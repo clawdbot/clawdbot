@@ -1336,7 +1336,10 @@ describe("openclaw state database", () => {
       legacy.close();
 
       if (migrationPath === "doctor repair") {
-        expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+        expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+          changes: ["Retired shared state commitments table and indexes"],
+          warnings: [],
+        });
       }
       const migrated = openOpenClawStateDatabase(options);
 
@@ -1585,6 +1588,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
+        "Retired shared state commitments table and indexes",
         "Migrated shared state session watch cursors → provenance column (0 ambient, 0 sentinels removed)",
         "Migrated shared state tables to SQLite STRICT typing (1)",
       ],
@@ -1617,6 +1621,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
+        "Retired shared state commitments table and indexes",
         "Migrated shared state session watch cursors → provenance column (2 ambient, 5 sentinels removed)",
       ],
       warnings: [],
@@ -2357,32 +2362,45 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     }
   });
 
-  it("rejects a missing stable v5 table before the v6 migration", () => {
-    const stateDir = createTempStateDir();
-    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    const databasePath = materializeCurrentStateDatabase(stateDir);
+  it.each(["runtime open", "doctor repair"] as const)(
+    "rejects a missing stable v5 table before the v7 migration through %s",
+    (migrationPath) => {
+      const stateDir = createTempStateDir();
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      const databasePath = materializeCurrentStateDatabase(stateDir);
 
-    const { DatabaseSync } = requireNodeSqlite();
-    const damaged = new DatabaseSync(databasePath);
-    damaged.exec("DROP TABLE auth_profile_stores;");
-    markStateDatabaseAsV5(damaged);
-    damaged.close();
+      const { DatabaseSync } = requireNodeSqlite();
+      const damaged = new DatabaseSync(databasePath);
+      damaged.exec("DROP TABLE auth_profile_stores;");
+      markStateDatabaseAsV5(damaged);
+      damaged.close();
 
-    expect(() => openOpenClawStateDatabase(options)).toThrow(/missing table auth_profile_stores/iu);
+      if (migrationPath === "runtime open") {
+        expect(() => openOpenClawStateDatabase(options)).toThrow(
+          /missing table auth_profile_stores/iu,
+        );
+      } else {
+        expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+          changes: [],
+          warnings: [expect.stringContaining("missing table auth_profile_stores")],
+        });
+      }
 
-    const after = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      expect(
-        after
-          .prepare(
-            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'auth_profile_stores'",
-          )
-          .get(),
-      ).toBeUndefined();
-    } finally {
-      after.close();
-    }
-  });
+      const after = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(
+          after
+            .prepare(
+              "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'auth_profile_stores'",
+            )
+            .get(),
+        ).toBeUndefined();
+        expect(readSqliteNumberPragma(after, "user_version")).toBe(5);
+      } finally {
+        after.close();
+      }
+    },
+  );
 
   it("upgrades v5 databases that predate startup worker tool tables", () => {
     const stateDir = createTempStateDir();
@@ -2413,33 +2431,45 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ]);
   });
 
-  it("rejects a missing stable v6 table before the v7 migration", () => {
-    const stateDir = createTempStateDir();
-    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    const databasePath = materializeCurrentStateDatabase(stateDir);
+  it.each(["runtime open", "doctor repair"] as const)(
+    "rejects a missing stable v6 table before the v7 migration through %s",
+    (migrationPath) => {
+      const stateDir = createTempStateDir();
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      const databasePath = materializeCurrentStateDatabase(stateDir);
 
-    const { DatabaseSync } = requireNodeSqlite();
-    const damaged = new DatabaseSync(databasePath);
-    damaged.exec("DROP TABLE auth_profile_stores;");
-    markStateDatabaseAsV6(damaged);
-    damaged.close();
+      const { DatabaseSync } = requireNodeSqlite();
+      const damaged = new DatabaseSync(databasePath);
+      damaged.exec("DROP TABLE auth_profile_stores;");
+      markStateDatabaseAsV6(damaged);
+      damaged.close();
 
-    expect(() => openOpenClawStateDatabase(options)).toThrow(/missing table auth_profile_stores/iu);
+      if (migrationPath === "runtime open") {
+        expect(() => openOpenClawStateDatabase(options)).toThrow(
+          /missing table auth_profile_stores/iu,
+        );
+      } else {
+        expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+          changes: [],
+          warnings: [expect.stringContaining("missing table auth_profile_stores")],
+        });
+      }
 
-    const after = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      expect(
-        after
-          .prepare(
-            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'auth_profile_stores'",
-          )
-          .get(),
-      ).toBeUndefined();
-      expect(readSqliteNumberPragma(after, "user_version")).toBe(6);
-    } finally {
-      after.close();
-    }
-  });
+      const after = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(
+          after
+            .prepare(
+              "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'auth_profile_stores'",
+            )
+            .get(),
+        ).toBeUndefined();
+        expect(readSqliteNumberPragma(after, "user_version")).toBe(6);
+      } finally {
+        after.close();
+      }
+    },
+  );
 
   it("rejects an inline unique constraint hidden behind a SQLite autoindex", () => {
     const stateDir = createTempStateDir();
@@ -2595,6 +2625,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
 
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
+        "Retired shared state commitments table and indexes",
         "Migrated shared state audit event ledger → versioned message lifecycle schema",
         "Migrated shared state tables to SQLite STRICT typing (3)",
       ],
@@ -2848,7 +2879,10 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     legacy.close();
 
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
-    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({ changes: [], warnings: [] });
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: ["Retired shared state commitments table and indexes"],
+      warnings: [],
+    });
     const beforeOpen = new DatabaseSync(databasePath, { readOnly: true });
     expect(readSqliteNumberPragma(beforeOpen, "user_version")).toBe(1);
     beforeOpen.close();

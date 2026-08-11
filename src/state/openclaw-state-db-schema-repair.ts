@@ -30,9 +30,12 @@ export function dropLegacyStateTables(db: DatabaseSync): void {
   db.exec("DROP TABLE IF EXISTS node_pairing_pending; DROP TABLE IF EXISTS node_pairing_paired;");
 }
 
-export function migrateRetiredCommitmentsSchema(db: DatabaseSync, previousVersion: number): void {
+export function migrateRetiredCommitmentsSchema(
+  db: DatabaseSync,
+  previousVersion: number,
+): boolean {
   if (previousVersion >= 7) {
-    return;
+    return false;
   }
   // The commitments runtime was removed before v7; retained rows are inert
   // migration debt and have no remaining product owner or export contract.
@@ -44,6 +47,7 @@ export function migrateRetiredCommitmentsSchema(db: DatabaseSync, previousVersio
     DROP INDEX IF EXISTS idx_commitments_agent_sent;
     DROP TABLE IF EXISTS commitments;
   `);
+  return true;
 }
 
 function hasCanonicalAgentDatabasesPrimaryKey(db: DatabaseSync): boolean {

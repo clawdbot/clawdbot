@@ -174,12 +174,16 @@ function repairOpenClawStateDatabaseSchemaWithWriteAccess(
           });
         } else if (previousVersion === 6) {
           assertOpenClawStateDatabaseV6ForMigration(db, { pathname });
+        } else if (previousVersion === 5) {
+          assertOpenClawStateDatabaseV5ForMigration(db, { pathname });
         }
         if (rebuiltIndexNames.size === 0) {
           assertSqliteIntegrity(db, pathname);
         }
         dropLegacyStateTables(db);
-        migrateRetiredCommitmentsSchema(db, previousVersion);
+        if (migrateRetiredCommitmentsSchema(db, previousVersion)) {
+          applied.push("Retired shared state commitments table and indexes");
+        }
         if (repairAgentDatabasesCompositePrimaryKey(db)) {
           applied.push(`Migrated shared state agent database registry primary key → agent_id,path`);
         }
