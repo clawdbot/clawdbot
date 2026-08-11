@@ -231,6 +231,23 @@ describe("landed ownership gates on the validated config", () => {
   // #120332 round 50 (P1): the landed-owner gate compares the probe-less candidate list, not
   // just the hashed surface. A candidate differing only in a section that creates capability
   // candidates (tts here) is a prospective mutation and must validate on its own plan.
+  // #120332 round 55 (P1): config-owned env vars are activation surface. A candidate that
+  // differs only in `env.vars` reloads into a different prepared environment, where an
+  // env-only channel can change a cross-channel replacement plan — it must validate on its
+  // own plan instead of reusing the landed owners.
+  it("goes predictive when config-owned env vars change", () => {
+    setupClaimants();
+    const runningConfig: OpenClawConfig = { channels: { acmech: { incOpt: "x" } } };
+    setRuntimeConfigSnapshot(runningConfig, runningConfig);
+
+    const result = validateConfigObjectWithPlugins({
+      channels: { acmech: { incOpt: "x" } },
+      env: { vars: { ACME_NEW_CRED: "1" } },
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
   it("goes predictive when a non-surface section changes claimant planning", () => {
     setupClaimants();
     const runningConfig: OpenClawConfig = { channels: { acmech: { incOpt: "x" } } };

@@ -458,6 +458,20 @@ function resolveRelevantSetupAutoEnablePluginIds(cfg: OpenClawConfig): string[] 
 }
 
 /**
+ * The bundled special setups' declarative relevance, by plugin id. These predicates are
+ * conservative mirrors of the plugins' own auto-enable probes; probe-less plans emit their
+ * candidates from this map, and loader cache identity fingerprints it — a config toggle that
+ * changes a declarative setup decision must never serve a cached registry planned without it.
+ */
+export function resolveDeclaredSpecialSetupRelevance(cfg: OpenClawConfig): Record<string, boolean> {
+  return {
+    browser: hasBrowserSetupAutoEnableRelevantConfig(cfg),
+    acpx: hasAcpxSetupAutoEnableRelevantConfig(cfg),
+    xai: hasXaiSetupAutoEnableRelevantConfig(cfg),
+  };
+}
+
+/**
  * True when this config could produce setup-derived auto-enable candidates at all — the same
  * gate the pass uses before running setup probes. When false, a probe-skipping plan is exactly
  * the plan the runtime executes, so the ownership projection may treat its completed activation
@@ -849,11 +863,9 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
     // keeps), so ownership, suppression, and fingerprints rank the same setup-derived claimant
     // fates the applied pass produces — without executing plugin code here.
     const manifestMatchedPluginIds = new Set(changes.map((entry) => entry.pluginId));
-    const declaredSpecialSetups: ReadonlyArray<readonly [string, boolean]> = [
-      ["browser", hasBrowserSetupAutoEnableRelevantConfig(params.config)],
-      ["acpx", hasAcpxSetupAutoEnableRelevantConfig(params.config)],
-      ["xai", hasXaiSetupAutoEnableRelevantConfig(params.config)],
-    ];
+    const declaredSpecialSetups = Object.entries(
+      resolveDeclaredSpecialSetupRelevance(params.config),
+    );
     for (const [pluginId, declared] of declaredSpecialSetups) {
       if (
         declared &&
@@ -1295,7 +1307,9 @@ function selectSoleClaimantAnchor(params: {
 /** Configured-channel candidate groups with their end-state liveness, in first-seen order. */
 function scanConfiguredChannelGroups(params: {
   candidates: readonly PluginAutoEnableCandidate[];
-  isClaimantLive: (pluginId: string) => boolean;
+  claims: readonly ChannelClaimCandidate[];
+  decisions: readonly ChannelClaimantDecision[];
+  isLiveDecision: (claim: ChannelClaimCandidate, decision: ChannelClaimantDecision) => boolean;
   config: OpenClawConfig;
   registry: PluginManifestRegistry;
 }): Map<string, ChannelCandidateGroup> {
@@ -1318,10 +1332,14 @@ function scanConfiguredChannelGroups(params: {
     group.lastIndex = index;
     const policyId = normalizePluginPolicyId(entry.pluginId);
     group.policyIds.add(policyId);
-    // Liveness reads the plugin's END-STATE fate, not this claim's own decision: a claimant
-    // whose channel claim died can end enabled through a later capability candidate, and a live
-    // plugin serves every channel it claims — its channels need no fallback re-selection.
-    if (params.isClaimantLive(entry.pluginId)) {
+    // Liveness reads THIS CLAIM'S decision, not the plugin's end-state fate: a capability can
+    // keep a plugin alive while its claim on this channel landed suppressed — that claim does
+    // not serve the channel, and counting it live would leave the group without the remedies
+    // that give it a registered owner. (A live plugin whose claim decision is enable — the
+    // capability-preserved multi-channel case — still counts through the decision itself.)
+    const claim = params.claims[index];
+    const decision = params.decisions[index];
+    if (claim !== undefined && decision !== undefined && params.isLiveDecision(claim, decision)) {
       group.live = true;
     } else if (!sourceForbidden(entry.pluginId)) {
       if (!group.deadClaimantPolicyIds.includes(policyId)) {
@@ -1500,6 +1518,7 @@ export function planPluginAutoEnable(params: {
       pinnedLiveClaimants: pinnedLive,
     });
     return {
+      claims,
       decisions: claims.map((claim) => resolution.decide(claim)),
       isLiveDecision: resolution.isLiveDecision,
       isClaimantLive: resolution.isClaimantLive,
@@ -1550,7 +1569,9 @@ export function planPluginAutoEnable(params: {
   const scanGroups = (scanned: typeof resolved) =>
     scanConfiguredChannelGroups({
       candidates,
-      isClaimantLive: scanned.isClaimantLive,
+      claims: scanned.claims,
+      decisions: scanned.decisions,
+      isLiveDecision: scanned.isLiveDecision,
       config: sourceConfig,
       registry: params.manifestRegistry,
     });

@@ -181,14 +181,20 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
     if (lifecycleRuntime) {
       await lifecycleRuntime.closeOnStartupFailure();
     } else {
-      clearSecretsRuntimeSnapshotState();
-      clearPluginMetadataLifecycleCaches();
       // Kernel state prep activates the process-global plugin registry and pins the runtime
       // config snapshot BEFORE the lifecycle exists. A pre-lifecycle failure must clear both,
       // or later validation (and a same-process retry) treats registrations from a Gateway
-      // that never started as LANDED channel owners and applies stale schemas.
-      await clearActivePluginRegistry();
-      clearRuntimeConfigSnapshot();
+      // that never started as LANDED channel owners and applies stale schemas. The registry
+      // retires FIRST — plugin-host cleanup still reads the runtime config and secrets
+      // snapshots, exactly as normal shutdown orders it — and the snapshots scrub afterwards
+      // even when that cleanup throws.
+      try {
+        await clearActivePluginRegistry();
+      } finally {
+        clearSecretsRuntimeSnapshotState();
+        clearPluginMetadataLifecycleCaches();
+        clearRuntimeConfigSnapshot();
+      }
     }
     throw error;
   }

@@ -814,10 +814,14 @@ export function collectChannelDmPolicyMetadata(
     originRank: number,
     dmAllowFromMode?: ChannelDmAllowFromMode,
   ): void => {
-    const id = channelId?.trim();
-    if (!id) {
+    const raw = channelId?.trim();
+    if (!raw) {
       return;
     }
+    // Canonical identity BEFORE origin precedence: alias-equivalent claimants (case variants,
+    // built-in aliases) are one logical channel, and two raw-keyed records would collapse by
+    // whatever order a consumer merges them in instead of by origin rank.
+    const id = normalizeManifestChannelId(raw);
     const current = byChannelId.get(id);
     if (current && current.originRank < originRank) {
       return;

@@ -8,6 +8,7 @@ import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
+import { normalizeManifestChannelId } from "./channel-claimant-plugins.js";
 import { containsEnvVarReference } from "./env-substitution.js";
 import {
   replaceSensitiveValuesInRaw,
@@ -201,7 +202,11 @@ function redactValue(
   const result: Record<string, unknown> = {};
   const fallbackContext = withoutRedactionLookup(context);
   for (const [key, value] of Object.entries(obj)) {
-    const path = prefix ? `${prefix}.${key}` : key;
+    // Hint paths carry the CANONICAL channel id while validation admits declared variant
+    // spellings as authored keys — the lookup canonicalizes the channel segment so a plugin's
+    // `sensitive: true` hint reaches every admitted spelling; output keys stay authored.
+    const lookupKey = prefix === "channels" ? normalizeManifestChannelId(key) : key;
+    const path = prefix ? `${prefix}.${lookupKey}` : key;
     const wildcardPath = prefix ? `${prefix}.*` : "*";
     const candidate = context.lookup
       ? [path, wildcardPath].find((entry) => context.lookup?.has(entry))

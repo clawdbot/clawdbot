@@ -524,11 +524,25 @@ export function createChannelClaimantResolution(params: {
   const isClaimSupersededOnOwnChannel = (candidate: ChannelClaimCandidate): boolean => {
     const policyId = normalizePluginPolicyId(candidate.pluginId);
     const group = groupOf(candidate);
-    return params.candidates.some((other) => {
+    const candidateIndex = params.candidates.indexOf(candidate);
+    return params.candidates.some((other, otherIndex) => {
       if (normalizePluginPolicyId(other.pluginId) === policyId) {
         return false;
       }
       if (groupOf(other) !== group || !declaresPreferenceOver(other, candidate.pluginId)) {
+        return false;
+      }
+      // RECIPROCAL edges between two landed-live claims ground on collection order: with both
+      // plugins alive (capability-seeded), neither edge can kill the other, and suppressing
+      // both would leave the channel served by whatever restoration happens to pick while the
+      // projection ranks a different claim. The first-collected claim wins exactly as
+      // first-wins registration would; the later claim is the one superseded.
+      if (
+        fates.get(normalizePluginPolicyId(other.pluginId)) === "enable" &&
+        declaresPreferenceOver(candidate, other.pluginId) &&
+        candidateIndex >= 0 &&
+        candidateIndex < otherIndex
+      ) {
         return false;
       }
       return liveAsSuperseder(other, group, new Set([policyId]), { tainted: false });
@@ -563,6 +577,20 @@ export function createChannelClaimantResolution(params: {
       if (landedFate === "dead" || landedFate === "enable") {
         liveMemo = new Map();
         if (isClaimSupersededOnOwnChannel(candidate)) {
+          if (
+            landedFate === "enable" &&
+            isPluginSelectedWithAliases(
+              params.selectionConfig.plugins,
+              candidate.pluginId,
+              params.registry,
+            )
+          ) {
+            // The keep contract survives a landed-live fate: an explicitly selected loser must
+            // stay a registered claimant (first-registration-wins plus the duplicate
+            // diagnostic), and a capability seeding the plugin's enable must not convert the
+            // operator's selection into silent suppression.
+            return "supersede-keep";
+          }
           return "supersede-disable";
         }
         return landedFate === "dead" ? "forbidden" : "enable";

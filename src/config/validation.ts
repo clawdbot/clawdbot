@@ -324,6 +324,10 @@ function validateConfigObjectWithPluginsBase(
       auth: cfg.auth,
       tools: cfg.tools,
       models: cfg.models,
+      // Config-owned env vars are activation surface: gateway reload applies the candidate's
+      // env, where an env-only channel can change a cross-channel replacement plan — the
+      // candidate fingerprint below runs against the CURRENT process env and cannot see them.
+      env: cfg.env,
     } as OpenClawConfig);
   const validatesActiveRegistryConfig = (): boolean => {
     const sourceSnapshot = getRuntimeConfigSourceSnapshot();
@@ -439,15 +443,11 @@ function validateConfigObjectWithPluginsBase(
 
   const ensureChannelDmAllowFromModes = (): ReadonlyMap<string, ChannelDmAllowFromMode> => {
     const info = ensureLoadedRegistryInfo();
-    // Keyed by CANONICAL channel identity: the metadata carries the manifest's declared
-    // spelling while authored config keys may be the canonical (or another admitted) variant,
-    // and a raw-key miss silently downgrades a nested-only channel to the default top-only
-    // shape — false DM-policy warnings on a valid config.
+    // The collector keys by canonical channel identity (origin precedence applies across
+    // alias-equivalent claimants there); the warning path canonicalizes its lookup to match.
     info.channelDmAllowFromModes ??= new Map(
       collectChannelDmPolicyMetadata(info.registry).flatMap((entry) =>
-        entry.dmAllowFromMode
-          ? [[normalizeManifestChannelId(entry.id), entry.dmAllowFromMode] as const]
-          : [],
+        entry.dmAllowFromMode ? [[entry.id, entry.dmAllowFromMode] as const] : [],
       ),
     );
     return info.channelDmAllowFromModes;

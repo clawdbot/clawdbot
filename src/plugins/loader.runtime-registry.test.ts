@@ -120,6 +120,11 @@ describe("resolvePluginLoadCacheContext", () => {
     expect(keyOf({ plugins: { entries: { "acme-tool": { config: { webFetch: {} } } } } })).not.toBe(
       keyOf({ plugins: { entries: { "acme-tool": { config: { other: {} } } } } }),
     );
+    // #120332 round 55 (P2): declared special-setup relevance (browser/acp toggles) adds or
+    // removes the probe-less setup candidates the suppression plan consumes — same entries,
+    // same autoEnabledReasons, different plan.
+    expect(keyOf({ acp: { enabled: true } })).not.toBe(baseKey);
+    expect(keyOf({ browser: { enabled: true } })).not.toBe(baseKey);
   });
 
   it("partitions full and setup channel plugin load intent", () => {

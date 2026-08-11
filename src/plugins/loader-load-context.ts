@@ -10,6 +10,7 @@ import {
 } from "../channels/config-presence.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
+import { resolveDeclaredSpecialSetupRelevance } from "../config/plugin-auto-enable.shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
@@ -241,6 +242,10 @@ function buildActivationMetadataHash(params: {
       typeof capabilityConfig.tools?.web?.fetch?.provider === "string"
         ? capabilityConfig.tools.web.fetch.provider
         : "",
+    // Declared special-setup relevance (browser/acp/xai config toggles) adds or removes the
+    // probe-less setup candidates the suppression plan consumes — a cached registry planned
+    // without them must not serve a config that declares them (and vice versa).
+    declaredSetupSurfaces: resolveDeclaredSpecialSetupRelevance(capabilityConfig),
     // Plugin-owned capability candidates key off entry-config KEYS (`webSearch`, `webFetch`,
     // declared tool schema keys) — materiality alone cannot distinguish two material entries
     // whose key sets differ, so the key sets themselves join the fingerprint.

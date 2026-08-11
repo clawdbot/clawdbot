@@ -10,6 +10,33 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { createGatewayKernel } from "./server-kernel.js";
 
+// #120332 round 55 (P2): teardown ORDER matters — the registry retires first (plugin-host
+// cleanup still reads runtime config and secrets snapshots, as in normal shutdown), snapshots
+// scrub afterwards.
+const teardownOrder = vi.hoisted(() => ({ calls: [] as string[] }));
+
+vi.mock("../plugins/runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/runtime.js")>();
+  return {
+    ...actual,
+    clearActivePluginRegistry: async () => {
+      teardownOrder.calls.push("registry");
+      return actual.clearActivePluginRegistry();
+    },
+  };
+});
+
+vi.mock("../secrets/runtime-state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../secrets/runtime-state.js")>();
+  return {
+    ...actual,
+    clearSecretsRuntimeSnapshotState: () => {
+      teardownOrder.calls.push("secrets");
+      return actual.clearSecretsRuntimeSnapshotState();
+    },
+  };
+});
+
 vi.mock("./server-lifecycle.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./server-lifecycle.js")>();
   return {
@@ -59,6 +86,11 @@ describe("createGatewayKernel pre-lifecycle failure", () => {
       ).rejects.toThrow("fixture pre-lifecycle failure");
       expect(getActivePluginRegistry()).toBeNull();
       expect(getRuntimeConfigSnapshot()).toBeNull();
+      // Registry teardown ran BEFORE the snapshot scrub.
+      expect(teardownOrder.calls.lastIndexOf("registry")).toBeGreaterThanOrEqual(0);
+      expect(teardownOrder.calls.lastIndexOf("registry")).toBeLessThan(
+        teardownOrder.calls.lastIndexOf("secrets"),
+      );
     } finally {
       await state.cleanup();
     }

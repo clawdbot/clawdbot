@@ -50,6 +50,24 @@ function expectGatewayAuthFieldValue(
 }
 
 describe("redactConfigSnapshot", () => {
+  // #120332 round 55 (P1): hint paths carry the canonical channel id while validation admits
+  // declared variant spellings as authored keys — the redaction lookup canonicalizes the
+  // channel segment, so a plugin's `sensitive: true` hint reaches every admitted spelling
+  // instead of falling back to name heuristics that miss non-heuristic secret fields.
+  it("redacts a sensitive hint field under an authored variant channel spelling", () => {
+    const snapshot = makeSnapshot({
+      channels: { QQBot: { accountCode: "s3cret-code" } },
+    });
+    const hints: ConfigUiHints = {
+      "channels.qqbot.accountCode": { sensitive: true },
+    };
+
+    const result = redactConfigSnapshot(snapshot, hints);
+
+    const channels = result.config.channels as Record<string, Record<string, unknown>>;
+    expect(channels.QQBot?.accountCode).toBe(REDACTED_SENTINEL);
+  });
+
   it("does not expose internal plugin metadata snapshot fields", () => {
     const snapshot = {
       ...makeSnapshot({

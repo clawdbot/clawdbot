@@ -261,3 +261,77 @@ describe("capability-backed liveness seeds channel claim decisions", () => {
     expect(suppressed.has(channelClaimSuppressionKey("acme-a-inc", "ych1"))).toBe(true);
   });
 });
+
+// #120332 round 55 (P1): the keep contract survives a landed-live fate. An explicitly selected
+// plugin whose capability seeded its enable is still a KEEP when a same-channel replacement
+// supersedes it — suppression would silently hand the operator's selected channel to the
+// replacement instead of first-registration-wins plus the duplicate diagnostic.
+describe("explicit selections stay keeps under capability-seeded fates", () => {
+  const SEL_INC: RegistryPlugins[number] = {
+    id: "acme-sel-inc",
+    origin: "global",
+    channels: ["kch"],
+    channelConfigs: { kch: { schema: { type: "object" } } },
+    autoEnableWhenConfiguredProviders: ["acme-prov"],
+  };
+  const SEL_REP: RegistryPlugins[number] = {
+    id: "acme-sel-rep",
+    origin: "global",
+    channels: ["kch"],
+    channelConfigs: { kch: { schema: { type: "object" }, preferOver: ["acme-sel-inc"] } },
+  };
+
+  it("does not suppress the explicitly selected capability owner", () => {
+    const registry = makeRegistry([SEL_INC, SEL_REP]);
+    const config: OpenClawConfig = {
+      channels: { kch: { token: "k" } },
+      auth: { profiles: { "acme-prov:default": { provider: "acme-prov", mode: "api_key" } } },
+      plugins: {
+        entries: { "acme-sel-inc": { enabled: true }, "acme-sel-rep": { enabled: true } },
+      },
+    };
+    const env = makeIsolatedEnv();
+    const suppressed = collectSupersededChannelClaims({ config, env, manifestRegistry: registry });
+
+    expect(suppressed.has(channelClaimSuppressionKey("acme-sel-inc", "kch"))).toBe(false);
+  });
+});
+
+// #120332 round 55 (P1): reciprocal replacement edges between two capability-live claims
+// ground on collection order — the first-collected claim keeps the channel exactly as
+// first-wins registration would, and only the later claim is suppressed. Suppressing both
+// left the channel to restoration while the projection ranked a different claim.
+describe("capability-backed reciprocal replacements ground on one claim", () => {
+  const REC_A: RegistryPlugins[number] = {
+    id: "acme-ra",
+    origin: "global",
+    channels: ["rch"],
+    channelConfigs: { rch: { schema: { type: "object" }, preferOver: ["acme-rb"] } },
+    autoEnableWhenConfiguredProviders: ["acme-prov-a"],
+  };
+  const REC_B: RegistryPlugins[number] = {
+    id: "acme-rb",
+    origin: "global",
+    channels: ["rch"],
+    channelConfigs: { rch: { schema: { type: "object" }, preferOver: ["acme-ra"] } },
+    autoEnableWhenConfiguredProviders: ["acme-prov-b"],
+  };
+
+  it("keeps the first-collected claim and suppresses the later one", () => {
+    const registry = makeRegistry([REC_A, REC_B]);
+    const config: OpenClawConfig = {
+      channels: { rch: { token: "r" } },
+      auth: {
+        profiles: {
+          "acme-prov-a:default": { provider: "acme-prov-a", mode: "api_key" },
+          "acme-prov-b:default": { provider: "acme-prov-b", mode: "api_key" },
+        },
+      },
+    };
+    const env = makeIsolatedEnv();
+    const suppressed = collectSupersededChannelClaims({ config, env, manifestRegistry: registry });
+
+    expect(suppressed.has(channelClaimSuppressionKey("acme-ra", "rch"))).toBe(false);
+    expect(suppressed.has(channelClaimSuppressionKey("acme-rb", "rch"))).toBe(true);
+  });
+});
