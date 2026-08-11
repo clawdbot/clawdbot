@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
@@ -29,6 +30,7 @@ function createContext(): GatewayRequestContext {
 }
 
 function createOperatorClient(params: {
+  caps?: string[];
   profileId: string;
   scopes: string[];
 }): NonNullable<GatewayRequestOptions["client"]> {
@@ -42,6 +44,7 @@ function createOperatorClient(params: {
       updatedAt: 1,
     },
     connect: {
+      ...(params.caps ? { caps: params.caps } : {}),
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
       role: "operator",
@@ -78,6 +81,7 @@ async function dispatchScopedMethod(params: {
   context: GatewayRequestContext;
   method: "agent" | "agent.wait";
   params: Record<string, unknown>;
+  signal?: AbortSignal;
 }) {
   return await withPluginRuntimeGatewayRequestScope(
     {
@@ -89,6 +93,7 @@ async function dispatchScopedMethod(params: {
       await dispatchGatewayMethodInProcess(params.method, params.params, {
         disableSyntheticClient: true,
         requireScopedClient: true,
+        ...(params.signal ? { signal: params.signal } : {}),
       }),
   );
 }
@@ -158,6 +163,49 @@ describe("typed in-process agent authorization", () => {
         params: { runId: 42 },
       }),
     ).rejects.toThrow("invalid agent.wait params:");
+    expect(waitForTurn).not.toHaveBeenCalled();
+  });
+
+  it("registers tool-event observation for a capable scoped client", async () => {
+    const context = createContext();
+    context.registerToolEventRecipient = vi.fn();
+    startTurn.mockImplementation(async ({ io, onRunObserved }) => {
+      onRunObserved?.("observed-run");
+      io.emitAcceptance([true, { runId: "observed-run", status: "accepted" }, undefined]);
+    });
+
+    await dispatchScopedAgent({
+      client: createOperatorClient({
+        caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
+        profileId: "tool-observer",
+        scopes: ["operator.write"],
+      }),
+      context,
+    });
+
+    expect(context.registerToolEventRecipient).toHaveBeenCalledWith(
+      "observed-run",
+      "conn-tool-observer",
+    );
+  });
+
+  it.each([
+    ["agent", { message: "cancelled", idempotencyKey: "cancelled-agent" }],
+    ["agent.wait", { runId: "cancelled-run" }],
+  ] as const)("rejects a pre-aborted %s request before agent work", async (method, params) => {
+    const controller = new AbortController();
+    controller.abort(new Error("already aborted"));
+
+    await expect(
+      dispatchScopedMethod({
+        client: createOperatorClient({ profileId: "writer", scopes: ["operator.write"] }),
+        context: createContext(),
+        method,
+        params,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("already aborted");
+    expect(startTurn).not.toHaveBeenCalled();
     expect(waitForTurn).not.toHaveBeenCalled();
   });
 });

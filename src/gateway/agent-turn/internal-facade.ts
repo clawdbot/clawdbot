@@ -7,6 +7,7 @@ import {
 import type { GatewayMethodRegistry } from "../methods/registry.js";
 import {
   type GatewayMethodDispatchResponse,
+  throwIfGatewayDispatchAborted,
   waitForGatewayDispatch,
   unwrapGatewayMethodDispatchResponse,
 } from "../server-in-process-dispatch.js";
@@ -20,7 +21,7 @@ import type { GatewayRequestOptions } from "../server-methods/types.js";
 import { validateGatewayMethodParams } from "../server-methods/validation.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 import { createAgentTurnService } from "./agent-turn-service.js";
-import { captureAgentTurnPrincipal } from "./principal.js";
+import { captureAgentTurnPrincipal, resolveAgentTurnRunObserver } from "./principal.js";
 import type { AgentTurnIo } from "./types.js";
 
 type InternalAgentTurnFacadeOptions = {
@@ -55,6 +56,7 @@ export function createInternalAgentTurnFacade(options: InternalAgentTurnFacadeOp
     dispatchOptions: InternalAgentTurnDispatchOptions = {},
   ): Promise<GatewayMethodDispatchResponse> => {
     const method = "agent";
+    throwIfGatewayDispatchAborted(method, dispatchOptions.signal);
     const context = options.getContext();
     const methodRegistry = getMethodRegistry();
     const authorization = await authorizeGatewayRequestPreDispatch({
@@ -130,10 +132,15 @@ export function createInternalAgentTurnFacade(options: InternalAgentTurnFacadeOp
         if (!preflight) {
           return;
         }
+        const onRunObserved = resolveAgentTurnRunObserver({
+          principal,
+          registerToolEventRecipient: context.registerToolEventRecipient,
+        });
         await createAgentTurnService({ context, isWebchatConnect }).startTurn({
           preflight,
           principal,
           io,
+          onRunObserved,
         });
       },
       {
@@ -201,6 +208,7 @@ export function createInternalAgentTurnFacade(options: InternalAgentTurnFacadeOp
     onSignalAbort?: () => Promise<void> | void,
   ): Promise<T> => {
     const method = "agent.wait";
+    throwIfGatewayDispatchAborted(method, signal);
     const context = options.getContext();
     const methodRegistry = getMethodRegistry();
     const authorization = await authorizeGatewayRequestPreDispatch({
