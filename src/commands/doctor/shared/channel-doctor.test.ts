@@ -201,8 +201,8 @@ describe("channel doctor compatibility mutations", () => {
       changes: [],
       warnings: ["matrix warning"],
     }));
-    const discordCleanup = vi.fn(({ cfg }: { cfg: unknown }) => ({
-      config: cfg,
+    const discordCleanup = vi.fn(({ cfg: currentCfg }: { cfg: unknown }) => ({
+      config: currentCfg,
       changes: ["discord cleanup"],
     }));
     mocks.getBundledChannelSetupPlugin.mockImplementation((id: string) => ({
