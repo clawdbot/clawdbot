@@ -105,20 +105,27 @@ describe("openclaw-modal-dialog", () => {
   });
 
   it("hands an active toast back to the app layer when it closes", async () => {
+    const shell = document.createElement("div");
+    shell.className = "shell";
     const appHost = document.createElement("openclaw-toast-host");
-    document.body.append(appHost);
+    shell.append(appHost);
+    document.body.append(shell);
     try {
       const { modal } = await renderModal();
+      const moveIntoModal = vi.spyOn(modal, "moveBefore");
+      const moveBackToShell = vi.spyOn(shell, "moveBefore");
 
       showToast({ message: "Saved" });
       modal.hide();
       await modal.updateComplete;
       await appHost.updateComplete;
 
+      expect(moveIntoModal).toHaveBeenCalledWith(appHost, null);
+      expect(moveBackToShell).toHaveBeenCalledWith(appHost, null);
       expect(appHost.querySelector(".app-toast__message")?.textContent).toBe("Saved");
       expect(modal.querySelector(".app-toast")).toBeNull();
     } finally {
-      appHost.remove();
+      shell.remove();
     }
   });
 

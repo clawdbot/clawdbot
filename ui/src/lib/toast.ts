@@ -22,9 +22,17 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
   private dismissTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 
   override disconnectedCallback() {
-    this.dismiss("disconnected");
+    const shell = document.querySelector(".shell");
+    if (!this.isConnected && this.parentElement?.localName === "openclaw-modal-dialog" && shell) {
+      shell.append(this);
+    } else {
+      this.dismiss("disconnected");
+    }
     super.disconnectedCallback();
   }
+
+  /** Keep the active outcome intact while moveBefore() crosses top-layer owners. */
+  connectedMoveCallback() {}
 
   show(options: ToastOptions) {
     this.dismiss("replaced");
@@ -33,15 +41,6 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
       () => this.dismiss("timeout"),
       options.durationMs ?? DEFAULT_TOAST_DURATION_MS,
     );
-  }
-
-  /** Preserve the visible outcome when a modal host leaves the top layer. */
-  handoff() {
-    const toast = this.toast;
-    if (toast && showToast(toast)) {
-      this.clearDismissTimer();
-      this.toast = null;
-    }
   }
 
   private clearDismissTimer() {
@@ -94,13 +93,22 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
 }
 
 export function showToast(options: ToastOptions): boolean {
-  // Native modal dialogs own the browser top layer, so their in-dialog host
-  // wins over the app host while an overlay is open.
-  const host = [...document.querySelectorAll<OpenClawToastHost>("openclaw-toast-host")].findLast(
-    (candidate) => (candidate.parentElement as HTMLElement & { open?: boolean }).open !== false,
-  );
+  const host = document.querySelector<OpenClawToastHost>("openclaw-toast-host");
   if (!host) {
     return false;
+  }
+  // Native modal dialogs own the browser top layer, so move the one toast host
+  // into the last open overlay before presenting its outcome.
+  const modal = [...document.querySelectorAll<HTMLElement>("openclaw-modal-dialog")].findLast(
+    (candidate) => (candidate as HTMLElement & { open?: boolean }).open,
+  );
+  if (modal && host.parentElement !== modal) {
+    modal.moveBefore(host, null);
+    modal.addEventListener(
+      "wa-hide",
+      () => document.querySelector(".shell")?.moveBefore(host, null),
+      { once: true },
+    );
   }
   host.show(options);
   return true;

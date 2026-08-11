@@ -37,15 +37,14 @@ describe("shared toast", () => {
     const appHost = await mountHost();
     const modal = document.createElement("openclaw-modal-dialog");
     modal.open = true;
-    const modalHost = document.createElement("openclaw-toast-host");
-    modal.append(modalHost);
     document.body.append(modal);
+    const moveBefore = vi.spyOn(modal, "moveBefore");
 
     showToast({ message: "Above overlay" });
-    await modalHost.updateComplete;
+    await appHost.updateComplete;
 
-    expect(modalHost.textContent).toContain("Above overlay");
-    expect(appHost.textContent).toBe("");
+    expect(moveBefore).toHaveBeenCalledWith(appHost, null);
+    expect(appHost.textContent).toContain("Above overlay");
   });
 
   it("auto-dismisses after the configured duration", async () => {

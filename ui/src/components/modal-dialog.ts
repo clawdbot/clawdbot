@@ -3,7 +3,6 @@ import "@awesome.me/webawesome/dist/components/dialog/dialog.js";
 import type WaDialog from "@awesome.me/webawesome/dist/components/dialog/dialog.js";
 import { css, html } from "lit";
 import { property, query } from "lit/decorators.js";
-import "../lib/toast.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
 export class OpenClawModalDialog extends OpenClawLitElement {
@@ -108,9 +107,6 @@ export class OpenClawModalDialog extends OpenClawLitElement {
   `;
 
   override connectedCallback() {
-    if (!this.querySelector(":scope > openclaw-toast-host")) {
-      this.append(document.createElement("openclaw-toast-host"));
-    }
     if (this.manual) {
       this.open = false;
     }
@@ -119,7 +115,6 @@ export class OpenClawModalDialog extends OpenClawLitElement {
   }
 
   override disconnectedCallback() {
-    this.querySelector("openclaw-toast-host")?.handoff();
     this.syncGeneration += 1;
     const webAwesomeDialog = this.webAwesomeDialog;
     const dialog = webAwesomeDialog?.shadowRoot?.querySelector("dialog");
@@ -156,10 +151,6 @@ export class OpenClawModalDialog extends OpenClawLitElement {
   }
 
   protected override updated() {
-    if (!this.open) {
-      // Keep an active outcome visible when its top-layer owner closes or is replaced.
-      this.querySelector("openclaw-toast-host")?.handoff();
-    }
     void this.syncAccessibility();
     void this.syncDialogOpen();
   }

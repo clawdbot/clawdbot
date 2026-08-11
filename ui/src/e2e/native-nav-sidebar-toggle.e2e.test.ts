@@ -467,9 +467,17 @@ suite.define(() => {
         animations: "disabled",
         path: path.join(TOAST_PROOF_DIR, `mobile-drawer-toast-${colorScheme}.png`),
       });
-      await dismiss.click();
-      await expect.poll(() => toast.isVisible()).toBe(false);
-      await expect.poll(() => dialog.isVisible()).toBe(true);
+      if (colorScheme === "dark") {
+        await page.keyboard.press("Escape");
+        await expect.poll(() => dialog.isVisible()).toBe(false);
+      } else {
+        await page.setViewportSize({ width: 1280, height: 900 });
+        await expect.poll(() => drawer.count()).toBe(0);
+      }
+      const handedOffToast = page.locator(".shell > openclaw-toast-host .app-toast");
+      await expect.poll(() => handedOffToast.textContent()).toContain("Codex hidden");
+      await handedOffToast.getByRole("button", { name: "Dismiss" }).click();
+      await expect.poll(() => handedOffToast.isVisible()).toBe(false);
     },
   );
 
