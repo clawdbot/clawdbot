@@ -14,6 +14,8 @@ import {
   rejectPendingPreparedModelRuntimeReplacement,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
+import { rebindOwnerConfigGeneration } from "./prepared-model-runtime.owner.js";
+import type { PreparedModelRuntimeOwner } from "./prepared-model-runtime.owner.js";
 import { getPreparedPluginRuntimeLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import {
   getPreparedModelRuntimeMocks,
@@ -126,6 +128,28 @@ describe("prepared model runtime snapshots", () => {
       `[scoped-refresh-trace] fullRefreshAgentCount=${buildCounts[0]} scopedRefreshAgentCount=${buildCounts[1]} ` +
         `| in-scope rebuilt="pro" (snapshot=pro) | out-of-scope retained="free" (snapshot=${retained?.agentId}, observesAcceptedConfig=${retained?.config === scopedConfig})`,
     );
+  });
+
+  it("discards a pending out-of-scope owner when rebinding the config generation", () => {
+    const config = { agents: { defaults: { model: "openai/gpt-5.6" } } };
+    const pendingOwner: PreparedModelRuntimeOwner = {
+      input: { config, agentId: "free", agentDir: "/tmp/pending-free" },
+      environmentFingerprint: "env",
+      catalogMode: "live",
+      provenance: "configured",
+      generation: 7,
+      needsRefresh: false,
+      pending: Promise.resolve() as Promise<PreparedModelRuntimeSnapshot>,
+      buildCompletion: Promise.resolve(),
+    };
+    const owners = new Map([["free", pendingOwner]]);
+    const nextConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
+    rebindOwnerConfigGeneration(owners, "free", nextConfig);
+    expect(pendingOwner.generation).toBe(8);
+    expect(pendingOwner.pending).toBeUndefined();
+    expect(pendingOwner.needsRefresh).toBe(true);
+    expect(pendingOwner.buildCompletion).toBeUndefined();
+    expect(pendingOwner.input.config).toBe(nextConfig);
   });
 
   it("reactivates a standalone read-only owner after a publication boundary", async () => {

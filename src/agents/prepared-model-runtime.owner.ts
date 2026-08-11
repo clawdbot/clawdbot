@@ -88,9 +88,21 @@ export function rebindOwnerConfigGeneration(
   config: OpenClawConfig,
 ): void {
   for (const owner of owners.values()) {
-    if (owner.input.agentId === agentId && owner.snapshot) {
-      owner.input = { ...owner.input, config };
+    if (owner.input.agentId !== agentId) {
+      continue;
+    }
+    owner.input = { ...owner.input, config };
+    if (owner.snapshot) {
       owner.snapshot = { ...owner.snapshot, config };
+    }
+    // If a build is still pending, bump the generation so its completion is treated as superseded
+    // and the old-config snapshot it would publish is discarded. The next lease starts a fresh
+    // build against the accepted config generation.
+    if (owner.pending) {
+      owner.generation += 1;
+      owner.pending = undefined;
+      owner.needsRefresh = true;
+      owner.buildCompletion = undefined;
     }
   }
 }
