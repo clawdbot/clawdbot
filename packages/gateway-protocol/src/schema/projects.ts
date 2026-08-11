@@ -26,18 +26,22 @@ export const ProjectRecordSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
 });
 
+export const ProjectRecentProjectSchema = closedObject({
+  kind: Type.Literal("project"),
+  projectId: NonEmptyString,
+  displayName: NonEmptyString,
+});
+
+export const ProjectRecentFolderSchema = closedObject({
+  kind: Type.Literal("folder"),
+  folder: NonEmptyString,
+  displayName: NonEmptyString,
+  execNode: Type.Optional(NonEmptyString),
+});
+
 export const ProjectRecentSchema = Type.Union([
-  closedObject({
-    kind: Type.Literal("project"),
-    projectId: NonEmptyString,
-    displayName: NonEmptyString,
-  }),
-  closedObject({
-    kind: Type.Literal("folder"),
-    folder: NonEmptyString,
-    displayName: NonEmptyString,
-    execNode: Type.Optional(NonEmptyString),
-  }),
+  ProjectRecentProjectSchema,
+  ProjectRecentFolderSchema,
 ]);
 
 export const ProjectsListParamsSchema = closedObject({});
