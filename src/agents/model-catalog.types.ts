@@ -5,7 +5,7 @@
  */
 import type { ModelCatalogStatus } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ModelApi, ModelCompatConfig, ModelMediaInputConfig } from "../config/types.models.js";
-import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
+import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 
 /** Input modalities a catalog entry can advertise. */
 export type ModelInputType = "text" | "image" | "audio" | "video" | "document";
