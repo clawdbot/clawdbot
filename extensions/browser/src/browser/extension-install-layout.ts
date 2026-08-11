@@ -303,7 +303,7 @@ function comparablePath(value: string, platform: NodeJS.Platform): string {
   return platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
-export async function approvedRealpaths(paths: readonly string[]): Promise<string[]> {
+async function approvedRealpaths(paths: readonly string[]): Promise<string[]> {
   const resolved = await Promise.all(
     paths.map(async (candidate) => await fs.realpath(candidate).catch(() => null)),
   );
