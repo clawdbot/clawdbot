@@ -5,7 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
-import { buildWorkspaceSkillsPrompt } from "./workspace.js";
+import { buildWorkspaceSkillsPrompt } from "./workspace-skill-prompt.js";
 
 describe("buildWorkspaceSkillsPrompt", () => {
   it("applies bundled allowlist without affecting workspace skills", async () => {

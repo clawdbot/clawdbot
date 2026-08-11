@@ -28,7 +28,7 @@ import {
   resolveProviderRuntimePluginHandle,
   type ProviderRuntimePluginHandle,
 } from "../../../plugins/provider-hook-runtime.js";
-import { resolveSkillsPromptForRun } from "../../../skills/loading/workspace.js";
+import { resolveSkillsPrompt } from "../../../skills/loading/workspace-skill-prompt.js";
 import { resolveEmbeddedRunSkillEntries } from "../../../skills/runtime/embedded-run-entries.js";
 import {
   applySkillEnvOverrides,
@@ -524,7 +524,7 @@ export function prepareEmbeddedAttemptSkills(params: {
       skillsWorkspaceDir,
       skillsPromptWorkspaceDir,
     });
-    const skillsPrompt = resolveSkillsPromptForRun({
+    const skillsPrompt = resolveSkillsPrompt({
       skillsSnapshot,
       entries: promptSkillEntries,
       config: params.attempt.config,

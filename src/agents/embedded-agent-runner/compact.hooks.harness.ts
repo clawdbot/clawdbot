@@ -964,9 +964,12 @@ export async function loadCompactHooksHarness(): Promise<{
     applySkillEnvOverridesFromSnapshot: vi.fn(() => () => {}),
   }));
 
-  vi.doMock("../../skills/loading/workspace.js", () => ({
-    loadWorkspaceSkillEntries: vi.fn(() => []),
-    resolveSkillsPromptForRun: vi.fn(() => undefined),
+  vi.doMock("../../skills/loading/workspace-skill-loader.js", () => ({
+    loadWorkspaceSkills: vi.fn(() => []),
+  }));
+
+  vi.doMock("../../skills/loading/workspace-skill-prompt.js", () => ({
+    resolveSkillsPrompt: vi.fn(() => undefined),
   }));
 
   vi.doMock("../agent-scope.js", () => ({

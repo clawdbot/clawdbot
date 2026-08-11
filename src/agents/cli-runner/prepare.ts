@@ -45,7 +45,7 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
-import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
+import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -259,7 +259,7 @@ async function resolveCliSkillsPrompt(params: {
     workspaceDir: params.workspaceDir,
   });
   if (!sandboxWorkspace) {
-    return resolveSkillsPromptForRun({
+    return resolveSkillsPrompt({
       skillsSnapshot: params.skillsSnapshot,
       workspaceDir: params.workspaceDir,
       config: params.config,
@@ -305,7 +305,7 @@ async function resolveCliSkillsPrompt(params: {
     skillsWorkspaceDir,
     skillsPromptWorkspaceDir,
   });
-  return resolveSkillsPromptForRun({
+  return resolveSkillsPrompt({
     skillsSnapshot: skillsSnapshotForRun,
     entries: promptSkillEntries,
     workspaceDir: skillsPromptWorkspaceDir,

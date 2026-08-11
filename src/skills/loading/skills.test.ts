@@ -26,7 +26,7 @@ import {
 } from "../test-support/home-env.test-support.js";
 import type { SkillEntry, SkillSnapshot } from "../types.js";
 import { shouldIncludeSkill } from "./config.js";
-import { buildWorkspaceSkillsPrompt } from "./workspace.js";
+import { buildWorkspaceSkillsPrompt } from "./workspace-skill-prompt.js";
 
 vi.mock("./plugin-skills.js", () => ({
   resolvePluginSkillDirs: () => [],

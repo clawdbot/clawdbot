@@ -1,4 +1,4 @@
-// Prompt resolution tests cover skill prompt lookup and active skill selection.
+// Workspace skill prompt resolution tests cover snapshot reuse and degraded-secret filtering.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,15 +7,15 @@ import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-st
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION, type SkillEntry } from "../types.js";
-import { buildWorkspaceSkillSnapshot, resolveSkillsPromptForRun } from "./workspace.js";
+import { buildSkillSnapshot, resolveSkillsPrompt } from "./workspace-skill-prompt.js";
 
 afterEach(() => {
   setActiveDegradedSecretOwners([]);
 });
 
-describe("resolveSkillsPromptForRun", () => {
+describe("resolveSkillsPrompt", () => {
   it("prefers snapshot prompt when available", () => {
-    const prompt = resolveSkillsPromptForRun({
+    const prompt = resolveSkillsPrompt({
       skillsSnapshot: { prompt: "SNAPSHOT", skills: [] },
       workspaceDir: "/tmp/openclaw",
     });
@@ -32,7 +32,7 @@ describe("resolveSkillsPromptForRun", () => {
       }),
       frontmatter: {},
     };
-    const prompt = resolveSkillsPromptForRun({
+    const prompt = resolveSkillsPrompt({
       entries: [entry],
       workspaceDir: "/tmp/openclaw",
     });
@@ -53,7 +53,7 @@ describe("resolveSkillsPromptForRun", () => {
     };
 
     expect(
-      resolveSkillsPromptForRun({
+      resolveSkillsPrompt({
         skillsSnapshot: { prompt: "", skills: [] },
         entries: [entry],
         workspaceDir: "/tmp/openclaw",
@@ -74,7 +74,7 @@ describe("resolveSkillsPromptForRun", () => {
     ]);
 
     expect(
-      resolveSkillsPromptForRun({
+      resolveSkillsPrompt({
         skillsSnapshot: {
           prompt:
             "LEAKED COLD INSTRUCTIONS\n<available_skills>\n  <skill>\n    <name>cold-skill</name>\n  </skill>\n</available_skills>",
@@ -98,7 +98,7 @@ describe("resolveSkillsPromptForRun", () => {
       },
     ]);
 
-    const prompt = resolveSkillsPromptForRun({
+    const prompt = resolveSkillsPrompt({
       skillsSnapshot: {
         prompt: "LEGACY SKILL PROMPT",
         skills: [{ name: "cold-skill" }, { name: "healthy-skill" }],
@@ -131,7 +131,7 @@ describe("resolveSkillsPromptForRun", () => {
       }),
       frontmatter: {},
     };
-    const snapshot = buildWorkspaceSkillSnapshot("/tmp/openclaw", {
+    const snapshot = buildSkillSnapshot("/tmp/openclaw", {
       entries: [cold, healthy],
     });
     setActiveDegradedSecretOwners([
@@ -145,7 +145,7 @@ describe("resolveSkillsPromptForRun", () => {
       },
     ]);
 
-    const prompt = resolveSkillsPromptForRun({
+    const prompt = resolveSkillsPrompt({
       skillsSnapshot: snapshot,
       entries: [cold, healthy],
       workspaceDir: "/tmp/openclaw",
@@ -167,7 +167,7 @@ describe("resolveSkillsPromptForRun", () => {
       frontmatter: {},
     });
     const capturedEntries = [createEntry("cold-skill"), createEntry("healthy-skill")];
-    const snapshot = buildWorkspaceSkillSnapshot("/tmp/openclaw", {
+    const snapshot = buildSkillSnapshot("/tmp/openclaw", {
       entries: capturedEntries,
     });
     setActiveDegradedSecretOwners([
@@ -181,7 +181,7 @@ describe("resolveSkillsPromptForRun", () => {
       },
     ]);
 
-    const prompt = resolveSkillsPromptForRun({
+    const prompt = resolveSkillsPrompt({
       skillsSnapshot: snapshot,
       entries: [...capturedEntries, createEntry("new-skill")],
       workspaceDir: "/tmp/openclaw",
@@ -204,7 +204,7 @@ describe("resolveSkillsPromptForRun", () => {
       name: "healthy-skill",
       description: "Captured healthy",
     });
-    const snapshot = buildWorkspaceSkillSnapshot(workspaceDir);
+    const snapshot = buildSkillSnapshot(workspaceDir);
     await writeSkill({
       dir: path.join(workspaceDir, "skills", "healthy-skill"),
       name: "healthy-skill",
@@ -227,7 +227,7 @@ describe("resolveSkillsPromptForRun", () => {
     ]);
 
     try {
-      const prompt = resolveSkillsPromptForRun({
+      const prompt = resolveSkillsPrompt({
         skillsSnapshot: snapshot,
         workspaceDir,
       });
@@ -255,7 +255,7 @@ describe("resolveSkillsPromptForRun", () => {
       frontmatter: {},
     };
 
-    const prompt = resolveSkillsPromptForRun({
+    const prompt = resolveSkillsPrompt({
       entries: [hidden],
       workspaceDir: "/tmp/openclaw",
     });
@@ -285,7 +285,7 @@ describe("resolveSkillsPromptForRun", () => {
       frontmatter: {},
     };
 
-    const prompt = resolveSkillsPromptForRun({
+    const prompt = resolveSkillsPrompt({
       entries: [visible, hidden],
       config: {
         agents: {
@@ -325,7 +325,7 @@ describe("resolveSkillsPromptForRun", () => {
       frontmatter: {},
     };
 
-    const prompt = resolveSkillsPromptForRun({
+    const prompt = resolveSkillsPrompt({
       entries: [inheritedEntry, explicitEntry],
       config: {
         agents: {

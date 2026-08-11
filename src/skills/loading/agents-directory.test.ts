@@ -9,7 +9,7 @@ import {
   type SkillsHomeEnvSnapshot,
 } from "../test-support/home-env.test-support.js";
 import { writeSkill } from "../test-support/test-helpers.js";
-import { buildWorkspaceSkillsPrompt } from "./workspace.js";
+import { buildWorkspaceSkillsPrompt } from "./workspace-skill-prompt.js";
 
 vi.mock("./plugin-skills.js", () => ({
   resolvePluginSkillDirs: () => [],

@@ -491,8 +491,8 @@ vi.mock("../../../skills/runtime/env-overrides.js", () => ({
   applySkillEnvOverridesFromSnapshot: () => () => {},
 }));
 
-vi.mock("../../../skills/loading/workspace.js", () => ({
-  resolveSkillsPromptForRun: (...args: unknown[]) => hoisted.resolveSkillsPromptForRunMock(...args),
+vi.mock("../../../skills/loading/workspace-skill-prompt.js", () => ({
+  resolveSkillsPrompt: (...args: unknown[]) => hoisted.resolveSkillsPromptForRunMock(...args),
 }));
 
 vi.mock("../../../skills/runtime/embedded-run-entries.js", () => ({

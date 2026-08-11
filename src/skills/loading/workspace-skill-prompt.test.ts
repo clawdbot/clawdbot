@@ -1,8 +1,10 @@
-// Compact format tests cover compact skill prompt serialization.
+// Workspace skill prompt tests cover catalog budgets, ordering, and compact paths.
+import fsSync from "node:fs";
 import os from "node:os";
-import { formatSkillsForPrompt as upstreamFormatSkillsForPrompt } from "openclaw/plugin-sdk/agent-sessions";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { withEnv } from "../../test-utils/env.js";
 import {
   restoreMockSkillsHomeEnv,
   setMockSkillsHomeEnv,
@@ -11,11 +13,12 @@ import {
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { SkillEntry } from "../types.js";
 import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
+import { testing as workspaceSkillsTesting } from "./skill-paths.js";
 import {
-  formatSkillsCompact,
+  buildSkillSnapshot,
   buildWorkspaceSkillsPrompt,
-  buildWorkspaceSkillSnapshot,
-} from "./workspace.js";
+  formatSkillsCompact,
+} from "./workspace-skill-prompt.js";
 
 function makeSkill(name: string, desc = "A skill", filePath = `/skills/${name}/SKILL.md`): Skill {
   return createCanonicalFixtureSkill({
@@ -68,86 +71,6 @@ const COMPACT_OMITTED_NOTICE =
   "⚠️ Skills catalog using compact format (descriptions omitted). Run `openclaw skills check` to audit.";
 const COMPACT_SHORTENED_NOTICE =
   "⚠️ Skills catalog using compact format (descriptions shortened). Run `openclaw skills check` to audit.";
-
-describe("formatSkillsCompact", () => {
-  it("keeps the full-format XML output aligned with the upstream formatter for visible skills", () => {
-    const skills = [
-      { ...makeSkill("weather", "Get weather <data> & forecasts"), promptVersion: "sha256:abc123" },
-      makeSkill("notes", "Summarize notes", "/tmp/notes/SKILL.md"),
-    ];
-    expect(formatSkillsForPrompt(skills)).toBe(upstreamFormatSkillsForPrompt(skills));
-  });
-
-  it("renders all passed skills in the full formatter without reapplying visibility policy", () => {
-    const hidden: Skill = { ...makeSkill("hidden"), disableModelInvocation: true };
-    const out = formatSkillsForPrompt([makeSkill("visible"), hidden]);
-    expect(out).toContain("visible");
-    expect(out).toContain("hidden");
-  });
-
-  it("returns empty string for no skills", () => {
-    expect(formatSkillsCompact([])).toBe("");
-  });
-
-  it("keeps compact descriptions with name, location, and version", () => {
-    const out = formatSkillsCompact([
-      { ...makeSkill("weather", "Get weather data"), promptVersion: "sha256:abc123" },
-    ]);
-    expect(out).toContain("<name>weather</name>");
-    expect(out).toContain("<description>Get weather data</description>");
-    expect(out).toContain("<location>/skills/weather/SKILL.md</location>");
-    expect(out).toContain("<version>sha256:abc123</version>");
-  });
-
-  it("omits descriptions when their compact budget is zero", () => {
-    const out = formatSkillsCompact([makeSkill("weather", "Get weather data")], {
-      descriptionMaxChars: 0,
-    });
-    expect(out).toContain("<name>weather</name>");
-    expect(out).not.toContain("<description>");
-  });
-
-  it("preserves location notes when compact descriptions are omitted", () => {
-    const out = formatSkillsCompact(
-      [
-        {
-          ...makeSkill("remote", "Remote skill"),
-          locationNote: "Load with exec host=node node=node-1.",
-        },
-      ],
-      { descriptionMaxChars: 0 },
-    );
-
-    expect(out).toContain("<location_note>Load with exec host=node node=node-1.</location_note>");
-  });
-
-  it("truncates descriptions without splitting emoji surrogate pairs", () => {
-    const out = formatSkillsCompact([makeSkill("emoji", `${"A".repeat(16)}😀 trailing`)], {
-      descriptionMaxChars: 20,
-    });
-
-    expect(out).toContain(`<description>${"A".repeat(16)}...</description>`);
-    expect(out).not.toMatch(/[\uD800-\uDFFF]/u);
-  });
-
-  it("renders all passed skills without reapplying visibility policy", () => {
-    const hidden: Skill = { ...makeSkill("hidden"), disableModelInvocation: true };
-    const out = formatSkillsCompact([makeSkill("visible"), hidden]);
-    expect(out).toContain("visible");
-    expect(out).toContain("hidden");
-  });
-
-  it("escapes XML special characters", () => {
-    const out = formatSkillsCompact([makeSkill("a<b&c")]);
-    expect(out).toContain("a&lt;b&amp;c");
-  });
-
-  it("is significantly smaller than full format", () => {
-    const skills = Array.from({ length: 50 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(800)));
-    const compact = formatSkillsCompact(skills);
-    expect(compact.length).toBeLessThan(formatSkillsForPrompt(skills).length / 2);
-  });
-});
 
 describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
   let envSnapshot: SkillsHomeEnvSnapshot;
@@ -394,7 +317,7 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     const skills = Array.from({ length: 5 }, (_, i) =>
       makeSkill(`skill-${i}`, "A skill", `${home}/.openclaw/workspace/skills/skill-${i}/SKILL.md`),
     );
-    const snapshot = buildWorkspaceSkillSnapshot("/fake", {
+    const snapshot = buildSkillSnapshot("/fake", {
       entries: skills.map(makeEntry),
     });
     // Prompt should use compacted paths
@@ -404,6 +327,200 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     for (const skill of snapshot.resolvedSkills ?? []) {
       expect(skill.filePath).toContain(home);
       expect(skill.filePath).not.toMatch(/^~\//);
+    }
+  });
+});
+
+describe("compactSkillPaths", () => {
+  function buildPromptForFixtureSkill(params: {
+    workspaceRoot: string;
+    skillDir: string;
+    name: string;
+    description: string;
+  }) {
+    return buildWorkspaceSkillsPrompt(params.workspaceRoot, {
+      entries: [
+        {
+          skill: createCanonicalFixtureSkill({
+            name: params.name,
+            description: params.description,
+            filePath: path.join(params.skillDir, "SKILL.md"),
+            baseDir: params.skillDir,
+            source: "test",
+          }),
+          frontmatter: {},
+          metadata: undefined,
+          invocation: { disableModelInvocation: false, userInvocable: true },
+          exposure: {
+            includeInRuntimeRegistry: true,
+            includeInAvailableSkillsPrompt: true,
+            userInvocable: true,
+          },
+        },
+      ],
+    });
+  }
+
+  it("replaces home directory prefix with ~ in skill locations", () => {
+    const home = os.homedir();
+    const skillDir = path.join(home, ".openclaw-test-skills", "test-skill");
+
+    const prompt = buildPromptForFixtureSkill({
+      workspaceRoot: home,
+      skillDir,
+      name: "test-skill",
+      description: "A test skill for path compaction",
+    });
+
+    expect(prompt).not.toContain(home + path.sep);
+    expect(prompt).toContain("~/");
+    expect(prompt).toContain("test-skill");
+    expect(prompt).toContain("A test skill for path compaction");
+  });
+
+  it("does not compact explicit state-root managed skill paths to OS-home tilde paths", () => {
+    const root = path.parse(os.homedir()).root;
+    const osHome = path.join(root, "data");
+    const stateDir = path.join(osHome, ".openclaw");
+    const skillDir = path.join(stateDir, "skills", "world-cup-soccer-openclaw-skill");
+    const skillFile = path.join(skillDir, "SKILL.md");
+
+    const prompt = withEnv(
+      {
+        HOME: osHome,
+        OPENCLAW_HOME: osHome,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      },
+      () =>
+        buildPromptForFixtureSkill({
+          workspaceRoot: path.join(root, "workspace"),
+          skillDir,
+          name: "world-cup-soccer-openclaw-skill",
+          description: "World Cup standings lookup",
+        }),
+    );
+
+    expect(prompt).toContain(`<location>${skillFile}</location>`);
+    expect(prompt).not.toContain("~/.openclaw/skills/world-cup-soccer-openclaw-skill/SKILL.md");
+  });
+
+  it("does not compact explicit state-root plugin skill paths to OS-home tilde paths", () => {
+    const root = path.parse(os.homedir()).root;
+    const osHome = path.join(root, "data");
+    const stateDir = path.join(osHome, ".openclaw");
+    const skillDir = path.join(stateDir, "plugin-skills", "calendar-plugin-skill");
+    const skillFile = path.join(skillDir, "SKILL.md");
+
+    const prompt = withEnv(
+      {
+        HOME: osHome,
+        OPENCLAW_HOME: osHome,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      },
+      () =>
+        buildPromptForFixtureSkill({
+          workspaceRoot: path.join(root, "workspace"),
+          skillDir,
+          name: "calendar-plugin-skill",
+          description: "Calendar plugin skill",
+        }),
+    );
+
+    expect(prompt).toContain(`<location>${skillFile}</location>`);
+    expect(prompt).not.toContain("~/.openclaw/plugin-skills/calendar-plugin-skill/SKILL.md");
+  });
+
+  it("compacts managed skill paths when OS-home tilde reaches the same path", () => {
+    const home = os.homedir();
+    const stateDir = path.join(home, ".openclaw");
+    const skillDir = path.join(stateDir, "skills", "home-managed-skill");
+
+    const prompt = withEnv(
+      {
+        HOME: home,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_HOME: undefined,
+      },
+      () =>
+        buildPromptForFixtureSkill({
+          workspaceRoot: path.join(home, "workspace"),
+          skillDir,
+          name: "home-managed-skill",
+          description: "Home managed skill",
+        }),
+    );
+
+    expect(prompt).toContain("<location>~/.openclaw/skills/home-managed-skill/SKILL.md</location>");
+    expect(prompt).not.toContain(`<location>${path.join(skillDir, "SKILL.md")}</location>`);
+  });
+
+  it("normalizes compacted Windows skill locations to forward slashes", () => {
+    const home = "C:\\Users\\alice";
+    const skillPath = path.win32.join(home, ".openclaw-test-skills", "win-skill", "SKILL.md");
+
+    const compactedPath = workspaceSkillsTesting.compactHomePath(skillPath, [home]);
+
+    expect(compactedPath).toBe("~/.openclaw-test-skills/win-skill/SKILL.md");
+  });
+
+  it("preserves POSIX literal backslashes after home compaction", () => {
+    const home = os.homedir();
+    const skillDir = path.join(home, ".openclaw-test-skills\\literal-skill");
+
+    const prompt = buildPromptForFixtureSkill({
+      workspaceRoot: home,
+      skillDir,
+      name: "literal-skill",
+      description: "POSIX literal backslash skill",
+    });
+
+    const locationMatch = prompt.match(/<location>([^<]+)<\/location>/);
+    if (!locationMatch) {
+      throw new Error("expected prompt location tag");
+    }
+    expect(locationMatch[1]).toContain("~/");
+    expect(locationMatch[1]).toContain("\\literal-skill");
+  });
+
+  it("preserves paths outside home directory", () => {
+    const outsideHome = path.join(path.parse(os.homedir()).root, "openclaw-external-skills");
+    const skillDir = path.join(outsideHome, "skills", "ext-skill");
+
+    const prompt = buildPromptForFixtureSkill({
+      workspaceRoot: outsideHome,
+      skillDir,
+      name: "ext-skill",
+      description: "External skill",
+    });
+
+    expect(prompt).toMatch(/<location>[^<]+SKILL\.md<\/location>/);
+    expect(prompt).toContain(path.join(skillDir, "SKILL.md"));
+  });
+
+  it("loads skills when the shared state database is unavailable", () => {
+    const root = fsSync.realpathSync(
+      fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-skill-load-")),
+    );
+    const blockedParent = path.join(root, "state-blocker");
+    fsSync.writeFileSync(blockedParent, "not a directory", "utf8");
+    const skillDir = path.join(root, "workspace", "skills", "available-skill");
+
+    try {
+      const prompt = withEnv({ OPENCLAW_STATE_DIR: path.join(blockedParent, "state") }, () =>
+        buildPromptForFixtureSkill({
+          workspaceRoot: path.join(root, "workspace"),
+          skillDir,
+          name: "available-skill",
+          description: "Available despite missing lifecycle state",
+        }),
+      );
+
+      expect(prompt).toContain("available-skill");
+      expect(prompt).toContain("Available despite missing lifecycle state");
+    } finally {
+      fsSync.rmSync(root, { recursive: true, force: true });
     }
   });
 });

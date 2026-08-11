@@ -11,7 +11,7 @@ import {
   setMockSkillsHomeEnv,
   type SkillsHomeEnvSnapshot,
 } from "../test-support/home-env.test-support.js";
-import { buildWorkspaceSkillSnapshot, buildWorkspaceSkillsPrompt } from "./workspace.js";
+import { buildSkillSnapshot, buildWorkspaceSkillsPrompt } from "./workspace-skill-prompt.js";
 
 vi.mock("./plugin-skills.js", () => ({
   resolvePluginSkillDirs: () => [],
@@ -19,7 +19,6 @@ vi.mock("./plugin-skills.js", () => ({
 
 const fixtureSuite = createFixtureSuite("openclaw-skills-snapshot-suite-");
 let truncationWorkspaceTemplateDir = "";
-let nestedRepoTemplateDir = "";
 let tempHome: TempHomeEnv | null = null;
 let skillsHomeEnv: SkillsHomeEnvSnapshot | null = null;
 
@@ -36,16 +35,6 @@ beforeAll(async () => {
       dir: path.join(truncationWorkspaceTemplateDir, "skills", name),
       name,
       description: "x".repeat(800),
-    });
-  }
-
-  nestedRepoTemplateDir = await fixtureSuite.createCaseDir("template-skills-repo");
-  for (let i = 0; i < 8; i += 1) {
-    const name = `repo-skill-${String(i).padStart(2, "0")}`;
-    await writeSkill({
-      dir: path.join(nestedRepoTemplateDir, "skills", name),
-      name,
-      description: `Desc ${i}`,
     });
   }
 });
@@ -66,12 +55,9 @@ function withWorkspaceHome<T>(workspaceDir: string, cb: () => T): T {
   return withPathResolutionEnv(workspaceDir, { PATH: "" }, () => cb());
 }
 
-function buildSnapshot(
-  workspaceDir: string,
-  options?: Parameters<typeof buildWorkspaceSkillSnapshot>[1],
-) {
+function buildSnapshot(workspaceDir: string, options?: Parameters<typeof buildSkillSnapshot>[1]) {
   return withWorkspaceHome(workspaceDir, () =>
-    buildWorkspaceSkillSnapshot(workspaceDir, {
+    buildSkillSnapshot(workspaceDir, {
       managedSkillsDir: path.join(workspaceDir, ".managed"),
       bundledSkillsDir: path.join(workspaceDir, ".bundled"),
       ...options,
@@ -86,7 +72,7 @@ async function cloneTemplateDir(templateDir: string, prefix: string): Promise<st
 }
 
 function expectSnapshotNamesAndPrompt(
-  snapshot: ReturnType<typeof buildWorkspaceSkillSnapshot>,
+  snapshot: ReturnType<typeof buildSkillSnapshot>,
   params: { contains?: string[]; omits?: string[] },
 ) {
   for (const name of params.contains ?? []) {
@@ -99,7 +85,7 @@ function expectSnapshotNamesAndPrompt(
   }
 }
 
-describe("buildWorkspaceSkillSnapshot", () => {
+describe("buildSkillSnapshot", () => {
   it("returns an empty snapshot when skills dirs are missing", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
 
@@ -125,7 +111,7 @@ describe("buildWorkspaceSkillSnapshot", () => {
     await fs.mkdir(path.join(home, ".agents"), { recursive: true });
     await fs.symlink(compatibilitySkillsDir, path.join(home, ".agents", "skills"), "dir");
     const buildHomeSnapshot = () =>
-      buildWorkspaceSkillSnapshot(workspaceDir, {
+      buildSkillSnapshot(workspaceDir, {
         managedSkillsDir: path.join(workspaceDir, ".managed"),
         bundledSkillsDir: path.join(workspaceDir, ".bundled"),
       });
@@ -207,9 +193,7 @@ describe("buildWorkspaceSkillSnapshot", () => {
       },
     };
 
-    const snapshot = withWorkspaceHome(workspaceDir, () =>
-      buildWorkspaceSkillSnapshot(workspaceDir, opts),
-    );
+    const snapshot = withWorkspaceHome(workspaceDir, () => buildSkillSnapshot(workspaceDir, opts));
     const prompt = withWorkspaceHome(workspaceDir, () =>
       buildWorkspaceSkillsPrompt(workspaceDir, opts),
     );
@@ -248,7 +232,7 @@ describe("buildWorkspaceSkillSnapshot", () => {
     const workspaceDir = await cloneTemplateDir(truncationWorkspaceTemplateDir, "workspace");
 
     const snapshot = withWorkspaceHome(workspaceDir, () =>
-      buildWorkspaceSkillSnapshot(workspaceDir, {
+      buildSkillSnapshot(workspaceDir, {
         config: {
           skills: {
             limits: {
@@ -291,137 +275,5 @@ describe("buildWorkspaceSkillSnapshot", () => {
       "github",
     ]);
     expect(snapshot.skillFilter).toEqual(["docs-search", "github"]);
-  });
-
-  it("limits discovery for nested repo-style skills roots (dir/skills/*)", async () => {
-    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
-    const repoDir = await cloneTemplateDir(nestedRepoTemplateDir, "skills-repo");
-
-    const snapshot = withWorkspaceHome(workspaceDir, () =>
-      buildWorkspaceSkillSnapshot(workspaceDir, {
-        config: {
-          skills: {
-            load: {
-              extraDirs: [repoDir],
-            },
-            limits: {
-              maxCandidatesPerRoot: 5,
-              maxSkillsLoadedPerSource: 5,
-            },
-          },
-        },
-        managedSkillsDir: path.join(workspaceDir, ".managed"),
-        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
-      }),
-    );
-
-    const skillNames = snapshot.skills.map((skill) => skill.name);
-    expect(skillNames).toStrictEqual([
-      "repo-skill-00",
-      "repo-skill-01",
-      "repo-skill-02",
-      "repo-skill-03",
-      "repo-skill-04",
-    ]);
-    for (const name of skillNames) {
-      expect(snapshot.prompt).toContain(name);
-    }
-  });
-
-  it("skips skills whose SKILL.md exceeds maxSkillFileBytes", async () => {
-    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
-
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "small-skill"),
-      name: "small-skill",
-      description: "Small",
-    });
-
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "big-skill"),
-      name: "big-skill",
-      description: "Big",
-      body: "x".repeat(5_000),
-    });
-
-    const snapshot = buildSnapshot(workspaceDir, {
-      config: {
-        skills: {
-          limits: {
-            maxSkillFileBytes: 1000,
-          },
-        },
-      },
-    });
-
-    expectSnapshotNamesAndPrompt(snapshot, {
-      contains: ["small-skill"],
-      omits: ["big-skill"],
-    });
-  });
-
-  it("detects nested skills roots beyond the first 25 entries", async () => {
-    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
-    const repoDir = await fixtureSuite.createCaseDir("skills-repo");
-
-    // Create 30 nested dirs, but only the last one is an actual skill.
-    for (let i = 0; i < 30; i += 1) {
-      await fs.mkdir(path.join(repoDir, "skills", `entry-${String(i).padStart(2, "0")}`), {
-        recursive: true,
-      });
-    }
-
-    await writeSkill({
-      dir: path.join(repoDir, "skills", "entry-29"),
-      name: "late-skill",
-      description: "Nested skill discovered late",
-    });
-
-    const snapshot = buildSnapshot(workspaceDir, {
-      config: {
-        skills: {
-          load: {
-            extraDirs: [repoDir],
-          },
-          limits: {
-            maxCandidatesPerRoot: 30,
-            maxSkillsLoadedPerSource: 30,
-          },
-        },
-      },
-    });
-
-    expectSnapshotNamesAndPrompt(snapshot, {
-      contains: ["late-skill"],
-    });
-  });
-
-  it("enforces maxSkillFileBytes for root-level SKILL.md", async () => {
-    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
-    const rootSkillDir = await fixtureSuite.createCaseDir("root-skill");
-
-    await writeSkill({
-      dir: rootSkillDir,
-      name: "root-big-skill",
-      description: "Big",
-      body: "x".repeat(5_000),
-    });
-
-    const snapshot = buildSnapshot(workspaceDir, {
-      config: {
-        skills: {
-          load: {
-            extraDirs: [rootSkillDir],
-          },
-          limits: {
-            maxSkillFileBytes: 1000,
-          },
-        },
-      },
-    });
-
-    expectSnapshotNamesAndPrompt(snapshot, {
-      omits: ["root-big-skill"],
-    });
   });
 });
