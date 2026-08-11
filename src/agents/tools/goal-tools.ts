@@ -19,7 +19,7 @@ import {
   ToolInputError,
   jsonResult,
   readPositiveIntegerParam,
-  readStringParam,
+  readToolStringParam,
 } from "./common.js";
 
 type GoalToolOptions = {
@@ -103,7 +103,7 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
     parameters: CreateGoalToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const objective = readStringParam(params, "objective", { required: true });
+      const objective = readToolStringParam(params, "objective", { required: true });
       const tokenBudget = readPositiveIntegerParam(params, "token_budget", {
         message: "token_budget must be a positive integer",
       });
@@ -130,7 +130,7 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
     parameters: UpdateGoalToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const status = readStringParam(params, "status", { required: true });
+      const status = readToolStringParam(params, "status", { required: true });
       if (
         !MODEL_UPDATABLE_SESSION_GOAL_STATUSES.includes(
           status as (typeof MODEL_UPDATABLE_SESSION_GOAL_STATUSES)[number],
@@ -140,7 +140,7 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
           `status must be one of ${MODEL_UPDATABLE_SESSION_GOAL_STATUSES.join(", ")}`,
         );
       }
-      const note = readStringParam(params, "note");
+      const note = readToolStringParam(params, "note");
       const scope = resolveGoalSessionScope(options);
       const goal = await updateSessionGoalStatus({
         ...scope,

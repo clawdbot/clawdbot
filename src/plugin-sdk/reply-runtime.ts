@@ -38,8 +38,8 @@ export {
   resolveInboundDebounceMs,
 } from "../auto-reply/inbound-debounce.js";
 export {
-  dispatchReplyWithBufferedBlockDispatcher,
-  dispatchReplyWithDispatcher,
+  dispatchReplyWithBufferedBlockDispatcherCore as dispatchReplyWithBufferedBlockDispatcher,
+  dispatchReplyWithDispatcherCore as dispatchReplyWithDispatcher,
 } from "../auto-reply/reply/provider-dispatcher.js";
 export {
   createReplyDispatcher,

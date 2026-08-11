@@ -1,10 +1,10 @@
 // Shared mocks and fixtures for agent-runner execution tests.
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
-import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../agents/embedded-agent-helpers/error-text.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { FailoverError, type FallbackAttemptRecord } from "../../agents/failover-error.js";
+import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../agents/failover/user-copy.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import {
   createUserTurnTranscriptRecorder,
@@ -13,6 +13,7 @@ import {
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
@@ -61,6 +62,9 @@ const state = vi.hoisted(() => ({
   updateSessionStoreMock: vi.fn(),
   resolveCurrentTurnImagesMock: vi.fn(),
   peekSessionMcpRuntimeMock: vi.fn(),
+  productionBuildEmbeddedRunExecutionParams: undefined as
+    | typeof buildEmbeddedRunExecutionParams
+    | undefined,
 }));
 
 export const GENERIC_RUN_FAILURE_TEXT =
@@ -171,7 +175,6 @@ vi.mock("../../agents/embedded-agent-helpers.js", async () => {
   );
   return {
     ...actual,
-    BILLING_ERROR_USER_MESSAGE: "billing",
     formatBillingErrorMessage: actual.formatBillingErrorMessage,
     isCompactionFailureError: (message?: string) => state.isCompactionFailureErrorMock(message),
     isContextOverflowError: (message?: string) => state.isContextOverflowErrorMock(message),
@@ -246,45 +249,38 @@ vi.mock("./current-turn-images.js", () => ({
 }));
 
 vi.mock("./agent-runner-utils.js", () => ({
-  buildEmbeddedRunExecutionParams: (params: {
-    provider: string;
-    model: string;
-    run: {
-      provider?: string;
-      thinkLevel?: string;
-      authProfileId?: string;
-      authProfileIdSource?: "auto" | "user";
-      agentAccountId?: string;
-      chatType?: string;
-    };
-    replyRoute?: {
-      originatingChannel?: string;
-      originatingTo?: string;
-      originatingAccountId?: string;
-      originatingChatType?: string;
-    };
-    sessionCtx: { AccountId?: string; ChatType?: string };
-  }) => ({
-    embeddedContext: {
-      messageProvider: params.replyRoute?.originatingChannel,
-      messageTo: params.replyRoute?.originatingTo,
-      agentAccountId:
-        params.replyRoute?.originatingAccountId ??
-        params.sessionCtx.AccountId ??
-        params.run.agentAccountId,
-      chatType:
-        params.replyRoute?.originatingChatType ?? params.sessionCtx.ChatType ?? params.run.chatType,
-    },
-    senderContext: {},
-    runBaseParams: {
-      provider: params.provider,
-      model: params.model,
-      thinkLevel: params.run.thinkLevel,
-      authProfileId: params.provider === params.run.provider ? params.run.authProfileId : undefined,
-      authProfileIdSource:
-        params.provider === params.run.provider ? params.run.authProfileIdSource : undefined,
-    },
-  }),
+  buildEmbeddedRunExecutionParams: (
+    params: Parameters<typeof buildEmbeddedRunExecutionParams>[0],
+  ) =>
+    // Most execution tests isolate fallback policy from config/channel discovery. Ownership
+    // regressions opt into the production builder so queue metadata must cross the real boundary.
+    state.productionBuildEmbeddedRunExecutionParams
+      ? state.productionBuildEmbeddedRunExecutionParams(params)
+      : {
+          embeddedContext: {
+            ...params.run,
+            messageProvider: params.replyRoute?.originatingChannel,
+            messageTo: params.replyRoute?.originatingTo,
+            agentAccountId:
+              params.replyRoute?.originatingAccountId ??
+              params.sessionCtx.AccountId ??
+              params.run.agentAccountId,
+            chatType:
+              params.replyRoute?.originatingChatType ??
+              params.sessionCtx.ChatType ??
+              params.run.chatType,
+          },
+          senderContext: {},
+          runBaseParams: {
+            provider: params.provider,
+            model: params.model,
+            thinkLevel: params.run.thinkLevel,
+            authProfileId:
+              params.provider === params.run.provider ? params.run.authProfileId : undefined,
+            authProfileIdSource:
+              params.provider === params.run.provider ? params.run.authProfileIdSource : undefined,
+          },
+        },
   resolveQueuedReplyRuntimeConfig: <T>(config: T) => config,
   resolveModelFallbackOptions: vi.fn(
     (run: { provider?: string; model?: string; config?: unknown; agentDir?: string }) => ({
@@ -340,6 +336,12 @@ export async function getExecuteAgentTurnForTest() {
     }
     return { kind: "final" as const, payload: { text: "NO_REPLY" } };
   };
+}
+
+export async function useProductionEmbeddedRunExecutionParamsForTest(): Promise<void> {
+  const actual =
+    await vi.importActual<typeof import("./agent-runner-utils.js")>("./agent-runner-utils.js");
+  state.productionBuildEmbeddedRunExecutionParams = actual.buildEmbeddedRunExecutionParams;
 }
 
 export async function loadActualRunCliAgentForTest(): Promise<RunCliAgent> {
@@ -689,6 +691,7 @@ export function setupAgentRunnerExecutionTestState() {
     state.updateSessionStoreMock.mockReset();
     state.resolveCurrentTurnImagesMock.mockReset();
     state.peekSessionMcpRuntimeMock.mockReset();
+    state.productionBuildEmbeddedRunExecutionParams = undefined;
     state.peekSessionMcpRuntimeMock.mockReturnValue(undefined);
     state.resolveCurrentTurnImagesMock.mockImplementation(
       async (params: { images?: unknown[]; imageOrder?: unknown[] }) => ({

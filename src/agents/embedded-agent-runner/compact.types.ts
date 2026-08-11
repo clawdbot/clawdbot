@@ -15,7 +15,7 @@ import type { SkillSnapshot } from "../../skills/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.exec-types.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
-import type { TrustedSubagentCompletionHandoff } from "../subagent-announce-handoff.js";
+import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
 
 export type CompactEmbeddedAgentSessionParams = {
   sessionId: string;

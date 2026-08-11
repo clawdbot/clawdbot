@@ -24,7 +24,7 @@ import {
   jsonResult,
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
-  readStringParam,
+  readToolStringParam,
 } from "./common.js";
 import {
   assertCronToolAgentFieldMatchesScope,
@@ -76,7 +76,7 @@ function isMissingOrEmptyObject(value: unknown): boolean {
 }
 
 function readCronJobIdParam(params: Record<string, unknown>) {
-  return readStringParam(params, "jobId") ?? readStringParam(params, "id");
+  return readToolStringParam(params, "jobId") ?? readToolStringParam(params, "id");
 }
 
 const CRON_SELF_REMOVE_SCOPE_ERROR = "Automations tool is restricted to the current automation.";
@@ -204,7 +204,7 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
     execute: async (_toolCallId, args, operationSignal) => {
       operationSignal?.throwIfAborted();
       const params = args as Record<string, unknown>;
-      const action = readStringParam(params, "action", { required: true });
+      const action = readToolStringParam(params, "action", { required: true });
       assertCronSelfRemoveScope(opts, action, params);
       const parsedGatewayOpts = readGatewayCallOptions(params);
       const gatewayOpts: GatewayCallOptions = {
@@ -596,7 +596,7 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
             if (!jobId || !runId) {
               throw new Error("cron next_check is only available to the currently running job");
             }
-            const rawDuration = readStringParam(params, "in", { required: true });
+            const rawDuration = readToolStringParam(params, "in", { required: true });
             let delayMs: number;
             try {
               delayMs = parseDurationMs(rawDuration);
@@ -610,7 +610,7 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
             return jsonResult({ ok: true, delayMs });
           }
           case "wake": {
-            const text = readStringParam(params, "text", { required: true });
+            const text = readToolStringParam(params, "text", { required: true });
             const mode =
               params.mode === "now" || params.mode === "next-heartbeat"
                 ? params.mode
@@ -627,8 +627,8 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
             // calling agent.
             const cfg = getRuntimeConfig();
             const { mainKey, alias } = resolveMainSessionAlias(cfg);
-            const explicitSessionKey = readStringParam(params, "sessionKey");
-            const explicitAgentId = readStringParam(params, "agentId");
+            const explicitSessionKey = readToolStringParam(params, "sessionKey");
+            const explicitAgentId = readToolStringParam(params, "agentId");
             if (callerScope) {
               assertCronToolAgentFieldMatchesScope({
                 value: explicitAgentId,

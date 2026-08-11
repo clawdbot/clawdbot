@@ -3,7 +3,11 @@ import type { DB as StateDatabase } from "../../state/openclaw-state-db.generate
 import { required, type WorkerSessionPlacementRecord } from "./placement-record.js";
 import { getRequired, query, transitionValues } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
-import { signalTurnClaimRelease } from "./placement-turn-claims.js";
+import {
+  assertNoRunningWorkerSessionToolOperations,
+  clearWorkerTurnToolState,
+} from "./placement-session-tool-operations.js";
+import { signalWorkerTurnClaimClosed } from "./placement-turn-claims.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.js";
 import { boundedWorkerError } from "./worker-error.js";
 
@@ -83,6 +87,13 @@ export function createPlacementPendingFailureOps(runtime: PlacementStoreRuntime)
         if (transitioning.state !== "draining") {
           throw new Error(`Session ${sessionId} workspace result did not reach draining`);
         }
+        if (persisted) {
+          assertNoRunningWorkerSessionToolOperations(db, {
+            sessionId,
+            claimId: persisted.claimId,
+          });
+          clearWorkerTurnToolState(db, { sessionId, claimId: persisted.claimId });
+        }
         const reconcilingValues = transitionValues(transitioning, "reconciling", {}, terminalAtMs);
         const reconciled = executeSqliteQuerySync(
           db,
@@ -130,10 +141,26 @@ export function createPlacementPendingFailureOps(runtime: PlacementStoreRuntime)
         if (removed.numAffectedRows !== 1n) {
           throw new Error(`Session ${sessionId} workspace result changed during failure`);
         }
-        return { record: getRequired(db, sessionId), releasedClaim: persisted !== null };
+        return {
+          record: getRequired(db, sessionId),
+          releasedClaim:
+            persisted?.owner === "worker"
+              ? {
+                  sessionId,
+                  owner: {
+                    kind: "worker" as const,
+                    environmentId: pending.environmentId,
+                    ownerEpoch: pending.ownerEpoch,
+                  },
+                  claimId: pending.claimId,
+                  runId: pending.runId,
+                  placementGeneration: pending.placementGeneration,
+                }
+              : null,
+        };
       });
       if (outcome.releasedClaim) {
-        signalTurnClaimRelease(path, sessionId);
+        signalWorkerTurnClaimClosed(path, outcome.releasedClaim);
       }
       return outcome.record;
     },

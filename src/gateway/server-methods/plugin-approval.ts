@@ -2,6 +2,8 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  ErrorCodes,
+  errorShape,
   validatePluginApprovalRequestParams,
   validatePluginApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -81,12 +83,37 @@ export function createPluginApprovalHandlers(
       };
       const twoPhase = p.twoPhase === true;
       const timeoutMs = resolvePluginApprovalTimeoutMs(p.timeoutMs);
+      const trustedAgentRuntime = client?.internal?.agentRuntimeIdentity;
+
+      if (
+        trustedAgentRuntime &&
+        context.validateAgentRuntimeApprovalAuthority?.(trustedAgentRuntime) !== true
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "agent runtime approval authority is no longer active",
+          ),
+        );
+        return;
+      }
+
+      if (trustedAgentRuntime && !trustedAgentRuntime.approvalOwnerPluginId) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "signed plugin approval owner is unavailable"),
+        );
+        return;
+      }
 
       const normalizeTrimmedString = (value?: string | null): string | null =>
         normalizeOptionalString(value) || null;
 
       const request: PluginApprovalRequestPayload = {
-        pluginId: p.pluginId ?? null,
+        pluginId: trustedAgentRuntime?.approvalOwnerPluginId ?? p.pluginId ?? null,
         title: p.title,
         description: p.description,
         detail: normalizeTrimmedString(p.detail),
@@ -100,17 +127,35 @@ export function createPluginApprovalHandlers(
               }),
             }
           : {}),
-        agentId: p.agentId ?? null,
-        sessionKey: p.sessionKey ?? null,
-        turnSourceChannel: normalizeTrimmedString(p.turnSourceChannel),
-        turnSourceTo: normalizeTrimmedString(p.turnSourceTo),
-        turnSourceAccountId: normalizeTrimmedString(p.turnSourceAccountId),
-        turnSourceThreadId: p.turnSourceThreadId ?? null,
+        agentId: trustedAgentRuntime?.agentId ?? p.agentId ?? null,
+        sessionKey: trustedAgentRuntime?.sessionKey ?? p.sessionKey ?? null,
+        runId: trustedAgentRuntime?.operationalRunInstance.runId ?? null,
+        turnSourceChannel: trustedAgentRuntime
+          ? normalizeTrimmedString(trustedAgentRuntime.turnSourceChannel)
+          : normalizeTrimmedString(p.turnSourceChannel),
+        turnSourceTo: trustedAgentRuntime
+          ? normalizeTrimmedString(trustedAgentRuntime.turnSourceTo)
+          : normalizeTrimmedString(p.turnSourceTo),
+        turnSourceAccountId: trustedAgentRuntime
+          ? normalizeTrimmedString(trustedAgentRuntime.turnSourceAccountId)
+          : normalizeTrimmedString(p.turnSourceAccountId),
+        turnSourceThreadId: trustedAgentRuntime
+          ? (trustedAgentRuntime.turnSourceThreadId ?? null)
+          : (p.turnSourceThreadId ?? null),
       };
 
       // Always server-generate the ID — never accept plugin-provided IDs.
       // Kind-prefix so /approve routing can distinguish plugin vs exec IDs deterministically.
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
+      if (trustedAgentRuntime) {
+        record.agentRuntimeDelegatedAuthority = trustedAgentRuntime.delegatedAuthority;
+      }
+      if (
+        trustedAgentRuntime?.executionIdentity &&
+        request.runId === trustedAgentRuntime.executionIdentity.runId
+      ) {
+        record.executionIdentityToken = trustedAgentRuntime.executionIdentity;
+      }
       bindApprovalRequesterMetadata({ record, client });
       if (client?.internal?.approvalRuntime === true) {
         bindApprovalReviewerDeviceIds({

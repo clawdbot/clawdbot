@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
+import type { CronServiceDeps } from "./service/state.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-stream-trigger-" });
 
@@ -194,7 +195,9 @@ describe("cron stream trigger composition", () => {
   it("reports a failed payload batch without reporting it fired", async () => {
     const { storePath } = await makeStorePath();
     const onTriggerDisposition = vi.fn();
-    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const sendCronFailureAlert = vi.fn<NonNullable<CronServiceDeps["sendCronFailureAlert"]>>(
+      async () => undefined,
+    );
     const cron = new CronService({
       storePath,
       cronEnabled: true,
@@ -239,15 +242,15 @@ describe("cron stream trigger composition", () => {
         consecutiveErrors: 1,
       });
       expect(sendCronFailureAlert).toHaveBeenCalledOnce();
-      expect(sendCronFailureAlert).toHaveBeenCalledWith(
-        expect.objectContaining({
-          payload: expect.objectContaining({
-            text:
-              'Automation "failing stream payload" failed 1 times\n' +
-              "Check automation history for details.",
-          }),
-        }),
-      );
+      const alert = sendCronFailureAlert.mock.calls[0]?.[0];
+      expect(alert?.channel).toBe("telegram");
+      expect(alert?.to).toBe("19098680");
+      expect(alert?.payload).toEqual({
+        text:
+          'Automation "failing stream payload" failed 1 times\n' +
+          "Check automation history for details.",
+      });
+      expect(alert?.job.state.lastError).toBe("boom");
     } finally {
       cron.stop();
     }

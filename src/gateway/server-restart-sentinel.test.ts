@@ -169,10 +169,15 @@ const mocks = vi.hoisted(() => {
 vi.unmock("./server-restart-sentinel.js");
 vi.resetModules();
 
-vi.mock("../agents/subagent-completion-delivery.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../agents/subagent-completion-delivery.js")>()),
-  settleCorrelatedSubagentDelivery: mocks.settleCorrelatedSubagentDelivery,
-}));
+vi.mock(
+  "../agents/subagents/completion/subagent-completion-delivery.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../agents/subagents/completion/subagent-completion-delivery.js")
+    >()),
+    settleCorrelatedSubagentDelivery: mocks.settleCorrelatedSubagentDelivery,
+  }),
+);
 
 vi.mock("../agents/agent-scope.js", async () => {
   const actual = await vi.importActual<typeof import("../agents/agent-scope.js")>(
@@ -304,7 +309,7 @@ vi.mock("../infra/outbound/delivery-queue.js", () => ({
   failDelivery: mocks.failDelivery,
   failDeliveryAfterPlatformSend: mocks.failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend: mocks.failDeliveryBeforePlatformSend,
-  drainPendingDeliveries: mocks.drainPendingDeliveries,
+  drainPendingDeliveriesCore: mocks.drainPendingDeliveries,
   withActiveDeliveryClaim: mocks.withActiveDeliveryClaim,
 }));
 

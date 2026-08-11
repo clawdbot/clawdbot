@@ -3,7 +3,7 @@ import type { SessionsListParams } from "../../../packages/gateway-protocol/src/
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
-} from "../../agents/subagent-registry.test-helpers.js";
+} from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   loadSessionEntry,

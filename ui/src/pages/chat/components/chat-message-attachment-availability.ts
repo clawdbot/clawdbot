@@ -44,8 +44,6 @@ const ASSISTANT_ATTACHMENT_METADATA_FETCH_TIMEOUT_MS = 30_000;
 export const ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS = 30_000;
 export const ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES = 2;
 
-let assistantAttachmentAvailabilityRenderVersion = 0;
-
 export function resolveAssistantAttachmentAvailability(
   source: string,
   localMediaPreviewRoots: readonly string[],
@@ -89,7 +87,6 @@ export function resolveAssistantAttachmentAvailability(
     ) {
       resource.retryAttempted = true;
       resource.value = undefined;
-      bumpAssistantAttachmentAvailabilityRenderVersion();
     } else if (
       cached.status === "available" &&
       cached.mediaTicket &&
@@ -252,15 +249,6 @@ function createUnavailableAssistantAttachment(
   };
 }
 
-export function getAssistantAttachmentAvailabilityRenderVersion(): number {
-  return assistantAttachmentAvailabilityRenderVersion;
-}
-
-export function bumpAssistantAttachmentAvailabilityRenderVersion(): void {
-  assistantAttachmentAvailabilityRenderVersion =
-    (assistantAttachmentAvailabilityRenderVersion + 1) % Number.MAX_SAFE_INTEGER;
-}
-
 function buildAssistantAttachmentMetaUrl(source: string, basePath?: string): string {
   const attachmentUrl = buildAssistantAttachmentUrl(source, basePath);
   return `${attachmentUrl}${attachmentUrl.includes("?") ? "&" : "?"}meta=1`;
@@ -274,7 +262,6 @@ function setAssistantAttachmentAvailability(
     return;
   }
   resource.value = availability;
-  bumpAssistantAttachmentAvailabilityRenderVersion();
   scheduleAssistantAttachmentRefresh(resource, availability);
 }
 
@@ -298,13 +285,8 @@ function scheduleAssistantAttachmentRefresh(
     // Keep the failed generation until its retry can inherit the one-attempt
     // budget. A ticket refresh keeps the playable generation mounted while
     // its replacement is minted, otherwise the checking card resets playback.
-    if (availability.status === "available") {
-      // Virtual rows use this version as their media invalidation key. Notify
-      // alone updates the host but can leave the attachment row memoized.
-      bumpAssistantAttachmentAvailabilityRenderVersion();
-    } else if (availability.status !== "unavailable") {
+    if (availability.status === "checking") {
       resource.value = undefined;
-      bumpAssistantAttachmentAvailabilityRenderVersion();
     }
     notifyChatMediaResourceSubscribers(resource);
   });

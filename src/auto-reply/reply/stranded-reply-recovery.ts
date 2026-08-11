@@ -1,7 +1,10 @@
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
-import { shouldWarnAboutPrivateMessageToolFinal } from "./private-message-tool-final.js";
+import {
+  classifyPrivateMessageToolFinal,
+  shouldClassifyPrivateMessageToolFinal,
+} from "./private-message-tool-final.js";
 import type { FollowupRun } from "./queue/types.js";
 
 const STRANDED_REPLY_RETRY_MARKER = "stranded-reply-retry";
@@ -31,29 +34,18 @@ export function resolveStrandedReplyRecovery(params: {
   isHeartbeat: boolean;
   isRoomEvent: boolean;
 }): StrandedReplyRecovery {
-  if (
-    params.isHeartbeat ||
-    params.isRoomEvent ||
-    params.sourceReplyDeliveryMode !== "message_tool_only" ||
-    params.sendPolicyDenied ||
-    params.successfulSourceReplyDelivery
-  ) {
+  if (!shouldClassifyPrivateMessageToolFinal(params)) {
     return { kind: "none" };
   }
-  const shouldWarn = shouldWarnAboutPrivateMessageToolFinal({
-    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    sendPolicyDenied: params.sendPolicyDenied,
-    successfulSourceReplyDelivery: params.successfulSourceReplyDelivery,
-    finalText: params.finalText,
-  });
+  const classification = classifyPrivateMessageToolFinal(params);
   if (params.base.strandedReplyRetry === true) {
     return {
       kind: "diagnostic",
       payload: buildStrandedReplyDeliveryFailurePayload(),
-      warn: shouldWarn,
+      warn: classification === "substantive",
     };
   }
-  if (!shouldWarn) {
+  if (classification !== "substantive") {
     return { kind: "none" };
   }
   return {

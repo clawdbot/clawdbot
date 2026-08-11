@@ -12,7 +12,7 @@ minimumReleaseAgeExclude:
   - "@openclaw/fs-safe@0.5.4"
   - "@openclaw/libterminal@0.3.2"
   - "@openclaw/proxyline@0.3.4"
-  - "@openclaw/uirouter@0.1.0"
+  - "@openclaw/uirouter@0.1.1"
   - "acpx"
   - "tokenjuice"
   - "@agentclientprotocol/sdk"

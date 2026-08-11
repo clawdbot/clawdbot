@@ -1,7 +1,7 @@
 // Assistant phase text tests cover extracting final-answer text from signed
 // assistant message phases.
 import { describe, expect, it } from "vitest";
-import { extractAssistantText as extractChatHistoryAssistantText } from "./chat-history-text.js";
+import { extractStoredAssistantText as extractChatHistoryAssistantText } from "./chat-history-text.js";
 
 function assistantTextPart(id: string, phase: string, text: string) {
   return {

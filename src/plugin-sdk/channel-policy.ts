@@ -306,6 +306,7 @@ export function createRestrictSendersChannelSecurity<
   normalizeDmEntry?: (raw: string) => string;
   /** Allows non-default accounts to inherit shared defaults from the default account. */
   inheritSharedDefaultsFromDefaultAccount?: boolean;
+  dmRouting?: ChannelSecurityAdapter<ResolvedAccount>["dmRouting"];
 }): ChannelSecurityAdapter<ResolvedAccount> {
   return {
     resolveDmPolicy: createScopedDmSecurityResolver<ResolvedAccount>({
@@ -321,6 +322,7 @@ export function createRestrictSendersChannelSecurity<
       normalizeEntry: params.normalizeDmEntry,
       inheritSharedDefaultsFromDefaultAccount: params.inheritSharedDefaultsFromDefaultAccount,
     }),
+    ...(params.dmRouting ? { dmRouting: params.dmRouting } : {}),
     collectWarnings: createAllowlistProviderRestrictSendersWarningCollector<ResolvedAccount>({
       providerConfigPresent:
         params.providerConfigPresent ?? ((cfg) => cfg.channels?.[params.channelKey] !== undefined),

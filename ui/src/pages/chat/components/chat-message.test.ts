@@ -9,9 +9,11 @@ import * as localStorageModule from "../../../local-storage.ts";
 import * as chatAvatar from "../chat-avatar.ts";
 import { renderChatNotice } from "./chat-divider.ts";
 import { isTextyDocumentAttachment } from "./chat-message-document-preview.ts";
-import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import {
-  getAssistantAttachmentAvailabilityRenderVersion,
+  getChatMediaRenderVersion,
+  releaseChatMediaResourceSubscriber,
+} from "./chat-message-media.ts";
+import {
   dismissConfirmedActionPopovers,
   renderActivityGroup,
   renderMessageGroup,
@@ -1921,6 +1923,7 @@ describe("grouped chat rendering", () => {
       renderChatNotice({
         kind: "notice",
         key: "notice:command",
+        label: "System",
         text: "**first line**\nsecond line\n<img src=x onerror=alert(1)><script>alert(1)</script>",
         timestamp: 1000,
       }),
@@ -1928,6 +1931,10 @@ describe("grouped chat rendering", () => {
     );
 
     const notice = container.querySelector<HTMLElement>(".chat-notice");
+    expect(notice?.querySelector(".chat-notice__label")?.textContent).toBe("System");
+    expect(notice?.querySelector(".chat-avatar")).toBeNull();
+    expect(notice?.querySelector(".chat-author-avatar")).toBeNull();
+    expect(notice?.querySelector(".chat-sender-name")).toBeNull();
     expect(notice?.querySelector("strong")?.textContent).toBe("first line");
     expect(notice?.textContent).not.toContain("**");
     expect(notice?.querySelector("br")).not.toBeNull();
@@ -3988,12 +3995,12 @@ describe("grouped chat rendering", () => {
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toContain("mediaTicket=ticket-old");
-    const renderVersionBeforeRefresh = getAssistantAttachmentAvailabilityRenderVersion();
+    const renderVersionBeforeRefresh = getChatMediaRenderVersion();
 
     await vi.advanceTimersByTimeAsync(1_001);
     await flushAssistantAttachmentAvailabilityChecks();
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(getAssistantAttachmentAvailabilityRenderVersion()).not.toBe(renderVersionBeforeRefresh);
+    expect(getChatMediaRenderVersion()).not.toBe(renderVersionBeforeRefresh);
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toContain("mediaTicket=ticket-new");
@@ -4563,7 +4570,10 @@ describe("grouped chat rendering", () => {
       },
     );
     const imageBlob = new Blob(["png"], { type: "image/png" });
-    const fetchMock = vi.fn(async () => ({ ok: true, blob: async () => imageBlob }));
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => ({
+      ok: true,
+      blob: async () => imageBlob,
+    }));
     vi.stubGlobal("fetch", fetchMock);
     let copiedBlob: Blob | undefined;
     class ClipboardItemMock {

@@ -172,10 +172,10 @@ export type {
 } from "../channels/message/index.js";
 
 /** Lazily forwards inbound reply delivery through the channel turn durable-delivery module. */
-export const deliverInboundReplyWithMessageSendContext: ChannelDurableDeliveryModule["deliverInboundReplyWithMessageSendContext"] =
+export const deliverInboundReplyWithMessageSendContext: ChannelDurableDeliveryModule["deliverInboundReplyWithMessageSendContextCore"] =
   async (...args) => {
     const mod = await import("../channels/turn/durable-delivery.js");
-    return await mod.deliverInboundReplyWithMessageSendContext(...args);
+    return await mod.deliverInboundReplyWithMessageSendContextCore(...args);
   };
 
 /** Sends a durable message batch without eager-loading channel message runtime internals. */

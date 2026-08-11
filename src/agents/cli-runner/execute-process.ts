@@ -13,13 +13,13 @@ import { extractCliErrorMessage, parseCliOutput } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
-import { runClaudeLiveSessionTurn } from "./claude-live-session.js";
+import { runClaudeTurn } from "./claude-live-session.js";
 import type { CliExecuteDeps } from "./execute-deps.js";
 import type { CliEventHandlers } from "./execute-events.js";
 import {
   createCliAbortError,
   executeNodeClaudeRun,
-  type resolveNodeClaudePlacement,
+  type resolveNodeClaudeTarget,
 } from "./execute-node-claude.js";
 import { appendCliOutputTail } from "./execute-output-buffer.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
@@ -66,7 +66,7 @@ export async function executeCliProcess(params: {
   events: CliEventHandlers;
   toolTracking: CliToolTracking;
   diagnostics: ReturnType<typeof createClaudeCliModelCallDiagnostics>;
-  nodePlacement: ReturnType<typeof resolveNodeClaudePlacement>;
+  nodePlacement: ReturnType<typeof resolveNodeClaudeTarget>;
   nodeSystemPrompt?: string;
   nodeEnv?: Record<string, string>;
   nodeClearEnv?: string[];
@@ -111,7 +111,7 @@ export async function executeCliProcess(params: {
       backend: context.backendResolved.id,
     });
     params.claimFallbackCleanup();
-    const liveResult = await runClaudeLiveSessionTurn({
+    const liveResult = await runClaudeTurn({
       context,
       args: params.executionArgs,
       executableCommand: params.executionCommand,

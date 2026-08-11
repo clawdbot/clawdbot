@@ -23,7 +23,7 @@ import { runContextEngineMaintenance } from "../embedded-agent-runner/context-en
 import {
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
-} from "../embedded-agent-runner/run/attempt.prompt-helpers.js";
+} from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 

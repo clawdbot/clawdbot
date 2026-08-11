@@ -69,8 +69,12 @@ describe("device identity state dir defaults", () => {
       if (!processTempPath || !stateLocalPath) {
         throw new Error("coordinator bridge paths are unavailable");
       }
-      const stateCoordinators = fs.readdirSync(path.dirname(stateLocalPath));
-      const processTempCoordinators = fs.readdirSync(path.dirname(processTempPath));
+      const stateCoordinators = fs
+        .readdirSync(path.dirname(stateLocalPath))
+        .filter((entry) => entry.startsWith("device-identity."));
+      const processTempCoordinators = fs
+        .readdirSync(path.dirname(processTempPath))
+        .filter((entry) => entry.startsWith("device-identity."));
       expect(stateCoordinators).toHaveLength(1);
       expect(processTempCoordinators).toEqual(stateCoordinators);
       expect(fs.existsSync(path.join(fakeHome, ".openclaw"))).toBe(false);

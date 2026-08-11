@@ -90,8 +90,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         parseAgentSessionKey(state.sessionKey)?.agentId ??
         this.context.agentSelection.state.selectedId ??
         "main";
-      this.onPaneSessionChange?.(
+      this.onSessionDeleted?.(
         this.paneId,
+        state.sessionKey,
         buildAgentMainSessionKey({
           agentId,
           mainKey: resolveUiConfiguredMainKey({
@@ -281,7 +282,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (
       routeSessionKey &&
       canonicalRouteSessionKey &&
-      canonicalRouteSessionKey !== routeSessionKey
+      canonicalRouteSessionKey !== routeSessionKey &&
+      this.active &&
+      this.presented
     ) {
       this.onPaneSessionChange?.(this.paneId, canonicalRouteSessionKey, { replace: true });
       state.requestUpdate?.();

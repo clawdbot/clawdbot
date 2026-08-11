@@ -11,7 +11,7 @@ import {
 import {
   getFreePort,
   installGatewayTestHooks,
-  startGatewayServer,
+  startTestGatewayServer,
   testState,
 } from "../../../../src/gateway/test-helpers.js";
 import {
@@ -129,12 +129,12 @@ describe("Gateway direct tool invoke product proof", () => {
         ]),
       );
 
-      let gateway: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+      let gateway: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
       let readOnlyClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
       let writeClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
 
       try {
-        gateway = await startGatewayServer(port, {
+        gateway = await startTestGatewayServer(port, {
           host: "127.0.0.1",
           auth: { mode: "token", token: GATEWAY_TOKEN },
           controlUiEnabled: false,

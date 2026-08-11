@@ -32,7 +32,7 @@ export function renderBackgroundTasksToggle(
         aria-expanded=${String(expanded)}
         @click=${backgroundTasks.onToggleCollapsed}
       >
-        ${icons.activity}
+        ${icons.listChecks}
         ${!expanded && activeCount > 0
           ? html`<span class="chat-tasks-toggle__badge" aria-hidden="true">${activeCount}</span>`
           : nothing}

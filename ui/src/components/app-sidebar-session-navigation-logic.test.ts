@@ -31,6 +31,7 @@ function projectSidebarSession(
     sessionsResult: null,
     sessionsAgentId: null,
     showCron: false,
+    showSystem: false,
     statusFilter: "active",
     compareSessions: () => 0,
     highlightCurrentSession: false,
@@ -258,6 +259,7 @@ it("keeps a prepared worktree session in Coding before canonical metadata arrive
     },
     sessionsAgentId: null,
     showCron: false,
+    showSystem: false,
     statusFilter: "active",
     compareSessions: () => 0,
     highlightCurrentSession: true,
@@ -269,6 +271,6 @@ it("keeps a prepared worktree session in Coding before canonical metadata arrive
     resolveAgentStatusNote: () => undefined,
   });
 
-  expect(navigation.visibleSessions).toHaveLength(1);
-  expect(navigation.visibleSessions[0]?.workSession).toBe(true);
+  expect(navigation.visibleSessionRows).toHaveLength(1);
+  expect(navigation.toSidebarSession(navigation.visibleSessionRows[0]!).workSession).toBe(true);
 });

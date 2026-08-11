@@ -7,6 +7,7 @@ import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
+import type { CronRuntimeAuthority } from "../runtime-authority.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { QuarantinedCronConfigJob } from "../store.js";
 import type {
@@ -391,8 +392,10 @@ export type CronAddOptions = {
   scheduledToolPolicy?: CronScheduledToolPolicy;
   /** Private proof from an authenticated agent-runtime caller. */
   toolsAllowProvenance?: CronToolsAllowProvenance;
-  /** Synchronous Gateway-owned guard consumed immediately before mutation. */
+  /** Synchronous Gateway-owned liveness guard consumed immediately before mutation. */
   commitGuard?: () => void;
+  /** One-use fresh capture; callback presence means fresh even when it returns undefined. */
+  captureRuntimeAuthority?: () => CronRuntimeAuthority | undefined;
 };
 /** Normalized patch input accepted by cron service updates. */
 export type CronUpdateInput = CronJobPatch;
@@ -400,7 +403,14 @@ export type CronUpdateInput = CronJobPatch;
 export type CronUpdateOptions = {
   scheduledToolPolicy?: CronScheduledToolPolicy;
   toolsAllowProvenance?: CronToolsAllowProvenance;
-  /** Synchronous Gateway-owned guard consumed immediately before mutation. */
+  /** Synchronous Gateway-owned liveness guard consumed immediately before mutation. */
+  commitGuard?: () => void;
+  /** One-use fresh capture; callback presence means fresh even when it returns undefined. */
+  captureRuntimeAuthority?: () => CronRuntimeAuthority | undefined;
+};
+
+export type CronCommitGuardOptions = {
+  /** Synchronous Gateway-owned guard consumed at the mutation owner. */
   commitGuard?: () => void;
 };
 /** Cron-store-locked guard evaluated against the current job before an update applies. */

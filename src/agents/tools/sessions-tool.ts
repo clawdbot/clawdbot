@@ -22,7 +22,12 @@ import {
 import { resolveDefaultAgentId } from "../agent-scope-config.js";
 import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringParam, ToolAuthorizationError, ToolInputError } from "./common.js";
+import {
+  jsonResult,
+  readToolStringParam,
+  ToolAuthorizationError,
+  ToolInputError,
+} from "./common.js";
 import {
   callAgentToolGatewayRequest,
   hasInProcessGatewayToolContext,
@@ -132,7 +137,7 @@ type SessionsToolOptions = {
   hasInProcessGatewayContext?: () => boolean;
 };
 
-function readBoolean(params: Record<string, unknown>, key: string): boolean | undefined {
+function readBooleanParam(params: Record<string, unknown>, key: string): boolean | undefined {
   const value = params[key];
   if (value === undefined) {
     return undefined;
@@ -251,9 +256,9 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
     parameters: SessionsToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
-      const action = readStringParam(params, "action", { required: true });
+      const action = readToolStringParam(params, "action", { required: true });
       if (action === "reset" || action === "delete") {
-        const rawKey = readStringParam(params, "sessionKey", { required: true });
+        const rawKey = readToolStringParam(params, "sessionKey", { required: true });
         const { key } = await resolvePatchTarget(
           { ...opts, config: opts.config ?? getRuntimeConfig() },
           rawKey,
@@ -287,7 +292,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
             archivedOnly: true,
             expectedSessionId,
             ...(expectedLifecycleRevision ? { expectedLifecycleRevision } : {}),
-            deleteTranscript: readBoolean(params, "deleteTranscript") ?? true,
+            deleteTranscript: readBooleanParam(params, "deleteTranscript") ?? true,
           }),
         );
       }
@@ -320,7 +325,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
 
       const { cfg, key, requesterKey } = await resolvePatchTarget(
         { ...opts, config: opts.config ?? getRuntimeConfig() },
-        normalizeOptionalString(readStringParam(params, "sessionKey")),
+        normalizeOptionalString(readToolStringParam(params, "sessionKey")),
         gatewayRequest,
       );
       const patch = {
@@ -332,21 +337,23 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         ...(params.attention !== undefined
           ? {
               attention:
-                readStringParam(params, "attention", { required: true }) === "clear"
+                readToolStringParam(params, "attention", { required: true }) === "clear"
                   ? null
-                  : readStringParam(params, "attention", { required: true }),
+                  : readToolStringParam(params, "attention", { required: true }),
             }
           : {}),
         ...(params.ttlMinutes !== undefined
           ? { ttlMinutes: readInteger(params, "ttlMinutes") }
           : {}),
-        ...(params.pinned !== undefined ? { pinned: readBoolean(params, "pinned") } : {}),
-        ...(params.archived !== undefined ? { archived: readBoolean(params, "archived") } : {}),
+        ...(params.pinned !== undefined ? { pinned: readBooleanParam(params, "pinned") } : {}),
+        ...(params.archived !== undefined
+          ? { archived: readBooleanParam(params, "archived") }
+          : {}),
         ...(params.model !== undefined
-          ? { model: readStringParam(params, "model", { required: true }) }
+          ? { model: readToolStringParam(params, "model", { required: true }) }
           : {}),
         ...(params.thinkingLevel !== undefined
-          ? { thinkingLevel: readStringParam(params, "thinkingLevel", { required: true }) }
+          ? { thinkingLevel: readToolStringParam(params, "thinkingLevel", { required: true }) }
           : {}),
       };
       if (Object.keys(patch).length === 1) {

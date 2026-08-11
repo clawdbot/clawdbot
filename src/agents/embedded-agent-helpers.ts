@@ -31,10 +31,9 @@ export type { ProviderRuntimeFailureKind } from "./embedded-agent-helpers/provid
 export {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
-  formatRateLimitOrOverloadedErrorCopy,
   getApiErrorPayloadFingerprint,
   isRawApiErrorPayload,
-} from "./embedded-agent-helpers/sanitize-user-facing-text.js";
+} from "./failover/user-copy.js";
 export {
   formatRawAssistantErrorForUi,
   parseApiErrorInfo,

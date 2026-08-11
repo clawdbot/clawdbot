@@ -17,7 +17,7 @@ import {
   resolveAgentTurnAttachments,
   resolveInlineAgentImageAttachments,
 } from "./agent-turn-attachments.js";
-import { tryDispatchAcpReply } from "./dispatch-acp.js";
+import { tryDispatchAcpReplyCore } from "./dispatch-acp.js";
 import { createAbortAwareDispatcher } from "./dispatch-from-config.abort.js";
 import {
   appendRecentHistoryImageContext,
@@ -370,7 +370,7 @@ async function runDispatch(params: {
   markIdle?: (reason: string) => void;
 }) {
   const targetSessionKey = params.sessionKeyOverride ?? sessionKey;
-  return tryDispatchAcpReply({
+  return tryDispatchAcpReplyCore({
     ctx: buildTestCtx({
       Provider: "discord",
       Surface: "discord",
@@ -486,7 +486,7 @@ function expectRoutedPayload(callIndex: number, payload: Partial<MockTtsReply>) 
   }
 }
 
-describe("tryDispatchAcpReply", () => {
+describe("tryDispatchAcpReplyCore", () => {
   beforeEach(() => {
     auditMocks.emitAcpLifecycleStart.mockReset();
     auditMocks.emitAcpRuntimeEvent.mockReset();
@@ -625,6 +625,40 @@ describe("tryDispatchAcpReply", () => {
     expect(routePayload().text).toBe("hello");
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("records channel transform suppression without an ACP delivery claim", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("private reply");
+    const transport = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({
+      deliver: transport,
+      transformReplyPayload: () => null,
+    });
+    const recordProcessed = vi.fn();
+
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      recordProcessed,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(transport).not.toHaveBeenCalled();
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+    expect(recordProcessed).toHaveBeenCalledWith("completed", {
+      reason: "channel_transform",
+    });
+    const transcript = requireRecord(
+      mockArg(transcriptMocks.persistAcpDispatchTranscript, 0, 0, "transcript call"),
+      "transcript call",
+    );
+    expect(transcript.finalText).toBe("");
   });
 
   it("persists ACP transcript when routed delivery fails", async () => {

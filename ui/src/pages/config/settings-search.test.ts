@@ -144,6 +144,7 @@ describe("findSettingsSearchBlocks", () => {
     });
 
     expect(matches).toEqual([
+      expect.objectContaining({ routeId: "secrets", label: "Secrets" }),
       expect.objectContaining({
         routeId: "advanced",
         search: "?section=secrets&advanced=1",
@@ -299,6 +300,19 @@ describe("findSettingsSearchBlocks", () => {
         label: "Managed Worktrees",
         hash: "",
       }),
+    ]);
+  });
+
+  it("routes team secret-store searches to the dedicated page", () => {
+    const matches = findSettingsSearchBlocks({
+      query: "team store",
+      schema: null,
+      value: null,
+      uiHints: {},
+    });
+
+    expect(matches).toEqual([
+      expect.objectContaining({ routeId: "secrets", label: "Secrets", hash: "" }),
     ]);
   });
 

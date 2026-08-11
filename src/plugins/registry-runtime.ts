@@ -847,9 +847,12 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             const runParams = { ...params, skillWorkshopCollectionReconcile: undefined };
             return await runWithPluginScope(async () => {
               const ownerPluginId = resolveRunSessionExecutionOwner(runParams);
-              return ownerPluginId
-                ? await resolvePluginRuntime(ownerPluginId).agent.runEmbeddedAgent(runParams)
-                : await agent.runEmbeddedAgent(runParams);
+              if (ownerPluginId) {
+                return await resolvePluginRuntime(ownerPluginId).agent.runEmbeddedAgent(runParams);
+              }
+              // The public runtime adapter owns admission preparation. Passing
+              // host authority through this plugin wrapper is rejected by design.
+              return await agent.runEmbeddedAgent(runParams);
             });
           };
           const scopedAgent = Object.create(

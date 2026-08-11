@@ -25,6 +25,9 @@ import {
   readQaSuiteSummary,
   selectPluginEntries,
 } from "./lib/plugin-gateway-gauntlet.mts";
+// Termination tests import this entrypoint in a child before publishing readiness.
+// Keep its record guard on the dependency-light script seam to avoid startup skew.
+import { isRecord } from "./lib/record-shared.mjs";
 
 const DEFAULT_QA_SCENARIOS = [
   "channel-chat-baseline",
@@ -114,10 +117,6 @@ type GauntletContext = {
   qaTimeoutMs: number;
 };
 type QaSummary = NonNullable<ReturnType<typeof readQaSuiteSummary>["summary"]>;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 /**
  * Parses plugin gateway gauntlet CLI arguments and env defaults.

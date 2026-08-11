@@ -1,13 +1,13 @@
 /**
  * Repairs malformed tool-call arguments in embedded-agent stream results.
  */
-import { extractBalancedJsonPrefix } from "../../../shared/balanced-json.js";
+import { extractBalancedJsonPrefix } from "@openclaw/normalization-core";
 import { normalizeProviderId } from "../../model-selection.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { log } from "../logger.js";
 import { createHtmlEntityToolCallArgumentDecodingWrapper } from "../tool-call-argument-decoding.js";
-import { isRunnerToolCallBlockType } from "./attempt.tool-call-block-type.js";
+import { isRunnerToolCallBlockType } from "./attempt-tool-call-block-type.js";
 import { wrapStreamObjectEvents } from "./stream-wrapper.js";
 
 const MAX_TOOLCALL_REPAIR_BUFFER_CHARS = 64_000;

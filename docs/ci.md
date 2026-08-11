@@ -186,7 +186,7 @@ for commands and recovery.
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ubuntu-24.04`                  | `security-fast`, manual CI dispatch and non-canonical repository fallbacks, pull-request retries of both UI E2E jobs, the QA Smoke aggregate, CodeQL security and quality scans, workflow-sanity, labeler, auto-response, the standalone Docs workflow, and the whole Install Smoke workflow |
 | `blacksmith-4vcpu-ubuntu-2404`  | `preflight`, `pnpm-store-warmup`, `native-i18n`, `checks-fast-core` except QA Smoke CI, plugin/channel contract shards, most bundled/lower-weight Linux Node shards, `check-*` lanes except `check-lint`, selected `check-additional-*` shards, `check-docs`, and `skills-python`            |
-| `blacksmith-8vcpu-ubuntu-2404`  | Retained heavy Linux Node suites, first-attempt same-repo pull requests and pushes for the serial Chromium/Vite `checks-ui-e2e` lane, boundary/extension-heavy `check-additional-*` shards, and `android`                                                                                    |
+| `blacksmith-8vcpu-ubuntu-2404`  | Retained heavy Linux Node suites, first-attempt same-repo pull requests and pushes for the serial Chromium/Vite `checks-ui-e2e` lane (three Control UI shards plus one browser extension shard), boundary/extension-heavy `check-additional-*` shards, and `android`                         |
 | `blacksmith-16vcpu-ubuntu-2404` | Automatic QA Smoke CI shards, first-attempt same-repo pull requests and pushes for `checks-ui-e2e-real-gateway`, `build-artifacts` in CI and Testbox, and `check-lint` (CPU-sensitive enough that 8 vCPU cost more than they saved)                                                          |
 | `blacksmith-8vcpu-windows-2025` | `checks-windows`                                                                                                                                                                                                                                                                             |
 | `blacksmith-6vcpu-macos-15`     | `macos-node` on `openclaw/openclaw`; forks fall back to `macos-15`                                                                                                                                                                                                                           |
@@ -705,6 +705,8 @@ Docker, package lanes, E2E, live proof, and CI parity. Trusted maintainer heavy
 proof defaults to `blacksmith-testbox`, and `.crabbox.yaml` now defaults to it. Its configured
 workflow hydrates provider and agent credentials, so untrusted contributor or
 fork code must use secretless fork CI or sanitized direct AWS Crabbox instead.
+The check workflow hydrates its pinned dispatch commit with a depth-1 checkout;
+the changed gate later reconstructs the exact merge base and synced final tree.
 Sanitized AWS runs set `CRABBOX_ENV_ALLOW=CI`, pass
 `--no-hydrate`, and use a fresh temporary remote `HOME`; this prevents the repo
 `OPENCLAW_*` allowlist and existing auth profiles from reaching untrusted code.

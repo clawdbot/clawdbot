@@ -5,11 +5,11 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import {
   appendMatchMetadata,
-  asString,
   isRecord,
   readAccountStatusSnapshot,
   resolveEnabledConfiguredAccountId,
 } from "openclaw/plugin-sdk/status-helpers";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type DiscordIntentSummary = {
   messageContent?: "enabled" | "limited" | "disabled";
@@ -66,17 +66,17 @@ function readDiscordPermissionsAuditSummary(value: unknown): DiscordPermissionsA
           if (!isRecord(entry)) {
             return null;
           }
-          const channelId = asString(entry.channelId);
+          const channelId = normalizeOptionalString(entry.channelId);
           if (!channelId) {
             return null;
           }
           const ok = typeof entry.ok === "boolean" ? entry.ok : undefined;
           const missing = Array.isArray(entry.missing)
-            ? entry.missing.map((v) => asString(v)).filter(Boolean)
+            ? entry.missing.map((v) => normalizeOptionalString(v)).filter(Boolean)
             : undefined;
-          const error = asString(entry.error) ?? null;
-          const matchKey = asString(entry.matchKey) ?? undefined;
-          const matchSource = asString(entry.matchSource) ?? undefined;
+          const error = normalizeOptionalString(entry.error) ?? null;
+          const matchKey = normalizeOptionalString(entry.matchKey);
+          const matchSource = normalizeOptionalString(entry.matchSource);
           return {
             channelId,
             ok,

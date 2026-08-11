@@ -48,6 +48,7 @@ export type HeartbeatStatus = {
   enabled: boolean;
   every: string;
   everyMs: number | null;
+  waitingForRoute?: boolean;
 };
 
 /** Aggregate status summary before text or JSON formatting. */

@@ -186,6 +186,9 @@ type SynologyChatPlugin = Omit<
   messaging: {
     targetPrefixes?: readonly string[];
     normalizeTarget: (target: string) => string | undefined;
+    inferTargetChatType: NonNullable<
+      ChannelPlugin<ResolvedSynologyChatAccount>["messaging"]
+    >["inferTargetChatType"];
     resolveOutboundSessionRoute: NonNullable<
       ChannelPlugin<ResolvedSynologyChatAccount>["messaging"]
     >["resolveOutboundSessionRoute"];
@@ -357,6 +360,7 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
       messaging: {
         targetPrefixes: ["synology-chat", "synology_chat", "synology"],
         normalizeTarget: normalizeSynologyChatTarget,
+        inferTargetChatType: ({ to }) => (normalizeSynologyChatTarget(to) ? "direct" : undefined),
         resolveOutboundSessionRoute: ({ agentId, accountId, target }) => {
           const chatUserId = normalizeSynologyChatTarget(target);
           if (!chatUserId) {

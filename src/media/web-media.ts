@@ -1030,7 +1030,7 @@ async function loadWebMediaInternal(
   mediaUrl = stripLegacyMediaDirectivePrefix(mediaUrl);
   mediaUrl = (await resolveMediaStoreUriToPath(mediaUrl)) ?? mediaUrl;
   // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
-  if (/^file:\/\//iu.test(mediaUrl)) {
+  if (/^file:/iu.test(mediaUrl)) {
     try {
       mediaUrl = safeFileURLToPath(mediaUrl);
     } catch (err) {

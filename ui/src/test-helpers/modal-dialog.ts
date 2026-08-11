@@ -43,6 +43,33 @@ export function installDialogPolyfill(): () => void {
   };
 }
 
+/**
+ * Wait for the confirm dialog `showConfirmDialog` renders into `document.body`.
+ * Returned separately from answering it so tests can mutate owner state (a
+ * reconnect, an agent switch) while the decision is still pending.
+ */
+export function waitForConfirmDialogActions(): Promise<HTMLElement> {
+  return vi.waitFor(() => {
+    const actions = document.body.querySelector<HTMLElement>(
+      "openclaw-modal-dialog .exec-approval-actions",
+    );
+    if (!actions) {
+      throw new Error("Expected an open confirm dialog");
+    }
+    return actions;
+  });
+}
+
+export function answerConfirmDialog(actions: HTMLElement, choice: "confirm" | "cancel") {
+  const button = actions.querySelector<HTMLButtonElement>(
+    choice === "confirm" ? ".btn.danger, .btn.primary" : ".btn[autofocus]",
+  );
+  if (!button) {
+    throw new Error(`Expected the confirm dialog's ${choice} button`);
+  }
+  button.click();
+}
+
 /** Await a dialog whose owner loads it behind a lazy import, then read it. */
 export async function waitForRenderedModalDialog(container: HTMLElement) {
   await vi.waitFor(() => {

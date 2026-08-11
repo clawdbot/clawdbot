@@ -56,7 +56,7 @@ import {
   connectOk,
   createGatewaySuiteHarness,
   dispatchInboundMessageMock,
-  getReplyFromConfig,
+  gatewayReplyMock,
   installGatewayTestHooks,
   mockGetReplyFromConfigOnce,
   onceMessage,
@@ -67,7 +67,7 @@ import {
 
 const restartRecoveryMocks = vi.hoisted(() => ({
   retryRestartAbortedMainSessionRecovery: vi.fn<
-    typeof import("../agents/main-session-restart-recovery.js").retryRestartAbortedMainSessionRecovery
+    typeof import("../agents/main-session-recovery/main-session-restart-recovery.js").retryRestartAbortedMainSessionRecovery
   >(async () => ({
     recovered: 0,
     failed: 1,
@@ -75,15 +75,20 @@ const restartRecoveryMocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("../agents/main-session-restart-recovery.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../agents/main-session-restart-recovery.js")>();
-  return {
-    ...actual,
-    retryRestartAbortedMainSessionRecovery:
-      restartRecoveryMocks.retryRestartAbortedMainSessionRecovery,
-  };
-});
+vi.mock(
+  "../agents/main-session-recovery/main-session-restart-recovery.js",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../agents/main-session-recovery/main-session-restart-recovery.js")
+      >();
+    return {
+      ...actual,
+      retryRestartAbortedMainSessionRecovery:
+        restartRecoveryMocks.retryRestartAbortedMainSessionRecovery,
+    };
+  },
+);
 
 installGatewayTestHooks({ scope: "suite" });
 const FAST_WAIT_OPTS = { timeout: 2_000, interval: 1 } as const;
@@ -3004,7 +3009,7 @@ describe("gateway server chat", () => {
       });
       expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
       if (retryable) {
-        expect(stored?.restartRecoveryBeforeAgentReplyState).toBe("admitted");
+        expect(stored?.restartRecoveryBeforeAgentReplyState).toBeUndefined();
         expect(stored?.restartRecoveryDeliveryRequestFingerprint).toEqual(
           expect.stringMatching(/^hmac-sha256:v1:/u),
         );
@@ -4789,7 +4794,7 @@ describe("gateway server chat", () => {
 
   test("chat.send does not force-disable block streaming", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const spy = getReplyFromConfig;
+      const spy = gatewayReplyMock;
       await connectOk(ws);
 
       await createSessionDir();
@@ -4832,7 +4837,7 @@ describe("gateway server chat", () => {
     try {
       await withGatewayChatHarness(
         async ({ ws, createSessionDir }) => {
-          const spy = getReplyFromConfig;
+          const spy = gatewayReplyMock;
           await connectOk(ws, makeGatewayWebchatClient());
 
           await createSessionDir();
@@ -4961,7 +4966,7 @@ describe("gateway server chat", () => {
   test("chat.send forwards Control UI reconnect resume internally", async () => {
     await withGatewayChatHarness(
       async ({ ws, createSessionDir }) => {
-        const spy = getReplyFromConfig;
+        const spy = gatewayReplyMock;
         await connectOk(ws, makeGatewayWebchatClient());
 
         await createSessionDir();
@@ -5000,7 +5005,7 @@ describe("gateway server chat", () => {
   test("chat.send forwards one-turn queue mode overrides internally", async () => {
     await withGatewayChatHarness(
       async ({ ws, createSessionDir }) => {
-        const spy = getReplyFromConfig;
+        const spy = gatewayReplyMock;
         await connectOk(ws, makeGatewayWebchatClient());
 
         await createSessionDir();
@@ -5087,6 +5092,21 @@ describe("gateway server chat", () => {
         timestamp: Date.now(),
         media: [
           {
+            kind: "video",
+            url: "media://inbound/video-claim",
+            contentType: "video/mp4",
+            fileName: "managed-video.mp4",
+            durationMs: 5678,
+          },
+          {
+            kind: "image",
+            url: "media://inbound/image-claim",
+            contentType: "image/png",
+            fileName: "managed-image.png",
+            width: 640,
+            height: 480,
+          },
+          {
             kind: "image",
             path: "/private/media/local-image.png",
             workspaceDir: "/private/workspace",
@@ -5105,13 +5125,6 @@ describe("gateway server chat", () => {
             durationMs: 1234,
           },
           {
-            kind: "video",
-            path: "media://inbound/video-claim",
-            contentType: "video/mp4",
-            fileName: "managed-video.mp4",
-            durationMs: 5678,
-          },
-          {
             kind: "document",
             url: "not a media reference",
             contentType: "application/pdf",
@@ -5124,10 +5137,11 @@ describe("gateway server chat", () => {
             fileName: `invalid-claim-${index}.png`,
           })),
         ],
+        mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 1 }] },
       }) as unknown as Record<string, unknown>;
       const metadata = persisted["__openclaw"] as Record<string, unknown>;
       const facts = metadata.media as Array<Record<string, unknown>>;
-      Object.assign(expectDefined(facts[0], "local media fact"), {
+      Object.assign(expectDefined(facts[2], "local media fact"), {
         data: "private-inline-data",
         blob: "private-inline-blob",
         filePath: "/private/media/alternate-image.png",
@@ -5166,7 +5180,23 @@ describe("gateway server chat", () => {
           content: "inspect mixed attachments",
           __openclaw: {
             keepMe: { durable: true },
+            mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 1 }] },
             media: [
+              {
+                kind: "video",
+                url: "media://inbound/video-claim",
+                contentType: "video/mp4",
+                fileName: "managed-video.mp4",
+                durationMs: 5678,
+              },
+              {
+                kind: "image",
+                url: "media://inbound/image-claim",
+                contentType: "image/png",
+                fileName: "managed-image.png",
+                width: 640,
+                height: 480,
+              },
               {
                 kind: "image",
                 contentType: "image/png",
@@ -5183,13 +5213,6 @@ describe("gateway server chat", () => {
                 contentType: "audio/wav",
                 fileName: "remote-audio.wav",
                 durationMs: 1234,
-              },
-              {
-                kind: "video",
-                path: "media://inbound/video-claim",
-                contentType: "video/mp4",
-                fileName: "managed-video.mp4",
-                durationMs: 5678,
               },
               {
                 kind: "document",
@@ -5209,9 +5232,10 @@ describe("gateway server chat", () => {
             ?.media ?? []
         ).map((fact) => fact.path ?? fact.url ?? null);
         expect(projectedMedia, boundary).toEqual([
+          "media://inbound/video-claim",
+          "media://inbound/image-claim",
           null,
           "https://media.example/audio.wav",
-          "media://inbound/video-claim",
           ...Array.from({ length: invalidClaims.length + 1 }, () => null),
         ]);
         const serialized = JSON.stringify(messages);
@@ -6362,7 +6386,7 @@ describe("gateway server chat", () => {
 
   test("smoke: supports abort and idempotent completion", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const spy = getReplyFromConfig;
+      const spy = gatewayReplyMock;
       let aborted = false;
       await connectOk(ws);
 

@@ -1,3 +1,4 @@
+import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.js";
 // Cron tool type declarations shared with the cron tool implementation.
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
@@ -22,9 +23,14 @@ export type CronToolsAllowCaptureRef = {
 export type CronCreatorToolAuthorityMaterialization = {
   tools: readonly CronCreatorToolAllowlistEntry[];
   provenance: CronToolsAllowCaptureProvenance;
+  /** Opaque runtime-owned authority captured with the same exact executable surface. */
+  runtimeAuthority?: CronRuntimeAuthority;
 };
 
-export type CronCreatorToolAuthoritySnapshot = CronCreatorToolAuthorityMaterialization & {
+export type CronCreatorToolAuthoritySnapshot = Omit<
+  CronCreatorToolAuthorityMaterialization,
+  "runtimeAuthority"
+> & {
   /** Gateway-process one-shot proof consumed only at the matching cron write. */
   grant: CronCreatorAuthorityGrant;
 };

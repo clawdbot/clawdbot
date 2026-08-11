@@ -35,7 +35,7 @@ import {
   formatUnknownCompactionReasonDetail,
 } from "./compact-reasons.js";
 import type { CompactEmbeddedAgentSessionRuntimeParams } from "./compact.types.js";
-import { createCompactionDiagId } from "./compaction-diagnostics.js";
+import { createDirectCompactionDiagId } from "./compaction-diagnostics.js";
 import { resolveEmbeddedCompactionThinkingLevel } from "./compaction-runtime-context.js";
 import {
   prepareCompactionHarnessAuth,
@@ -54,7 +54,7 @@ export async function prepareDirectCompactionAttempt(
   params: PreparedCompactEmbeddedAgentSessionParams,
 ) {
   const startedAt = Date.now();
-  const diagId = params.diagId?.trim() || createCompactionDiagId();
+  const diagId = params.diagId?.trim() || createDirectCompactionDiagId();
   const trigger = params.trigger ?? "manual";
   const attempt = params.attempt ?? 1;
   const maxAttempts = params.maxAttempts ?? 1;

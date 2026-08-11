@@ -186,7 +186,22 @@ export const rateLimitOverloadCases = [
     id: "retry-resource-exhausted-worker",
     source: retrySource,
     signal: { message: "ResourceExhausted: Worker local total request limit reached" },
-    expected: null,
+    // FIXED(refactor-06): separator-free provider code now shares the canonical rate-limit path.
+    expected: reason("rate_limit"),
+  },
+  {
+    // FIXED(refactor-06): live key rotation already treated the spaced form as rate limiting.
+    id: "live-auth-resource-exhausted-spaced",
+    source: "src/agents/live-auth-keys.ts",
+    signal: { message: "resource exhausted" },
+    expected: reason("rate_limit"),
+  },
+  {
+    // FIXED(refactor-06): preserve the provider-code spelling used by live key rotation.
+    id: "live-auth-quota-exceeded-code",
+    source: "src/agents/live-auth-keys.ts",
+    signal: { message: "quota_exceeded" },
+    expected: reason("rate_limit"),
   },
   {
     id: "retry-resource-exhausted-capacity",

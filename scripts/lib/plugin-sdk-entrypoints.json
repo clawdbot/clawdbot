@@ -98,6 +98,7 @@
   "speech-core",
   "speech-settings",
   "tts-runtime",
+  "plugin-command-runtime",
   "plugin-runtime",
   "channel-secret-basic-runtime",
   "channel-secret-runtime",

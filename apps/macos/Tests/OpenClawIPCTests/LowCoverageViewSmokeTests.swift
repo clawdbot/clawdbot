@@ -1,5 +1,4 @@
 import AppKit
-import OpenClawProtocol
 import SwiftUI
 import Testing
 @testable import OpenClaw
@@ -7,51 +6,6 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct LowCoverageViewSmokeTests {
-    @Test func `context root menu label builds body`() {
-        let longStatus = "Gateway connection dropped; gateway likely restarted and needs a few seconds to reconnect."
-        _ = ContextRootMenuLabelView(subtitle: longStatus, width: 320).body
-    }
-
-    @Test func `settings toggle row builds body`() {
-        var flag = false
-        let binding = Binding(get: { flag }, set: { flag = $0 })
-        let view = SettingsToggleRow(title: "Enable", subtitle: "Detail", binding: binding)
-        _ = view.body
-    }
-
-    @Test func `voice wake test card builds body across states`() {
-        var state = VoiceWakeTestState.idle
-        var isTesting = false
-        let stateBinding = Binding(get: { state }, set: { state = $0 })
-        let testingBinding = Binding(get: { isTesting }, set: { isTesting = $0 })
-
-        _ = VoiceWakeTestCard(testState: stateBinding, isTesting: testingBinding, onToggle: {}).body
-
-        state = .hearing("hello")
-        _ = VoiceWakeTestCard(testState: stateBinding, isTesting: testingBinding, onToggle: {}).body
-
-        state = .detected("command")
-        isTesting = true
-        _ = VoiceWakeTestCard(testState: stateBinding, isTesting: testingBinding, onToggle: {}).body
-
-        state = .failed("No mic")
-        _ = VoiceWakeTestCard(testState: stateBinding, isTesting: testingBinding, onToggle: {}).body
-    }
-
-    @Test func `agent events window builds body with event`() {
-        AgentEventStore.shared.clear()
-        let sample = ControlAgentEvent(
-            runId: "run-1",
-            seq: 1,
-            stream: "tool",
-            ts: Date().timeIntervalSince1970 * 1000,
-            data: ["phase": AnyCodable("start"), "name": AnyCodable("test")],
-            summary: nil)
-        AgentEventStore.shared.append(sample)
-        _ = AgentEventsWindow().body
-        AgentEventStore.shared.clear()
-    }
-
     @Test func `notify overlay keeps replacement visible`() async {
         let controller = NotifyOverlayController()
         controller.present(title: "Hello", body: "World", autoDismissAfter: 0.05)

@@ -8,7 +8,7 @@ export function buildSkillWorkshopToolDescription(params: {
   collectionOnly: boolean;
 }): string {
   if (params.collectionOnly) {
-    return `Read every current writable skill, then replace the collection with one reconcile call. Keep distinct useful skills. Rewrite weak skills. Merge overlap by writing the strongest result and dropping the redundant skills. Drop narrow, stale, duplicate, or unusable skills. Every current skill needs exactly one keep, write, or drop decision.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
+    return `Read every current writable skill, then replace the collection with one reconcile call. Every current skill needs exactly one keep, write, or drop decision.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
   }
   if (!params.proposalOnly) {
     const repairPolicy =

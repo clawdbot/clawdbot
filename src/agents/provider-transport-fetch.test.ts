@@ -307,6 +307,7 @@ describe("buildGuardedModelFetch", () => {
         model: "gpt-5.4",
       },
     });
+    expect(params.dispatcherPool).toBeDefined();
   });
 
   it("rejects successful streamed OpenAI-compatible responses with HTML content", async () => {

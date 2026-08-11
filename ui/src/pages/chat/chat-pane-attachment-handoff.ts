@@ -116,11 +116,9 @@ export function resumeStagedPanes(
   layout: ChatSplitLayout,
   narrow: boolean,
 ): void {
-  const visibleSessions = new Map(
-    visiblePanesOf(layout, narrow).map((pane) => [pane.id, pane.sessionKey]),
-  );
+  const visiblePaneIds = new Set(visiblePanesOf(layout, narrow).map((pane) => pane.id));
   for (const pane of root.querySelectorAll<StagedAttachmentPane>("openclaw-chat-pane")) {
-    if (visibleSessions.get(pane.paneId) === pane.sessionKey) {
+    if (visiblePaneIds.has(pane.paneId)) {
       pane.resumeStagedAttachments?.();
     }
   }
@@ -133,11 +131,14 @@ export function closeStagedPane(
   paneId: string,
 ) {
   const survivingPane = panesOf(layout).find((candidate) => candidate.id !== paneId);
-  const pane = [...root.querySelectorAll<StagedAttachmentPane>("openclaw-chat-pane")].find(
+  const mounted = [...root.querySelectorAll<StagedAttachmentPane>("openclaw-chat-pane")].filter(
     (candidate) => candidate.paneId === paneId,
   );
-  // Clear a mounted pane first so its disconnect cannot restage the closed package.
-  pane?.discardStagedAttachments?.();
+  // Clear every retained presentation first so their disconnects cannot
+  // restage a package under a later reused logical pane id.
+  for (const pane of mounted) {
+    pane.discardStagedAttachments?.();
+  }
   context.chatAttachmentHandoff.clearPane(paneId);
   return survivingPane;
 }

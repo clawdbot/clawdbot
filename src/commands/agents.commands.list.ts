@@ -15,7 +15,7 @@ import {
   listProvidersForAgent,
   summarizeBindings,
 } from "./agents.providers.js";
-import { requireValidConfigSnapshot } from "./config-validation.js";
+import { requireValidConfig } from "./config-validation.js";
 
 type AgentsListOptions = {
   json?: boolean;
@@ -79,7 +79,7 @@ export async function agentsListCommand(
   opts: AgentsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const cfg = await requireValidConfigSnapshot(runtime);
+  const cfg = await requireValidConfig(runtime);
   if (!cfg) {
     return;
   }

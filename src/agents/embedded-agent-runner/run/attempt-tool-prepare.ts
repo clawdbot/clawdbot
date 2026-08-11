@@ -31,15 +31,15 @@ import type {
   CronToolsAllowCaptureRef,
 } from "../../tools/cron-tool.js";
 import { log } from "../logger.js";
+import { resolveAttemptToolPolicyMessageProvider } from "./attempt-run-decisions.js";
+import { resolveAttemptSpawnWorkspaceDir } from "./attempt-thread-helpers.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
 } from "./attempt-tool-construction-plan.js";
-import { resolveAttemptToolPolicyMessageProvider } from "./attempt.run-decisions.js";
-import { resolveAttemptSpawnWorkspaceDir } from "./attempt.thread-helpers.js";
-import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
-import { TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES } from "./attempt.tool-search-run-plan.js";
+import { buildEmbeddedAttemptToolRunContext } from "./attempt-tool-run-context.js";
+import { TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES } from "./attempt-tool-search-run-plan.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type OpenClawCodingToolsOptions = NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;
@@ -323,8 +323,13 @@ export function prepareEmbeddedAttemptToolBase(params: {
           scheduledToolPolicy: attempt.scheduledToolPolicy,
           onYield: params.onYield,
         });
+        // The built-in harness retains its existing authoritative wrappers.
+        // Only plugin harnesses receive and require the projected host capability.
+        const boundTools = attempt.hostCapabilities
+          ? attempt.hostCapabilities.bindToolSurface(allTools)
+          : allTools;
         params.markCoreToolStage("attempt:create-openclaw-coding-tools");
-        const filteredTools = applyEmbeddedAttemptToolsAllow(allTools, effectiveToolsAllow, {
+        const filteredTools = applyEmbeddedAttemptToolsAllow(boundTools, effectiveToolsAllow, {
           toolMeta: (tool) => getPluginToolMeta(tool),
         });
         params.markCoreToolStage("attempt:tools-allow");

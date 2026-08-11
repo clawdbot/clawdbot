@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { supportsWorkerExecutionContextLaunch } from "./admission.js";
 import {
   createPlacementFailureActions,
   isUnavailableEnvironment,
@@ -79,9 +80,12 @@ function requireProvisionedEnvironment(
   if (
     (environment.state !== "ready" && environment.state !== "idle") ||
     !environment.bootstrapReceipt ||
-    environment.environmentId !== expectedEnvironmentId
+    environment.environmentId !== expectedEnvironmentId ||
+    !supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt)
   ) {
-    throw new Error(`Worker environment is not dispatchable: ${environment.state}`);
+    throw new Error(
+      `Worker environment is not dispatchable with the current execution-context contract: ${environment.state}`,
+    );
   }
   return {
     environmentId: environment.environmentId,
@@ -161,7 +165,16 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         patch: { environmentId: expectedEnvironmentId },
       });
       reportTransition(onTransition, placement);
-      const environment = await environments.create(request.profileId, idempotencyKey);
+      const environment = request.inheritedProfile
+        ? await environments.createFromProfileSnapshot(
+            {
+              profileId: request.profileId,
+              providerId: request.inheritedProfile.providerId,
+              profileSnapshot: request.inheritedProfile.profileSnapshot,
+            },
+            idempotencyKey,
+          )
+        : await environments.create(request.profileId, idempotencyKey);
       const provisioned = requireProvisionedEnvironment(environment, expectedEnvironmentId);
       environmentId = provisioned.environmentId;
       ownerEpoch = provisioned.ownerEpoch;
@@ -340,6 +353,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             // owner lock are still held. A committed manifest or durable ref keeps
             // recovery authoritative.
             if (!canonicalExists && !preparedExists && stillOwnsEmptyResult()) {
+              await placements.closeWorkerTurnToolState(reclaimClaim);
               placements.cancelWorkspaceResultAndReleaseTurn(reclaimClaim);
             }
           });

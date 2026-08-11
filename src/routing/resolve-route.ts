@@ -466,6 +466,20 @@ function getEvaluatedBindingIndexForChannelAccount(
   return built;
 }
 
+/** @internal Lists exact DM peers from the canonical channel/account binding index. */
+export function listExactDirectMessageBindingPeerIds(
+  input: Pick<ResolveAgentRouteInput, "cfg" | "channel" | "accountId">,
+): string[] {
+  const prefix = "direct:";
+  return [
+    ...getEvaluatedBindingIndexForChannelAccount(
+      input.cfg,
+      normalizeLowercaseStringOrEmpty(input.channel),
+      normalizeAccountId(input.accountId),
+    ).byPeer.keys(),
+  ].flatMap((key) => (key.startsWith(prefix) ? [key.slice(prefix.length)] : []));
+}
+
 function normalizePeerConstraint(
   peer: { kind?: string; id?: string } | undefined,
 ): NormalizedPeerConstraint {
@@ -772,5 +786,12 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   }
 
   return choose(resolveDefaultAgentId(input.cfg), "default");
+}
+
+/** @internal Resolves fallback precedence for an unknown direct peer. */
+export function resolveUnknownDirectMessageRoute(
+  input: Pick<ResolveAgentRouteInput, "cfg" | "channel" | "accountId" | "dmScope">,
+): ResolvedAgentRoute {
+  return resolveAgentRoute({ ...input, peer: { kind: "direct", id: "" } });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

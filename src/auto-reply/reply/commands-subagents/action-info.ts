@@ -1,9 +1,7 @@
 // Formats detailed subagent run information for the info action.
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
-import { subagentRuns } from "../../../agents/subagent-registry-memory.js";
-import { countPendingDescendantRunsFromRuns } from "../../../agents/subagent-registry-queries.js";
-import { getSubagentRunsSnapshotForRead } from "../../../agents/subagent-registry-state.js";
-import { resolveSubagentDisplayStatus } from "../../../agents/subagent-session-metrics.js";
+import { countPendingDescendantRuns } from "../../../agents/subagents/registry/subagent-registry-read.js";
+import { resolveSubagentDisplayStatus } from "../../../agents/subagents/registry/subagent-session-metrics.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
@@ -11,13 +9,10 @@ import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { findTaskByRunIdForOwner } from "../../../tasks/task-owner-access.js";
 import { sanitizeTaskStatusText } from "../../../tasks/task-status.js";
+import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel } from "../subagents-utils.js";
-import {
-  resolveSubagentEntryForToken,
-  stopWithText,
-  type SubagentsCommandContext,
-} from "./shared.js";
+import { resolveSubagentEntryForToken, type SubagentsCommandContext } from "./shared.js";
 
 function formatTimestampWithAge(valueMs?: number) {
   if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
@@ -48,7 +43,7 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
   const { params, requesterKey, runs, restTokens } = ctx;
   const target = restTokens[0];
   if (!target) {
-    return stopWithText("ℹ️ Usage: /subagents info <id|#>");
+    return commandReply("ℹ️ Usage: /subagents info <id|#>");
   }
 
   const targetResolution = resolveSubagentEntryForToken(runs, target);
@@ -80,13 +75,7 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
 
   const lines = [
     "ℹ️ Subagent info",
-    `Status: ${resolveSubagentDisplayStatus(
-      run,
-      countPendingDescendantRunsFromRuns(
-        getSubagentRunsSnapshotForRead(subagentRuns),
-        run.childSessionKey,
-      ),
-    )}`,
+    `Status: ${resolveSubagentDisplayStatus(run, countPendingDescendantRuns(run.childSessionKey))}`,
     `Label: ${formatRunLabel(run)}`,
     `Task: ${taskText}`,
     `Run: ${run.runId}`,
@@ -108,5 +97,5 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
     linkedTask ? `Delivery: ${linkedTask.deliveryStatus}` : undefined,
   ].filter(Boolean);
 
-  return stopWithText(lines.join("\n"));
+  return commandReply(lines.join("\n"));
 }

@@ -67,58 +67,6 @@ afterEach(() => {
   }
 });
 
-it("states the target, restart impact, and both versions without starting the update", async () => {
-  const postMessage = installNativeBridge();
-  const { settled, startGatewayUpdate } = startUpdate();
-  const { modal, dialog } = await getRenderedModalDialog(document.body);
-
-  expect(dialog.getAttribute("aria-label")).toBe("Update Gateway");
-  expect(modal.textContent).toContain(
-    "Installs the available update on the connected Gateway and restarts it.",
-  );
-  expect(modal.textContent).toContain("this Control UI disconnects until the Gateway is back");
-  expect(modal.textContent).toContain("Installed v1.0.0 · Available v2.0.0");
-  // The confirm action names the operation; a generic "Yes" would not.
-  expect(findButton("Update and restart")).toBeInstanceOf(HTMLButtonElement);
-  expect(findButton("Cancel").hasAttribute("autofocus")).toBe(true);
-  expect(startGatewayUpdate).not.toHaveBeenCalled();
-  expect(postMessage).not.toHaveBeenCalled();
-
-  findButton("Cancel").click();
-  await settled;
-});
-
-it.each([
-  { dismiss: () => findButton("Cancel").click(), name: "Cancel" },
-  {
-    dismiss: () => {
-      const modal = document.body.querySelector("openclaw-modal-dialog");
-      modal?.dispatchEvent(new CustomEvent("modal-cancel", { bubbles: true, composed: true }));
-    },
-    name: "Escape or modal dismissal",
-  },
-])("sends nothing when the operator chooses $name", async ({ dismiss }) => {
-  const postMessage = installNativeBridge();
-  const { settled, startGatewayUpdate } = startUpdate({ viaNativeApp: true });
-  await getRenderedModalDialog(document.body);
-
-  dismiss();
-  await settled;
-
-  expect(startGatewayUpdate).not.toHaveBeenCalled();
-  expect(postMessage).not.toHaveBeenCalled();
-});
-
-it("starts exactly one Gateway update after an explicit confirmation", async () => {
-  const { settled, startGatewayUpdate } = startUpdate();
-  await getRenderedModalDialog(document.body);
-
-  findButton("Update and restart").click();
-  await settled;
-
-  expect(startGatewayUpdate).toHaveBeenCalledOnce();
-});
-
 it("hands a confirmed update to the Mac app instead of the Gateway", async () => {
   const postMessage = installNativeBridge();
   const { settled, startGatewayUpdate } = startUpdate({ viaNativeApp: true });

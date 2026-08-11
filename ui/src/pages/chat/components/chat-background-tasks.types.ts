@@ -1,4 +1,5 @@
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
+import type { SubagentActivityPresentation } from "./chat-subagent-activity.ts";
 
 export type BackgroundTasksRailView =
   | { kind: "list" }
@@ -24,6 +25,7 @@ export type BackgroundTasksProps = {
   error: string | null;
   /** null until the first load for this session finished. */
   tasks: TaskSummary[] | null;
+  subagentActivity: SubagentActivityPresentation;
   view: BackgroundTasksRailView;
   taskDetails: ReadonlyMap<string, TaskSummary>;
   taskDetailErrors: ReadonlyMap<string, string>;

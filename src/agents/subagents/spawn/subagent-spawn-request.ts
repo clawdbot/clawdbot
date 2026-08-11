@@ -10,8 +10,7 @@ import {
 import { listAgentIds } from "../../agent-scope-config.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import { resolveSpawnAdmission, resolveSpawnMode } from "../../spawn-plan.js";
-import { listSwarmRunsForGroup } from "../../subagent-registry.js";
-import { normalizeSubagentTaskName } from "../../subagent-task-name.js";
+import { listSwarmRunsForGroup } from "../registry/subagent-registry.js";
 import { resolveSwarmConfig } from "../swarm/swarm-config.js";
 import { validateStructuredOutputSchema } from "../swarm/swarm-output-schema.js";
 import { reserveSwarmRun } from "../swarm/swarm-scheduler.js";
@@ -26,6 +25,7 @@ import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-plan.js";
 import { loadSubagentConfig } from "./subagent-spawn-session-patch.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./subagent-spawn.runtime.js";
+import { normalizeSubagentTaskName } from "./subagent-task-name.js";
 
 type ResolvedSubagentSpawnRequest = {
   request: {

@@ -1,5 +1,9 @@
 // Covers heartbeat tool-response handling and visible reply policy.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+} from "../agents/failover/user-copy.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import {
   createHeartbeatToolResponsePayload,
@@ -9,10 +13,6 @@ import {
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../auto-reply/reply-payload.js";
-import {
-  GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
-} from "../auto-reply/reply/agent-runner-failure-copy.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { patchSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -27,7 +27,8 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { stripTrailingHeartbeatNotifyFalse } from "./heartbeat-delivery-normalization.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import { claimHeartbeatOutcomeForRun } from "./heartbeat-outcome-store.js";
-import { runHeartbeatOnce, testing, type HeartbeatDeps } from "./heartbeat-runner.js";
+import { truncateHeartbeatPreview } from "./heartbeat-runner-prompt.js";
+import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
   readSessionStoreForTest,
@@ -45,8 +46,8 @@ installHeartbeatRunnerTestRuntime();
 
 describe("heartbeat event previews", () => {
   it("keeps the 200-code-unit preview UTF-16 well-formed", () => {
-    expect(testing.truncateHeartbeatPreview(`${"x".repeat(199)}🚀tail`)).toBe("x".repeat(199));
-    expect(testing.truncateHeartbeatPreview(undefined)).toBeUndefined();
+    expect(truncateHeartbeatPreview(`${"x".repeat(199)}🚀tail`)).toBe("x".repeat(199));
+    expect(truncateHeartbeatPreview(undefined)).toBeUndefined();
   });
 });
 

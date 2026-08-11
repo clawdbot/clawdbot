@@ -180,6 +180,7 @@
 
   /* Layering */
   --z-dropdown: 100;
+  --z-toast: 2000;
 
   /* Custom select chevron. Data URIs cannot read var(--muted), so the stroke
      color is baked per theme mode; light mode overrides the whole image. */

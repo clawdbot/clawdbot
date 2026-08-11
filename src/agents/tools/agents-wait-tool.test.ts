@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SubagentRunRecord } from "../subagent-registry.types.js";
+import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
 
 const records = new Map<string, SubagentRunRecord>();
 const registryEvents = vi.hoisted(() => ({ listeners: new Set<() => void>() }));
 
-vi.mock("../subagent-registry.js", () => ({
+vi.mock("../subagents/registry/subagent-registry.js", () => ({
   getSubagentRunsByRunIds: (runIds: readonly string[]) => ({
     entries: new Map(
       runIds.flatMap((runId) => {
@@ -20,7 +20,7 @@ vi.mock("../subagent-registry.js", () => ({
   }),
 }));
 
-vi.mock("../subagent-registry-state.js", () => ({
+vi.mock("../subagents/registry/subagent-registry-state.js", () => ({
   onSubagentRegistryPersisted: (listener: () => void) => {
     registryEvents.listeners.add(listener);
     return () => registryEvents.listeners.delete(listener);

@@ -680,7 +680,7 @@ export function extractTuiAbortedText(message: unknown, includeThinking: boolean
   return extractTextFromMessage(message, { includeThinking, includeAttachments: false });
 }
 
-export function isCommandMessage(message: unknown): boolean {
+export function isCommandMarkedMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
   }
@@ -748,7 +748,7 @@ export function formatContextUsageLine(params: {
   return `tokens ${totalLabel}/${ctxLabel}${extra ? ` (${extra})` : ""}`;
 }
 
-export function asString(value: unknown, fallback = ""): string {
+export function formatPrimitiveString(value: unknown, fallback = ""): string {
   if (typeof value === "string") {
     return value;
   }

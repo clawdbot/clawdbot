@@ -7,11 +7,146 @@ import { createDockPanelLayout } from "../../components/dock-panel-layout.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
 import type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { clampText } from "../../lib/format.ts";
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 export type ChatPageContext = ApplicationContext;
 export type PaneSessionChangeOptions = { replace?: boolean };
+export type PaneSessionHandoff = {
+  attachments: ChatAttachment[];
+  composerFallbacks?: ChatPageHost["chatComposerFallbackByScope"];
+  draft: string;
+  restore?: boolean;
+  send?: boolean;
+  storageFailed?: boolean;
+};
+type PendingPaneSessionHandoff = PaneSessionHandoff & { expiresAt: number; sessionKey: string };
+// A retained pane owns one session for life, so creation/fork adoption crosses
+// component instances. The application context scopes that one-shot transfer.
+const PANE_SESSION_HANDOFF_TTL_MS = 30_000;
+const PANE_SESSION_HANDOFF_LIMIT = 4;
+const paneSessionHandoffs = new WeakMap<
+  ApplicationContext,
+  Map<string, PendingPaneSessionHandoff[]>
+>();
+
+function discardPaneSessionHandoff(handoff: PendingPaneSessionHandoff): void {
+  if (!handoff.restore) {
+    return;
+  }
+  releaseChatAttachmentPayloads([
+    ...handoff.attachments,
+    ...Object.values(handoff.composerFallbacks ?? {}).flatMap((fallback) => fallback.attachments),
+  ]);
+}
+
+function paneHandoffs(
+  context: ApplicationContext,
+  paneId: string,
+  create: boolean,
+): PendingPaneSessionHandoff[] | undefined {
+  let byPane = paneSessionHandoffs.get(context);
+  if (!byPane && create) {
+    byPane = new Map();
+    paneSessionHandoffs.set(context, byPane);
+  }
+  let pending = byPane?.get(paneId);
+  if (!pending && create) {
+    pending = [];
+    byPane?.set(paneId, pending);
+  }
+  if (pending) {
+    const now = Date.now();
+    for (let index = pending.length - 1; index >= 0; index -= 1) {
+      if (pending[index]!.expiresAt <= now) {
+        discardPaneSessionHandoff(pending[index]!);
+        pending.splice(index, 1);
+      }
+    }
+  }
+  return pending;
+}
+
+export function preparePaneSessionHandoff(
+  context: ApplicationContext,
+  paneId: string,
+  sessionKey: string,
+  handoff: PaneSessionHandoff,
+): void {
+  const pending = paneHandoffs(context, paneId, true)!;
+  const existing = pending.findIndex((candidate) =>
+    areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey),
+  );
+  if (existing >= 0) {
+    discardPaneSessionHandoff(pending[existing]!);
+    pending.splice(existing, 1);
+  }
+  const stored = {
+    sessionKey,
+    ...handoff,
+    expiresAt: Date.now() + PANE_SESSION_HANDOFF_TTL_MS,
+  };
+  pending.push(stored);
+  globalThis.setTimeout(() => {
+    paneHandoffs(context, paneId, false);
+  }, PANE_SESSION_HANDOFF_TTL_MS);
+  while (pending.length > PANE_SESSION_HANDOFF_LIMIT) {
+    discardPaneSessionHandoff(pending.shift()!);
+  }
+}
+
+export function consumePaneSessionHandoff(
+  context: ApplicationContext,
+  paneId: string,
+  sessionKey: string,
+): PaneSessionHandoff | null {
+  const pending = paneHandoffs(context, paneId, false);
+  const index = pending?.findIndex((candidate) =>
+    areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey),
+  );
+  if (!pending || index === undefined || index < 0) {
+    return null;
+  }
+  const handoff = pending.splice(index, 1)[0]!;
+  const { expiresAt: _expiresAt, sessionKey: _sessionKey, ...value } = handoff;
+  return value;
+}
+
+export function clearPaneSessionHandoff(
+  context: ApplicationContext,
+  paneId: string,
+  sessionKey: string,
+): void {
+  const pending = paneHandoffs(context, paneId, false);
+  for (let index = (pending?.length ?? 0) - 1; index >= 0; index -= 1) {
+    if (areUiSessionKeysEquivalent(pending![index]!.sessionKey, sessionKey)) {
+      discardPaneSessionHandoff(pending![index]!);
+      pending?.splice(index, 1);
+    }
+  }
+}
+
+export function clearPaneSessionHandoffs(context: ApplicationContext, paneId: string): void {
+  const byPane = paneSessionHandoffs.get(context);
+  if (!byPane) {
+    return;
+  }
+  const pending = byPane.get(paneId);
+  if (!pending) {
+    return;
+  }
+  for (const handoff of pending) {
+    discardPaneSessionHandoff(handoff);
+  }
+  byPane.delete(paneId);
+  if (byPane.size === 0) {
+    paneSessionHandoffs.delete(context);
+  }
+}
+
 export type ResolvedBoardView = {
   provider: BoardProvider;
   snapshot: BoardSnapshot;
@@ -113,7 +248,16 @@ export const WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH = 800;
 // Widest the rail's grid column gets; a side-docked rail takes this from the
 // width available to the chat + detail-panel split.
 export const WORKSPACE_RAIL_MAX_WIDTH = 280;
-export const SESSION_RAIL_DOCK_MIN_WIDTH = 1080;
+// Widest the session companion's docked column gets; keep in sync with the
+// flex-basis in chat/sidebar.css. Wider than the workspace rail because it
+// hosts a reading surface, not a file list.
+const SESSION_RAIL_MAX_WIDTH = 400;
+// The companion is a side surface, not an overlay: it docks whenever its column
+// and a readable thread both fit. Measured against the width left after the
+// workspace and task rails take theirs. Below this the pane cannot hold two
+// columns, so the companion becomes a full-height sheet instead of covering
+// the thread as a floating card.
+export const SESSION_RAIL_SIDE_MIN_PANE_WIDTH = SESSION_RAIL_MAX_WIDTH + 480;
 export const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new session after the active run or queued messages finish.";
 export const NEW_SESSION_LIST_LOADING_MESSAGE =

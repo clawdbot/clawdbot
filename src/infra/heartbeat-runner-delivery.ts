@@ -2,8 +2,8 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import { replaceGenericExternalRunFailureText } from "../agents/failover/user-copy.js";
 import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
-import { replaceGenericExternalRunFailureText } from "../auto-reply/reply/agent-runner-failure-copy.js";
 import { buildRecoverablePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import { sendDurableMessageBatch } from "../channels/message/runtime.js";
 import { patchSessionEntry } from "../config/sessions/session-accessor.js";
@@ -40,6 +40,9 @@ const log = heartbeatLog;
 const CLEARED_PENDING_FINAL_DELIVERY_FIELDS = {
   pendingFinalDelivery: undefined,
 } as const;
+
+const FIRST_HEARTBEAT_ALERT_PREAMBLE =
+  'First heartbeat alert: your bot runs periodic background checks and messages you only when something needs attention. Set agents.defaults.heartbeat.target: "none" to keep these internal.';
 
 // Clear pending-final only when this run produced it: the agent run stamps
 // createdAt during the run, so createdAt >= run start means we own it. An older
@@ -335,7 +338,11 @@ export async function finalizeHeartbeatOutcome(params: {
     return { status: "ran", durationMs: Date.now() - startedAt };
   }
 
-  const previewText = normalized.text;
+  const deliveryText =
+    delivery.implicitDefaultRoute && prevHeartbeatAt === undefined
+      ? `${FIRST_HEARTBEAT_ALERT_PREAMBLE}\n${normalized.text}`
+      : normalized.text;
+  const previewText = deliveryText;
   if (delivery.channel === "none" || !delivery.to) {
     emitHeartbeatEvent({
       status: "skipped",
@@ -401,7 +408,7 @@ export async function finalizeHeartbeatOutcome(params: {
     payloads: [
       copyReplyPayloadMetadata(replyPayload ?? {}, {
         ...replyPayload,
-        text: normalized.text,
+        text: deliveryText,
         mediaUrls,
       }),
     ],
@@ -413,7 +420,7 @@ export async function finalizeHeartbeatOutcome(params: {
   }
   const visibleSendSucceeded = send.status === "sent";
   if (visibleSendSucceeded) {
-    const hasHeartbeatText = Boolean(normalized.text.trim());
+    const hasHeartbeatText = Boolean(deliveryText.trim());
     await patchSessionEntry(
       { storePath, sessionKey },
       (current, context) => {

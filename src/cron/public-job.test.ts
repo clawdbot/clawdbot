@@ -62,4 +62,23 @@ describe("toPublicCronJob", () => {
       source: "final-executable-surface",
     });
   });
+
+  it("strips private runtime authority without mutating the stored job", () => {
+    const runtimeAuthority = {
+      version: 1 as const,
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: { apps: [{ id: "calendar" }] },
+    };
+    const job: CronStoredJob = {
+      ...makeCronJob({}),
+      runtimeAuthority,
+      runtimeAuthorityRecoveryRequired: true,
+    };
+
+    expect(toPublicCronJob(job)).not.toHaveProperty("runtimeAuthority");
+    expect(toPublicCronJob(job)).not.toHaveProperty("runtimeAuthorityRecoveryRequired");
+    expect(job.runtimeAuthority).toEqual(runtimeAuthority);
+    expect(job.runtimeAuthorityRecoveryRequired).toBe(true);
+  });
 });

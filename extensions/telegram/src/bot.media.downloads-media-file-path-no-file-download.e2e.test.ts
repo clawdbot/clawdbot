@@ -6,7 +6,7 @@ import {
   setNextSavedMediaPath,
   telegramBotDepsForTest,
   telegramMediaHarnessSendMessageSpy,
-} from "./bot.media.e2e-harness.js";
+} from "./bot.media.e2e.test-harness.js";
 import {
   TELEGRAM_TEST_TIMINGS,
   createBotHandler,

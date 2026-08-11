@@ -1,8 +1,7 @@
 /**
  * OpenAI-compatible STT (Speech-to-Text) configuration and transcription.
  *
- * Migrated from `src/stt.ts` — uses core/utils/string-normalize instead
- * of broad SDK text barrels.
+ * Uses canonical Plugin SDK coercion helpers plus QQ-specific filename sanitization.
  */
 
 import * as fs from "node:fs";
@@ -14,13 +13,13 @@ import {
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
+  asOptionalObjectRecord,
   normalizeOptionalString,
-  asOptionalObjectRecord as asRecord,
-  readStringField as readString,
-  sanitizeFileName,
-} from "./string-normalize.js";
+  readStringField,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { sanitizeFileName } from "./string-normalize.js";
 
 const STT_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const DEFAULT_STT_TIMEOUT_MS = 60_000;
@@ -44,19 +43,20 @@ function resolveSTTTimeoutMs(...timeoutSeconds: unknown[]): number {
 
 /** Resolve the STT configuration from the nested config object. */
 export function resolveSTTConfig(cfg: Record<string, unknown>): STTConfig | null {
-  const channels = asRecord(cfg.channels);
-  const qqbot = asRecord(channels?.qqbot);
-  const channelStt = asRecord(qqbot?.stt);
-  const models = asRecord(cfg.models);
-  const providers = asRecord(models?.providers);
+  const channels = asOptionalObjectRecord(cfg.channels);
+  const qqbot = asOptionalObjectRecord(channels?.qqbot);
+  const channelStt = asOptionalObjectRecord(qqbot?.stt);
+  const models = asOptionalObjectRecord(cfg.models);
+  const providers = asOptionalObjectRecord(models?.providers);
 
   // Prefer plugin-specific STT config.
   if (channelStt && channelStt.enabled !== false) {
-    const providerId = readString(channelStt, "provider") ?? "openai";
-    const providerCfg = asRecord(providers?.[providerId]);
-    const baseUrl = readString(channelStt, "baseUrl") ?? readString(providerCfg, "baseUrl");
-    const apiKey = readString(channelStt, "apiKey") ?? readString(providerCfg, "apiKey");
-    const model = readString(channelStt, "model") ?? "whisper-1";
+    const providerId = readStringField(channelStt, "provider") ?? "openai";
+    const providerCfg = asOptionalObjectRecord(providers?.[providerId]);
+    const baseUrl =
+      readStringField(channelStt, "baseUrl") ?? readStringField(providerCfg, "baseUrl");
+    const apiKey = readStringField(channelStt, "apiKey") ?? readStringField(providerCfg, "apiKey");
+    const model = readStringField(channelStt, "model") ?? "whisper-1";
     if (baseUrl && apiKey) {
       return {
         baseUrl: baseUrl.replace(/\/+$/, ""),
@@ -68,19 +68,21 @@ export function resolveSTTConfig(cfg: Record<string, unknown>): STTConfig | null
   }
 
   // Fall back to framework-level audio model config.
-  const tools = asRecord(cfg.tools);
-  const media = asRecord(tools?.media);
-  const audio = asRecord(media?.audio);
+  const tools = asOptionalObjectRecord(cfg.tools);
+  const media = asOptionalObjectRecord(tools?.media);
+  const audio = asOptionalObjectRecord(media?.audio);
   const mediaModels = Array.isArray(media?.models) ? media.models : [];
   const audioModelEntry = mediaModels
-    .map((entry) => asRecord(entry))
+    .map((entry) => asOptionalObjectRecord(entry))
     .find((entry) => !Array.isArray(entry?.capabilities) || entry.capabilities.includes("audio"));
   if (audioModelEntry) {
-    const providerId = readString(audioModelEntry, "provider") ?? "openai";
-    const providerCfg = asRecord(providers?.[providerId]);
-    const baseUrl = readString(audioModelEntry, "baseUrl") ?? readString(providerCfg, "baseUrl");
-    const apiKey = readString(audioModelEntry, "apiKey") ?? readString(providerCfg, "apiKey");
-    const model = readString(audioModelEntry, "model") ?? "whisper-1";
+    const providerId = readStringField(audioModelEntry, "provider") ?? "openai";
+    const providerCfg = asOptionalObjectRecord(providers?.[providerId]);
+    const baseUrl =
+      readStringField(audioModelEntry, "baseUrl") ?? readStringField(providerCfg, "baseUrl");
+    const apiKey =
+      readStringField(audioModelEntry, "apiKey") ?? readStringField(providerCfg, "apiKey");
+    const model = readStringField(audioModelEntry, "model") ?? "whisper-1";
     if (baseUrl && apiKey) {
       return {
         baseUrl: baseUrl.replace(/\/+$/, ""),

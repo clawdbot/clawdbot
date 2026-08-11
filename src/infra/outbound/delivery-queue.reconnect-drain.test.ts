@@ -14,7 +14,7 @@ import {
 } from "./delivery-queue-storage.js";
 import {
   type DeliverFn,
-  drainPendingDeliveries,
+  drainPendingDeliveriesCore,
   enqueueDelivery,
   failDelivery,
   type RecoveryLogger,
@@ -89,7 +89,7 @@ async function drainDirectChatReconnectPending(opts: {
   stateDir: string;
 }) {
   const normalizedAccountId = normalizeReconnectAccountIdForTest(opts.accountId);
-  await drainPendingDeliveries({
+  await drainPendingDeliveriesCore({
     drainKey: `directchat:${normalizedAccountId}`,
     logLabel: "DirectChat reconnect drain",
     cfg: stubCfg,
@@ -143,7 +143,7 @@ async function enqueueFailedDirectChatDelivery(params: {
   return id;
 }
 
-describe("drainPendingDeliveries for reconnect", () => {
+describe("drainPendingDeliveriesCore for reconnect", () => {
   let tmpDir: string;
   const fixtures = installDeliveryQueueTmpDirHooks();
 
@@ -200,7 +200,7 @@ describe("drainPendingDeliveries for reconnect", () => {
       { channel: entry.channel, messageId: `${entry.channel}-delivered` },
     ]);
     const drain = () =>
-      drainPendingDeliveries({
+      drainPendingDeliveriesCore({
         drainKey: "gateway:outbound",
         logLabel: "Outbound delivery retry",
         cfg: stubCfg,
@@ -266,7 +266,7 @@ describe("drainPendingDeliveries for reconnect", () => {
     });
     const deliver = vi.fn<DeliverFn>(async () => []);
 
-    await drainPendingDeliveries({
+    await drainPendingDeliveriesCore({
       drainKey: "gateway:outbound",
       logLabel: "Outbound delivery retry",
       cfg,
@@ -644,7 +644,7 @@ describe("drainPendingDeliveries for reconnect", () => {
     const id = await enqueueFailedDirectChatDelivery({ accountId: "acct1", stateDir: tmpDir });
     let mutated = false;
 
-    await drainPendingDeliveries({
+    await drainPendingDeliveriesCore({
       drainKey: "directchat:acct1",
       logLabel: "DirectChat reconnect drain",
       cfg: stubCfg,

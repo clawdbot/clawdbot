@@ -4,7 +4,6 @@ import type { Message } from "grammy/types";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { createChannelApiRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
 import { markdownToTelegramHtml } from "../format.js";
 import { isSafeToRetrySendError, isTelegramRateLimitError } from "../network-errors.js";
@@ -24,9 +23,9 @@ import {
   type TelegramInputRichMessage,
 } from "../rich-message.js";
 import {
-  buildTelegramPlainFallbackPlan,
   isTelegramEmptyContentError,
   isTelegramHtmlParseError,
+  withTelegramPlainFallback,
   warnTelegramRichBlocksDegradations,
 } from "../rich-plain-fallback.js";
 import { withTelegramNativeQuoteFallback } from "../send-context.js";
@@ -164,36 +163,31 @@ export async function sendTelegramText(
       runtime.log?.("telegram sendRichMessage rendered empty; falling back to plain text");
       return await sendPlainFallback();
     }
-    let res: Message;
-    try {
-      res = await sendTelegramWithThreadFallback({
-        operation: "sendRichMessage",
-        runtime,
-        requestParams: toTelegramRichMessageContextParams(baseParams),
-        removeNativeQuoteParam: removeTelegramRichNativeQuoteParam,
-        send: (effectiveParams) =>
-          getTelegramRichRawApi(bot.api).sendRichMessage({
-            chat_id: chatId,
-            rich_message: richPlan.richMessage,
-            ...(opts.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-            ...effectiveParams,
-          }),
-      });
-    } catch (err) {
-      const fallbackPlan = buildTelegramPlainFallbackPlan({
-        plainText: richPlan.plainText || fallbackText,
-        err,
-        context: "sendRichMessage",
-        warn: (message) => runtime.log?.(message),
-      });
-      if (!fallbackPlan || !hasFallbackText) {
-        throw err;
-      }
-      return await sendPlainFallback(fallbackPlan.plainText);
-    }
-    const messageId = await acceptProviderMessage(res);
-    runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${messageId}`);
-    return messageId;
+    return await withTelegramPlainFallback({
+      kind: "rich",
+      context: "sendRichMessage",
+      plainText: richPlan.plainText || fallbackText,
+      warn: (message) => runtime.log?.(message),
+      sendFormatted: async () => {
+        const res = await sendTelegramWithThreadFallback({
+          operation: "sendRichMessage",
+          runtime,
+          requestParams: toTelegramRichMessageContextParams(baseParams),
+          removeNativeQuoteParam: removeTelegramRichNativeQuoteParam,
+          send: (effectiveParams) =>
+            getTelegramRichRawApi(bot.api).sendRichMessage({
+              chat_id: chatId,
+              rich_message: richPlan.richMessage,
+              ...(opts.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+              ...effectiveParams,
+            }),
+        });
+        const messageId = await acceptProviderMessage(res);
+        runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${messageId}`);
+        return messageId;
+      },
+      sendPlain: (plan) => sendPlainFallback(plan.plainText),
+    });
   }
 
   // Markdown can render to empty HTML for syntax-only chunks; recover with plain text.
@@ -205,32 +199,29 @@ export async function sendTelegramText(
     }
     return await sendPlainFallback();
   }
-  try {
-    const res = await sendTelegramWithThreadFallback({
-      operation: "sendMessage",
-      runtime,
-      requestParams: baseParams,
-      shouldLog: (err) => !isTelegramHtmlParseError(err) && !isTelegramEmptyContentError(err),
-      send: (effectiveParams) =>
-        bot.api.sendMessage(chatId, htmlText, {
-          parse_mode: "HTML",
-          ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
-          ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-          ...effectiveParams,
-        }),
-    });
-    const messageId = await acceptProviderMessage(res);
-    runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${messageId}`);
-    return messageId;
-  } catch (err) {
-    const errText = formatErrorMessage(err);
-    if (isTelegramHtmlParseError(err) || isTelegramEmptyContentError(err)) {
-      if (!hasFallbackText) {
-        throw err;
-      }
-      runtime.log?.(`telegram formatted send failed; retrying without formatting: ${errText}`);
-      return await sendPlainFallback();
-    }
-    throw err;
-  }
+  return await withTelegramPlainFallback({
+    kind: "html",
+    context: "sendMessage",
+    plainText: fallbackText,
+    warn: (message) => runtime.log?.(message),
+    sendFormatted: async () => {
+      const res = await sendTelegramWithThreadFallback({
+        operation: "sendMessage",
+        runtime,
+        requestParams: baseParams,
+        shouldLog: (err) => !isTelegramHtmlParseError(err) && !isTelegramEmptyContentError(err),
+        send: (effectiveParams) =>
+          bot.api.sendMessage(chatId, htmlText, {
+            parse_mode: "HTML",
+            ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
+            ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+            ...effectiveParams,
+          }),
+      });
+      const messageId = await acceptProviderMessage(res);
+      runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${messageId}`);
+      return messageId;
+    },
+    sendPlain: (plan) => sendPlainFallback(plan.plainText),
+  });
 }

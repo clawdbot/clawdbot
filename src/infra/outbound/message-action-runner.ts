@@ -5,7 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
-import { readStringArrayParam, readStringParam } from "../../agents/tools/common.js";
+import { readStringArrayParam, readToolStringParam } from "../../agents/tools/common.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
@@ -72,10 +72,10 @@ async function handleBroadcastAction(
   if (rawTargets.length === 0) {
     throw new Error("Broadcast requires at least one target in --targets.");
   }
-  const channelHint = readStringParam(params, "channel");
+  const channelHint = readToolStringParam(params, "channel");
   const explicitAccountId = validateExplicitMessageAccountSelection({
     cfg: input.cfg,
-    accountId: readStringParam(params, "accountId"),
+    accountId: readToolStringParam(params, "accountId"),
     checkResolvedAccount: false,
   });
   if (input.broadcastAccountPlan && input.broadcastAccountPlan.accountId !== explicitAccountId) {

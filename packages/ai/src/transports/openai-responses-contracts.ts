@@ -1,4 +1,9 @@
-import type { Api, ProviderReplayState } from "@openclaw/llm-core";
+import {
+  PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
+  PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
+  type Api,
+  type ProviderReplayState,
+} from "@openclaw/llm-core";
 import type {
   FunctionTool,
   ResponseCreateParamsStreaming,
@@ -22,6 +27,36 @@ export const OPENAI_RESPONSES_REASONING_REPLAY_META_KEY = "__openclaw_replay";
 export const OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY = "openclawReasoningReplay";
 export const OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH = 64;
 export const OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE = "openai-responses-compaction";
+
+export class OpenAIResponsesWebSocketResponseFailedError extends Error {
+  readonly code: string;
+
+  constructor(hasOutput: boolean) {
+    super("OpenAI Responses WebSocket returned response.failed");
+    this.name = "OpenAIResponsesWebSocketResponseFailedError";
+    this.code = hasOutput
+      ? PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE
+      : PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE;
+  }
+}
+
+export class OpenAIResponsesWebSocketPreDispatchError extends Error {
+  constructor(cause: unknown) {
+    super("OpenAI Responses WebSocket failed before request dispatch", { cause });
+    this.name = "OpenAIResponsesWebSocketPreDispatchError";
+  }
+}
+
+export class OpenAIResponsesWebSocketPostDispatchError extends Error {
+  readonly code = PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE;
+
+  constructor(cause: unknown) {
+    super("OpenAI Responses WebSocket failed after request dispatch; outcome is unknown", {
+      cause,
+    });
+    this.name = "OpenAIResponsesWebSocketPostDispatchError";
+  }
+}
 
 export type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
 export type ReplayableResponseCompactionItem = Omit<ResponseCompactionItem, "id"> & { id?: string };
@@ -55,7 +90,7 @@ export type OpenAIResponsesOptions = BaseOpenAIStreamOptions & {
 
 const PROMPT_OBSERVER = Symbol("openaiResponsesPromptObserver");
 export type ResponsesPromptObservation = {
-  egress: "responses-sdk" | "native-codex-websocket" | "native-codex-sse";
+  egress: "responses-sdk" | "responses-websocket" | "native-codex-websocket" | "native-codex-sse";
   payloadVariant: "initial" | "reasoning-stripped" | "compaction-stripped";
   promptSource: "instructions" | "input.developer" | "input.system" | "missing";
   expectedChars: number;

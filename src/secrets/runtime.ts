@@ -190,6 +190,8 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins" | "manifestRegistry">;
   /** Isolate known non-Gateway owners and retain unchanged last-known-good values when possible. */
   allowUnavailableSecretOwners?: boolean;
+  /** Ref keys whose owners must become cold rather than retain last-known-good values. */
+  forceColdRefKeys?: ReadonlySet<string>;
   /** Test override for discovered loadable plugins and their origins. */
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): Promise<PreparedSecretsRuntimeSnapshot> {
@@ -312,6 +314,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
             cache: context.cache,
             manifestRegistry: context.manifestRegistry,
           },
+          forceColdRefKeys: params.forceColdRefKeys,
         })
       : { degradedOwners: [], resolvedValues: new Map<string, unknown>() };
   const assignmentSecretOwners = listSecretAssignmentOwners(
@@ -325,6 +328,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
         resolvedConfig,
         context,
         allowUnavailableSecretOwners: params.allowUnavailableSecretOwners,
+        forceColdRefKeys: params.forceColdRefKeys,
       })
     : {
         metadata: createEmptyRuntimeWebToolsMetadata(),

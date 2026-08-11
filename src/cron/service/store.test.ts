@@ -553,21 +553,29 @@ describe("cron service store seam coverage", () => {
     expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toBe(changedNextRunAtMs);
   });
 
-  it("loads normalized jobId-only jobs from SQLite so scheduler lookups resolve by stable id", async () => {
+  it("uses the normalized stable id for job rows and companion authority", async () => {
     const { storePath } = await makeStorePath();
-
-    await writeSingleJobStore(storePath, {
+    const rawJob = {
       jobId: "repro-stable-id",
       name: "handed",
       enabled: true,
       createdAtMs: STORE_TEST_NOW - 60_000,
       updatedAtMs: STORE_TEST_NOW - 60_000,
       schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
+      sessionTarget: "isolated",
       wakeMode: "now",
-      payload: { kind: "systemEvent", text: "tick" },
+      payload: { kind: "agentTurn", message: "tick", toolsAllow: [" read "] },
+      runtimeAuthority: {
+        version: 1,
+        runtimeId: "codex",
+        namespace: "codex.apps",
+        payload: { apps: [{ id: "calendar" }] },
+      },
       state: {},
-    });
+    };
+
+    await writeSingleJobStore(storePath, rawJob);
+    await writeSingleJobStore(storePath, rawJob);
 
     const state = createStoreTestState(storePath);
 
@@ -576,6 +584,13 @@ describe("cron service store seam coverage", () => {
     const job = findJobOrThrow(state, "repro-stable-id");
     expect(job.id).toBe("repro-stable-id");
     expect((job as { jobId?: unknown }).jobId).toBeUndefined();
+    expect(job.payload).toMatchObject({ kind: "agentTurn", toolsAllow: ["read"] });
+    expect(job.runtimeAuthority).toEqual({
+      version: 1,
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: { apps: [{ id: "calendar" }] },
+    });
     await expectPathMissing(`${storePath}.migrated`);
   });
 

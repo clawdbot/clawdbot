@@ -5,6 +5,7 @@ import {
   collectModuleExportNames,
   collectRepositoryCollisions,
   compareExportNameCollisionDebt,
+  findAliasingReExports,
   findExportNameCollisions,
   isExcludedExportCollisionSource,
 } from "../../scripts/check-export-name-collisions.mts";
@@ -62,6 +63,45 @@ describe("export name collision guard", () => {
     `);
     expect([...result.definitions]).toEqual([]);
     expect([...result.exportedNames]).toEqual(["importedValue", "remoteValue"]);
+  });
+
+  it("reports direct aliasing re-exports only outside the Plugin SDK", () => {
+    expect(
+      findAliasingReExports([
+        {
+          path: "src/alias.ts",
+          content: `
+            export { original } from "./source.js";
+            export type { OriginalType as RenamedType } from "./source.js";
+            export { original as renamed } from "./source.js";
+          `,
+        },
+        {
+          path: "src/local-alias.ts",
+          content: `
+            import { original } from "./source.js";
+            export { original as locallyRenamed };
+          `,
+        },
+        {
+          path: "src/plugin-sdk/alias.ts",
+          content: 'export { original as sanctioned } from "../source.js";',
+        },
+        {
+          path: "packages/support.ts",
+          content: 'export { original as packageAlias } from "./source.js";',
+          includeDefinitions: false,
+        },
+      ]),
+    ).toEqual([
+      {
+        exportedName: "renamed",
+        importedName: "original",
+        line: 4,
+        moduleSpecifier: "./source.js",
+        path: "src/alias.ts",
+      },
+    ]);
   });
 
   it("exempts exact function and const same-name forwarders", () => {

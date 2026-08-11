@@ -140,6 +140,34 @@ app set automatically. Run `/new` or `/reset` to refresh the current
 conversation. A gateway restart is not required for plugin enable/disable
 changes.
 
+## Scheduled automations
+
+When an authenticated owner creates an automation from a Codex turn, OpenClaw
+captures the app IDs and approval limits callable on that exact Codex thread.
+The stored authority is bound to the creator's prepared Codex profile and
+account. Scheduled runs intersect that cap with current Codex policy and app
+availability. They never gain new app IDs or a broader destructive,
+open-world, or approval ceiling. Tools added later within an already captured
+app may run only when both the stored ceiling and current policy allow them.
+
+Scheduled app calls are unattended. Only actions explicitly allowed both when
+the job was created and when it runs can proceed without a prompt. An action
+that still requires approval or elicitation is declined. A changed account,
+runtime, revoked app, narrower policy, or unavailable inventory stops before
+app execution and reports how to restore access or reauthorize the automation.
+Model fallbacks cannot move this authority to another runtime or account.
+
+Jobs created before app authority capture may keep their ordinary OpenClaw
+tool cap and continue non-app work, but cannot recover Codex app access
+automatically. Recreate or reauthorize only a job that needs app access, from a
+fresh authenticated owner turn. See
+[Automations](/automation/cron-jobs#codex-apps-in-scheduled-automations).
+Ordinary edits preserve captured app authority. Explicitly replacing a job's
+`toolsAllow` cap without a fresh authenticated Codex authority capture clears
+that authority; the next run reports that app access requires reauthorization.
+An update from a fresh authenticated owner turn can instead capture and store a
+new app ceiling for the updated job.
+
 ## Manage plugins from chat
 
 `/codex plugins` inspects or changes configured native Codex plugins from the

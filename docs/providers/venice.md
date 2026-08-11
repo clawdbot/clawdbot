@@ -50,7 +50,7 @@ Anonymized models are not fully private. Venice strips metadata before forwardin
       </Tab>
       <Tab title="Non-interactive">
         ```bash
-        openclaw onboard --non-interactive \
+        openclaw onboard --non-interactive --accept-risk --skip-health \
           --auth-choice venice-api-key \
           --venice-api-key "vapi_xxxxxxxxxxxx"
         ```

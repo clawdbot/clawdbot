@@ -773,6 +773,8 @@ export function createNativeApprovalChannelRouteGates<TTarget extends NativeAppr
     approvalKind: ApprovalKind;
     request: ApprovalRequest;
   }): boolean => {
+    // Per-account runtimes report raw candidates here. The route coordinator rejects
+    // unbound multi-account groups as ambiguous before any runtime can deliver.
     const accountId = input.accountId ?? params.resolveDefaultAccountId(input.cfg);
     const eligibleAccountIds = params.isTransportEnabled({ cfg: input.cfg, accountId })
       ? [accountId]

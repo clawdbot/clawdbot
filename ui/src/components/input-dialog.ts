@@ -17,6 +17,11 @@ type InputDialogOptions = {
    */
   requireValue?: boolean;
   /**
+   * Holds submission closed while the entry still equals `defaultValue`, so a
+   * rename that would change nothing cannot be submitted.
+   */
+  requireChange?: boolean;
+  /**
    * Runs the operation the dialog was opened for. `null` resolves the dialog; a
    * message keeps it open with the typed value, so a rejected attempt stays
    * visible and retryable instead of discarding what the operator wrote.
@@ -36,12 +41,19 @@ function presentInputDialog(options: InputDialogOptions): Promise<string | null>
     let settled = false;
     let submitting = false;
     let failure: string | null = null;
-    // Tracked so the submit button can reflect an empty required field. It flips
-    // only across the empty boundary, never per keystroke: the value binding is
+    const entryValue = (raw: string) => (options.requireValue === true ? raw.trim() : raw);
+    const submitBlocked = (raw: string) => {
+      const value = entryValue(raw);
+      return (
+        (options.requireValue === true && value.length === 0) ||
+        (options.requireChange === true && value === (options.defaultValue ?? ""))
+      );
+    };
+    // Tracked so the submit button can reflect an entry the caller refuses. It
+    // flips only across that boundary, never per keystroke: the value binding is
     // constant, so the input stays uncontrolled and keeps its caret and IME
     // composition across the repaints this triggers.
-    let blockedEmpty =
-      options.requireValue === true && (options.defaultValue ?? "").trim().length === 0;
+    let blocked = submitBlocked(options.defaultValue ?? "");
 
     const finish = (value: string | null) => {
       if (settled) {
@@ -57,12 +69,9 @@ function presentInputDialog(options: InputDialogOptions): Promise<string | null>
     const inputElement = () => host.querySelector<HTMLInputElement>('input[name="value"]');
 
     const handleInput = (event: Event) => {
-      if (options.requireValue !== true) {
-        return;
-      }
-      const empty = (event.target as HTMLInputElement).value.trim().length === 0;
-      if (empty !== blockedEmpty) {
-        blockedEmpty = empty;
+      const next = submitBlocked((event.target as HTMLInputElement).value);
+      if (next !== blocked) {
+        blocked = next;
         paint();
       }
     };
@@ -76,10 +85,10 @@ function presentInputDialog(options: InputDialogOptions): Promise<string | null>
       if (raw === undefined) {
         return;
       }
-      const value = options.requireValue === true ? raw.trim() : raw;
-      if (options.requireValue === true && value.length === 0) {
+      if (submitBlocked(raw)) {
         return;
       }
+      const value = entryValue(raw);
       if (!options.submit) {
         finish(value);
         return;
@@ -153,7 +162,7 @@ function presentInputDialog(options: InputDialogOptions): Promise<string | null>
                 ? html`<div class="exec-approval-error" role="alert">${failure}</div>`
                 : nothing}
               <div class="exec-approval-actions">
-                <button type="submit" class="btn primary" ?disabled=${submitting || blockedEmpty}>
+                <button type="submit" class="btn primary" ?disabled=${submitting || blocked}>
                   ${options.submitLabel ?? t("common.save")}
                 </button>
                 <button

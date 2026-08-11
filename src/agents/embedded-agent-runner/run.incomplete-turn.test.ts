@@ -1,6 +1,7 @@
 // Coverage for incomplete-turn safety, retry instructions, and liveness states.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE } from "../../llm/types.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
   hasOutboundDeliveryEvidence,
@@ -4071,6 +4072,21 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         assistant,
       }),
     ).toBe(true);
+  });
+
+  it("does not retry an ambiguous post-dispatch provider outcome", () => {
+    const assistant = makeLastAssistant({
+      stopReason: "error",
+      errorCode: PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
+      errorMessage: "The WebSocket closed after dispatch",
+      usage: { input: 100, output: 0, totalTokens: 100 },
+    });
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
+        assistant,
+      }),
+    ).toBe(false);
   });
 
   it("does not retry errored empty turns when non-zero output may indicate progress", () => {

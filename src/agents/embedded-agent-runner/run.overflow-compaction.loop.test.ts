@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import {
   createEmbeddedRunReplayState,
   type EmbeddedRunReplayState,
@@ -36,7 +37,7 @@ vi.mock("../harness/selection.js", () => ({
   runAgentHarnessSettledTurnFinalization: vi.fn(),
 }));
 
-vi.mock("../subagent-registry.js", () => ({
+vi.mock("../subagents/registry/subagent-registry.js", () => ({
   settleRequesterAfterSessionSpawns: mocks.settleRequesterAfterSessionSpawns,
 }));
 
@@ -64,6 +65,7 @@ function makeDispatchInput(
       config: {},
       contextEngineLogicalTurnLease: { owner: "logical-turn" },
       onContextEngineTurnCandidate: vi.fn(),
+      admittedRunContext: createTestAdmittedRunContext("run-1"),
     },
     transcriptOwnership: { kind: "caller-owned", sessionManager },
     runtime: {

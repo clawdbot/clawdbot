@@ -5,6 +5,7 @@ import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import {
+  isCronSessionKey,
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
   resolveSessionWorkSubtitle,
@@ -19,6 +20,7 @@ import {
 import {
   compareSessionRowsByUpdatedAt,
   filterVisibleSessionRows,
+  isSystemCreatedSessionRow,
   resolveSessionNavigation,
 } from "../lib/sessions/index.ts";
 import {
@@ -33,10 +35,10 @@ import {
   normalizeAgentId,
   resolveUiCanonicalMainSessionKey,
   resolveUiConfiguredMainKey,
+  resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
 import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
-import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
 import {
   limitSidebarSessionRows,
   SIDEBAR_SESSION_NO_ATTENTION,
@@ -101,7 +103,8 @@ function isSidebarDraftOwnedBySelf(
 export type SidebarSessionNavigationState = {
   routeSessionKey: string;
   selectedAgentId: string;
-  visibleSessions: SidebarRecentSession[];
+  activeRowKey: string | null;
+  visibleSessionRows: GatewaySessionRow[];
   toSidebarSession: (row: SessionRow, isChild?: boolean) => SidebarRecentSession;
 };
 
@@ -112,6 +115,7 @@ export function buildSidebarSessionNavigationState(input: {
   activeSession?: GatewaySessionRow | null;
   sessionsAgentId: string | null;
   showCron: boolean;
+  showSystem: boolean;
   statusFilter: SidebarSessionStatusFilter;
   compareSessions: (a: SessionRow, b: SessionRow) => number;
   highlightCurrentSession: boolean;
@@ -138,6 +142,7 @@ export function buildSidebarSessionNavigationState(input: {
       context?.agentSelection.state.selectedId ?? context?.gateway.snapshot.assistantAgentId,
     hello: context?.gateway.snapshot.hello,
     showCron: input.showCron,
+    showSystem: input.showSystem,
     archivedFilter: input.statusFilter,
     compareSessions: input.compareSessions,
   });
@@ -160,7 +165,6 @@ export function buildSidebarSessionNavigationState(input: {
       // The sidebar's zone structure already says what forked from what;
       // a "Subagent:" prefix on named threads is noise (other surfaces keep it).
       label: resolveSessionDisplayName(row.key, row, { includeSubagentPrefix: false }),
-      meta: formatSidebarTimestamp(row.updatedAt),
       subtitle: resolveSessionWorkSubtitle(row),
       href: sessionNavigationTarget({
         face: resolveSessionPreferredFace(row),
@@ -230,7 +234,8 @@ export function buildSidebarSessionNavigationState(input: {
   return {
     routeSessionKey: navigation.currentSessionKey,
     selectedAgentId: navigation.selectedAgentId,
-    visibleSessions: navigation.visibleSessions.map((row) => toSidebarSession(row)),
+    activeRowKey: navigation.activeRowKey,
+    visibleSessionRows: navigation.visibleSessions,
     toSidebarSession,
   };
 }
@@ -387,6 +392,32 @@ export function latestVisibleAgentSessionRow(input: {
   return visible.toSorted(compareSessionRowsByUpdatedAt)[0] ?? null;
 }
 
+/**
+ * Promote the hidden main session's children to top-level threads, with the
+ * same visibility rules as ordinary roots so archived, cron, or
+ * system-created children cannot sneak in and pagination stays deterministic.
+ */
+export function collectPromotedMainChildRows(input: {
+  rows: readonly GatewaySessionRow[];
+  childRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
+  mainSessionKeys: ReadonlySet<string>;
+  scopedRootKeys: ReadonlySet<string>;
+  showCron: boolean;
+  showSystem: boolean;
+}): GatewaySessionRow[] {
+  return [...input.rows, ...Object.values(input.childRowsByParent).flat()].filter((row) => {
+    const parentKey = resolveUiSessionNavigationParentKey(row);
+    return (
+      parentKey != null &&
+      input.mainSessionKeys.has(parentKey) &&
+      !input.scopedRootKeys.has(row.key) &&
+      !row.archived &&
+      (input.showCron || !isCronSessionKey(row.key)) &&
+      (input.showSystem || !isSystemCreatedSessionRow(row))
+    );
+  });
+}
+
 export function resolveSidebarAgentResumeKey(
   latest: SessionRow | null,
   agentId: string,
@@ -459,11 +490,11 @@ export function findProjectedSidebarSession(input: {
   navigationState: SidebarSessionNavigationState;
   sessionRowsByAgent: Readonly<Record<string, SessionsListResult["sessions"]>>;
 }): SidebarRecentSession | undefined {
-  const active = input.navigationState.visibleSessions.find(
+  const active = input.navigationState.visibleSessionRows.find(
     (candidate) => candidate.key === input.sessionKey,
   );
   if (active) {
-    return active;
+    return input.navigationState.toSidebarSession(active);
   }
   for (const rows of Object.values(input.sessionRowsByAgent)) {
     const row = rows.find((candidate) => candidate.key === input.sessionKey);

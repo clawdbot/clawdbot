@@ -18,7 +18,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import {
   getFreePort,
   installGatewayTestHooks,
-  startGatewayServer,
+  startTestGatewayServer,
   testState,
 } from "./test-helpers.js";
 import "./server-startup-secret-diagnostics.test-support.js";
@@ -125,7 +125,7 @@ async function startVaultAclFixture() {
 }
 
 describe("Gateway startup SecretRef owner isolation", () => {
-  let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+  let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
 
   afterEach(async () => {
     await server?.close();
@@ -272,7 +272,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
         testState.gatewayAuth = undefined;
 
         const port = await getFreePort();
-        server = await startGatewayServer(port);
+        server = await startTestGatewayServer(port);
         const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
 
         expect(ready.status).toBe(200);
@@ -435,7 +435,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
       });
 
       const port = await getFreePort();
-      server = await startGatewayServer(port, { auth: { mode: "none" } });
+      server = await startTestGatewayServer(port, { auth: { mode: "none" } });
       const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
 
       expect(ready.status).toBe(200);
@@ -508,7 +508,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
           });
 
           const port = await getFreePort();
-          server = await startGatewayServer(port, { auth: { mode: "none" } });
+          server = await startTestGatewayServer(port, { auth: { mode: "none" } });
           const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
 
           expect(ready.status).toBe(200);
@@ -582,7 +582,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
         await writeConfig(config);
 
         const port = await getFreePort();
-        server = await startGatewayServer(port, { auth: { mode: "none" } });
+        server = await startTestGatewayServer(port, { auth: { mode: "none" } });
         const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
         expect(ready.status).toBe(200);
 
@@ -631,7 +631,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
       });
       testState.gatewayAuth = undefined;
 
-      await expect(startGatewayServer(await getFreePort())).rejects.toThrow(
+      await expect(startTestGatewayServer(await getFreePort())).rejects.toThrow(
         /Startup failed: required secrets are unavailable/,
       );
     });

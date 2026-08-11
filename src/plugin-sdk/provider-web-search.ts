@@ -13,7 +13,7 @@ export {
   readNumberParam,
   readPositiveIntegerParam,
   readStringArrayParam,
-  readStringParam,
+  readToolStringParam as readStringParam,
 } from "../agents/tools/common.js";
 export { resolveCitationRedirectUrl } from "../agents/tools/web-search-citation-redirect.js";
 export {
@@ -55,7 +55,10 @@ export {
   withSelfHostedWebToolsEndpoint,
   withTrustedWebToolsEndpoint,
 } from "../agents/tools/web-guarded-fetch.js";
-export { markdownToText, truncateText } from "../agents/tools/web-fetch-utils.js";
+export {
+  markdownToText,
+  truncateWebFetchText as truncateText,
+} from "../agents/tools/web-fetch-utils.js";
 export {
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_TIMEOUT_SECONDS,

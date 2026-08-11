@@ -1,9 +1,3 @@
-type BedrockEmbeddingTestApi = {
-  parseCohereBatch: (family: string, raw: string) => number[][];
-  parseSingle: (family: string, raw: string) => number[];
-  stripInferenceProfilePrefix: (modelId: string) => string;
-};
-
 type BedrockStreamTestApi = {
   buildAdditionalModelRequestFields: (
     model: unknown,
@@ -37,9 +31,6 @@ function lazyTestApi(key: string): object {
   );
 }
 
-export const embeddingTesting = lazyTestApi(
-  "openclaw.amazonBedrockEmbeddingTestApi",
-) as BedrockEmbeddingTestApi;
 export const streamTesting = lazyTestApi(
   "openclaw.amazonBedrockStreamTestApi",
 ) as BedrockStreamTestApi;

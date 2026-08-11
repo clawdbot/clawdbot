@@ -19,7 +19,7 @@ function readMetaValue<T>(
 }
 
 /** Reads the first present string metadata value from a current-to-legacy key list. */
-export function readString(
+export function readMetadataString(
   meta: Record<string, unknown> | null | undefined,
   keys: string[],
 ): string | undefined {
@@ -35,7 +35,7 @@ export function readBool(
 }
 
 /** Reads the first finite numeric metadata value from a current-to-legacy key list. */
-export function readNumber(
+export function readMetadataNumber(
   meta: Record<string, unknown> | null | undefined,
   keys: string[],
 ): number | undefined {

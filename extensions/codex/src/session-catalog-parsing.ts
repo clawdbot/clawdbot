@@ -179,7 +179,7 @@ export function normalizeLimit(value: unknown, key: string): number {
   return value as number;
 }
 
-export function readOptionalString(
+export function readBoundedOptionalString(
   params: Record<string, unknown>,
   key: string,
   maxLength: number,
@@ -217,9 +217,9 @@ export function readPageParams(value: unknown): CodexSessionCatalogPageParams {
   }
   const params = value;
   requireOnlyKeys(params, new Set(["cursor", "limit", "searchTerm", "cwd"]));
-  const cursor = readOptionalString(params, "cursor", MAX_CURSOR_LENGTH);
-  const searchTerm = readOptionalString(params, "searchTerm", MAX_SEARCH_LENGTH);
-  const cwd = readOptionalString(params, "cwd", MAX_CWD_LENGTH);
+  const cursor = readBoundedOptionalString(params, "cursor", MAX_CURSOR_LENGTH);
+  const searchTerm = readBoundedOptionalString(params, "searchTerm", MAX_SEARCH_LENGTH);
+  const cwd = readBoundedOptionalString(params, "cwd", MAX_CWD_LENGTH);
   return {
     limit: normalizeLimit(params.limit, "limit"),
     ...(cursor ? { cursor } : {}),
@@ -234,7 +234,7 @@ export function readGatewayParams(value: unknown): CodexSessionCatalogParams {
   }
   const params = isRecord(value) ? value : {};
   requireOnlyKeys(params, new Set(["search", "limitPerHost", "hostIds", "cursors"]));
-  const search = readOptionalString(params, "search", MAX_SEARCH_LENGTH);
+  const search = readBoundedOptionalString(params, "search", MAX_SEARCH_LENGTH);
   let hostIds: string[] | undefined;
   if (params.hostIds !== undefined) {
     if (!Array.isArray(params.hostIds) || params.hostIds.length > MAX_HOST_COUNT) {

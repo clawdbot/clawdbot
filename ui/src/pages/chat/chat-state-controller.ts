@@ -1,5 +1,4 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { disposeSelectedSessionMessageSubscription } from "./chat-history.ts";
 import { subscribeChatOutboxProjection } from "./chat-queue.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
@@ -16,12 +15,6 @@ import {
 } from "./composer-persistence.ts";
 import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
 import { cancelChatScroll, scheduleCommittedChatScroll } from "./scroll.ts";
-
-type PendingCreatedSessionComposer = {
-  sessionKey: string;
-  chatMessage: string;
-  chatAttachments: ChatAttachment[];
-};
 
 type ChatRenderLifecycleScope = {
   connectionEpoch: number;
@@ -42,7 +35,6 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   private forceScrollAfterUpdate = false;
   private chatThreadResizeObserver: ResizeObserver | null = null;
   private chatThreadResizeTarget: Element | null = null;
-  private pendingCreatedSessionComposer: PendingCreatedSessionComposer | null = null;
   private readonly cleanups: Array<() => void> = [];
   private renderLifecycleConnected = false;
   private renderLifecycleConnectionEpoch = 0;
@@ -314,45 +306,12 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.composerPersistence.start();
   }
 
-  persistComposerForRouteSwitch(): ChatComposerPersistResult {
+  persistComposerForEviction(): ChatComposerPersistResult {
     return this.composerPersistence.persistForRouteSwitchResult();
   }
 
-  composerScopeForRouteSwitch(): StoredChatOutboxScope | null {
+  composerScopeForEviction(): StoredChatOutboxScope | null {
     return this.composerPersistence.scopeForRouteSwitch();
-  }
-
-  adoptComposerRoute() {
-    // File reads belong to their original session; abort before a late load can
-    // attach its payload to the pane's newly adopted route.
-    releaseChatMediaResourceSubscriber(this.stateValue?.requestUpdate);
-    this.attachmentReads.abortReads();
-    this.composerPersistence.adoptCurrentRoute();
-  }
-
-  captureCreatedSessionComposer(sessionKey: string) {
-    const state = this.stateValue;
-    if (!state) {
-      return;
-    }
-    this.pendingCreatedSessionComposer = {
-      sessionKey,
-      chatMessage: state.chatMessage,
-      chatAttachments: state.chatAttachments,
-    };
-  }
-
-  restoreCreatedSessionComposer(sessionKey: string | null | undefined): boolean {
-    const state = this.stateValue;
-    const pending = this.pendingCreatedSessionComposer;
-    if (!state || !pending || pending.sessionKey !== sessionKey) {
-      return false;
-    }
-    this.pendingCreatedSessionComposer = null;
-    state.chatMessage = pending.chatMessage;
-    state.chatAttachments = pending.chatAttachments;
-    this.composerPersistence.persistNow();
-    return true;
   }
 
   private stopChatEffects() {
@@ -387,6 +346,5 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.scrollAfterUpdate = false;
     this.scrollContentChangedAfterUpdate = false;
     this.forceScrollAfterUpdate = false;
-    this.pendingCreatedSessionComposer = null;
   }
 }

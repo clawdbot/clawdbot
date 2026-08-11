@@ -10,11 +10,11 @@ import {
   resolveSessionEntrySelection,
 } from "./session-accessor.entry.js";
 import {
-  readCommittedSqliteTranscriptMessageSequence,
-  rememberCommittedSqliteTranscriptMessageSequences,
+  readCommittedTranscriptMessageSequence,
+  rememberCommittedTranscriptMessageSequences,
 } from "./session-accessor.sqlite-transcript-sequences.js";
 import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
-import { appendSqliteExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-write.js";
+import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-write.js";
 import { appendTranscriptMessage, emitTranscriptUpdate } from "./session-accessor.transcript.js";
 import type {
   SessionTranscriptWriteScope,
@@ -164,7 +164,7 @@ async function appendTranscriptTurnMessages(
     }
   }
   // Resolve cursors only after the last explicit parent has chosen the branch.
-  rememberCommittedSqliteTranscriptMessageSequences(target, appendedMessages);
+  rememberCommittedTranscriptMessageSequences(target, appendedMessages);
   return appendedMessages;
 }
 
@@ -247,7 +247,7 @@ async function persistExpectedSessionTranscriptTurn(
       sessionTarget: target,
     },
     () =>
-      appendSqliteExpectedSessionTranscriptTurn(
+      appendExpectedSessionTranscriptTurn(
         {
           agentId,
           sessionKey: resolved.normalizedKey,
@@ -428,7 +428,7 @@ async function publishTranscriptTurnUpdate(params: {
   }
   const sequencedMessages = appendedMessages.map((message) => ({
     message,
-    messageSeq: readCommittedSqliteTranscriptMessageSequence(message),
+    messageSeq: readCommittedTranscriptMessageSequence(message),
   }));
   if (
     sequencedMessages.length > 1 &&

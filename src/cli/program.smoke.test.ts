@@ -4,7 +4,7 @@ import { buildProgram } from "./program.js";
 import {
   callGateway,
   configureCommand,
-  ensureConfigReady,
+  ensureConfigReadyMock,
   runSystemAgentWithInference,
   runTui,
   runtime,
@@ -46,7 +46,7 @@ describe("cli program (smoke)", () => {
     vi.clearAllMocks();
     runTui.mockResolvedValue(undefined);
     runSystemAgentWithInference.mockResolvedValue(undefined);
-    ensureConfigReady.mockResolvedValue(undefined);
+    ensureConfigReadyMock.mockResolvedValue(undefined);
   });
 
   it("registers message + status commands", () => {

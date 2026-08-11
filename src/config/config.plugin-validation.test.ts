@@ -2263,7 +2263,7 @@ describe("config plugin validation", () => {
   it("accepts known plugin ids and valid channel/heartbeat enums", () => {
     const res = validateInSuite({
       agents: {
-        defaults: { heartbeat: { target: "last", directPolicy: "block" } },
+        defaults: { heartbeat: { target: "owner", directPolicy: "block" } },
         list: [{ id: "openclaw", heartbeat: { directPolicy: "allow" } }],
       },
       channels: {

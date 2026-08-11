@@ -17,7 +17,7 @@ vi.mock("../provider-runtime.runtime.js", () => ({
 }));
 
 let getApiKeyForModel: typeof import("./runtime-model-auth.runtime.js").getApiKeyForModel;
-let getRuntimeAuthForModel: typeof import("./runtime-model-auth.runtime.js").getRuntimeAuthForModel;
+let getRuntimeAuthForModelCore: typeof import("./runtime-model-auth.runtime.js").getRuntimeAuthForModelCore;
 let resolveApiKeyForProvider: typeof import("./runtime-model-auth.runtime.js").resolveApiKeyForProvider;
 
 const MODEL = {
@@ -29,7 +29,7 @@ const MODEL = {
 
 describe("runtime-model-auth.runtime", () => {
   beforeAll(async () => {
-    ({ getApiKeyForModel, getRuntimeAuthForModel, resolveApiKeyForProvider } =
+    ({ getApiKeyForModel, getRuntimeAuthForModelCore, resolveApiKeyForProvider } =
       await import("./runtime-model-auth.runtime.js"));
   });
 
@@ -53,7 +53,7 @@ describe("runtime-model-auth.runtime", () => {
     });
 
     await expect(
-      getRuntimeAuthForModel({
+      getRuntimeAuthForModelCore({
         model: MODEL as never,
       }),
     ).resolves.toEqual({
@@ -92,7 +92,7 @@ describe("runtime-model-auth.runtime", () => {
     hoisted.prepareProviderRuntimeAuth.mockResolvedValue(undefined);
 
     await expect(
-      getRuntimeAuthForModel({
+      getRuntimeAuthForModelCore({
         model: {
           ...MODEL,
           id: "openai/gpt-5.4",
@@ -113,7 +113,7 @@ describe("runtime-model-auth.runtime", () => {
     });
 
     await expect(
-      getRuntimeAuthForModel({
+      getRuntimeAuthForModelCore({
         model: {
           ...MODEL,
           id: "bedrock/claude-sonnet",

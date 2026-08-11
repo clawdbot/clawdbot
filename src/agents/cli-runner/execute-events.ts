@@ -128,7 +128,7 @@ export function createCliEventHandlers(params: {
           toolCallId: event.toolCallId,
           isError: event.isError,
           result: sanitizeToolResult(event.result),
-          ...(startedArgs ? { args: startedArgs } : {}),
+          ...(startedArgs ? { args: sanitizeToolArgs(startedArgs) } : {}),
           ...(resultContentSource ? { resultContentSource } : {}),
         },
       });
@@ -165,6 +165,7 @@ export function createCliEventHandlers(params: {
     observedCliActivity = true;
     recordToolResult(event);
     if (emitLiveEvents) {
+      toolArgsByCallId.delete(event.toolCallId);
       emitAgentEvent({
         runId: runParams.runId,
         stream: "tool",

@@ -30,7 +30,10 @@ import {
 import { parseWorkerSessionPlacementState } from "./placement-state.js";
 
 type PlacementRow = Selectable<WorkerSessionPlacements>;
-type PlacementDatabase = Pick<StateDatabase, "worker_session_placements">;
+type PlacementDatabase = Pick<
+  StateDatabase,
+  "worker_session_placements" | "worker_session_tool_operations" | "worker_turn_tool_authorities"
+>;
 
 export const query = (db: DatabaseSync) => getNodeSqliteKysely<PlacementDatabase>(db);
 

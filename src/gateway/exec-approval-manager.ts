@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { buildApprovalPresentation } from "../infra/approval-presentation.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import type {
@@ -12,6 +13,7 @@ import type {
 } from "../infra/exec-approvals.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import type { AgentRuntimeDelegatedAuthority } from "./agent-runtime-identity-token.js";
 import {
   consumeOperatorApprovalAllowOnce,
   forceDenyOperatorApproval,
@@ -98,6 +100,9 @@ export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   resolverKind?: OperatorApprovalResolver["kind"] | null;
   consumedAtMs?: number | null;
   consumedBy?: string | null;
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
+  /** Exact source authority retained only for use-time liveness validation. */
+  agentRuntimeDelegatedAuthority?: AgentRuntimeDelegatedAuthority;
 };
 
 type OperatorApprovalPersistenceRuntime = {
@@ -121,6 +126,7 @@ type ExecApprovalManagerOptions<TPayload> = {
     context: { approvalId: string; approvalKind: OperatorApprovalKind; operation: "expire" },
   ) => void;
   onLifecycle?: (event: OperatorApprovalLifecycleEvent) => void;
+  validateAgentRuntimeDelegatedAuthority?: (authority: AgentRuntimeDelegatedAuthority) => boolean;
 };
 
 export type OperatorApprovalLifecycleEvent = {
@@ -268,6 +274,14 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     record: ExecApprovalRecord<TPayload>,
     _timeoutMs: number,
   ): Promise<ExecApprovalDecision | null> {
+    if (
+      record.agentRuntimeDelegatedAuthority &&
+      this.options.validateAgentRuntimeDelegatedAuthority?.(
+        record.agentRuntimeDelegatedAuthority,
+      ) !== true
+    ) {
+      throw new Error("agent runtime approval authority is no longer active");
+    }
     const persistence = this.options.persistence;
     const allowedDecisions = persistence
       ? normalizeAllowedDecisions(this.options.resolveAllowedDecisions?.(record.request))
@@ -323,6 +337,9 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
           runtimeEpoch: persistence.runtimeEpoch,
           createdAtMs: record.createdAtMs,
           expiresAtMs: record.expiresAtMs,
+          ...(record.executionIdentityToken
+            ? { executionIdentityToken: record.executionIdentityToken }
+            : {}),
         },
         databaseOptions: persistence.databaseOptions,
       });
@@ -423,6 +440,20 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     localResolvedBy: string | null = null,
     localResolutionSource: ExecApprovalResolutionSource = "operator",
   ): ExecApprovalResolveResult<TPayload> {
+    if (decision !== "deny") {
+      const closed = this.forceDenyIfDelegatedAuthorityClosed(recordId);
+      if (closed) {
+        if (closed.outcome === "not-found" || closed.outcome === "corrupt") {
+          return closed;
+        }
+        return {
+          outcome: "already-resolved",
+          retry: "conflict",
+          record: closed.record,
+          ...(closed.liveRecord ? { liveRecord: closed.liveRecord } : {}),
+        };
+      }
+    }
     const persistence = this.options.persistence;
     const localEntry = this.pending.get(recordId);
     if (localEntry?.record.terminalReason === "storage-corrupt") {
@@ -1047,6 +1078,9 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
   }
 
   consumeAllowOnce(recordId: string, consumerId = recordId): boolean {
+    if (this.forceDenyIfDelegatedAuthorityClosed(recordId)) {
+      return false;
+    }
     const entry = this.pending.get(recordId);
     if (!entry) {
       return false;
@@ -1095,11 +1129,52 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
    * Returns the decision promise if the ID is pending, null otherwise.
    */
   awaitDecision(recordId: string): Promise<ExecApprovalDecision | null> | null {
+    this.forceDenyIfDelegatedAuthorityClosed(recordId);
     if (!this.getSnapshot(recordId)) {
       return null;
     }
     const entry = this.pending.get(recordId);
     return entry?.promise ?? null;
+  }
+
+  /** Projects an allowed decision only while its exact runtime authority is live. */
+  projectDecisionIfActive(
+    recordId: string,
+    decision: ExecApprovalDecision | null,
+  ): ExecApprovalDecision | null {
+    if (decision !== "allow-once" && decision !== "allow-always") {
+      return decision;
+    }
+    const record = this.pending.get(recordId)?.record;
+    if (!record) {
+      // Durable approval truth is not executable authority. Once the local
+      // binding is gone, stale handoffs must fail closed even if they kept its verdict.
+      return null;
+    }
+    const authority = record.agentRuntimeDelegatedAuthority;
+    if (!authority || this.options.validateAgentRuntimeDelegatedAuthority?.(authority) === true) {
+      return decision;
+    }
+    // Durable first-answer truth remains auditable even when closure races an
+    // already-allowed row. Executable projection fails closed at this handoff.
+    this.forceDenyIfDelegatedAuthorityClosed(recordId);
+    return null;
+  }
+
+  /** Atomically closes a live approval whose exact delegated owner is gone. */
+  forceDenyIfDelegatedAuthorityClosed(
+    recordId: string,
+  ): ExecApprovalForceDenyResult<TPayload> | null {
+    const authority = this.pending.get(recordId)?.record.agentRuntimeDelegatedAuthority;
+    if (!authority || this.options.validateAgentRuntimeDelegatedAuthority?.(authority) === true) {
+      return null;
+    }
+    return this.forceDenyDetailed(
+      recordId,
+      "run-aborted",
+      { kind: "system", id: null },
+      "cancelled",
+    );
   }
 
   lookupApprovalId(

@@ -796,6 +796,28 @@ describe("collapseCompletedTurnWork", () => {
     expect(new Set(workGroups.map((item) => item.key)).size).toBe(2);
   });
 
+  it("keeps recovery work separate when a system notice starts the next turn", () => {
+    const items = collapsedItems({
+      messages: [
+        userMessage("first", 1_000),
+        toolResult("call-1", 2_000),
+        assistantMessage("First done.", 3_000),
+        userMessage("[System] Continue the interrupted turn.", 4_000, {
+          provenance: { kind: "internal_system", sourceTool: "main-session-restart-recovery" },
+        }),
+        toolResult("call-2", 5_000),
+        assistantMessage("Recovery done.", 6_000),
+      ],
+    });
+
+    const workGroups = items.filter((item) => item.kind === "work-group");
+    expect(workGroups).toHaveLength(2);
+    expect(workGroups.map((item) => messageRecord(groupAt(item.groups, 0)).toolCallId)).toEqual([
+      "call-1",
+      "call-2",
+    ]);
+  });
+
   it("collapses hidden-input runs independently without changing duration arithmetic", () => {
     const items = collapsedItems({
       messages: [
@@ -1534,6 +1556,30 @@ describe("buildCachedChatItems", () => {
     ]);
   });
 
+  it("renders internal system user messages as labeled notices without changing search visibility", () => {
+    const messages = [
+      userMessage("before", 999),
+      userMessage("[System] Continue the interrupted turn.", 1000, {
+        provenance: { kind: "internal_system", sourceTool: "main-session-restart-recovery" },
+      }),
+      userMessage("after", 1001),
+    ];
+    const items = buildCachedChatItems(createProps({ messages }));
+
+    expect(items.map((item) => item.kind)).toEqual(["group", "notice", "group"]);
+    expect(items[1]).toMatchObject({
+      kind: "notice",
+      label: "System",
+      text: "Continue the interrupted turn.",
+      timestamp: 1000,
+    });
+
+    const filtered = buildCachedChatItems(
+      createProps({ messages, searchOpen: true, searchQuery: "after" }),
+    );
+    expect(filtered.some((item) => item.kind === "notice")).toBe(false);
+  });
+
   it("attributes assistant groups to the latest user in multi-sender threads", () => {
     const groups = messageGroups({
       messages: [
@@ -1672,6 +1718,141 @@ describe("buildCachedChatItems", () => {
       data: "fixture-image",
       mimeType: "image/png",
     });
+  });
+
+  it("coalesces a native tool result that sorts before its call", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-native",
+              name: "example_tool",
+              arguments: { query: "example" },
+            },
+          ],
+          timestamp: 2000,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-native",
+          toolName: "example_tool",
+          content: [{ type: "text", text: "Native result" }],
+          timestamp: 1000,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message, "native-reversed");
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      callId: "call-native",
+      args: { query: "example" },
+      outputText: "Native result",
+    });
+  });
+
+  it("pairs earlier-sorted same-name tool results by call id", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call-a",
+          toolName: "read",
+          content: [{ type: "text", text: "contents of a" }],
+          timestamp: 1000,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-b",
+          toolName: "read",
+          content: [{ type: "text", text: "contents of b" }],
+          timestamp: 1001,
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "call-b", name: "read", arguments: { path: "b.ts" } },
+            { type: "toolCall", id: "call-a", name: "read", arguments: { path: "a.ts" } },
+          ],
+          timestamp: 1002,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    const cards = groupAt(groups, 0).messages.flatMap((entry, index) =>
+      extractToolCards(entry.message, `native-same-name-${index}`),
+    );
+    expect(cards).toHaveLength(2);
+    expect(cards.find((card) => card.callId === "call-a")).toMatchObject({
+      args: { path: "a.ts" },
+      outputText: "contents of a",
+    });
+    expect(cards.find((card) => card.callId === "call-b")).toMatchObject({
+      args: { path: "b.ts" },
+      outputText: "contents of b",
+    });
+  });
+
+  it("pairs an earlier bundled result message with later calls", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "call-a", content: "contents of a" },
+            { type: "tool_result", tool_use_id: "call-b", content: "contents of b" },
+          ],
+          timestamp: 1000,
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "call-a", name: "read", input: { path: "a.ts" } },
+            { type: "tool_use", id: "call-b", name: "read", input: { path: "b.ts" } },
+          ],
+          timestamp: 1001,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message, "bundled-reversed");
+    expect(cards.map((card) => [card.callId, card.args, card.outputText])).toEqual([
+      ["call-a", { path: "a.ts" }, "contents of a"],
+      ["call-b", { path: "b.ts" }, "contents of b"],
+    ]);
+  });
+
+  it("preserves mixed content in an earlier bundled result message", () => {
+    const mixedContent = [
+      { type: "text", text: "Keep this explanation" },
+      { type: "tool_result", tool_use_id: "call-a", content: "contents of a" },
+      { type: "tool_result", tool_use_id: "call-b", content: "contents of b" },
+    ];
+    const groups = messageGroups({
+      messages: [
+        { role: "user", content: mixedContent, timestamp: 1000 },
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "call-a", name: "read", input: { path: "a.ts" } },
+            { type: "tool_use", id: "call-b", name: "read", input: { path: "b.ts" } },
+          ],
+          timestamp: 1001,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).messages).toHaveLength(2);
+    expect(firstMessageContent(groupAt(groups, 0))).toEqual(mixedContent);
   });
 
   it("coalesces interleaved parallel call/result pairs by call id", () => {
@@ -1834,6 +2015,29 @@ describe("buildCachedChatItems", () => {
     });
 
     // Call and late result stay separate items around the user turn.
+    expect(groups).toHaveLength(3);
+    expect(groups.map((group) => group.role)).toEqual(["tool", "user", "tool"]);
+  });
+
+  it("does not pair an earlier result across a user message boundary", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call-x",
+          toolName: "read",
+          content: [{ type: "toolResult", text: "early result" }],
+          timestamp: 1000,
+        },
+        { role: "user", content: "start a new turn", timestamp: 1001 },
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "call-x", name: "read", input: { path: "x.ts" } }],
+          timestamp: 1002,
+        },
+      ],
+    });
+
     expect(groups).toHaveLength(3);
     expect(groups.map((group) => group.role)).toEqual(["tool", "user", "tool"]);
   });
@@ -2956,6 +3160,34 @@ describe("buildCachedChatItems", () => {
     expect(groups.map((group) => group.role)).toEqual(["user", "assistant", "user", "assistant"]);
     expect(canvasBlocksIn(groupAt(groups, 1))).toStrictEqual([]);
     expect(canvasBlocksIn(groupAt(groups, 3))).toHaveLength(1);
+  });
+
+  it("keeps a live App preview in the recovery turn after a system notice", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        messages: [
+          userMessage("Interrupted request", 1_000),
+          assistantMessage("Interrupted reply", 2_000),
+          userMessage("[System] Continue the interrupted turn.", 3_000, {
+            provenance: { kind: "internal_system", sourceTool: "main-session-restart-recovery" },
+          }),
+        ],
+        toolMessages: [mcpAppResult("mcp-app-recovery", "call-recovery", 3_001)],
+        showToolCalls: false,
+      }),
+    );
+
+    expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+      "user",
+      "assistant",
+      "notice",
+      "assistant",
+    ]);
+    const assistantGroups = items.filter(
+      (item): item is MessageGroup => item.kind === "group" && item.role === "assistant",
+    );
+    expect(canvasBlocksIn(groupAt(assistantGroups, 0))).toStrictEqual([]);
+    expect(canvasBlocksIn(groupAt(assistantGroups, 1))).toHaveLength(1);
   });
 
   it("keeps a live App preview on an assistant search match", () => {
@@ -4095,6 +4327,18 @@ describe("tool turn outcome annotation (#89683)", () => {
       failedTool(5),
     ]);
     expect(tools.map((group) => group.turnSucceeded)).toEqual([true, false]);
+  });
+
+  it("keeps internal system notices as semantic user-turn boundaries", () => {
+    const tools = toolGroups([
+      failedTool(1),
+      userMessage("[System] Continue the interrupted turn.", 2, {
+        provenance: { kind: "internal_system", sourceTool: "main-session-restart-recovery" },
+      }),
+      failedTool(3),
+      assistantReply("Recovered on the next turn.", 4),
+    ]);
+    expect(tools.map((group) => group.turnSucceeded)).toEqual([false, true]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -17,6 +17,7 @@ const RESERVED_CATALOG_ROOTS = {
 } as const;
 
 const PLUGIN_CATALOG_PATHS = {
+  "browser extension native-host": "registered and covered by the browser plugin",
   memory: "registered and covered by the memory-core plugin",
   "memory search": "registered and covered by the memory-core plugin",
   "memory status": "registered and covered by the memory-core plugin",

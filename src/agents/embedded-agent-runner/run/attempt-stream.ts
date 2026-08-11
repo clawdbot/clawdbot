@@ -20,13 +20,13 @@ import {
   dropThinkingBlocks,
   wrapAnthropicStreamWithRecovery,
 } from "../thinking.js";
-import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
-import { resolveUnknownToolGuardThreshold } from "./attempt.run-decisions.js";
+import { resolveUnknownToolGuardThreshold } from "./attempt-run-decisions.js";
 import {
   createYieldAbortedResponse,
   isSessionsYieldAbortReason,
-} from "./attempt.sessions-yield.js";
-import { wrapStreamFnHandleSensitiveStopReason } from "./attempt.stop-reason-recovery.js";
+} from "./attempt-sessions-yield.js";
+import { wrapStreamFnHandleSensitiveStopReason } from "./attempt-stop-reason-recovery.js";
+import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 import {
   shouldRepairMalformedToolCallArguments,
   wrapStreamFnDecodeXaiToolCallArguments,

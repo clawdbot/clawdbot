@@ -33,6 +33,32 @@ export function controlUiSessionUrl(baseUrl: string, sessionKey: string): string
   return url.toString();
 }
 
+export async function navigateToControlUiSession(page: Page, sessionKey: string): Promise<void> {
+  await page.evaluate((pathname) => {
+    const app = document.querySelector("openclaw-app") as HTMLElement & {
+      runtime?: {
+        context: {
+          navigate: (routeId: string, options: { pathname: string }) => void;
+        };
+      };
+    };
+    if (!app.runtime) {
+      throw new Error("OpenClaw application runtime is unavailable");
+    }
+    app.runtime.context.navigate("chat", { pathname });
+  }, controlUiSessionPath(sessionKey));
+  await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey));
+  await page.waitForFunction(
+    (targetSessionKey) =>
+      [...document.querySelectorAll<HTMLElement>("openclaw-chat-pane")].some(
+        (pane) =>
+          pane.classList.contains("chat-pane-cache__pane--visible") &&
+          (pane as HTMLElement & { sessionKey?: string }).sessionKey === targetSessionKey,
+      ),
+    sessionKey,
+  );
+}
+
 export function controlUiBundledGatewayUrl(baseUrl: string): string {
   const url = new URL(baseUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -113,6 +139,22 @@ export async function waitForControlUiRoute(page: Page, target: ControlUiRouteTa
       { cause: error },
     );
   }
+}
+
+/**
+ * Wait for the settled in-app confirmation modal. Control UI routes destructive
+ * confirms through `showConfirmDialog`, so no native browser dialog ever fires;
+ * waiting for full opacity keeps the click from landing mid-animation.
+ */
+export async function waitForConfirmModal(page: Page): Promise<Locator> {
+  await page.waitForFunction(() => {
+    const modal = [...document.querySelectorAll("openclaw-modal-dialog")].at(-1);
+    const dialog = modal?.shadowRoot
+      ?.querySelector("wa-dialog")
+      ?.shadowRoot?.querySelector("dialog");
+    return Boolean(dialog) && getComputedStyle(dialog as Element).opacity === "1";
+  });
+  return page.locator("openclaw-modal-dialog").last();
 }
 
 export async function waitForControlUiSettingsTakeover(
@@ -913,6 +955,8 @@ function installControlUiMockGateway(
     return names;
   }
 
+  // This function is serialized with installControlUiMockGateway.toString().
+  // Keep the guard local so the generated script captures no module imports.
   function isRecord(value: unknown): value is Record<string, unknown> {
     return Boolean(value) && typeof value === "object" && !Array.isArray(value);
   }
@@ -1394,7 +1438,10 @@ function installControlUiMockGateway(
       case "connect":
         return {
           auth: {
-            ...(deviceAuthMigrationPending ? {} : { deviceToken: scenario.deviceToken }),
+            ...(deviceAuthMigrationPending
+              ? {}
+              : { deviceToken: scenario.deviceToken, recoveryMigrationAllowed: true as const }),
+            recoveryScope: "e2e-recovery-scope",
             role: "operator",
             scopes: scenario.operatorScopes,
           },

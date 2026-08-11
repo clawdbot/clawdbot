@@ -15,7 +15,7 @@ import {
   applyExclusiveSlotSelection,
   buildPluginSnapshotReport,
   clearPluginRegistryLoadCache,
-  enablePluginInConfig,
+  enablePluginInConfigMock,
   findBundledPluginSourceMock,
   installHooksFromNpmSpec,
   installHooksFromPath,
@@ -30,7 +30,7 @@ import {
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
   parseClawHubPluginSpec,
-  promptYesNo,
+  promptYesNoMock,
   reportClawHubPluginInstallTelemetry,
   recordHookInstall,
   recordPluginInstall,
@@ -38,7 +38,7 @@ import {
   replaceConfigFile,
   runPluginsCommand,
   runtimeErrors,
-  runtimeLogs,
+  pluginsCliRuntimeLogs,
   writeConfigFile,
   writePersistedInstalledPluginIndexInstallRecordsWithLease,
 } from "./plugins-cli-test-helpers.js";
@@ -218,7 +218,7 @@ function primeNpmPluginFallback(pluginId = "demo") {
   loadConfig.mockReturnValue(cfg);
   mockClawHubPackageNotFound(pluginId);
   installPluginFromNpmSpec.mockResolvedValue(createNpmPluginInstallResult(pluginId));
-  enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+  enablePluginInConfigMock.mockReturnValue({ config: enabledCfg });
   recordPluginInstall.mockReturnValue(enabledCfg);
   applyExclusiveSlotSelection.mockReturnValue({
     config: enabledCfg,
@@ -233,7 +233,7 @@ function primeSuccessfulPluginPersistence(pluginId = "demo") {
   const enabledCfg = createEnabledPluginConfig(pluginId);
 
   loadConfig.mockReturnValue(cfg);
-  enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+  enablePluginInConfigMock.mockReturnValue({ config: enabledCfg });
   recordPluginInstall.mockReturnValue(enabledCfg);
   applyExclusiveSlotSelection.mockReturnValue({
     config: enabledCfg,
@@ -456,7 +456,7 @@ function recordHookInstallCall(callIndex = 0): PersistedInstallRecord {
 }
 
 function runtimeLogsContain(fragment: string): boolean {
-  return runtimeLogs.some((line) => line.includes(fragment));
+  return pluginsCliRuntimeLogs.some((line) => line.includes(fragment));
 }
 
 function setTty(value: boolean): void {
@@ -1268,7 +1268,7 @@ describe("plugins cli install", () => {
       marketplaceSource: "local/repo",
       marketplacePlugin: "alpha",
     });
-    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    enablePluginInConfigMock.mockReturnValue({ config: enabledCfg });
     buildPluginSnapshotReport.mockReturnValue({
       plugins: [{ id: "alpha", kind: "provider" }],
       diagnostics: [],
@@ -1444,14 +1444,14 @@ describe("plugins cli install", () => {
       fs.rmSync(localPath, { recursive: true, force: true });
     }
 
-    expect(promptYesNo).not.toHaveBeenCalled();
+    expect(promptYesNoMock).not.toHaveBeenCalled();
     expect(runtimeErrors.join("\n")).not.toContain("outside ClawHub review");
     expect(installPluginFromPath).toHaveBeenCalledTimes(1);
   });
 
   it("prompts interactive users before non-ClawHub plugin installs and cancels on no", async () => {
     setTty(true);
-    promptYesNo.mockResolvedValueOnce(false);
+    promptYesNoMock.mockResolvedValueOnce(false);
     primeSuccessfulPluginPersistence("demo");
     installPluginFromNpmSpec.mockResolvedValue(createNpmPluginInstallResult("demo"));
 
@@ -1459,7 +1459,7 @@ describe("plugins cli install", () => {
       "__exit__:1",
     );
 
-    expect(promptYesNo).toHaveBeenCalledWith("Install this non-ClawHub plugin source?");
+    expect(promptYesNoMock).toHaveBeenCalledWith("Install this non-ClawHub plugin source?");
     expect(runtimeLogsContain("Installing plugin from npm registry")).toBe(true);
     expect(runtimeLogsContain("outside ClawHub review")).toBe(true);
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
@@ -1467,13 +1467,13 @@ describe("plugins cli install", () => {
 
   it("prompts interactive users before non-ClawHub plugin installs and proceeds on yes", async () => {
     setTty(true);
-    promptYesNo.mockResolvedValueOnce(true);
+    promptYesNoMock.mockResolvedValueOnce(true);
     primeSuccessfulPluginPersistence("demo");
     installPluginFromNpmSpec.mockResolvedValue(createNpmPluginInstallResult("demo"));
 
     await runPluginsCommand(["plugins", "install", "npm:demo"]);
 
-    expect(promptYesNo).toHaveBeenCalledWith("Install this non-ClawHub plugin source?");
+    expect(promptYesNoMock).toHaveBeenCalledWith("Install this non-ClawHub plugin source?");
     expect(runtimeLogsContain("Installing plugin from npm registry")).toBe(true);
     expect(runtimeLogsContain("outside ClawHub review")).toBe(true);
     expect(installPluginFromNpmSpec).toHaveBeenCalledTimes(1);
@@ -1748,7 +1748,7 @@ describe("plugins cli install", () => {
     expect(record.source).toBe("path");
     expect(String(record.sourcePath)).toContain(pluginId);
     expect(String(record.installPath)).toContain(pluginId);
-    expect(enablePluginInConfig).not.toHaveBeenCalled();
+    expect(enablePluginInConfigMock).not.toHaveBeenCalled();
     expect(applyExclusiveSlotSelection).not.toHaveBeenCalled();
     expect(runtimeLogsContain("requires configuration first")).toBe(true);
   });
@@ -1782,7 +1782,7 @@ describe("plugins cli install", () => {
     );
 
     expect(writeConfigFile).not.toHaveBeenCalled();
-    expect(enablePluginInConfig).not.toHaveBeenCalled();
+    expect(enablePluginInConfigMock).not.toHaveBeenCalled();
   });
 
   it("enables config-gated bundled installs when provider-backed config is explicit", async () => {
@@ -1814,11 +1814,11 @@ describe("plugins cli install", () => {
       },
       requiresConfig: true,
     });
-    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    enablePluginInConfigMock.mockReturnValue({ config: enabledCfg });
 
     await runPluginsCommand(["plugins", "install", pluginId]);
 
-    expect(enablePluginInConfig).toHaveBeenCalledTimes(1);
+    expect(enablePluginInConfigMock).toHaveBeenCalledTimes(1);
     expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
     expect(runtimeLogsContain("requires configuration first")).toBe(false);
   });
@@ -2357,7 +2357,7 @@ describe("plugins cli install", () => {
       version: "1.2.3",
       extensions: ["./dist/index.js"],
     });
-    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    enablePluginInConfigMock.mockReturnValue({ config: enabledCfg });
     recordPluginInstall.mockReturnValue(enabledCfg);
     applyExclusiveSlotSelection.mockReturnValue({
       config: enabledCfg,
@@ -2562,7 +2562,7 @@ describe("plugins cli install", () => {
         extensions: [],
       };
     });
-    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    enablePluginInConfigMock.mockReturnValue({ config: enabledCfg });
     recordPluginInstall.mockReturnValue(enabledCfg);
     applyExclusiveSlotSelection.mockReturnValue({
       config: enabledCfg,
