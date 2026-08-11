@@ -8,6 +8,7 @@ import {
   formatConnectErrorMessage,
   GatewayProtocolClient,
   GatewayProtocolRequestError,
+  GatewayScopeUpgrade,
   type GatewayConnectAuthSelection,
   type GatewayClientMode,
   type GatewayClientName,
@@ -15,6 +16,8 @@ import {
   type GatewayProtocolRequestOptions,
   type GatewayProtocolRequestTiming,
   type GatewayProtocolTiming,
+  type ScopeUpgradeBinding,
+  type ScopeUpgradeOutcome,
   type ConnectParams,
   type ErrorShape,
   type EventFrame,
@@ -309,6 +312,7 @@ async function buildGatewayConnectDevice(params: {
 
 export class GatewayBrowserClient {
   private readonly client: GatewayProtocolClient<ConnectPlan>;
+  private readonly scopeUpgrade: GatewayScopeUpgrade;
   inboundActivitySeq = 0;
   private lastInboundActivityAtMs: number | null = null;
   private tickWatchTimer: ReturnType<typeof setInterval> | null = null;
@@ -317,6 +321,7 @@ export class GatewayBrowserClient {
   private recoveryScopeValue = "";
   private recoveryScopeResolved = false;
   private recoveryScopeGeneration = 0;
+  private scopeUpgradeBinding: ScopeUpgradeBinding | null = null;
 
   constructor(private opts: GatewayBrowserClientOptions) {
     this.client = new GatewayProtocolClient<ConnectPlan>({
@@ -344,6 +349,7 @@ export class GatewayBrowserClient {
       resolveClose: (context) => this.resolveClose(context),
       onClose: (context, decision) => {
         this.stopTickWatch();
+        this.scopeUpgradeBinding = null;
         const error = context.connectFailure?.error;
         this.client.recordTiming("failed", context.generation, undefined, {
           errorCode: error instanceof GatewayRequestError ? error.code : "SOCKET_CLOSED",
@@ -380,6 +386,25 @@ export class GatewayBrowserClient {
           ? performance.now()
           : Date.now(),
     });
+    this.scopeUpgrade = new GatewayScopeUpgrade({
+      request: (method, params, options) => this.request(method, params, options),
+      tokenStore: {
+        load: ({ deviceId, role }) =>
+          loadDeviceAuthToken({ deviceId, gatewayUrl: this.opts.url, role }),
+        store: ({ deviceId, role, token, scopes }) => {
+          storeDeviceAuthToken({
+            deviceId,
+            gatewayUrl: this.opts.url,
+            role,
+            token,
+            scopes,
+          });
+        },
+        clear: ({ deviceId, role }) =>
+          clearDeviceAuthToken({ deviceId, gatewayUrl: this.opts.url, role }),
+      },
+      reconnect: () => this.forceReconnect("scope upgrade approved"),
+    });
   }
 
   get instanceId(): string | undefined {
@@ -397,6 +422,8 @@ export class GatewayBrowserClient {
   stop() {
     this.stopTickWatch();
     this.client.stop();
+    this.scopeUpgrade.cancelScopeUpgrade();
+    this.scopeUpgradeBinding = null;
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
   }
@@ -521,6 +548,13 @@ export class GatewayBrowserClient {
     this.deviceTokenRetryBudgetUsed = false;
     this.opts.bootstrapToken = undefined;
     this.opts.bootstrapProfile = undefined;
+    this.scopeUpgradeBinding = plan.deviceIdentity
+      ? {
+          clientId: plan.params.client.id,
+          deviceId: plan.deviceIdentity.deviceId,
+          role: plan.params.role ?? CONTROL_UI_OPERATOR_ROLE,
+        }
+      : null;
     if (hello?.auth?.deviceToken && plan.deviceIdentity) {
       const role = hello.auth.role ?? plan.params.role ?? CONTROL_UI_OPERATOR_ROLE;
       const scopes =
@@ -666,6 +700,24 @@ export class GatewayBrowserClient {
     options?: GatewayProtocolRequestOptions,
   ): Promise<T> {
     return this.client.request<T>(method, params, options);
+  }
+
+  requestScopeUpgrade(
+    options: { onPending?: (requestId: string) => void } = {},
+  ): Promise<ScopeUpgradeOutcome> {
+    const binding = this.scopeUpgradeBinding;
+    if (!this.connected || !binding) {
+      return Promise.reject(new Error("scope upgrade requires a connected browser device"));
+    }
+    return this.scopeUpgrade.requestScopeUpgrade({
+      binding,
+      scopes: CONTROL_UI_OPERATOR_SCOPES,
+      onPending: options.onPending,
+    });
+  }
+
+  cancelScopeUpgrade(): void {
+    this.scopeUpgrade.cancelScopeUpgrade();
   }
 
   addEventListener(listener: GatewayEventListener): () => void {

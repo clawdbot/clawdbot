@@ -306,6 +306,18 @@ export function renderPlaceSelect(params: {
   const nodeIcon = isPhoneFamily(activeNode?.deviceFamily)
     ? icons.monitorSmartphone
     : icons.monitor;
+  const browseButton = html`<button
+    type="button"
+    class="session-menu__item"
+    data-value="browse"
+    aria-pressed="false"
+    ?disabled=${params.submitting || params.pendingCloud || !params.browseAvailable}
+    @click=${() => params.onBrowse(browseTarget)}
+  >
+    <span class="session-menu__check" aria-hidden="true"></span>
+    <span class="session-menu__text">${t("newSession.browse")}</span>
+    <span class="new-session-page__menu-chevron" aria-hidden="true">${icons.chevronRight}</span>
+  </button>`;
 
   return html`
     <span class="new-session-page__select">
@@ -515,23 +527,11 @@ export function renderPlaceSelect(params: {
                     })}
                   `
                 : nothing}
-              <button
-                type="button"
-                class="session-menu__item"
-                data-value="browse"
-                aria-pressed="false"
-                title=${params.browseAvailable || params.isAdmin
-                  ? nothing
-                  : t("newSession.browseRequiresAdmin")}
-                ?disabled=${params.submitting || params.pendingCloud || !params.browseAvailable}
-                @click=${() => params.onBrowse(browseTarget)}
-              >
-                <span class="session-menu__text">${t("newSession.browse")}</span>
-                <span class="new-session-page__menu-chevron" aria-hidden="true"
-                  >${icons.chevronRight}</span
-                >
-              </button>
-
+              ${params.browseAvailable || params.isAdmin
+                ? browseButton
+                : html`<openclaw-tooltip .content=${t("newSession.browseRequiresAdmin")}>
+                    ${browseButton}
+                  </openclaw-tooltip>`}
               ${params.showDestinations
                 ? html`
                     <div class="new-session-page__menu-title">${t("newSession.thisGateway")}</div>
