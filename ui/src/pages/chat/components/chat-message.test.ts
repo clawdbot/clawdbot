@@ -1923,6 +1923,7 @@ describe("grouped chat rendering", () => {
       renderChatNotice({
         kind: "notice",
         key: "notice:command",
+        icon: "cpu",
         label: "System",
         text: "**first line**\nsecond line\n<img src=x onerror=alert(1)><script>alert(1)</script>",
         timestamp: 1000,
@@ -1931,7 +1932,8 @@ describe("grouped chat rendering", () => {
     );
 
     const notice = container.querySelector<HTMLElement>(".chat-notice");
-    expect(notice?.querySelector(".chat-notice__label")?.textContent).toBe("System");
+    expect(notice?.querySelector(".chat-divider__title")?.textContent).toBe("System");
+    expect(notice?.querySelector(".chat-divider__icon svg")).not.toBeNull();
     expect(notice?.querySelector(".chat-avatar")).toBeNull();
     expect(notice?.querySelector(".chat-author-avatar")).toBeNull();
     expect(notice?.querySelector(".chat-sender-name")).toBeNull();

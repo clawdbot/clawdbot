@@ -104,9 +104,9 @@ const buildChatItemsMock = vi.fn(
         {
           kind: "divider",
           key: "divider:compaction:test",
+          icon: "foldVertical",
           label: "Compacted history",
-          description:
-            "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
+          description: "The compacted transcript is preserved as a checkpoint.",
           action: {
             kind: "session-checkpoints",
             label: "Open checkpoints",
@@ -898,12 +898,11 @@ describe("chat compaction divider", () => {
       onOpenSessionCheckpoints,
     });
 
-    expect(container.querySelector(".chat-divider__label > span")?.textContent).toBe(
-      "Compacted history",
-    );
+    expect(container.querySelector(".chat-divider__title")?.textContent).toBe("Compacted history");
     expect(container.querySelector(".chat-divider__description")?.textContent?.trim()).toBe(
-      "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
+      "The compacted transcript is preserved as a checkpoint.",
     );
+    expect(container.querySelector(".chat-divider__icon svg")).not.toBeNull();
     const button = container.querySelector<HTMLButtonElement>(".chat-divider__action");
     expect(button?.textContent?.trim()).toBe("Open checkpoints");
 

@@ -36,6 +36,7 @@ export function buildCompactionDividerItem(
         ? `divider:compaction:${marker.id}`
         : `divider:compaction:${timestamp}:${index}`,
     label: t("chat.compaction.label"),
+    icon: "foldVertical",
     ...(tokensSaved === null
       ? {}
       : {

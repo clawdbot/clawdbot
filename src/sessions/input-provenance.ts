@@ -19,6 +19,7 @@ export type InputProvenance = {
 
 export const MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL = "main_session_restart_recovery" as const;
 
+export const SYSTEM_TURN_PROMPT_PREFIX = "[System]";
 export const INTER_SESSION_PROMPT_PREFIX_BASE = "[Inter-session message]";
 const AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS = [
   "agent_harness_task",
@@ -126,6 +127,13 @@ export function hasInterSessionUserProvenance(
     return false;
   }
   return isInterSessionInputProvenance(message.provenance);
+}
+
+export function formatSystemTurnPrompt(body: string): string {
+  const trimmedBody = body.trim();
+  return trimmedBody.startsWith(SYSTEM_TURN_PROMPT_PREFIX)
+    ? trimmedBody
+    : `${SYSTEM_TURN_PROMPT_PREFIX} ${trimmedBody}`;
 }
 
 // Prefix text is model-facing safety context for inter-session handoffs. It
