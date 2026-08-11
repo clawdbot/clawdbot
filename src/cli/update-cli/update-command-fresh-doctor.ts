@@ -23,31 +23,41 @@ import {
 type UpdateDoctorPhase = "pre-plugin" | "post-plugin";
 
 export async function withPrePluginUpdateDoctorEnv<T>(run: () => Promise<T>): Promise<T> {
-  const phaseEnv: NodeJS.ProcessEnv = {
-    OPENCLAW_UPDATE_IN_PROGRESS: "1",
-    [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1",
-    [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
-    [UPDATE_POST_CORE_CONVERGENCE_ENV]: undefined,
-  };
-  const previousEnv = Object.fromEntries(
-    Object.keys(phaseEnv).map((key) => [key, process.env[key]]),
-  );
-  for (const [key, value] of Object.entries(phaseEnv)) {
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
+  const previousUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+  const previousDeferConfiguredPluginInstallRepair =
+    process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV];
+  const previousParentSupportsDoctorConfigWrite =
+    process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV];
+  const previousPostCoreConvergence = process.env[UPDATE_POST_CORE_CONVERGENCE_ENV];
+
+  process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+  process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV] = "1";
+  process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV] = "1";
+  delete process.env[UPDATE_POST_CORE_CONVERGENCE_ENV];
   try {
     return await run();
   } finally {
-    for (const [key, value] of Object.entries(previousEnv)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
+    if (previousUpdateInProgress === undefined) {
+      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+    } else {
+      process.env.OPENCLAW_UPDATE_IN_PROGRESS = previousUpdateInProgress;
+    }
+    if (previousDeferConfiguredPluginInstallRepair === undefined) {
+      delete process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV];
+    } else {
+      process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV] =
+        previousDeferConfiguredPluginInstallRepair;
+    }
+    if (previousParentSupportsDoctorConfigWrite === undefined) {
+      delete process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV];
+    } else {
+      process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV] =
+        previousParentSupportsDoctorConfigWrite;
+    }
+    if (previousPostCoreConvergence === undefined) {
+      delete process.env[UPDATE_POST_CORE_CONVERGENCE_ENV];
+    } else {
+      process.env[UPDATE_POST_CORE_CONVERGENCE_ENV] = previousPostCoreConvergence;
     }
   }
 }
