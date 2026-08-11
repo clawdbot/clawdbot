@@ -1972,22 +1972,23 @@ describe("main-session-restart-recovery", () => {
     }
   });
 
-  it("fails visibly when residual ambiguity has no notice identity", async () => {
+  it("resumes safely when residual ambiguity has no notice identity", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeMainSession({
       sessionsDir,
       pendingFinalDelivery: {
         kind: "transport-only",
         createdAt: Date.now(),
-        // No context and no intentId: debt cannot be recorded, so the session
-        // must take the visible interruption path instead of ending silently.
+        // No context and no intentId: debt cannot be recorded, so the remaining
+        // fail arm resumes under restart-safe tool policy.
         deliveries: [{ id: "delivery-identity-less", state: "unknown" }],
       },
     });
 
-    await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
+    await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
 
-    expect(callGateway).not.toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
   });
 
   it("completes an unqueued media-only final with owed notice debt", async () => {
@@ -2109,7 +2110,7 @@ describe("main-session-restart-recovery", () => {
 
         await expectRecovery(
           ownerStatus === "pending"
-            ? { recovered: 0, failed: 1, skipped: 0 }
+            ? { recovered: 0, failed: 0, skipped: 1 }
             : { recovered: 1, failed: 0, skipped: 0 },
         );
 
