@@ -10,7 +10,7 @@ import { formatConnectionFlagReminder, getNodesTheme, runNodesCommand } from "./
 import { parsePairingList } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import {
-  callGatewayCli,
+  callNodesGatewayCli,
   callNodePairApprovalGatewayCli,
   nodesCallOpts,
   resolveNodeId,
@@ -129,7 +129,7 @@ export function registerNodesPairingCommands(nodes: Command) {
       .description("List pending pairing requests")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("pending", async () => {
-          const result = await callGatewayCli("node.pair.list", opts, {});
+          const result = await callNodesGatewayCli("node.pair.list", opts, {});
           const { pending } = parsePairingList(result);
           if (opts.json) {
             defaultRuntime.writeJson(pending);
@@ -192,7 +192,7 @@ export function registerNodesPairingCommands(nodes: Command) {
         await runNodesCommand("reject", async () => {
           let result: unknown;
           try {
-            result = await callGatewayCli("node.pair.reject", opts, {
+            result = await callNodesGatewayCli("node.pair.reject", opts, {
               requestId,
             });
           } catch (error) {
@@ -218,7 +218,7 @@ export function registerNodesPairingCommands(nodes: Command) {
             defaultRuntime.exit(1);
             return;
           }
-          const result = await callGatewayCli("node.pair.remove", opts, { nodeId });
+          const result = await callNodesGatewayCli("node.pair.remove", opts, { nodeId });
           if (opts.json) {
             defaultRuntime.writeJson(result);
             return;
@@ -246,7 +246,7 @@ export function registerNodesPairingCommands(nodes: Command) {
             defaultRuntime.exit(1);
             return;
           }
-          const result = await callGatewayCli("node.rename", opts, {
+          const result = await callNodesGatewayCli("node.rename", opts, {
             nodeId,
             displayName: name,
           });

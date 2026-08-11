@@ -4,7 +4,7 @@ import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
 import {
-  formatConfigPath,
+  formatConfigKeyPath,
   noteImplicitFallbackClobberWarnings,
   noteOpencodeProviderOverrides,
   noteSandboxOriginProxyWarning,
@@ -85,8 +85,8 @@ describe("doctor config analysis helpers", () => {
   });
 
   it("formats config paths predictably", () => {
-    expect(formatConfigPath([])).toBe("<root>");
-    expect(formatConfigPath(["channels", "slack", "accounts", 0, "token"])).toBe(
+    expect(formatConfigKeyPath([])).toBe("<root>");
+    expect(formatConfigKeyPath(["channels", "slack", "accounts", 0, "token"])).toBe(
       "channels.slack.accounts[0].token",
     );
   });
@@ -204,7 +204,7 @@ describe("doctor config analysis helpers", () => {
     const result = stripUnknownConfigKeys(config as never);
 
     expect(result.removed).toContain("unexpected");
-    expect(result.removed).not.toContain(formatConfigPath([...path, "$include"]));
+    expect(result.removed).not.toContain(formatConfigKeyPath([...path, "$include"]));
     expect(resolveConfigPathTarget(result.config, path)).toMatchObject({
       $include: expect.any(String),
     });

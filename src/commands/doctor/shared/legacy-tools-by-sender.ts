@@ -2,7 +2,7 @@
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { parseToolsBySenderTypedKey } from "../../../config/types.tools.js";
-import { formatConfigPath, resolveConfigPathTarget } from "../../doctor-config-analysis.js";
+import { formatConfigKeyPath, resolveConfigPathTarget } from "../../doctor-config-analysis.js";
 import { asObjectRecord } from "./object.js";
 
 type LegacyToolsBySenderKeyHit = {
@@ -35,7 +35,7 @@ function collectLegacyToolsBySenderKeyHits(
   const toolsBySender = asObjectRecord(record.toolsBySender);
   if (toolsBySender) {
     const path = [...pathParts, "toolsBySender"];
-    const pathLabel = formatConfigPath(path);
+    const pathLabel = formatConfigKeyPath(path);
     for (const rawKey of Object.keys(toolsBySender)) {
       const trimmed = rawKey.trim();
       if (!trimmed || trimmed === "*" || parseToolsBySenderTypedKey(trimmed)) {

@@ -4,7 +4,7 @@
 import { generateSecureToken } from "../../../infra/secure-random.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
-import { extractAssistantVisibleText } from "../../embedded-agent-utils.js";
+import { extractEmbeddedAssistantVisibleText } from "../../embedded-agent-utils.js";
 import {
   deriveContextPromptTokens,
   hasNonzeroUsage,
@@ -284,7 +284,7 @@ export function resolveFinalAssistantVisibleText(
   if (!lastAssistant) {
     return undefined;
   }
-  const visibleText = extractAssistantVisibleText(lastAssistant).trim();
+  const visibleText = extractEmbeddedAssistantVisibleText(lastAssistant).trim();
   return visibleText || undefined;
 }
 

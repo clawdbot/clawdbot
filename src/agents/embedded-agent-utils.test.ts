@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   extractEmbeddedAssistantText,
   extractAssistantThinking,
-  extractAssistantVisibleText,
+  extractEmbeddedAssistantVisibleText,
   createThinkingTagStreamState,
   extractThinkingFromTaggedStream,
   extractThinkingFromTaggedText,
@@ -657,7 +657,7 @@ describe("stripDowngradedToolCallText", () => {
   });
 });
 
-describe("extractAssistantVisibleText", () => {
+describe("extractEmbeddedAssistantVisibleText", () => {
   it("prefers non-empty final_answer text over commentary", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
@@ -676,7 +676,7 @@ describe("extractAssistantVisibleText", () => {
       timestamp: Date.now(),
     });
 
-    expect(extractAssistantVisibleText(msg)).toBe("Done.");
+    expect(extractEmbeddedAssistantVisibleText(msg)).toBe("Done.");
   });
 
   it("does not fall back to commentary when final_answer is empty", () => {
@@ -697,7 +697,7 @@ describe("extractAssistantVisibleText", () => {
       timestamp: Date.now(),
     });
 
-    expect(extractAssistantVisibleText(msg)).toBe("");
+    expect(extractEmbeddedAssistantVisibleText(msg)).toBe("");
   });
 
   it("does not fall back to unphased legacy text when an empty final_answer block exists", () => {
@@ -714,7 +714,7 @@ describe("extractAssistantVisibleText", () => {
       timestamp: Date.now(),
     });
 
-    expect(extractAssistantVisibleText(msg)).toBe("");
+    expect(extractEmbeddedAssistantVisibleText(msg)).toBe("");
   });
 
   it("does not fall back to unphased legacy text when an empty output_text final_answer block exists", () => {
@@ -731,7 +731,7 @@ describe("extractAssistantVisibleText", () => {
       timestamp: Date.now(),
     });
 
-    expect(extractAssistantVisibleText(msg)).toBe("");
+    expect(extractEmbeddedAssistantVisibleText(msg)).toBe("");
   });
 
   it("falls back to legacy unphased text when phased text is absent", () => {
@@ -741,7 +741,7 @@ describe("extractAssistantVisibleText", () => {
       timestamp: Date.now(),
     });
 
-    expect(extractAssistantVisibleText(msg)).toBe("Legacy answer");
+    expect(extractEmbeddedAssistantVisibleText(msg)).toBe("Legacy answer");
   });
 
   it("keeps strict reasoning-tag stripping for legacy string content", () => {
@@ -751,7 +751,7 @@ describe("extractAssistantVisibleText", () => {
       timestamp: Date.now(),
     });
 
-    expect(extractAssistantVisibleText(msg)).toBe("Visible prefix");
+    expect(extractEmbeddedAssistantVisibleText(msg)).toBe("Visible prefix");
   });
 
   it("preserves literal reasoning-looking tags in unphased visible text", () => {
@@ -767,7 +767,7 @@ describe("extractAssistantVisibleText", () => {
       timestamp: Date.now(),
     });
 
-    expect(extractAssistantVisibleText(msg)).toBe("Before <think>literal tag text after");
+    expect(extractEmbeddedAssistantVisibleText(msg)).toBe("Before <think>literal tag text after");
   });
 
   it("does not pull unphased legacy text into final_answer extraction when phased blocks are present", () => {
@@ -785,7 +785,7 @@ describe("extractAssistantVisibleText", () => {
       timestamp: Date.now(),
     });
 
-    expect(extractAssistantVisibleText(msg)).toBe("Done.");
+    expect(extractEmbeddedAssistantVisibleText(msg)).toBe("Done.");
   });
 });
 
