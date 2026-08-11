@@ -304,6 +304,32 @@ describe("renderAgents", () => {
     }
   });
 
+  it("hides the agent selector for one agent and keeps agent creation available", () => {
+    const container = document.createElement("div");
+    const onCreateAgent = vi.fn();
+    render(
+      renderAgents(
+        createProps({
+          agentsList: {
+            defaultId: "alpha",
+            mainKey: "main",
+            scope: "per-sender",
+            agents: [{ id: "alpha", name: "Alpha" }],
+          },
+          selectedAgentId: "alpha",
+          onCreateAgent,
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".agents-control-select")).toBeNull();
+    const createButton = container.querySelector<HTMLButtonElement>(".agents-create-btn");
+    expect(createButton?.textContent?.trim()).toBe(t("custodian.newAgent"));
+    createButton?.click();
+    expect(onCreateAgent).toHaveBeenCalledOnce();
+  });
+
   it("selects the configured primary model on initial render", async () => {
     const container = document.createElement("div");
     const configForm = {
