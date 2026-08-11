@@ -3,15 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   discordVoiceTranscriptsSourceProvider,
   setDiscordTranscriptsVoiceManager,
-} from "../../../extensions/discord/transcripts-source-api.js";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { TranscriptsStore } from "../../transcripts/store.js";
-import { activeSessions } from "./transcripts-tool-runtime.js";
-import { createTranscriptsTool } from "./transcripts-tool.js";
+} from "../extensions/discord/test-api.js";
+import { activeSessions } from "../src/agents/tools/transcripts-tool-runtime.js";
+import { createTranscriptsTool } from "../src/agents/tools/transcripts-tool.js";
+import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../src/plugins/runtime.js";
+import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
+import { TranscriptsStore } from "../src/transcripts/store.js";
+import { createTempDirTracker } from "./helpers/temp-dir.js";
 
 type DiscordTranscriptsVoiceManager = NonNullable<
   Parameters<typeof setDiscordTranscriptsVoiceManager>[0]["manager"]
