@@ -672,8 +672,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(box?.height).toBe(16);
       }
       await input.focus();
-      const outline = await input.evaluate((element) => getComputedStyle(element).outline);
-      expect(outline).toContain("2px solid");
+      const outline = await input.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return { style: style.outlineStyle, width: style.outlineWidth };
+      });
+      expect(outline).toEqual({ style: "solid", width: "2px" });
     } finally {
       await closeBrowserPage(page);
     }
