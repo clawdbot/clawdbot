@@ -10,16 +10,16 @@ read_when:
 reasoning model built for coding and agentic workloads. OpenClaw provides the
 official LongCat plugin for LongCat's OpenAI-compatible endpoint.
 
-| Property   | Value                                |
-| ---------- | ------------------------------------ |
-| Provider   | `longcat`                            |
-| Auth       | `LONGCAT_API_KEY`                    |
-| API        | OpenAI-compatible Chat Completions   |
-| Base URL   | `https://api.longcat.chat/openai/v1` |
-| Model      | `longcat/LongCat-2.0`                |
-| Context    | 1,048,576 tokens                     |
-| Max output | 131,072 tokens                       |
-| Input      | Text                                 |
+| Property   | Value                              |
+| ---------- | ---------------------------------- |
+| Provider   | `longcat`                          |
+| Auth       | `LONGCAT_API_KEY`                  |
+| API        | OpenAI-compatible Chat Completions |
+| Base URL   | `https://api.longcat.chat/openai`  |
+| Model      | `longcat/LongCat-2.0`              |
+| Context    | 1,048,576 tokens                   |
+| Max output | 131,072 tokens                     |
+| Input      | Text                               |
 
 ## Install plugin
 

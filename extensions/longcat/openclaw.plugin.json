@@ -2,9 +2,6 @@
   "id": "longcat",
   "name": "LongCat",
   "description": "OpenClaw LongCat provider plugin.",
-  "doctorContract": {
-    "configRepair": true
-  },
   "activation": {
     "onStartup": false
   },
@@ -20,7 +17,7 @@
   "modelCatalog": {
     "providers": {
       "longcat": {
-        "baseUrl": "https://api.longcat.chat/openai/v1",
+        "baseUrl": "https://api.longcat.chat/openai",
         "api": "openai-completions",
         "models": [
           {
