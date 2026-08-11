@@ -270,6 +270,7 @@ export async function consumeDeviceBootstrapTokenWithSetupCompletion(params: {
       token: params.token,
       deviceId: params.deviceId,
       completedAtMs: params.completedAtMs,
+      oldestValidIssuedAtMs: nowMs - DEVICE_BOOTSTRAP_TOKEN_TTL_MS,
       // Retention follows the store clock rather than an injected event time.
       retentionNowMs: nowMs,
       retainUntilMs: nowMs + DEVICE_PAIR_SETUP_COMPLETION_RETENTION_MS,

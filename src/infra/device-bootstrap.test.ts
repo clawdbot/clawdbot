@@ -153,6 +153,31 @@ describe("device bootstrap tokens", () => {
     ).resolves.toBeNull();
   });
 
+  it("rejects a setup credential that expires after verification but before consumption", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-14T12:00:00Z"));
+    const baseDir = await createTempDir();
+    const issued = await issueDevicePairSetupBootstrapToken({
+      baseDir,
+      profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    });
+    await verifyBootstrapToken(baseDir, issued.token);
+
+    vi.setSystemTime(new Date(Date.now() + 10 * 60 * 1000 + 1));
+    await expect(
+      consumeDeviceBootstrapTokenWithSetupCompletion({
+        token: issued.token,
+        deviceId: "device-123",
+        completedAtMs: Date.now(),
+        baseDir,
+      }),
+    ).resolves.toBeNull();
+
+    await expect(
+      readDevicePairSetupCompletion({ baseDir, setupId: issued.setupId }),
+    ).resolves.toBeNull();
+  });
+
   // Databases written before this table shipped stay at the same schema
   // version, so the feature owner has to create it on first use rather than
   // the state schema refusing to open.

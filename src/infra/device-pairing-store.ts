@@ -539,6 +539,7 @@ export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(para
   token: string;
   deviceId: string;
   completedAtMs: number;
+  oldestValidIssuedAtMs: number;
   retentionNowMs: number;
   retainUntilMs: number;
   pairedDeviceMatches?: (device: PairedDevice | null) => boolean;
@@ -552,9 +553,15 @@ export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(para
   return runOpenClawStateWriteTransaction(({ db }) => {
     ensureDevicePairSetupCompletionSchema(db);
     const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+    // Verification precedes async pairing work, so expiry must be checked again
+    // against the authoritative row before consumption becomes terminal.
     const tokenRow = executeSqliteQueryTakeFirstSync(
       db,
-      kysely.selectFrom("device_bootstrap_tokens").selectAll().where("token_key", "=", token),
+      kysely
+        .selectFrom("device_bootstrap_tokens")
+        .selectAll()
+        .where("token_key", "=", token)
+        .where("issued_at_ms", ">=", params.oldestValidIssuedAtMs),
     );
     if (!tokenRow || tokenRow.token !== token || tokenRow.device_id?.trim() !== deviceId) {
       return null;
