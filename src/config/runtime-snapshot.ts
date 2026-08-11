@@ -1,4 +1,5 @@
 // Produces redacted runtime config snapshots for diagnostics and UI surfaces.
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { clearExecutablePathCache } from "../infra/executable-path.js";
 import {
@@ -106,6 +107,10 @@ export type RuntimeConfigSnapshotMetadata = {
 
 let runtimeConfigSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
+// Gateway startup's ambient env-trigger policy. Schema/validation projections read it so
+// ownership planning excludes the same env-only channels loader suppression excludes; outside a
+// gateway process it stays null and projections use the default policy.
+let runtimeAmbientEnvTriggers: AmbientEnvTriggerPolicy | null = null;
 let runtimeConfigSnapshotMetadata: RuntimeConfigSnapshotMetadata | null = null;
 let runtimeConfigAppliedHash: string | null = null;
 let runtimeConfigSnapshotRevision = 0;
@@ -214,6 +219,7 @@ export function resetConfigRuntimeState(): void {
   clearExecutablePathCache();
   runtimeConfigSnapshot = null;
   runtimeConfigSourceSnapshot = null;
+  runtimeAmbientEnvTriggers = null;
   runtimeConfigSnapshotMetadata = null;
   runtimeConfigAppliedHash = null;
   runtimeConfigSnapshotRevision = 0;
@@ -226,6 +232,15 @@ export function clearRuntimeConfigSnapshot(): void {
 
 export function getRuntimeConfigSnapshot(): OpenClawConfig | null {
   return runtimeConfigSnapshot;
+}
+
+/** Records the gateway's ambient env-trigger policy for projection reads. */
+export function setRuntimeAmbientEnvTriggers(policy: AmbientEnvTriggerPolicy): void {
+  runtimeAmbientEnvTriggers = policy;
+}
+
+export function getRuntimeAmbientEnvTriggers(): AmbientEnvTriggerPolicy | null {
+  return runtimeAmbientEnvTriggers;
 }
 
 export function getRuntimeConfigSourceSnapshot(): OpenClawConfig | null {

@@ -27,6 +27,7 @@ import {
 import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
+import { getRuntimeAmbientEnvTriggers } from "./runtime-snapshot.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import {
   bundledChannelIds,
@@ -319,10 +320,14 @@ function validateConfigObjectWithPluginsBase(
           (entry) => [entry.channelId, { schema: entry.schema }] as const,
         ),
       );
+      const ambientEnvTriggers = getRuntimeAmbientEnvTriggers();
       for (const entry of collectChannelSchemaMetadataWithOwnership(
         info.registry,
         ensureCompatConfig(),
         opts.env,
+        // Ownership planning honors the gateway's ambient env-trigger policy, so an env-only
+        // channel startup excludes cannot decide claimant fates validation ranks schemas by.
+        ambientEnvTriggers ? { ambientEnvTriggers } : undefined,
       )) {
         const current = info.channelSchemas.get(entry.id);
         if (entry.configSchema) {

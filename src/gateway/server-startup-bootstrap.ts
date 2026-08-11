@@ -15,6 +15,7 @@ import {
 } from "../config/io.js";
 import { normalizeStateDirEnv } from "../config/paths.js";
 import { captureConfigOverrideApplier } from "../config/runtime-overrides.js";
+import { setRuntimeAmbientEnvTriggers } from "../config/runtime-snapshot.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -129,6 +130,9 @@ export async function prepareGatewayServerBootstrap(input: {
   const minimalTestGateway =
     isVitestRuntimeEnv() && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
   const ambientEnvTriggers = opts.ambientEnvTriggers ?? "suppress";
+  // Published for schema/validation projections: ownership planning must exclude the same
+  // env-only channels this policy keeps out of startup and loader suppression.
+  setRuntimeAmbientEnvTriggers(ambientEnvTriggers);
 
   // Ensure all default port derivations (browser/canvas) see the actual runtime port.
   process.env.OPENCLAW_GATEWAY_PORT = String(port);

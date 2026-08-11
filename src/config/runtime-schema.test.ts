@@ -8,7 +8,11 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "./runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeAmbientEnvTriggers,
+  setRuntimeConfigSnapshot,
+} from "./runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
 const mockLoadConfig = vi.hoisted(() => vi.fn<() => OpenClawConfig>());
@@ -536,6 +540,81 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     const channels = schema.properties?.channels as { properties?: Record<string, unknown> };
 
     expect(JSON.stringify(channels.properties?.acmechat)).toContain("legacyOption");
+  });
+
+  // #120332 round 45 (P2): the gateway's ambient env-trigger policy reaches ownership planning.
+  // Under `ambientEnvTriggers: "suppress"` an env-only channel is excluded from startup and
+  // loader suppression, so its claims must not decide ANOTHER configured channel's claimant
+  // fate — a default "allow" plan would advertise the schema of a fallback the gateway never
+  // needs while superseding the plugin it actually serves.
+  it("honors the gateway's ambient env-trigger policy in advertised channel schemas", () => {
+    const makeClaimant = (params: {
+      id: string;
+      channels: Record<string, string>;
+      preferOver?: string[];
+    }) => ({
+      id: params.id,
+      origin: "global",
+      rootDir: `/fake/${params.id}`,
+      source: `/fake/${params.id}/index.js`,
+      manifestPath: `/fake/${params.id}/openclaw.plugin.json`,
+      enabledByDefault: true,
+      channels: Object.keys(params.channels),
+      channelConfigs: Object.fromEntries(
+        Object.entries(params.channels).map(([channelId, extraProperty]) => [
+          channelId,
+          {
+            ...(params.preferOver ? { preferOver: params.preferOver } : {}),
+            schema: {
+              type: "object",
+              properties: { [extraProperty]: { type: "string" } },
+              additionalProperties: false,
+            },
+          },
+        ]),
+      ),
+    });
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        // Discovery-first claimant of the config-configured channel; also the incumbent of the
+        // env-only qqbot channel, where a replacement edge kills it plugin-globally.
+        makeClaimant({ id: "acme-aa-multi", channels: { qqbot: "aOption", acmey: "aOption" } }),
+        makeClaimant({
+          id: "qqbot-bb-rep",
+          channels: { qqbot: "bOption" },
+          preferOver: ["acme-aa-multi"],
+        }),
+        makeClaimant({ id: "acme-cc-fallback", channels: { acmey: "cOption" } }),
+      ],
+    });
+    mockLoadConfig.mockReturnValue({
+      ...explicitMainRoster(),
+      channels: { acmey: { token: "y" } },
+    });
+    process.env.QQBOT_APP_ID = "app";
+    process.env.QQBOT_CLIENT_SECRET = "secret";
+    try {
+      const acmeySchemaText = () => {
+        const schema = loadGatewayRuntimeConfigSchema().schema as {
+          properties?: Record<string, unknown>;
+        };
+        const channels = schema.properties?.channels as { properties?: Record<string, unknown> };
+        return JSON.stringify(channels.properties?.acmey);
+      };
+
+      // Default policy: the env-only qqbot channel joins the plan, its replacement kills the
+      // multi-channel incumbent, and the configured channel falls back to its other claimant.
+      expect(acmeySchemaText()).toContain("cOption");
+
+      // Suppressed ambient triggers: qqbot is outside the plan exactly as it is outside loader
+      // suppression, so the configured channel keeps its discovery-first claimant.
+      setRuntimeAmbientEnvTriggers("suppress");
+      expect(acmeySchemaText()).toContain("aOption");
+    } finally {
+      delete process.env.QQBOT_APP_ID;
+      delete process.env.QQBOT_CLIENT_SECRET;
+    }
   });
 
   it("does not activate or replace the active plugin registry across repeated schema loads (regression guard for #54816)", () => {

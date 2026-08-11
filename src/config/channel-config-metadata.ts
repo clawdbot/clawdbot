@@ -736,8 +736,9 @@ export function collectChannelSchemaMetadataCore(
   registry: PluginManifestRegistry,
   config?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
+  options?: ChannelSchemaOwnershipOptions,
 ): ChannelUiMetadata[] {
-  return collectChannelSchemaMetadataWithOwnership(registry, config, env).map(
+  return collectChannelSchemaMetadataWithOwnership(registry, config, env, options).map(
     ({ schemaPluginId: _schemaPluginId, schemaPluginOrigin: _schemaPluginOrigin, ...entry }) =>
       entry,
   );
