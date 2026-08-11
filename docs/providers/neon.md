@@ -149,16 +149,29 @@ The `input` array accepts `text`, `image`, `video`, and `audio`. Neon's catalog 
 types than that for some models, including PDF for `gpt-5-3-codex` and video and audio for Gemini,
 but only the four values above are valid in an OpenClaw model entry.
 
-### Streaming responses report no token usage
+### OpenClaw does not ask Neon for streamed token usage
 
 OpenClaw resolves `supportsUsageInStreaming` to `false` for any provider configured with its own
-`baseUrl`, so it never sends `stream_options` to Neon and reports no token usage on streamed
-replies. That applies to every model above, and no `compat` block is needed to get it.
+`baseUrl`, so it does not send `stream_options` to Neon. That applies to every model above, and no
+`compat` block is needed to get it.
 
-If you set `compat: { supportsUsageInStreaming: true }` to recover token counts, leave it off the
-`gemini-` models. Neon serves those through the native Gemini dialect rather than a chat-completions
-translation, and the request then fails with
-`400 Unknown name "stream_options" at 'generation_config'`.
+This is a statement about the outgoing request, not about what you will see. OpenClaw still records
+a `usage` object on any chunk that carries one, so a provider that reports usage without being asked
+is accounted for normally. In practice, not asking usually means no final usage arrives, and a
+streamed turn is then reported at zero tokens.
+
+If you set `compat: { supportsUsageInStreaming: true }` to recover token counts, be aware that the
+`gemini-` models may reject the field. Neon serves that family by translating the request into a
+Gemini `generation_config`, which has no `stream_options`, and an unknown field there is rejected
+rather than ignored. Sending it against a `gemini-` model on a Neon branch returned:
+
+```text
+Invalid JSON payload received. Unknown name "stream_options" at 'generation_config'
+```
+
+That is an observation from one branch rather than a documented Neon contract, and the same request
+succeeded against the non-Gemini chat models on that branch. Treat it as a reason to enable the flag
+per model rather than across the whole provider.
 
 ## Models
 
