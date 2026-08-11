@@ -394,6 +394,9 @@ function resolveReplySessionRolloverState(entry: SessionEntry): Partial<SessionE
     authProfileOverrideCompactionCount: preservedSelection.authProfileOverrideCompactionCount,
     label: entry.label,
     displayName: entry.displayName,
+    // Notice debt survives rollover: erasing it here would recreate the
+    // silent ambiguous-loss outcome the debt exists to prevent.
+    pendingDeliveryNotice: entry.pendingDeliveryNotice,
     spawnedBy: entry.spawnedBy,
     spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
     spawnedCwd: entry.spawnedCwd,

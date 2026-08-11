@@ -24,7 +24,10 @@ export type GatewayRecoveryRuntime = {
     threadId?: string | number;
     text: string;
     idempotencyKey: string;
-  }) => Promise<void>;
+  }) => Promise<{
+    /** True when delivery produced zero platform results (policy/channel suppression). */
+    suppressed: boolean;
+  }>;
 };
 
 export type GatewayInstanceRuntime = {

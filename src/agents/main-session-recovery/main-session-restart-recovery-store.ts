@@ -5,9 +5,11 @@ import {
   type InternalSessionEntry as SessionEntry,
   resolveSessionWorkStartError,
 } from "../../config/sessions.js";
+import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
 import {
   listSessionEntriesByStatus,
   loadExactSessionEntry,
+  updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
@@ -57,7 +59,7 @@ import {
 function pendingFinalRecoveryAction(
   pending: NonNullable<SessionEntry["pendingFinalDelivery"]>,
   stateDir?: string,
-): "complete" | "defer" | "fail" | "retry" {
+): "complete" | "defer" | "fail" | "notice" | "retry" {
   const deliveries = pending.deliveries;
   if (!deliveries?.length) {
     return "fail";
@@ -69,15 +71,74 @@ function pendingFinalRecoveryAction(
   if (owners.some((owner) => owner?.status === "pending")) {
     return "defer";
   }
-  for (const [index, delivery] of deliveries.entries()) {
-    const owner = owners[index];
-    if (owner || delivery.state === "delivered" || delivery.state === "unknown") {
-      return "fail";
-    }
+  if (
+    pending.kind === "replayable" &&
+    deliveries.every(({ state }) => state === "prepared") &&
+    owners.every((owner) => owner === null)
+  ) {
+    return "retry";
   }
-  return pending.kind === "replayable" && deliveries.every(({ state }) => state === "prepared")
-    ? "retry"
-    : "fail";
+  // Residual ambiguity (unknown custody, settled owners, unreplayable mixes):
+  // complete the session and record durable notice debt instead of failing it.
+  // A fire-and-forget failure notice is lost during the very outage that made
+  // the outcome ambiguous; the debt survives until the next same-route turn.
+  // Records without notice identity cannot carry debt, so they keep the
+  // visible fail path instead of completing silently.
+  return pending.context && pending.intentId ? "notice" : "fail";
+}
+
+async function completePendingFinalRecoveryWithNotice(
+  entry: SessionEntry,
+  sessionKey: string,
+  storePath: string,
+): Promise<boolean> {
+  const endedAt = Date.now();
+  let completed = false;
+  await updateSessionEntry(
+    { sessionKey, storePath },
+    (current) => {
+      if (
+        current.sessionId !== entry.sessionId ||
+        current.pendingFinalDelivery?.intentId !== entry.pendingFinalDelivery?.intentId
+      ) {
+        return null;
+      }
+      const pending = current.pendingFinalDelivery;
+      completed = true;
+      return {
+        ...buildRestartRecoveryClaimCleanupPatch({
+          entry: current,
+          recordTerminalSource: true,
+        }),
+        abortedLastRun: false,
+        endedAt,
+        lifecycleRunId: undefined,
+        pendingFinalDelivery: undefined,
+        ...(pending?.context &&
+        pending.intentId &&
+        (!current.pendingDeliveryNotice ||
+          current.pendingDeliveryNotice.createdAt <= pending.createdAt)
+          ? {
+              pendingDeliveryNotice: {
+                createdAt: pending.createdAt,
+                context: pending.context,
+                intentId: pending.intentId,
+                state: "owed" as const,
+              },
+            }
+          : {}),
+        restartRecoveryRuns: undefined,
+        runtimeMs:
+          typeof current.startedAt === "number"
+            ? Math.max(0, endedAt - current.startedAt)
+            : undefined,
+        status: "done" as const,
+        updatedAt: endedAt,
+      };
+    },
+    { skipMaintenance: true, takeCacheOwnership: true },
+  );
+  return completed;
 }
 
 export function loadExpectedRestartRecoveryTarget(params: {
@@ -415,6 +476,15 @@ export async function recoverStore(params: {
       } else {
         result.skipped++;
       }
+      continue;
+    }
+    if (pendingAction === "notice") {
+      const completed = await completePendingFinalRecoveryWithNotice(
+        entry,
+        sessionKey,
+        params.storePath,
+      );
+      result[completed ? "recovered" : "skipped"]++;
       continue;
     }
     if (pendingAction === "fail") {

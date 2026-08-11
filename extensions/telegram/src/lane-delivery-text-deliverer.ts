@@ -318,7 +318,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       await onPlatformSendDispatch?.();
     }
     if (finalizePreview) {
-      await params.stopDraftLane(lane);
+      if (previewAlreadyVisible) {
+        // Cleanup cannot invalidate an accepted preview or create fresh send custody.
+        await params.stopDraftLane(lane).catch(() => undefined);
+      } else {
+        await params.stopDraftLane(lane);
+      }
     } else {
       await params.flushDraftLane(lane);
     }

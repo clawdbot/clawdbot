@@ -12,7 +12,10 @@ import {
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { applyMessageSendingHook } from "../../infra/outbound/deliver-hooks.js";
 import { normalizeEmptyPayloadForDelivery } from "../../infra/outbound/deliver-payload.js";
-import { isPlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
+import {
+  isPlatformMessageNotDispatchedError,
+  isPlatformMessageRejectedError,
+} from "../../infra/outbound/deliver-types.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { createMessageSentEmitter } from "../../infra/outbound/message-sent-hook.js";
 import { summarizeOutboundPayloadForTransport } from "../../infra/outbound/payloads.js";
@@ -221,6 +224,28 @@ async function settleChannelDeliveryAttempts(params: {
   }
 }
 
+// Failed-send custody policy: a permanent typed non-dispatch rejection is a
+// proven no-send (terminal suppression, no replay, no notice); an untyped error
+// after the pre-I/O claim affirms real ambiguity (unknown -> owed notice); a
+// retryable typed rejection restores prepared custody so recovery can replay —
+// the pre-claim already wrote unknown, and leaving it would fake ambiguity.
+async function settleFailedPendingFinalDelivery(
+  payload: ReplyPayload,
+  error: unknown,
+): Promise<void> {
+  const completion = resolvePendingFinalCompletion(payload);
+  if (!completion) {
+    return;
+  }
+  if (isPlatformMessageRejectedError(error)) {
+    await settlePendingFinalDelivery(completion, "suppressed", ["prepared", "queued", "unknown"]);
+  } else if (isPlatformMessageNotDispatchedError(error)) {
+    await settlePendingFinalDelivery(completion, "prepared", ["queued", "unknown"]);
+  } else {
+    await settlePendingFinalDelivery(completion, "unknown", ["queued", "unknown"]);
+  }
+}
+
 async function settleChannelDeliveryAttempt(params: {
   attempt: PendingChannelDeliveryAttempt;
   onDelivered: AnyChannelDeliveryAdapter["onDelivered"] | undefined;
@@ -255,6 +280,7 @@ async function settleChannelDeliveryAttempt(params: {
     } catch {
       // Error observers are best-effort and must not replace the native settlement failure.
     }
+    await settleFailedPendingFinalDelivery(attempt.payload, error);
     const partial = resolvePartialChannelDeliveryResult(error);
     if (!isPlatformMessageNotDispatchedError(error)) {
       params.emitMessageSent?.({
@@ -592,6 +618,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
                         }
                       }
                     } catch (error: unknown) {
+                      await settleFailedPendingFinalDelivery(effectivePayload, error);
                       if (delivery.observeMessageSent) {
                         await settleChannelDeliveryAttempt({
                           attempt: {

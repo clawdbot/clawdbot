@@ -1637,6 +1637,7 @@ export async function performGatewaySessionReset(params: {
             label: currentEntry?.label,
             displayName: currentEntry?.displayName,
             delivery: currentEntry?.delivery,
+            pendingDeliveryNotice: currentEntry?.pendingDeliveryNotice,
             groupId: currentEntry?.groupId,
             subject: currentEntry?.subject,
             groupChannel: currentEntry?.groupChannel,

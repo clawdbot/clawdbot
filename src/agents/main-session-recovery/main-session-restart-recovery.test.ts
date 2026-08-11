@@ -108,9 +108,9 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: vi.fn(async () => ({ runId: "run-resumed" })),
 }));
 
-const sendRecoveryNotice = vi.fn<GatewayRecoveryRuntime["sendRecoveryNotice"]>(
-  async () => undefined,
-);
+const sendRecoveryNotice = vi.fn<GatewayRecoveryRuntime["sendRecoveryNotice"]>(async () => ({
+  suppressed: false,
+}));
 const mockRecoveryRuntime = {
   dispatchAgent: async <T>(params: Record<string, unknown>, timeoutMs?: number) =>
     (await callGateway({ method: "agent", params, timeoutMs })) as T,
@@ -2005,8 +2005,27 @@ describe("main-session-restart-recovery", () => {
     }
   });
 
-  it("fails closed for an unqueued media-only final", async () => {
+  it("fails visibly when residual ambiguity has no notice identity", async () => {
     const sessionsDir = await makeSessionsDir();
+    await writeMainSession({
+      sessionsDir,
+      pendingFinalDelivery: {
+        kind: "transport-only",
+        createdAt: Date.now(),
+        // No context and no intentId: debt cannot be recorded, so the session
+        // must take the visible interruption path instead of ending silently.
+        deliveries: [{ id: "delivery-identity-less", state: "unknown" }],
+      },
+    });
+
+    await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
+
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("completes an unqueued media-only final with owed notice debt", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
     await writeMainSession({
       sessionsDir,
       pendingFinalDelivery: {
@@ -2018,16 +2037,25 @@ describe("main-session-restart-recovery", () => {
       },
     });
 
-    await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
+    await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
 
     expect(callGateway).not.toHaveBeenCalled();
-    expect(sendRecoveryNotice).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringContaining("ask for any missing remainder") }),
-    );
+    // The debt is delivered on the next same-route turn; a fire-and-forget
+    // notice would be lost during the outage that interrupted the send.
+    expect(sendRecoveryNotice).not.toHaveBeenCalled();
+    const entry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+    expect(entry?.status).toBe("done");
+    expect(entry?.pendingFinalDelivery).toBeUndefined();
+    expect(entry?.pendingDeliveryNotice).toMatchObject({
+      intentId: "intent-media-only",
+      state: "owed",
+      context: discordDeliveryContext,
+    });
   });
 
-  it("fails visibly instead of replaying part of an unqueued text and media final", async () => {
+  it("completes an unqueued text and media final with owed notice debt instead of replaying", async () => {
     const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
     await writeMainSession({
       sessionsDir,
       pendingFinalDelivery: {
@@ -2042,16 +2070,20 @@ describe("main-session-restart-recovery", () => {
       },
     });
 
-    await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
+    await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
 
     expect(callGateway).not.toHaveBeenCalled();
-    expect(sendRecoveryNotice).toHaveBeenCalledOnce();
+    expect(sendRecoveryNotice).not.toHaveBeenCalled();
+    expect(
+      loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.pendingDeliveryNotice,
+    ).toMatchObject({ intentId: "intent-text-media", state: "owed" });
   });
 
   it.each(["delivered", "unknown"] as const)(
-    "fails closed when a %s delivery is mixed with prepared work",
+    "completes with owed notice debt when a %s delivery is mixed with prepared work",
     async (state) => {
       const sessionsDir = await makeSessionsDir();
+      const storePath = path.join(sessionsDir, "sessions.json");
       await writeMainSession({
         sessionsDir,
         pendingFinalDelivery: makePendingFinalDelivery("Do not regenerate this aggregate.", {
@@ -2064,16 +2096,16 @@ describe("main-session-restart-recovery", () => {
         }),
       });
 
-      await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
+      await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
 
       expect(callGateway).not.toHaveBeenCalled();
-      expect(sendRecoveryNotice).toHaveBeenCalledOnce();
-      expect(sendRecoveryNotice).toHaveBeenCalledWith(
-        expect.objectContaining({
-          text: expect.stringContaining("ask for any missing remainder"),
-        }),
-      );
-      expect(sendRecoveryNotice.mock.calls[0]?.[0].text).not.toContain("send that last request");
+      expect(sendRecoveryNotice).not.toHaveBeenCalled();
+      const entry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+      expect(entry?.status).toBe("done");
+      expect(entry?.pendingDeliveryNotice).toMatchObject({
+        intentId: `intent-mixed-${state}`,
+        state: "owed",
+      });
     },
   );
 
@@ -2108,13 +2140,20 @@ describe("main-session-restart-recovery", () => {
           }),
         });
 
-        await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
+        await expectRecovery(
+          ownerStatus === "pending"
+            ? { recovered: 0, failed: 1, skipped: 0 }
+            : { recovered: 1, failed: 0, skipped: 0 },
+        );
 
         expect(callGateway).not.toHaveBeenCalled();
-        if (ownerStatus === "pending") {
-          expect(sendRecoveryNotice).not.toHaveBeenCalled();
-        } else {
-          expect(sendRecoveryNotice).toHaveBeenCalledOnce();
+        expect(sendRecoveryNotice).not.toHaveBeenCalled();
+        if (ownerStatus !== "pending") {
+          const sessionsStorePath = path.join(sessionsDir, "sessions.json");
+          expect(
+            loadSessionEntry({ sessionKey: "agent:main:main", storePath: sessionsStorePath })
+              ?.pendingDeliveryNotice,
+          ).toMatchObject({ intentId: `intent-owner-${ownerStatus}`, state: "owed" });
         }
       } finally {
         closeOpenClawStateDatabaseForTest();
@@ -4725,6 +4764,7 @@ describe("main-session-restart-recovery", () => {
           restartRecoveryDeliverySourceRunId: "replacement-source",
         },
       );
+      return { suppressed: false };
     });
 
     await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
