@@ -6,6 +6,7 @@ import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtime
 import {
   hasMeaningfulChannelConfig,
   listPotentialConfiguredChannelPresenceSignals,
+  listPresentChannelPresenceEnvVars,
   type AmbientEnvTriggerPolicy,
 } from "../channels/config-presence.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
@@ -210,6 +211,10 @@ function buildActivationMetadataHash(params: {
     .filter((signal) => signal.source === "env")
     .map((signal) => signal.channelId)
     .toSorted((left, right) => left.localeCompare(right));
+  // Presence signals collapse per channel, but configured-state contracts (`env.allOf`)
+  // distinguish WHICH credential vars exist — a partial set (contract-rejected) must never
+  // share a cached registry with the complete one (contract-accepted).
+  const envPresenceCredentials = listPresentChannelPresenceEnvVars(params.env);
   // Capability candidates (provider auth, configured model refs, speech/worker providers,
   // agent-harness runtimes, web-search selection) join the suppression plan beside channel
   // claims and can change cross-channel claimant liveness. An already-active capability owner
@@ -277,6 +282,7 @@ function buildActivationMetadataHash(params: {
         enabledChannels: enabledSourceChannels,
         configuredChannels: configuredSourceChannels,
         envPresenceChannels: envPresenceSignals,
+        envPresenceCredentials,
         ambientEnvTriggers: params.ambientEnvTriggers ?? "allow",
         catalogPathsEnv: [
           params.env.OPENCLAW_PLUGIN_CATALOG_PATHS ?? "",

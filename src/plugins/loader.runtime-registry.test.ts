@@ -125,6 +125,15 @@ describe("resolvePluginLoadCacheContext", () => {
     // same autoEnabledReasons, different plan.
     expect(keyOf({ acp: { enabled: true } })).not.toBe(baseKey);
     expect(keyOf({ browser: { enabled: true } })).not.toBe(baseKey);
+    // #120332 round 57 (P2): presence signals collapse per channel, but configured-state
+    // contracts (`env.allOf`) distinguish WHICH credential vars exist — a partial set
+    // (contract-rejected) must not share a cached registry with the complete one.
+    const envKeyOf = (env: NodeJS.ProcessEnv) =>
+      resolvePluginLoadCacheContext({ config: {}, env }).cacheKey;
+    const partialEnv: NodeJS.ProcessEnv = { ...process.env, MATTERMOST_BOT_TOKEN: "token" };
+    delete partialEnv.MATTERMOST_URL;
+    const completeEnv: NodeJS.ProcessEnv = { ...partialEnv, MATTERMOST_URL: "https://mm.local" };
+    expect(envKeyOf(partialEnv)).not.toBe(envKeyOf(completeEnv));
   });
 
   it("partitions full and setup channel plugin load intent", () => {

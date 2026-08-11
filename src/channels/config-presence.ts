@@ -135,6 +135,35 @@ export function listPotentialConfiguredChannelIds(
 }
 
 /** Lists deduplicated channel presence signals with their detection source. */
+/**
+ * Env var NAMES currently present that can produce channel presence signals. Presence signals
+ * collapse per channel, but configured-state contracts (`env.allOf`) distinguish WHICH
+ * variables exist — the loader cache fingerprints these so a partial credential set (contract-
+ * rejected) never shares a cached registry with the complete one (contract-accepted).
+ */
+export function listPresentChannelPresenceEnvVars(env: NodeJS.ProcessEnv): string[] {
+  const channelEnvPrefixes = listChannelEnvPrefixes(listBundledChannelIds(env));
+  const officialExternalChannelEnvVars = listOfficialExternalChannelEnvVars();
+  const present = new Set<string>();
+  for (const [key, value] of Object.entries(env)) {
+    if (!hasNonEmptyString(value)) {
+      continue;
+    }
+    for (const [prefix] of channelEnvPrefixes) {
+      if (key.startsWith(prefix)) {
+        present.add(key);
+        break;
+      }
+    }
+    for (const { envVars } of officialExternalChannelEnvVars) {
+      if (envVars.includes(key)) {
+        present.add(key);
+      }
+    }
+  }
+  return [...present].toSorted((left, right) => left.localeCompare(right));
+}
+
 export function listPotentialConfiguredChannelPresenceSignals(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
