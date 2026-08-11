@@ -1,8 +1,10 @@
-import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js";
+import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { setLastActiveSessionKey } from "../../app/settings.ts";
+import { compareChatQueueOrder } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { uiSessionRowMatchesSelectedChat } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import {
   getChatAttachmentDataUrl,
@@ -54,9 +56,52 @@ export type SteerSendDependencies = {
     host: SteerLifecycleHost,
     message: string,
     attachments: ChatAttachment[] | undefined,
-    options: { canApplyError: () => boolean; queueMode?: QueueMode; runId: string },
+    options: {
+      canApplyError: () => boolean;
+      queueMode?: QueueMode;
+      runId: string;
+      expectedRunId?: string;
+      expectedLeafEntryId?: string | null;
+      replyToId?: string;
+    },
   ) => Promise<SteerChatSendResult>;
 };
+
+type SteerTarget = { runId: string; leafEntryId?: string | null };
+
+function resolveSteerTarget(host: SteerLifecycleHost, item: ChatQueueItem): SteerTarget | null {
+  const matchingRows =
+    host.sessionsResult?.sessions.filter((row) =>
+      uiSessionRowMatchesSelectedChat(host, row.key, item.sessionKey ?? host.sessionKey),
+    ) ?? [];
+  const serverRunIds = new Set(
+    matchingRows.flatMap((row) => (row.hasActiveRun ? (row.activeRunIds ?? []) : [])),
+  );
+  const durableRunId = item.kind === "steered" ? item.steerTargetRunId?.trim() : undefined;
+  if (item.kind === "steered" && !durableRunId) {
+    return null;
+  }
+  const runId =
+    durableRunId ||
+    host.chatRunId?.trim() ||
+    (serverRunIds.size === 1 ? [...serverRunIds][0] : undefined);
+  if (!runId) {
+    return null;
+  }
+  const activeRow = matchingRows.find((row) => row.activeRunIds?.includes(runId));
+  const displayedLeaf =
+    host.chatRunId?.trim() === runId ? host.chatDisplayedLeafEntryId : undefined;
+  const leafEntryId =
+    displayedLeaf === null ? null : displayedLeaf?.trim() || activeRow?.activeLeafEntryId;
+  return {
+    runId,
+    ...(leafEntryId === null
+      ? { leafEntryId: null }
+      : typeof leafEntryId === "string" && leafEntryId.trim()
+        ? { leafEntryId: leafEntryId.trim() }
+        : {}),
+  };
+}
 
 type RejectedSteerChatSend = { kind: "rejected"; error: string };
 type SteerChatSendResult = ChatSendAck | RejectedSteerChatSend | null;
@@ -244,7 +289,6 @@ export async function sendQueuedChatMessageWithQueueMode(
   }
   const isSteer = queueMode === "steer";
   const unconfirmedError = isSteer ? UNCONFIRMED_STEER_ERROR : UNCONFIRMED_FOLLOW_UP_ERROR;
-  const activeRunId = host.chatRunId;
   const item = host.chatQueue.find(
     (entry) =>
       entry.id === id &&
@@ -255,6 +299,17 @@ export async function sendQueuedChatMessageWithQueueMode(
   if (!item) {
     return;
   }
+  const steerTarget = isSteer ? resolveSteerTarget(host, item) : null;
+  if (isSteer && !steerTarget) {
+    const error =
+      item.kind === "steered"
+        ? "This restored steer has no original run target and cannot be retried safely."
+        : "The active run could not be identified uniquely. Review and retry.";
+    updateQueuedMessage(host, id, (entry) => ({ ...entry, sendError: error, sendState: "failed" }));
+    setChatError(host, error);
+    return;
+  }
+  const activeRunId = steerTarget?.runId ?? host.chatRunId;
   const itemSessionKey = item.sessionKey ?? host.sessionKey;
   const message = item.text.trim();
   const attachments = item.attachments ?? [];
@@ -267,6 +322,11 @@ export async function sendQueuedChatMessageWithQueueMode(
   const claimed = updateQueuedMessage(host, id, (entry) => ({
     ...entry,
     ...(isSteer ? { kind: "steered" as const } : {}),
+    ...(steerTarget
+      ? {
+          steerTargetRunId: steerTarget.runId,
+        }
+      : {}),
     sendError: unconfirmedError,
     sendRunId: entry.sendRunId ?? generateUUID(),
     sendState: "unconfirmed",
@@ -280,6 +340,7 @@ export async function sendQueuedChatMessageWithQueueMode(
     text: item.text,
     createdAt: item.createdAt,
     attachments: item.attachments,
+    replyToId: item.replyToId,
     sendRunId: claimed.sendRunId,
     sessionKey: claimed.sessionKey,
     agentId: claimed.agentId,
@@ -312,6 +373,15 @@ export async function sendQueuedChatMessageWithQueueMode(
     {
       canApplyError: () => visibleSessionMatches(host, itemSessionKey, item.agentId),
       ...(queueMode ? { queueMode } : {}),
+      ...(claimed.replyToId ? { replyToId: claimed.replyToId } : {}),
+      ...(steerTarget
+        ? {
+            expectedRunId: steerTarget.runId,
+            ...(steerTarget.leafEntryId !== undefined
+              ? { expectedLeafEntryId: steerTarget.leafEntryId }
+              : {}),
+          }
+        : {}),
       runId: claimed.sendRunId,
     },
   );
@@ -388,7 +458,7 @@ export async function sendQueuedChatMessageWithQueueMode(
       host,
       itemSessionKey,
       [...host.chatQueue.filter((entry) => entry.id !== id), steeredIndicator].toSorted(
-        (left, right) => left.createdAt - right.createdAt,
+        compareChatQueueOrder,
       ),
       item.agentId,
     );

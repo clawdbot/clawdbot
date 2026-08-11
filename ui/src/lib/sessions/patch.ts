@@ -11,7 +11,6 @@ export type SessionPatch = {
   label?: string | null;
   category?: string | null;
   boardFace?: "chat" | "dashboard";
-  icon?: string | null;
   model?: string | null;
   thinkingLevel?: string | null;
   fastMode?: FastMode | null;

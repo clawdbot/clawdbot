@@ -1,10 +1,13 @@
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { start } from "./service/ops-lifecycle.js";
 import { status } from "./service/ops-read.js";
 import { createCronServiceState } from "./service/state.js";
+import { runMissedJobs } from "./service/timer.js";
 import { onTimer } from "./service/timer.test-support.js";
-import { saveCronStore } from "./store.js";
+import * as cronStoreModule from "./store.js";
+import { loadCronStore, saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
 const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
@@ -13,6 +16,21 @@ const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
 });
 
 describe("CronService startup catch-up repair scoping", () => {
+  function createDateBoundaryEveryJob(id: string, nextRunAtMs: number): CronJob {
+    return {
+      id,
+      name: `job-${id}`,
+      enabled: true,
+      createdAtMs: nextRunAtMs - 60_000,
+      updatedAtMs: nextRunAtMs - 60_000,
+      schedule: { kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS, anchorMs: 0 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: `tick-${id}` },
+      state: { nextRunAtMs },
+    };
+  }
+
   function createHourlyCronJob(id: string, nextRunAtMs: number): CronJob {
     return {
       id,
@@ -142,5 +160,93 @@ describe("CronService startup catch-up repair scoping", () => {
 
     state.stopped = true;
     await store.cleanup();
+  });
+
+  it("disables startup catch-up deferrals that exceed the Date range", async () => {
+    const store = await makeStorePath();
+    const now = MAX_DATE_TIMESTAMP_MS - 2_000;
+    await saveCronStore(store.storePath, {
+      version: 1,
+      jobs: [
+        createDateBoundaryEveryJob("date-limit-0", now - 60_000),
+        createDateBoundaryEveryJob("date-limit-1", now - 50_000),
+        createDateBoundaryEveryJob("date-limit-2", now - 40_000),
+      ],
+    });
+    const order: string[] = [];
+    const deferredAutoDisableReasons = new Set([
+      "cron:date-limit-1:auto-disabled",
+      "cron:date-limit-2:auto-disabled",
+    ]);
+    const enqueueSystemEvent = vi.fn((_text: string, context?: { contextKey?: string }) => {
+      if (context?.contextKey && deferredAutoDisableReasons.has(context.contextKey)) {
+        order.push("notify");
+      }
+    });
+    const requestHeartbeat = vi.fn((request: { reason?: string }) => {
+      if (request.reason && deferredAutoDisableReasons.has(request.reason)) {
+        order.push("heartbeat");
+      }
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent,
+      requestHeartbeat,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      maxMissedJobsPerRestart: 1,
+      missedJobStaggerMs: 5_000,
+    });
+    const save = cronStoreModule.saveCronJobsStore;
+    const saveSpy = vi
+      .spyOn(cronStoreModule, "saveCronJobsStore")
+      .mockImplementation(async (...args) => {
+        if (
+          args[1].jobs.some(
+            (job) => job.id !== "date-limit-0" && job.state.autoDisabled !== undefined,
+          )
+        ) {
+          expect(order).toEqual([]);
+          const result = await save(...args);
+          expect(order).toEqual([]);
+          order.push("persist");
+          return result;
+        }
+        return await save(...args);
+      });
+
+    try {
+      await runMissedJobs(state);
+
+      const deferred = (state.store?.jobs ?? []).filter((job) => job.id !== "date-limit-0");
+      expect(deferred).toHaveLength(2);
+      for (const job of deferred) {
+        expect(job.enabled).toBe(false);
+        expect(job.state.nextRunAtMs).toBeUndefined();
+        expect(job.state.startupCatchupAtMs).toBeUndefined();
+        expect(job.state.autoDisabled).toEqual({
+          reason: "schedule-errors",
+          atMs: now,
+          consecutiveErrors: 1,
+        });
+      }
+      expect(order).toEqual(["persist", "notify", "heartbeat", "notify", "heartbeat"]);
+      expect((await loadCronStore(store.storePath)).jobs).toEqual(
+        expect.arrayContaining(
+          deferred.map((job) =>
+            expect.objectContaining({
+              id: job.id,
+              enabled: false,
+              state: expect.objectContaining({ autoDisabled: job.state.autoDisabled }),
+            }),
+          ),
+        ),
+      );
+    } finally {
+      saveSpy.mockRestore();
+      await store.cleanup();
+    }
   });
 });

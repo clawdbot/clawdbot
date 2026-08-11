@@ -1,6 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  captureNodePairingGeneration,
+  captureNodePairingState,
+} from "../../infra/device-pairing-node-state.js";
+import { approveNodePairing, requestNodePairing } from "../../infra/device-pairing-node.js";
+import {
   approveDevicePairing,
   listDevicePairing,
   requestDevicePairing,
@@ -13,11 +18,6 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticSecurityEvent,
 } from "../../infra/diagnostic-events.js";
-import {
-  captureNodePairingGeneration,
-  captureNodePairingState,
-} from "../../infra/node-pairing-state.js";
-import { approveNodePairing, requestNodePairing } from "../../infra/node-pairing.js";
 import { loadApnsRegistration, registerApnsRegistration } from "../../infra/push-apns.js";
 import { resetRemoteNodeSkillsForTests } from "../../skills/runtime/remote-skills.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -43,8 +43,8 @@ const pairingGenerationHooks = vi.hoisted(() => ({
   beforeCapture: vi.fn<(nodeId: string) => Promise<void> | void>(),
 }));
 
-vi.mock("../../infra/node-pairing-state.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/node-pairing-state.js")>();
+vi.mock("../../infra/device-pairing-node-state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/device-pairing-node-state.js")>();
   return {
     ...actual,
     captureNodePairingState: async (nodeId: string) => {
@@ -126,7 +126,6 @@ function createContext() {
       getActiveNode: vi.fn(),
       updateSurface: vi.fn(),
       updateNodeSkills: vi.fn(),
-      updateProtocolFeatures: vi.fn(),
     },
   };
 }
@@ -194,34 +193,6 @@ describe("nodeHandlers node.skills.update", () => {
       { nodeId: "node-1", skills: [skill] },
       undefined,
     );
-  });
-});
-
-describe("nodeHandlers node.protocolFeatures.update", () => {
-  it("stores transient features on the calling node connection", async () => {
-    const features = ["node-invoke-session-key-envelope-v1"];
-    const { context, opts } = createOptions(
-      { features },
-      {
-        client: {
-          connId: "conn-1",
-          connect: { device: { id: "node-1" }, client: { id: "node-client" } },
-        } as never,
-      },
-    );
-    context.nodeRegistry.updateProtocolFeatures.mockReturnValue({ nodeId: "node-1" });
-
-    await expectDefined(
-      nodeHandlers["node.protocolFeatures.update"],
-      'nodeHandlers["node.protocolFeatures.update"] test invariant',
-    )(opts);
-
-    expect(context.nodeRegistry.updateProtocolFeatures).toHaveBeenCalledWith(
-      "node-1",
-      "conn-1",
-      features,
-    );
-    expect(opts.respond).toHaveBeenCalledWith(true, { nodeId: "node-1" }, undefined);
   });
 });
 

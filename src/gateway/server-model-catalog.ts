@@ -39,7 +39,7 @@ async function resolveLoader(
 }
 
 // Isolated gateway tests share process module state with lifecycle-owner tests.
-export async function resetPreparedModelCatalogForTest(): Promise<void> {
+export async function resetPreparedModelCatalogStateForTest(): Promise<void> {
   const [{ resetPreparedModelRuntimeSnapshotsForTest }, { resetModelCatalogBuilderCacheForTest }] =
     await Promise.all([
       import("../agents/prepared-model-runtime.test-support.js"),

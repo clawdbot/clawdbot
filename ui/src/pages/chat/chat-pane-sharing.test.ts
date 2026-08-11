@@ -2,6 +2,7 @@
 /* @vitest-environment-options {"url":"http://chat-pane-sharing.test/"} */
 
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
@@ -62,22 +63,6 @@ function createSharingTestChatPane(params: Parameters<typeof createTestChatPane>
   result.state.sessionsResult = sharingSessionsResult(sessionRow());
   result.state.sessionsResultAgentId = "main";
   return result;
-}
-
-type Deferred<T> = {
-  promise: Promise<T>;
-  reject: (error: unknown) => void;
-  resolve: (value: T) => void;
-};
-
-function createDeferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((nextResolve, nextReject) => {
-    resolve = nextResolve;
-    reject = nextReject;
-  });
-  return { promise, reject, resolve };
 }
 
 function sessionRow(): GatewaySessionRow {
@@ -517,7 +502,7 @@ describe("chat pane sharing mutation phase ownership", () => {
   it.each(["resolve", "reject"] as const)(
     "drops a stale visibility session refresh when it later %s",
     async (completion) => {
-      const refreshed = createDeferred<void>();
+      const refreshed = createDeferred();
       const request = vi.fn(async (method: string) => {
         if (method === "session.visibility.set") {
           return {};
@@ -600,7 +585,7 @@ describe("chat pane sharing mutation phase ownership", () => {
   });
 
   it("drops a stale member session refresh failure", async () => {
-    const refreshed = createDeferred<void>();
+    const refreshed = createDeferred();
     const row = sessionRow();
     const request = vi.fn(async (method: string) => {
       if (method === "session.members.list") {

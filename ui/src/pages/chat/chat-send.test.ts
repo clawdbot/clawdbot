@@ -4,8 +4,9 @@ import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
 import { createResolvedModelPatch } from "../../test-helpers/chat-model.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -146,6 +147,7 @@ let flushChatQueueForEvent: typeof import("./chat-send-actions.ts").flushChatQue
 let retryReconnectableQueuedChatSends: typeof import("./chat-send-actions.ts").retryReconnectableQueuedChatSends;
 let retryQueuedChatMessage: typeof import("./chat-send-actions.ts").retryQueuedChatMessage;
 let recordChatSendServerTiming: typeof import("./chat-send-timing.ts").recordChatSendServerTiming;
+let beginQueuedMessageEdit: typeof import("./queued-message-edit.ts").beginQueuedMessageEdit;
 let refreshPageChat: typeof import("./chat-state-refresh.ts").refreshPageChat;
 
 async function loadChatHelpers(): Promise<void> {
@@ -157,6 +159,7 @@ async function loadChatHelpers(): Promise<void> {
   } = await import("./chat-send-actions.ts"));
   ({ handleSendChat } = await import("./chat-send-submit.ts"));
   ({ recordChatSendServerTiming } = await import("./chat-send-timing.ts"));
+  ({ beginQueuedMessageEdit } = await import("./queued-message-edit.ts"));
   ({ handlePageGatewayEvent } = await import("./chat-state-events.ts"));
   ({ refreshPageChat } = await import("./chat-state-refresh.ts"));
   ({ loadChatBranches, loadChatHistory } = await import("./chat-history.ts"));
@@ -290,19 +293,6 @@ function idleChatHistory(sessionKey = "agent:main") {
   };
 }
 
-function createDeferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-}
-
 const neverSettlesPromise: Promise<never> = Promise.race([]);
 
 function pendingPromise<T = unknown>(): Promise<T> {
@@ -368,7 +358,7 @@ describe("refreshChat", () => {
     expect(requestUpdate).not.toHaveBeenCalled();
   });
 
-  it("uses startup-shipped metadata without requesting chat.metadata", async () => {
+  it("uses explicit model discovery after startup metadata", async () => {
     const startup = createDeferred<unknown>();
     const host = makeChatHost({
       hello: {
@@ -376,6 +366,16 @@ describe("refreshChat", () => {
       } as TestChatHost["hello"],
       requestHandlers: {
         "chat.startup": () => startup.promise,
+        "models.list": {
+          models: [
+            {
+              available: true,
+              id: "live-model",
+              name: "Live Model",
+              provider: "openai",
+            },
+          ],
+        },
       },
     });
 
@@ -407,14 +407,14 @@ describe("refreshChat", () => {
       expect(host.chatModelCatalog).toEqual([
         {
           available: true,
-          id: "startup-model",
-          name: "Startup Model",
+          id: "live-model",
+          name: "Live Model",
           provider: "openai",
         },
       ]),
     );
     expect(host.request).not.toHaveBeenCalledWith("chat.metadata", expect.anything());
-    expect(host.request).not.toHaveBeenCalledWith("models.list", expect.anything());
+    expect(host.request).toHaveBeenCalledWith("models.list", { view: "configured" });
     expect(host.request).not.toHaveBeenCalledWith("commands.list", expect.anything());
   });
 
@@ -557,6 +557,42 @@ describe("refreshChat", () => {
       { role: "assistant", content: [{ type: "text", text: "ready" }] },
     ]);
     expect(requestUpdate).toHaveBeenCalled();
+  });
+
+  it("keeps the routed archived descriptor when history confirms archive state", async () => {
+    const key = "agent:main:dashboard:archived";
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.history": {
+          messages: [],
+          sessionInfo: row(key, {
+            archived: true,
+            sessionId: "archived-session",
+          }),
+        },
+      },
+      sessionKey: key,
+      sessionsResult: createSessionsResult([
+        row(key, {
+          derivedTitle: "Readable archived title",
+          sessionId: "archived-session",
+        }),
+      ]),
+    });
+
+    await refreshPageChat(asChatPageHost(host), {
+      awaitHistory: true,
+      scheduleScroll: false,
+    });
+
+    expect(asChatPageHost(host).selectedChatSessionArchived).toBe(true);
+    expect(host.sessions.state.result?.sessions).toEqual([
+      expect.objectContaining({
+        key,
+        archived: true,
+        derivedTitle: "Readable archived title",
+      }),
+    ]);
   });
 
   it("keeps an active run adopted from history over newer stale catalog metadata", async () => {
@@ -1621,7 +1657,7 @@ describe("handleSendChat", () => {
   });
 
   it("keeps a resolved model reconciliation inside the canonical settings queue", async () => {
-    const reconcile = createDeferred<void>();
+    const reconcile = createDeferred();
     let patchCount = 0;
     const host = makeChatHost({
       requestHandlers: {
@@ -1916,7 +1952,7 @@ describe("handleSendChat", () => {
   ])("gates $sendKey on its default-main alias patch", async ({ patchKey, sendKey }) => {
     const settingsPatch = createDeferred<boolean>();
 
-    const agentsList = {
+    const agentsList: AgentsListResult = {
       defaultId: "ops",
       mainKey: "work",
       scope: "per-sender",
@@ -1951,7 +1987,7 @@ describe("handleSendChat", () => {
   it("keeps a real main agent patch separate from a non-main default agent", async () => {
     const settingsPatch = createDeferred<boolean>();
 
-    const agentsList = {
+    const agentsList: AgentsListResult = {
       defaultId: "ops",
       mainKey: "work",
       scope: "per-sender",
@@ -3480,6 +3516,7 @@ describe("handleSendChat", () => {
       },
       chatMessage: "tighten the plan",
       chatRunId: "run-1",
+      chatDisplayedLeafEntryId: "leaf-active",
       chatStream: "Working...",
       sessionKey: "agent:main:main",
       settings: { chatFollowUpMode: "steer" },
@@ -3539,6 +3576,7 @@ describe("handleSendChat", () => {
       ],
       chatReplyTarget: replyTarget,
       chatRunId: "active-run",
+      chatDisplayedLeafEntryId: "leaf-active",
       chatStream: "Working...",
       settings: { chatFollowUpMode: "steer" },
     });
@@ -3552,6 +3590,7 @@ describe("handleSendChat", () => {
         expect.objectContaining({
           message: "steer without waiting for history",
           queueMode: "steer",
+          replyToId: "steer-behind-outbox-source",
         }),
       ),
     );
@@ -3559,6 +3598,9 @@ describe("handleSendChat", () => {
 
     expect(host.chatReplyTarget).toBeNull();
     expect(host.chatRunId).toBe("active-run");
+    expect(host.chatQueue.find((item) => item.kind === "steered")?.replyToId).toBe(
+      "steer-behind-outbox-source",
+    );
     olderHistory.resolve({
       messages: [{ role: "user", __openclaw: { idempotencyKey: "older-reconciliation-run:user" } }],
       sessionInfo: row("agent:main", { hasActiveRun: true, status: "running" }),
@@ -3629,7 +3671,12 @@ describe("handleSendChat", () => {
       chatRunId: null,
       sessionKey: "agent:main:main",
       sessionsResult: createSessionsResult([
-        row("agent:main:main", { hasActiveRun: true, status: "running" }),
+        row("agent:main:main", {
+          hasActiveRun: true,
+          activeRunIds: ["active-run"],
+          activeLeafEntryId: "leaf-active",
+          status: "running",
+        }),
       ]),
     });
 
@@ -3661,7 +3708,12 @@ describe("handleSendChat", () => {
       chatRunId: null,
       sessionKey: "agent:main:main",
       sessionsResult: createSessionsResult([
-        row("agent:main:main", { hasActiveRun: true, status: "running" }),
+        row("agent:main:main", {
+          hasActiveRun: true,
+          activeRunIds: ["active-run"],
+          activeLeafEntryId: "leaf-active",
+          status: "running",
+        }),
       ]),
       settings: { chatFollowUpMode: "steer" },
     });
@@ -3684,6 +3736,7 @@ describe("handleSendChat", () => {
       connected: false,
       chatMessage: "queued while offline",
       chatRunId: "run-1",
+      chatDisplayedLeafEntryId: "leaf-active",
       settings: { chatFollowUpMode: "steer" },
     });
 
@@ -4073,6 +4126,37 @@ describe("handleSendChat", () => {
 
     expect(executeSlashCommandMock).toHaveBeenCalledTimes(2);
     expect(listStoredChatOutboxes(visibleHost)).toStrictEqual([]);
+  });
+
+  it("holds a row being edited against a drain owned by another pane", async () => {
+    const request = makeRequestMock({ "chat.history": () => idleChatHistory() });
+    const client = clientWithRequest(request);
+    const item = {
+      id: "edited-across-panes",
+      text: "the text being rewritten",
+      createdAt: 1,
+      sessionKey: "agent:main",
+    };
+    // Two panes on one session: the composer holding the edit is pane-local, but
+    // the outbox and the drain lane are shared, and either pane can own the lane.
+    const editing = makeChatHost({ client, chatQueue: [item] });
+    const peer = makeChatHost({ client, chatQueue: [] });
+    const stopEditing = subscribeChatOutboxProjection(editing);
+    const stopPeer = subscribeChatOutboxProjection(peer);
+    expect(admitQueuedMessageForSession(editing, editing.sessionKey, item)).toBe(true);
+    expect(beginQueuedMessageEdit(editing, item.id)).toBe("started");
+
+    try {
+      await retryReconnectableQueuedChatSends(peer);
+
+      expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
+      expect(listStoredChatOutboxes(peer)[0]?.queue).toEqual([
+        expect.objectContaining({ id: item.id, text: item.text }),
+      ]);
+    } finally {
+      stopPeer();
+      stopEditing();
+    }
   });
 
   it("projects a running local command to panes that subscribe after execution starts", async () => {
@@ -7087,6 +7171,42 @@ describe("handleSendChat", () => {
     ).toHaveProperty("expectedLeafEntryId", null);
   });
 
+  it("waits for terminal history reconciliation before sending a follow-up", async () => {
+    const history = createDeferred<unknown>();
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.history": () => history.promise,
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "reconciled follow-up payload");
+          return { runId: payload.idempotencyKey, status: "started" };
+        },
+      },
+      chatDisplayedLeafEntryId: "leaf-before-terminal",
+      chatMessage: "immediate follow-up",
+    });
+    const historyLoad = loadChatHistory(host as unknown as Parameters<typeof loadChatHistory>[0]);
+
+    const sending = handleSendChat(host);
+    await Promise.resolve();
+    const sendsBeforeHistory = host.request.mock.calls.filter(
+      ([method]) => method === "chat.send",
+    ).length;
+    history.resolve({
+      messages: [],
+      sessionInfo: {
+        activeLeafEntryId: "leaf-after-terminal",
+        key: "agent:main",
+        sessionId: "session-main",
+      },
+    });
+    await Promise.all([historyLoad, sending]);
+
+    expect(sendsBeforeHistory).toBe(0);
+    expect(
+      findRequestPayload(host.request as unknown as MockCallSource, "chat.send", "follow-up send"),
+    ).toMatchObject({ expectedLeafEntryId: "leaf-after-terminal" });
+  });
+
   it("omits the active leaf when draining a restored outbox", async () => {
     const host = makeChatHost({
       client: null,
@@ -7190,7 +7310,7 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("stale branch prompt");
     expect(host.chatQueue).toEqual([
       expect.objectContaining({
-        sendError: "The thread switched branches — review and resend.",
+        sendError: "The session switched branches — review and resend.",
         sendState: "failed",
       }),
     ]);
@@ -7626,7 +7746,14 @@ describe("handleSendChat", () => {
       chatRunId: "run-1",
       chatMessage: "/steer tighten the plan",
       sessionKey: "agent:main:main",
-      sessionsResult: createSessionsResult([row("agent:main:main", { status: "running" })]),
+      sessionsResult: createSessionsResult([
+        row("agent:main:main", {
+          activeLeafEntryId: "leaf-active",
+          activeRunIds: ["run-1"],
+          hasActiveRun: true,
+          status: "running",
+        }),
+      ]),
     });
 
     await handleSendChat(host);
@@ -7644,6 +7771,7 @@ describe("handleSendChat", () => {
         "chat.send": { status: "started", runId: "steer-run" },
       },
       chatRunId: "run-1",
+      chatDisplayedLeafEntryId: "leaf-active",
       chatStream: "Working...",
       chatQueue: [original],
       sessionKey: "agent:main:main",
@@ -7665,6 +7793,8 @@ describe("handleSendChat", () => {
       message: "tighten the plan",
       deliver: false,
       queueMode: "steer",
+      expectedRunId: "run-1",
+      expectedLeafEntryId: "leaf-active",
       idempotencyKey,
       attachments: undefined,
     });
@@ -7686,7 +7816,12 @@ describe("handleSendChat", () => {
       chatQueue: [original],
       sessionKey: "agent:main:main",
       sessionsResult: createSessionsResult([
-        row("agent:main:main", { hasActiveRun: true, status: "running" }),
+        row("agent:main:main", {
+          hasActiveRun: true,
+          activeRunIds: ["active-run"],
+          activeLeafEntryId: "leaf-active",
+          status: "running",
+        }),
       ]),
     });
     expect(admitQueuedMessageForSession(host, host.sessionKey, original)).toBe(true);
@@ -7703,6 +7838,7 @@ describe("handleSendChat", () => {
       message: "tighten the plan",
       deliver: false,
       queueMode: "steer",
+      expectedRunId: "active-run",
     });
     expect(host.chatRunId).toBeNull();
     expect(host.chatQueue).toEqual([
@@ -7732,6 +7868,7 @@ describe("handleSendChat", () => {
       },
       chatQueue: [original],
       chatRunId: "active-run",
+      chatDisplayedLeafEntryId: "leaf-active",
       sessionKey: original.sessionKey,
     });
     expect(admitQueuedMessageForSession(host, host.sessionKey, original)).toBe(true);
@@ -7867,6 +8004,7 @@ describe("handleSendChat", () => {
     const host = makeChatHost({
       requestHandlers: {},
       chatRunId: "run-1",
+      chatDisplayedLeafEntryId: "leaf-active",
       chatQueue: [original],
       sessionKey: "agent:main:main",
     });
@@ -7896,6 +8034,7 @@ describe("handleSendChat", () => {
         "chat.send": { status: "started", runId: "steer-run" },
       },
       chatRunId: "active-run",
+      chatDisplayedLeafEntryId: "leaf-active",
       chatQueue: [original],
       sessionKey: "agent:main:main",
     });
@@ -7944,6 +8083,7 @@ describe("handleSendChat", () => {
           }),
       },
       chatRunId: "active-run",
+      chatDisplayedLeafEntryId: "leaf-active",
       chatQueue: [original],
       sessionKey: "agent:main:main",
     });
@@ -7991,6 +8131,7 @@ describe("handleSendChat", () => {
           }),
       },
       chatRunId: "active-run",
+      chatDisplayedLeafEntryId: "leaf-active",
       chatQueue: [original],
       sessionKey: original.sessionKey,
     });
@@ -8255,6 +8396,7 @@ describe("handleSendChat", () => {
         },
       },
       chatRunId: "active-run",
+      chatDisplayedLeafEntryId: "leaf-active",
       chatQueue: [original],
       sessionKey: original.sessionKey,
     });
@@ -8304,6 +8446,7 @@ describe("handleSendChat", () => {
         },
       },
       chatRunId: "active-run",
+      chatDisplayedLeafEntryId: "leaf-active",
       chatQueue: [original],
       sessionKey: original.sessionKey,
     });
@@ -8379,6 +8522,7 @@ describe("handleSendChat", () => {
         },
       },
       chatRunId: "active-run",
+      chatDisplayedLeafEntryId: "leaf-active",
       chatQueue: [original],
       sessionKey: original.sessionKey,
     });
@@ -8423,6 +8567,7 @@ describe("handleSendChat", () => {
           }),
       },
       chatRunId: "active-run",
+      chatDisplayedLeafEntryId: "leaf-active",
       chatQueue: [original],
       sessionKey: "agent:main:original",
     });
@@ -8468,6 +8613,7 @@ describe("handleSendChat", () => {
         },
         chatError: null,
         chatRunId: "active-run",
+        chatDisplayedLeafEntryId: "leaf-active",
         chatQueue: [original],
         sessionKey: original.sessionKey,
       });
@@ -8522,12 +8668,14 @@ describe("handleSendChat", () => {
     const host = makeChatHost({
       client,
       chatRunId: "active-run",
+      chatDisplayedLeafEntryId: "leaf-active",
       chatQueue: [original],
       sessionKey: "agent:main:main",
     });
     const peer = makeChatHost({
       client,
       chatRunId: "active-run",
+      chatDisplayedLeafEntryId: "leaf-active",
       chatQueue: [{ ...original }],
       sessionKey: host.sessionKey,
     });
@@ -8630,6 +8778,7 @@ describe("handleSendChat", () => {
         },
       },
       chatRunId: "active-run",
+      chatDisplayedLeafEntryId: "leaf-active",
       chatQueue: [original],
       sessionKey: original.sessionKey,
     });
@@ -8656,6 +8805,7 @@ describe("handleSendChat", () => {
     );
 
     host.chatRunId = "active-run";
+    host.chatDisplayedLeafEntryId = "leaf-advanced-during-tool-work";
     await retryQueuedChatMessage(host, original.id);
 
     expect(payloads).toHaveLength(2);
@@ -8664,6 +8814,108 @@ describe("handleSendChat", () => {
       original.sendRunId,
     ]);
     expect(payloads.map((payload) => payload.queueMode)).toEqual(["steer", "steer"]);
+    expect(payloads.map((payload) => payload.expectedRunId)).toEqual(["active-run", "active-run"]);
+    expect(payloads.map((payload) => payload.expectedLeafEntryId)).toEqual([
+      "leaf-active",
+      "leaf-advanced-during-tool-work",
+    ]);
+  });
+
+  it("fails a restored steer that predates durable target identity", async () => {
+    const original = {
+      id: "legacy-targetless-steer",
+      text: "do not redirect this",
+      createdAt: 1,
+      kind: "steered" as const,
+      sendRunId: "stable-request",
+      sendState: "failed" as const,
+      sessionKey: "agent:main:main",
+    };
+    const host = makeChatHost({
+      requestHandlers: { "chat.send": { status: "started", runId: "successor" } },
+      chatRunId: "successor",
+      chatDisplayedLeafEntryId: "successor-leaf",
+      chatQueue: [original],
+      sessionKey: original.sessionKey,
+    });
+    expect(admitQueuedMessageForSession(host, host.sessionKey, original)).toBe(true);
+
+    await retryQueuedChatMessage(host, original.id);
+
+    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(host.chatQueue[0]).toMatchObject({
+      kind: "steered",
+      sendState: "failed",
+      sendError: "This restored steer has no original run target and cannot be retried safely.",
+    });
+  });
+
+  it("retries a restored steer against its run with the refreshed current leaf", async () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    const original = {
+      id: "restored-run-bound-steer",
+      text: "continue the same turn",
+      createdAt: 1,
+      kind: "steered" as const,
+      sendRunId: "stable-steer-request",
+      sendState: "failed" as const,
+      steerTargetRunId: "active-run",
+      sessionKey: "agent:main:main",
+    };
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "restored run-bound steer payload");
+          payloads.push(payload);
+          return { status: "started", runId: payload.idempotencyKey };
+        },
+      },
+      chatRunId: null,
+      chatQueue: [original],
+      sessionKey: original.sessionKey,
+      sessionsResult: createSessionsResult([
+        row(original.sessionKey, {
+          activeLeafEntryId: "leaf-advanced-during-tool-work",
+          activeRunIds: ["active-run"],
+          hasActiveRun: true,
+          status: "running",
+        }),
+      ]),
+    });
+    expect(admitQueuedMessageForSession(host, host.sessionKey, original)).toBe(true);
+
+    await retryQueuedChatMessage(host, original.id);
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      expectedLeafEntryId: "leaf-advanced-during-tool-work",
+      expectedRunId: "active-run",
+      idempotencyKey: original.sendRunId,
+      queueMode: "steer",
+    });
+  });
+
+  it("does not guess among multiple server-reported active runs", async () => {
+    const original = { id: "ambiguous-server-steer", text: "pick neither", createdAt: 1 };
+    const host = makeChatHost({
+      requestHandlers: {},
+      chatQueue: [original],
+      sessionKey: "agent:main:main",
+      sessionsResult: createSessionsResult([
+        row("agent:main:main", {
+          hasActiveRun: true,
+          activeRunIds: ["run-a", "run-b"],
+          activeLeafEntryId: "leaf-active",
+          status: "running",
+        }),
+      ]),
+    });
+    expect(admitQueuedMessageForSession(host, host.sessionKey, original)).toBe(true);
+
+    await steerQueuedChatMessage(host, original.id);
+
+    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(host.chatQueue[0]?.sendState).toBe("failed");
   });
 
   it("removes queued steer indicators when chat.send returns terminal ok", async () => {
@@ -8673,6 +8925,7 @@ describe("handleSendChat", () => {
         "chat.send": { status: "ok", runId: "steer-ok" },
       },
       chatRunId: "run-1",
+      chatDisplayedLeafEntryId: "leaf-active",
       chatStream: "Working...",
       chatQueue: [original],
       sessionKey: "agent:main:main",
@@ -8697,6 +8950,7 @@ describe("handleSendChat", () => {
         "chat.send": { status: "error", runId: "steer-error" },
       },
       chatRunId: "run-1",
+      chatDisplayedLeafEntryId: "leaf-active",
       chatStream: "Working...",
       chatQueue: [original],
       sessionKey: "agent:main:main",
@@ -8909,7 +9163,7 @@ describe("handleAbortChat", () => {
         agentId: "work",
       },
     },
-  ])("$name", async ({ scope, expected }) => {
+  ] as const)("$name", async ({ scope, expected }) => {
     const request = vi.fn(async () => ({ abortedRunId: null, status: "aborted" }));
     const sessionKey = "agent:work:main";
     const host = makeChatHost({

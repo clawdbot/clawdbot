@@ -102,7 +102,29 @@ data class ChatPendingToolCall(
   val args: kotlinx.serialization.json.JsonObject? = null,
   val startedAtMs: Long,
   val isError: Boolean? = null,
+  val liveDiff: ChatDiffStat? = null,
 )
+
+data class ChatDiffStat(
+  val added: Int,
+  val removed: Int,
+  val files: Int? = null,
+)
+
+data class ChatSubagentActivity(
+  val id: String,
+  val status: String,
+  val snippet: String?,
+  val diffStat: ChatDiffStat?,
+  val terminalSummary: String?,
+  val error: String?,
+  val startedAtMs: Long,
+  val endedAtMs: Long?,
+  val childSessionKey: String?,
+) {
+  val isWorking: Boolean
+    get() = status == "queued" || status == "running"
+}
 
 enum class ChatPlanStepStatus {
   Pending,

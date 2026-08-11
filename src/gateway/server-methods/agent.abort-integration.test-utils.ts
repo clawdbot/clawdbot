@@ -4,15 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
+import { prepareAgentRunDispatch } from "../agent-turn/agent-run-admission-phase.js";
+import { createAgentTurnIo } from "../agent-turn/io.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
-import { setGatewayDedupeEntry } from "./agent-job.js";
-import { prepareAgentRunDispatch } from "./agent-run-admission-phase.js";
 import {
   getAgentTestMocks,
   makeContext,
   type AgentHandlerArgs,
   waitForAssertion,
-  waitForAgentCommandCall,
   requireValue,
   expectRecordFields,
   mockCallArg,
@@ -1655,7 +1655,7 @@ describe("gateway agent handler chat.abort integration", () => {
         agentDedupeKeys: [`agent:${runId}`],
         context,
         client: null,
-        respond: vi.fn(),
+        io: createAgentTurnIo(vi.fn()),
         abortForLifecycleRotation: () => false,
         acquireGatewayWorkAdmission: async () => {
           markAcquireStarted();
@@ -2310,192 +2310,6 @@ describe("gateway agent handler chat.abort integration", () => {
     ).toBe(true);
   });
 
-  it("replays restart recovery identity admission failures for the same idempotency key", async () => {
-    const sessionKey = "agent:main:main";
-    const sessionId = "recovery-session";
-    const runId = "recovery-identity-token-unavailable";
-    const storePath = "/tmp/sessions.json";
-    const store: Record<string, SessionEntry> = {
-      [sessionKey]: {
-        sessionId,
-        updatedAt: Date.now() - 10_000,
-        status: "running",
-        abortedLastRun: true,
-        mainRestartRecovery: {
-          cycleId: "cycle-1",
-          revision: 1,
-          chargedAttempts: 1,
-          reservation: {
-            runId,
-            attempt: 1,
-            lifecycleGeneration: "test-generation",
-          },
-        },
-      },
-    };
-    mocks.loadConfigReturn = {
-      logging: {
-        audit: {
-          enabled: true,
-          executionIdentity: true,
-        },
-      },
-    };
-    mocks.loadSessionEntry.mockImplementation(() => ({
-      cfg: mocks.loadConfigReturn,
-      storePath,
-      entry: structuredClone(store[sessionKey]),
-      canonicalKey: sessionKey,
-    }));
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
-
-    const context = makeContext();
-    const request = {
-      message: "resume after restart",
-      agentId: "main",
-      sessionKey,
-      sessionId,
-      expectedExistingSessionId: sessionId,
-      idempotencyKey: runId,
-      internalExecutionIdentityRetry: false,
-      inputProvenance: {
-        kind: "internal_system" as const,
-        sourceSessionKey: sessionKey,
-        sourceTool: "main_session_restart_recovery",
-      },
-    };
-    const firstRespond = vi.fn();
-    await invokeAgent(request, {
-      client: backendGatewayClient(),
-      context,
-      reqId: runId,
-      respond: firstRespond,
-    });
-
-    const summary = "Error: restart recovery execution identity token is unavailable";
-    expect(firstRespond).toHaveBeenCalledWith(
-      false,
-      { runId, status: "error", summary },
-      expect.objectContaining({ code: "UNAVAILABLE", message: summary }),
-      { runId, error: summary },
-    );
-    expect(context.dedupe.get(`agent:${runId}`)).toMatchObject({
-      ok: false,
-      payload: { runId, status: "error", summary },
-      error: { code: "UNAVAILABLE", message: summary },
-    });
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
-
-    const secondRespond = vi.fn();
-    await invokeAgent(request, {
-      client: backendGatewayClient(),
-      context,
-      reqId: `${runId}-retry`,
-      respond: secondRespond,
-    });
-
-    expect(secondRespond).toHaveBeenCalledWith(
-      false,
-      { runId, status: "error", summary },
-      expect.objectContaining({ code: "UNAVAILABLE", message: summary }),
-      { cached: true },
-    );
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
-  });
-
-  it("registers attribution only after restart recovery admission persists", async () => {
-    const sessionKey = "agent:main:main";
-    const sessionId = "recovery-session";
-    const runId = "recovery-admission-write-retry";
-    const storePath = "/tmp/sessions.json";
-    const store: Record<string, SessionEntry> = {
-      [sessionKey]: {
-        sessionId,
-        updatedAt: Date.now() - 10_000,
-        status: "running",
-        abortedLastRun: true,
-        mainRestartRecovery: {
-          cycleId: "cycle-1",
-          revision: 1,
-          chargedAttempts: 1,
-          reservation: {
-            runId,
-            attempt: 1,
-            lifecycleGeneration: "test-generation",
-          },
-        },
-      },
-    };
-    mocks.loadSessionEntry.mockImplementation(() => ({
-      cfg: {},
-      storePath,
-      entry: structuredClone(store[sessionKey]),
-      canonicalKey: sessionKey,
-    }));
-    let failRecoveryAdmissionWrite = true;
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      const candidate = structuredClone(store);
-      const result = await updater(candidate);
-      const admittedRecovery =
-        store[sessionKey]?.mainRestartRecovery?.reservation !== undefined &&
-        candidate[sessionKey]?.mainRestartRecovery?.reservation === undefined;
-      if (failRecoveryAdmissionWrite && admittedRecovery) {
-        failRecoveryAdmissionWrite = false;
-        throw new Error("recovery admission write failed");
-      }
-      for (const key of Object.keys(store)) {
-        delete store[key];
-      }
-      Object.assign(store, candidate);
-      return result;
-    });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
-    mocks.agentCommand.mockClear();
-    mocks.registerAgentRunContext.mockClear();
-    const context = makeContext();
-    const request = {
-      message: "resume after restart",
-      agentId: "main",
-      sessionKey,
-      sessionId,
-      expectedExistingSessionId: sessionId,
-      idempotencyKey: runId,
-      inputProvenance: {
-        kind: "internal_system" as const,
-        sourceSessionKey: sessionKey,
-        sourceTool: "main_session_restart_recovery",
-      },
-    };
-    const firstRespond = vi.fn();
-
-    await invokeAgent(request, {
-      client: backendGatewayClient(),
-      context,
-      reqId: runId,
-      respond: firstRespond,
-    });
-
-    expectRespondError(firstRespond, {
-      code: "UNAVAILABLE",
-      message: "Error: recovery admission write failed",
-    });
-    expect(mocks.registerAgentRunContext).not.toHaveBeenCalled();
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
-
-    await invokeAgent(request, {
-      client: backendGatewayClient(),
-      context,
-      reqId: `${runId}-retry`,
-    });
-
-    await waitForAgentCommandCall();
-    expect(mocks.registerAgentRunContext).toHaveBeenCalledTimes(1);
-    expect(mockCallArg(mocks.registerAgentRunContext, 0, 0)).toBe(runId);
-  });
-
   it("releases a foreground recovery owner if pre-dispatch reactivation fails", async () => {
     const sessionKey = "agent:main:main";
     const sessionId = "interrupted-session";
@@ -2646,6 +2460,78 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
     expect(context.addChatRun).not.toHaveBeenCalled();
     expect(mocks.registerAgentRunContext).not.toHaveBeenCalled();
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(true, { runId, status: "in_flight" }, undefined, {
+      cached: true,
+      runId,
+    });
+  });
+
+  it("does not dispatch a duplicate sessionless run while its reservation is active", async () => {
+    prime();
+    let finishRun!: (result: {
+      payloads: Array<{ text: string }>;
+      meta: { durationMs: number };
+    }) => void;
+    mocks.agentCommand.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishRun = resolve;
+      }),
+    );
+
+    const context = makeContext();
+    const runId = "idem-sessionless-active-collision";
+    const request = {
+      message: "hi",
+      agentId: "main",
+      sessionId: "sessionless-existing-session",
+      idempotencyKey: runId,
+    };
+    await invokeAgent(request, { context, reqId: runId });
+    expect(context.chatAbortControllers.has(runId)).toBe(false);
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(1);
+
+    const duplicateRespond = vi.fn();
+    await invokeAgent(request, {
+      context,
+      reqId: `${runId}-duplicate`,
+      respond: duplicateRespond,
+    });
+
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(1);
+    expect(duplicateRespond).toHaveBeenCalledWith(true, { runId, status: "in_flight" }, undefined, {
+      cached: true,
+      runId,
+    });
+
+    finishRun({ payloads: [{ text: "ok" }], meta: { durationMs: 1 } });
+  });
+
+  it("keeps a sessionless run from replacing an active projected run", async () => {
+    prime();
+    const context = makeContext();
+    const runId = "idem-sessionless-projected-collision";
+    const preExisting = {
+      controller: new AbortController(),
+      sessionId: "chat-send-session",
+      sessionKey: "agent:main:main",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+    };
+    context.chatAbortControllers.set(runId, preExisting);
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionId: "sessionless-existing-session",
+        idempotencyKey: runId,
+      },
+      { context, reqId: runId, respond },
+    );
+
+    expect(context.chatAbortControllers.get(runId)).toBe(preExisting);
     expect(mocks.agentCommand).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(true, { runId, status: "in_flight" }, undefined, {
       cached: true,

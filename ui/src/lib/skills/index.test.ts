@@ -2,8 +2,9 @@
 // Control UI tests cover skills behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { createRuntimeConfigCapability } from "../config/index.ts";
+import { createRuntimeConfigCapability } from "../config/runtime-config-capability.ts";
 import { searchClawHub } from "./clawhub-search.ts";
 import {
   clawhubVerdictKey,
@@ -23,14 +24,6 @@ import {
 type SkillsState = Parameters<typeof loadSkills>[0];
 
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<TestRequest>> } {
   const request = vi.fn<TestRequest>();
@@ -1385,7 +1378,7 @@ describe("reconcileSkillsAgentId", () => {
     reconcileSkillsAgentId(state, {
       defaultId: "main",
       mainKey: "main",
-      scope: "project",
+      scope: "per-sender",
       agents: [{ id: "main" }],
     });
 

@@ -32,6 +32,10 @@ vi.mock("../../utils/message-channel.js", () => ({
 }));
 
 vi.mock("./channel-resolution.js", () => ({
+  normalizeDeliverableOutboundChannel: (value?: string | null) => {
+    const normalized = typeof value === "string" ? value.trim().toLowerCase() : undefined;
+    return normalized && deliverableChannelIds.includes(normalized) ? normalized : undefined;
+  },
   resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
 }));
 
@@ -290,27 +294,46 @@ describe("resolveMessageChannelSelection", () => {
     },
   ])("resolves message channel selection for %j", async ({ setup, params, expected, verify }) => {
     const setupResult = setup?.();
-    await expect(expectResolvedSelection(params)).resolves.toEqual(expected);
+    await expect(expectResolvedSelection(params)).resolves.toMatchObject(expected);
     verify?.(setupResult as never);
+  });
+
+  it("returns the exact bootstrapped plugin used to prove availability", async () => {
+    const plugin = { id: "alpha" };
+    mocks.resolveOutboundChannelPlugin.mockReturnValue(plugin);
+
+    const selection = await expectResolvedSelection({ cfg: {} as never, channel: "alpha" });
+
+    expect(selection.plugin).toBe(plugin);
+  });
+
+  it("returns the exact configured plugin used for single-channel selection", async () => {
+    const plugin = makePlugin({ id: "delta", isConfigured: async () => true });
+    mocks.listChannelPlugins.mockReturnValue([plugin]);
+
+    const selection = await expectResolvedSelection({ cfg: {} as never });
+
+    expect(selection.plugin).toBe(plugin);
   });
 
   it("allows bootstrap while checking explicit and fallback channels", async () => {
     const cfg = {} as never;
+    const fallbackPlugin = { id: "beta" };
     mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) =>
-      channel === "beta" ? { id: "beta" } : undefined,
+      channel === "beta" ? fallbackPlugin : undefined,
     );
 
-    await expect(
-      expectResolvedSelection({
-        cfg,
-        channel: "alpha",
-        fallbackChannel: "beta",
-      }),
-    ).resolves.toEqual({
+    const selection = await expectResolvedSelection({
+      cfg,
+      channel: "alpha",
+      fallbackChannel: "beta",
+    });
+    expect(selection).toMatchObject({
       channel: "beta",
       configured: [],
       source: "tool-context-fallback",
     });
+    expect(selection.plugin).toBe(fallbackPlugin);
 
     expect(mocks.resolveOutboundChannelPlugin).toHaveBeenNthCalledWith(1, {
       channel: "alpha",

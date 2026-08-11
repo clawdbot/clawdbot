@@ -23,7 +23,7 @@ struct NotificationManager {
                 self.logger.warning("notification permission denied (request)")
                 return false
             }
-        } else if status.authorizationStatus != .authorized {
+        } else if !PermissionManager.isNotificationAuthorized(status: status.authorizationStatus) {
             self.logger.warning("notification permission denied status=\(status.authorizationStatus.rawValue)")
             return false
         }

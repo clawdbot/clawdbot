@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
 import { updateMcpAppModelContext } from "../../agents/mcp-app-model-context.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
-import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions } from "../types.js";
@@ -550,41 +549,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     expect(runtime.pendingMcpAppModelContext).toBeUndefined();
   });
 
-  it("propagates commitment-only bootstrap scope to CLI runs", async () => {
-    state.isCliProviderMock.mockReturnValue(true);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("claude-cli", "sonnet-4.6"),
-      provider: "claude-cli",
-      model: "sonnet-4.6",
-      attempts: [],
-    }));
-    state.runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "final" }],
-      meta: {},
-    });
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "claude-cli";
-    followupRun.run.model = "sonnet-4.6";
-    const params = createMinimalRunAgentTurnParams({
-      followupRun,
-      opts: {
-        isHeartbeat: true,
-        bootstrapContextMode: "lightweight",
-        [HEARTBEAT_RUN_SCOPE]: "commitment-only",
-      },
-    });
-    params.isHeartbeat = true;
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await executeAgentTurn(params);
-
-    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
-      trigger: "heartbeat",
-      bootstrapContextMode: "lightweight",
-      bootstrapContextRunKind: "commitment-only",
-    });
-  });
-
   it("registers run ownership before asynchronous image preflight", async () => {
     const agentRunRegistry = await import("../../infra/agent-run-registry.js");
     const registerAgentRunContext = vi.mocked(agentRunRegistry.registerAgentRunContext);
@@ -601,29 +565,19 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     });
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const runPromise = executeAgentTurn(
-      createMinimalRunAgentTurnParams({ opts: { runId: "queued-turn-attribution" } }),
-    );
+    const runPromise = executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(registerAgentRunContext).toHaveBeenCalledWith(
-      "queued-turn-attribution",
+      expect.any(String),
       expect.objectContaining({
         sessionKey: "main",
         sessionId: "session",
-        attribution: expect.objectContaining({
-          runId: "queued-turn-attribution",
-          sessionKey: "main",
-          sessionId: "session",
-        }),
       }),
     );
-    const attribution = registerAgentRunContext.mock.calls[0]?.[1]?.attribution;
-    expect(Object.isFrozen(attribution)).toBe(true);
     expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
 
     resolveImages?.();
     await runPromise;
-    expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.attribution).toBe(attribution);
   });
 
   it("clears run ownership when image preflight fails", async () => {

@@ -16,6 +16,7 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import { resolveExistingAgentSessionStoreTargetsReadOnlyResult } from "../config/sessions/targets-read-availability.js";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { readImageProbeFromHeader } from "../media/image-ops.js";
 import { setMediaStoreNetworkDepsForTest } from "../media/store.test-support.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -909,6 +910,45 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     });
     expect(wrong.result.statusCode).toBe(401);
     expect(authorizeGatewayHttpRequestOrReplyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("serves a bounded thumbnail through the full-image artifact ticket", async () => {
+    const source = createSolidPngBuffer(640, 320, { r: 24, g: 64, b: 128 });
+    const { attachmentId, sessionKey } = await createFixture(stateDir, { body: source });
+    const canonicalPath = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+    const transcriptMessages = [
+      {
+        role: "assistant",
+        content: [{ type: "image", url: canonicalPath, openUrl: canonicalPath }],
+        __openclaw: { id: "msg-1" },
+      },
+    ];
+    loadSessionEntryMock.mockReturnValue({
+      storePath: path.join(stateDir, "sessions.sqlite"),
+      entry: { sessionId: "sess-1", sessionFile: "session.jsonl" },
+    });
+    resolveSessionHistoryTranscriptPathMock.mockResolvedValue("session.jsonl");
+    readSessionMessagesMock.mockResolvedValue(transcriptMessages);
+    const download = await resolveManagedOutgoingImageArtifactDownload({
+      sessionKey,
+      artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
+      stateDir,
+    });
+    const thumbnailUrl = download?.url.replace(/\/full(?=\?)/u, "/thumbnail") ?? "";
+
+    vi.clearAllMocks();
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: thumbnailUrl,
+      denyAuth: true,
+      transcriptMessages,
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.headers["content-type"]).toBe("image/png");
+    expect(result.headers["content-disposition"]).toContain("cat-thumbnail.png");
+    expect(readImageProbeFromHeader(result.body)).toMatchObject({ width: 300, height: 150 });
+    expect(authorizeGatewayHttpRequestOrReplyMock).not.toHaveBeenCalled();
   });
 
   it("keeps serving and deleting an original after the configured media root changes", async () => {

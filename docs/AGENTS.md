@@ -15,6 +15,7 @@ This directory owns docs authoring, Mintlify link rules, and docs i18n policy.
 
 - For docs, UI copy, and picker lists, order services/providers alphabetically unless the section is explicitly describing runtime order or auto-detection order.
 - Keep bundled plugin naming consistent with the repo-wide plugin terminology rules in the root `AGENTS.md`.
+- JSON5/JSON config fences that look like whole `openclaw.json` documents are schema-validated in CI with `pnpm docs:check-config-examples`; deliberately partial or legacy snippets opt out with `validate=false` in the fence info string.
 - Generated docs, never hand-edit: `docs/plugins/reference/**`, `docs/plugins/reference.md`, and `docs/plugins/plugin-inventory.md` come from `pnpm plugins:inventory:gen`; `docs/maturity/**` from `pnpm maturity:render`.
 - The public and packaged docs map is generated from `pnpm docs:list --headings` during publishing and packaging. Keep only the small source stub at `docs/docs_map.md`; never commit the expanded heading mirror.
 

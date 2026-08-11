@@ -57,7 +57,6 @@ export const SessionRowSchema = Type.Object(
     archivedBy: Type.Optional(SessionCreatedActorSchema),
     pinned: Type.Optional(Type.Boolean()),
     pinnedAt: Type.Optional(Type.Number()),
-    icon: Type.Optional(Type.String()),
     unread: Type.Optional(Type.Boolean()),
     lastReadAt: Type.Optional(Type.Number()),
     lastActivityAt: Type.Optional(Type.Number()),
@@ -135,3 +134,4 @@ export const SessionRowSchema = Type.Object(
 export type SessionCreatedActor = Static<typeof SessionCreatedActorSchema>;
 export type SessionToolOverrides = Static<typeof SessionToolOverridesSchema>;
 export type SessionRow = Static<typeof SessionRowSchema>;
+export type SessionRunStatus = NonNullable<SessionRow["status"]>;

@@ -9,7 +9,7 @@ import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.j
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope-config.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
-import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
+import { expandToolGroups, normalizeToolPolicyName } from "./tool-policy.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
 const LOCAL_MODEL_LEAN_DENY_TOOL_NAMES = new Set([
@@ -34,8 +34,8 @@ function resolvePreservedLocalModelLeanToolNames(names?: Iterable<string>) {
     return [];
   }
   return compileGlobPatterns({
-    raw: expandToolGroups([...names]).filter((name) => normalizeToolName(name) !== "*"),
-    normalize: normalizeToolName,
+    raw: expandToolGroups([...names]).filter((name) => normalizeToolPolicyName(name) !== "*"),
+    normalize: normalizeToolPolicyName,
   });
 }
 
@@ -101,7 +101,7 @@ export function filterLocalModelLeanTools(params: {
   }
   const preservedToolNames = resolvePreservedLocalModelLeanToolNames(params.preserveToolNames);
   return params.tools.filter((tool) => {
-    const normalizedName = normalizeToolName(tool.name);
+    const normalizedName = normalizeToolPolicyName(tool.name);
     return (
       matchesAnyGlobPattern(normalizedName, preservedToolNames) ||
       !LOCAL_MODEL_LEAN_DENY_TOOL_NAMES.has(normalizedName)

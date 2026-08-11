@@ -37,6 +37,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalog: mocks.loadModelCatalog,
 }));
 
@@ -1009,30 +1010,6 @@ describe("CORE_HEALTH_CHECKS", () => {
         checkId: "core/doctor/provider-catalog-projection",
         severity: "error",
         target: "mockplugin",
-      }),
-    );
-  });
-
-  it("registers stale session locks as a legacy-owned structured check", async () => {
-    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/session-locks");
-
-    if (typeof check.repair !== "function") {
-      throw new Error("expected session lock check repair");
-    }
-    await expect(
-      check.repair(
-        {
-          mode: "fix",
-          runtime,
-          cfg: {},
-          cwd: "/tmp/openclaw-test-workspace",
-        },
-        [],
-      ),
-    ).resolves.toEqual(
-      expect.objectContaining({
-        status: "skipped",
-        reason: "legacy doctor session lock contribution owns cleanup",
       }),
     );
   });

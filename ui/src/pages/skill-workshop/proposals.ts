@@ -1,10 +1,10 @@
 // Control UI controller manages skill workshop gateway state.
-import { formatErrorMessage } from "@openclaw/normalization-core";
+import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationGateway } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
-import { redactToolDetail } from "../../lib/browser-redact.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import {
   normalizeAgentId,
@@ -143,11 +143,7 @@ function resetSkillWorkshopAgentScope(state: SkillWorkshopState, agentId: string
 }
 
 function parseDateMs(value: string | undefined): number {
-  if (!value) {
-    return Date.now();
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : Date.now();
+  return parseDateStringTimestampMs(value) ?? Date.now();
 }
 
 function startOfLocalDay(ms: number): number {
@@ -406,7 +402,7 @@ export async function loadSkillWorkshopProposals(
       await loadSkillWorkshopProposalDetail(state, context, state.skillWorkshopSelectedKey);
     }
   } catch (err) {
-    state.skillWorkshopError = formatErrorMessage(err, { redact: redactToolDetail });
+    state.skillWorkshopError = formatUiError(err);
   } finally {
     state.skillWorkshopLoading = false;
     if (skillWorkshopAgentParams(context).agentId !== requestAgentId) {
@@ -456,7 +452,7 @@ async function loadSkillWorkshopProposalDetail(
     return true;
   } catch (err) {
     if (state.skillWorkshopAgentId === requestAgentId) {
-      state.skillWorkshopError = formatErrorMessage(err, { redact: redactToolDetail });
+      state.skillWorkshopError = formatUiError(err);
     }
     return false;
   } finally {
@@ -524,7 +520,7 @@ export async function runSkillWorkshopLifecycleAction(
       t(action === "apply" ? "skillWorkshop.notices.applied" : "skillWorkshop.notices.rejected"),
     );
   } catch (err) {
-    state.skillWorkshopError = formatErrorMessage(err, { redact: redactToolDetail });
+    state.skillWorkshopError = formatUiError(err);
   } finally {
     if (
       state.skillWorkshopActionBusy?.key === proposalId &&
@@ -599,7 +595,7 @@ export async function runSkillWorkshopEvaluation(
     return true;
   } catch (err) {
     if (state.skillWorkshopAgentId === requestAgentId) {
-      state.skillWorkshopError = formatErrorMessage(err, { redact: redactToolDetail });
+      state.skillWorkshopError = formatUiError(err);
     }
     return false;
   } finally {
@@ -668,7 +664,7 @@ export async function requestSkillWorkshopRevision(
     showActionNotice(state, proposal, t("skillWorkshop.notices.revisionRequested"));
     return true;
   } catch (err) {
-    state.skillWorkshopError = formatErrorMessage(err, { redact: redactToolDetail });
+    state.skillWorkshopError = formatUiError(err);
     return false;
   } finally {
     if (

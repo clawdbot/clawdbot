@@ -2,9 +2,9 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
-  listSessionEntries,
+  listSessionEntriesCore,
   resolveTranscriptSessionKeyBySessionId,
   resolveSessionTranscriptRuntimeTarget,
   type SessionTranscriptRuntimeTarget,
@@ -25,6 +25,10 @@ export type AgentRunSessionTarget = {
   sessionKey?: string;
   storePath?: string;
   threadId?: string | number;
+  /** Internal admission fence paired with sessionId for run-owned transcript writes. */
+  expectedLifecycleRevision?: string;
+  /** Internal durable writer claim installed after session-lane admission. */
+  expectedWriterRunId?: string;
 };
 
 /** Canonical SQLite target resolved from the storage-neutral run identity. */
@@ -100,7 +104,7 @@ export async function resolveAgentRunSessionTarget(params: {
     (params.missingSessionKey === "create" ? plainCompatibilitySessionKey : undefined);
   const markerEntries =
     legacyMarker && !hasCompleteTypedTarget
-      ? listSessionEntries({
+      ? listSessionEntriesCore({
           agentId: legacyMarker.agentId,
           storePath: legacyMarker.storePath,
         })
@@ -129,7 +133,7 @@ export async function resolveAgentRunSessionTarget(params: {
   const lookupStorePath =
     targetStorePath ??
     legacyMarker?.storePath ??
-    resolveStorePath(config.session?.store, { agentId: lookupAgentId });
+    resolveSessionStorePathCore(config.session?.store, { agentId: lookupAgentId });
   const storedSessionKey =
     params.missingSessionKey === "resolve-existing" &&
     !targetSessionKey &&
@@ -201,7 +205,7 @@ export async function resolveAgentRunSessionTarget(params: {
     const storePath =
       targetStorePath ??
       legacyMarker?.storePath ??
-      resolveStorePath(config.session?.store, { agentId: effectiveAgentId });
+      resolveSessionStorePathCore(config.session?.store, { agentId: effectiveAgentId });
     return await resolveSessionTranscriptRuntimeTarget({
       ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
       sessionId,
@@ -220,7 +224,9 @@ export async function resolveAgentRunSessionTarget(params: {
     });
   }
 
-  const storePath = resolveStorePath(config.session?.store, { agentId: effectiveAgentId });
+  const storePath = resolveSessionStorePathCore(config.session?.store, {
+    agentId: effectiveAgentId,
+  });
   return await resolveSessionTranscriptRuntimeTarget({
     ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
     sessionId,

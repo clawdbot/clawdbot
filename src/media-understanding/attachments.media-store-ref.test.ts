@@ -166,7 +166,7 @@ describe("inbound media-store references in the attachment url field", () => {
     });
   });
 
-  it("keeps HTTP documents blocked when remote URLs are disabled", async () => {
+  it("reports blocked HTTP documents when remote URLs are disabled", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     const ctx: MsgContext = {
       Body: "<media:document>",
@@ -185,9 +185,38 @@ describe("inbound media-store references in the attachment url field", () => {
         cfg: createUrlDisabledFileCfg(),
       });
 
-      expect(result.appliedFile).toBe(false);
-      expect(ctx.Body).toBe("<media:document>");
+      expect(result.appliedFile).toBe(true);
+      expect(ctx.Body).toContain("[Attachment skipped: URL file sources are disabled]");
       expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("never renders signed URL query credentials as attachment names", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const ctx: MsgContext = {
+      Body: "<media:document>",
+      media: toInboundMediaFacts([
+        {
+          url: "https://cdn.example.test/docs/report.docx?X-Amz-Signature=SECRETSIG&X-Amz-Credential=AKIA123",
+          contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          kind: "document",
+        },
+      ]),
+    };
+
+    try {
+      const result = await applyMediaUnderstanding({
+        ctx,
+        cfg: createUrlDisabledFileCfg(),
+      });
+
+      expect(result.appliedFile).toBe(true);
+      expect(ctx.Body).toContain("[Attachment skipped: URL file sources are disabled]");
+      expect(ctx.Body).toContain('name="report.docx"');
+      expect(ctx.Body).not.toContain("SECRETSIG");
+      expect(ctx.Body).not.toContain("AKIA123");
     } finally {
       fetchSpy.mockRestore();
     }

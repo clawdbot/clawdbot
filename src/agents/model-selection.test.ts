@@ -6,7 +6,7 @@ import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.j
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import {
   getModelRefStatus as getNarrowModelRefStatus,
-  resolveAllowedModelRef as resolveNarrowAllowedModelRef,
+  resolveAllowedModelRefCore as resolveNarrowAllowedModelRef,
 } from "./model-selection-resolve.js";
 import { isModelKeyAllowedBySet } from "./model-selection-shared.js";
 import {

@@ -103,6 +103,10 @@ extension RootTabs {
         case split
     }
 
+    static func sidebarLayoutContainerSize(contentSize: CGSize, windowSize: CGSize?) -> CGSize {
+        windowSize ?? contentSize
+    }
+
     static func sidebarLayoutMode(containerSize: CGSize) -> SidebarLayoutMode {
         containerSize.width < self.sidebarPersistentWidthThreshold || containerSize.height > containerSize.width
             ? .drawer

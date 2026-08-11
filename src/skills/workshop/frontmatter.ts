@@ -1,6 +1,6 @@
 // Workshop frontmatter helpers parse generated skill metadata before saving drafts.
 import { extractFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
-import { parseFrontmatter } from "../loading/frontmatter.js";
+import { parseSkillFrontmatter } from "../loading/frontmatter.js";
 
 type ProposalFrontmatter = {
   name: string;
@@ -54,7 +54,7 @@ export function renderProposalMarkdown(params: {
 }
 
 export function readProposalFrontmatter(content: string): ProposalFrontmatter | null {
-  const frontmatter = parseFrontmatter(content);
+  const frontmatter = parseSkillFrontmatter(content);
   const name = frontmatter.name?.trim();
   const description = frontmatter.description?.trim();
   const status = frontmatter.status?.trim().toLowerCase();

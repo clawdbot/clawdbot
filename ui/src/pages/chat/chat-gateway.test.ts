@@ -3,6 +3,7 @@ import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 // Control UI tests cover chat behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { loadChatHistory, type ChatState } from "./chat-history.ts";
@@ -37,19 +38,6 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     sessionKey: "main",
     ...overrides,
   };
-}
-
-function createDeferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
 }
 
 type HistoryResult = {
@@ -384,6 +372,27 @@ describe("handleChatGatewayEvent", () => {
         sessionKey: "other",
       }),
     ).toEqual([payload.message]);
+  });
+
+  it("caches one background final when three retained panes receive the same event", () => {
+    const cache = new Map();
+    const states = ["one", "two", "three"].map((sessionKey) =>
+      createState({ chatMessagesBySession: cache, sessionKey }),
+    );
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "background",
+      state: "final",
+      message: createTextChatMessage("assistant", "background final"),
+    };
+
+    for (const state of states) {
+      expect(handleChatGatewayEvent(state, payload)).toBeNull();
+    }
+
+    expect(readChatMessagesFromCache(cache, states[0]!, { sessionKey: "background" })).toEqual([
+      payload.message,
+    ]);
   });
 
   it.each([
@@ -876,6 +885,39 @@ describe("handleChatGatewayEvent", () => {
     expectTextChatMessage(state.chatMessages[1], "assistant", "Looking into it.");
     expectTextChatMessage(state.chatMessages[2], "user", "Focus on the deployment too");
     expectTextChatMessage(state.chatMessages[3], "assistant", "Final answer.");
+  });
+
+  it("retires a reply steer chip after an exact-target terminal rejection", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "reply-steer-request",
+      chatQueue: [
+        {
+          id: "reply-steer-chip",
+          text: "Reply with deployment context",
+          createdAt: 3,
+          kind: "steered",
+          pendingRunId: "reply-steer-request",
+          sendRunId: "reply-steer-request",
+          sessionKey: "main",
+        },
+      ],
+    });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "reply-steer-request",
+        sessionKey: "main",
+        state: "error",
+        errorMessage: "active run changed; review and retry",
+      }),
+    ).toBe("error");
+
+    expect(state.chatQueue).toEqual([]);
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatRunError).toEqual({
+      summary: "Error: active run changed; review and retry",
+    });
   });
 
   it("uses an already-persisted steer to recover the active stream boundary", () => {

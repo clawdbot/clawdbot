@@ -39,3 +39,9 @@ export function resolveOpenClawStateSqliteDir(env: NodeJS.ProcessEnv = process.e
 export function resolveOpenClawStateSqlitePath(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveOpenClawStateSqliteDir(env), "openclaw.sqlite");
 }
+
+/** Resolve the state owner directory for a canonical or explicit shared database path. */
+export function resolveOpenClawStateDirForDatabasePath(databasePath: string): string {
+  const databaseDir = path.dirname(path.resolve(databasePath));
+  return path.basename(databaseDir) === "state" ? path.dirname(databaseDir) : databaseDir;
+}

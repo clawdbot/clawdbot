@@ -3,6 +3,17 @@ import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  OPENAI_GPT_53_CODEX_SPARK_MODEL_ID,
+  OPENAI_GPT_54_MINI_MODEL_ID,
+  OPENAI_GPT_54_MODEL_ID,
+  OPENAI_GPT_54_NANO_MODEL_ID,
+  OPENAI_GPT_54_PRO_MODEL_ID,
+  OPENAI_GPT_55_MODEL_ID,
+  OPENAI_GPT_55_PRO_MODEL_ID,
+  OPENAI_GPT_56_MODEL_ID,
+  resolveOpenAICodexReasoningEfforts,
+} from "./model-route-contract.js";
 
 type OpenAIThinkingCompat = ProviderDefaultThinkingPolicyContext["compat"];
 type OpenAIThinkingApi = ProviderDefaultThinkingPolicyContext["api"];
@@ -28,18 +39,18 @@ const OPENAI_THINKING_LEVEL_ORDER = [
 type OpenAIThinkingLevelId = (typeof OPENAI_THINKING_LEVEL_ORDER)[number];
 
 const OPENAI_CODEX_XHIGH_MODEL_IDS = [
-  "gpt-5.6",
-  "gpt-5.5",
-  "gpt-5.5-pro",
-  "gpt-5.4",
-  "gpt-5.4-pro",
-  "gpt-5.3-codex-spark",
+  OPENAI_GPT_56_MODEL_ID,
+  OPENAI_GPT_55_MODEL_ID,
+  OPENAI_GPT_55_PRO_MODEL_ID,
+  OPENAI_GPT_54_MODEL_ID,
+  OPENAI_GPT_54_PRO_MODEL_ID,
+  OPENAI_GPT_53_CODEX_SPARK_MODEL_ID,
 ] as const;
 
 const OPENAI_UNIFIED_XHIGH_MODEL_IDS = [
   ...OPENAI_CODEX_XHIGH_MODEL_IDS,
-  "gpt-5.4-mini",
-  "gpt-5.4-nano",
+  OPENAI_GPT_54_MINI_MODEL_ID,
+  OPENAI_GPT_54_NANO_MODEL_ID,
 ] as const;
 
 function normalizeModelId(value: string): string {
@@ -62,9 +73,7 @@ function normalizeCodexReasoningEffort(value: string): OpenAIThinkingLevelId | u
   return OPENAI_THINKING_LEVEL_ORDER.find((level) => level === normalized);
 }
 
-function buildAuthoritativeCodexLevels(
-  efforts: readonly string[],
-): ProviderThinkingProfile["levels"] {
+function buildCodexLevels(efforts: readonly string[]): ProviderThinkingProfile["levels"] {
   // Omitting an effort remains a valid Codex choice even when model/list has
   // no reasoning presets. Every other picker stop must come from that list.
   const supported = new Set<OpenAIThinkingLevelId>(["off"]);
@@ -86,31 +95,25 @@ function buildOpenAIThinkingProfile(params: {
 }): ProviderThinkingProfile {
   const modelId = normalizeModelId(params.modelId);
   const agentRuntime = normalizeModelId(params.agentRuntime ?? "");
-  const isBare = modelId === "gpt-5.6";
-  const isSol = modelId === "gpt-5.6-sol";
-  const isTerra = modelId === "gpt-5.6-terra";
-  const isLuna = modelId === "gpt-5.6-luna";
   const codexEfforts = params.compat?.supportedReasoningEfforts?.map(normalizeModelId);
-  const authoritativeCodexEfforts =
-    params.api === "openai-chatgpt-responses" ? codexEfforts : undefined;
-  const fallbackCodexMax = isSol || isTerra || isLuna;
-  const codexSupportsMax = authoritativeCodexEfforts
-    ? authoritativeCodexEfforts.includes("max")
-    : fallbackCodexMax;
+  const resolvedCodexEfforts =
+    params.api === "openai-chatgpt-responses"
+      ? resolveOpenAICodexReasoningEfforts(modelId, codexEfforts)
+      : undefined;
+  const knownCodexEfforts = resolveOpenAICodexReasoningEfforts(modelId, undefined);
+  const isGpt56Variant = knownCodexEfforts !== undefined;
+  const codexSupportsMax = (resolvedCodexEfforts ?? knownCodexEfforts)?.includes("max");
   const supportsMax =
     modelId.startsWith("gpt-5.6") && (agentRuntime !== "codex" || codexSupportsMax);
-  const fallbackCodexUltra = isSol || isTerra;
-  const codexSupportsUltra = authoritativeCodexEfforts
-    ? authoritativeCodexEfforts.includes("ultra")
-    : fallbackCodexUltra;
+  const codexSupportsUltra = (resolvedCodexEfforts ?? knownCodexEfforts)?.includes("ultra");
   // OpenClaw owns its logical Ultra orchestration. Native Codex capabilities
   // come only from the selected ChatGPT route's catalog metadata.
   const supportsUltra =
-    (isBare || isSol || isTerra || isLuna) &&
+    (modelId === OPENAI_GPT_56_MODEL_ID || isGpt56Variant) &&
     (agentRuntime === "openclaw" ||
       agentRuntime === "auto" ||
       (agentRuntime === "codex" && codexSupportsUltra));
-  const defaultLevel = isSol || isTerra || isLuna ? "medium" : undefined;
+  const defaultLevel = isGpt56Variant ? "medium" : undefined;
   const fallbackLevels: ProviderThinkingProfile["levels"] = [
     ...OPENAI_THINKING_BASE_LEVELS,
     ...(matchesExactOrPrefix(params.modelId, params.xhighModelIds)
@@ -120,8 +123,8 @@ function buildOpenAIThinkingProfile(params: {
     ...(supportsUltra ? [{ id: "ultra" as const }] : []),
   ];
   const levels =
-    agentRuntime === "codex" && authoritativeCodexEfforts !== undefined
-      ? buildAuthoritativeCodexLevels(authoritativeCodexEfforts)
+    agentRuntime === "codex" && resolvedCodexEfforts !== undefined
+      ? buildCodexLevels(resolvedCodexEfforts)
       : fallbackLevels;
   const supportedDefault = defaultLevel && levels.some((level) => level.id === defaultLevel);
   return {

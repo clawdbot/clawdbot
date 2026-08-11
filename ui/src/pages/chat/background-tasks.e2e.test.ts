@@ -2,7 +2,7 @@ import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
-import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, type MockGatewayRequest } from "../../test-helpers/control-ui-e2e.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI chat background-tasks rail mocked Gateway E2E",
@@ -15,6 +15,19 @@ const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-
 const baseTime = Date.now();
 const chatSessionKey = "agent:main:main";
 
+function requestSessionKey(request: MockGatewayRequest): string | undefined {
+  const { params } = request;
+  if (
+    typeof params !== "object" ||
+    params === null ||
+    !("sessionKey" in params) ||
+    typeof params.sessionKey !== "string"
+  ) {
+    return undefined;
+  }
+  return params.sessionKey;
+}
+
 const runningSubagent = {
   id: "task-subagent",
   taskId: "task-subagent",
@@ -23,6 +36,7 @@ const runningSubagent = {
   status: "running",
   title: "Map model routing code",
   agentId: "main",
+  sessionKey: chatSessionKey,
   ownerKey: chatSessionKey,
   childSessionKey: "agent:main:subagent:routing",
   createdAt: baseTime - 5_000,
@@ -113,14 +127,46 @@ suite.define(() => {
                     thinkingLevel: null,
                   },
                 },
+                {
+                  match: { sessionKey: finishedCli.sessionKey },
+                  response: {
+                    messages: [
+                      {
+                        content: [
+                          { type: "text", text: "CLI transcript stayed in the task rail." },
+                        ],
+                        role: "assistant",
+                        timestamp: Date.now(),
+                      },
+                    ],
+                    sessionId: "cli-task-transcript",
+                    thinkingLevel: null,
+                  },
+                },
               ],
             },
             "tasks.list": { tasks: [runningSubagent, queuedCron, finishedCli] },
             "tasks.get": {
-              task: {
-                ...runningSubagent,
-                prompt: "Trace model routing across provider and session boundaries.",
-              },
+              cases: [
+                {
+                  match: { taskId: runningSubagent.id },
+                  response: {
+                    task: {
+                      ...runningSubagent,
+                      prompt: "Trace model routing across provider and session boundaries.",
+                    },
+                  },
+                },
+                {
+                  match: { taskId: finishedCli.id },
+                  response: {
+                    task: {
+                      ...finishedCli,
+                      prompt: "Generate a searchable media index.",
+                    },
+                  },
+                },
+              ],
             },
             "tasks.cancel": {
               found: true,
@@ -218,13 +264,165 @@ suite.define(() => {
         expect(page.url()).toBe(chatUrl);
         expect(
           (await gateway.getRequests("chat.history")).some(
-            (request) =>
-              (request.params as { sessionKey?: string }).sessionKey ===
-              runningSubagent.childSessionKey,
+            (request) => requestSessionKey(request) === runningSubagent.childSessionKey,
           ),
         ).toBe(false);
         await page.screenshot({
           path: path.join(artifactDir, "04-back-to-list.png"),
+          fullPage: true,
+        });
+
+        const mainTranscript = page.locator(".chat-main .chat-thread");
+        const mainTranscriptBefore = await mainTranscript.textContent();
+        await rail
+          .locator('[data-task-id="task-cli"]')
+          .getByRole("button", { name: "Show details for Generate media index" })
+          .click();
+        await rail.getByText("Generate a searchable media index.").waitFor();
+        await page.screenshot({
+          path: path.join(artifactDir, "05-cli-task-detail.png"),
+          fullPage: true,
+        });
+
+        await rail.getByRole("button", { name: "View transcript" }).click();
+        await expect
+          .poll(async () =>
+            (await gateway.getRequests("chat.history")).some(
+              (request) => requestSessionKey(request) === finishedCli.sessionKey,
+            ),
+          )
+          .toBe(true);
+        const transcriptRequest = (await gateway.getRequests("chat.history")).find(
+          (request) => requestSessionKey(request) === finishedCli.sessionKey,
+        );
+        expect(transcriptRequest?.params).toEqual({
+          sessionKey: finishedCli.sessionKey,
+          limit: 100,
+        });
+        await rail.getByText("CLI transcript stayed in the task rail.").waitFor();
+        expect(await rail.locator(".chat-thread").textContent()).toContain(
+          "CLI transcript stayed in the task rail.",
+        );
+        expect(page.url()).toBe(chatUrl);
+        expect(await mainTranscript.textContent()).toBe(mainTranscriptBefore);
+        expect(await rail.getByRole("button", { name: "Back to task details" }).count()).toBe(1);
+        await page.screenshot({
+          path: path.join(artifactDir, "06-cli-task-transcript.png"),
+          fullPage: true,
+        });
+
+        await rail.getByRole("button", { name: "Back to task details" }).click();
+        await rail.locator('[data-task-detail="task-cli"]').waitFor({ state: "visible" });
+        await rail.getByText("Generate a searchable media index.").waitFor();
+        expect(page.url()).toBe(chatUrl);
+        expect(await mainTranscript.textContent()).toBe(mainTranscriptBefore);
+        await page.screenshot({
+          path: path.join(artifactDir, "07-cli-task-detail-restored.png"),
+          fullPage: true,
+        });
+      },
+    );
+  });
+
+  it("streams two subagent activity rows and retains final diff chips", async () => {
+    const activityDir = path.join(artifactDir, "subagent-activity");
+    await mkdir(activityDir, { recursive: true });
+    await suite.withPage(
+      {
+        locale: "en-US",
+        recordVideo: { dir: activityDir, size: { width: 1280, height: 800 } },
+        serviceWorkers: "block",
+        viewport: { width: 1280, height: 800 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          historyMessages: [
+            {
+              content: [{ type: "text", text: "Parallel subagent activity proof." }],
+              role: "assistant",
+              timestamp: Date.now(),
+            },
+          ],
+          methodResponses: { "tasks.list": { tasks: [] } },
+        });
+
+        const response = await page.goto(`${suite.server.baseUrl}chat`);
+        expect(response?.status()).toBe(200);
+        await page.getByText("Parallel subagent activity proof.").waitFor({ timeout: 10_000 });
+
+        const first = {
+          ...runningSubagent,
+          id: "task-parallel-one",
+          taskId: "task-parallel-one",
+          childSessionKey: "agent:main:subagent:parallel-one",
+          title: "Review session ownership",
+          lastActivity: "Reviewing session ownership",
+          diffStat: { files: 2, added: 14, removed: 3 },
+        };
+        const second = {
+          ...runningSubagent,
+          id: "task-parallel-two",
+          taskId: "task-parallel-two",
+          childSessionKey: "agent:main:subagent:parallel-two",
+          title: "Review tool card rendering",
+          lastActivity: "Checking tool card rendering",
+          diffStat: { files: 1, added: 5, removed: 0 },
+        };
+        await gateway.emitGatewayEvent("task", { action: "upserted", task: first });
+        await gateway.emitGatewayEvent("task", { action: "upserted", task: second });
+
+        const activity = page.locator(".chat-subagent-activity");
+        await expect.poll(() => activity.locator(".chat-subagent-activity__row").count()).toBe(2);
+        const firstRow = activity.locator('[data-subagent-task-id="task-parallel-one"]');
+        const secondRow = activity.locator('[data-subagent-task-id="task-parallel-two"]');
+        expect(await firstRow.textContent()).toContain("Reviewing session ownership");
+        expect(await secondRow.textContent()).toContain("Checking tool card rendering");
+        expect(await firstRow.locator(".chat-diffstat__add").textContent()).toBe("+14");
+        expect(await firstRow.locator(".chat-diffstat__del").textContent()).toBe("-3");
+        await page.screenshot({
+          path: path.join(activityDir, "01-two-subagents-streaming.png"),
+          fullPage: true,
+        });
+
+        await gateway.emitGatewayEvent("task", {
+          action: "upserted",
+          task: {
+            ...first,
+            updatedAt: baseTime + 1_000,
+            lastActivity: "Cross-checking requester ownership",
+          },
+        });
+        await firstRow.getByText("Cross-checking requester ownership").waitFor();
+
+        await gateway.emitGatewayEvent("task", {
+          action: "upserted",
+          task: {
+            id: first.id,
+            taskId: first.taskId,
+            kind: first.kind,
+            runtime: first.runtime,
+            status: "completed",
+            title: first.title,
+            agentId: first.agentId,
+            sessionKey: first.sessionKey,
+            ownerKey: first.ownerKey,
+            childSessionKey: first.childSessionKey,
+            createdAt: first.createdAt,
+            startedAt: first.startedAt,
+            updatedAt: baseTime + 2_000,
+            endedAt: baseTime + 2_000,
+            terminalSummary: "Ownership review complete",
+          },
+        });
+
+        await firstRow.getByText("Subagent finished").waitFor();
+        expect(await firstRow.textContent()).toContain("Ownership review complete");
+        expect(await firstRow.locator(".chat-diffstat__add").textContent()).toBe("+14");
+        expect(await firstRow.locator(".chat-diffstat__del").textContent()).toBe("-3");
+        expect(await secondRow.textContent()).toContain("Subagent working");
+        expect(await secondRow.textContent()).toContain("Checking tool card rendering");
+        await page.screenshot({
+          path: path.join(activityDir, "02-one-subagent-finished.png"),
           fullPage: true,
         });
       },
@@ -279,7 +477,7 @@ suite.define(() => {
         expect(Math.abs(previewCenter - linkCenter)).toBeLessThanOrEqual(2);
         expect(previewBox.y + previewBox.height).toBeLessThanOrEqual(linkBox.y);
         await page.screenshot({
-          path: path.join(artifactDir, "05-running-task-popover-centered.png"),
+          path: path.join(artifactDir, "08-running-task-popover-centered.png"),
           fullPage: true,
         });
 
@@ -289,7 +487,7 @@ suite.define(() => {
         expect(await row.textContent()).toContain("CLI command");
         expect(await row.textContent()).toContain("Command running");
         await page.screenshot({
-          path: path.join(artifactDir, "06-one-background-exec.png"),
+          path: path.join(artifactDir, "09-one-background-exec.png"),
           fullPage: true,
         });
       },

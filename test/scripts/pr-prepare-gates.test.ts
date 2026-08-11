@@ -1,36 +1,19 @@
 // Covers the scripts/pr prepare-gates remote testbox mode and the
 // cross-worktree gate lock that serializes whole gate blocks.
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = process.cwd();
-const gateLockHelperPath = join(repoRoot, "scripts", "pr-gates-lock.mjs");
+const gateLockHelperPath = join(repoRoot, "scripts", "pr-gates-lock.mts");
 
-const tempDirs: string[] = [];
+const tempDirs = createTempDirTracker();
 const children: ChildProcess[] = [];
 
-function makeTempDir(prefix: string): string {
-  // macOS os.tmpdir() is a /var -> /private/var symlink; resolve so lock and
-  // owner paths compare canonically.
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
-  tempDirs.push(dir);
-  return dir;
-}
-
 function makeLockRepoDir(): string {
-  const dir = makeTempDir("openclaw-pr-gates-lock-");
+  const dir = tempDirs.make("openclaw-pr-gates-lock-");
   mkdirSync(join(dir, ".git"), { recursive: true });
   return dir;
 }
@@ -98,7 +81,7 @@ function spawnGateLockHolder(repoDir: string, statusFile: string, env: NodeJS.Pr
 }
 
 function makeRetryRepo(): { repoDir: string; stubBin: string; headSha: string } {
-  const dir = makeTempDir("openclaw-pr-gates-retry-");
+  const dir = tempDirs.make("openclaw-pr-gates-retry-");
   const repoDir = join(dir, "repo");
   mkdirSync(repoDir);
   for (const args of [
@@ -138,7 +121,7 @@ function makeRetryRepo(): { repoDir: string; stubBin: string; headSha: string } 
 }
 
 function makeSyncRepo(options: { needsRebase: boolean }): string {
-  const repoDir = join(makeTempDir("openclaw-pr-sync-"), "repo");
+  const repoDir = join(tempDirs.make("openclaw-pr-sync-"), "repo");
   mkdirSync(repoDir);
 
   const git = (...args: string[]) => {
@@ -186,7 +169,7 @@ function makePreparePushHeadDriftRepo(): {
   recordedHead: string;
   reviewedHead: string;
 } {
-  const repoDir = join(makeTempDir("openclaw-pr-prepare-drift-"), "repo");
+  const repoDir = join(tempDirs.make("openclaw-pr-prepare-drift-"), "repo");
   mkdirSync(repoDir);
 
   const git = (...args: string[]) => {
@@ -323,9 +306,7 @@ afterEach(async () => {
     child.kill("SIGKILL");
     await waitForExit(child);
   }
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  tempDirs.cleanup();
 });
 
 describe("resolve_pr_gates_remote_mode", () => {
@@ -404,7 +385,7 @@ describe("prepare gate changed-file plan", () => {
   });
 
   it("scans changed files without temporary input storage", () => {
-    const workDir = makeTempDir("openclaw-pr-gates-no-tmp-");
+    const workDir = tempDirs.make("openclaw-pr-gates-no-tmp-");
     mkdirSync(join(workDir, ".local"));
     writeFileSync(join(workDir, ".local", "pr-meta.env"), "PR_AUTHOR=steipete\n");
     const result = runGatesBash(
@@ -437,7 +418,7 @@ describe("prepare gate changed-file plan", () => {
 
 describe("remote testbox gate delegation", () => {
   it("runs the full pnpm test through the worktree crabbox wrapper", () => {
-    const dir = makeTempDir("openclaw-pr-gates-remote-");
+    const dir = tempDirs.make("openclaw-pr-gates-remote-");
     const stubBin = join(dir, "bin");
     mkdirSync(stubBin);
     writeFileSync(
@@ -481,7 +462,7 @@ describe("remote testbox gate delegation", () => {
   });
 
   it("extracts the last successful blacksmith-testbox timing stamp", () => {
-    const dir = makeTempDir("openclaw-pr-gates-stamp-");
+    const dir = tempDirs.make("openclaw-pr-gates-stamp-");
     const log = join(dir, "gates-test.log");
     writeFileSync(
       log,
@@ -508,7 +489,7 @@ describe("remote testbox gate delegation", () => {
   });
 
   it("fails when the gate log has no successful stamp", () => {
-    const dir = makeTempDir("openclaw-pr-gates-stamp-");
+    const dir = tempDirs.make("openclaw-pr-gates-stamp-");
     const log = join(dir, "gates-test.log");
     writeFileSync(
       log,
@@ -579,7 +560,7 @@ describe("lease-retry gate stamp refresh", () => {
 
 describe("prepare review readiness", () => {
   it("rejects invalid review artifacts before any preparation side effects", () => {
-    const repoDir = makeTempDir("openclaw-pr-prepare-invalid-review-");
+    const repoDir = tempDirs.make("openclaw-pr-prepare-invalid-review-");
     mkdirSync(join(repoDir, ".local"));
     const result = runGatesBash(
       [
@@ -600,7 +581,7 @@ describe("prepare review readiness", () => {
   });
 
   it("rejects a non-ready review before taking the operation lock past validation", () => {
-    const repoDir = makeTempDir("openclaw-pr-prepare-not-ready-");
+    const repoDir = tempDirs.make("openclaw-pr-prepare-not-ready-");
     mkdirSync(join(repoDir, ".local"));
     const result = runGatesBash(
       [
@@ -710,7 +691,7 @@ describe("GraphQL fork publication", () => {
 
     const result = runGatesBash(
       [
-        'gh() { cat > .local/graphql-payload.json; printf \'%s\\n\' \'{"data":{"createCommitOnBranch":{"commit":{"oid":"signed-head","url":"https://example.test/commit"}}}}\'; }',
+        'gh_plain() { cat > .local/graphql-payload.json; printf \'%s\\n\' \'{"data":{"createCommitOnBranch":{"commit":{"oid":"signed-head","url":"https://example.test/commit"}}}}\'; }',
         `graphql_push_to_fork example/repo topic ${headSha}`,
         'test "$(jq -r .variables.input.message.headline .local/graphql-payload.json)" = "reviewed fixup"',
         'test "$(jq -r .variables.input.message.body .local/graphql-payload.json)" = "Co-authored-by: Helper <helper@example.com>"',
@@ -740,7 +721,7 @@ describe("GraphQL fork publication", () => {
 
     const result = runGatesBash(
       [
-        "gh() { touch .local/gh-called; return 99; }",
+        "gh_plain() { touch .local/gh-called; return 99; }",
         `graphql_push_to_fork example/repo topic ${headSha}`,
       ].join("\n"),
       { cwd: repoDir, sourcePush: true },
@@ -779,7 +760,7 @@ describe("GraphQL fork publication", () => {
 
     const result = runGatesBash(
       [
-        "gh() { touch .local/gh-called; return 99; }",
+        "gh_plain() { touch .local/gh-called; return 99; }",
         `graphql_push_to_fork example/repo topic ${headSha}`,
       ].join("\n"),
       { cwd: repoDir, sourcePush: true },
@@ -792,7 +773,7 @@ describe("GraphQL fork publication", () => {
 });
 
 describe("fork publication transport", () => {
-  it("keeps the PR push URL process-local", () => {
+  it("keeps the PR push URL process-local and reports a missing branch", () => {
     const { repoDir } = makeRetryRepo();
     const result = runGatesBash(
       [
@@ -801,23 +782,9 @@ describe("fork publication transport", () => {
         "setup_prhead_remote",
         'test "$PRHEAD_REMOTE_URL" = https://github.com/contributor/repo.git',
         "test ! -e .local/git-called",
-      ].join("\n"),
-      { cwd: repoDir, sourcePush: true },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
-  });
-
-  it("preserves an HTTPS fallback for the later push", () => {
-    const { repoDir } = makeRetryRepo();
-    const result = runGatesBash(
-      [
-        "PRHEAD_REMOTE_URL=ssh://git@example.test/contributor/repo.git",
-        "resolve_head_push_url_https() { printf '%s\\n' https://github.com/contributor/repo.git; }",
-        'git() { if [ "$1" = ls-remote ] && [ "$2" = https://github.com/contributor/repo.git ]; then printf \'hosted\\trefs/heads/topic\\n\'; fi; }',
-        "resolve_prhead_remote_sha topic",
-        'test "$PRHEAD_REMOTE_URL" = https://github.com/contributor/repo.git',
-        'test "$PRHEAD_REMOTE_SHA" = hosted',
+        "if remote_error=$(resolve_prhead_remote_sha topic 2>&1); then exit 97; fi",
+        'test "$remote_error" = "Remote branch refs/heads/topic not found on prhead"',
+        "test -e .local/git-called",
       ].join("\n"),
       { cwd: repoDir, sourcePush: true },
     );

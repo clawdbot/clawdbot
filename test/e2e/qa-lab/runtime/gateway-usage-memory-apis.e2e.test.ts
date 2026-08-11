@@ -8,7 +8,7 @@ import {
 } from "../../../../src/config/sessions/legacy-sqlite-marker.js";
 import {
   persistSessionTranscriptTurn,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { READ_SCOPE } from "../../../../src/gateway/method-scopes.js";
@@ -19,7 +19,7 @@ import { loadSessionEntryReadOnly } from "../../../../src/gateway/session-utils.
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  getFreeGatewayPort,
+  getGatewayE2ePortBlock,
 } from "../../../../src/gateway/test-helpers.e2e.js";
 import type { UsageSummary } from "../../../../src/infra/provider-usage.types.js";
 import { refreshCostUsageCacheForAgent } from "../../../../src/infra/session-cost-usage-aggregation.js";
@@ -92,7 +92,7 @@ async function seedCompletedUsageSession(state: OpenClawTestState): Promise<{
     storePath,
   };
 
-  await upsertSessionEntry(scope, {
+  await upsertSessionEntryCore(scope, {
     sessionId: FIXTURE_SESSION_ID,
     sessionFile,
     startedAt: FIXTURE_STARTED_AT,
@@ -125,7 +125,7 @@ async function seedCompletedUsageSession(state: OpenClawTestState): Promise<{
   });
   expect(turn.appendedCount).toBe(2);
 
-  await upsertSessionEntry(scope, {
+  await upsertSessionEntryCore(scope, {
     sessionId: FIXTURE_SESSION_ID,
     sessionFile,
     startedAt: FIXTURE_STARTED_AT,
@@ -151,7 +151,7 @@ describe("gateway usage and memory APIs", () => {
     "projects deterministic usage and explicit memory readiness over authenticated WebSocket RPCs",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
-      const port = await getFreeGatewayPort();
+      const port = await getGatewayE2ePortBlock();
       const token = `gateway-usage-memory-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}`;
       const state = await createOpenClawTestState({
         label: "gateway-usage-memory-apis",

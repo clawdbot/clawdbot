@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { listSessionEntries, loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { listSessionEntriesCore, loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
@@ -243,7 +243,7 @@ async function performSessionReset(params: {
   onCommitted?: (commit: { key: string; sessionId: string }) => void;
 }) {
   const { performGatewaySessionReset } = await import("./session-reset-service.js");
-  return performGatewaySessionReset(params);
+  return performGatewaySessionReset({ ...params, workerPlacementContext: {} });
 }
 
 function expectResetErrorMessage(
@@ -319,7 +319,7 @@ async function resolveGatewaySessionStorePathForKey(key: string) {
 async function loadGatewaySessionStoreForKey(key: string) {
   const gatewayStorePath = await resolveGatewaySessionStorePathForKey(key);
   return Object.fromEntries(
-    listSessionEntries({ storePath: gatewayStorePath }).map(({ sessionKey, entry }) => [
+    listSessionEntriesCore({ storePath: gatewayStorePath }).map(({ sessionKey, entry }) => [
       sessionKey,
       entry,
     ]),
@@ -447,8 +447,7 @@ test("sessions.reset infers selected global agent from agent-prefixed aliases", 
     await writeGlobalSessionFile(globalConfig.workStorePath, "sess-work-global");
     const { getRuntimeConfig } = await import("../config/config.js");
     const { resolveGatewaySessionStoreTarget } = await import("./session-utils.js");
-    const { performGatewaySessionReset } = await import("./session-reset-service.js");
-    const reset = await performGatewaySessionReset({
+    const reset = await performSessionReset({
       key: "agent:work:main",
       reason: "reset",
       commandSource: "gateway:sessions.reset",

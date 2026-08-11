@@ -6,7 +6,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import {
@@ -425,7 +425,7 @@ function resolveSafeCliSessionFile(params: {
     agentId: sessionAgentId ?? defaultAgentId,
     storePath: params.config?.session?.store,
   });
-  const sessionFile = resolveSessionFilePath(
+  const sessionFile = resolveSessionFilePathCore(
     params.sessionId,
     { sessionFile: params.sessionFile },
     pathOptions,

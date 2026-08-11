@@ -30,16 +30,6 @@ vi.mock("node-llama-cpp", () => ({
 
 import { detectLlamaCppSetup, prepareLlamaCppSetup, runLlamaCppSetup } from "./setup.js";
 
-const { formatLlamaCppDownloadProgress } = (globalThis as Record<PropertyKey, unknown>)[
-  Symbol.for("openclaw.llamaCppSetupTestApi")
-] as {
-  formatLlamaCppDownloadProgress: (params: {
-    downloadedSize: number;
-    totalSize: number;
-    bytesPerSecond: number;
-  }) => string;
-};
-
 const GIB = 1024 ** 3;
 
 let tempRoot: string;
@@ -104,16 +94,6 @@ describe("llama.cpp setup", () => {
   it("requires 16 GiB for the bundled default offer", () => {
     expect(meetsLlamaCppDefaultModelRamFloor(16 * GIB - 1)).toBe(false);
     expect(meetsLlamaCppDefaultModelRamFloor(16 * GIB)).toBe(true);
-  });
-
-  it("formats percent, decimal GB, and transfer rate", () => {
-    expect(
-      formatLlamaCppDownloadProgress({
-        downloadedSize: 2_100_000_000,
-        totalSize: 5_000_000_000,
-        bytesPerSecond: 38_000_000,
-      }),
-    ).toBe("Downloading Gemma 4 E4B… 42% (2.1/5.0 GB, 38 MB/s)");
   });
 
   it("returns null when the configured model is not cached", async () => {

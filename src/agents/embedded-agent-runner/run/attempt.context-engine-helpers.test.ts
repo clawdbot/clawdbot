@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "../../../llm/types.js";
-import { findLatestUncompactedAttemptUsageSnapshot } from "./attempt.context-engine-helpers.js";
+import { findLatestUncompactedAttemptUsageSnapshot } from "./attempt-context-engine-helpers.js";
 
 const ASSISTANT_WITH_USAGE = {
   role: "assistant",

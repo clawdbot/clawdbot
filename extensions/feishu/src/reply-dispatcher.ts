@@ -77,7 +77,7 @@ function mergeStreamingFinalText(
   return `${previousText}\n\n${nextText}`;
 }
 
-function toError(error: unknown): Error {
+function toFeishuError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
@@ -707,10 +707,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     statusLine = nextStatusLine;
     const hasStreamingSession = Boolean(streaming?.isActive() || streamingStartPromise);
     if (!hasStreamingSession && (options?.startIfNeeded === false || renderMode !== "card")) {
-      return;
+      return false;
     }
     startStreaming();
     flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+    return false;
   };
 
   const sendChunkedTextReply = async (paramsLocal: {
@@ -850,7 +851,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 if (isChannelPartialDeliveryError(error)) {
                   // The attachment is already visible; text recovery would duplicate delivery.
                   markVisibleReplySent();
-                  throw toError(error);
+                  throw toFeishuError(error);
                 }
                 const fallbackText = await buildFeishuMediaFallbackText({
                   text: sentFallbackText ? undefined : options.fallbackText,
@@ -1068,7 +1069,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
           }
           if (closeOutcome.error !== undefined) {
-            throw toError(closeOutcome.error);
+            throw toFeishuError(closeOutcome.error);
           }
         } while (pendingStreamingDeliveries.length > 0);
       } finally {
@@ -1312,7 +1313,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           : undefined;
       if (!shouldDeliverText && !hasMedia) {
         if (priorClosedStreamingSettlement?.error !== undefined) {
-          throw toError(priorClosedStreamingSettlement.error);
+          throw toFeishuError(priorClosedStreamingSettlement.error);
         }
         return priorClosedStreamingSettlement?.result ?? noVisibleFeishuReplyDelivery;
       }
@@ -1523,32 +1524,34 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       onPartialReply: previewStreamingEnabled
         ? (payload: ReplyPayload) => {
             if (!payload.text) {
-              return;
+              return false;
             }
             const cleaned = stripReasoningTagsFromText(payload.text, {
               mode: "strict",
               trim: "both",
             });
             if (!cleaned) {
-              return;
+              return false;
             }
             startStreaming();
             queueStreamingUpdate(cleaned, {
               dedupeWithLastPartial: true,
               mode: "snapshot",
             });
+            return false;
           }
         : undefined,
       onReasoningStream: reasoningPreviewEnabled
         ? (payload: ReplyPayload) => {
             if (!payload.text) {
-              return;
+              return false;
             }
             startStreaming();
             queueReasoningUpdate(formatReasoningMessage(payload.text));
+            return false;
           }
         : undefined,
-      onReasoningEnd: reasoningPreviewEnabled ? () => {} : undefined,
+      onReasoningEnd: reasoningPreviewEnabled ? () => false : undefined,
       onToolStart: previewStreamingEnabled
         ? (payload: {
             name?: string;
@@ -1557,7 +1560,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             detailMode?: "explain" | "raw";
           }) => {
             if (!isChannelProgressDraftWorkToolName(payload.name)) {
-              return;
+              return false;
             }
             const statusLineLocal = formatChannelProgressDraftLineForEntry(
               account.config,
@@ -1572,25 +1575,18 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               },
             );
             if (statusLineLocal) {
-              updateStreamingStatusLine(statusLineLocal);
+              return updateStreamingStatusLine(statusLineLocal);
             }
+            return false;
           }
         : undefined,
       onAssistantMessageStart: previewStreamingEnabled
-        ? () => {
-            updateStreamingStatusLine("", { startIfNeeded: false });
-          }
+        ? () => updateStreamingStatusLine("", { startIfNeeded: false })
         : undefined,
       onCompactionStart: previewStreamingEnabled
-        ? () => {
-            updateStreamingStatusLine("📦 **Compacting context...**");
-          }
+        ? () => updateStreamingStatusLine("📦 **Compacting context...**")
         : undefined,
-      onCompactionEnd: previewStreamingEnabled
-        ? () => {
-            updateStreamingStatusLine("");
-          }
-        : undefined,
+      onCompactionEnd: previewStreamingEnabled ? () => updateStreamingStatusLine("") : undefined,
     },
     ensureNoVisibleReplyFallback,
     getVisibleReplyState: () => ({

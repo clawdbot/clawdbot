@@ -42,7 +42,7 @@ function firstMockArg(
 }
 
 vi.mock("../../config/sessions/inbound.runtime.js", () => ({
-  resolveStorePath: mocks.resolveStorePath,
+  resolveSessionStorePathCore: mocks.resolveStorePath,
   updateSessionLastRoute: mocks.updateSessionLastRoute,
 }));
 

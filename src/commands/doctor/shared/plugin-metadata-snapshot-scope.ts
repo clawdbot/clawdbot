@@ -4,6 +4,7 @@ import {
   type PluginMetadataSnapshotScopeRunner,
 } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import {
+  completePluginMetadataSnapshot,
   isPluginMetadataSnapshotCompatible,
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
@@ -24,15 +25,7 @@ export function completeDoctorPluginMetadataSnapshot(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): PluginMetadataSnapshot | undefined {
-  if (!params.snapshot || params.snapshot.pluginIds === undefined) {
-    return params.snapshot;
-  }
-  return loadPluginMetadataSnapshot({
-    config: params.config,
-    env: params.env ?? process.env,
-    index: params.snapshot.index,
-    ...(params.snapshot.workspaceDir ? { workspaceDir: params.snapshot.workspaceDir } : {}),
-  });
+  return completePluginMetadataSnapshot(params);
 }
 
 /** Reuses one exact immutable plugin metadata generation per Doctor workspace. */

@@ -459,6 +459,24 @@ const TIER_ORDER: Record<SlashCommandTier, number> = {
   power: 2,
 };
 
+const NON_MATCHING_COMMAND_RANK = 4;
+
+function getSlashCommandRelevance(command: SlashCommandDef, filter: string): number {
+  const names = [command.name, ...(command.aliases ?? [])].map(normalizeLowercaseStringOrEmpty);
+  if (names.some((name) => name === filter)) {
+    return 0;
+  }
+  if (names.some((name) => name.startsWith(filter))) {
+    return 1;
+  }
+  if (names.some((name) => name.includes(filter))) {
+    return 2;
+  }
+  return normalizeLowercaseStringOrEmpty(getSlashCommandDescription(command)).includes(filter)
+    ? 3
+    : NON_MATCHING_COMMAND_RANK;
+}
+
 export function getSlashCommandCompletions(
   filter: string,
   options?: { showAll?: boolean },
@@ -467,10 +485,7 @@ export function getSlashCommandCompletions(
   const showAll = options?.showAll ?? false;
   let commands = lower
     ? SLASH_COMMANDS.filter(
-        (cmd) =>
-          cmd.name.startsWith(lower) ||
-          cmd.aliases?.some((alias) => normalizeLowercaseStringOrEmpty(alias).startsWith(lower)) ||
-          normalizeLowercaseStringOrEmpty(getSlashCommandDescription(cmd)).includes(lower),
+        (command) => getSlashCommandRelevance(command, lower) < NON_MATCHING_COMMAND_RANK,
       )
     : SLASH_COMMANDS;
 
@@ -480,7 +495,12 @@ export function getSlashCommandCompletions(
   }
 
   return commands.toSorted((a, b) => {
-    // Sort by tier first (essential → standard → power)
+    if (lower) {
+      const relevance = getSlashCommandRelevance(a, lower) - getSlashCommandRelevance(b, lower);
+      if (relevance !== 0) {
+        return relevance;
+      }
+    }
     const aTier = TIER_ORDER[a.tier ?? "standard"] ?? 1;
     const bTier = TIER_ORDER[b.tier ?? "standard"] ?? 1;
     if (aTier !== bTier) {
@@ -490,13 +510,6 @@ export function getSlashCommandCompletions(
     const bi = CATEGORY_ORDER.indexOf(b.category ?? "session");
     if (ai !== bi) {
       return ai - bi;
-    }
-    if (lower) {
-      const aExact = a.name.startsWith(lower) ? 0 : 1;
-      const bExact = b.name.startsWith(lower) ? 0 : 1;
-      if (aExact !== bExact) {
-        return aExact - bExact;
-      }
     }
     return 0;
   });

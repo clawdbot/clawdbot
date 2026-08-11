@@ -1,5 +1,8 @@
 {
   "id": "device-pair",
+  "doctorContract": {
+    "stateMigrations": true
+  },
   "activation": {
     "onStartup": true
   },

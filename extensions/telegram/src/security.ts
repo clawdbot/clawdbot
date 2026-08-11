@@ -2,7 +2,9 @@
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import { resolveDefaultTelegramAccountId } from "./account-selection.js";
 import type { ResolvedTelegramAccount } from "./accounts.js";
+import { resolveTelegramSecurityDmRoute } from "./dm-session-key.js";
 import { collectTelegramSecurityAuditFindings } from "./security-audit.js";
 
 const resolveTelegramDmPolicy = createScopedDmSecurityResolver<ResolvedTelegramAccount>({
@@ -36,6 +38,10 @@ const collectTelegramSecurityWarnings =
 
 export const telegramSecurityAdapter = {
   resolveDmPolicy: resolveTelegramDmPolicy,
+  dmRouting: {
+    resolveDmRoute: (ctx) =>
+      resolveTelegramSecurityDmRoute(resolveDefaultTelegramAccountId(ctx.cfg), ctx),
+  },
   collectWarnings: collectTelegramSecurityWarnings,
   collectAuditFindings: collectTelegramSecurityAuditFindings,
 } satisfies NonNullable<ChannelPlugin<ResolvedTelegramAccount>["security"]>;

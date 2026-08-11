@@ -191,15 +191,30 @@ describe("browser config", () => {
     expect(() => resolveBrowserConfig({ profiles })).toThrow(/extension.*relay.*port/i);
   });
 
-  it("embeds the host-local relay secret as Basic auth in the extension cdpUrl", () => {
-    const token = "a".repeat(64);
-    writeRelaySecret(token);
+  it("keeps the host-local relay key out of the extension cdpUrl", () => {
+    const relayKey = "a".repeat(64);
+    writeRelaySecret(relayKey);
     const resolved = resolveBrowserConfig(undefined);
-    expect(resolved.extensionRelayToken).toBe(token);
+    expect(resolved.extensionRelayToken).toBe(relayKey);
     const chrome = resolveProfile(resolved, "chrome");
-    expect(chrome?.cdpUrl).toBe(
-      `http://openclaw:${token}@127.0.0.1:${resolved.extensionRelayDefaultPort}`,
+    expect(chrome?.cdpUrl).toBe(`http://127.0.0.1:${resolved.extensionRelayDefaultPort}`);
+
+    resolved.extensionRelayInternalTokens.chrome = "process-only-token";
+    expect(resolveProfile(resolved, "chrome")?.cdpUrl).toBe(
+      [
+        "http://openclaw-internal:",
+        "process-only-token",
+        `@127.0.0.1:${resolved.extensionRelayDefaultPort}`,
+      ].join(""),
     );
+  });
+
+  it("allows legacy extension relay auth for one migration window by default", () => {
+    expect(resolveBrowserConfig(undefined).extensionRelay.allowLegacyAuth).toBe(true);
+    expect(
+      resolveBrowserConfig({ extensionRelay: { allowLegacyAuth: false } }).extensionRelay
+        .allowLegacyAuth,
+    ).toBe(false);
   });
 
   it("derives default ports from OPENCLAW_GATEWAY_PORT when unset", () => {

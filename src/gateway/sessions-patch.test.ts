@@ -11,14 +11,34 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { withAgentSessionModelPatchOrigin } from "./session-model-patch-origin.js";
-import { applySessionsPatchToStore } from "./sessions-patch.js";
+import { projectSessionsPatchEntry } from "./sessions-patch.js";
+
+async function applySessionsPatchToStore(
+  params: Omit<
+    Parameters<typeof projectSessionsPatchEntry>[0],
+    "existingEntry" | "isLabelInUse"
+  > & { store: Record<string, SessionEntry> },
+) {
+  const projected = await projectSessionsPatchEntry({
+    ...params,
+    existingEntry: params.store[params.storeKey],
+    isLabelInUse: (label) =>
+      Object.entries(params.store).some(
+        ([sessionKey, entry]) => sessionKey !== params.storeKey && entry.label === label,
+      ),
+  });
+  if (projected.ok) {
+    params.store[params.storeKey] = projected.entry;
+  }
+  return projected;
+}
 
 const acpSessionMetaMocks = vi.hoisted(() => ({
   readAcpSessionMetaForEntry: vi.fn(),
 }));
 const providerThinkingMocks = vi.hoisted(() => ({
   resolveProviderThinkingProfile:
-    vi.fn<typeof import("../plugins/provider-thinking.js").resolveProviderThinkingProfile>(),
+    vi.fn<typeof import("../plugins/provider-thinking.js").resolveEffectiveThinkingProfile>(),
 }));
 
 vi.mock("../acp/runtime/session-meta.js", () => ({
@@ -27,7 +47,7 @@ vi.mock("../acp/runtime/session-meta.js", () => ({
 
 // This suite owns patch projection; provider policy artifacts have dedicated contract coverage.
 vi.mock("../plugins/provider-thinking.js", () => ({
-  resolveProviderThinkingProfile: providerThinkingMocks.resolveProviderThinkingProfile,
+  resolveEffectiveThinkingProfile: providerThinkingMocks.resolveProviderThinkingProfile,
 }));
 
 const SUBAGENT_MODEL = "synthetic/hf:moonshotai/Kimi-K2.7-Code";
@@ -614,50 +634,6 @@ describe("gateway sessions patch", () => {
       }),
     );
     expect(entry.category).toBe("Research");
-  });
-
-  test("canonicalizes and clears session icons", async () => {
-    const icon = expectPatchOk(
-      await runPatch({
-        store: mainStoreEntry({}),
-        patch: {
-          key: MAIN_SESSION_KEY,
-          icon: "  svg:<svg viewBox='0 0 24 24'><path d='M1 2' fill='currentColor'/></svg>  ",
-        },
-      }),
-    );
-    expect(icon.icon).toBe(
-      'svg:<svg viewBox="0 0 24 24"><path d="M1 2" fill="currentColor"/></svg>',
-    );
-
-    const cleared = expectPatchOk(
-      await runPatch({
-        store: mainStoreEntry({ icon: "🦞" }),
-        patch: { key: MAIN_SESSION_KEY, icon: null },
-      }),
-    );
-    expect(cleared.icon).toBeUndefined();
-  });
-
-  test.each([
-    ["script", "svg:<svg><script>alert(1)</script></svg>"],
-    ["event handler", 'svg:<svg onload="alert(1)"></svg>'],
-    [
-      "xlink href",
-      'svg:<svg xmlns:xlink="http://www.w3.org/1999/xlink"><path xlink:href="#x"/></svg>',
-    ],
-    ["URL paint", 'svg:<svg><path fill="url(#paint)"/></svg>'],
-    ["DOCTYPE", "svg:<!DOCTYPE svg><svg></svg>"],
-    ["oversized payload", `svg:<svg><title>${"x".repeat(4096)}</title></svg>`],
-    ["double root", "svg:<svg></svg><svg></svg>"],
-  ])("rejects hostile session SVG icons: %s", async (_label, icon) => {
-    expectPatchError(
-      await runPatch({
-        store: mainStoreEntry({}),
-        patch: { key: MAIN_SESSION_KEY, icon },
-      }),
-      "invalid icon",
-    );
   });
 
   test("rejects empty category", async () => {

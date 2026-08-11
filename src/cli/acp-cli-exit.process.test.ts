@@ -1,13 +1,8 @@
-// Process regression coverage for ACP help commands returning without loading runtime transports.
-import {
-  execFile,
-  spawn,
-  spawnSync,
-  type ChildProcessWithoutNullStreams,
-} from "node:child_process";
+// Process regression coverage for ACP bridge disconnect and startup-handshake exit paths.
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:http";
 import path from "node:path";
-import { promisify } from "node:util";
+import { stripVTControlCharacters } from "node:util";
 import { describe, expect, it } from "vitest";
 import { type RawData, WebSocketServer } from "ws";
 import {
@@ -16,7 +11,6 @@ import {
 } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
-const execFileAsync = promisify(execFile);
 const CHILD_PROCESS_TIMEOUT_MS = 30_000;
 
 const INITIALIZE_FRAME = {
@@ -60,6 +54,17 @@ function createAcpProcessEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     OPENCLAW_NO_RESPAWN: "1",
     VITEST: undefined,
   };
+}
+
+function withoutSqliteTransactionWarnings(stderr: string): string {
+  // Slow-hold logger output is load-dependent performance diagnostics, not ACP clean-exit
+  // signal; see logSlowTransactionHold in sqlite-transaction.ts.
+  return stderr
+    .split("\n")
+    .filter(
+      (line) => !stripVTControlCharacters(line).trimStart().startsWith("[sqlite/transaction]"),
+    )
+    .join("\n");
 }
 
 function waitForExit(child: ChildProcessWithoutNullStreams) {
@@ -115,46 +120,7 @@ function rawDataToText(data: RawData): string {
 }
 
 describe("ACP CLI process exit", () => {
-  it.each([
-    { args: ["acp", "--help"], usage: "Usage: openclaw acp [options] [command]" },
-    { args: ["acp", "client", "--help"], usage: "Usage: openclaw acp client [options]" },
-  ])(
-    "exits promptly after $args",
-    async ({ args, usage }) => {
-      const state = await createPreparedAcpProcessState();
-      try {
-        const result = await execFileAsync(
-          process.execPath,
-          ["--import", "tsx", "src/entry.ts", ...args],
-          {
-            cwd: path.resolve("."),
-            encoding: "utf8",
-            env: {
-              ...createAcpProcessEnv(state.env),
-              NODE_OPTIONS: process.platform === "darwin" ? "--use-system-ca" : undefined,
-              NODE_USE_SYSTEM_CA: undefined,
-            },
-            killSignal: "SIGKILL",
-            timeout: CHILD_PROCESS_TIMEOUT_MS,
-          },
-        );
-
-        expect(result.stderr).toBe("");
-        expect(result.stdout).toContain(usage);
-      } finally {
-        await state.cleanup();
-      }
-    },
-    CHILD_PROCESS_TIMEOUT_MS + 5_000,
-  );
-
-  it.each([
-    { name: "empty stdin", input: "" },
-    {
-      name: "an initialize frame",
-      input: `${JSON.stringify(INITIALIZE_FRAME)}\n`,
-    },
-  ])("exits when the bridge starts with $name and the client disconnects", async ({ input }) => {
+  it("exits when the client disconnects after sending an initialize frame", async () => {
     const state = await createPreparedAcpProcessState();
     try {
       const result = spawnSync(
@@ -164,7 +130,7 @@ describe("ACP CLI process exit", () => {
           cwd: path.resolve("."),
           encoding: "utf8",
           env: createAcpProcessEnv(state.env),
-          input,
+          input: `${JSON.stringify(INITIALIZE_FRAME)}\n`,
           killSignal: "SIGKILL",
           timeout: CHILD_PROCESS_TIMEOUT_MS,
         },
@@ -173,7 +139,7 @@ describe("ACP CLI process exit", () => {
       expect(result.error).toBeUndefined();
       expect(result.signal).toBeNull();
       expect(result.status).toBe(0);
-      expect(result.stderr).toBe("");
+      expect(withoutSqliteTransactionWarnings(result.stderr)).toBe("");
     } finally {
       await state.cleanup();
     }
@@ -272,7 +238,7 @@ describe("ACP CLI process exit", () => {
       child.stdin.end();
       const exit = await exitPromise;
       expect(exit).toEqual({ code: 0, signal: null });
-      expect(stderr).toBe("");
+      expect(withoutSqliteTransactionWarnings(stderr)).toBe("");
     } finally {
       child?.kill("SIGKILL");
       for (const socket of wss.clients) {

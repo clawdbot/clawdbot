@@ -12,6 +12,11 @@ import {
 
 let instance: OpenClawTestInstance | undefined;
 type GatewayToken = NonNullable<NonNullable<OpenClawConfig["gateway"]>["auth"]>["token"];
+const DOCTOR_CLI_TIMEOUT_MS = 120_000;
+const DOCTOR_CLI_CALL_COUNT = 6;
+// Entry-point preparation can precede the first CLI timeout; reserve one more
+// command budget for instance and config setup across the scenario.
+const DOCTOR_SCENARIO_TIMEOUT_MS = DOCTOR_CLI_TIMEOUT_MS * (DOCTOR_CLI_CALL_COUNT + 2);
 
 afterEach(async () => {
   await instance?.cleanup();
@@ -23,7 +28,7 @@ function outputOf(result: { stderr: string; stdout: string }): string {
 }
 
 function normalizedOutputOf(result: { stderr: string; stdout: string }): string {
-  return stripAnsiSequences(outputOf(result)).replace(/\s+/g, " ").trim();
+  return stripAnsiSequences(outputOf(result)).replaceAll("│", " ").replace(/\s+/g, " ").trim();
 }
 
 async function writeConfig(config: OpenClawConfig): Promise<void> {
@@ -45,10 +50,12 @@ function localGatewayConfig(token?: GatewayToken): OpenClawConfig {
   };
 }
 
-describe("doctor auth and SecretRef product proof", () => {
+// Windows ACL failure diagnostics are owned by focused resolver and Doctor
+// tests; this broad process proof owns the platform-neutral product flow.
+describe.skipIf(process.platform === "win32")("doctor auth and SecretRef product proof", () => {
   it(
     "preserves SecretRef ownership while proving resolution, fallback, exec gating, and token generation",
-    { timeout: 240_000 },
+    { timeout: DOCTOR_SCENARIO_TIMEOUT_MS },
     async () => {
       instance = await createOpenClawTestInstance({
         name: "qa-doctor-auth-secretref",
@@ -65,7 +72,7 @@ describe("doctor auth and SecretRef product proof", () => {
       );
       const resolved = await instance.cli(
         ["doctor", "--non-interactive", "--no-workspace-suggestions"],
-        { timeoutMs: 120_000 },
+        { timeoutMs: DOCTOR_CLI_TIMEOUT_MS },
       );
       const resolvedOutput = outputOf(resolved);
       expect(resolved.code).toBe(0);
@@ -89,7 +96,7 @@ describe("doctor auth and SecretRef product proof", () => {
           "--generate-gateway-token",
           "--no-workspace-suggestions",
         ],
-        { timeoutMs: 120_000 },
+        { timeoutMs: DOCTOR_CLI_TIMEOUT_MS },
       );
       const unresolvedOutput = outputOf(unresolved);
       expect(unresolved.code).toBe(0);
@@ -102,6 +109,35 @@ describe("doctor auth and SecretRef product proof", () => {
         gateway?: { auth?: { token?: unknown } };
       };
       expect(unresolvedConfig.gateway?.auth?.token).toEqual(unresolvedRef);
+
+      const filePath = path.join(instance.stateDir, "doctor-file-secretref.json");
+      const fileSecret = "qa-file-token";
+      await fs.writeFile(filePath, JSON.stringify({ gateway: { token: fileSecret } }), {
+        mode: 0o600,
+      });
+      await writeConfig({
+        ...localGatewayConfig({
+          source: "file",
+          provider: "filemain",
+          id: "/gateway/token",
+        }),
+        secrets: {
+          providers: {
+            filemain: {
+              source: "file",
+              path: filePath,
+            },
+          },
+        },
+      });
+      const fileResult = await instance.cli(
+        ["doctor", "--non-interactive", "--no-workspace-suggestions"],
+        { timeoutMs: DOCTOR_CLI_TIMEOUT_MS },
+      );
+      expect(fileResult.code).toBe(0);
+      const fileOutput = normalizedOutputOf(fileResult);
+      expect(fileOutput).not.toContain("Gateway token SecretRef could not be resolved");
+      expect(fileOutput).not.toContain(fileSecret);
 
       const execMarker = path.join(instance.stateDir, "doctor-exec-secretref.marker");
       const execScript = [
@@ -130,7 +166,7 @@ describe("doctor auth and SecretRef product proof", () => {
         });
         const execGated = await activeInstance.cli(
           ["doctor", "--non-interactive", "--no-workspace-suggestions"],
-          { timeoutMs: 120_000 },
+          { timeoutMs: DOCTOR_CLI_TIMEOUT_MS },
         );
         expect(execGated.code).toBe(0);
         expect(normalizedOutputOf(execGated)).toMatch(
@@ -140,18 +176,11 @@ describe("doctor auth and SecretRef product proof", () => {
 
         const execAllowed = await activeInstance.cli(
           ["doctor", "--non-interactive", "--allow-exec", "--no-workspace-suggestions"],
-          { timeoutMs: 120_000 },
+          { timeoutMs: DOCTOR_CLI_TIMEOUT_MS },
         );
         expect(execAllowed.code).toBe(0);
         const execAllowedOutput = normalizedOutputOf(execAllowed);
-        if (process.platform === "win32") {
-          expect(execAllowedOutput).toMatch(
-            /Gateway token SecretRef could not be resolved: .*ACL verification unavailable on Windows/,
-          );
-          await expect(fs.access(execMarker)).rejects.toThrow();
-        } else {
-          await expect(fs.readFile(execMarker, "utf8")).resolves.toBe("executed");
-        }
+        await expect(fs.readFile(execMarker, "utf8")).resolves.toBe("executed");
         expect(execAllowedOutput).not.toContain("qa-exec-token");
       });
 
@@ -166,7 +195,7 @@ describe("doctor auth and SecretRef product proof", () => {
           "--generate-gateway-token",
           "--no-workspace-suggestions",
         ],
-        { timeoutMs: 120_000 },
+        { timeoutMs: DOCTOR_CLI_TIMEOUT_MS },
       );
       expect(generated.code).toBe(0);
       const generatedConfig = JSON.parse(await fs.readFile(instance.configPath, "utf8")) as {
@@ -181,8 +210,8 @@ describe("doctor auth and SecretRef product proof", () => {
           unresolvedRefPreserved: true,
           ambientFallbackRejected: true,
           execRefGated: true,
-          execRefAllowed: process.platform !== "win32",
-          execRefWindowsAclBlocked: process.platform === "win32",
+          execRefAllowed: true,
+          fileRefAllowed: true,
           generatedTokenPersisted: true,
         })}`,
       );

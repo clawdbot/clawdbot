@@ -7,7 +7,24 @@ import {
 import type { PersistedClawPackageRef } from "./provenance.js";
 
 export function digestClawPackageRef(ref: PersistedClawPackageRef): string {
-  return `sha256:${createHash("sha256").update(stableStringify(ref)).digest("hex")}`;
+  const persisted = {
+    schemaVersion: ref.schemaVersion,
+    agentId: ref.agentId,
+    clawName: ref.clawName,
+    kind: ref.kind,
+    source: ref.source,
+    ref: ref.ref,
+    version: ref.version,
+    integrity: ref.integrity,
+    status: ref.status,
+    relationship: ref.relationship,
+    origin: ref.origin,
+    independentOwner: ref.independentOwner,
+    ...(ref.extension ? { extension: ref.extension } : {}),
+    installedAtMs: ref.installedAtMs,
+    updatedAtMs: ref.updatedAtMs,
+  };
+  return `sha256:${createHash("sha256").update(stableStringify(persisted)).digest("hex")}`;
 }
 
 export function replaceClawPackageRefExpected(
@@ -36,6 +53,12 @@ export function replaceClawPackageRefExpected(
               AND relationship = @relationship
               AND origin = @origin
               AND independent_owner = @independent_owner
+              AND extension_id IS @extension_id
+              AND extension_format IS @extension_format
+              AND extension_detected_format IS @extension_detected_format
+              AND extension_mapped_json IS @extension_mapped_json
+              AND extension_unavailable_json IS @extension_unavailable_json
+              AND extension_adapter_identity IS @extension_adapter_identity
               AND installed_at_ms = @installed_at_ms
               AND updated_at_ms = @updated_at_ms`,
         )
@@ -52,6 +75,16 @@ export function replaceClawPackageRefExpected(
           relationship: expected.relationship,
           origin: expected.origin,
           independent_owner: expected.independentOwner ? 1 : 0,
+          extension_id: expected.extension?.id ?? null,
+          extension_format: expected.extension?.format ?? null,
+          extension_detected_format: expected.extension?.detectedFormat ?? null,
+          extension_mapped_json: expected.extension
+            ? JSON.stringify(expected.extension.mapped)
+            : null,
+          extension_unavailable_json: expected.extension
+            ? JSON.stringify(expected.extension.unavailable)
+            : null,
+          extension_adapter_identity: expected.extension?.adapterIdentity ?? null,
           installed_at_ms: expected.installedAtMs,
           updated_at_ms: expected.updatedAtMs,
         });
@@ -80,11 +113,15 @@ export function replaceClawPackageRefExpected(
           `INSERT INTO claw_package_refs (
            agent_id, package_kind, package_source, package_ref, package_version, package_integrity,
            schema_version, claw_name, package_status, relationship, origin, independent_owner,
+           extension_id, extension_format, extension_detected_format, extension_mapped_json,
+           extension_unavailable_json, extension_adapter_identity,
            installed_at_ms, updated_at_ms
          ) VALUES (
            @agent_id, @package_kind, @package_source, @package_ref, @package_version, @package_integrity,
            @schema_version, @claw_name, @package_status, @relationship, @origin,
-           @independent_owner, @installed_at_ms, @updated_at_ms
+           @independent_owner, @extension_id, @extension_format, @extension_detected_format,
+           @extension_mapped_json, @extension_unavailable_json, @extension_adapter_identity,
+           @installed_at_ms, @updated_at_ms
          )`,
         )
         .run({
@@ -100,6 +137,16 @@ export function replaceClawPackageRefExpected(
           relationship: replacement.relationship,
           origin: replacement.origin,
           independent_owner: replacement.independentOwner ? 1 : 0,
+          extension_id: replacement.extension?.id ?? null,
+          extension_format: replacement.extension?.format ?? null,
+          extension_detected_format: replacement.extension?.detectedFormat ?? null,
+          extension_mapped_json: replacement.extension
+            ? JSON.stringify(replacement.extension.mapped)
+            : null,
+          extension_unavailable_json: replacement.extension
+            ? JSON.stringify(replacement.extension.unavailable)
+            : null,
+          extension_adapter_identity: replacement.extension?.adapterIdentity ?? null,
           installed_at_ms: replacement.installedAtMs,
           updated_at_ms: replacement.updatedAtMs,
         });

@@ -27,18 +27,6 @@ export function readTrimmedString(params: Record<string, unknown>, key: string):
   return typeof value === "string" ? value.trim() : "";
 }
 
-export function readBoolean(
-  params: Record<string, unknown>,
-  key: string,
-  defaultValue = false,
-): boolean {
-  const value = params[key];
-  if (typeof value === "boolean") {
-    return value;
-  }
-  return defaultValue;
-}
-
 export function readClampedInt(params: {
   input: Record<string, unknown>;
   key: string;

@@ -16,6 +16,7 @@ import {
   formatMs,
   formatTokens,
 } from "../../lib/format.ts";
+import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 
 // Leaf contract: the slice of the cron view props this module needs. Keeping
@@ -169,6 +170,8 @@ export function renderRunsSection(props: CronRunsSectionProps) {
     .map((option) => option.label);
   const statusSummary = summarizeSelection(selectedStatusLabels, t("cron.runs.allStatuses"));
   const deliverySummary = summarizeSelection(selectedDeliveryLabels, t("cron.runs.allDelivery"));
+  // The sort select's .value binding commits before its options exist;
+  // selected attributes preserve non-first values.
   return html`
     <div class="cron-runs">
       <div class="cron-run-filters">
@@ -226,8 +229,12 @@ export function renderRunsSection(props: CronRunsSectionProps) {
               cronRunsSortDir: (e.target as HTMLSelectElement).value as CronSortDir,
             })}
         >
-          <option value="desc">${t("cron.runs.newestFirst")}</option>
-          <option value="asc">${t("cron.runs.oldestFirst")}</option>
+          <option value="desc" ?selected=${props.runsSortDir === "desc"}>
+            ${t("cron.runs.newestFirst")}
+          </option>
+          <option value="asc" ?selected=${props.runsSortDir === "asc"}>
+            ${t("cron.runs.oldestFirst")}
+          </option>
         </select>
       </div>
       ${runs.length === 0
@@ -336,7 +343,7 @@ function renderRun(
             : nothing}
           <div class="muted">
             ${typeof entry.durationMs === "number" && Number.isFinite(entry.durationMs)
-              ? (formatDurationCompact(entry.durationMs, { spaced: true }) ??
+              ? (formatDurationCompact(entry.durationMs) ??
                 formatDurationHuman(entry.durationMs, t("common.na")))
               : t("common.na")}
           </div>
@@ -349,14 +356,7 @@ function renderRun(
                   class="session-link"
                   href=${chatUrl}
                   @click=${(e: MouseEvent) => {
-                    if (
-                      e.defaultPrevented ||
-                      e.button !== 0 ||
-                      e.metaKey ||
-                      e.ctrlKey ||
-                      e.shiftKey ||
-                      e.altKey
-                    ) {
+                    if (!shouldHandleNavigationClick(e)) {
                       return;
                     }
                     if (onNavigateToChat && entry.sessionKey) {

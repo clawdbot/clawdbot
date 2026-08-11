@@ -60,7 +60,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      const link = page.getByRole("link", { name: "测试 report.pdf" });
+      const link = page.getByRole("link", { name: "测试 report.pdf", exact: true });
       await link.waitFor({ state: "visible", timeout: 10_000 });
       const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
 
@@ -645,19 +645,21 @@ suite.define(() => {
       const overflowProof = await readBlobProof();
       // Concurrent image fetches can resolve in any order. Find the real LRU
       // rather than assuming that creation order matches transcript order.
+      expect(overflowProof.revoked).toHaveLength(1);
       const evictedBlobUrl = expectDefined(
-        overflowProof.created.find((blobUrl) => blobUrl !== retainedRecentBlobUrl),
+        overflowProof.revoked.find((blobUrl) => blobUrl !== retainedRecentBlobUrl),
         "evicted managed image Blob URL",
       );
+      expect(overflowProof.created).toContain(evictedBlobUrl);
       const evictedImageIndex = initialBlobUrls.indexOf(evictedBlobUrl);
       expect(evictedImageIndex).toBeGreaterThanOrEqual(0);
-      expect(overflowProof.revoked).toContain(evictedBlobUrl);
       expect(overflowProof.revoked).not.toContain(retainedRecentBlobUrl);
 
-      const evictedPath = new URL(
+      const evictedUrl = new URL(
         expectDefined(imageUrls[evictedImageIndex], "evicted managed image URL"),
         suite.server.baseUrl,
-      ).pathname;
+      );
+      const evictedPath = evictedUrl.pathname.replace(/\/full$/u, "/thumbnail");
       const fetchesBeforeRevisit = fetchedMedia.filter(
         (request) => request.pathname === evictedPath,
       ).length;

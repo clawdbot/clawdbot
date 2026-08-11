@@ -1,4 +1,7 @@
-import { publishSqliteSessionEntryCacheInvalidation } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
+import {
+  publishSessionEntryCacheInvalidation,
+  trackSessionEntryCacheWrite,
+} from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { parseSqliteSessionEntryRecord } from "../config/sessions/session-entry-json.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
@@ -21,23 +24,29 @@ export function writeValidatedDoctorSessionEntryJson(
     throw new Error(`Refusing invalid SQLite session entry rewrite for ${row.session_key}`);
   }
   const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
-  executeSqliteQuerySync(
-    database.db,
-    db
-      .updateTable("session_nodes")
-      .set({ entry_json: entryJson })
-      .where("session_key", "=", row.session_key),
-  );
-  // The entry_json trigger marks every rewrite pending, including a value already validated
-  // above. Settle it separately so the next strict reader does not reject doctor's output.
-  executeSqliteQuerySync(
-    database.db,
-    db
-      .updateTable("session_nodes")
-      .set({ entry_valid: 1 })
-      .where("session_key", "=", row.session_key),
-  );
+  const writeGeneration = trackSessionEntryCacheWrite(database, () => {
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("session_nodes")
+        .set({ entry_json: entryJson })
+        .where("session_key", "=", row.session_key),
+    );
+    // The entry_json trigger marks every rewrite pending, including a value already validated
+    // above. Settle it separately so the next strict reader does not reject doctor's output.
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("session_nodes")
+        .set({ entry_valid: 1 })
+        .where("session_key", "=", row.session_key),
+    );
+  });
   // The transaction owner defers this row publication until commit; rollback must never
   // expose repaired JSON through a warm connection-local session cache.
-  publishSqliteSessionEntryCacheInvalidation(database, { ...row, entry_json: entryJson });
+  publishSessionEntryCacheInvalidation(
+    database,
+    { ...row, entry_json: entryJson },
+    writeGeneration,
+  );
 }

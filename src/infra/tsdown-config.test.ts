@@ -128,34 +128,6 @@ describe("tsdown config", () => {
     expect(watchedPaths).toEqual([schemaPath]);
   });
 
-  it("includes canonical schema bytes in the Vitest filesystem cache key", () => {
-    const rootDir = process.cwd();
-    const plugin = createStateSchemaInlinePlugin(rootDir, { vitestFsModuleCache: true });
-    let cacheKeyGenerator:
-      | ((context: { id: string; sourceCode: string; environment: unknown }) => unknown)
-      | undefined;
-    plugin.configureVitest?.({
-      experimental_defineCacheKeyGenerator(callback) {
-        cacheKeyGenerator = callback;
-      },
-    });
-
-    expect(
-      cacheKeyGenerator?.({
-        id: path.resolve(rootDir, "src/state/openclaw-state-schema.ts"),
-        sourceCode: "",
-        environment: {},
-      }),
-    ).toBe(readFileSync(path.resolve(rootDir, "src/state/openclaw-state-schema.sql"), "utf8"));
-    expect(
-      cacheKeyGenerator?.({
-        id: path.resolve(rootDir, "src/state/openclaw-state-db.ts"),
-        sourceCode: "",
-        environment: {},
-      }),
-    ).toBeUndefined();
-  });
-
   it("installs schema inlining only on the unified runtime graph", () => {
     const unifiedGraph = requireUnifiedDistGraph();
     const inlinePlugins = asConfigArray(tsdownConfig).flatMap(
@@ -253,6 +225,14 @@ describe("tsdown config", () => {
 
     expect(entrySources(distGraph)["gateway/worker-environments/runtime"]).toBe(
       "src/gateway/worker-environments/runtime.ts",
+    );
+  });
+
+  it("keeps Gateway plugin reload targets behind one stable dist entry", () => {
+    const distGraph = requireUnifiedDistGraph();
+
+    expect(entrySources(distGraph)["gateway/plugin-channel-reload-targets"]).toBe(
+      "src/gateway/plugin-channel-reload-targets.ts",
     );
   });
 

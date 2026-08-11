@@ -7,7 +7,7 @@
  * and stay framework-agnostic.
  */
 
-import { asOptionalObjectRecord as asRecord } from "../utils/string-normalize.js";
+import { readQqbotObjectRecord as asOptionalObjectRecord } from "../object-record.js";
 import { DEFAULT_ACCOUNT_ID } from "./resolve.js";
 
 // ---- Logout: clear all credential fields for an account ----
@@ -29,8 +29,8 @@ export function clearAccountCredentials(
   accountId: string,
 ): ClearCredentialsResult {
   const nextCfg = { ...cfg };
-  const channels = asRecord(cfg.channels);
-  const nextQQBot = channels?.qqbot ? { ...asRecord(channels.qqbot) } : undefined;
+  const channels = asOptionalObjectRecord(cfg.channels);
+  const nextQQBot = channels?.qqbot ? { ...asOptionalObjectRecord(channels.qqbot) } : undefined;
   let cleared = false;
   let changed = false;
 

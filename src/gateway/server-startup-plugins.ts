@@ -1,6 +1,6 @@
 // Gateway plugin startup bootstrap and adjacent startup maintenance.
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { initSubagentRegistry } from "../agents/subagent-registry.js";
+import { initSubagentRegistry } from "../agents/subagents/registry/subagent-registry.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -145,8 +145,8 @@ export async function prepareGatewayPluginBootstrap(params: {
           workerProviderIds: params.workerProviderIds ?? [],
           ambientEnvTriggers: params.ambientEnvTriggers,
         });
-  // Startup logging consumes the same process-stable manifest snapshot used for
-  // activation planning. Minimal gateways deliberately have no plugin metadata.
+  // Startup logging and lifecycle publication consume the process-stable metadata snapshot.
+  // Minimal gateways skip runtime lookup-table construction, not metadata ownership.
   const pluginManifestRecords =
     pluginLookUpTable?.manifestRegistry.plugins ??
     params.pluginMetadataSnapshot?.manifestRegistry.plugins ??
@@ -179,6 +179,7 @@ export async function prepareGatewayPluginBootstrap(params: {
     defaultWorkspaceDir,
     startupPluginIds,
     pluginManifestRecords,
+    pluginMetadataSnapshot: pluginLookUpTable ?? params.pluginMetadataSnapshot,
     pluginLookUpTable,
     baseMethods,
     pluginRegistry,

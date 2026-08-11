@@ -222,6 +222,8 @@ function createMistralRealtimeTranscriptionSession(
       return;
     }
     if (event.type === "session.created") {
+      clearPartial();
+      hasFinalSegment = false;
       transport.sendJson({
         type: "session.update",
         session: {

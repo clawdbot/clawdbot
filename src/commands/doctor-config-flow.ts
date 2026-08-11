@@ -12,6 +12,7 @@ import { callGateway } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   noteImplicitFallbackClobberWarnings,
+  noteMcpOriginWarning,
   noteOpencodeProviderOverrides,
   noteSandboxOriginProxyWarning,
 } from "./doctor-config-analysis.js";
@@ -33,12 +34,6 @@ import { materializeDefaultAgentRoles } from "./doctor/shared/default-agent-role
 import { isSingleTopLevelIncludeMigration } from "./doctor/shared/include-migration-ownership.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 import type { DoctorPluginMetadataSnapshotState } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
-
-function hasLegacyInternalHookHandlers(raw: unknown): boolean {
-  const handlers = (raw as { hooks?: { internal?: { handlers?: unknown } } })?.hooks?.internal
-    ?.handlers;
-  return Array.isArray(handlers) && handlers.length > 0;
-}
 
 function collectInvalidHookTransformsDirWarnings(
   cfg: OpenClawConfig,
@@ -314,16 +309,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note(legacyIssueLines.join("\n"), "Legacy config keys detected");
   }
   emitDoctorChangesPanel(legacyStep.changeLines, shouldRepair);
-  if (hasLegacyInternalHookHandlers(snapshot.parsed)) {
-    note(
-      [
-        "- hooks.internal.handlers: legacy inline hook modules are no longer part of the public config surface.",
-        "- Migrate each entry to a managed or workspace hook directory with HOOK.md + handler.js, then enable it through hooks.internal.entries.<hookKey> as needed.",
-        "- openclaw doctor --fix does not rewrite this shape automatically.",
-      ].join("\n"),
-      "Legacy config keys detected",
-    );
-  }
   const hookTransformsDirWarnings = collectInvalidHookTransformsDirWarnings(
     state.cfg,
     snapshot.path,
@@ -441,6 +426,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       applyConfigMutation(staleCleanup, {
         fixHint: `Run "${doctorFixCommand}" to remove stale channel plugin references.`,
         sanitize: true,
+        emitWarnings: true,
       });
     }
   }
@@ -562,6 +548,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   });
   noteImplicitFallbackClobberWarnings(cfg);
   noteSandboxOriginProxyWarning(cfg);
+  noteMcpOriginWarning(cfg);
 
   return {
     cfg,

@@ -3,11 +3,34 @@ import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
-import type { WorkerPlacementTurnBinding, WorkerSessionPlacementGate } from "./service.js";
+
+type WorkerPlacementBinding = Readonly<{
+  sessionId: string;
+  environmentId: string;
+  ownerEpoch: number;
+}>;
+
+export type WorkerPlacementTurnBinding = WorkerPlacementBinding &
+  Readonly<{
+    runId: string;
+  }>;
+
+export type WorkerSessionPlacementGate = {
+  hasWorkerTurn(binding: WorkerPlacementBinding): boolean;
+  validateWorkerTurn(binding: WorkerPlacementTurnBinding): boolean;
+  isWorkerTurnToolAuthorized(binding: WorkerPlacementTurnBinding, toolName: string): boolean;
+  updateAckCursors(
+    binding: WorkerPlacementTurnBinding & {
+      transcriptSeq?: number;
+      liveSeq?: number;
+      workspaceResultPending?: boolean;
+    },
+  ): void;
+};
 
 function claimForBinding(
   record: WorkerSessionPlacementRecord | undefined,
-  binding: WorkerPlacementTurnBinding,
+  binding: WorkerPlacementBinding & { runId?: string },
 ): WorkerSessionTurnClaim | undefined {
   const persisted = record?.turnClaim;
   if (
@@ -16,7 +39,7 @@ function claimForBinding(
     record.environmentId !== binding.environmentId ||
     record.activeOwnerEpoch !== binding.ownerEpoch ||
     persisted?.owner !== "worker" ||
-    persisted.runId !== binding.runId ||
+    (binding.runId !== undefined && persisted.runId !== binding.runId) ||
     persisted.ownerEpoch !== binding.ownerEpoch
   ) {
     return undefined;
@@ -43,7 +66,16 @@ export function createWorkerSessionPlacementGate(
   };
 
   return {
+    hasWorkerTurn(binding): boolean {
+      const claim = claimForBinding(store.get(binding.sessionId), binding);
+      return claim ? store.validateTurnClaim(claim) : false;
+    },
+
     validateWorkerTurn,
+
+    isWorkerTurnToolAuthorized(binding, toolName): boolean {
+      return store.isWorkerTurnToolAuthorized(binding, toolName);
+    },
 
     updateAckCursors(binding): void {
       const claim = claimForBinding(store.get(binding.sessionId), binding);

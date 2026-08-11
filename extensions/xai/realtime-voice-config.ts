@@ -9,13 +9,18 @@ import type {
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
   asFiniteNumber,
+  asRecord,
   normalizeOptionalString,
-  parseBooleanValue as readBoolean,
+  parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { XAI_BASE_URL } from "./model-definitions.js";
 
 type XaiRealtimeVoice = "eve" | "ara" | "rex" | "sal" | "leo";
 type XaiRealtimeReasoningEffort = "high" | "none";
+
+function readXaiObjectRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" ? asRecord(value) : undefined;
+}
 
 type XaiRealtimeVoiceProviderConfig = {
   apiKey?: string;
@@ -131,14 +136,23 @@ export const XAI_REALTIME_VOICES = [
   "leo",
 ] as const satisfies readonly XaiRealtimeVoice[];
 
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+export function serializeXaiRealtimeToolResult(result: unknown): string {
+  const message = "xAI realtime voice tool result is not JSON-serializable";
+  try {
+    const serialized = JSON.stringify(result);
+    if (typeof serialized === "string") {
+      return serialized;
+    }
+  } catch (cause) {
+    throw new Error(message, { cause });
+  }
+  throw new Error(message);
 }
 
 function readNestedXaiConfig(rawConfig: RealtimeVoiceProviderConfig) {
-  const raw = readRecord(rawConfig);
-  const providers = readRecord(raw?.providers);
-  return readRecord(providers?.xai ?? raw?.xai ?? raw) ?? {};
+  const raw = readXaiObjectRecord(rawConfig);
+  const providers = readXaiObjectRecord(raw?.providers);
+  return readXaiObjectRecord(providers?.xai ?? raw?.xai ?? raw) ?? {};
 }
 
 export function normalizeXaiRealtimeBaseUrl(value?: string): string {
@@ -194,9 +208,9 @@ export function normalizeXaiRealtimeProviderConfig(
     vadThreshold: asXaiVadThreshold(raw.vadThreshold),
     silenceDurationMs: asXaiDurationMs(raw.silenceDurationMs),
     prefixPaddingMs: asXaiDurationMs(raw.prefixPaddingMs),
-    interruptResponseOnInputAudio: readBoolean(raw.interruptResponseOnInputAudio),
+    interruptResponseOnInputAudio: parseBooleanValue(raw.interruptResponseOnInputAudio),
     reasoningEffort: asXaiReasoningEffort(raw.reasoningEffort),
-    sessionResumption: readBoolean(raw.sessionResumption),
+    sessionResumption: parseBooleanValue(raw.sessionResumption),
   };
 }
 
@@ -204,7 +218,7 @@ export function readXaiRealtimeErrorDetail(error: unknown): string {
   if (typeof error === "string" && error) {
     return error;
   }
-  const record = readRecord(error);
+  const record = readXaiObjectRecord(error);
   return (
     normalizeOptionalString(record?.message) ??
     normalizeOptionalString(record?.code) ??

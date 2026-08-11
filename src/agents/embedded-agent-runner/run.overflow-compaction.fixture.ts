@@ -4,7 +4,7 @@
 import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
 import { normalizeAgentRunAttemptTerminal } from "../agent-run-terminal-outcome.js";
 import { isAgentToolReplaySafe } from "../tool-replay-safety.js";
-import { buildAttemptReplayMetadata } from "./run/incomplete-turn.js";
+import { buildAttemptReplayMetadata } from "./run/attempt-terminal-evidence.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 const DEFAULT_OVERFLOW_ERROR_MESSAGE =

@@ -1,6 +1,7 @@
 /** Tracks managed service environment keys across reinstall and repair flows. */
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
+import { detectRespawnSupervisor } from "../infra/supervisor-markers.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 
 const MANAGED_SERVICE_ENV_KEYS_VAR = "OPENCLAW_SERVICE_MANAGED_ENV_KEYS";
@@ -70,6 +71,36 @@ export function readManagedServiceEnvKeysFromEnvironment(
     }
   }
   return new Set();
+}
+
+export function readManagedSystemdServiceEnvKeysFromEnvironment(
+  environment: Record<string, string | undefined> | undefined,
+  platform: NodeJS.Platform = process.platform,
+): Set<string> {
+  // Only systemd snapshots state dotenv values into its inherited service environment.
+  // Other supervisors retain their existing reinstall-based precedence contract.
+  return environment && detectRespawnSupervisor(environment, platform) === "systemd"
+    ? readManagedServiceEnvKeysFromEnvironment(environment)
+    : new Set();
+}
+
+export function clearMissingManagedServiceEnvKeys(params: {
+  environment: Record<string, string | undefined>;
+  managedKeys: Iterable<string>;
+  presentKeys: Iterable<string>;
+  preserveKeys?: Iterable<string>;
+}): void {
+  const presentKeys = new Set(
+    [...params.presentKeys, ...(params.preserveKeys ?? [])].flatMap((key) => {
+      const normalized = normalizeServiceEnvKey(key);
+      return normalized ? [normalized] : [];
+    }),
+  );
+  const missingKeys = [...params.managedKeys].filter((key) => {
+    const normalized = normalizeServiceEnvKey(key);
+    return normalized !== null && !presentKeys.has(normalized);
+  });
+  deleteManagedServiceEnvKeys(params.environment, missingKeys);
 }
 
 function deleteManagedServiceEnvKeys(

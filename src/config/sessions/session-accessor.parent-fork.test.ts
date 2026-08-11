@@ -7,7 +7,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import {
+  forkSessionEntryFromParentTarget,
   forkSessionFromParentTranscript,
+  loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
   replaceTranscriptEvents,
@@ -726,5 +728,52 @@ describe("forkSessionFromParentTranscript", () => {
       agentId: "main",
       sessionId: parentSessionId,
     });
+  });
+
+  it("clears a reused child token snapshot after parent identity spread", async () => {
+    const root = await makeRoot("openclaw-parent-fork-reused-child-");
+    const storePath = path.join(root, "sessions.json");
+    const parentKey = "agent:main:main";
+    const childKey = "agent:main:child";
+    const parentSessionId = "parent-reused-child";
+    await replaceSessionEntry(
+      { sessionKey: parentKey, storePath },
+      { sessionId: parentSessionId, updatedAt: 1 },
+    );
+    await replaceSessionEntry(
+      { sessionKey: childKey, storePath },
+      {
+        sessionId: "old-child",
+        updatedAt: 1,
+        totalTokens: 88_876,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
+    );
+    await seedParentTranscript({
+      storePath,
+      parentSessionId,
+      events: [
+        { type: "session", version: 3, id: parentSessionId, timestamp: "2026-05-01T00:00:00Z" },
+        {
+          type: "message",
+          id: "parent-user",
+          parentId: null,
+          message: { role: "user", content: "fork me" },
+        },
+      ],
+    });
+
+    const result = await forkSessionEntryFromParentTarget({
+      storePath,
+      parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey] },
+      sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
+    });
+
+    expect(result.status).toBe("forked");
+    const childEntry = loadSessionEntry({ sessionKey: childKey, storePath });
+    expect(childEntry?.totalTokens).toBeUndefined();
+    expect(childEntry?.totalTokensFresh).toBe(false);
+    expect(childEntry?.totalTokensVersion).toBeUndefined();
   });
 });

@@ -486,7 +486,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     service.loaded &&
     service.runtime?.status === "running" &&
     status.port &&
-    status.port.status !== "busy"
+    status.port.status === "free"
   ) {
     defaultRuntime.error(
       errorText(`Gateway port ${status.port.port} is not listening (service appears running).`),

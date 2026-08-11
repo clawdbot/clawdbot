@@ -34,7 +34,7 @@ vi.mock("../tool-result-truncation.js", () => ({
   truncateOversizedToolResultsInMessages: hoisted.truncateOversizedToolResultsInMessages,
 }));
 
-import { prepareEmbeddedAttemptPromptContext } from "./attempt-prompt-context.js";
+import { prepareEmbeddedAttemptPromptContext } from "./attempt-prompt-build.js";
 
 const messages = [
   {

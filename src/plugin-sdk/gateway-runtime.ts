@@ -5,7 +5,7 @@ export type { GatewayRpcOpts } from "../cli/gateway-rpc.js";
 export { isLoopbackHost } from "../gateway/net.js";
 export async function resolveAdvertisedLanHost(): Promise<string | null> {
   const runtime = await import("../infra/advertised-lan-host.js");
-  return await runtime.resolveAdvertisedLanHost();
+  return await runtime.resolveAdvertisedLanHostCore();
 }
 export { resolveHostedPluginSurfaceUrl } from "../gateway/hosted-plugin-surface-url.js";
 export type { HostedPluginSurfaceUrlParams } from "../gateway/hosted-plugin-surface-url.js";
@@ -25,8 +25,8 @@ export type { NodeSession } from "../gateway/node-registry.js";
 export { resolveNodeFromNodeList } from "../shared/node-resolve.js";
 export type { NodeMatchCandidate } from "../shared/node-match.js";
 export {
+  parseGatewayPayload as safeParseJson,
   respondUnavailableOnNodeInvokeError,
-  safeParseJson,
 } from "../gateway/server-methods/nodes.helpers.js";
 export type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
 export { ensureGatewayStartupAuth } from "../gateway/startup-auth.js";

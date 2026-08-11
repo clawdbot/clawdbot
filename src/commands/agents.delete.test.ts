@@ -7,9 +7,12 @@ import {
   resolveDefaultAgentId,
   toAgentEntriesRecord,
 } from "../agents/agent-scope-config.js";
-import { resolveStorePath } from "../config/sessions.js";
+import { resolveSessionStorePathCore } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { listSessionEntries, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  listSessionEntriesCore,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
@@ -102,10 +105,12 @@ async function arrangeAgentsDeleteTest(params: {
     agents: { ...agents, entries: toAgentEntriesRecord(roster) },
   };
   const storeAgentId = resolveFixtureStoreAgentId(cfg, deletedAgentId);
-  const storePath = resolveStorePath(cfg.session?.store, { agentId: deletedAgentId });
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: deletedAgentId });
   for (const [sessionKey, entry] of Object.entries(params.sessions)) {
     const entryAgentId = parseAgentSessionKey(sessionKey)?.agentId ?? storeAgentId;
-    const entryStorePath = resolveStorePath(cfg.session?.store, { agentId: entryAgentId });
+    const entryStorePath = resolveSessionStorePathCore(cfg.session?.store, {
+      agentId: entryAgentId,
+    });
     await replaceSessionEntry({ agentId: entryAgentId, sessionKey, storePath: entryStorePath }, {
       ...entry,
       delivery: { kind: "none" },
@@ -142,9 +147,9 @@ function expectSessionStore(
   expect(
     Object.fromEntries(
       [...agentIds].flatMap((storeAgentId) =>
-        listSessionEntries({
+        listSessionEntriesCore({
           agentId: storeAgentId,
-          storePath: resolveStorePath(cfg.session?.store, { agentId: storeAgentId }),
+          storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: storeAgentId }),
         }).map(({ entry, sessionKey }) => [sessionKey, entry]),
       ),
     ),

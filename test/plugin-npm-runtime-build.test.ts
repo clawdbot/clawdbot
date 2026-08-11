@@ -14,7 +14,7 @@ import {
   listMissingPluginNpmRuntimeHostExports,
   listPublishablePluginPackageDirs,
   resolvePluginNpmRuntimeBuildPlan,
-} from "../scripts/lib/plugin-npm-runtime-build.mjs";
+} from "../scripts/lib/plugin-npm-runtime-build.mts";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -93,7 +93,7 @@ describe("plugin npm runtime build planning", () => {
       expectDistRelativePaths(plan.runtimeBuildOutputs);
       expect(plan.packageFiles).toContain("dist/**");
       expect(plan.packagePeerMetadata.peerDependencies.openclaw).toBe(
-        plan.packageJson.openclaw.compat.pluginApi,
+        plan.packageJson.openclaw?.compat?.pluginApi,
       );
       expect(plan.packagePeerMetadata.peerDependenciesMeta.openclaw.optional).toBe(true);
     }
@@ -240,19 +240,16 @@ describe("plugin npm runtime build planning", () => {
     expect(plan.runtimeBuildOutputs).toContain("./dist/setup-api.js");
   });
 
-  it.each(["codex", "copilot"])(
-    "keeps published %s runtime imports resolvable from the host package",
-    async (pluginId) => {
-      const result = await buildPluginNpmRuntime({
-        repoRoot,
-        packageDir: `extensions/${pluginId}`,
-        logLevel: "silent",
-      });
-      const plan = expectPluginNpmRuntimeBuildPlan(result);
+  it("keeps published Codex runtime imports resolvable from the host package", async () => {
+    const result = await buildPluginNpmRuntime({
+      repoRoot,
+      packageDir: "extensions/codex",
+      logLevel: "silent",
+    });
+    const plan = expectPluginNpmRuntimeBuildPlan(result);
 
-      expect(listMissingPluginNpmRuntimeHostExports(plan)).toEqual([]);
-    },
-  );
+    expect(listMissingPluginNpmRuntimeHostExports(plan)).toEqual([]);
+  });
 
   it("detects unresolved side-effect host imports in built plugin runtimes", () => {
     const outDir = tempDirs.make("openclaw-plugin-runtime-host-import-");
@@ -275,45 +272,6 @@ describe("plugin npm runtime build planning", () => {
     expect(listMissingPluginNpmRuntimeHostExports({ ...plan, outDir })).toEqual([
       "openclaw/plugin-sdk/not-exported",
       "openclaw/plugin-sdk/not-exported-from-require",
-    ]);
-  });
-
-  it("allows private harness authority imports only for their official package owners", () => {
-    const outDir = tempDirs.make("openclaw-plugin-runtime-private-owner-import-");
-    writeFileSync(
-      path.join(outDir, "index.js"),
-      [
-        'import "openclaw/plugin-sdk/agent-harness-tool-authority-runtime";',
-        'import "openclaw/plugin-sdk/not-owner-restricted";',
-        "",
-      ].join("\n"),
-    );
-    const plan = expectPluginNpmRuntimeBuildPlan(
-      resolvePluginNpmRuntimeBuildPlan({
-        repoRoot,
-        packageDir: path.join(repoRoot, "extensions", "codex"),
-      }),
-    );
-
-    expect(listMissingPluginNpmRuntimeHostExports({ ...plan, outDir })).toEqual([
-      "openclaw/plugin-sdk/not-owner-restricted",
-    ]);
-    expect(
-      listMissingPluginNpmRuntimeHostExports({
-        ...plan,
-        outDir,
-        packageJson: { ...plan.packageJson, name: "@openclaw/copilot" },
-      }),
-    ).toEqual(["openclaw/plugin-sdk/not-owner-restricted"]);
-    expect(
-      listMissingPluginNpmRuntimeHostExports({
-        ...plan,
-        outDir,
-        packageJson: { ...plan.packageJson, name: "@openclaw/demo" },
-      }),
-    ).toEqual([
-      "openclaw/plugin-sdk/agent-harness-tool-authority-runtime",
-      "openclaw/plugin-sdk/not-owner-restricted",
     ]);
   });
 

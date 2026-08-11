@@ -1,6 +1,7 @@
 // Doctor-only import for the retired TUI last-session JSON store.
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -60,10 +61,6 @@ function assertLegacySourceUnchanged(sourcePath: string, expected: LegacySourceS
     label: "TUI last-session",
     followSymlinks: true,
   });
-}
-
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function isHeartbeatSessionKey(sessionKey: string): boolean {

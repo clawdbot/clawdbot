@@ -4,10 +4,9 @@
  * Records quota/manual/circuit suspensions and temporarily lowers command-lane concurrency.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import path from "node:path";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
 import { resolveCronMaxConcurrentRuns } from "../config/cron-limits.js";
-import { patchSessionEntry } from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { QuotaSuspension } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -18,8 +17,9 @@ import {
   resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "../shared/number-coercion.js";
+import { resolveRegisteredAgentIdForDir } from "./agent-dir-registry.js";
 import { resolveStoredSessionKeyForSessionId } from "./command/session.js";
-import type { FailoverReason } from "./embedded-agent-helpers/types.js";
+import type { FailoverReason } from "./failover/signal.js";
 
 const log = createSubsystemLogger("session-suspension");
 
@@ -116,6 +116,7 @@ type SessionSuspensionTarget =
   | { mode: "suspend" };
 export type SessionSuspensionParams = {
   cfg: OpenClawConfig | undefined;
+  agentId?: string;
   agentDir?: string;
   sessionId: string;
   laneId?: string;
@@ -312,10 +313,15 @@ async function suspendSessionQueued(params: SessionSuspensionParams, queuedGener
     return;
   }
 
+  // agentDir is <state>/agents/<id>/agent, so basename(agentDir) is always the
+  // literal "agent" — only the registry lookup recovers the real owner id.
+  const agentIdFromDir = params.agentDir
+    ? resolveRegisteredAgentIdForDir(params.agentDir)
+    : undefined;
   const { sessionKey, storePath } = resolveStoredSessionKeyForSessionId({
     cfg: params.cfg,
     sessionId: params.sessionId,
-    agentId: params.agentDir ? path.basename(params.agentDir) : undefined,
+    agentId: params.agentId ?? agentIdFromDir,
   });
 
   if (!sessionKey) {
@@ -368,7 +374,7 @@ async function suspendSessionQueued(params: SessionSuspensionParams, queuedGener
   let persistedSuspension: boolean;
 
   try {
-    const patchedEntry = await patchSessionEntry(
+    const patchedEntry = await patchSessionEntryCore(
       { storePath, sessionKey },
       (entry) => {
         if (getSessionSuspensionState().cleanupGeneration !== suspensionGeneration) {
@@ -417,7 +423,7 @@ async function suspendSessionQueued(params: SessionSuspensionParams, queuedGener
     (postPatchState.cleanupActive || suspensionGeneration !== postPatchState.cleanupGeneration)
   ) {
     try {
-      await patchSessionEntry(
+      await patchSessionEntryCore(
         { storePath, sessionKey },
         (entry) =>
           entry.quotaSuspension?.suspendedAt === now &&

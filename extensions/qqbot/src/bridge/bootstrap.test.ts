@@ -88,6 +88,8 @@ describe("QQBot built-in platform adapter", () => {
       approvalId: "exec:looks-like-exec/1",
       approvalKind: "plugin",
       decision: "allow-once",
+      accountId: "default",
+      senderId: "owner",
     });
 
     expect(mocks.resolveApprovalOverGateway).toHaveBeenCalledWith({
@@ -95,6 +97,9 @@ describe("QQBot built-in platform adapter", () => {
       approvalId: "exec:looks-like-exec/1",
       approvalKind: "plugin",
       decision: "allow-once",
+      channel: "qqbot",
+      accountId: "default",
+      senderId: "owner",
       clientDisplayName: "QQBot Approval Handler",
     });
     expect(result).toBe(canonicalLoserResult);

@@ -43,7 +43,6 @@ type ReadyContextEngineTurnOutboxPayload = Readonly<{
   boundary: TranscriptTurnBoundary;
   isHeartbeat: boolean;
   messages: AgentMessage[];
-  prePromptMessageCount: number;
   state: "ready";
 }>;
 
@@ -256,10 +255,10 @@ export function discardContextEngineTurnIntent(params: {
 }
 
 export function recoverContextEngineTurnOutbox(params: {
-  currentAdmission: TranscriptTurnAdmission;
   database: OpenClawAgentDatabase;
   engineId: string;
   ownerPluginId?: string;
+  sessionId: string;
   warn: (message: string) => void;
 }): void {
   const db = outboxDb(params.database);
@@ -270,7 +269,7 @@ export function recoverContextEngineTurnOutbox(params: {
       .select(["advancement_key", "payload_json"])
       .where("engine_id", "=", params.engineId)
       .where("owner_plugin_id", params.ownerPluginId ? "=" : "is", params.ownerPluginId ?? null)
-      .where("session_id", "=", params.currentAdmission.sessionId)
+      .where("session_id", "=", params.sessionId)
       .orderBy(outboxEnqueueSequence(), "asc"),
   ).rows;
   for (const row of rows) {
@@ -328,7 +327,6 @@ export function recoverContextEngineTurnOutbox(params: {
         boundary: payload.boundary,
         isHeartbeat: payload.isHeartbeat,
         messages: closedTurn.messages,
-        prePromptMessageCount: closedTurn.prePromptMessageCount,
       },
     });
   }
@@ -343,8 +341,7 @@ export async function drainContextEngineTurnOutbox(params: {
   limit?: number;
   warn: (message: string) => void;
 }): Promise<{ pending: boolean }> {
-  const commitTurn = params.engine.commitTurn?.bind(params.engine);
-  if (typeof commitTurn !== "function") {
+  if (typeof params.engine.commitTurn !== "function") {
     return { pending: false };
   }
   let remaining = Math.max(0, params.limit ?? 16);
@@ -392,7 +389,7 @@ export async function drainContextEngineTurnOutbox(params: {
         continue;
       }
       remaining -= 1;
-      if (await commitPendingContextEngineTurn({ ...params, commitTurn, db, row })) {
+      if (await commitPendingContextEngineTurn({ ...params, db, row })) {
         continuingSessionIds.push(sessionId);
       }
     }
@@ -421,7 +418,6 @@ function hasPendingContextEngineTurn(
 
 async function commitPendingContextEngineTurn(
   params: Omit<Parameters<typeof drainContextEngineTurnOutbox>[0], "limit" | "sessionId"> & {
-    commitTurn: NonNullable<ContextEngine["commitTurn"]>;
     db: ReturnType<typeof outboxDb>;
     row: PendingContextEngineTurn;
   },
@@ -432,12 +428,11 @@ async function commitPendingContextEngineTurn(
     if (payload.state !== "ready") {
       return false;
     }
-    const result = await params.commitTurn({
+    const commonParams = {
       advancementKey: row.advancement_key,
       admission: payload.boundary.admission,
       terminal: payload.boundary.terminal,
       messages: payload.messages,
-      prePromptMessageCount: payload.prePromptMessageCount,
       sessionId: payload.boundary.admission.sessionId,
       sessionKey: payload.boundary.admission.sessionKey,
       sessionTarget: {
@@ -447,7 +442,11 @@ async function commitPendingContextEngineTurn(
         storePath: payload.boundary.admission.storePath,
       },
       isHeartbeat: payload.isHeartbeat,
-    });
+    };
+    const result = await params.engine.commitTurn?.(commonParams);
+    if (!result) {
+      throw new Error("context engine does not implement commitTurn");
+    }
     if (result.status !== "committed" && result.status !== "duplicate") {
       throw new Error(`invalid commitTurn result status: ${String(result.status)}`);
     }

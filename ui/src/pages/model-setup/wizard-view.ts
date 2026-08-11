@@ -9,6 +9,7 @@ const WIZARD_TEXT_INPUT_ID = "model-setup-wizard-text-input";
 type WizardViewProps = {
   mode: "auth" | "prepare";
   state: ModelSetupWizardState;
+  refreshWarning: string | null;
   value: unknown;
   onValueChange: (value: unknown) => void;
   onAnswer: (value: unknown, includeValue?: boolean) => void;
@@ -46,6 +47,9 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
           </h2>
         </div>
         <div class="model-setup-wizard__body">
+          ${props.refreshWarning
+            ? html`<div class="callout warning" role="alert">${props.refreshWarning}</div>`
+            : nothing}
           ${props.state.phase === "starting"
             ? html`<div role="status">
                 ${t(

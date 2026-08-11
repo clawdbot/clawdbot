@@ -155,8 +155,7 @@ export function loadConfigFromContext(
         configPath,
         raw,
         parsed,
-        validateBackupSync: (backup) =>
-          context.resolveSuspiciousRecoveryBackupCandidate(backup.parsed) !== null,
+        prepareBackup: context.prepareRecoveryBackupCandidate,
       });
       if (recovery.raw !== raw) {
         restoreEnvChangesIfUnchanged({

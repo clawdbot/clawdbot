@@ -5,7 +5,7 @@ import {
 } from "./embeddings-remote-client.js";
 import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.types.js";
-import type { SsrFPolicy } from "./ssrf-policy.js";
+import type { SsrFPolicy } from "./openclaw-runtime-network.js";
 
 // Remote embedding provider factory for OpenAI-compatible embeddings APIs.
 

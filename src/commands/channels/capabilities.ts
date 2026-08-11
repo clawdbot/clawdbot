@@ -26,7 +26,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 import { persistResolvedChannelPluginConfig } from "./plugin-config-persistence.js";
-import { formatChannelAccountLabel, requireValidConfig } from "./shared.js";
+import { formatChannelAccountLabel, requireValidChannelConfig } from "./shared.js";
 
 export type ChannelsCapabilitiesOptions = {
   channel?: string;
@@ -303,7 +303,7 @@ export async function channelsCapabilitiesCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
-  const loadedCfg = await requireValidConfig(runtime);
+  const loadedCfg = await requireValidChannelConfig(runtime);
   if (!loadedCfg) {
     return;
   }

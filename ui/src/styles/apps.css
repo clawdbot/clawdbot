@@ -158,7 +158,7 @@
   font-size: var(--control-ui-text-sm);
   font-weight: 550;
   text-decoration: none;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition:
     transform 140ms ease,
     background 140ms ease,
@@ -200,7 +200,7 @@
   background: none;
   color: var(--text);
   font: inherit;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   text-decoration: underline;
   text-underline-offset: 2px;
 }

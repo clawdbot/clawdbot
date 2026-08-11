@@ -53,7 +53,6 @@
   letter-spacing: 0.04em;
 }
 
-.model-providers__layout,
 .model-providers__fallbacks,
 .model-providers__inline-form,
 .model-providers__probe {
@@ -135,9 +134,7 @@
 .model-providers__probe-summary,
 .model-providers__probe-target,
 .model-providers__fallback-heading,
-.model-providers__fallback-row,
-.model-providers__defaults-heading,
-.model-providers__add-heading {
+.model-providers__fallback-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -194,11 +191,6 @@
   grid-template-columns: minmax(160px, 0.8fr) minmax(220px, 1.4fr) auto;
 }
 
-.model-providers__card .callout,
-.model-providers__add .callout {
-  margin-top: 10px;
-}
-
 @media (max-width: 700px) {
   .model-providers__head {
     align-items: flex-start;
@@ -221,9 +213,7 @@
   }
 
   .model-providers__credentials,
-  .model-providers__confirm,
-  .model-providers__defaults-heading,
-  .model-providers__add-heading {
+  .model-providers__confirm {
     align-items: flex-start;
     flex-direction: column;
   }

@@ -6,7 +6,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
-import { saveJsonFile } from "../infra/json-file.js";
+import { writeJsonTarget } from "../infra/json-file.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import type { BundledPluginSource } from "../plugins/bundled-sources.js";
 import {
@@ -31,12 +31,13 @@ import {
   type StaleManagedNpmInstallGenerationIssue,
 } from "./doctor-plugin-generations.js";
 import {
-  listManagedPluginNpmRoots,
+  resolveDoctorPluginNpmRoots,
   listPluginOpenClawHostLinkIssues,
   maybeRepairPluginOpenClawHostLinks,
 } from "./doctor-plugin-host-links.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
+  InvalidPluginInstallRecordStateError,
   migratePluginRegistryForInstall,
   preflightPluginRegistryInstallMigration,
   type PluginRegistryInstallMigrationParams,
@@ -153,7 +154,7 @@ function listStaleManagedNpmBundledPlugins(
   );
   const stale: StaleManagedNpmBundledPlugin[] = [];
 
-  for (const npmRoot of listManagedPluginNpmRoots(params)) {
+  for (const npmRoot of resolveDoctorPluginNpmRoots(params)) {
     const npmPackageJsonPath = path.join(npmRoot, "package.json");
     const dependencies = readStringMap(readJsonObject(npmPackageJsonPath)?.dependencies);
     for (const packageName of Object.keys(dependencies).toSorted((left, right) =>
@@ -240,7 +241,7 @@ function removeManagedNpmDependency(params: {
           ...packageJson,
           dependencies,
         };
-  saveJsonFile(npmPackageJsonPath, nextPackageJson);
+  writeJsonTarget(npmPackageJsonPath, nextPackageJson);
   removeManagedNpmPackageLockDependency(params);
   fs.rmSync(params.packageDir, { recursive: true, force: true });
   const scopeDir = path.dirname(params.packageDir);
@@ -287,7 +288,7 @@ function removeManagedNpmPackageLockDependency(params: {
   }
 
   if (changed) {
-    saveJsonFile(packageLockPath, packageLock);
+    writeJsonTarget(packageLockPath, packageLock);
   }
 }
 
@@ -584,7 +585,16 @@ function assertNeverPluginRegistryIssue(issue: never): never {
 export async function maybeRepairPluginRegistryState(
   params: PluginRegistryDoctorRepairParams,
 ): Promise<PluginRegistryDoctorRepairResult> {
-  const preflight = preflightPluginRegistryInstallMigration(params);
+  let preflight: ReturnType<typeof preflightPluginRegistryInstallMigration>;
+  try {
+    preflight = preflightPluginRegistryInstallMigration(params);
+  } catch (error) {
+    if (!(error instanceof InvalidPluginInstallRecordStateError)) {
+      throw error;
+    }
+    note(error.message, "Plugin registry");
+    return { config: params.config };
+  }
 
   const migrationParams = {
     ...params,

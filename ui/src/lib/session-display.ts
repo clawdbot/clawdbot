@@ -61,6 +61,11 @@ type SessionWorktreeDisplayRow = {
   execNode?: string;
 };
 
+/** Basename shown for a repository path on every Control UI surface. */
+export function repoName(repoRoot: string): string {
+  return repoRoot.split(/[\\/]/).findLast(Boolean) ?? repoRoot;
+}
+
 /** Compact "repo ⎇ branch" (plus node host) line for worktree/work sessions. */
 export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): string | undefined {
   const repoRoot = normalizeOptionalString(row.worktree?.repoRoot);
@@ -68,11 +73,11 @@ export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): stri
   // execNode is often a raw node id (long hex); never render it in full.
   const rawNode = normalizeOptionalString(row.execNode);
   const node = rawNode ? shortenOpaqueIdRuns(rawNode) : undefined;
-  const repoName = repoRoot ? (repoRoot.split(/[\\/]/).findLast(Boolean) ?? repoRoot) : undefined;
+  const repo = repoRoot ? repoName(repoRoot) : undefined;
   const shortBranch = branch?.startsWith(WORKTREE_BRANCH_PREFIX)
     ? branch.slice(WORKTREE_BRANCH_PREFIX.length)
     : branch;
-  const checkout = repoName ? (shortBranch ? `${repoName} ⎇ ${shortBranch}` : repoName) : undefined;
+  const checkout = repo ? (shortBranch ? `${repo} ⎇ ${shortBranch}` : repo) : undefined;
   if (checkout && node) {
     // Checkout first: it names the work; the node is routing detail.
     return `${checkout} · ${node}`;
@@ -123,7 +128,7 @@ function parseSessionKey(key: string): SessionKeyInfo {
 
   // Main session.
   if (key === "main" || /^agent:[^:]+:main$/u.test(key)) {
-    return { prefix: "", fallbackName: "Main Thread" };
+    return { prefix: "", fallbackName: "Main Session" };
   }
 
   // Subagent.
@@ -167,14 +172,14 @@ function parseSessionKey(key: string): SessionKeyInfo {
   // pre-agent-scoped builds still surface in session lists; label, don't leak keys.
   for (const ch of KNOWN_CHANNEL_KEYS) {
     if (key === ch || key.startsWith(`${ch}:`)) {
-      return { prefix: "", fallbackName: `${CHANNEL_LABELS[ch]} Thread` };
+      return { prefix: "", fallbackName: `${CHANNEL_LABELS[ch]} Session` };
     }
   }
 
   // Dashboard sessions get generated titles asynchronously; the opaque uuid key
   // must not flash in the sidebar while that title is pending.
   if (/^agent:[^:]+:dashboard:/.test(key)) {
-    return { prefix: "", fallbackName: "New thread" };
+    return { prefix: "", fallbackName: "New session" };
   }
 
   // Remaining agent keys are named subsessions (CLI --session-id and friends):

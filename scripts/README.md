@@ -29,10 +29,10 @@ new directory taxonomy.
 
 | Area            | Prefer                                                                         | Notes                                                                                                              |
 | --------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| Build           | `pnpm build`                                                                   | Runs `scripts/build-all.mjs`; use specific build scripts only when debugging a build stage.                        |
+| Build           | `pnpm build`                                                                   | Runs `scripts/build-all.mts`; use specific build scripts only when debugging a build stage.                        |
 | Changed checks  | `pnpm changed:lanes --json`, `pnpm check:changed`                              | Lane classification lives in `scripts/changed-lanes.mjs`; changed-file checks live in `scripts/check-changed.mjs`. |
 | Docs            | `pnpm docs:list`, `pnpm docs:check-mdx`, `pnpm docs:check-links`               | Backed by `scripts/docs-list.js`, `scripts/check-docs-mdx.mjs`, and `scripts/docs-link-audit.mjs`.                 |
-| Formatting docs | `pnpm format:docs:check`                                                       | Uses `scripts/format-docs.mjs`; use write mode only when intentionally formatting docs.                            |
+| Formatting docs | `pnpm format:docs:check`                                                       | Uses `scripts/format-docs.mts`; use write mode only when intentionally formatting docs.                            |
 | Lint            | `pnpm lint`, `pnpm lint:core`, `pnpm lint:all`                                 | Wrapper scripts keep oxlint behavior aligned with repo config.                                                     |
 | Targeted tests  | `pnpm test <path-or-filter>` or `node scripts/run-vitest.mjs <path-or-filter>` | Avoid bare `vitest`; it can start watch mode.                                                                      |
 | Changed tests   | `pnpm test:changed`                                                            | Uses the repo's changed-test resolver instead of a broad Vitest run.                                               |
@@ -45,11 +45,11 @@ new directory taxonomy.
 
 ## Script Families
 
-- `check-*.mjs` / `check-*.ts`: guardrails for architecture, docs, package
+- `check-*.mts` / `check-*.ts` / retained `check-*.mjs`: guardrails for architecture, docs, package
   contents, boundaries, workflows, and generated artifacts.
-- `run-*.mjs`: wrappers around repo runtimes or tools, such as Node, Vitest,
+- `run-*.mjs` / `run-*.mts`: stable wrappers and typed implementations for Node, Vitest,
   oxlint, tsgo, and environment setup.
-- `test-*.mjs` / `test-*.sh` / `test-*.ts`: test planners, Docker lanes, live
+- `test-*.mts` / retained `test-*.mjs` / `test-*.sh` / `test-*.ts`: test planners, Docker lanes, live
   checks, and focused validation helpers.
 - `docs-*` and `check-docs-*`: docs listing, link auditing, MDX checks,
   spellcheck, sync, and i18n glossary checks.

@@ -326,6 +326,36 @@ describe("guardSessionManager integration", () => {
     expect(recorder.hasPersisted()).toBe(true);
   });
 
+  it("marks the exact queued recorder blocked when a write hook suppresses its user message", () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_message_write",
+          handler: () => ({ block: true }),
+        },
+      ]),
+    );
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "queued prompt" },
+      target: createTestUserTurnTranscriptTarget(),
+    });
+    const preparedMessage = expectDefined(recorder.message, "expected prepared queued turn");
+    const runtimeMessage = attachRuntimeUserTurnTranscriptContext(
+      {
+        role: "user",
+        content: "runtime queued prompt",
+        timestamp: 456,
+      },
+      { message: preparedMessage, recorder },
+    );
+    const sm = guardSessionManager(SessionManager.inMemory());
+
+    sm.appendMessage(runtimeMessage);
+
+    expect(getMessages(sm)).toEqual([]);
+    expect(recorder.isBlocked()).toBe(true);
+  });
+
   it("does not consume prepared user persistence for before-agent-run blocked messages", () => {
     // Blocked messages are audit records, not the actual user turn that should
     // receive prepared media metadata.

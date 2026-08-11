@@ -1,5 +1,6 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Parses inline reply directives into typed execution and routing options.
+import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ExecAsk, ExecSecurity, ExecTarget } from "../../infra/exec-approvals.js";
 import { extractModelDirective } from "../model.js";
 import { isSessionDefaultDirectiveValue } from "../thinking.js";
@@ -21,7 +22,7 @@ import {
   extractVerboseDirective,
 } from "./directives.js";
 import { extractQueueDirective } from "./queue/directive.js";
-import type { QueueDropPolicy, QueueMode } from "./queue/types.js";
+import type { QueueDropPolicy } from "./queue/types.js";
 
 const NATIVE_REPLY_DIRECTIVE_COMMANDS = {
   think: true,
@@ -112,7 +113,7 @@ export type InlineDirectives = {
 };
 
 /** Parses supported inline directives in the same order they are stripped from text. */
-export function parseInlineDirectives(
+export function parseInlineSessionDirectives(
   body: string,
   options?: {
     modelAliases?: string[];

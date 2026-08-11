@@ -7,7 +7,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js";
-import type { NodePairingPairedNode, NodePairingRequestInput } from "../infra/node-pairing.js";
+import type { NodePairingRequestInput, PairedDeviceNode } from "../infra/device-pairing-node.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { reconcileNodePairingOnConnect } from "./node-connect-reconcile.js";
@@ -27,7 +27,7 @@ function makeNodeConnectParams(overrides?: Partial<ConnectParams>): ConnectParam
   };
 }
 
-function makePairedNode(overrides?: Partial<NodePairingPairedNode>): NodePairingPairedNode {
+function makePairedNode(overrides?: Partial<PairedDeviceNode>): PairedDeviceNode {
   return {
     nodeId: "openclaw-ios",
     createdAtMs: 1,

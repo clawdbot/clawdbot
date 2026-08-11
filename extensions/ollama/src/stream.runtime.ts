@@ -35,6 +35,7 @@ import {
   type OllamaThinkValue,
   resolveOllamaConfiguredNumCtx,
   resolveOllamaThinkParamValue,
+  supportsNativeOllamaMax,
   shouldForwardNativeOllamaThink,
 } from "./stream-compat.js";
 import { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./stream-contract.js";
@@ -245,7 +246,7 @@ function resolveOllamaTopLevelParams(
       }
     }
   }
-  const think = resolveOllamaThinkParamValue(params);
+  const think = resolveOllamaThinkParamValue(params, supportsNativeOllamaMax(model));
   if (think !== undefined && shouldForwardNativeOllamaThink(model, think)) {
     requestParams.think = think;
   }

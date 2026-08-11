@@ -124,17 +124,17 @@ function isBlankParamValue(raw: unknown): boolean {
   return typeof raw === "string" && raw.trim() === "";
 }
 
-export function readStringParam(
+export function readToolStringParam(
   params: Record<string, unknown>,
   key: string,
   options: StringParamOptions & { required: true },
 ): string;
-export function readStringParam(
+export function readToolStringParam(
   params: Record<string, unknown>,
   key: string,
   options?: StringParamOptions,
 ): string | undefined;
-export function readStringParam(
+export function readToolStringParam(
   params: Record<string, unknown>,
   key: string,
   options: StringParamOptions = {},
@@ -388,7 +388,7 @@ export function readReactionParams(
   const emojiKey = options.emojiKey ?? "emoji";
   const removeKey = options.removeKey ?? "remove";
   const remove = typeof params[removeKey] === "boolean" ? params[removeKey] : false;
-  const emoji = readStringParam(params, emojiKey, {
+  const emoji = readToolStringParam(params, emojiKey, {
     required: true,
     allowEmpty: true,
   });

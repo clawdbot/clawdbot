@@ -97,6 +97,55 @@ describe("loadCodexEffectiveMcpCatalog", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it.each(["success", "failure"] as const)(
+    "retains the bound client until its final catalog page settles with %s",
+    async (outcome) => {
+      let resolveFinalPage!: () => void;
+      let rejectFinalPage!: (error: Error) => void;
+      const finalPage = new Promise<void>((resolve, reject) => {
+        resolveFinalPage = resolve;
+        rejectFinalPage = reject;
+      });
+      const release = vi.fn();
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce({ data: [], nextCursor: "page-2" })
+        .mockImplementationOnce(async () => {
+          await finalPage;
+          return { data: [], nextCursor: null };
+        });
+      sharedClientMocks.retainById.mockReturnValueOnce({ client: { request }, release });
+      const bindingStore = {
+        read: vi.fn().mockResolvedValue({ threadId: "thread-1", clientId: "client-1" }),
+      };
+
+      const catalog = loadCodexEffectiveMcpCatalog(
+        {
+          config: {},
+          agentId: "main",
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          workspaceDir: "/workspace",
+          mcpServerNames: [],
+        },
+        { bindingStore: bindingStore as never },
+      );
+
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+      expect(release).not.toHaveBeenCalled();
+
+      if (outcome === "success") {
+        resolveFinalPage();
+        await expect(catalog).resolves.toMatchObject({ tools: [] });
+      } else {
+        rejectFinalPage(new Error("final MCP catalog page failed"));
+        await expect(catalog).rejects.toThrow("final MCP catalog page failed");
+      }
+
+      expect(release).toHaveBeenCalledOnce();
+    },
+  );
+
   it("does not start a new Codex process when the binding has no live client", async () => {
     const bindingStore = {
       read: vi.fn().mockResolvedValue({ threadId: "thread-1", cwd: "/workspace" }),
