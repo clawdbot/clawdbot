@@ -377,8 +377,13 @@ describe("atomic subagent completion admission store", () => {
       });
 
       const cappedSubagent = structuredClone(subagentRuns.get(input.subagent.runId)!);
-      const attachmentsRootDir = path.join(tempDir, "attachments");
-      const attachmentsDir = path.join(attachmentsRootDir, "completion-run");
+      const attachmentsRootDir = tempDir;
+      const attachmentsDir = path.join(
+        attachmentsRootDir,
+        ".openclaw",
+        "attachments",
+        "12345678-1234-4123-8123-123456789abc",
+      );
       await fs.mkdir(attachmentsDir, { recursive: true });
       await fs.writeFile(path.join(attachmentsDir, "result.txt"), "retained result");
       cappedSubagent.attachmentsRootDir = attachmentsRootDir;

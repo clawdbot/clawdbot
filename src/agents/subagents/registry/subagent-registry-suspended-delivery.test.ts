@@ -32,6 +32,7 @@ describe("discardSuspendedPendingFinalDelivery", () => {
       resumedRuns: new Set([entry.runId]),
       clearPendingLifecycleError: vi.fn(),
       clearPendingLifecycleTimeout: vi.fn(),
+      discardTerminalDelivery: vi.fn(),
       completeCleanupBookkeeping,
       shouldEmitEndedHookForRun: vi.fn(() => false),
       emitSubagentEndedHookForRun: vi.fn(async () => undefined),

@@ -23,6 +23,7 @@ import {
   SUBAGENT_SUSPENDED_DELIVERY_HARD_CAP,
   SUBAGENT_SUSPENDED_DELIVERY_WARNING_COUNT,
 } from "./subagent-registry-suspended-delivery.js";
+import { createSubagentSweepSessionLifecycle } from "./subagent-registry-sweep-session.js";
 export { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
 import {
   reconcileDurableSubagentKillIntent,
@@ -34,7 +35,6 @@ import type {
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
 import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
-import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import {
   loadSubagentSessionEntry,
   resolveCompletionFromSessionEntry,
@@ -186,46 +186,14 @@ export function createSubagentRegistrySweeper(params: {
     schedule: (delayMs) => schedule({ delayMs }),
     warn: params.warn,
   });
+  const { deleteSession, freezeSessionIdentity } = createSubagentSweepSessionLifecycle(
+    params.callGateway,
+  );
 
   function runCleanupTail(runId: string, label: string, run: () => Promise<unknown>) {
     void runWithGatewayIndependentRootWorkAdmission(run).catch((error: unknown) => {
       params.warn(`subagent sweep ${label} failed`, { runId, error });
     });
-  }
-
-  type FrozenSessionIdentity = {
-    sessionId: string;
-    lifecycleRevision: string;
-  };
-
-  function freezeSessionIdentity(
-    childSessionKey: string,
-    storeCache: SubagentSessionStoreCache,
-  ): FrozenSessionIdentity | undefined {
-    const sessionEntry = loadSubagentSessionEntry({ childSessionKey, storeCache });
-    const sessionId = sessionEntry?.sessionId?.trim();
-    const lifecycleRevision = sessionEntry?.lifecycleRevision?.trim();
-    return sessionId && lifecycleRevision ? { sessionId, lifecycleRevision } : undefined;
-  }
-
-  async function deleteSession(
-    childSessionKey: string,
-    identity: FrozenSessionIdentity,
-  ): Promise<"deleted" | "changed"> {
-    let failure: unknown;
-    const outcome = await deleteSubagentSessionForCleanup({
-      callGateway: params.callGateway,
-      childSessionKey,
-      expectedSessionId: identity.sessionId,
-      expectedLifecycleRevision: identity.lifecycleRevision,
-      onError: (error) => {
-        failure = error;
-      },
-    });
-    if (outcome === "failed") {
-      throw failure;
-    }
-    return outcome;
   }
 
   const sweptContext = (entry: SubagentRunRecord) => ({

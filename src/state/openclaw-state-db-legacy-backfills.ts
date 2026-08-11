@@ -1,14 +1,10 @@
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
 import { selectDeliverableSessionsReply } from "../agents/tools/sessions-send-tokens.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
 import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
-
-const legacyBackfillLog = createSubsystemLogger("state/legacy-backfill");
 
 export function ensureOperatorApprovalResolutionRefs(db: DatabaseSync): void {
   if (!tableExists(db, "operator_approvals")) {
@@ -124,63 +120,6 @@ export function repairLegacyTaskDeliveryStatuses(db: DatabaseSync): void {
     SET delivery_status = 'not_applicable'
     WHERE delivery_status = 'not-requested';
   `);
-}
-
-const GENERATED_SUBAGENT_ATTACHMENT_ID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** Retire shipped unconfined attachment cleanup before canonical registry hydration. */
-export function retireLegacySubagentAttachmentCleanup(db: DatabaseSync): void {
-  if (!tableExists(db, "subagent_runs")) {
-    return;
-  }
-  const rows = db.prepare("SELECT run_id, payload_json FROM subagent_runs").all() as Array<{
-    run_id: string;
-    payload_json: string;
-  }>;
-  const update = db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?");
-  const warnedRoots = new Set<string>();
-  for (const row of rows) {
-    const payload = parseJsonRecord(row.payload_json);
-    const storedRoot = payload ? textField(payload, "attachmentsRootDir") : null;
-    const storedDir = payload ? textField(payload, "attachmentsDir") : null;
-    if (!payload || !storedRoot || !storedDir) {
-      continue;
-    }
-    if (
-      Object.hasOwn(payload, "attachmentsSandboxSessionKey") ||
-      Object.hasOwn(payload, "attachmentsSandboxAgentId") ||
-      Object.hasOwn(payload, "attachmentsSandboxWorkspaceDir") ||
-      Object.hasOwn(payload, "attachmentsSandboxDir")
-    ) {
-      continue;
-    }
-    const rootDir = path.resolve(storedRoot);
-    const attachmentsDir = path.resolve(storedDir);
-    const attachmentId = path.relative(rootDir, attachmentsDir);
-    if (
-      path.basename(rootDir) !== "attachments" ||
-      path.basename(path.dirname(rootDir)) !== ".openclaw" ||
-      path.dirname(attachmentId) !== "." ||
-      !GENERATED_SUBAGENT_ATTACHMENT_ID.test(attachmentId)
-    ) {
-      continue;
-    }
-    if (!warnedRoots.has(rootDir) && warnedRoots.size < 4) {
-      warnedRoots.add(rootDir);
-      legacyBackfillLog.warn(
-        warnedRoots.size < 4
-          ? `Legacy subagent attachments may remain at ${rootDir}; inspect and remove them manually. Unsafe cleanup metadata is being retired.`
-          : "Additional legacy subagent attachment roots were omitted from this warning.",
-      );
-    }
-    // v2026.7.x stored no sandbox cleanup boundary. A host removal can race a
-    // writable sandbox. Warn before retiring the receipt without touching its path.
-    delete payload.attachmentsDir;
-    delete payload.attachmentsRootDir;
-    delete payload.retainAttachmentsOnKeep;
-    update.run(JSON.stringify(payload), row.run_id);
-  }
 }
 
 type LegacyRetainedResultRow = {

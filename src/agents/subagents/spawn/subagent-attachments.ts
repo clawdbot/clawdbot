@@ -484,16 +484,16 @@ export async function materializeSubagentAttachments(params: {
       files,
     };
     if (params.sandboxFsBridge) {
+      const bridge = params.sandboxFsBridge;
       if (!sandboxDir) {
         throw new Error("sandbox attachment staging requires a resolved receipt path");
       }
-      const createFileExclusive = params.sandboxFsBridge.createFileExclusive;
-      if (!createFileExclusive) {
+      if (!bridge.createFileExclusive) {
         throw new Error("sandbox attachment staging requires exclusive file creation support");
       }
-      await params.sandboxFsBridge.mkdirp({ filePath: sandboxDir, mode: 0o700 });
+      await bridge.mkdirp({ filePath: sandboxDir, mode: 0o700 });
       for (const { outPath, buf } of writeJobs) {
-        const created = await createFileExclusive.call(params.sandboxFsBridge, {
+        const created = await bridge.createFileExclusive({
           filePath: path.posix.join(sandboxDir, outPath),
           data: buf,
           mkdir: false,
@@ -502,7 +502,7 @@ export async function materializeSubagentAttachments(params: {
           throw new Error("sandbox attachment destination already exists");
         }
       }
-      const manifestCreated = await createFileExclusive.call(params.sandboxFsBridge, {
+      const manifestCreated = await bridge.createFileExclusive({
         filePath: path.posix.join(sandboxDir, ".manifest.json"),
         data: `${JSON.stringify(manifest)}\n`,
         mkdir: false,

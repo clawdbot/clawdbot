@@ -3,10 +3,10 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
+import { retireLegacySubagentAttachmentCleanup } from "./openclaw-state-db-legacy-attachment-cleanup.js";
 import {
   repairLegacySubagentExecutionPayloads,
   repairLegacySubagentRetainedResults,
-  retireLegacySubagentAttachmentCleanup,
 } from "./openclaw-state-db-legacy-backfills.js";
 import {
   closeOpenClawStateDatabaseForTest,
