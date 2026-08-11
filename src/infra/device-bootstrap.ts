@@ -371,18 +371,6 @@ export async function revokeDeviceBootstrapTokensForDevice(params: {
   });
 }
 
-/** Restore a previously revoked bootstrap token record after a downstream send failure. */
-export async function restoreDeviceBootstrapToken(params: {
-  record: DeviceBootstrapTokenRecord;
-  baseDir?: string;
-}): Promise<void> {
-  return await withLock(async () => {
-    const state = await loadState(params.baseDir);
-    state[params.record.token] = params.record;
-    persistState(state, params.baseDir);
-  });
-}
-
 /** Read the issued profile for a valid token without binding or redeeming it. */
 export async function getDeviceBootstrapTokenProfile(params: {
   token: string;

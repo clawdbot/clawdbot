@@ -25,7 +25,6 @@ import {
   issueDevicePairSetupBootstrapToken,
   readDevicePairSetupCompletion,
   redeemDeviceBootstrapTokenProfile,
-  restoreDeviceBootstrapToken,
   revokeDeviceBootstrapToken,
   verifyDeviceBootstrapToken,
 } from "./device-bootstrap.js";
@@ -387,26 +386,6 @@ describe("device bootstrap tokens", () => {
       ok: false,
       reason: "bootstrap_token_invalid",
     });
-  });
-
-  it("restores a revoked bootstrap token record after send failure recovery", async () => {
-    const baseDir = await createTempDir();
-    const issued = await issueDevicePairSetupBootstrapToken({
-      baseDir,
-      profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-    });
-
-    await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({ ok: true });
-    const revoked = await revokeDeviceBootstrapToken({ baseDir, token: issued.token });
-    expect(revoked.removed).toBe(true);
-    expect(revoked.record?.token).toBe(issued.token);
-
-    if (!revoked.record) {
-      throw new Error("expected revoked bootstrap token record");
-    }
-    await restoreDeviceBootstrapToken({ baseDir, record: revoked.record });
-    await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({ ok: true });
-    expect(loadDeviceBootstrapTokenRecords(baseDir)[issued.token]?.setupId).toBe(issued.setupId);
   });
 
   it("revokes a specific bootstrap token", async () => {
