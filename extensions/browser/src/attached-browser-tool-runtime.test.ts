@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   createBrowserTool: vi.fn(),
   startBrowserBridgeServer: vi.fn(),
   stopBrowserBridgeServer: vi.fn(),
+  retirePlaywrightBrowserConnectionExact: vi.fn(),
 }));
 
 vi.mock("./browser-tool.js", () => ({
@@ -18,17 +19,31 @@ vi.mock("./browser/bridge-server.js", () => ({
   stopBrowserBridgeServer: mocks.stopBrowserBridgeServer,
 }));
 
+vi.mock("./browser/pw-session.js", () => ({
+  retirePlaywrightBrowserConnectionExact: mocks.retirePlaywrightBrowserConnectionExact,
+}));
+
 import { createAttachedBrowserToolRuntime } from "./attached-browser-tool-runtime.js";
 
 describe("attached Browser tool runtime", () => {
+  const closeRetirement = vi.fn();
+  const refreshRetirement = vi.fn();
+
   beforeEach(() => {
     vi.clearAllMocks();
+    closeRetirement.mockResolvedValue(undefined);
+    refreshRetirement.mockReturnValue(true);
     mocks.createBrowserTool.mockReturnValue({ name: "browser" });
     mocks.startBrowserBridgeServer.mockResolvedValue({
       baseUrl: "http://127.0.0.1:18443",
       server: { marker: "bridge-server" },
     });
     mocks.stopBrowserBridgeServer.mockResolvedValue(undefined);
+    mocks.retirePlaywrightBrowserConnectionExact.mockReturnValue({
+      retired: true,
+      close: closeRetirement,
+      refresh: refreshRetirement,
+    });
   });
 
   it("exposes only one raw attach-only CDP profile through an authenticated loopback bridge", async () => {
@@ -80,11 +95,13 @@ describe("attached Browser tool runtime", () => {
     const sourcePath = path.join(workspaceDir, "source.png");
     await fs.writeFile(sourcePath, "screenshot-bytes");
     const artifactPath = await toolParams.persistScreenshot({ sourcePath, type: "png" });
-    expect(artifactPath).toMatch(
+    expect(artifactPath.replaceAll("\\", "/")).toMatch(
       /\.artifacts\/cloud-worker-browser\/screenshot-[a-f0-9]{16}\.png$/u,
     );
     expect(await fs.readFile(artifactPath, "utf8")).toBe("screenshot-bytes");
-    expect((await fs.stat(artifactPath)).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect((await fs.stat(artifactPath)).mode & 0o777).toBe(0o600);
+    }
     const filesBeforeFailure = await fs.readdir(path.dirname(artifactPath));
     await expect(
       toolParams.persistScreenshot({
@@ -97,7 +114,34 @@ describe("attached Browser tool runtime", () => {
 
     await runtime.dispose();
     expect(mocks.stopBrowserBridgeServer).toHaveBeenCalledWith({ marker: "bridge-server" });
+    expect(mocks.retirePlaywrightBrowserConnectionExact).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:9222",
+    });
+    expect(closeRetirement).toHaveBeenCalledOnce();
     expect(ensureAttachTarget).toHaveBeenCalledOnce();
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+  });
+
+  it("retires the exact Playwright CDP adapter upon disposal and supports repeated retries", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "attached-browser-workspace-"));
+    const runtime = await createAttachedBrowserToolRuntime({
+      cdpUrl: "http://127.0.0.1:9222",
+      ensureAttachTarget: async () => {},
+      workspaceDir,
+    });
+
+    await runtime.dispose();
+    expect(mocks.stopBrowserBridgeServer).toHaveBeenCalledOnce();
+    expect(mocks.retirePlaywrightBrowserConnectionExact).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:9222",
+    });
+    expect(closeRetirement).toHaveBeenCalledOnce();
+
+    // Repeated disposal should refresh the retirement and retry close
+    await runtime.dispose();
+    expect(refreshRetirement).toHaveBeenCalledOnce();
+    expect(closeRetirement).toHaveBeenCalledTimes(2);
+
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
