@@ -9,10 +9,14 @@ import {
 
 async function getFreePort(): Promise<number> {
   const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : 0;
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
   return port;
 }
 
