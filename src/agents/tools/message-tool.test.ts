@@ -147,6 +147,7 @@ vi.mock("../../channels/plugins/bundled.js", async () => {
 });
 
 type RunMessageActionInput = {
+  action?: ChannelMessageActionName;
   actionOrigin?: "message-tool";
   agentId?: string;
   broadcastAccountPlan?: {
