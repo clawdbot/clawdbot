@@ -34,6 +34,10 @@ type ResolvedHttpMcpTransportConfig = Extract<
   { kind: "http" }
 >;
 
+type McpOAuthAuthorizationStartResult =
+  | { status: "authorized" }
+  | { status: "redirect"; authorizationUrl: string; redirectUrl: string; state: string };
+
 /** Persisted OAuth credential presence and authorization state for one MCP server. */
 export type McpOAuthCredentialsStatus = {
   hasTokens: boolean;
@@ -333,7 +337,7 @@ async function runMcpOAuthAuthorizationAttempt(
     suppressStoredTokens?: boolean;
   },
   lease: OpenClawStateLeaseContext,
-): Promise<void> {
+): Promise<"authorized" | "redirect"> {
   const provider = createMcpOAuthClientProvider({
     identity: params.identity,
     config: params.config,
@@ -341,7 +345,7 @@ async function runMcpOAuthAuthorizationAttempt(
     suppressStoredTokens: params.suppressStoredTokens,
     lease,
   });
-  await auth(provider, {
+  const result = await auth(provider, {
     serverUrl: params.identity.serverUrl,
     authorizationCode: normalizeOptionalString(params.authorizationCode),
     resourceMetadataUrl: params.resourceMetadataUrl,
@@ -349,13 +353,14 @@ async function runMcpOAuthAuthorizationAttempt(
     fetchFn: withMcpOAuthLeaseSignal(params.fetchFn, lease.signal),
   });
   lease.assertOwned();
+  return result === "AUTHORIZED" ? "authorized" : "redirect";
 }
 
 export async function startMcpOAuthAuthorization(
   identity: McpOAuthIdentity,
   config: ResolvedHttpMcpTransportConfig,
   opts: { redirectUrl?: string },
-): Promise<{ authorizationUrl: string; redirectUrl: string; state: string }> {
+): Promise<McpOAuthAuthorizationStartResult> {
   const storeKey = identity.storeKey;
   return await withMcpOAuthLease(storeKey, async (lease) => {
     const store = readMcpOAuthStore(storeKey);
@@ -376,17 +381,18 @@ export async function startMcpOAuthAuthorization(
         ? new URL(pendingChallenge.resourceMetadataUrl)
         : undefined,
       scope: normalizeOptionalString(pendingChallenge?.scope),
-      suppressStoredTokens: true,
+      suppressStoredTokens: pendingChallenge?.requiresAuthorization === true,
     };
+    let result: "authorized" | "redirect";
     try {
-      await runMcpOAuthAuthorizationAttempt(attempt, lease);
+      result = await runMcpOAuthAuthorizationAttempt(attempt, lease);
     } catch (error) {
       if (
         !normalizeOptionalString(opts.redirectUrl) &&
         !normalizeOptionalString(config.oauth?.redirectUrl) &&
         isMcpOAuthRedirectRegistrationError(error)
       ) {
-        await runMcpOAuthAuthorizationAttempt(
+        result = await runMcpOAuthAuthorizationAttempt(
           {
             ...attempt,
             config: { ...config.oauth, redirectUrl: LOCALHOST_REDIRECT_URL },
@@ -397,13 +403,16 @@ export async function startMcpOAuthAuthorization(
         throw error;
       }
     }
+    if (result === "authorized") {
+      return { status: "authorized" };
+    }
     const pending = readMcpOAuthStore(storeKey);
     const authorizationUrl = pending.lastAuthorizationUrl;
     const state = authorizationUrl ? new URL(authorizationUrl).searchParams.get("state") : null;
     if (!authorizationUrl || !pending.codeVerifier || !pending.redirectUrl || !state) {
       throw new Error("MCP OAuth authorization session was not persisted.");
     }
-    return { authorizationUrl, redirectUrl: pending.redirectUrl, state };
+    return { status: "redirect", authorizationUrl, redirectUrl: pending.redirectUrl, state };
   });
 }
 
