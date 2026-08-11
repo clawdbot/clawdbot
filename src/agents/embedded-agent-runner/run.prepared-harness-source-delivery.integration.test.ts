@@ -1,17 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { makeAttemptResult } from "../../agents/embedded-agent-runner/run.overflow-compaction.fixture.js";
-import {
-  loadRunOverflowCompactionHarness,
-  mockedBuildEmbeddedRunPayloads,
-  mockedGlobalHookRunner,
-  mockedRunEmbeddedAttempt,
-  useOpenAIPlatformAuthFixture,
-} from "../../agents/embedded-agent-runner/run.overflow-compaction.harness.js";
-import { buildEmbeddedSystemPrompt } from "../../agents/embedded-agent-runner/system-prompt.js";
-import { registerAgentHarness } from "../../agents/harness/registry.js";
-import { settleReplyDispatcher } from "../dispatch-dispatcher.js";
-import type { MsgContext } from "../templating.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { settleReplyDispatcher } from "../../auto-reply/dispatch-dispatcher.js";
 import {
   createFollowupRun,
   createMockTypingSignaler,
@@ -19,22 +7,37 @@ import {
   setupAgentRunnerExecutionTestState,
   type FallbackRunnerParams,
   useProductionEmbeddedRunExecutionParamsForTest,
-} from "./agent-runner-execution.test-support.js";
-import { emptyConfig, sessionStoreMocks } from "./dispatch-from-config.shared.test-harness.js";
+} from "../../auto-reply/reply/agent-runner-execution.test-support.js";
+import {
+  emptyConfig,
+  sessionStoreMocks,
+} from "../../auto-reply/reply/dispatch-from-config.shared.test-harness.js";
 import {
   describe2BeforeEach0,
   dispatchReplyFromConfig,
   globalBeforeAll0,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
-import type { InternalGetReplyOptions } from "./get-reply.types.js";
-import { buildDirectChatContext } from "./groups.js";
-import { createReplyDispatcher } from "./reply-dispatcher.js";
+} from "../../auto-reply/reply/dispatch-from-config.test-harness.js";
+import type { InternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
+import { buildDirectChatContext } from "../../auto-reply/reply/groups.js";
+import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import {
   setSourceReplyDeliveryModeOrigin,
   setSourceReplyDeliveryPromptComponents,
-} from "./source-reply-delivery-runtime.js";
-import { buildTestCtx } from "./test-ctx.js";
+} from "../../auto-reply/reply/source-reply-delivery-runtime.js";
+import { buildTestCtx } from "../../auto-reply/reply/test-ctx.js";
+import type { MsgContext } from "../../auto-reply/templating.js";
+import type { GetReplyOptions, ReplyPayload } from "../../auto-reply/types.js";
+import { registerAgentHarness } from "../harness/registry.js";
+import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
+import {
+  loadRunOverflowCompactionHarness,
+  mockedBuildEmbeddedRunPayloads,
+  mockedGlobalHookRunner,
+  mockedRunEmbeddedAttempt,
+  useOpenAIPlatformAuthFixture,
+} from "./run.overflow-compaction.harness.js";
+import { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
 const runnerState = setupAgentRunnerExecutionTestState();
 
@@ -90,8 +93,9 @@ describe("prepared harness source delivery", () => {
     },
   ])("$name", async (testCase) => {
     await useProductionEmbeddedRunExecutionParamsForTest();
-    const { createBlockReplyDeliveryHandler } =
-      await vi.importActual<typeof import("./reply-delivery.js")>("./reply-delivery.js");
+    const { createBlockReplyDeliveryHandler } = await vi.importActual<
+      typeof import("../../auto-reply/reply/reply-delivery.js")
+    >("../../auto-reply/reply/reply-delivery.js");
     runnerState.createBlockReplyDeliveryHandlerMock.mockImplementation((params) =>
       createBlockReplyDeliveryHandler(
         params as Parameters<typeof createBlockReplyDeliveryHandler>[0],
