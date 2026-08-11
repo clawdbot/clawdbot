@@ -15,6 +15,7 @@ import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { resolveAbortCutoffFromContext, shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
 import { getAbortMemory } from "./abort-primitives.js";
 import {
+  abortSessionRunTargetWithOutcome,
   formatAbortReplyText,
   isAbortRequestText,
   isAbortTrigger,
@@ -635,6 +636,72 @@ describe("abort detection", () => {
       expect.objectContaining({ id: expect.any(Number) }),
       [],
       false,
+    );
+  });
+
+  it("releases a reserved terminal when the only backend throws before aborting", async () => {
+    const sessionKey = "telegram:throw-before-abort";
+    const sessionId = "session-throw-before-abort";
+    runtimeAbortMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(sessionId);
+    runtimeAbortMocks.resolveActiveEmbeddedRunId.mockReturnValue("run-throw-before-abort");
+    let terminal: Promise<boolean> | undefined;
+    runtimeAbortMocks.abortEmbeddedAgentRun.mockImplementation(() => {
+      terminal = experienceReviewMocks.consumeStoppedTerminal(
+        sessionKey,
+        "run-throw-before-abort",
+        false,
+      );
+      throw new Error("backend abort failed");
+    });
+
+    expect(() => abortSessionRunTargetWithOutcome({ key: sessionKey })).toThrow(
+      "backend abort failed",
+    );
+    await expect(terminal).resolves.toBe(false);
+    expect(experienceReviewMocks.reconcile).toHaveBeenCalledWith(
+      expect.objectContaining({ id: expect.any(Number) }),
+      [],
+      false,
+    );
+  });
+
+  it("confirms an earlier exact abort when a later backend throws", async () => {
+    const sessionKey = "telegram:partial-throw";
+    const firstSessionId = "session-partial-first";
+    const secondSessionId = "session-partial-second";
+    runtimeAbortMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(firstSessionId);
+    runtimeAbortMocks.resolveActiveEmbeddedRunId.mockImplementation((sessionId) =>
+      sessionId === firstSessionId ? "run-partial-first" : "run-partial-second",
+    );
+    let firstTerminal: Promise<boolean> | undefined;
+    let secondTerminal: Promise<boolean> | undefined;
+    runtimeAbortMocks.abortEmbeddedAgentRun
+      .mockImplementationOnce(() => {
+        firstTerminal = experienceReviewMocks.consumeStoppedTerminal(
+          sessionKey,
+          "run-partial-first",
+          false,
+        );
+        secondTerminal = experienceReviewMocks.consumeStoppedTerminal(
+          sessionKey,
+          "run-partial-second",
+          false,
+        );
+        return true;
+      })
+      .mockImplementationOnce(() => {
+        throw new Error("second backend abort failed");
+      });
+
+    expect(() =>
+      abortSessionRunTargetWithOutcome({ key: sessionKey, sessionId: secondSessionId }),
+    ).toThrow("second backend abort failed");
+    await expect(firstTerminal).resolves.toBe(true);
+    await expect(secondTerminal).resolves.toBe(false);
+    expect(experienceReviewMocks.reconcile).toHaveBeenCalledWith(
+      expect.objectContaining({ id: expect.any(Number) }),
+      ["run-partial-first"],
+      true,
     );
   });
 
