@@ -836,6 +836,39 @@ describe("models.list OpenAI routes", () => {
       );
     });
   });
+  it("keeps configured provider rows visible when unavailable", async () => {
+    await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {
+      const cfg = {
+        models: {
+          providers: {
+            openai: {
+              api: "openai-chatgpt-responses",
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+              models: [{ id: "gpt-5.6", name: "GPT-5.6" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      await expect(
+        listModels({
+          cfg,
+          view: "configured",
+          catalog: [catalogEntry("gpt-5.6", "openai-chatgpt-responses")],
+        }),
+      ).resolves.toEqual({
+        models: [
+          {
+            id: "gpt-5.6",
+            name: "GPT-5.6",
+            provider: "openai",
+            agentRuntime: IMPLICIT_OPENCLAW_RUNTIME,
+            available: false,
+          },
+        ],
+      });
+    });
+  });
 
   it("includes runtime-discovered rows for configured providers without explicit models", async () => {
     await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {

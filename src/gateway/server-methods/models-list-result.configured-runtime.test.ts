@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -14,23 +13,17 @@ const WITHOUT_OPENAI_ENV_AUTH = {
   OPENAI_OAUTH_TOKEN: undefined,
   CHATGPT_OAUTH_TOKEN: undefined,
 } as const;
-const IMPLICIT_OPENCLAW_RUNTIME = { id: "openclaw", source: "implicit" } as const;
-
-function catalogEntry(id: string, api: ModelCatalogEntry["api"]): ModelCatalogEntry {
-  return { id, name: id, provider: "openai", api };
-}
-
-async function listConfiguredModels(params: { catalog: ModelCatalogEntry[]; cfg: OpenClawConfig }) {
+async function listConfiguredModels(params: { cfg: OpenClawConfig }) {
   const context = {
     getRuntimeConfig: () => params.cfg,
-    loadGatewayModelCatalog: vi.fn(() => Promise.resolve(params.catalog)),
+    loadGatewayModelCatalog: vi.fn(() => Promise.resolve([])),
     loadGatewayModelCatalogSnapshot: vi.fn(() =>
       Promise.resolve({
         agentId: "main",
         agentDir: "/tmp/models-list-configured-runtime-agent",
         config: params.cfg,
-        entries: params.catalog,
-        routeVariants: params.catalog,
+        entries: [],
+        routeVariants: [],
       }),
     ),
     logGateway: { debug: vi.fn() },
@@ -42,39 +35,6 @@ async function listConfiguredModels(params: { catalog: ModelCatalogEntry[]; cfg:
 }
 
 describe("models.list configured runtimes", () => {
-  it("keeps configured provider rows visible when unavailable", async () => {
-    await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {
-      const cfg = {
-        models: {
-          providers: {
-            openai: {
-              api: "openai-chatgpt-responses",
-              baseUrl: "https://chatgpt.com/backend-api/codex",
-              models: [{ id: "gpt-5.6", name: "GPT-5.6" }],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig;
-
-      await expect(
-        listConfiguredModels({
-          cfg,
-          catalog: [catalogEntry("gpt-5.6", "openai-chatgpt-responses")],
-        }),
-      ).resolves.toEqual({
-        models: [
-          {
-            id: "gpt-5.6",
-            name: "GPT-5.6",
-            provider: "openai",
-            agentRuntime: IMPLICIT_OPENCLAW_RUNTIME,
-            available: false,
-          },
-        ],
-      });
-    });
-  });
-
   it("projects a configured Codex default missing from the prepared catalog", async () => {
     await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {
       await withOpenClawTestState(
@@ -111,7 +71,7 @@ describe("models.list configured runtimes", () => {
             },
           } as OpenClawConfig;
 
-          await expect(listConfiguredModels({ cfg, catalog: [] })).resolves.toEqual({
+          await expect(listConfiguredModels({ cfg })).resolves.toEqual({
             models: [
               {
                 id: "gpt-5.6-sol",
@@ -144,7 +104,7 @@ describe("models.list configured runtimes", () => {
         },
       } as OpenClawConfig;
 
-      await expect(listConfiguredModels({ cfg, catalog: [] })).resolves.toEqual({
+      await expect(listConfiguredModels({ cfg })).resolves.toEqual({
         models: [
           {
             id: "gpt-5.6-sol",
@@ -158,47 +118,117 @@ describe("models.list configured runtimes", () => {
     });
   });
 
-  it.each([
-    ["an alias-only binding", undefined],
-    ["an agent alias override of a canonical default", "codex"],
-  ] as const)(
-    "reports %s from the effective alias runtime policy",
-    async (_name, defaultsRuntime) => {
-      await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {
-        const cfg = {
-          agents: {
-            defaults: {
-              model: { primary: "openai/gpt-5.4-codex" },
-              models: defaultsRuntime
-                ? {
-                    "openai/gpt-5.4": { agentRuntime: { id: defaultsRuntime } },
-                  }
-                : {},
+  it("preserves an exact alias runtime binding through public projection", async () => {
+    await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-models-list-configured-codex-alias-",
+          agentEnv: "main",
+        },
+        async (state) => {
+          await state.writeAuthProfiles({
+            version: 1,
+            profiles: {
+              "openai:chatgpt": {
+                type: "oauth",
+                provider: "openai",
+                access: "chatgpt-access",
+                refresh: "chatgpt-refresh",
+                expires: Date.now() + 30 * 60_000,
+              },
             },
-            list: [
-              {
-                id: "main",
-                default: true,
+          });
+          const cfg = {
+            agents: {
+              defaults: {
+                model: { primary: "openai/gpt-5.4-codex" },
+                modelPolicy: {},
                 models: {
-                  "openai/gpt-5.4-codex": { agentRuntime: { id: "openclaw" } },
+                  "openai/gpt-5.4": { agentRuntime: { id: "auto" } },
+                  "openai/gpt-5.4-codex": { agentRuntime: { id: "codex" } },
                 },
               },
-            ],
-          },
-        } as OpenClawConfig;
-
-        await expect(listConfiguredModels({ cfg, catalog: [] })).resolves.toEqual({
-          models: [
-            {
-              id: "gpt-5.4",
-              name: "gpt-5.4",
-              provider: "openai",
-              agentRuntime: { id: "openclaw", source: "model" },
-              available: false,
             },
-          ],
-        });
-      });
-    },
-  );
+          } as OpenClawConfig;
+
+          await expect(listConfiguredModels({ cfg })).resolves.toEqual({
+            models: [
+              {
+                id: "gpt-5.4-codex",
+                name: "gpt-5.4-codex",
+                provider: "openai",
+                agentRuntime: { id: "codex", source: "model" },
+                available: true,
+              },
+            ],
+          });
+        },
+      );
+    });
+  });
+
+  it("keeps a defaults alias when an agent canonical sibling does not match it", async () => {
+    await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-models-list-configured-codex-cross-scope-alias-",
+          agentEnv: "main",
+        },
+        async (state) => {
+          await state.writeAuthProfiles({
+            version: 1,
+            profiles: {
+              "openai:chatgpt": {
+                type: "oauth",
+                provider: "openai",
+                access: "chatgpt-access",
+                refresh: "chatgpt-refresh",
+                expires: Date.now() + 30 * 60_000,
+              },
+            },
+          });
+          const cfg = {
+            agents: {
+              defaults: {
+                model: { primary: "my-alias" },
+                modelPolicy: {},
+                models: {
+                  "openai/gpt-5.4-codex": {
+                    alias: "my-alias",
+                    agentRuntime: { id: "codex" },
+                  },
+                },
+              },
+              list: [
+                {
+                  id: "main",
+                  default: true,
+                  models: {
+                    "openai/gpt-5.4": {
+                      alias: "my-alias",
+                      agentRuntime: { id: "auto" },
+                    },
+                  },
+                },
+              ],
+            },
+          } as OpenClawConfig;
+
+          await expect(listConfiguredModels({ cfg })).resolves.toEqual({
+            models: [
+              {
+                id: "gpt-5.4-codex",
+                name: "gpt-5.4-codex",
+                provider: "openai",
+                agentRuntime: { id: "codex", source: "model" },
+                available: true,
+              },
+            ],
+          });
+        },
+      );
+    });
+  });
 });

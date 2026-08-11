@@ -31,7 +31,6 @@ import {
 } from "../../agents/model-catalog-route.js";
 import {
   resolveLogicalModelCatalogEntryState,
-  resolveLogicalModelRuntimePolicy,
   resolveLogicalVisibleModelCatalog,
 } from "../../agents/model-catalog-visibility.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
@@ -110,12 +109,6 @@ function resolveModelChoiceAgentRuntime(params: {
   agentId: string;
   entry: ModelCatalogEntry;
 }): GatewayAgentRuntime | undefined {
-  const resolvedModelRuntimePolicy = resolveLogicalModelRuntimePolicy({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    entry: params.entry,
-    routePolicy: openAIModelCatalogRoutePolicy,
-  });
   const harnessPolicy = resolveAgentHarnessPolicy({
     provider: params.entry.provider,
     modelId: params.entry.id,
@@ -123,7 +116,6 @@ function resolveModelChoiceAgentRuntime(params: {
     modelBaseUrl: params.entry.baseUrl,
     config: params.cfg,
     agentId: params.agentId,
-    ...(resolvedModelRuntimePolicy ? { resolvedModelRuntimePolicy } : {}),
   });
   if (harnessPolicy.runtime === "auto") {
     return undefined;
