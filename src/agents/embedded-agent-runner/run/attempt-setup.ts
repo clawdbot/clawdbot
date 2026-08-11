@@ -63,7 +63,12 @@ import {
   resolveLiveToolResultMaxChars,
 } from "../tool-result-truncation.js";
 import { mapThinkingLevel, mapThinkingLevelForProvider } from "../utils.js";
+import { buildLoopPromptCacheInfo } from "./attempt-context-engine-helpers.js";
 import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
+import {
+  buildAfterTurnRuntimeContext,
+  resolveAttemptFsWorkspaceOnly,
+} from "./attempt-prompt-helpers.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
   createEmbeddedRunStageTracker,
@@ -71,11 +76,6 @@ import {
   shouldWarnEmbeddedRunStageSummary,
 } from "./attempt-stage-timing.js";
 import { repairAttemptToolUseResultPairing } from "./attempt-transcript-helpers.js";
-import { buildLoopPromptCacheInfo } from "./attempt.context-engine-helpers.js";
-import {
-  buildAfterTurnRuntimeContext,
-  resolveAttemptFsWorkspaceOnly,
-} from "./attempt.prompt-helpers.js";
 import { installHistoryImagePruneContextTransform } from "./history-image-prune.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";

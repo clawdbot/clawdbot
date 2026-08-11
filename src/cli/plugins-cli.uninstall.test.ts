@@ -14,7 +14,7 @@ import {
   loadConfig,
   planPluginUninstall,
   PromptInputClosedError,
-  promptYesNo,
+  promptYesNoMock,
   readPersistedInstalledPluginIndex,
   refreshPluginRegistry,
   replaceConfigFile,
@@ -22,7 +22,7 @@ import {
   restorePersistedInstalledPluginIndexIfCurrent,
   runPluginsCommand,
   runtimeErrors,
-  runtimeLogs,
+  pluginsCliRuntimeLogs,
   setInstalledPluginIndexInstallRecords,
   writeConfigFile,
   writePersistedInstalledPluginIndexInstallRecordsWithLease,
@@ -59,7 +59,7 @@ function primeUninstallPlan(
 }
 
 function expectRuntimeLogIncludes(fragment: string) {
-  expect(runtimeLogs.join("\n")).toContain(fragment);
+  expect(pluginsCliRuntimeLogs.join("\n")).toContain(fragment);
 }
 
 function expectInstallRecordsWrittenWithLease(records: unknown, config: unknown) {
@@ -195,7 +195,7 @@ describe("plugins cli uninstall", () => {
 
     await runPluginsCommand(["plugins", "uninstall", "alpha", "--force", "--keep-files"]);
 
-    expect(promptYesNo).not.toHaveBeenCalled();
+    expect(promptYesNoMock).not.toHaveBeenCalled();
     expectLatestUninstallPlanParams({ pluginId: "alpha", deleteFiles: false });
     expectInstallRecordsWrittenWithLease({}, { plugins: { entries: {} } });
     expect(writeConfigFile).toHaveBeenCalledWith({
@@ -306,7 +306,7 @@ describe("plugins cli uninstall", () => {
 
     expect(runtimeErrors.at(-1)).toContain('Plugin uninstall target "calendar" is ambiguous');
     expect(planPluginUninstall).not.toHaveBeenCalled();
-    expect(promptYesNo).not.toHaveBeenCalled();
+    expect(promptYesNoMock).not.toHaveBeenCalled();
     expect(applyPluginUninstallDirectoryRemoval).not.toHaveBeenCalled();
     expect(writePersistedInstalledPluginIndexInstallRecordsWithLease).not.toHaveBeenCalled();
     expect(writeConfigFile).not.toHaveBeenCalled();
@@ -392,7 +392,7 @@ describe("plugins cli uninstall", () => {
       diagnostics: [],
     });
     primeUninstallPlan({ plugins: { entries: {}, installs: {} } } as OpenClawConfig);
-    promptYesNo.mockRejectedValueOnce(new PromptInputClosedError());
+    promptYesNoMock.mockRejectedValueOnce(new PromptInputClosedError());
 
     await expect(runPluginsCommand(["plugins", "uninstall", "alpha"])).rejects.toThrow(
       "__exit__:1",
@@ -595,7 +595,7 @@ describe("plugins cli uninstall", () => {
 
     expectLatestUninstallPlanParams({ pluginId: "alpha", deleteFiles: true });
     expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
-    expect(runtimeLogs.at(-2)).toContain('Uninstalled plugin "alpha"');
+    expect(pluginsCliRuntimeLogs.at(-2)).toContain('Uninstalled plugin "alpha"');
   });
 
   it("uninstalls stale enabled entries when plugin is absent from the current registry", async () => {
@@ -627,7 +627,7 @@ describe("plugins cli uninstall", () => {
       reason: "source-changed",
     });
     expect(runtimeErrors).not.toContain("Plugin not found: alpha");
-    expect(runtimeLogs.at(-2)).toContain('Uninstalled plugin "alpha"');
+    expect(pluginsCliRuntimeLogs.at(-2)).toContain('Uninstalled plugin "alpha"');
   });
 
   it.each([
@@ -758,7 +758,7 @@ describe("plugins cli uninstall", () => {
     expectInstallRecordsWrittenWithLease({}, nextConfig);
     expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
     expectRuntimeLogIncludes("channel config (channels.alpha)");
-    expect(runtimeLogs.at(-2)).toContain('Uninstalled plugin "alpha"');
+    expect(pluginsCliRuntimeLogs.at(-2)).toContain('Uninstalled plugin "alpha"');
   });
 
   it("exits when uninstall target is not managed by plugin install records", async () => {

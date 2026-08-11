@@ -10,17 +10,14 @@ import {
   requireRecord,
   sessionRow,
   sessionsListResponse,
+  waitForConfirmModal,
   waitForPatch,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
 async function confirmDelete(page: import("playwright").Page, proofName?: string) {
-  const dialog = page.locator("openclaw-modal-dialog").last();
-  const nativeDialog = dialog.locator("wa-dialog").locator("dialog");
-  await expect
-    .poll(() => nativeDialog.evaluate((element) => getComputedStyle(element).opacity))
-    .toBe("1");
+  const dialog = await waitForConfirmModal(page);
   if (proofName) {
     await captureUiProof(page, proofName);
   }
@@ -334,7 +331,9 @@ suite.define(() => {
       await rowFor(selected.key).waitFor({ state: "visible", timeout: 10_000 });
       await rowFor(selected.key).locator("a").first().click();
       await assertSelectedRoute();
-      await page.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+      await page
+        .locator('openclaw-chat-pane[aria-hidden="false"] .agent-chat__input textarea')
+        .waitFor({ state: "visible" });
 
       for (const row of batchRows) {
         await rowFor(row.key).click({ modifiers: ["Meta"] });
@@ -382,7 +381,9 @@ suite.define(() => {
       const archivedNotice = page.locator(".agent-chat__disabled-banner");
       await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => archivedNotice.textContent()).toContain("This session is archived.");
-      await expect.poll(() => page.locator(".agent-chat__input").count()).toBe(0);
+      await expect
+        .poll(() => page.locator(".chat-pane-cache__pane--visible .agent-chat__input").count())
+        .toBe(0);
 
       await archivedNotice.getByRole("button", { name: "Unarchive" }).click();
       await waitForPatch(
@@ -398,7 +399,9 @@ suite.define(() => {
 
       await assertSelectedRoute();
       await archivedNotice.waitFor({ state: "detached", timeout: 10_000 });
-      await page.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+      await page
+        .locator(".chat-pane-cache__pane--visible .agent-chat__input textarea")
+        .waitFor({ state: "visible" });
     } finally {
       await context.close();
     }

@@ -122,6 +122,8 @@ export type QaBusMessage = {
   senderId: string;
   senderName?: string;
   text: string;
+  /** Runtime-authored failure marker; copy wording is not a QA contract. */
+  isError?: boolean;
   timestamp: number;
   threadId?: string;
   threadTitle?: string;
@@ -187,6 +189,8 @@ export type QaBusOutboundMessageInput = {
   senderId?: string;
   senderName?: string;
   text: string;
+  /** Preserves ReplyPayload.isError through the synthetic channel transport. */
+  isError?: boolean;
   timestamp?: number;
   threadId?: string;
   replyToId?: string;

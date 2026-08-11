@@ -36,20 +36,13 @@ export type TabAccessEventPolicy = {
   replaceTab(addedTabId: number, removedTabId: number): Promise<boolean>;
 };
 
-export type TabAccessEventCopilot = {
-  onConsentChanged(tabId?: number, options?: { revoked?: boolean }): void | Promise<void>;
-  onTabRemoved(tabId: number): void | Promise<void>;
-};
-
 export function registerTabAccessEvents(options: {
   chromeApi?: TabAccessEventsChromeApi;
   accessReady: Promise<unknown>;
   policy: TabAccessEventPolicy;
   attachedTabs: Set<number>;
   attachedAccessEpochs: Map<number, TabAccessEpoch>;
-  copilotDeniedTabs: Set<number>;
   attachingTabs: Map<number, Promise<unknown>>;
-  getCopilot(): TabAccessEventCopilot;
   send(message: Record<string, unknown>): void;
   scheduleTabsSync(): void;
   detachDebugger(tabId: number): Promise<void>;

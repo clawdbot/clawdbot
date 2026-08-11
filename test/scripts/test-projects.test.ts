@@ -1923,7 +1923,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/plugin-npm-runtime-build-args.test.ts",
       ],
       "scripts/lib/generated-text-asset.mts": [
-        "extensions/browser/scripts/build-copilot-runtime.test.ts",
         "test/scripts/build-diffs-viewer-runtime.test.ts",
         "test/scripts/bundled-plugin-assets.test.ts",
       ],

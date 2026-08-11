@@ -7,12 +7,12 @@ import { MediaAttachmentCache } from "./attachments.js";
 import { normalizeAttachmentPath } from "./attachments.normalize.js";
 
 describe.runIf(process.platform === "win32")("media attachment Windows file URLs", () => {
-  it("reads an uppercase file URL through the attachment cache", async () => {
+  it("reads a single-slash uppercase file URL through the attachment cache", async () => {
     await withTempDir({ prefix: "openclaw-media-file-url-" }, async (base) => {
       const filePath = path.join(base, "café photo.png");
       const contents = Buffer.from("media-understanding-file-url");
       await fs.writeFile(filePath, contents);
-      const fileUrl = pathToFileURL(filePath).href.replace(/^file:/u, "FILE:");
+      const fileUrl = pathToFileURL(filePath).href.replace(/^file:\/\//u, "FILE:");
       const cache = new MediaAttachmentCache([{ index: 0, path: fileUrl }], {
         includeDefaultLocalPathRoots: false,
         localPathRoots: [base],

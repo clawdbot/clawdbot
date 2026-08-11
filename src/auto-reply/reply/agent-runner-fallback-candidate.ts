@@ -192,6 +192,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         }
         turn.opts?.onModelSelected?.({ provider, model, thinkLevel: candidateThinkLevel });
         const common = {
+          preparedRunAdmission: params.preparedRunAdmission,
           turn,
           candidateRun,
           runtimeConfig: params.runtimeConfig,

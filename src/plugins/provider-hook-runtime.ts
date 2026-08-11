@@ -50,9 +50,36 @@ export type ProviderRuntimePluginHandle = ProviderRuntimePluginLookupParams & {
   plugin?: ProviderPlugin;
 };
 
+const MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL = Symbol.for(
+  "openclaw.modelProviderRuntimePluginHandle",
+);
+
+type ModelWithProviderRuntimePluginHandle = {
+  [MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL]?: ProviderRuntimePluginHandle;
+};
+
 type ProviderRuntimePluginHandleParams = ProviderRuntimePluginLookupParams & {
   runtimeHandle?: ProviderRuntimePluginHandle;
 };
+
+/** Carries one attempt's prepared provider plugin through the model transport boundary. */
+export function attachModelProviderRuntimePluginHandle<TModel extends object>(
+  model: TModel,
+  runtimeHandle: ProviderRuntimePluginHandle,
+): TModel {
+  const next = { ...model } as TModel & ModelWithProviderRuntimePluginHandle;
+  next[MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL] = runtimeHandle;
+  return next;
+}
+
+/** Reads the provider plugin handle attached to a prepared attempt model. */
+export function getModelProviderRuntimePluginHandle(
+  model: object | undefined,
+): ProviderRuntimePluginHandle | undefined {
+  return model
+    ? (model as ModelWithProviderRuntimePluginHandle)[MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL]
+    : undefined;
+}
 
 export function clearProviderRuntimePluginCacheForTest(): void {
   providerRuntimePluginCache = new WeakMap();

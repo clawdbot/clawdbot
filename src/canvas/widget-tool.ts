@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { Type } from "typebox";
 import type { BoardWidgetPutResult } from "../../packages/gateway-protocol/src/index.js";
 import { optionalStringEnum } from "../agents/schema/string-enum.js";
-import { type AnyAgentTool, jsonResult, readStringParam } from "../agents/tools/common.js";
+import { type AnyAgentTool, jsonResult, readToolStringParam } from "../agents/tools/common.js";
 import {
   callInProcessGatewayTool,
   type InProcessGatewayCaller,
@@ -127,8 +127,8 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
     requiredClientCaps: SHOW_WIDGET_REQUIRED_CLIENT_CAPS,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const title = readStringParam(params, "title", { required: true });
-      const rawWidgetCode = readStringParam(params, "widget_code", {
+      const title = readToolStringParam(params, "title", { required: true });
+      const rawWidgetCode = readToolStringParam(params, "widget_code", {
         required: true,
         trim: false,
       });
@@ -156,12 +156,12 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       let pinnedWidgetName: string | undefined;
       if (pinSessionKey) {
         const sessionKey = pinSessionKey;
-        const explicitName = readStringParam(params, "name");
+        const explicitName = readToolStringParam(params, "name");
         const name = explicitName ?? slugWidgetName(title);
-        const tab = readStringParam(params, "tab");
-        const size = readStringParam(params, "size");
-        const presentation = readStringParam(params, "presentation");
-        const after = readStringParam(params, "after");
+        const tab = readToolStringParam(params, "tab");
+        const size = readToolStringParam(params, "size");
+        const presentation = readToolStringParam(params, "presentation");
+        const after = readToolStringParam(params, "after");
         const pinnedTitle = boardWidgetTitle(title);
         assertPinnedWidgetDocumentSize(
           buildWidgetDocument(pinnedTitle ?? name, widgetCode, {

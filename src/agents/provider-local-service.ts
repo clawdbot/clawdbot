@@ -288,10 +288,10 @@ export async function ensureProviderLocalService(
   }
 }
 
-/** Stop all managed local services and clear process state for tests. */
-export function stopManagedProviderLocalServicesForTest(): void {
+/** Stop all managed local services owned by this process. */
+export function stopManagedProviderLocalServices(): void {
   for (const [key, managed] of services) {
-    stopManagedService(key, managed, "test");
+    stopManagedService(key, managed, "host-shutdown");
   }
   services.clear();
 }

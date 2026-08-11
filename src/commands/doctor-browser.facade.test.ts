@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   detectLegacyClawdBrowserProfileResidue,
   maybeArchiveLegacyClawdBrowserProfileResidue,
+  maybeRepairOwnedChromeExtensionNativeHosts,
   noteChromeMcpBrowserReadiness,
 } from "./doctor-browser.js";
 
@@ -108,6 +109,20 @@ describe("doctor browser facade", () => {
       artifactBasename: "browser-doctor.js",
     });
     expect(cleanup).toHaveBeenCalledWith(cfg, deps);
+  });
+
+  it("delegates owned Chrome native-host repair to the browser facade surface", async () => {
+    const repair = vi.fn().mockResolvedValue({ changes: ["repaired"], warnings: [] });
+    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+      noteChromeMcpBrowserReadiness: vi.fn(),
+      maybeRepairOwnedChromeExtensionNativeHosts: repair,
+    });
+
+    await expect(maybeRepairOwnedChromeExtensionNativeHosts()).resolves.toEqual({
+      changes: ["repaired"],
+      warnings: [],
+    });
+    expect(repair).toHaveBeenCalledOnce();
   });
 
   it("warns when browser profile cleanup surface is unavailable", async () => {

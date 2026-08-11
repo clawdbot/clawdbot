@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
 
-vi.mock("../../subagent-registry.js", () => ({
+vi.mock("../../subagents/registry/subagent-registry.js", () => ({
   releasePendingAgentSteeringItems: mocks.releasePendingSteering,
 }));
 vi.mock("../google-prompt-cache.js", () => ({

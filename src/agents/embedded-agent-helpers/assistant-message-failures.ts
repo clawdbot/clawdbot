@@ -1,4 +1,5 @@
 import type { AssistantMessage } from "../../llm/types.js";
+import { isReplayUnsafeAssistantError } from "../../llm/utils/retry.js";
 import { extractLeadingHttpStatus } from "../../shared/assistant-error-format.js";
 import {
   classifyFailoverSignal,
@@ -25,7 +26,7 @@ export function classifyAssistantFailoverReason(
   msg: AssistantMessage | undefined,
   opts?: { provider?: string },
 ): FailoverReason | null {
-  if (!msg || msg.stopReason !== "error") {
+  if (!msg || msg.stopReason !== "error" || isReplayUnsafeAssistantError(msg)) {
     return null;
   }
   const classification = classifyFailoverSignal(buildAssistantFailoverSignal(msg, opts));

@@ -66,6 +66,13 @@ function resolveDispatchAbortError(method: string, signal: AbortSignal): Error {
     : createAbortError(`gateway request aborted for ${method}`, { cause: signal.reason });
 }
 
+/** Reject before a cancelled in-process request can invoke method work. */
+export function throwIfGatewayDispatchAborted(method: string, signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw resolveDispatchAbortError(method, signal);
+  }
+}
+
 async function waitForDispatch<T>(
   method: string,
   promise: Promise<T>,
@@ -121,8 +128,15 @@ export async function waitForGatewayDispatch<T>(
   promise: Promise<T>,
   timeoutMs?: number,
   signal?: AbortSignal,
+  onSignalAbort?: () => Promise<void> | void,
 ): Promise<T> {
-  return await waitForDispatch(method, promise, resolveDispatchDeadlineMs(timeoutMs), signal);
+  return await waitForDispatch(
+    method,
+    promise,
+    resolveDispatchDeadlineMs(timeoutMs),
+    signal,
+    onSignalAbort,
+  );
 }
 
 /** Dispatches one request through the ordinary Gateway router without opening a transport. */
@@ -131,9 +145,7 @@ export async function dispatchGatewayRequestInProcessRaw(
   params: unknown,
   options: InProcessGatewayDispatchOptions,
 ): Promise<GatewayMethodDispatchResponse> {
-  if (options.signal?.aborted) {
-    throw resolveDispatchAbortError(method, options.signal);
-  }
+  throwIfGatewayDispatchAborted(method, options.signal);
   let firstResponse: GatewayMethodDispatchResponse | undefined;
   let finalResponse: GatewayMethodDispatchResponse | undefined;
   let resolveFirstResponse: ((response: GatewayMethodDispatchResponse) => void) | undefined;

@@ -927,6 +927,7 @@ describe("agent exec run config layering", () => {
 
     expect(config.agents?.defaults?.workspace).toBe("/run/here");
     expect(config.agents?.defaults?.skipBootstrap).toBe(true);
+    expect(config.skills?.load?.watch).toBe(false);
   });
 
   it("never downgrades a configured sandbox or shell env to the exec defaults", () => {

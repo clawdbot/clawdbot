@@ -55,6 +55,7 @@ const mocks = vi.hoisted(() => ({
   runSetupMemoryImportStep: vi.fn(),
   writeWizardConfigFile: vi.fn(),
   runCollectedChannelOnboardingPostWriteHooks: vi.fn(async () => {}),
+  chatWarn: vi.fn(),
   sharedVerifiedInference: undefined as SystemAgentVerifiedInferenceBinding | undefined,
 }));
 
@@ -64,6 +65,17 @@ vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
 }));
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) =>
+      subsystem === "system-agent/chat-engine"
+        ? ({ warn: mocks.chatWarn } as unknown as ReturnType<typeof actual.createSubsystemLogger>)
+        : actual.createSubsystemLogger(subsystem),
+  };
+});
 
 vi.mock("../wizard/setup.shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../wizard/setup.shared.js")>()),
@@ -174,7 +186,9 @@ function testHarnessBinding(route: SystemAgentConfiguredRoute) {
     return { auth: {}, deps: {} };
   }
   const agentHarnessId =
-    route.agentHarnessRuntimeOverride === "auto" ? "openclaw" : route.agentHarnessRuntimeOverride;
+    route.agentHarnessRuntimeOverride === "auto"
+      ? "openclaw"
+      : (route.agentHarnessRuntimeOverride ?? "codex");
   if (agentHarnessId === "openclaw") {
     return { auth: { agentHarnessId }, deps: {} };
   }
@@ -3148,13 +3162,15 @@ describe("SystemAgentChatEngine", () => {
   it("fails closed when neither inference path is usable", async () => {
     const planner = vi.fn(async () => null);
     const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => null,
+      runAgentTurn: async () => {
+        throw new Error("workspace owner openclaw is missing from the roster");
+      },
       planWithAssistant: planner,
       deps: { loadOverview: fakeOverviewLoader() },
     });
 
-    await expect(engine.handle("please make everything nice")).rejects.toBeInstanceOf(
-      SystemAgentInferenceUnavailableError,
+    await expect(engine.handle("please make everything nice")).rejects.toThrow(
+      "workspace owner openclaw is missing from the roster",
     );
   });
 });
@@ -3272,6 +3288,7 @@ describe("OpenClaw agent loop backends", () => {
 
     expect(runCliAgent).toHaveBeenCalledOnce();
     expect(reply.text).toContain("planner fallback reply");
+    expect(mocks.chatWarn).toHaveBeenCalledWith(expect.stringContaining("claude exploded"));
   });
 });
 

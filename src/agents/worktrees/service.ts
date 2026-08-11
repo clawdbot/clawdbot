@@ -692,6 +692,7 @@ export class ManagedWorktreeService {
       throw commandError("git show-ref --verify", branchExists);
     }
     const base = await resolveWorktreeBase(repository.repoRoot, params.baseRef);
+    params.commitGuard?.();
     await fs.mkdir(root, { recursive: true });
     let gitBase = base.gitOperand;
     let recordBase = base.recordRef;
@@ -725,6 +726,7 @@ export class ManagedWorktreeService {
       if (runRepositorySetup) {
         await runSetupScript(repository.sourceRoot, worktreePath);
       }
+      params.commitGuard?.();
     } catch (error) {
       try {
         await cleanupFailedCreate(repository.repoRoot, worktreePath, branch);

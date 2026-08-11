@@ -15,7 +15,6 @@ import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admiss
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
-import { SystemAgentInferenceUnavailableError } from "../../system-agent/inference-error.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture,
   installSystemAgentPluginMetadataTestSnapshot,
@@ -469,6 +468,7 @@ describe("openclaw.setup", () => {
       baseSnapshot: expect.objectContaining({ hash: "prepare-base-hash" }),
       baseHash: "prepare-base-hash",
     });
+    await whenAdmittedWizardSessionSettled(session);
   });
 });
 
@@ -933,10 +933,14 @@ describe("openclaw.chat", () => {
 
   it("reuses a live session, then requires fresh fallback verification after failure", async () => {
     stubEngineOverview();
-    const engine = makeVerifiedEngine();
-    vi.spyOn(engine, "handle").mockRejectedValue(
-      new SystemAgentInferenceUnavailableError("conversation"),
-    );
+    const engine = new SystemAgentChatEngine({
+      verifiedInference: requireVerifiedInferenceFixture(),
+      runAgentTurn: async () => {
+        throw new Error("workspace owner openclaw is missing from the roster");
+      },
+      planWithAssistant: async () => null,
+      deps: requireVerifiedInferenceDeps(),
+    });
     const dispose = vi.spyOn(engine, "dispose").mockResolvedValue();
     const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
     const context = makeContext(sessions);
@@ -947,7 +951,7 @@ describe("openclaw.chat", () => {
       ok: false,
       error: {
         code: "UNAVAILABLE",
-        message: expect.stringContaining("working inference"),
+        message: expect.stringContaining("workspace owner openclaw is missing from the roster"),
         details: { code: "system_agent_session_invalidated" },
       },
     });

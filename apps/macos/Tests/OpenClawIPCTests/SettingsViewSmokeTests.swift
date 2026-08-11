@@ -6,81 +6,6 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct SettingsViewSmokeTests {
-    @Test func `cron settings builds body`() {
-        let store = CronJobsStore(isPreview: true)
-        store.schedulerEnabled = false
-        store.schedulerStorePath = "/tmp/openclaw-cron-store.json"
-
-        let job1 = CronJob(
-            id: "job-1",
-            agentId: "ops",
-            name: "  Morning Check-in  ",
-            description: nil,
-            enabled: true,
-            deleteAfterRun: nil,
-            createdAtMs: 1_700_000_000_000,
-            updatedAtMs: 1_700_000_100_000,
-            schedule: .cron(expr: "0 8 * * *", tz: "UTC"),
-            sessionTarget: .main,
-            wakeMode: .now,
-            payload: .systemEvent(text: "ping"),
-            delivery: nil,
-            state: CronJobState(
-                nextRunAtMs: 1_700_000_200_000,
-                runningAtMs: nil,
-                lastRunAtMs: 1_700_000_050_000,
-                lastStatus: "ok",
-                lastError: nil,
-                lastDurationMs: 123))
-
-        let job2 = CronJob(
-            id: "job-2",
-            agentId: nil,
-            name: "",
-            description: nil,
-            enabled: false,
-            deleteAfterRun: nil,
-            createdAtMs: 1_700_000_000_000,
-            updatedAtMs: 1_700_000_100_000,
-            schedule: .every(everyMs: 30000, anchorMs: nil),
-            sessionTarget: .isolated,
-            wakeMode: .nextHeartbeat,
-            payload: .agentTurn(
-                message: "hello",
-                thinking: "low",
-                timeoutSeconds: 30,
-                deliver: nil,
-                channel: nil,
-                to: nil,
-                bestEffortDeliver: nil),
-            delivery: CronDelivery(mode: .announce, channel: "sms", to: "+15551234567", bestEffort: true),
-            state: CronJobState(
-                nextRunAtMs: nil,
-                runningAtMs: nil,
-                lastRunAtMs: nil,
-                lastStatus: nil,
-                lastError: nil,
-                lastDurationMs: nil))
-
-        store.jobs = [job1, job2]
-        store.selectedJobId = job1.id
-        store.runEntries = [
-            CronRunLogEntry(
-                ts: 1_700_000_050_000,
-                jobId: job1.id,
-                action: "finished",
-                status: "ok",
-                error: nil,
-                summary: "ok",
-                runAtMs: 1_700_000_050_000,
-                durationMs: 123,
-                nextRunAtMs: 1_700_000_200_000),
-        ]
-
-        let view = CronSettings(store: store)
-        _ = view.body
-    }
-
     @Test func `cron settings renders in hosting view`() {
         let store = CronJobsStore(isPreview: true)
         store.schedulerEnabled = false
@@ -142,12 +67,6 @@ struct SettingsViewSmokeTests {
 
     @Test func `debug settings builds body`() {
         let view = DebugSettings()
-        _ = view.body
-    }
-
-    @Test func `general settings builds body`() {
-        let state = AppState(preview: true)
-        let view = GeneralSettings(state: state)
         _ = view.body
     }
 

@@ -176,9 +176,9 @@ vi.mock("../infra/net/fetch-guard.js", async () => {
   };
 });
 
-const { describeImageWithModel } = await import("./image.js");
+const { describeImageWithModelCore } = await import("./image.js");
 
-describe("describeImageWithModel", () => {
+describe("describeImageWithModelCore", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
@@ -300,7 +300,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "flash ok" }],
     });
 
-    const result = await describeImageWithModel({
+    const result = await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "google",
@@ -355,7 +355,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "flash lite ok" }],
     });
 
-    const result = await describeImageWithModel({
+    const result = await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "google",
@@ -415,7 +415,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "profile-scoped image ok" }],
     });
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "github-copilot",
@@ -469,7 +469,7 @@ describe("describeImageWithModel", () => {
       })),
     });
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "github-copilot",
@@ -554,7 +554,7 @@ describe("describeImageWithModel", () => {
       })),
     });
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "github-copilot",
@@ -593,7 +593,7 @@ describe("describeImageWithModel", () => {
     );
 
     await expect(
-      describeImageWithModel({
+      describeImageWithModelCore({
         cfg: {},
         agentDir: "/tmp/openclaw-agent",
         provider: "github-copilot",
@@ -630,7 +630,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "A solid red square." }],
     });
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "openai",
@@ -676,7 +676,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "ok" }],
     });
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "agent-plan",
@@ -713,7 +713,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "ok" }],
     });
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "fake",
@@ -759,7 +759,7 @@ describe("describeImageWithModel", () => {
       },
     };
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg,
       agentId: "vision-agent",
       agentDir: "/tmp/openclaw-agent",
@@ -817,7 +817,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "committed runtime" }],
     });
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg: requestedCfg,
       agentDir: "/tmp/requested-agent",
       workspaceDir: "/tmp/requested-workspace",
@@ -873,7 +873,7 @@ describe("describeImageWithModel", () => {
       createStores: () => ({ authStorage: preparedAuthStorage, modelRegistry: {} }),
     } as never;
 
-    const result = await describeImageWithModel({
+    const result = await describeImageWithModelCore({
       cfg,
       agentDir: "/tmp/parent-agent",
       workspaceDir: "/tmp/parent-workspace",

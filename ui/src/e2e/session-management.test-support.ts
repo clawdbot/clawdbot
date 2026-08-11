@@ -6,12 +6,13 @@ import {
   controlUiSessionPath,
   controlUiSessionUrl,
   installMockGateway,
+  waitForConfirmModal,
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-export { controlUiSessionPath, controlUiSessionUrl, installMockGateway };
+export { controlUiSessionPath, controlUiSessionUrl, installMockGateway, waitForConfirmModal };
 
 export const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -187,5 +188,11 @@ export async function captureUiProof(page: Page, fileName: string) {
     return;
   }
   await mkdir(uiProofArtifactDir, { recursive: true });
-  await page.screenshot({ fullPage: true, path: path.join(uiProofArtifactDir, fileName) });
+  // Dialogs and menus fade in, so an undisabled capture can land mid-transition
+  // and prove nothing about the state it was taken for.
+  await page.screenshot({
+    animations: "disabled",
+    fullPage: true,
+    path: path.join(uiProofArtifactDir, fileName),
+  });
 }

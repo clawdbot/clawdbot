@@ -232,6 +232,7 @@ export function renderSidebarSessionSortMenu(params: {
   peopleSortAvailable: boolean;
   statusFilter: SidebarSessionStatusFilter;
   showCron: boolean;
+  showSystem: boolean;
   creators: readonly SessionCreatorOption[];
   creatorFilterId: string | null;
   onGroupingChange: (grouping: SidebarSessionsGrouping) => void;
@@ -239,6 +240,7 @@ export function renderSidebarSessionSortMenu(params: {
   onStatusFilterChange: (statusFilter: SidebarSessionStatusFilter) => void;
   onCreatorFilterChange: (creatorId: string | null) => void;
   onShowCronChange: (show: boolean) => void;
+  onShowSystemChange: (show: boolean) => void;
   onClose: (restoreFocus: boolean) => void;
 }) {
   const position = params.position;
@@ -274,6 +276,8 @@ export function renderSidebarSessionSortMenu(params: {
               params.onCreatorFilterChange(value.slice("creator:".length) || null);
             } else if (value === "show-cron") {
               params.onShowCronChange(!params.showCron);
+            } else if (value === "show-system") {
+              params.onShowSystemChange(!params.showSystem);
             }
           }}
           @keydown=${(event: KeyboardEvent) =>
@@ -326,6 +330,17 @@ export function renderSidebarSessionSortMenu(params: {
             <span class="session-menu__text">${t("sessionsView.showCronSessions")}</span>
             <span slot="details" class="session-menu__check" aria-hidden="true"
               >${params.showCron ? icons.check : nothing}</span
+            >
+          </wa-dropdown-item>
+          <wa-dropdown-item
+            class="sidebar-session-sort-menu__item"
+            type="checkbox"
+            value="show-system"
+            .checked=${params.showSystem}
+          >
+            <span class="session-menu__text">${t("sessionsView.showSystemSessions")}</span>
+            <span slot="details" class="session-menu__check" aria-hidden="true"
+              >${params.showSystem ? icons.check : nothing}</span
             >
           </wa-dropdown-item>
         </wa-dropdown>

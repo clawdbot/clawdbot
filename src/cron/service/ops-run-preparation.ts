@@ -75,6 +75,8 @@ export type ActivatedManualRun = Extract<PreparedManualRun, { ran: true }> & {
 
 export type ManualRunOptions = {
   runId?: string;
+  /** Revalidates the admitted caller immediately before reserving durable work. */
+  commitGuard?: () => void;
   scheduleOwnershipAtMs?: number;
   payload?: CronPayload;
   terminalTracker?: ManualRunTerminalTracker;
@@ -336,6 +338,7 @@ export async function prepareManualRun(
     if (hasActiveCronRun(job)) {
       return { ok: true, ran: false, reason: "already-running" as const };
     }
+    opts?.commitGuard?.();
     const reservationAt = state.deps.nowMs();
     if (!isJobDue(job, reservationAt, { forced: mode === "force" })) {
       return { ok: true, ran: false, reason: "not-due" as const };

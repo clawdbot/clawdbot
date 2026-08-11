@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listTasksForOwnerKey } from "../../../tasks/runtime-internal.js";
-import { getSubagentRunByChildSessionKey } from "../../subagent-registry.js";
+import { getSubagentRunByChildSessionKey } from "../registry/subagent-registry.js";
 
 function isActiveTaskStatus(status: string | undefined): boolean {
   return status === "queued" || status === "running";

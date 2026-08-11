@@ -1,6 +1,10 @@
 import { vi } from "vitest";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { AssistantMessage } from "../../llm/types.js";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../admitted-run-context.js";
 import { isStrictAgenticSupportedProviderModel } from "../execution-contract.js";
 import type { FailoverReason } from "../failover/signal.js";
 import type { AgentHarness } from "../harness/types.js";
@@ -159,7 +163,10 @@ export function resetRunIncompleteTurnOwnerMocks(): void {
   mockedSleepWithAbort.mockResolvedValue(undefined);
 }
 
-type OwnerHarnessParams = RunEmbeddedAgentParams & {
+type OwnerHarnessParams = Omit<
+  RunEmbeddedAgentParams,
+  "admittedRunContext" | "preparedRunAdmission"
+> & {
   authProfileStateMode?: "read-write" | "read-only";
 };
 
@@ -187,7 +194,11 @@ function terminalLifecycleSetter(
  * Exercises the production incomplete-turn owners without importing the full
  * runner, plugin registry, session store, or prepared-runtime graph.
  */
-export async function runIncompleteTurnOwnerHarness(params: OwnerHarnessParams) {
+async function runIncompleteTurnOwnerHarnessWithContext(
+  params: RunEmbeddedAgentParams & {
+    authProfileStateMode?: "read-write" | "read-only";
+  },
+) {
   const usageAccumulator = createUsageAccumulator();
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
   const retryState = createEmbeddedRunTerminalRetryState();
@@ -447,6 +458,33 @@ export async function runIncompleteTurnOwnerHarness(params: OwnerHarnessParams) 
     activePromptPersisted = nextPromptPersisted;
   }
   throw new Error("Focused incomplete-turn owner harness exhausted its retry budget");
+}
+
+export async function runIncompleteTurnOwnerHarness(inputParams: OwnerHarnessParams) {
+  const agentId = inputParams.agentId ?? "main";
+  const preparedRunAdmission = prepareAgentRunAdmission({
+    cfg: inputParams.config ?? {},
+    operationalRunInstance: createOperationalRunInstanceRef(inputParams.runId),
+    facts: {
+      runId: inputParams.runId,
+      agentId,
+      ingress: {
+        kind: "system",
+        boundary: "run-incomplete-turn-owner-harness",
+        state: "present",
+      },
+    },
+  });
+  try {
+    const admittedRunContext = await preparedRunAdmission.admit("embedded");
+    return await runIncompleteTurnOwnerHarnessWithContext({
+      ...inputParams,
+      admittedRunContext,
+      agentId,
+    });
+  } finally {
+    preparedRunAdmission.close();
+  }
 }
 
 resetRunIncompleteTurnOwnerMocks();

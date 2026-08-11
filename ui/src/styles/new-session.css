@@ -529,6 +529,7 @@ wa-dropdown.new-session-page__start-menu {
 .new-session-page__browser-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
   padding: 8px 10px;
   border-top: 1px solid var(--border);
 }
@@ -593,6 +594,22 @@ wa-dropdown.new-session-page__start-menu {
 }
 
 .new-session-page__browser-use:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.new-session-page__browser-register {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: var(--cursor-action);
+}
+
+.new-session-page__browser-register:disabled {
   opacity: 0.5;
   cursor: default;
 }

@@ -169,7 +169,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
   });
   const requesterSessionKey = params.requester?.sessionKey ?? ownerSessionKey;
   const { adoptPausedSubagentRunForFollowUp, registerSubagentRun } =
-    await import("../../agents/subagent-registry.js");
+    await import("../../agents/subagents/registry/subagent-registry.js");
   // A follow-up aimed at a session paused by sessions_yield continues that run.
   // Registering a sibling row here would reassign the requester to this agent's
   // own main session and leave the original requester waiting behind a row that

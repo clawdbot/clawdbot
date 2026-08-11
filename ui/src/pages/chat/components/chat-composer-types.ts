@@ -25,6 +25,14 @@ import type {
   ChatComposerPlusMenuView,
 } from "./chat-composer-plus-menu.ts";
 
+/** One shape for the queued-message edit state and its two actions. */
+export type ChatQueuedEditProps = {
+  /** Id of the row the composer currently owns, or null when composing fresh. */
+  editingId: string | null;
+  onEdit?: (id: string) => void;
+  onCancel: () => void;
+};
+
 export type CapabilityMenuProps = Omit<
   ChatComposerPlusMenuProps,
   | "attachments"
@@ -121,6 +129,8 @@ export type ChatComposerProps = {
   onQueueRemove: (id: string) => void;
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
+  onQueueMove?: (id: string, toIndex: number) => void;
+  queuedEdit?: ChatQueuedEditProps;
   onNewSession: () => void;
   onClearReply?: () => void;
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;

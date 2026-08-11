@@ -31,6 +31,10 @@ vi.mock("./doctor-browser.js", () => ({
     changes: [],
     warnings: [],
   }),
+  maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
+    changes: [],
+    warnings: [],
+  }),
   noteChromeMcpBrowserReadiness: vi.fn().mockResolvedValue(undefined),
 }));
 

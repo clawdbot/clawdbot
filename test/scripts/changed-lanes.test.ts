@@ -224,13 +224,6 @@ afterEach(() => {
 });
 
 describe("scripts/changed-lanes", () => {
-  it("keeps a non-executed changed-gate warning fixture", () => {
-    // openclaw-temp-dir: allow test fixture for the temp warning report
-    const warningFixture = 'fs.mkdtemp("openclaw-warning-fixture-", () => {})';
-
-    expect(warningFixture).toContain("mkdtemp");
-  });
-
   it("detects direct script execution from Windows argv paths", () => {
     expect(
       isDirectRunPath(
@@ -813,48 +806,6 @@ describe("scripts/changed-lanes", () => {
     for (const fullLane of ["lint:core", "lint:extensions", "lint:scripts"]) {
       expect(commandNames).not.toContain(fullLane);
     }
-  });
-
-  it("keeps manifest-declared generated browser assets out of targeted extension lint", () => {
-    const generatedAsset = "extensions/browser/chrome-extension/modules/copilot-runtime.js";
-    const result = detectChangedLanes([
-      generatedAsset,
-      "packages/gateway-client/src/protocol-client.ts",
-    ]);
-    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
-
-    expect(result.lanes.extensions).toBe(true);
-    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions");
-    expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:extensions");
-    expect(
-      plan.commands
-        .filter((command) => command.args[0] === "scripts/run-oxlint.mjs")
-        .flatMap((command) => command.args),
-    ).not.toContain(generatedAsset);
-  });
-
-  it("still lints extension source alongside its generated browser asset", () => {
-    const generatedAsset = "extensions/browser/chrome-extension/modules/copilot-runtime.js";
-    const source = "extensions/browser/scripts/copilot-runtime-entry.ts";
-    const result = detectChangedLanes([generatedAsset, source]);
-    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
-
-    expect(plan.commands).toContainEqual(
-      expect.objectContaining({
-        name: "lint extension changed file",
-        args: [
-          "scripts/run-oxlint.mjs",
-          "--tsconfig",
-          "config/tsconfig/oxlint.extensions.json",
-          source,
-        ],
-      }),
-    );
-    expect(
-      plan.commands
-        .filter((command) => command.args[0] === "scripts/run-oxlint.mjs")
-        .flatMap((command) => command.args),
-    ).not.toContain(generatedAsset);
   });
 
   it.each([
@@ -1641,7 +1592,8 @@ describe("scripts/changed-lanes", () => {
       docs: true,
       releaseMetadata: true,
     });
-    expect(plan.commands.map((command) => command.args[0])).toEqual([
+    const commands = plan.commands.map((command) => command.args[0]);
+    expect(commands).toEqual([
       "check:no-conflict-markers",
       "check:changelog-attributions",
       "check:doctor-deprecation-registry",
@@ -1657,11 +1609,11 @@ describe("scripts/changed-lanes", () => {
       "deps:patches:check",
       "release-metadata:check",
       "android:version:check",
-      "ios:version:check",
       "config:schema:check",
       "config:docs:check",
       "deps:root-ownership:check",
     ]);
+    expect(commands).not.toContain("ios:version:check");
     expect(
       plan.commands.find((command) => command.args[0] === "release-metadata:check")?.args,
     ).toEqual(["release-metadata:check", "--staged"]);

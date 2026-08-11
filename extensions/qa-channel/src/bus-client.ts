@@ -190,6 +190,7 @@ export async function sendQaBusMessage(params: {
   accountId: string;
   to: string;
   text: string;
+  isError?: boolean;
   senderId?: string;
   senderName?: string;
   threadId?: string;

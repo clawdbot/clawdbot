@@ -130,6 +130,31 @@ describe("showInputDialog", () => {
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 
+  it("holds a rename closed on the name it started from", async () => {
+    const closed = showInputDialog({
+      title: 'Rename group "Research"',
+      label: "Group name",
+      defaultValue: "Research",
+      requireValue: true,
+      requireChange: true,
+    });
+    await getRenderedModalDialog(document.body);
+
+    // The starting name is a no-op rename, so it never reaches the Gateway;
+    // whitespace around it is the same name once trimmed.
+    expect(findButton("Save").disabled).toBe(true);
+    await type("  Research  ");
+    expect(findButton("Save").disabled).toBe(true);
+    submitForm();
+    expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
+
+    await type("Projects");
+    expect(findButton("Save").disabled).toBe(false);
+    submitForm();
+
+    await expect(closed).resolves.toBe("Projects");
+  });
+
   it("keeps the typed value and shows why a rejected attempt failed", async () => {
     const submit = vi.fn().mockResolvedValueOnce("group name exceeds 512 characters");
     submit.mockResolvedValue(null);

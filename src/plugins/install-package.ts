@@ -334,7 +334,6 @@ async function installPluginFromPackageDir(
         installedDir,
         pluginId: plugin.pluginId,
         peerDependencies: plugin.peerDependencies,
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
         trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
         config: params.config,
         mode: effectiveMode,

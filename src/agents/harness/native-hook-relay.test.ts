@@ -312,6 +312,56 @@ describe("native hook relay registry", () => {
     });
   });
 
+  it("rejects a bound pre-tool policy result after exact host authority closes", async () => {
+    let active = true;
+    let resolvePolicy:
+      | ((value: { blocked: false; params: Record<string, unknown> }) => void)
+      | undefined;
+    const runBeforeToolCall = vi.fn(
+      () =>
+        new Promise<{ blocked: false; params: Record<string, unknown> }>((resolve) => {
+          resolvePolicy = resolve;
+        }),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-bound-authority-close",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+      runBeforeToolCall,
+      assertActive: () => {
+        if (!active) {
+          throw new Error("agent harness host capability is no longer active");
+        }
+      },
+    });
+    const invocation = invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        openclaw_approval_mode: "report",
+        cwd: "/repo",
+        tool_name: "Bash",
+        tool_use_id: "native-close-1",
+        tool_input: { command: "git status" },
+      },
+    });
+    await vi.waitFor(() => expect(runBeforeToolCall).toHaveBeenCalledTimes(1));
+    active = false;
+    resolvePolicy?.({ blocked: false, params: { command: "git status" } });
+
+    await expect(invocation).rejects.toThrow("agent harness host capability is no longer active");
+    expect(runBeforeToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalMode: "defer",
+        nativeOperation: { cwd: "/repo" },
+      }),
+    );
+  });
+
   it("stores permission approval state in process-global state", async () => {
     const relay = registerNativeHookRelay({
       provider: "codex",

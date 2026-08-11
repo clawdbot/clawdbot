@@ -1077,6 +1077,8 @@ export class NodeRegistry {
     sessionKey?: string;
     /** Receives the id after pairing validation and a successful dispatch. */
     onDispatchReady?: (invokeId: string) => void;
+    /** Revalidates caller authority at the registry-owned transport handoff. */
+    isDispatchAuthorized?: () => boolean;
   }): Promise<NodeInvokeResult> {
     if (params.signal?.aborted) {
       return { ok: false, error: { code: "ABORTED", message: "node invoke cancelled" } };
@@ -1139,6 +1141,17 @@ export class NodeRegistry {
           error: { code: "ROUTE_CHANGED", message: "node connection changed before dispatch" },
         };
       }
+    }
+    // Pairing resolution may yield after the caller's last authority check. The
+    // registry owns the raw send, so closure must win before pending state is armed.
+    if (params.isDispatchAuthorized?.() === false) {
+      return {
+        ok: false,
+        error: {
+          code: "APPROVAL_AUTHORITY_CLOSED",
+          message: "runtime authority closed before node dispatch",
+        },
+      };
     }
     const requestId = randomUUID();
     const invokeParams = normalizeSystemRunInvokeParams({

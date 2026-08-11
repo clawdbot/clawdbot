@@ -140,6 +140,20 @@ export const structuredMiscCases = [
       id: "retry-socket-closed",
       message: "The socket connection was closed unexpectedly by fetch",
     },
+    { id: "retry-connection-refused", message: "connection refused" },
+    { id: "retry-connection-lost", message: "connection lost" },
+    { id: "retry-other-side-closed", message: "other side closed" },
+    { id: "retry-reset-before-headers", message: "upstream reset before headers" },
+    { id: "retry-websocket-closed", message: "WebSocket closed unexpectedly" },
+    { id: "retry-websocket-error", message: "WebSocket error" },
+    { id: "retry-anthropic-message-stop", message: "stream ended before message_stop" },
+    { id: "retry-http2-no-response", message: "HTTP2 request did not get a response" },
+    { id: "retry-delay", message: "retry delay 1000ms" },
+    {
+      id: "retry-ended-without-terminal-response",
+      message: "provider request ended without a terminal response",
+    },
+    { id: "retry-rate-limit-hyphen", message: "rate-limit reached" },
   ]),
   ...messageRows(errorsSource, null, [
     {

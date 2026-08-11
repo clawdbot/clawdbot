@@ -157,16 +157,14 @@ function resolveConfiguredProvider(params: {
 }): SecretProviderConfig {
   const { ref, config } = params;
   const providerConfig = config.secrets?.providers?.[ref.provider];
+  if (
+    providerConfig?.source !== ref.source &&
+    (ref.source === "env" || ref.source === "store") &&
+    ref.provider === resolveDefaultSecretProviderAlias(config, ref.source)
+  ) {
+    return { source: ref.source };
+  }
   if (!providerConfig) {
-    if (ref.source === "env" && ref.provider === resolveDefaultSecretProviderAlias(config, "env")) {
-      return { source: "env" };
-    }
-    if (
-      ref.source === "store" &&
-      ref.provider === resolveDefaultSecretProviderAlias(config, "store")
-    ) {
-      return { source: "store" };
-    }
     throw providerResolutionError({
       code: "SECRET_PROVIDER_NOT_CONFIGURED",
       source: ref.source,

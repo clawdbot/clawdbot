@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { supportsWorkerExecutionContextLaunch } from "./admission.js";
 import {
   createPlacementFailureActions,
   isUnavailableEnvironment,
@@ -79,9 +80,12 @@ function requireProvisionedEnvironment(
   if (
     (environment.state !== "ready" && environment.state !== "idle") ||
     !environment.bootstrapReceipt ||
-    environment.environmentId !== expectedEnvironmentId
+    environment.environmentId !== expectedEnvironmentId ||
+    !supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt)
   ) {
-    throw new Error(`Worker environment is not dispatchable: ${environment.state}`);
+    throw new Error(
+      `Worker environment is not dispatchable with the current execution-context contract: ${environment.state}`,
+    );
   }
   return {
     environmentId: environment.environmentId,

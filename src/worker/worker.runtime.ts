@@ -124,6 +124,9 @@ export async function runWorkerDescriptor(
     try {
       turnStarted = true;
       await runWorkerEmbeddedTurn({
+        agentId: descriptor.assignment.agentId,
+        operationalRunInstance: descriptor.assignment.operationalRunInstance,
+        agentRuntimeIdentityToken: descriptor.assignment.agentRuntimeIdentityToken,
         cwd: workspaceDir,
         stateDir,
         sessionId: descriptor.admission.sessionId,
@@ -138,6 +141,7 @@ export async function runWorkerDescriptor(
           : { systemPrompt: descriptor.assignment.systemPrompt }),
         inferenceOptions: descriptor.assignment.inferenceOptions,
         allowedToolNames: descriptor.assignment.toolAuthority.allowedToolNames,
+        ...(descriptor.assignment.browser ? { browser: descriptor.assignment.browser } : {}),
         inference: { stream },
         transcript: {
           commit: async (messages) => {

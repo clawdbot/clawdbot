@@ -3176,7 +3176,7 @@ async function verifyGatewayUltraSubagentHandoff(params: {
   thinkingLevel: string;
 }): Promise<void> {
   const { listSubagentRunsForRequester } =
-    await import("../agents/subagent-registry.test-helpers.js");
+    await import("../agents/subagents/registry/subagent-registry.test-helpers.js");
   const existingRunIds = new Set(
     listSubagentRunsForRequester(params.sessionKey).map((entry) => entry.runId),
   );
@@ -4576,7 +4576,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     "OPENCLAW_LOG_LEVEL",
     "OPENCLAW_AGENT_DIR",
   ]);
-  const { startGatewayServer } = await import("./server.impl.js");
+  const { startGatewayServerCore } = await import("./server-start.js");
   let runtimeEnv: ReturnType<typeof enterProductionEnvForLiveRun> | undefined;
   let cleanupTempStateDir: string | undefined;
   let cleanupTempAgentDir: string | undefined;
@@ -4692,7 +4692,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
         `${params.label}: gateway-port`,
       );
       server = await withGatewayLiveProbeTimeout(
-        startGatewayServer(port, {
+        startGatewayServerCore(port, {
           bind: "loopback",
           auth: { mode: "token", token },
           controlUiEnabled: false,
@@ -5734,7 +5734,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     clearRuntimeConfigSnapshot();
     const runtimeEnv = enterProductionEnvForLiveRun();
     const previousEnv = snapshotLiveEnv(["OPENCLAW_AGENT_DIR"]);
-    const { startGatewayServer } = await import("./server.impl.js");
+    const { startGatewayServerCore } = await import("./server-start.js");
 
     process.env.OPENCLAW_SKIP_CHANNELS = "1";
     process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
@@ -5833,7 +5833,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           "zai-fallback: gateway-port",
         );
         server = await withGatewayLiveProbeTimeout(
-          startGatewayServer(port, {
+          startGatewayServerCore(port, {
             bind: "loopback",
             auth: { mode: "token", token },
             controlUiEnabled: false,

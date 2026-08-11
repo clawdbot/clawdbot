@@ -895,6 +895,15 @@ export function createGatewayCloseHandler(
       );
       await shutdownStep("agent-harnesses", () => disposeRegisteredAgentHarnesses(), warnings);
       await shutdownStep("ai-session-resources", () => cleanupSessionResources(), warnings);
+      await shutdownStep(
+        "provider-transport-dispatchers",
+        async () => {
+          const { closeProviderTransportDispatcherPool } =
+            await import("../agents/provider-transport-dispatcher-pool.js");
+          await closeProviderTransportDispatcherPool();
+        },
+        warnings,
+      );
       await measureCloseStep("bundle-runtimes", async () => {
         await Promise.all([
           disposeRuntimeWithShutdownGrace({

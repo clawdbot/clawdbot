@@ -11,7 +11,6 @@ import { resolveDiscordAccount } from "../accounts.js";
 import { Client } from "../internal/discord.js";
 import { probeDiscordApplicationId } from "../probe.js";
 import { createDiscordNativeCommand } from "./native-command.js";
-import type { GetPluginCommandSpecs } from "./provider.commands.js";
 import { runDiscordGatewayLifecycle } from "./provider.lifecycle.js";
 
 type DiscordVoiceRuntimeModule = typeof import("../voice/manager.runtime.js");
@@ -53,7 +52,6 @@ export const discordProviderRuntime = {
   loadDiscordVoiceRuntime,
   loadDiscordProviderSessionRuntime,
   createClient: (...args: ConstructorParameters<typeof Client>) => new Client(...args),
-  getPluginCommandSpecs: undefined as GetPluginCommandSpecs | undefined,
   resolveDiscordAccount,
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,

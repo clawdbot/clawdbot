@@ -22,10 +22,6 @@ type FormatRelativeTimestampOptions = {
   suffix?: boolean;
 };
 
-type FormatDurationCompactOptions = {
-  spaced?: boolean;
-};
-
 function formatUnit(value: number, unit: RelativeTimeUnit | "millisecond"): string {
   return new Intl.NumberFormat(i18n.getLocale(), {
     style: "unit",
@@ -95,11 +91,8 @@ export function formatRelativeTimestamp(
   return options.suffix === false ? formatUnit(value, unit) : formatRelative(signedValue, unit);
 }
 
-export function formatDurationCompact(
-  ms?: number | null,
-  options: FormatDurationCompactOptions = {},
-): string | undefined {
-  const coreValue = formatDurationCompactCore(ms, options);
+export function formatDurationCompact(ms?: number | null): string | undefined {
+  const coreValue = formatDurationCompactCore(ms, { spaced: true });
   if (!coreValue || ms == null || !Number.isFinite(ms) || ms <= 0) {
     return coreValue;
   }
@@ -118,7 +111,7 @@ export function formatDurationCompact(
     if (seconds > 0) {
       parts.push(formatUnit(seconds, "second"));
     }
-    return parts.join(options.spaced ? " " : "");
+    return parts.join(" ");
   }
   const hours = Math.floor(totalMinutes / 60);
   if (hours >= 24) {
@@ -128,14 +121,14 @@ export function formatDurationCompact(
     if (remainingHours > 0) {
       parts.push(formatUnit(remainingHours, "hour"));
     }
-    return parts.join(options.spaced ? " " : "");
+    return parts.join(" ");
   }
   const minutes = totalMinutes % 60;
   const parts = [formatUnit(hours, "hour")];
   if (minutes > 0) {
     parts.push(formatUnit(minutes, "minute"));
   }
-  return parts.join(options.spaced ? " " : "");
+  return parts.join(" ");
 }
 
 export function formatDurationHuman(ms?: number | null, fallback = t("common.na")): string {

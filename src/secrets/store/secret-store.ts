@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { Selectable } from "kysely";
 import { ENV_SECRET_REF_ID_RE } from "../../config/types.secrets.js";
@@ -10,6 +9,7 @@ import {
 import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
+import { ensureSecretStoreSchema } from "../../state/openclaw-state-db-schema-additive.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -52,28 +52,6 @@ export class SecretStoreValidationError extends Error {
 
 export const SECRET_STORE_VALUE_MAX_BYTES = 64 * 1024;
 const SECRET_STORE_RETENTION_MS = 30 * 24 * 60 * 60_000;
-const ensuredDatabases = new WeakSet<DatabaseSync>();
-
-// Keep this feature-local DDL byte-for-byte aligned with the canonical schema.
-const SECRET_STORE_SCHEMA_SQL = `
--- scope_id is non-null because SQLite treats NULLs as distinct in unique indexes/PKs,
--- which would allow duplicate team rows. This PK also avoids a rebuild for identity scope.
-CREATE TABLE IF NOT EXISTS secret_store_entries (
-  scope_kind TEXT NOT NULL CHECK (scope_kind IN ('team', 'identity')),
-  scope_id TEXT NOT NULL,
-  name TEXT NOT NULL,
-  value TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('secret', 'env')),
-  created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
-  updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0),
-  updated_by TEXT,
-  deleted_at_ms INTEGER,
-  CHECK ((scope_kind = 'team' AND scope_id = '') OR (scope_kind = 'identity' AND length(scope_id) > 0)),
-  PRIMARY KEY (scope_kind, scope_id, name)
-) STRICT;
-CREATE INDEX IF NOT EXISTS secret_store_entries_live_idx
-  ON secret_store_entries (scope_kind, scope_id, name) WHERE deleted_at_ms IS NULL;
-`;
 
 function normalizeScope(_scope: SecretStoreScope): { scopeKind: "team"; scopeId: "" } {
   return { scopeKind: "team", scopeId: "" };
@@ -104,22 +82,6 @@ function isMissingSecretStoreTableError(error: unknown): boolean {
     (error as NodeJS.ErrnoException).code === "ERR_SQLITE_ERROR" &&
     error.message === "no such table: secret_store_entries"
   );
-}
-
-function ensureSecretStoreSchema(options: OpenClawStateDatabaseOptions = {}): void {
-  const database = openOpenClawStateDatabase(options);
-  if (ensuredDatabases.has(database.db)) {
-    return;
-  }
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      // sqlite-allow-raw -- feature-local additive schema DDL; secret rows use Kysely below.
-      db.exec(SECRET_STORE_SCHEMA_SQL);
-    },
-    options,
-    { operationLabel: "secrets.store.schema.ensure" },
-  );
-  ensuredDatabases.add(database.db);
 }
 
 function toMetadata(row: SecretStoreRow): SecretStoreEntryMetadata {
@@ -227,11 +189,11 @@ export function writeSecretStoreEntry(params: {
 }): void {
   assertSecretStoreName(params.name);
   assertSecretStoreValue(params.value);
-  ensureSecretStoreSchema(params.database);
   const { scopeKind, scopeId } = normalizeScope(params.scope);
   const now = Date.now();
   runOpenClawStateWriteTransaction(
     ({ db: sqlite }) => {
+      ensureSecretStoreSchema(sqlite);
       const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
       executeSqliteQuerySync(
         sqlite,

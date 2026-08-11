@@ -40,7 +40,9 @@ const AA_NORMAL_TEXT_MIN = 4.5;
  * (which overrode the surface) looked correct. The chip tokens are read out of
  * the live rule so swapping them back for a collapsing pair fails here.
  */
-const CODE_CHIP_RULE = ".chat-text :where(:not(pre) > code)";
+// Recognized workspace paths are excluded from the chip: they render as file
+// links, so their contrast comes from the link color, not this surface.
+const CODE_CHIP_RULE = ".chat-text :where(:not(pre, a.markdown-file-link) > code)";
 const CODE_CHIP_HOST_SURFACES = ["--card", "--bg"] as const;
 const CHIP_SURFACE_MIN_STEP = 1.05;
 const CHIP_BORDER_MIN_STEP = 1.25;

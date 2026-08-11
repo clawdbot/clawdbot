@@ -655,13 +655,11 @@ suite.define(() => {
       expect(evictedImageIndex).toBeGreaterThanOrEqual(0);
       expect(overflowProof.revoked).not.toContain(retainedRecentBlobUrl);
 
-      const evictedPath = new URL(
-        expectDefined(imageUrls[evictedImageIndex], "evicted managed image URL").replace(
-          /\/full$/u,
-          "/thumbnail",
-        ),
+      const evictedUrl = new URL(
+        expectDefined(imageUrls[evictedImageIndex], "evicted managed image URL"),
         suite.server.baseUrl,
-      ).pathname;
+      );
+      const evictedPath = evictedUrl.pathname.replace(/\/full$/u, "/thumbnail");
       const fetchesBeforeRevisit = fetchedMedia.filter(
         (request) => request.pathname === evictedPath,
       ).length;

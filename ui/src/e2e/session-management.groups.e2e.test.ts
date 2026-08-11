@@ -572,8 +572,16 @@ suite.define(() => {
       await groupMenuButton.click();
       await page.getByRole("menuitem", { name: "Rename group…" }).waitFor({ state: "visible" });
       await captureUiProof(page, "sidebar-group-menu.png");
-      page.once("dialog", (dialog) => void dialog.accept("Projects"));
       await activateMenuItem(page.getByRole("menuitem", { name: "Rename group…" }));
+      // The rename runs in the owned dialog, prefilled with the name it is
+      // changing; a native prompt here would be a regression.
+      const renameDialog = page.getByRole("dialog", { name: 'Rename group "Research"' });
+      await renameDialog.waitFor({ state: "visible" });
+      await expect
+        .poll(() => page.locator("openclaw-modal-dialog input").inputValue())
+        .toBe("Research");
+      await captureUiProof(page, "sidebar-group-rename-dialog.png");
+      await submitInputDialog(page, "Projects");
       const renameRequest = await gateway.waitForRequest("sessions.groups.rename");
       expect(requireRecord(renameRequest.params)).toMatchObject({
         name: "Research",
@@ -597,9 +605,19 @@ suite.define(() => {
         name: "Group options for Projects",
       });
       await projectsGroup.locator(".sidebar-recent-sessions__head").hover();
-      page.once("dialog", (dialog) => void dialog.accept());
       await projectsMenuButton.click();
       await activateMenuItem(page.getByRole("menuitem", { name: "Delete group…" }));
+      // The confirm names the group and what happens to its sessions, and only
+      // the operator's answer sends sessions.groups.delete.
+      await page
+        .getByRole("dialog", { name: 'Delete group "Projects"' })
+        .waitFor({ state: "visible" });
+      const deleteConfirm = page.locator("openclaw-modal-dialog");
+      await expect
+        .poll(() => deleteConfirm.textContent())
+        .toContain("The group is removed. Its sessions move back to the session list.");
+      await captureUiProof(page, "sidebar-group-delete-confirm.png");
+      await deleteConfirm.getByRole("button", { name: "Delete", exact: true }).click();
       const deleteRequest = await gateway.waitForRequest("sessions.groups.delete");
       expect(requireRecord(deleteRequest.params)).toMatchObject({ name: "Projects" });
       await expect
@@ -617,10 +635,15 @@ suite.define(() => {
         )
         .toBe(2);
 
-      // Group by "None" flattens the category sections into the plain list.
+      // Group by "None" flattens the category sections into the plain list. The
+      // confirm left the pointer over the dialog rather than the sidebar, and
+      // section actions only surface on hover, so reveal this one first.
       const sortSessionsButton = page.locator(
         "button.sidebar-session-sort:not(.sidebar-session-new)",
       );
+      await page
+        .locator('[data-session-section="ungrouped"] .sidebar-recent-sessions__head')
+        .hover();
       await sortSessionsButton.click();
       const showAutomationSessions = page.getByRole("menuitemcheckbox", {
         name: "Show automation sessions",
@@ -720,8 +743,8 @@ suite.define(() => {
       await expect.poll(() => researchGroup.locator(".sidebar-recent-session").count()).toBe(0);
       await researchGroup.locator(".sidebar-recent-sessions__head").hover();
       await researchGroup.getByRole("button", { name: "Group options for Research" }).click();
-      page.once("dialog", (dialog) => void dialog.accept("Projects"));
       await activateMenuItem(page.getByRole("menuitem", { name: "Rename group…" }));
+      await submitInputDialog(page, "Projects");
       await gateway.waitForRequest("sessions.groups.rename");
       await gateway.rejectDeferred("sessions.groups.rename", {
         code: "INVALID_REQUEST",

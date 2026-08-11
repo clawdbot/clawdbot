@@ -56,6 +56,7 @@ type GatewayResultEvidence = {
   helloType: string | null;
   message: string | null;
   ok: boolean;
+  recoveryScope: string | null;
 };
 
 type ProxyConnectionEvidence = {
@@ -151,12 +152,14 @@ function captureGatewayResult(
   const error = asRecord(frame.error);
   const details = asRecord(error?.details);
   const payload = asRecord(frame.payload);
+  const auth = asRecord(payload?.auth);
   evidence.gatewayResult = {
     errorCode: stringValue(details?.code) ?? stringValue(error?.code),
     errorReason: stringValue(details?.authReason) ?? stringValue(details?.reason),
     helloType: stringValue(payload?.type),
     message: stringValue(error?.message),
     ok: frame.ok === true,
+    recoveryScope: stringValue(auth?.recoveryScope),
   };
 }
 
@@ -652,6 +655,8 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     });
     expect(trustedEvidence.identityInjected).toBe(true);
     expect(trustedEvidence.requiredHeaderInjected).toBe(true);
+    expect(trustedEvidence.gatewayResult?.recoveryScope).toMatch(/^[A-Za-z0-9_-]+$/u);
+    expect(trustedEvidence.gatewayResult?.recoveryScope).not.toContain(trustedProxyUser);
     await captureChromiumScreenshot(connected.page, "01-trusted-proxy-connected.png");
     expect(connected.errors).toEqual([]);
     await closeConnectedContext(connected.context);

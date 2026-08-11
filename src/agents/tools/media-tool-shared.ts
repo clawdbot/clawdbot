@@ -30,7 +30,7 @@ import {
   ToolInputError,
   readPositiveIntegerParam,
   readStringArrayParam,
-  readStringParam,
+  readToolStringParam,
 } from "./common.js";
 import type { ImageModelConfig } from "./image-tool.helpers.js";
 import {
@@ -482,7 +482,7 @@ export function resolveGenerateAction<TAction extends string>(params: {
   allowed: readonly TAction[];
   defaultAction: TAction;
 }): TAction {
-  const raw = readStringParam(params.args, "action");
+  const raw = readToolStringParam(params.args, "action");
   if (!raw) {
     return params.defaultAction;
   }
@@ -513,7 +513,7 @@ export function normalizeMediaReferenceInputs(params: {
   maxCount: number;
   label: string;
 }): string[] {
-  const single = readStringParam(params.args, params.singularKey);
+  const single = readToolStringParam(params.args, params.singularKey);
   const multiple = readStringArrayParam(params.args, params.pluralKey);
   const combined = [...(single ? [single] : []), ...(multiple ?? [])];
   const deduped: string[] = [];

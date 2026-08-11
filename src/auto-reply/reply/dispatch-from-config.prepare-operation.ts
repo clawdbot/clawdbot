@@ -11,6 +11,7 @@ import {
   markPluginBindingFallbackNoticeShown,
 } from "../../plugins/conversation-binding.js";
 import { getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
+import type { PluginCommandExecutionReplyOptions } from "../../plugins/plugin-command-runtime.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import { DispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
@@ -166,7 +167,14 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
     }
     touchConversationBindingRecord(pluginOwnedBinding.bindingId);
-    if (shouldBypassPluginOwnedBindingForCommand(ctx, cfg)) {
+    params.replyOptions ??= {};
+    if (
+      shouldBypassPluginOwnedBindingForCommand(
+        ctx,
+        cfg,
+        params.replyOptions as PluginCommandExecutionReplyOptions,
+      )
+    ) {
       logVerbose(
         `plugin-bound inbound command escaped plugin binding (plugin=${pluginOwnedBinding.pluginId} session=${sessionKey ?? "unknown"}); falling through to command processing`,
       );

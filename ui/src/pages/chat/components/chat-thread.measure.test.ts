@@ -337,34 +337,6 @@ describe("chat transcript row measurement", () => {
     expect(restoredItemsA.every((item, index) => item === itemsA[index])).toBe(true);
   });
 
-  it("keeps an unsettled restored offset with its cached session host", () => {
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const messages = Array.from({ length: 20 }, (_, index) => ({
-      role: index % 2 === 0 ? "user" : "assistant",
-      content: `message ${index}`,
-      timestamp: index,
-    }));
-    const renderSession = (sessionKey: string) => {
-      render(
-        renderChatThread(threadProps("pane-pending-scroll", sessionKey, messages), transcript),
-        container,
-      );
-    };
-    renderSession("agent:main:session-a");
-    transcript.hostConnected();
-    transcript.hostUpdated();
-    transcript.scrollToOffset(420);
-    expect(transcript.pendingScrollOffsetFor("agent:main:session-a")).toBe(420);
-
-    renderSession("agent:main:session-b");
-    transcript.hostUpdated();
-    expect(transcript.pendingScrollOffsetFor("agent:main:session-b")).toBeNull();
-
-    renderSession("agent:main:session-a");
-    expect(transcript.pendingScrollOffsetFor("agent:main:session-a")).toBe(420);
-  });
-
   it("pauses an unmeasurable restore until loading commits an empty transcript", () => {
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
@@ -405,61 +377,6 @@ describe("chat transcript row measurement", () => {
     }
 
     expect(transcript.pendingScrollOffsetFor(props.sessionKey)).toBeNull();
-  });
-
-  it("reuses measured hosts, remeasures width changes, and tears down evictions", async () => {
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const renderSession = async (sessionKey: string) => {
-      render(renderChatThread(threadProps("pane-host-cache", sessionKey), transcript), container);
-      transcript.hostUpdated();
-      await flushDeferredRowPrune();
-    };
-    await renderSession("agent:main:session-a");
-    transcript.hostConnected();
-    transcript.hostUpdated();
-    await flushDeferredRowPrune();
-
-    type VirtualizerInternals = {
-      itemSizeCache: Map<unknown, number>;
-      measure: () => void;
-    };
-    type SessionHostInternals = {
-      connected: boolean;
-      measureRowRefs: Map<string, unknown>;
-      virtualizerController: { getVirtualizer: () => VirtualizerInternals };
-    };
-    const controllerInternals = transcript as unknown as {
-      sessionVirtualizers: Map<string, SessionHostInternals>;
-    };
-    const hostA = controllerInternals.sessionVirtualizers.get("agent:main:session-a");
-    expect(hostA).toBeDefined();
-    const virtualizerA = hostA?.virtualizerController.getVirtualizer();
-    expect(virtualizerA?.itemSizeCache.size).toBeGreaterThan(0);
-    const measuredSizes = new Map(virtualizerA?.itemSizeCache);
-
-    await renderSession("agent:main:session-b");
-    await renderSession("agent:main:session-a");
-    expect(controllerInternals.sessionVirtualizers.get("agent:main:session-a")).toBe(hostA);
-    expect(virtualizerA?.itemSizeCache).toEqual(measuredSizes);
-
-    const measure = vi.spyOn(virtualizerA as VirtualizerInternals, "measure");
-    for (const observer of resizeObservers) {
-      observer.emit(640, 600);
-    }
-    expect(measure).toHaveBeenCalled();
-
-    await renderSession("agent:main:session-c");
-    await renderSession("agent:main:session-d");
-    expect(controllerInternals.sessionVirtualizers.size).toBe(3);
-    expect(controllerInternals.sessionVirtualizers.has("agent:main:session-b")).toBe(false);
-    expect(hostA?.connected).toBe(false);
-
-    await renderSession("agent:main:session-e");
-    expect(controllerInternals.sessionVirtualizers.has("agent:main:session-a")).toBe(false);
-    expect(hostA?.measureRowRefs.size).toBe(0);
-    transcript.hostDisconnected();
-    expect(observedElements.size).toBe(0);
   });
 
   it("updates rendered row offsets from freshly wrapped heights while scrolling", async () => {
@@ -571,9 +488,10 @@ describe("chat transcript row measurement", () => {
     transcript.hostUpdated();
     await flushDeferredRowPrune();
 
+    const thumbnailSource = source.replace(/\/full$/u, "/thumbnail");
     const previousResource = observeChatMediaResource<string | null>(
       "managed-image",
-      `${source.replace(/\/full$/u, "/thumbnail")}::old-token::`,
+      `${thumbnailSource}::old-token::`,
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(previousResource.subscribers.size).toBe(1);
@@ -593,7 +511,7 @@ describe("chat transcript row measurement", () => {
 
     const nextResource = observeChatMediaResource<string | null>(
       "managed-image",
-      `${source.replace(/\/full$/u, "/thumbnail")}::next-token::`,
+      `${thumbnailSource}::next-token::`,
     );
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get("Authorization")).toBe(

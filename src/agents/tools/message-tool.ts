@@ -23,7 +23,6 @@ import {
 } from "../../auto-reply/reply/strip-inbound-meta.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
-import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import {
   getChannelPlugin,
@@ -96,7 +95,7 @@ import {
   stringEnum,
 } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringArrayParam, readStringParam } from "./common.js";
+import { jsonResult, readStringArrayParam, readToolStringParam } from "./common.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import {
   readGatewayCallOptions,
@@ -515,7 +514,7 @@ function sanitizePresentationTextFieldsResult(
 
 function readFirstStringParam(params: Record<string, unknown>, keys: readonly string[]): string {
   for (const key of keys) {
-    const value = readStringParam(params, key);
+    const value = readToolStringParam(params, key);
     if (value) {
       return value;
     }
@@ -534,7 +533,7 @@ function readStructuredAttachmentMediaParams(value: unknown): string[] {
     }
     const record = attachment as Record<string, unknown>;
     for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl", "url"]) {
-      const candidate = readStringParam(record, key);
+      const candidate = readToolStringParam(record, key);
       if (candidate) {
         values.push(candidate);
       }
@@ -1200,12 +1199,12 @@ function enforceSourceReplyOnlyMessageAction(params: {
     throw new Error("Completion source replies require an authoritative current conversation.");
   }
 
-  const requestedChannel = readStringParam(params.args, "channel");
+  const requestedChannel = readToolStringParam(params.args, "channel");
   if (requestedChannel && normalizeMessageChannel(requestedChannel) !== sourceChannel) {
     throw new Error("Completion source replies cannot target another channel.");
   }
 
-  const requestedAccountId = readStringParam(params.args, "accountId");
+  const requestedAccountId = readToolStringParam(params.args, "accountId");
   const sourceAccountId = params.trustedTurnContext
     ? params.trustedTurnContext.requesterAccountId
     : params.currentAccountId;
@@ -1222,7 +1221,7 @@ function enforceSourceReplyOnlyMessageAction(params: {
     throw new Error("Completion source replies cannot target another thread.");
   }
 
-  const requestedReplyTo = readStringParam(params.args, "replyTo");
+  const requestedReplyTo = readToolStringParam(params.args, "replyTo");
   const sourceMessageId = normalizeOptionalStringifiedId(sourceContext.currentMessageId);
   if (
     requestedReplyTo &&
@@ -1460,14 +1459,16 @@ function resolveIncludeBestEffort(params: MessageToolDiscoveryParams): boolean {
     return false;
   }
   const prepared = params.preparedMessageToolCatalog?.getChannel(currentChannel);
-  if (prepared) {
-    return prepared.reconcilesUnknownSend;
+  if (params.preparedMessageToolCatalog) {
+    // The prepared catalog is the exact runtime-registry generation for this
+    // turn. A missing channel is an authoritative absence, not permission to
+    // rediscover bundled plugins on the request path.
+    return prepared?.reconcilesUnknownSend ?? false;
   }
-  const adapter = params.preparedMessageToolCatalog
-    ? getBundledChannelPlugin(currentChannel)?.message
-    : (getLoadedChannelPlugin(currentChannel as Parameters<typeof getLoadedChannelPlugin>[0])
-        ?.message ??
-      getChannelPlugin(currentChannel as Parameters<typeof getChannelPlugin>[0])?.message);
+  const adapter =
+    getLoadedChannelPlugin(currentChannel as Parameters<typeof getLoadedChannelPlugin>[0])
+      ?.message ??
+    getChannelPlugin(currentChannel as Parameters<typeof getChannelPlugin>[0])?.message;
   return (
     adapter?.durableFinal?.capabilities?.reconcileUnknownSend === true &&
     typeof adapter.durableFinal.reconcileUnknownSend === "function"
@@ -1620,7 +1621,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }
       // Shallow-copy so we don't mutate the original event args (used for logging/dedup).
       const params = { ...(args as Record<string, unknown>) };
-      const action = readStringParam(params, "action", {
+      const action = readToolStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
       const trustedTurnContext =
@@ -1738,7 +1739,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
 
       const gatewayOpts = readGatewayCallOptions(params);
       const rawConfig = options?.config ?? loadConfigForTool();
-      const requestedAccountId = readStringParam(params, "accountId");
+      const requestedAccountId = readToolStringParam(params, "accountId");
       validateExplicitMessageAccountSelection({
         cfg: rawConfig,
         accountId: requestedAccountId,
@@ -1839,9 +1840,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           const vote = recentPollVote;
           recentPollVoteBySession.delete(pollEchoSessionKey);
           const outboundText =
-            readStringParam(params, "text") ??
-            readStringParam(params, "message") ??
-            readStringParam(params, "content");
+            readToolStringParam(params, "text") ??
+            readToolStringParam(params, "message") ??
+            readToolStringParam(params, "content");
           if (outboundText && isPollVoteEchoText(vote.option, outboundText)) {
             return jsonResult({
               status: "suppressed",

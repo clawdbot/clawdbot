@@ -34,9 +34,9 @@ describe("Control UI managed media under a UI base path", () => {
       viewport: { width: 1280, height: 800 },
     });
     const page = await context.newPage();
-    const mediaPath =
+    const sourcePath =
       "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000001/full";
-    const previewPath = mediaPath.replace(/\/full$/u, "/thumbnail");
+    const previewPath = sourcePath.replace(/\/full$/u, "/thumbnail");
     const imageBytes = await readFile(
       path.join(process.cwd(), "docs/assets/openclaw-banner-dark.png"),
     );
@@ -64,7 +64,7 @@ describe("Control UI managed media under a UI base path", () => {
           role: "assistant",
           content: [
             { type: "text", text: "Managed attachment proof" },
-            { type: "image", url: mediaPath, alt: "Managed proof image" },
+            { type: "image", url: sourcePath, alt: "Managed proof image" },
           ],
           timestamp: 1,
         },

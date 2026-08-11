@@ -29,7 +29,7 @@ vi.mock("../runs.js", () => ({
   clearActiveEmbeddedRun: mocks.clearActiveRun,
   setActiveEmbeddedRun: mocks.setActiveRun,
 }));
-vi.mock("./attempt.subscription-cleanup.js", () => ({
+vi.mock("./attempt-subscription-cleanup.js", () => ({
   buildEmbeddedSubscriptionParams: mocks.buildSubscriptionParams,
 }));
 vi.mock("./tool-activity-heartbeat.js", () => ({
@@ -43,8 +43,8 @@ import {
   createEmbeddedAttemptExternalAbortController,
   createEmbeddedAttemptRunAbort,
 } from "./attempt-finalize.js";
+import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
-import { SESSIONS_YIELD_ABORT_REASON } from "./attempt.sessions-yield.js";
 
 function prepareCatalogExecutor(
   projections: ToolSearchTargetTranscriptProjection[],

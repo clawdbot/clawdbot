@@ -114,7 +114,10 @@ function readPluginSdkEntrypointBudgetEnv(
 }
 
 const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
-  core: 2,
+  // +1 each: legacy AgentHarness remains projected through the core and plugin-entry
+  // compatibility barrels while external harnesses migrate to AgentHarnessV2.
+  core: 3,
+  "plugin-entry": 1,
   routing: 1,
   health: 0,
   // +1: shipped channel setup state-migration declaration during its migration window.
@@ -143,7 +146,10 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "agent-runtime": 2,
   "channel-secret-runtime": 23,
   // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
-  "agent-harness-runtime": 8,
+  // +4: legacy AgentHarness, attempt, embedded-run, and side-question contracts remain
+  // deprecated while external harnesses migrate to required-capability V2 contracts.
+  "agent-harness": 2,
+  "agent-harness-runtime": 12,
   "agent-config-primitives": 2,
   "command-auth": 78,
   discord: 47,
@@ -187,7 +193,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: dependency-light agent scope helpers for doctor migration enumeration.
       // +1: dependency-light channel streaming config readers for doctor closures
       //     (realtime-voice-activation is private-local and not counted here).
-      151,
+      // +1: registry-bound plugin command planning and exact selected execution.
+      152,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -251,11 +258,16 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: channel streaming config reader re-exports and session-agent scope resolver.
       // +3: session-catalog terminal-start provider request and Gateway params/result contracts.
       // +1: worker desktop endpoint contract for desktop-capable worker leases.
+      // +1: closed worker desktop app metadata for provider-advertised launchers.
       // +1: native command spec merger through the native-command-registry facade.
+      // +8: focused plugin command runtime factory, dispatch symbol, and six readonly contracts.
       // -2: remove unused WhatsApp-specific ack policy exports from channel-feedback.
       // -7: retire unused and duplicate inbound-dispatch compatibility exports.
       // +7: restore still-existing deprecated inbound-dispatch compatibility re-exports.
-      4848,
+      // +1: channel-account-bound native approval request selection.
+      // +6: required-capability V2 harness contracts through the focused and runtime barrels,
+      // including the side-question compatibility split.
+      4863,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -309,10 +321,13 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +4: focused agent scope functions for doctor migration enumeration.
       // +3: channel streaming config reader functions and session-agent scope resolver.
       // +1: native command spec merger through the native-command-registry facade.
+      // +1: focused registry-bound plugin command runtime factory.
       // -1: remove the unused WhatsApp-specific ack policy helper.
       // -10: collapse inbound-dispatch callable aliases and wrappers.
       // +7: restore still-existing deprecated inbound-dispatch callable re-exports.
-      2918,
+      // -3: keep the generic plugin-command reply carrier opaque and non-callable.
+      // +1: channel-account-bound native approval request selection.
+      2919,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -327,7 +342,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shipped channel setup state-migration declaration during its migration window.
       // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
       // +7: restore still-existing deprecated inbound-dispatch compatibility re-exports.
-      1715,
+      // +6: source-compatible harness contracts retained during the V2 migration window.
+      1716,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

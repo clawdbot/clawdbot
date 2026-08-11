@@ -41,6 +41,77 @@ describe("store SecretRef resolution", () => {
     ).resolves.toBe("resolved-store-secret");
   });
 
+  it("resolves the store default when an env provider uses the same alias", async () => {
+    const env = await createStateEnv();
+    writeSecretStoreEntry({
+      scope: { kind: "team" },
+      name: "STORED_API_KEY",
+      value: "resolved-store-secret",
+      kind: "secret",
+      updatedBy: "test",
+      database: { env },
+    });
+
+    await expect(
+      resolveSecretRefString(
+        { source: "store", provider: "default", id: "STORED_API_KEY" },
+        {
+          config: { secrets: { providers: { default: { source: "env" } } } },
+          env,
+        },
+      ),
+    ).resolves.toBe("resolved-store-secret");
+  });
+
+  it("resolves an explicitly configured store provider alias", async () => {
+    const env = await createStateEnv();
+    writeSecretStoreEntry({
+      scope: { kind: "team" },
+      name: "STORED_API_KEY",
+      value: "resolved-store-secret",
+      kind: "secret",
+      updatedBy: "test",
+      database: { env },
+    });
+
+    await expect(
+      resolveSecretRefString(
+        { source: "store", provider: "teamstore", id: "STORED_API_KEY" },
+        {
+          config: { secrets: { providers: { teamstore: { source: "store" } } } },
+          env,
+        },
+      ),
+    ).resolves.toBe("resolved-store-secret");
+  });
+
+  it("rejects a non-default store alias configured for another source", async () => {
+    await expect(
+      resolveSecretRefString(
+        { source: "store", provider: "envmain", id: "STORED_API_KEY" },
+        {
+          config: { secrets: { providers: { envmain: { source: "env" } } } },
+        },
+      ),
+    ).rejects.toMatchObject({
+      code: "SECRET_PROVIDER_INVALID",
+      source: "store",
+      provider: "envmain",
+    });
+  });
+
+  it("resolves the env default when a store provider uses the same alias", async () => {
+    await expect(
+      resolveSecretRefString(
+        { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        {
+          config: { secrets: { providers: { default: { source: "store" } } } },
+          env: { OPENAI_API_KEY: "resolved-env-secret" },
+        },
+      ),
+    ).resolves.toBe("resolved-env-secret");
+  });
+
   it("maps a missing name to a retryable not-found degradation", async () => {
     const env = await createStateEnv();
     const error = await resolveSecretRefString(

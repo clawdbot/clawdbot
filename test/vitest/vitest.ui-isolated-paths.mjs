@@ -15,6 +15,7 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/chat/chat-pane-identity.test.ts",
   "ui/src/pages/chat/chat-pane-lifecycle.test.ts",
   "ui/src/pages/chat/chat-pane-pull-requests.test.ts",
+  "ui/src/pages/chat/chat-pane-retained-presentation.test.ts",
   "ui/src/pages/chat/chat-pane.message-cut.test.ts",
   "ui/src/pages/chat/chat-pane.read-marker.test.ts",
   "ui/src/pages/chat/chat-pane.session-discussion.test.ts",

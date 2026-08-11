@@ -22,6 +22,7 @@ import {
   storeCollapsedSessionSections,
   storeSidebarSessionsGrouping,
   storeSidebarSessionsShowCron,
+  storeSidebarSessionsShowSystem,
   type SidebarRecentSession,
   type SidebarSectionDropTarget,
   type SidebarSessionMutationResult,
@@ -48,6 +49,7 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
   readonly onUpdateSidebarEntries?: (entries: string[]) => void;
   sessionsGrouping: SidebarSessionsGrouping;
   sessionsShowCron: boolean;
+  sessionsShowSystem: boolean;
   sessionsStatusFilter: SidebarSessionStatusFilter;
   clearSessionSelection(): void;
   findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
@@ -196,7 +198,9 @@ export class SessionOrganizerController implements ReactiveController {
       return;
     }
     const operations = await this.loadOperations(scope);
-    await operations?.deleteSession(this.host, session, scope);
+    // Sidebar is the surface the delete-confirm setting names, so it is the one
+    // caller allowed to offer the opt-out.
+    await operations?.deleteSession(this.host, session, scope, { offerSkip: true });
   }
 
   startSidebarRouteDrag(event: DragEvent, route: SidebarNavRoute) {
@@ -475,8 +479,17 @@ export class SessionOrganizerController implements ReactiveController {
   }
 
   async renameSessionGroupFromMenu(group: string): Promise<void> {
-    const next = window.prompt(t("sessionsView.renameGroupPrompt"), group)?.trim();
-    if (!next || next === group) {
+    const showInputDialog = await this.loadInputDialog();
+    // requireChange holds the submit closed on the name the group already has,
+    // so the only rename that reaches the Gateway is one that changes something.
+    const next = await showInputDialog?.({
+      title: t("sessionsView.renameGroupTitle", { group }),
+      label: t("sessionsView.groupNameLabel"),
+      defaultValue: group,
+      requireValue: true,
+      requireChange: true,
+    });
+    if (!next) {
       return;
     }
     const scope = this.host.sessionData.beginSessionMutation();
@@ -500,9 +513,6 @@ export class SessionOrganizerController implements ReactiveController {
   }
 
   async deleteSessionGroupFromMenu(group: string): Promise<void> {
-    if (!window.confirm(t("sessionsView.deleteGroupConfirm", { group }))) {
-      return;
-    }
     const scope = this.host.sessionData.beginSessionMutation();
     if (!scope) {
       return;
@@ -685,6 +695,15 @@ export class SessionOrganizerController implements ReactiveController {
     this.host.sessionsShowCron = show;
     try {
       storeSidebarSessionsShowCron(show);
+    } catch {
+      // Keep the in-memory preference when storage is unavailable.
+    }
+  }
+
+  setSessionsShowSystem(show: boolean) {
+    this.host.sessionsShowSystem = show;
+    try {
+      storeSidebarSessionsShowSystem(show);
     } catch {
       // Keep the in-memory preference when storage is unavailable.
     }

@@ -4,7 +4,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import {
   claimMainSessionRecoveryOwner,
   releaseMainSessionRecoveryOwner,
-} from "../../agents/main-session-recovery-store.js";
+} from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,

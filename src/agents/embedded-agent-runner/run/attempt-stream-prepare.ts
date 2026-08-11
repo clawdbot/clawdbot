@@ -39,13 +39,13 @@ import {
   type EmbeddedAgentQueueHandle,
   setActiveEmbeddedRun,
 } from "../runs.js";
-import type { EmbeddedAttemptClientToolCallSlot } from "./attempt-result.js";
 import {
   requiresCompletionRequiredAsyncTaskWait,
   type AsyncStartedToolMeta,
-} from "./attempt.async-tasks.js";
-import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt.queue-message.js";
-import { buildEmbeddedSubscriptionParams } from "./attempt.subscription-cleanup.js";
+} from "./attempt-async-tasks.js";
+import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt-queue-message.js";
+import type { EmbeddedAttemptClientToolCallSlot } from "./attempt-result.js";
+import { buildEmbeddedSubscriptionParams } from "./attempt-subscription-cleanup.js";
 import {
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,

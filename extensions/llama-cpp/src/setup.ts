@@ -211,9 +211,3 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
   }
   return buildSetupResult(ctx.config);
 }
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.llamaCppSetupTestApi")] = {
-    formatLlamaCppDownloadProgress,
-  };
-}

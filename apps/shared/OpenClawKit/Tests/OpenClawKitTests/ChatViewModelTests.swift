@@ -96,6 +96,33 @@ private func usageEvent(runId: String, outputTokens: Int, seq: Int) -> OpenClawA
         data: ["outputTokens": AnyCodable(outputTokens)])
 }
 
+private func subagentTaskSummary(
+    id: String,
+    status: String,
+    sessionKey: String = "agent:main:main",
+    lastActivity: String? = nil,
+    progressSummary: String? = nil,
+    terminalSummary: String? = nil,
+    diffStat: [String: AnyCodable]? = nil,
+    startedAt: Double = 1000,
+    endedAt: Double? = nil) -> TaskSummary
+{
+    TaskSummary(
+        id: id,
+        runtime: "subagent",
+        status: AnyCodable(status),
+        agentid: "main",
+        sessionkey: sessionKey,
+        childsessionkey: "agent:main:subagent:\(id)",
+        updatedat: AnyCodable(endedAt ?? startedAt),
+        startedat: AnyCodable(startedAt),
+        endedat: endedAt.map(AnyCodable.init),
+        lastactivity: lastActivity,
+        diffstat: diffStat,
+        progresssummary: progressSummary,
+        terminalsummary: terminalSummary)
+}
+
 private func lifecycleSessionEntry(
     key: String,
     updatedAt: Double,
@@ -702,6 +729,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let swarmEnabledHook: (@Sendable (String) async throws -> Bool)?
     private let listChildSessionsHook: (@Sendable (String) async throws -> [OpenClawChatSessionEntry])?
     private let listQuestionsHook: (@Sendable () async throws -> [QuestionRecord])?
+    private let listTasksHook: (@Sendable (String, String?) async throws -> [TaskSummary])?
     private let getQuestionHook: (@Sendable (String) async throws -> QuestionRecord)?
     private let cancelQuestionHook: (@Sendable (String) async throws -> Void)?
     private let healthResponses: [Bool]
@@ -738,6 +766,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         swarmEnabledHook: (@Sendable (String) async throws -> Bool)? = nil,
         listChildSessionsHook: (@Sendable (String) async throws -> [OpenClawChatSessionEntry])? = nil,
         listQuestionsHook: (@Sendable () async throws -> [QuestionRecord])? = nil,
+        listTasksHook: (@Sendable (String, String?) async throws -> [TaskSummary])? = nil,
         getQuestionHook: (@Sendable (String) async throws -> QuestionRecord)? = nil,
         cancelQuestionHook: (@Sendable (String) async throws -> Void)? = nil,
         healthResponses: [Bool] = [true])
@@ -768,6 +797,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.swarmEnabledHook = swarmEnabledHook
         self.listChildSessionsHook = listChildSessionsHook
         self.listQuestionsHook = listQuestionsHook
+        self.listTasksHook = listTasksHook
         self.getQuestionHook = getQuestionHook
         self.cancelQuestionHook = cancelQuestionHook
         self.healthResponses = healthResponses
@@ -1067,6 +1097,10 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
 
     func listQuestions() async throws -> [QuestionRecord] {
         try await self.listQuestionsHook?() ?? []
+    }
+
+    func listTasks(sessionKey: String, agentID: String?) async throws -> [TaskSummary] {
+        try await self.listTasksHook?(sessionKey, agentID) ?? []
     }
 
     func getQuestion(id: String) async throws -> QuestionRecord {
@@ -1425,6 +1459,110 @@ private actor SwarmCapabilityScript {
 
 @Suite(.serialized)
 struct ChatViewModelTests {
+    @Test func `bootstrap fills subagent activity from the current session task list`() async throws {
+        let transport = TestChatTransport(
+            historyResponses: [historyPayload()],
+            listTasksHook: { sessionKey, agentID in
+                guard sessionKey == "main", agentID == "main" else { return [] }
+                return [subagentTaskSummary(
+                    id: "listed",
+                    status: "running",
+                    progressSummary: "Restored from task list")]
+            })
+        let viewModel = await MainActor.run {
+            OpenClawChatViewModel(
+                sessionKey: "main",
+                transport: transport,
+                activeAgentId: "main")
+        }
+
+        await MainActor.run { viewModel.load() }
+        try await waitUntil("listed subagent activity") {
+            await MainActor.run { viewModel.subagentActivities.map(\.id) == ["listed"] }
+        }
+
+        #expect(await MainActor.run { viewModel.subagentActivities.first?.snippet } ==
+            "Restored from task list")
+    }
+
+    @Test @MainActor func `subagent task events filter by session and retain terminal activity`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []),
+            activeAgentId: "main")
+        let liveDiff = [
+            "files": AnyCodable(2),
+            "added": AnyCodable(9),
+            "removed": AnyCodable(3),
+        ]
+
+        viewModel.handleTransportEvent(.task(.upserted(subagentTaskSummary(
+            id: "foreign",
+            status: "running",
+            sessionKey: "agent:main:other",
+            lastActivity: "Must stay hidden"))))
+        viewModel.handleTransportEvent(.task(.upserted(subagentTaskSummary(
+            id: "owned",
+            status: "running",
+            lastActivity: "Editing shared chat",
+            diffStat: liveDiff))))
+
+        #expect(viewModel.subagentActivities.map(\.id) == ["owned"])
+        #expect(viewModel.subagentActivities[0].snippet == "Editing shared chat")
+        #expect(viewModel.subagentActivities[0].diffStat == ChatToolDiffStat(
+            files: 2,
+            added: 9,
+            removed: 3))
+
+        viewModel.handleTransportEvent(.task(.upserted(subagentTaskSummary(
+            id: "owned",
+            status: "completed",
+            progressSummary: "Older milestone",
+            terminalSummary: "Finished cleanly",
+            endedAt: Date().timeIntervalSince1970 * 1000))))
+
+        #expect(viewModel.subagentActivities[0].status == .completed)
+        #expect(viewModel.subagentActivities[0].snippet == "Editing shared chat")
+        #expect(viewModel.subagentActivities[0].terminalSummary == "Finished cleanly")
+        #expect(viewModel.subagentActivities[0].diffStat?.added == 9)
+    }
+
+    @Test @MainActor func `tool input delta updates the matching pending edit diff`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        viewModel.sessionId = "run-1"
+        viewModel.handleTransportEvent(.agent(OpenClawAgentEventPayload(
+            runId: "run-1",
+            seq: 1,
+            stream: "tool",
+            ts: 1000,
+            data: [
+                "phase": AnyCodable("start"),
+                "name": AnyCodable("apply_patch"),
+                "toolCallId": AnyCodable("tool-1"),
+                "args": AnyCodable(["patch": "*** Begin Patch"]),
+            ])))
+        viewModel.handleTransportEvent(.agent(OpenClawAgentEventPayload(
+            runId: "run-1",
+            seq: 2,
+            stream: "tool",
+            ts: 1001,
+            data: [
+                "phase": AnyCodable("input_delta"),
+                "name": AnyCodable("apply_patch"),
+                "toolCallId": AnyCodable("tool-1"),
+                "diff": AnyCodable([
+                    "added": AnyCodable(12),
+                    "removed": AnyCodable(4),
+                ]),
+            ])))
+
+        #expect(viewModel.pendingToolCalls.first?.diffStat == ChatToolDiffStat(
+            added: 12,
+            removed: 4))
+    }
+
     @Test @MainActor func `transient Swarm capability failure preserves state and retries until explicit false`() async throws {
         let script = SwarmCapabilityScript([.value(true), .failure, .value(false)])
         var child = sessionEntry(key: "agent:main:child", updatedAt: 1)

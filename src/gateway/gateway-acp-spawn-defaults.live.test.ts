@@ -10,6 +10,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
+import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { isLiveTestEnabled, readLiveTestConfig } from "../agents/live-test-helpers.js";
 import { isSpawnAcpAcceptedResult, spawnAcpDirect } from "../agents/subagents/spawn/acp-spawn.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
@@ -248,13 +249,20 @@ async function runOpenCodeThinkingControlProof(params: {
   });
   params.sessionKeys.push(sessionKey);
 
+  const requestId = randomUUID();
   await manager.runTurn({
     cfg: params.cfg,
     sessionKey,
     provenance: "system",
     text: "Reply with exactly LIVE-ACP-SPAWN-DEFAULTS-OK",
     mode: "prompt",
-    requestId: randomUUID(),
+    requestId,
+    admittedRunContext: await prepareSystemAgentRunAdmission(
+      params.cfg,
+      requestId,
+      "opencode",
+      "gateway-acp-spawn-defaults.live",
+    ).admit("acp"),
   });
   const status = await manager.getSessionStatus({ cfg: params.cfg, sessionKey });
   expect(status.runtimeOptions).toMatchObject({
@@ -299,13 +307,20 @@ async function runCodexThinkingControlProof(params: {
   });
   params.sessionKeys.push(sessionKey);
 
+  const initialRequestId = randomUUID();
   await manager.runTurn({
     cfg: params.cfg,
     sessionKey,
     provenance: "system",
     text: "Reply with exactly LIVE-ACP-SPAWN-DEFAULTS-OK",
     mode: "prompt",
-    requestId: randomUUID(),
+    requestId: initialRequestId,
+    admittedRunContext: await prepareSystemAgentRunAdmission(
+      params.cfg,
+      initialRequestId,
+      "codex",
+      "gateway-acp-spawn-defaults.live",
+    ).admit("acp"),
   });
   const initialStatus = await manager.getSessionStatus({ cfg: params.cfg, sessionKey });
   const initialReasoningEffortOption = findRuntimeConfigOption(
@@ -321,13 +336,20 @@ async function runCodexThinkingControlProof(params: {
     sessionKey,
     patch: { thinking: params.thinking },
   });
+  const updatedRequestId = randomUUID();
   await manager.runTurn({
     cfg: params.cfg,
     sessionKey,
     provenance: "system",
     text: "Reply with exactly LIVE-ACP-SPAWN-DEFAULTS-OK",
     mode: "prompt",
-    requestId: randomUUID(),
+    requestId: updatedRequestId,
+    admittedRunContext: await prepareSystemAgentRunAdmission(
+      params.cfg,
+      updatedRequestId,
+      "codex",
+      "gateway-acp-spawn-defaults.live",
+    ).admit("acp"),
   });
   const status = await manager.getSessionStatus({ cfg: params.cfg, sessionKey });
   expect(status.capabilities.configOptionKeys).toContain("reasoning_effort");

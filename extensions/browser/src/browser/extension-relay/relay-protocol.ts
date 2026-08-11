@@ -13,22 +13,6 @@ export type RelayTabInfo = {
   active: boolean;
 };
 
-export const PAGE_SHARE_MAX_NOTE_CHARS = 2_000;
-export const PAGE_SHARE_MAX_TITLE_CHARS = 500;
-export const PAGE_SHARE_MAX_URL_CHARS = 2_000;
-
-/** Page-share payload captured by the extension on explicit user action. */
-export type PageSharePayload = {
-  url: string;
-  title: string;
-  /** Extracted readable page text (already truncated extension-side). */
-  content: string;
-  /** User-highlighted selection; preferred over content when present. */
-  selection?: string;
-  /** Short user-typed note; trusted (typed by the user in the popup). */
-  note?: string;
-};
-
 /** First message the extension sends after the WebSocket opens. */
 type ExtensionHelloMessage = {
   type: "hello";
@@ -80,12 +64,6 @@ type ExtensionPongMessage = {
   type: "pong";
 };
 
-type ExtensionPageShareMessage = {
-  type: "pageShare";
-  requestId: number;
-  payload: PageSharePayload;
-};
-
 export type ExtensionToRelayMessage =
   | ExtensionHelloMessage
   | ExtensionTabsMessage
@@ -93,8 +71,7 @@ export type ExtensionToRelayMessage =
   | ExtensionResultMessage
   | ExtensionErrorMessage
   | ExtensionDetachedMessage
-  | ExtensionPongMessage
-  | ExtensionPageShareMessage;
+  | ExtensionPongMessage;
 
 /**
  * Command bodies sent to the extension. The bridge assigns the `seq` used to
@@ -119,17 +96,7 @@ type RelayPingMessage = {
   type: "ping";
 };
 
-export type RelayPageShareResultMessage = {
-  type: "pageShareResult";
-  requestId: number;
-  ok: boolean;
-  error?: string;
-};
-
-export type RelayToExtensionMessage =
-  | (RelayCommandBody & { seq: number })
-  | RelayPingMessage
-  | RelayPageShareResultMessage;
+export type RelayToExtensionMessage = (RelayCommandBody & { seq: number }) | RelayPingMessage;
 
 function hasExactOwnKeys(value: object, keys: readonly string[]): boolean {
   const actual = Object.keys(value);
@@ -207,7 +174,6 @@ export function parseExtensionMessage(raw: string): ExtensionToRelayMessage | nu
     case "error":
     case "detached":
     case "pong":
-    case "pageShare":
       return parsed as ExtensionToRelayMessage;
     default:
       return null;

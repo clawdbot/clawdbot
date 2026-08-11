@@ -3,17 +3,20 @@
  * Verifies actionable recovery hints, transient-copy suppression, provider
  * naming, and diagnostic cause handling.
  */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 const LOGIN_HINT_SENTINEL = "<<login-hint-for-provider>>";
 
-vi.mock("../provider-auth-recovery-hint.js", () => ({
-  buildProviderAuthRecoveryHint: (params: { provider: string }) =>
-    `${LOGIN_HINT_SENTINEL}:${params.provider}`,
-}));
-
 import type { FailoverReason } from "../failover/signal.js";
-import { formatAuthProfileFailureMessage } from "./failure-copy.js";
+import { renderAuthProfileFailoverCopy } from "../failover/user-copy.js";
+
+const formatAuthProfileFailureMessage = (
+  params: Parameters<typeof renderAuthProfileFailoverCopy>[0],
+) =>
+  renderAuthProfileFailoverCopy({
+    ...params,
+    recoveryHint: `${LOGIN_HINT_SENTINEL}:${params.provider}`,
+  });
 
 const PROVIDER = "openai-codex";
 
@@ -32,7 +35,7 @@ const REASONS_WITHOUT_RECOVERY: readonly FailoverReason[] = [
   "format",
 ];
 
-describe("formatAuthProfileFailureMessage", () => {
+describe("renderAuthProfileFailoverCopy", () => {
   describe("recovery-hint dispatch", () => {
     it("includes the login command for reasons the user can act on", () => {
       for (const reason of REASONS_WITH_RECOVERY) {
@@ -83,14 +86,14 @@ describe("formatAuthProfileFailureMessage", () => {
 
   describe("cause handling", () => {
     it("returns the cause text verbatim when the reason has no actionable copy", () => {
-      const cause = new Error("upstream provider returned 502");
+      const causeText = "upstream provider returned 502";
       const message = formatAuthProfileFailureMessage({
         reason: "unknown",
         provider: PROVIDER,
         allInCooldown: false,
-        cause,
+        causeText,
       });
-      expect(message).toBe(cause.message);
+      expect(message).toBe(causeText);
     });
 
     it("appends a diagnostic suffix when the cause adds detail beyond the description", () => {
@@ -98,7 +101,7 @@ describe("formatAuthProfileFailureMessage", () => {
         reason: "auth",
         provider: PROVIDER,
         allInCooldown: false,
-        cause: new Error("invalid_grant"),
+        causeText: "invalid_grant",
       });
       expect(message).toContain("(invalid_grant)");
     });
@@ -118,7 +121,7 @@ describe("formatAuthProfileFailureMessage", () => {
         reason: "auth",
         provider: PROVIDER,
         allInCooldown: false,
-        cause: new Error(description),
+        causeText: description,
       });
       expect(withDuplicateCause).toBe(withoutCause);
     });

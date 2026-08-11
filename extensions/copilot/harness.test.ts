@@ -3,9 +3,10 @@ import type { CopilotClient } from "@github/copilot-sdk";
 import { attachModelProviderRequestTransport } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   AgentHarness,
-  AgentHarnessAttemptParams,
+  AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams,
   AgentHarnessAttemptResult,
   AgentHarnessCompactParams,
+  AgentHarnessV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -16,6 +17,7 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCopilotAgentHarness, type CopilotSessionBinding } from "./harness.js";
 import type { resolvePoolAcquire } from "./src/attempt.js";
+import { createCopilotTestHostCapabilities } from "./src/host-capability.test-support.js";
 import type { CopilotClientPool, PoolKey } from "./src/runtime.js";
 
 type AgentHarnessIsolatedCompletionParams = Parameters<
@@ -23,6 +25,9 @@ type AgentHarnessIsolatedCompletionParams = Parameters<
 >[0];
 
 type CanonicalAttemptResult = Extract<AgentHarnessAttemptResult, { terminal: unknown }>;
+type SettledTurnFinalizationAttemptParams = Parameters<
+  NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
+>[0]["attempt"];
 
 const COPILOT_BYOK_PROVIDER_ERROR =
   "[copilot-attempt] BYOK requires an OpenAI-compatible or Anthropic model api and a non-empty baseUrl";
@@ -60,7 +65,17 @@ vi.mock("./src/runtime.js", () => ({
 }));
 
 function asAttemptParams(value: Record<string, unknown>): AgentHarnessAttemptParams {
-  return value as unknown as AgentHarnessAttemptParams;
+  return {
+    hostCapabilities: createCopilotTestHostCapabilities(),
+    ...value,
+  } as unknown as AgentHarnessAttemptParams;
+}
+
+function asFinalizationAttempt(
+  params: AgentHarnessAttemptParams,
+): SettledTurnFinalizationAttemptParams {
+  const { hostCapabilities: _hostCapabilities, ...attempt } = params;
+  return attempt;
 }
 
 function asAttemptResult(value: Record<string, unknown>): AgentHarnessAttemptResult {
@@ -460,7 +475,10 @@ describe("createCopilotAgentHarness", () => {
 
     await expect(harness.runAttempt(params)).resolves.toBe(settledResult);
     await expect(
-      harness.finalizeSettledTurn?.({ attempt: params, settledAttempt: settledResult }),
+      harness.finalizeSettledTurn?.({
+        attempt: asFinalizationAttempt(params),
+        settledAttempt: settledResult,
+      }),
     ).resolves.toEqual({ assistant: finalAssistant });
 
     expect(mocks.runCopilotAttempt).toHaveBeenCalledTimes(2);
@@ -492,7 +510,10 @@ describe("createCopilotAgentHarness", () => {
     });
 
     await expect(
-      harness.finalizeSettledTurn?.({ attempt: params, settledAttempt: ATTEMPT_RESULT }),
+      harness.finalizeSettledTurn?.({
+        attempt: asFinalizationAttempt(params),
+        settledAttempt: ATTEMPT_RESULT,
+      }),
     ).rejects.toThrow(
       "cannot safely finalize a settled tool turn without its compatible SDK session",
     );
