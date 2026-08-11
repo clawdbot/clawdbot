@@ -1,7 +1,13 @@
 import type { SourceReplyDeliveryMode } from "../../auto-reply/source-reply-delivery-mode.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 
-export type RestartRecoveryBeforeAgentReplyState = "pending" | "handled-silent" | "handled-reply";
+export type RestartRecoveryBeforeAgentReplyState =
+  | "admitted"
+  | "pending"
+  | "continue"
+  | "handled-silent"
+  | "handled-reply"
+  | "handled-unrecoverable";
 
 export type RestartRecoveryTerminalDeliveryEvidenceResult = {
   /** The terminal result was captured even when it contained no visible or delivery evidence. */

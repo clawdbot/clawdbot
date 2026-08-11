@@ -30,7 +30,13 @@ function progressMessage(text: string, itemId: string): Record<string, unknown> 
 
 function resolvePolicy(params: {
   messages?: unknown[];
-  beforeAgentReplyState?: "pending" | "handled-silent" | "handled-reply";
+  beforeAgentReplyState?:
+    | "admitted"
+    | "pending"
+    | "continue"
+    | "handled-silent"
+    | "handled-reply"
+    | "handled-unrecoverable";
   deliveryReceiptState?: "terminal-pending" | "delivered-terminal";
   deliveryToolCallId?: string;
 }) {
@@ -85,7 +91,7 @@ describe("resolveMainSessionResumePolicy former terminal states", () => {
       params: { deliveryReceiptState: "delivered-terminal" as const },
       expected: { action: "resume", forceRestartSafeTools: true },
     },
-    ...(["pending", "handled-reply"] as const).map((state) => ({
+    ...(["pending", "handled-reply", "handled-unrecoverable"] as const).map((state) => ({
       label: `before_agent_reply ${state}`,
       params: { beforeAgentReplyState: state },
       expected: { action: "resume" as const, forceRestartSafeTools: true },

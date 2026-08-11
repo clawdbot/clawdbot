@@ -44,7 +44,8 @@ export async function clearPendingFinalDeliveryAfterSuccess(
       }
       const completesHookTurn =
         recoveryRunId === undefined &&
-        entry.restartRecoveryBeforeAgentReplyState === "handled-reply";
+        (entry.restartRecoveryBeforeAgentReplyState === "handled-reply" ||
+          entry.restartRecoveryBeforeAgentReplyState === "handled-unrecoverable");
       const endedAt = completesHookTurn ? Date.now() : undefined;
       return {
         ...(recoveryRunId

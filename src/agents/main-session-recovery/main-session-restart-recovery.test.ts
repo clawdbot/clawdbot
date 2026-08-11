@@ -4044,7 +4044,7 @@ describe("main-session-restart-recovery", () => {
     });
   });
 
-  it.each(["pending", "handled-reply"] as const)(
+  it.each(["pending", "handled-reply", "handled-unrecoverable"] as const)(
     "resumes safely for a %s before_agent_reply checkpoint without a recoverable result",
     async (restartRecoveryBeforeAgentReplyState) => {
       const { sessionsDir, storePath, sessionKey } = await makeMainSessionFixture({
