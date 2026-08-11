@@ -47,7 +47,7 @@ export function getSubagentSpawnDeps(): SubagentSpawnDeps {
   return subagentSpawnDeps;
 }
 
-export function setSubagentSpawnDepsForTest(overrides?: Partial<SubagentSpawnDeps>): void {
+function setSubagentSpawnDepsForTest(overrides?: Partial<SubagentSpawnDeps>): void {
   subagentSpawnDeps = overrides
     ? {
         ...defaultSubagentSpawnDeps,
