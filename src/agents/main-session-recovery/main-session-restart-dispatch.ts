@@ -16,8 +16,6 @@ import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runti
 import type { AgentRunRequest } from "../../gateway/server-methods/agent-request-types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { findRestartRecoveryUnsafeReplyHook } from "../../plugins/restart-recovery-hook-safety.js";
-import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { CommandLane } from "../../process/lanes.js";
 import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -28,7 +26,6 @@ import {
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
-import { resolveAgentWorkspaceDir } from "../agent-scope.js";
 import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
 import {
   repairMainSessionRecoveryMutation,
@@ -43,7 +40,6 @@ import {
 } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import { normalizeFiniteTimestamp } from "./main-session-restart-recovery-shared.js";
-import { loadAgentRuntimePluginRegistryHandle } from "../runtime-plugins.js";
 
 const log = createSubsystemLogger("main-session-restart-recovery");
 const RESTART_RECOVERY_RESUME_MESSAGE = formatSystemTurnPrompt(
@@ -70,54 +66,6 @@ export function requiresRestartRecoveryMessageActionAuthority(entry: SessionEntr
   );
 }
 
-export function resolveRestartRecoveryResumeBlockReason(params: {
-  agentId: string;
-  cfg?: OpenClawConfig;
-  entry: SessionEntry;
-  sessionKey: string;
-}): string | undefined {
-  const beforeAgentReplyState = params.entry.restartRecoveryBeforeAgentReplyState;
-  const sourceIngress = params.entry.restartRecoverySourceIngress;
-  const hasLegacyClaimWithoutOwnership =
-    sourceIngress === undefined &&
-    normalizeOptionalString(params.entry.restartRecoveryDeliveryRunId) !== undefined;
-  // Durable claims written before source ownership existed may have entered
-  // through a channel or Control UI. Treat those claims as external so an
-  // upgrade cannot bypass a newly active policy or side-effect hook.
-  const requiresHookSafetyProof =
-    hasLegacyClaimWithoutOwnership ||
-    beforeAgentReplyState === "admitted" ||
-    beforeAgentReplyState === "continue" ||
-    beforeAgentReplyState === "handled-reply" ||
-    sourceIngress === "channel" ||
-    sourceIngress === "control-ui";
-  if (!requiresHookSafetyProof) {
-    return undefined;
-  }
-  if (!params.cfg) {
-    return "pre-hook recovery runtime config is unavailable";
-  }
-  let pluginRegistry: ReturnType<typeof loadAgentRuntimePluginRegistryHandle>;
-  try {
-    pluginRegistry = loadAgentRuntimePluginRegistryHandle({
-      config: params.cfg,
-      workspaceDir: resolveAgentWorkspaceDir(params.cfg, params.agentId),
-      allowGatewaySubagentBinding: true,
-    });
-  } catch {
-    return "pre-hook recovery runtime plugins could not be loaded";
-  }
-  if (!pluginRegistry) {
-    return "pre-hook recovery runtime plugins could not be loaded";
-  }
-  // A stored hook result proves that invocation completed, but not that the
-  // same plugin code and config are still loaded after restart. Fail closed
-  // until hook activation owns a stable cross-process implementation digest.
-  const unsafeHook = withPluginRuntimeRegistryScope(pluginRegistry, () =>
-    findRestartRecoveryUnsafeReplyHook({ trigger: "user" }),
-  );
-  return unsafeHook ? `pre-hook recovery cannot bypass the active ${unsafeHook} hook` : undefined;
-}
 function buildResumeMessage(pendingFinalDeliveryText?: string | null): string {
   const sanitizedPendingText =
     typeof pendingFinalDeliveryText === "string"

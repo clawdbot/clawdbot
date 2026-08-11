@@ -24,7 +24,7 @@ import type {
   SubagentRunRecord,
 } from "../registry/subagent-registry.types.js";
 import { hasSubagentRunEnded } from "../registry/subagent-run-liveness.js";
-import { resolveSubagentRequesterAgentId } from "../registry/subagent-requester-owner.js";
+import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
 import {
   deliverSubagentAnnouncement,

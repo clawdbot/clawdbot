@@ -30,7 +30,6 @@ import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import {
   hasRestartRecoveryMessageActionAuthority,
   requiresRestartRecoveryMessageActionAuthority,
-  resolveRestartRecoveryResumeBlockReason,
   resumeMainSession,
 } from "./main-session-restart-dispatch.js";
 import {
@@ -410,27 +409,6 @@ export async function recoverStore(params: {
         }
       }
     };
-    const failCurrent = async (reason: string) => {
-      if (stopped()) {
-        return false;
-      }
-      const disposition = await tombstoneMainRestartRecoveryWithNotice({
-        agentId,
-        cfg: params.cfg,
-        entry,
-        gatewayRuntime: params.gatewayRuntime,
-        observation: recoveryView.observation,
-        reason,
-        sessionKey,
-        storePath: params.storePath,
-      });
-      if (disposition === "notice_failed") {
-        result.failed++;
-      } else {
-        result.skipped++;
-      }
-      return true;
-    };
     if (
       requiresRestartRecoveryMessageActionAuthority(entry) &&
       !hasRestartRecoveryMessageActionAuthority(entry)
@@ -459,22 +437,6 @@ export async function recoverStore(params: {
     const expectedRecoverySourceRunId = normalizeOptionalString(
       entry.restartRecoveryDeliverySourceRunId,
     );
-    const failBlockedResume = async (): Promise<boolean> => {
-      const resumeBlockReason = resolveRestartRecoveryResumeBlockReason({
-        agentId,
-        cfg: params.cfg,
-        entry,
-        sessionKey,
-      });
-      if (!resumeBlockReason) {
-        return false;
-      }
-      if (!shouldContinue()) {
-        return true;
-      }
-      await failCurrent(resumeBlockReason);
-      return true;
-    };
     const resumeCurrent = async (
       options: Pick<
         Parameters<typeof resumeMainSession>[0],

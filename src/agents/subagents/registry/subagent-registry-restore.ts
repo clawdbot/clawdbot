@@ -23,7 +23,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   backfillSubagentRequesterAgentIds,
   resolveSubagentRequesterAgentId,
-} from "./subagent-requester-owner.js";
+} from "../../subagent-requester-owner.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import {
   loadSubagentSessionEntry,
