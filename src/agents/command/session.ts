@@ -188,7 +188,7 @@ function collectSessionIdMatchesForRequest(opts: {
   const configuredStoreOwners = new Map<string, Set<string>>();
   for (const agentId of configuredAgentIds) {
     const configuredStorePath = path.resolve(
-      resolveStorePath(opts.cfg.session?.store, { agentId }),
+      resolveSessionStorePathCore(opts.cfg.session?.store, { agentId }),
     );
     const owners = configuredStoreOwners.get(configuredStorePath) ?? new Set<string>();
     owners.add(agentId);
