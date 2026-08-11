@@ -7,8 +7,6 @@ const MAX_GRACE_MS = 60_000;
 const TASKKILL_COMPLETION_TIMEOUT_MS = 3000;
 
 type ProcessSnapshot = { pid: number; startTime: string | undefined };
-type TreeSnapshot = { rootStartTime: string | undefined; pids: ProcessSnapshot[] };
-const treeSnapshotCache = new Map<number, TreeSnapshot>();
 
 export type KillProcessTreeOptions = {
   graceMs?: number;
@@ -55,32 +53,24 @@ export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): voi
   }
 
   const graceMs = normalizeGraceMs(opts?.graceMs);
-  signalProcessTreeUnix(pid, "SIGTERM", useGroupKill);
+  const pids = signalProcessTreeUnix(pid, "SIGTERM", useGroupKill);
   setTimeout(() => {
-    let pids: ProcessSnapshot[];
+    let checkPids = pids;
     if (useGroupKill) {
-      pids = [{ pid, startTime: getProcessStartTime(pid) }];
-    } else {
-      const cached = treeSnapshotCache.get(pid);
-      if (!cached) {
-        treeSnapshotCache.delete(pid);
-        return;
-      }
-      pids = cached.pids;
+      checkPids = [{ pid, startTime: getProcessStartTime(pid) }];
     }
     const stillAlive = useGroupKill
       ? isProcessAlive(-pid) || isProcessAlive(pid)
-      : pids.some(
+      : checkPids.some(
           (p) =>
             isProcessAlive(p.pid) &&
             p.startTime !== undefined &&
             getProcessStartTime(p.pid) === p.startTime,
         );
     if (!stillAlive) {
-      treeSnapshotCache.delete(pid);
       return;
     }
-    signalProcessTreeUnix(pid, "SIGKILL", useGroupKill);
+    signalProcessTreeUnix(pid, "SIGKILL", useGroupKill, pids);
   }, graceMs).unref();
 }
 
@@ -297,41 +287,18 @@ function signalProcessTreeUnix(
   pid: number,
   signal: "SIGTERM" | "SIGKILL",
   useGroupKill: boolean,
-): void {
+  pidsToSignal?: ProcessSnapshot[],
+): ProcessSnapshot[] {
   if (useGroupKill) {
     try {
       process.kill(-pid, signal);
-      return;
+      return [];
     } catch {
       // Process group does not exist or we lack permission; try direct pid tree.
     }
   }
 
-  let pidsToSignal: ProcessSnapshot[];
-  const rootStartTime = getProcessStartTime(pid);
-
-  if (signal === "SIGTERM") {
-    const cached = treeSnapshotCache.get(pid);
-    if (cached && cached.rootStartTime === rootStartTime) {
-      pidsToSignal = cached.pids;
-    } else {
-      pidsToSignal = getUnixProcessTreePids(pid);
-      treeSnapshotCache.set(pid, { rootStartTime, pids: pidsToSignal });
-      setTimeout(() => {
-        treeSnapshotCache.delete(pid);
-      }, MAX_GRACE_MS + 5000).unref();
-    }
-  } else if (signal === "SIGKILL") {
-    const cached = treeSnapshotCache.get(pid);
-    if (cached) {
-      pidsToSignal = cached.pids;
-    } else {
-      pidsToSignal = getUnixProcessTreePids(pid);
-    }
-    treeSnapshotCache.delete(pid);
-  } else {
-    pidsToSignal = getUnixProcessTreePids(pid);
-  }
+  pidsToSignal = pidsToSignal ?? getUnixProcessTreePids(pid);
 
   for (const p of pidsToSignal) {
     try {
@@ -346,6 +313,8 @@ function signalProcessTreeUnix(
       // Already gone.
     }
   }
+
+  return pidsToSignal;
 }
 
 function runTaskkill(args: string[], onExit?: (code: number | null) => void): Promise<void> {
