@@ -520,21 +520,35 @@ export function validateInventory(manifest, changedPaths) {
       `open PR overlap requires update_existing or supersede_existing (PRs: ${overlaps.map((item) => item.number).join(", ")})`,
     );
   }
-  if (
-    manifest.strategy === "update_existing" &&
-    !overlaps.some((item) => item.number === manifest.existingPr)
-  ) {
-    fail(
-      `manifest.existingPr #${manifest.existingPr} is not present in the overlapping open-PR inventory`,
-    );
+  if (manifest.strategy === "update_existing") {
+    const selected = overlaps.find((item) => item.number === manifest.existingPr);
+    if (!selected) {
+      fail(
+        `manifest.existingPr #${manifest.existingPr} is not present in the overlapping open-PR inventory`,
+      );
+    }
+    if (!selected.sameBranch) {
+      fail(`manifest.existingPr #${manifest.existingPr} does not use the current feature branch`);
+    }
+    const undeclared = overlaps.filter((item) => item.number !== manifest.existingPr);
+    if (undeclared.length > 0) {
+      fail(
+        `update_existing leaves undeclared overlapping PRs (${undeclared.map((item) => item.number).join(", ")})`,
+      );
+    }
   }
-  if (
-    manifest.strategy === "supersede_existing" &&
-    !overlaps.some((item) => item.number === manifest.supersedesPr)
-  ) {
-    fail(
-      `manifest.supersedesPr #${manifest.supersedesPr} is not present in the overlapping open-PR inventory`,
-    );
+  if (manifest.strategy === "supersede_existing") {
+    if (!overlaps.some((item) => item.number === manifest.supersedesPr)) {
+      fail(
+        `manifest.supersedesPr #${manifest.supersedesPr} is not present in the overlapping open-PR inventory`,
+      );
+    }
+    const undeclared = overlaps.filter((item) => item.number !== manifest.supersedesPr);
+    if (undeclared.length > 0) {
+      fail(
+        `supersede_existing leaves undeclared overlapping PRs (${undeclared.map((item) => item.number).join(", ")})`,
+      );
+    }
   }
 }
 

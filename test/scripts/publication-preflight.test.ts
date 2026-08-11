@@ -172,6 +172,81 @@ describe("publication preflight pure gates", () => {
     ).toThrow(/overlap/u);
   });
 
+  it("binds update_existing to the current branch and rejects undeclared overlaps", () => {
+    const manifest = {
+      repository: "openclaw/openclaw",
+      strategy: "update_existing",
+      existingPr: 42,
+      head: "feat/publication-security-preflight",
+      openPrInventory: [
+        {
+          number: 42,
+          repository: "openclaw/openclaw",
+          author: "contributor",
+          branch: "feat/publication-security-preflight",
+          title: "Current publication",
+          paths: ["safe.txt"],
+        },
+        {
+          number: 43,
+          repository: "openclaw/openclaw",
+          author: "other-contributor",
+          branch: "other-branch",
+          title: "Other overlapping work",
+          paths: ["safe.txt"],
+        },
+      ],
+    };
+
+    expect(() =>
+      validateInventory({ ...manifest, openPrInventory: [manifest.openPrInventory[0]] }, [
+        "safe.txt",
+      ]),
+    ).not.toThrow();
+    expect(() => validateInventory(manifest, ["safe.txt"])).toThrow(/undeclared overlapping PRs/u);
+    expect(() =>
+      validateInventory(
+        {
+          ...manifest,
+          openPrInventory: [{ ...manifest.openPrInventory[0], branch: "other-branch" }],
+        },
+        ["safe.txt"],
+      ),
+    ).toThrow(/current feature branch/u);
+  });
+
+  it("rejects undeclared overlaps when superseding an existing PR", () => {
+    expect(() =>
+      validateInventory(
+        {
+          repository: "openclaw/openclaw",
+          strategy: "supersede_existing",
+          supersedesPr: 42,
+          head: "feat/publication-security-preflight",
+          openPrInventory: [
+            {
+              number: 42,
+              repository: "openclaw/openclaw",
+              author: "contributor",
+              branch: "old-branch",
+              title: "Superseded work",
+              paths: ["safe.txt"],
+            },
+            {
+              number: 43,
+              repository: "openclaw/openclaw",
+              author: "other-contributor",
+              branch: "other-branch",
+              title: "Other overlapping work",
+              paths: ["safe.txt"],
+            },
+          ],
+        },
+        ["safe.txt"],
+      ),
+    ).toThrow(/undeclared overlapping PRs/u);
+  });
+
   it("collects every open PR and changed file across paginated GitHub responses", () => {
     const exec = vi
       .fn()
