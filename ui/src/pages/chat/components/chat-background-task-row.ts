@@ -37,7 +37,7 @@ function taskDisplayFacts(task: TaskSummary): TaskDisplayFacts {
     active,
     finishedDuration:
       !active && endedMs > startedMs && startedMs > 0
-        ? formatDurationCompact(endedMs - startedMs, { spaced: true })
+        ? formatDurationCompact(endedMs - startedMs)
         : undefined,
     startedMs,
     timestamp: taskTimestampMs(task.updatedAt ?? task.createdAt),
