@@ -7,14 +7,16 @@ export type SourceReplyDeliveryRuntimeOptions = {
   onSourceReplyDeliveryModeResolved?: (mode: SourceReplyDeliveryMode) => void;
 };
 
-// Enumerable symbol metadata follows queue-owned run spreads without widening its public type.
-// Losing it would let a failed candidate's runtime default govern the fallback winner.
+// The shared enumerable binding follows queue/run spreads without widening their public types.
+// Its listener moves prepared ownership before live callbacks; copying only the mode would leave
+// pre-settlement source delivery on the preliminary policy.
 const sourceReplyDeliveryModeOriginKey: unique symbol = Symbol.for(
   "openclaw.source-reply-delivery-runtime",
 );
 type SourceReplyDeliveryRuntimeBinding = {
   origin?: SourceReplyDeliveryModeOrigin;
   preparedHarnessMode?: SourceReplyDeliveryMode;
+  preparedHarnessModeListener?: (mode: SourceReplyDeliveryMode) => void;
 };
 type SourceReplyDeliveryModeOwner = {
   [sourceReplyDeliveryModeOriginKey]?: SourceReplyDeliveryRuntimeBinding;
@@ -55,7 +57,24 @@ export function publishPreparedHarnessSourceReplyDeliveryMode(
   const binding = readSourceReplyDeliveryRuntimeBinding(owner);
   if (binding?.origin === "runtime_default") {
     binding.preparedHarnessMode = mode;
+    binding.preparedHarnessModeListener?.(mode);
   }
+}
+
+export function bindPreparedHarnessSourceReplyDeliveryMode(
+  owner: object,
+  listener: (mode: SourceReplyDeliveryMode) => void,
+): () => void {
+  const binding = readSourceReplyDeliveryRuntimeBinding(owner);
+  if (binding?.origin !== "runtime_default") {
+    return () => {};
+  }
+  binding.preparedHarnessModeListener = listener;
+  return () => {
+    if (binding.preparedHarnessModeListener === listener) {
+      binding.preparedHarnessModeListener = undefined;
+    }
+  };
 }
 
 export function readPreparedHarnessSourceReplyDeliveryMode(

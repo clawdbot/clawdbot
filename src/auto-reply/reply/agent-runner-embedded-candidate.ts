@@ -44,6 +44,7 @@ import type { FollowupRun } from "./queue.js";
 import { isReplyOperationRestartAbort } from "./reply-operation-abort.js";
 import { markReplyOperationGlobalLaneWaitProgress } from "./reply-run-registry.js";
 import {
+  bindPreparedHarnessSourceReplyDeliveryMode,
   readPreparedHarnessSourceReplyDeliveryMode,
   type SourceReplyDeliveryRuntimeOptions,
 } from "./source-reply-delivery-runtime.js";
@@ -193,6 +194,17 @@ export async function runEmbeddedFallbackCandidate(params: {
     }),
   });
   params.onLifecycleBackstop(lifecycleBackstop);
+  const unbindPreparedHarnessSourceReplyDeliveryMode = bindPreparedHarnessSourceReplyDeliveryMode(
+    params.candidateRun,
+    (mode) => {
+      params.candidateRun.sourceReplyDeliveryMode = mode;
+      turn.followupRun.run.sourceReplyDeliveryMode = mode;
+      if (turn.opts) {
+        turn.opts.sourceReplyDeliveryMode = mode;
+      }
+      sourceReplyDeliveryRuntimeOptions?.onSourceReplyDeliveryModeResolved?.(mode);
+    },
+  );
   try {
     // Profiler milestone. Exposes pre-dispatch delay without normal-path logging.
     params.timing.logMilestoneIfSlow({
@@ -202,7 +214,7 @@ export async function runEmbeddedFallbackCandidate(params: {
       milestone: "before_embedded_run",
     });
     let eventHandler: ReturnType<typeof createAgentRunEventHandler> | undefined;
-    const embeddedRun = params.timing.measure("embedded_run", () =>
+    const result = await params.timing.measure("embedded_run", () =>
       runEmbeddedAgent({
         preparedRunAdmission: params.preparedRunAdmission,
         ...embeddedContext,
@@ -427,18 +439,6 @@ export async function runEmbeddedFallbackCandidate(params: {
           : undefined,
       }),
     );
-    const result = await embeddedRun.finally(() => {
-      const mode = readPreparedHarnessSourceReplyDeliveryMode(params.candidateRun);
-      if (!mode) {
-        return;
-      }
-      params.candidateRun.sourceReplyDeliveryMode = mode;
-      turn.followupRun.run.sourceReplyDeliveryMode = mode;
-      if (turn.opts) {
-        turn.opts.sourceReplyDeliveryMode = mode;
-      }
-      sourceReplyDeliveryRuntimeOptions?.onSourceReplyDeliveryModeResolved?.(mode);
-    });
     const resultCompactionCount = Math.max(0, result.meta?.agentMeta?.compactionCount ?? 0);
     attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
     return {
@@ -448,6 +448,7 @@ export async function runEmbeddedFallbackCandidate(params: {
       ),
     };
   } finally {
+    unbindPreparedHarnessSourceReplyDeliveryMode();
     params.onCompactionCount(attemptCompactionCount);
     revokeMessageActionTurnCapability(messageActionTurnCapability);
   }

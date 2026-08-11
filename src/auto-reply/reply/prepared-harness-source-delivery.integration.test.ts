@@ -39,18 +39,24 @@ describe("prepared harness source delivery", () => {
 
   it.each([
     {
-      name: "delivers one final when preparation changes tool ownership to automatic",
+      name: "delivers one streamed answer when preparation changes tool ownership to automatic",
+      failsCliPrimary: true,
       preliminaryVisibleReplies: "message_tool" as const,
       preparedVisibleReplies: "automatic" as const,
       expectedTransitions: ["message_tool_only", "automatic"],
       expectedDeliveries: 1,
+      expectedPartials: 1,
+      expectedFinals: 1,
     },
     {
-      name: "sends nothing when preparation retains tool ownership",
+      name: "suppresses live output when preparation changes automatic ownership to tool",
+      failsCliPrimary: false,
       preliminaryVisibleReplies: "automatic" as const,
       preparedVisibleReplies: "message_tool" as const,
-      expectedTransitions: ["message_tool_only", "message_tool_only"],
+      expectedTransitions: ["message_tool_only"],
       expectedDeliveries: 0,
+      expectedPartials: 0,
+      expectedFinals: 0,
     },
   ])("$name", async (testCase) => {
     const { runEmbeddedAgent, registerPreparedAgentHarness } =
@@ -62,10 +68,15 @@ describe("prepared harness source delivery", () => {
       providerOverride: "openai",
       modelOverride: "gpt-5.4",
     });
+    const emittedStreamingCallbacks: string[] = [];
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "Short fallback final" }]);
-    mockedRunEmbeddedAttempt.mockResolvedValue(
-      makeAttemptResult({ assistantTexts: ["Short fallback final"] }),
-    );
+    mockedRunEmbeddedAttempt.mockImplementation(async (attemptParams) => {
+      emittedStreamingCallbacks.push("partial");
+      await attemptParams.onPartialReply?.({ text: "Short fallback final" });
+      emittedStreamingCallbacks.push("block");
+      await attemptParams.onBlockReply?.({ text: "Short fallback final" });
+      return makeAttemptResult({ assistantTexts: ["Short fallback final"] });
+    });
     useOpenAIPlatformAuthFixture();
     let embeddedError: unknown;
     let embeddedParams: unknown;
@@ -84,7 +95,9 @@ describe("prepared harness source delivery", () => {
     runnerState.runCliAgentMock.mockRejectedValueOnce(new Error("cli failed"));
     runnerState.runWithModelFallbackMock.mockImplementationOnce(
       async (params: FallbackRunnerParams) => {
-        await params.run("anthropic", "primary").catch(() => undefined);
+        if (testCase.failsCliPrimary) {
+          await params.run("anthropic", "primary").catch(() => undefined);
+        }
         return {
           result: await params.run("custom", "plugin-fallback"),
           provider: "custom",
@@ -115,7 +128,13 @@ describe("prepared harness source delivery", () => {
           provider === "openai"
             ? { supported: true, priority: 200 }
             : { supported: false, reason: "prepared OpenAI route only" },
-        runAttempt: vi.fn(async () => ({}) as never),
+        runAttempt: vi.fn(async (attemptParams) => {
+          emittedStreamingCallbacks.push("partial");
+          await attemptParams.onPartialReply?.({ text: "Short fallback final" });
+          emittedStreamingCallbacks.push("block");
+          await attemptParams.onBlockReply?.({ text: "Short fallback final" });
+          return makeAttemptResult({ assistantTexts: ["Short fallback final"] });
+        }),
       });
     }
     sessionStoreMocks.currentEntry = {
@@ -156,7 +175,7 @@ describe("prepared harness source delivery", () => {
         opts: runtimeOpts,
         typingSignals: createMockTypingSignaler(),
         blockReplyPipeline: null,
-        blockStreamingEnabled: false,
+        blockStreamingEnabled: true,
         resolvedBlockStreamingBreak: "message_end",
         applyReplyToMode: (payload) => payload,
         shouldEmitToolResult: () => true,
@@ -183,6 +202,7 @@ describe("prepared harness source delivery", () => {
       return execution.runResult.payloads[0] satisfies ReplyPayload;
     });
     const deliver = vi.fn(async () => {});
+    const onPartialReply = vi.fn(async () => {});
     const dispatcher = createReplyDispatcher({ deliver });
 
     const result = await dispatchReplyFromConfig({
@@ -190,6 +210,7 @@ describe("prepared harness source delivery", () => {
       cfg: emptyConfig,
       dispatcher,
       replyResolver,
+      replyOptions: { onPartialReply },
     });
     await settleReplyDispatcher({ dispatcher });
 
@@ -197,7 +218,9 @@ describe("prepared harness source delivery", () => {
       { prompt: "hello" },
       expect.any(Object),
     );
+    expect(emittedStreamingCallbacks).toEqual(["partial", "block"]);
     expect(modeTransitions).toEqual(testCase.expectedTransitions);
+    expect(onPartialReply).toHaveBeenCalledTimes(testCase.expectedPartials);
     expect(result.queuedFinal).toBe(testCase.expectedDeliveries === 1);
     if (testCase.expectedDeliveries === 1) {
       expect(result.sourceReplyDeliveryMode).toBeUndefined();
@@ -212,7 +235,7 @@ describe("prepared harness source delivery", () => {
     expect(dispatcher.getQueuedCounts()).toEqual({
       tool: 0,
       block: 0,
-      final: testCase.expectedDeliveries,
+      final: testCase.expectedFinals,
     });
     expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
   });
