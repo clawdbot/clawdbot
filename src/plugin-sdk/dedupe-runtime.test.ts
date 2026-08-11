@@ -99,6 +99,110 @@ describe("createPersistentDedupeCache", () => {
     expect(cache.peek("k3")).toBe(false);
   });
 
+  it("keeps legacy persistent expirations authoritative in non-expiring memory", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    const backing = createMemoryStore();
+    const record = { at: Date.now() };
+    const expiresAt = Date.now() + 60_000;
+    backing.entries.set("legacy", record);
+    const store = {
+      ...backing.store,
+      lookup: vi.fn(async (key: string) =>
+        Date.now() < expiresAt ? backing.entries.get(key) : undefined,
+      ),
+      entries: vi.fn(async () => [
+        { key: "legacy", value: record, createdAt: record.at, expiresAt },
+      ]),
+    };
+    const { cache } = createCache({ ttlMs: 0, openStore: () => store });
+
+    expect(await cache.lookup("legacy")).toBe(true);
+    expect(cache.peek("legacy")).toBe(false);
+
+    vi.setSystemTime(expiresAt);
+    expect(await cache.lookup("legacy")).toBe(false);
+    expect(cache.peek("legacy")).toBe(false);
+    expect(store.lookup).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-primes non-expiring memory only for durable persistent entries", async () => {
+    const backing = createMemoryStore();
+    const record = { at: 1_000_000 };
+    backing.entries.set("durable", record);
+    const store = {
+      ...backing.store,
+      entries: vi.fn(async () => [{ key: "durable", value: record, createdAt: record.at }]),
+    };
+    const { cache } = createCache({ ttlMs: 0, openStore: () => store });
+
+    expect(await cache.lookup("durable")).toBe(true);
+    expect(cache.peek("durable")).toBe(true);
+    expect(await cache.lookup("durable")).toBe(true);
+    expect(store.lookup).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a persistent hit that disappears before its expiration metadata is read", async () => {
+    const backing = createMemoryStore();
+    backing.entries.set("missing", { at: 1_000_000 });
+    const store = {
+      ...backing.store,
+      entries: vi.fn(async () => []),
+    };
+    const { cache } = createCache({ ttlMs: 0, openStore: () => store });
+
+    expect(await cache.lookup("missing")).toBe(false);
+    expect(cache.peek("missing")).toBe(false);
+  });
+
+  it("re-primes non-expiring memory when entry metadata is unavailable", async () => {
+    const backing = createMemoryStore();
+    backing.entries.set("durable", { at: 1_000_000 });
+    const store = {
+      ...backing.store,
+      entries: vi.fn(async () => undefined),
+    };
+    const { cache } = createCache({ ttlMs: 0, openStore: () => store });
+
+    expect(await cache.lookup("durable")).toBe(true);
+    expect(cache.peek("durable")).toBe(true);
+  });
+
+  it("disables persistence after an expiration metadata read fails", async () => {
+    const logError = vi.fn();
+    const backing = createMemoryStore();
+    backing.entries.set("legacy", { at: 1_000_000 });
+    const error = new Error("metadata read failed");
+    const store = {
+      ...backing.store,
+      entries: vi.fn(async () => {
+        throw error;
+      }),
+    };
+    const { cache } = createCache({ ttlMs: 0, openStore: () => store, logError });
+
+    expect(await cache.lookup("legacy")).toBe(false);
+    expect(cache.peek("legacy")).toBe(false);
+    expect(logError).toHaveBeenCalledExactlyOnceWith(error);
+    await cache.register("later", { at: 1_000_001 });
+    expect(store.register).not.toHaveBeenCalled();
+    expect(store.entries).toHaveBeenCalledOnce();
+  });
+
+  it("does not inspect expiration metadata for positive-TTL caches", async () => {
+    const backing = createMemoryStore();
+    backing.entries.set("expiring", { at: 1_000_000 });
+    const store = {
+      ...backing.store,
+      entries: vi.fn(async () => []),
+    };
+    const { cache } = createCache({ ttlMs: 60_000, openStore: () => store });
+
+    expect(await cache.lookup("expiring")).toBe(true);
+    expect(cache.peek("expiring")).toBe(true);
+    expect(store.entries).not.toHaveBeenCalled();
+  });
+
   it("retains non-expiring entries past 24 hours and restores them after restart", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000_000);

@@ -10,6 +10,11 @@ type PersistentDedupeStore<TRecord> = {
   lookup(key: string): Promise<TRecord | undefined>;
 };
 
+type PersistentDedupeEntryMetadata = {
+  key: string;
+  expiresAt?: number;
+};
+
 /** Dual-layer presence cache: process-memory dedupe plus best-effort persistent state. */
 export type PersistentDedupeCache<TRecord> = {
   /** Memory-only presence check without refreshing recency. */
@@ -89,11 +94,29 @@ export function createPersistentDedupeCache<TRecord>(params: {
       let record: TRecord | undefined;
       try {
         record = await store.lookup(key);
+        if (record === undefined) {
+          return false;
+        }
+        if (params.ttlMs <= 0) {
+          const metadataStore = store as {
+            entries?: () => Promise<PersistentDedupeEntryMetadata[] | undefined>;
+          };
+          if (typeof metadataStore.entries === "function") {
+            const entries = await metadataStore.entries();
+            if (Array.isArray(entries)) {
+              const entry = entries.find((candidate) => candidate.key === key);
+              if (!entry) {
+                return false;
+              }
+              if (entry.expiresAt !== undefined) {
+                // Legacy TTL-bound entries must never become permanent memory hits.
+                return entry.expiresAt > Date.now();
+              }
+            }
+          }
+        }
       } catch (error) {
         disablePersistentStore(error);
-        return false;
-      }
-      if (record === undefined) {
         return false;
       }
       memory.check(key, params.persistent.readTimestamp?.(record));

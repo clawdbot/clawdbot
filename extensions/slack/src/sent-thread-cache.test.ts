@@ -172,7 +172,7 @@ describe("slack sent-thread-cache", () => {
     expect(lookup).not.toHaveBeenCalled();
   });
 
-  it("keeps expired legacy participation expired while new participation survives restart", async () => {
+  it("preserves hydrated legacy expiration while new participation survives restart", async () => {
     await withOpenClawTestState(
       { label: "slack-thread-participation", layout: "state-only", applyEnv: false },
       async (state) => {
@@ -203,7 +203,7 @@ describe("slack sent-thread-cache", () => {
           logging: { getChildLogger: () => ({ warn: vi.fn() }) },
         } as never);
 
-        now.mockReturnValue(repliedAt + 25 * 60 * 60 * 1000);
+        now.mockReturnValue(repliedAt + 23 * 60 * 60 * 1000);
         await expect(
           hasSlackThreadParticipationWithPersistence({
             accountId: "A1",
@@ -211,7 +211,8 @@ describe("slack sent-thread-cache", () => {
             channelId: "C123",
             threadTs: legacyThreadTs,
           }),
-        ).resolves.toBe(false);
+        ).resolves.toBe(true);
+        expect(hasSlackThreadParticipation("A1", "C123", legacyThreadTs, "T1")).toBe(false);
         expect(openKeyedStore).toHaveBeenCalledExactlyOnceWith({
           namespace: "slack.thread-participation",
           maxEntries: 1000,
@@ -221,13 +222,21 @@ describe("slack sent-thread-cache", () => {
           maxEntries: 1000,
           env: state.env,
         });
-        now.mockReturnValue(repliedAt + 23 * 60 * 60 * 1000);
         const preservedLegacyEntry = (await store.entries()).find(
           (candidate) => candidate.key === legacyKey,
         );
         expect(preservedLegacyEntry?.expiresAt).toBe(legacyEntry?.expiresAt);
 
         now.mockReturnValue(repliedAt + 25 * 60 * 60 * 1000);
+        await expect(
+          hasSlackThreadParticipationWithPersistence({
+            accountId: "A1",
+            teamId: "T1",
+            channelId: "C123",
+            threadTs: legacyThreadTs,
+          }),
+        ).resolves.toBe(false);
+        expect(hasSlackThreadParticipation("A1", "C123", legacyThreadTs, "T1")).toBe(false);
         expect(await store.lookup(legacyKey)).toBeUndefined();
         recordSlackThreadParticipation("A1", "C123", "1700000000.000003", { teamId: "T1" });
         await vi.waitFor(async () => {
@@ -261,6 +270,7 @@ describe("slack sent-thread-cache", () => {
             threadTs: "1700000000.000003",
           }),
         ).resolves.toBe(true);
+        expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000003", "T1")).toBe(true);
         expect(openKeyedStore).toHaveBeenCalledTimes(2);
 
         for (const probe of [
