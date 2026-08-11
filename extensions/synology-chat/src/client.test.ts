@@ -448,10 +448,7 @@ describe("sendHostedFileUrl", () => {
     credentialedUrl.username = "fixture-user";
     credentialedUrl.password = "fixture-password";
     const result = await settleTimers(
-      sendHostedFileUrl(
-        "https://nas.example.com/incoming",
-        hostedUrl(credentialedUrl.toString()),
-      ),
+      sendHostedFileUrl("https://nas.example.com/incoming", hostedUrl(credentialedUrl.toString())),
     );
     expect(result).toEqual({ status: "not-dispatched" });
     expect(vi.mocked(https.request)).not.toHaveBeenCalled();

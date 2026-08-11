@@ -13,7 +13,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { loadWebMedia as loadWebMediaType } from "openclaw/plugin-sdk/web-media";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSynologyHostedMediaRoute } from "./hosted-media-route.js";
 import {
   prepareSynologyHostedMedia,
@@ -47,11 +47,13 @@ vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia: loadWebMediaMock,
 }));
 
+// openclaw-temp-dir: allow suite state must survive reopen tests; afterAll closes SQLite before removal.
+const testStateDir = fs.mkdtempSync(
+  path.join(resolvePreferredOpenClawTmpDir(), "openclaw-synology-media-"),
+);
 const testStateEnv: NodeJS.ProcessEnv = {
   ...process.env,
-  OPENCLAW_STATE_DIR: fs.mkdtempSync(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-synology-media-"),
-  ),
+  OPENCLAW_STATE_DIR: testStateDir,
 };
 
 function createAccount(overrides: Partial<ResolvedSynologyChatAccount> = {}) {
@@ -94,6 +96,11 @@ function internalCapabilityUrl(publicUrl: string, pathName = "/internal/synology
 }
 
 describe("Synology Chat hosted outbound media", () => {
+  afterAll(() => {
+    resetPluginStateStoreForTests();
+    fs.rmSync(testStateDir, { recursive: true, force: true });
+  });
+
   beforeEach(() => {
     resetPluginStateStoreForTests();
     installRuntime();
