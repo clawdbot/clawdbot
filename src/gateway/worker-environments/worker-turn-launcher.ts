@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolvePreparedRunAdmission } from "../../agents/admitted-run-context.js";
 import { mapThinkingLevelForProvider } from "../../agents/embedded-agent-runner/utils.js";
 import type {
   LocalTurnPlacementClaim,
@@ -33,11 +32,11 @@ import {
 import {
   assertSupportedTurn,
   assistantText,
-  buildWorkerAgentRuntimeIdentity,
   buildWorkerAgentMeta,
   emitProviderReplayRejected,
   fitLaunchDescriptorWithRuntimeIdentity,
   parseRuntimeResult,
+  prepareWorkerAgentRuntimeIdentity,
   windowInitialMessages,
 } from "./worker-turn-payload.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
@@ -314,21 +313,15 @@ async function executeWorkerTurn(params: {
     modelRef,
     turn,
   });
-  const admittedRunContext = await resolvePreparedRunAdmission({
-    runId: turn.runId,
-    runtimeKind: "worker",
+  const { operationalRunInstance, runtimeIdentity } = await prepareWorkerAgentRuntimeIdentity({
+    agentId: placement.agentId,
     runtimeInstanceId: placement.environmentId,
-    admittedRunContext: turn.admittedRunContext,
-    preparedRunAdmission: turn.preparedRunAdmission,
+    sessionKey: placement.sessionKey,
+    turn,
+    turnClaim: params.turnClaim,
   });
   const launchPlan = await fitLaunchDescriptorWithRuntimeIdentity({
-    runtimeIdentity: buildWorkerAgentRuntimeIdentity({
-      admittedRunContext,
-      agentId: placement.agentId,
-      sessionKey: placement.sessionKey,
-      turn,
-      turnClaim: params.turnClaim,
-    }),
+    runtimeIdentity,
     messages: initialMessages,
     build: (agentRuntimeIdentityToken, windowedMessages) =>
       parseWorkerLaunchDescriptor({
@@ -344,7 +337,7 @@ async function executeWorkerTurn(params: {
         },
         assignment: {
           agentId: placement.agentId,
-          operationalRunInstance: admittedRunContext.operationalRunInstance,
+          operationalRunInstance,
           agentRuntimeIdentityToken,
           runId: turn.runId,
           turnId: randomUUID(),

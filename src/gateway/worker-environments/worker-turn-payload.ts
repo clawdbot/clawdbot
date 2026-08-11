@@ -3,7 +3,10 @@ import {
   WORKER_INFERENCE_MAX_CONTEXT_MESSAGES,
   WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
-import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
+import {
+  resolvePreparedRunAdmission,
+  type AdmittedRunContext,
+} from "../../agents/admitted-run-context.js";
 import {
   isDefaultAgentRuntimeId,
   normalizeOptionalAgentRuntimeId,
@@ -47,7 +50,7 @@ type WorkerInitialMessagePlan =
       details: WorkerProviderReplayUnavailable | WorkerReplayMessageWindowUnavailable;
     };
 
-export function buildWorkerAgentRuntimeIdentity(params: {
+function buildWorkerAgentRuntimeIdentity(params: {
   admittedRunContext: AdmittedRunContext;
   agentId: string;
   sessionKey: string;
@@ -75,6 +78,27 @@ export function buildWorkerAgentRuntimeIdentity(params: {
     turnSourceAccountId: turn.agentAccountId,
     turnSourceThreadId: turn.currentThreadTs,
     workerTurnClaim: params.turnClaim,
+  };
+}
+
+type PrepareWorkerAgentRuntimeIdentityParams = Omit<
+  Parameters<typeof buildWorkerAgentRuntimeIdentity>[0],
+  "admittedRunContext" | "turn"
+> & { runtimeInstanceId: string; turn: SessionPlacementTurnParams };
+
+export async function prepareWorkerAgentRuntimeIdentity(
+  params: PrepareWorkerAgentRuntimeIdentityParams,
+) {
+  const admittedRunContext = await resolvePreparedRunAdmission({
+    runId: params.turn.runId,
+    runtimeKind: "worker",
+    runtimeInstanceId: params.runtimeInstanceId,
+    admittedRunContext: params.turn.admittedRunContext,
+    preparedRunAdmission: params.turn.preparedRunAdmission,
+  });
+  return {
+    operationalRunInstance: admittedRunContext.operationalRunInstance,
+    runtimeIdentity: buildWorkerAgentRuntimeIdentity({ ...params, admittedRunContext }),
   };
 }
 
