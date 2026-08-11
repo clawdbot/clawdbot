@@ -608,6 +608,10 @@ suite.define(() => {
             sessionId: "control-ui-e2e-session",
             thinkingLevel: null,
           },
+          "models.list": {
+            catalogMode: "replace",
+            models,
+          },
         },
       });
 
@@ -617,6 +621,9 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__input");
       await composer.locator('[data-chat-model-select="true"]').click();
       const hint = composer.locator(".chat-controls__catalog-hint");
+      expect(await gateway.getRequests("models.list")).toEqual([
+        expect.objectContaining({ params: { view: "configured" } }),
+      ]);
       await expect
         .poll(async () => (await hint.textContent())?.replace(/\s+/g, " ").trim())
         .toBe("Replace mode filters models according to your model settings. Manage models");
