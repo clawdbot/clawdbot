@@ -6,7 +6,8 @@ const DEFAULT_GRACE_MS = 3000;
 const MAX_GRACE_MS = 60_000;
 const TASKKILL_COMPLETION_TIMEOUT_MS = 3000;
 
-const treeSnapshotCache = new Map<number, number[]>();
+type ProcessSnapshot = { pid: number; startTime: string | undefined };
+const treeSnapshotCache = new Map<number, ProcessSnapshot[]>();
 
 export type KillProcessTreeOptions = {
   graceMs?: number;
@@ -55,10 +56,12 @@ export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): voi
   const graceMs = normalizeGraceMs(opts?.graceMs);
   signalProcessTreeUnix(pid, "SIGTERM", useGroupKill);
   setTimeout(() => {
-    const pids = useGroupKill ? [pid] : (treeSnapshotCache.get(pid) ?? getUnixProcessTreePids(pid));
+    const pids = useGroupKill
+      ? [{ pid, startTime: getProcessStartTime(pid) }]
+      : (treeSnapshotCache.get(pid) ?? getUnixProcessTreePids(pid));
     const stillAlive = useGroupKill
       ? isProcessAlive(-pid) || isProcessAlive(pid)
-      : pids.some((p) => isProcessAlive(p));
+      : pids.some((p) => isProcessAlive(p.pid) && getProcessStartTime(p.pid) === p.startTime);
     if (!stillAlive) {
       treeSnapshotCache.delete(pid);
       return;
@@ -153,7 +156,33 @@ function isProcessGroupLeader(pid: number): boolean {
   return pgid === pid;
 }
 
-function getUnixProcessTreePids(rootPid: number): number[] {
+function getProcessStartTime(pid: number): string | undefined {
+  if (process.platform === "linux") {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const commEnd = stat.lastIndexOf(")");
+      if (commEnd >= 0) {
+        const fields = stat
+          .slice(commEnd + 1)
+          .trim()
+          .split(/\s+/);
+        return fields[19];
+      }
+    } catch {}
+  }
+  try {
+    const res = spawnSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8" });
+    if (!res.error && res.status === 0 && res.stdout) {
+      const lines = res.stdout.trim().split("\n");
+      if (lines.length > 1) {
+        return lines[1].trim();
+      }
+    }
+  } catch {}
+  return undefined;
+}
+
+function getUnixProcessTreePids(rootPid: number): ProcessSnapshot[] {
   if (!Number.isFinite(rootPid) || rootPid <= 1) {
     return [];
   }
@@ -225,7 +254,7 @@ function getUnixProcessTreePids(rootPid: number): number[] {
     }
   }
 
-  const result: number[] = [];
+  const result: ProcessSnapshot[] = [];
   const visited = new Set<number>();
 
   function traverse(currentPid: number) {
@@ -240,7 +269,7 @@ function getUnixProcessTreePids(rootPid: number): number[] {
         traverse(childPid);
       }
     }
-    result.push(currentPid);
+    result.push({ pid: currentPid, startTime: getProcessStartTime(currentPid) });
   }
 
   traverse(rootPid);
@@ -261,12 +290,12 @@ function signalProcessTreeUnix(
     }
   }
 
-  let pidsToSignal: number[];
-  
+  let pidsToSignal: ProcessSnapshot[];
+
   if (signal === "SIGTERM") {
     pidsToSignal = treeSnapshotCache.get(pid) ?? getUnixProcessTreePids(pid);
     treeSnapshotCache.set(pid, pidsToSignal);
-    
+
     setTimeout(() => {
       treeSnapshotCache.delete(pid);
     }, MAX_GRACE_MS + 5000).unref();
@@ -279,7 +308,14 @@ function signalProcessTreeUnix(
 
   for (const p of pidsToSignal) {
     try {
-      process.kill(p, signal);
+      if (
+        signal === "SIGKILL" &&
+        p.startTime !== undefined &&
+        getProcessStartTime(p.pid) !== p.startTime
+      ) {
+        continue;
+      }
+      process.kill(p.pid, signal);
     } catch {
       // Already gone.
     }
