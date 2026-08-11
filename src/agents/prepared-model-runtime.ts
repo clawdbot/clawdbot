@@ -16,6 +16,7 @@ import {
   hasSameLifecycleInput,
   isOwnerInRefreshScope,
   forEachOwnerInRefreshScope,
+  invalidateOwnersInRefreshScope,
   listConfiguredOwnerInputs,
   normalizeOptionalDir,
   normalizePreparedModelRuntimeInput,
@@ -487,19 +488,7 @@ export function markPreparedModelRuntimeSnapshotsStale(
   }
   refreshRequestEpoch += 1;
   const staleError = new Error(reason);
-  forEachOwnerInRefreshScope(owners, options.agentIds, (key, owner) => {
-    // Standalone owners have no publication controller to rebuild them. Retire them so the next
-    // standalone lifecycle boundary can activate a fresh generation after publication changes.
-    if (owner.provenance === "standalone") {
-      owner.generation += 1;
-      owners.delete(key);
-      return;
-    }
-    owner.generation += 1;
-    owner.needsRefresh = true;
-    owner.refreshError = staleError;
-    owner.pluginGeneration = undefined;
-  });
+  invalidateOwnersInRefreshScope(owners, options.agentIds, staleError, true);
   notifyPreparedModelRuntimePublication({ phase: "invalidated" });
   if (!pendingModelRuntimeReplacement) {
     notifyPreparedModelRuntimePublication({ phase: "failed", error: staleError });
@@ -533,11 +522,7 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
   const catalogMode = options.catalogMode ?? "live";
   gatewayLifecycleActive ||= options.gatewayLifecycle === true;
   const staleError = new Error("prepared model runtime owner is stale after config publication");
-  forEachOwnerInRefreshScope(owners, options.agentIds, (_, owner) => {
-    owner.generation += 1;
-    owner.needsRefresh = true;
-    owner.refreshError = staleError;
-  });
+  invalidateOwnersInRefreshScope(owners, options.agentIds, staleError);
   const entries: Array<{ owner?: PreparedModelRuntimeOwner; input: PreparedModelRuntimeInput }> =
     [];
   const knownKeys = new Set<string>();

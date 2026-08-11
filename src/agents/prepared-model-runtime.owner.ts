@@ -61,6 +61,27 @@ export function forEachOwnerInRefreshScope(
   }
 }
 
+export function invalidateOwnersInRefreshScope(
+  owners: Map<string, PreparedModelRuntimeOwner>,
+  agentIds: ReadonlySet<string> | undefined,
+  staleError: Error,
+  resetPluginGeneration = false,
+): void {
+  forEachOwnerInRefreshScope(owners, agentIds, (key, owner) => {
+    if (owner.provenance === "standalone") {
+      owner.generation += 1;
+      owners.delete(key);
+      return;
+    }
+    owner.generation += 1;
+    owner.needsRefresh = true;
+    owner.refreshError = staleError;
+    if (resetPluginGeneration) {
+      owner.pluginGeneration = undefined;
+    }
+  });
+}
+
 export function rebindOwnerConfigGeneration(
   owners: Map<string, PreparedModelRuntimeOwner>,
   agentId: string | undefined,
