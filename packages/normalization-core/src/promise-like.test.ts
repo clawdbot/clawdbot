@@ -18,6 +18,7 @@ describe("isPromiseLike", () => {
 });
 
 it("classifies objects with throwing then getters as non-thenable", () => {
+  // oxlint-disable-next-line unicorn/no-thenable -- intentionally hostile thenable fixture
   const hostile = Object.defineProperty({}, "then", {
     get() {
       throw new Error("trap");
