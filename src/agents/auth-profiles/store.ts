@@ -45,13 +45,13 @@ import {
 } from "./persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshot as clearRuntimeAuthProfileStoreSnapshotImpl,
-  clearRuntimeAuthProfileStoreSnapshots as clearRuntimeAuthProfileStoreSnapshotsImpl,
+  clearRuntimeAuthProfileStoreSnapshots,
   getPreparedRuntimeAuthProfileStoreSnapshot as getPreparedRuntimeAuthProfileStoreSnapshotImpl,
   getRuntimeAuthProfileStoreSnapshot as getRuntimeAuthProfileStoreSnapshotImpl,
   getRuntimeAuthProfileStoreSnapshotRevision,
   noteRuntimeAuthProfileStorePersistedMutation,
   listRuntimeAuthProfileStoreSnapshots,
-  replaceRuntimeAuthProfileStoreSnapshots as replaceRuntimeAuthProfileStoreSnapshotsImpl,
+  replaceRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
 import {
@@ -209,7 +209,7 @@ function publishRuntimeSnapshotsAfterCommit(publish: (() => void) | undefined): 
     }
     return true;
   } catch (err) {
-    clearRuntimeAuthProfileStoreSnapshotsImpl();
+    clearRuntimeAuthProfileStoreSnapshots();
     log.warn("auth profile store committed but runtime snapshot publication failed", { err });
     return false;
   }
@@ -1322,18 +1322,6 @@ export function getPreparedRuntimeAuthProfileStoreSnapshot(
 
 export { getRuntimeAuthProfileStoreSnapshotRevision };
 
-/** Replace runtime auth-profile snapshots, used by tests and prepared runtimes. */
-export function replaceRuntimeAuthProfileStoreSnapshots(
-  entries: Array<{ agentDir?: string; store: AuthProfileStore }>,
-): void {
-  replaceRuntimeAuthProfileStoreSnapshotsImpl(entries);
-}
-
-/** Clear all runtime auth-profile snapshots. */
-export function clearRuntimeAuthProfileStoreSnapshots(): void {
-  clearRuntimeAuthProfileStoreSnapshotsImpl();
-}
-
 /** Clear one runtime auth-profile snapshot. */
 export function clearRuntimeAuthProfileStoreSnapshot(agentDir?: string): boolean {
   return clearRuntimeAuthProfileStoreSnapshotImpl(agentDir);
@@ -1588,7 +1576,7 @@ function replaceRuntimeAuthProfileStoreSnapshot(
     return;
   }
   const replacedAuthPath = resolveAuthStorePath(agentDir);
-  replaceRuntimeAuthProfileStoreSnapshotsImpl(
+  replaceRuntimeAuthProfileStoreSnapshots(
     listRuntimeAuthProfileStoreSnapshots().filter(
       (entry) => resolveAuthStorePath(entry.agentDir) !== replacedAuthPath,
     ),

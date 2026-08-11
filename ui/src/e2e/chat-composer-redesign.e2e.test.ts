@@ -13,6 +13,55 @@ const suite = createControlUiE2eSuite({
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
 suite.define(() => {
+  it("keeps mobile picker panels above an attachment-expanded composer", async () => {
+    await suite.withPage({ viewport: { width: 667, height: 375 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+
+      const composer = page.locator(".agent-chat__input");
+      await composer.waitFor({ state: "visible" });
+      await composer.locator(".agent-chat__file-input").setInputFiles({
+        name: "mobile-composer-proof.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from("mobile composer attachment"),
+      });
+      await composer.locator(".chat-attachments-preview").waitFor({ state: "visible" });
+
+      for (const picker of [
+        {
+          menu: ".chat-controls__model-menu",
+          trigger: '[data-chat-model-select="true"]',
+        },
+        {
+          menu: ".chat-controls__effort-menu",
+          trigger: '[data-chat-thinking-select="true"]',
+        },
+      ]) {
+        await composer.locator(picker.trigger).click();
+        await page.waitForTimeout(100);
+        const [composerBox, footerBox, menuBox, triggerBox] = await Promise.all([
+          composer.boundingBox(),
+          composer.locator(".agent-chat__composer-footer").boundingBox(),
+          page.locator(picker.menu).boundingBox(),
+          composer.locator(picker.trigger).boundingBox(),
+        ]);
+        expect(composerBox).not.toBeNull();
+        expect(footerBox).not.toBeNull();
+        expect(menuBox).not.toBeNull();
+        expect(triggerBox).not.toBeNull();
+        if (!composerBox || !footerBox || !menuBox || !triggerBox) {
+          throw new Error(`expected mobile layout boxes for ${picker.menu}`);
+        }
+        expect(menuBox.y).toBeGreaterThanOrEqual(0);
+        expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(composerBox.y + 1);
+        expect(triggerBox.y + triggerBox.height).toBeLessThanOrEqual(376);
+        expect(footerBox.y + footerBox.height).toBeLessThanOrEqual(376);
+        await composer.locator(picker.trigger).click();
+      }
+    });
+  });
+
   it("keeps the model in the bottom bar, session settings in the header, and switches the primary action with input state", async () => {
     await suite.withPage({ viewport: { width: 1920, height: 1080 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {

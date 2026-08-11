@@ -21,7 +21,7 @@ import {
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
-import { extractAssistantText } from "./embedded-agent-utils.js";
+import { extractEmbeddedAssistantText } from "./embedded-agent-utils.js";
 import { isRateLimitErrorMessage } from "./failover/classify.js";
 import { collectProviderApiKeys } from "./live-auth-keys.js";
 import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
@@ -1597,7 +1597,7 @@ async function runDeepSeekV4ReplayRegression(params: {
   if (second.stopReason === "error") {
     throw new Error(second.errorMessage || "DeepSeek V4 replay followup returned error");
   }
-  expect(extractAssistantText(second).length).toBeGreaterThan(0);
+  expect(extractEmbeddedAssistantText(second).length).toBeGreaterThan(0);
 }
 
 async function runExtraTurnProbes(params: {
@@ -1627,7 +1627,7 @@ async function runExtraTurnProbes(params: {
     if (file.stopReason === "error") {
       throw new Error(file.errorMessage || "file-read probe returned error with no message");
     }
-    let fileText = extractAssistantText(file);
+    let fileText = extractEmbeddedAssistantText(file);
     if (!fileProbeTextMatches(fileText)) {
       logProgress(`${params.progressLabel}: file-read probe retry`);
       const retry = await completeSimpleWithTimeout(
@@ -1644,7 +1644,7 @@ async function runExtraTurnProbes(params: {
           retry.errorMessage || "file-read probe retry returned error with no message",
         );
       }
-      fileText = extractAssistantText(retry);
+      fileText = extractEmbeddedAssistantText(retry);
     }
     if (!fileProbeTextMatches(fileText)) {
       if (fileText.length === 0) {
@@ -1689,7 +1689,7 @@ async function runExtraTurnProbes(params: {
             : `${attemptLabel} returned error with no message`;
         throw new Error(image.errorMessage || fallback);
       }
-      return extractAssistantText(image);
+      return extractEmbeddedAssistantText(image);
     },
     onRetry: (firstText) => {
       const reason = firstText.length === 0 ? "was empty" : "did not return ok";

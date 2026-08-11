@@ -16,7 +16,7 @@ import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js
 import {
   WorkerAdmissionError,
   WorkerConnectionInterruptedError,
-  toError,
+  toWorkerConnectionError,
   type WorkerConnectionOptions,
 } from "./worker-connection-contract.js";
 import { closeInvalidWorkerFrame } from "./worker-connection-frames.js";
@@ -113,7 +113,7 @@ export function connectWorkerConnectionAttempt(
 
     socket.on("error", (error) => {
       if (!admitted) {
-        rejectAttempt(new WorkerConnectionInterruptedError(toError(error).message));
+        rejectAttempt(new WorkerConnectionInterruptedError(toWorkerConnectionError(error).message));
       }
     });
     socket.on("open", () => {

@@ -31,6 +31,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "acceptIdleWorkspaceReconciliation"
   | "claimReclaimWorkspaceResult"
   | "claimTurn"
+  | "closeWorkerTurnToolState"
   | "fail"
   | "finishReclaim"
   | "get"
@@ -60,7 +61,14 @@ export type WorkerDispatchPlacementStore = Pick<
 
 export type WorkerDispatchEnvironmentService = Pick<
   WorkerEnvironmentService,
-  "attachSession" | "create" | "destroy" | "get" | "reconcileOnce" | "startTunnel" | "stopTunnel"
+  | "attachSession"
+  | "create"
+  | "createFromProfileSnapshot"
+  | "destroy"
+  | "get"
+  | "reconcileOnce"
+  | "startTunnel"
+  | "stopTunnel"
 >;
 
 export type WorkerActivationBarrier = (params: {
@@ -218,6 +226,19 @@ export function createPlacementFailureActions(deps: {
     const current = placements.get(placement.sessionId);
     if (current?.state !== "draining") {
       return;
+    }
+    if (current.turnClaim) {
+      await placements.closeWorkerTurnToolState({
+        sessionId: current.sessionId,
+        claimId: current.turnClaim.claimId,
+        runId: current.turnClaim.runId,
+        placementGeneration: current.turnClaim.generation,
+        owner: {
+          kind: "worker",
+          environmentId: current.environmentId,
+          ownerEpoch: current.turnClaim.ownerEpoch,
+        },
+      });
     }
     const reconciling = startReconcile(current);
     const teardownErrors = await cleanupEnvironment({

@@ -19,7 +19,7 @@ import {
   type RuntimeToolSchemaDiagnostic,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
-import { runWithCronCreatorAuthorityResolver } from "openclaw/plugin-sdk/codex-mcp-projection";
+import { runWithCronCreatorAuthorityCapabilityResolver } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
 import { readCodexPluginConfig, type CodexPluginConfig } from "./config.js";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
@@ -98,7 +98,7 @@ type DynamicToolBuildParams = {
   cronCreatorToolAllowlistRef?: OpenClawCodingToolsOptions["cronCreatorToolAllowlistRef"];
   cronCreatorToolAllowlistCaptureRef?: OpenClawCodingToolsOptions["cronCreatorToolAllowlistCaptureRef"];
   resolveCronCreatorToolAuthority?: Parameters<
-    typeof runWithCronCreatorAuthorityResolver
+    typeof runWithCronCreatorAuthorityCapabilityResolver
   >[0]["resolve"];
   cronCreatorAuthorityUnavailableReason?: OpenClawCodingToolsOptions["cronCreatorAuthorityUnavailableReason"];
   forceHeartbeatTool?: boolean;
@@ -355,7 +355,8 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
       { cwd: input.effectiveCwd ?? input.effectiveWorkspace },
     );
   const allTools = input.resolveCronCreatorToolAuthority
-    ? runWithCronCreatorAuthorityResolver({
+    ? runWithCronCreatorAuthorityCapabilityResolver({
+        capability: params.cronCreatorAuthorityCapability,
         runId: params.runId,
         resolve: input.resolveCronCreatorToolAuthority,
         run: buildOpenClawCodingTools,

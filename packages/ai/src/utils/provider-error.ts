@@ -1,4 +1,5 @@
 import { asOptionalRecord, stableStringify } from "@openclaw/normalization-core";
+import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { projectDiagnosticValue, redactDiagnosticText } from "./credential-redaction.js";
 
@@ -20,12 +21,14 @@ export function configureProviderErrorRedactor(redactor: ProviderErrorRedactor |
   return previous;
 }
 
-function readString(record: Record<string, unknown> | undefined, key: string): string | undefined {
+function readProviderErrorField(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): string | undefined {
   const value = record?.[key];
-  if (typeof value === "string") {
-    return value.trim() || undefined;
-  }
-  return typeof value === "number" && Number.isFinite(value) ? String(value) : undefined;
+  return typeof value === "string" || (typeof value === "number" && Number.isFinite(value))
+    ? normalizeStringifiedOptionalString(value)
+    : undefined;
 }
 
 function readCauseCode(error: Record<string, unknown>): string | undefined {
@@ -36,7 +39,7 @@ function readCauseCode(error: Record<string, unknown>): string | undefined {
     cause = asOptionalRecord(cause.cause)
   ) {
     seen.add(cause);
-    const code = readString(cause, "code");
+    const code = readProviderErrorField(cause, "code");
     if (code) {
       return code;
     }
@@ -69,8 +72,8 @@ function buildProjection(snapshot: unknown, signal?: AbortSignal): ProviderError
   const body = stringifyField(bodyValue, MAX_ERROR_BODY_LENGTH);
   const originalMessage =
     (typeof snapshot === "string" ? snapshot : undefined) ??
-    readString(error, "message") ??
-    readString(nestedError, "message");
+    readProviderErrorField(error, "message") ??
+    readProviderErrorField(nestedError, "message");
   const genericMessage = originalMessage === `${status} status code (no body)`;
   let errorMessage =
     status !== undefined && body && (!originalMessage || genericMessage)
@@ -93,13 +96,15 @@ function buildProjection(snapshot: unknown, signal?: AbortSignal): ProviderError
     errorMessage += `\n${rawMetadata}`;
   }
   const errorCode =
-    readString(error, "errorCode") ??
-    readString(error, "code") ??
-    readString(nestedError, "code") ??
+    readProviderErrorField(error, "errorCode") ??
+    readProviderErrorField(error, "code") ??
+    readProviderErrorField(nestedError, "code") ??
     (error ? readCauseCode(error) : undefined) ??
     (status === undefined ? undefined : String(status));
   const errorType =
-    readString(error, "errorType") ?? readString(error, "type") ?? readString(nestedError, "type");
+    readProviderErrorField(error, "errorType") ??
+    readProviderErrorField(error, "type") ??
+    readProviderErrorField(nestedError, "type");
   return {
     stopReason: signal?.aborted ? "aborted" : "error",
     errorMessage: stringifyField(errorMessage, 4096) ?? "Unknown provider error",

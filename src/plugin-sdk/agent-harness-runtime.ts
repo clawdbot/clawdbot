@@ -28,7 +28,7 @@ import {
   type EmbeddedAgentQueueMessageOptions,
 } from "../agents/embedded-agent-runner/runs.js";
 import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
-import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
+import { inferToolMetaFromArgsCore } from "../agents/tool-display.js";
 import {
   buildWatchedSessionsPromptLines,
   prepareWatchedSessionsPrompt,
@@ -537,8 +537,7 @@ export function inferToolMetaFromArgs(
   args: unknown,
   options?: { detailMode?: ToolProgressDetailMode },
 ): string | undefined {
-  const display = resolveToolDisplay({ name: toolName, args, detailMode: options?.detailMode });
-  return formatToolDetail(display);
+  return inferToolMetaFromArgsCore(toolName, args, options);
 }
 
 /**

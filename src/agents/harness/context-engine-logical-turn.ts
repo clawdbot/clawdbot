@@ -2,6 +2,7 @@ import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   evaluateContextEngineHostSupport,
+  supportsContextEngineDurableTurnAdvancement,
   type ContextEngineHostSupport,
 } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
@@ -149,9 +150,7 @@ export async function createContextEngineLogicalTurnLease(params: {
     }
     if (
       selection.requiresDurableCommit &&
-      (effective.engine.info.transcriptSemantics?.turnAdvancementIdempotency !==
-        "atomic-idempotent-v1" ||
-        typeof effective.engine.commitTurn !== "function")
+      !supportsContextEngineDurableTurnAdvancement(effective.engine)
     ) {
       return "atomic idempotent turn advancement is not declared";
     }

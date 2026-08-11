@@ -17,6 +17,8 @@ export const validateConnectParams = compile(S.ConnectParamsSchema);
 export const validateWorkerAdmissionHandshake = compile(S.WorkerAdmissionHandshakeSchema);
 export const validateWorkerConnectRequestFrame = compile(S.WorkerConnectRequestFrameSchema);
 export const validateWorkerHeartbeatParams = compile(S.WorkerHeartbeatParamsSchema);
+export const validateWorkerSessionsSpawnParams = compile(S.WorkerSessionsSpawnParamsSchema);
+export const validateWorkerSessionsSendParams = compile(S.WorkerSessionsSendParamsSchema);
 
 function checkWorkerProtocolJson(data: unknown): ValidationError | undefined {
   const stack: Array<{ depth: number; value: unknown }> = [{ depth: 0, value: data }];
@@ -176,6 +178,11 @@ export const validateWebPushUnsubscribeParams = compile<WebPushUnsubscribeParams
 export const validateWebPushTestParams = compile<WebPushTestParams>(S.WebPushTestParamsSchema);
 export const validateSecretsResolveParams = compile(S.SecretsResolveParamsSchema);
 export const validateSecretsResolveResult = compile(S.SecretsResolveResultSchema);
+export const validateSecretsStoreListParams = compile(S.SecretsStoreListParamsSchema);
+export const validateSecretsStoreListResult = compile(S.SecretsStoreListResultSchema);
+export const validateSecretsStoreSetParams = compile(S.SecretsStoreSetParamsSchema);
+export const validateSecretsStoreDeleteParams = compile(S.SecretsStoreDeleteParamsSchema);
+export const validateSecretsStoreMutationResult = compile(S.SecretsStoreMutationResultSchema);
 export const validateSessionsListParams = compile(S.SessionsListParamsSchema);
 export const validateSessionsCatalogListParams = compile(S.SessionsCatalogListParamsSchema);
 export const validateSessionsCatalogReadParams = compile(S.SessionsCatalogReadParamsSchema);

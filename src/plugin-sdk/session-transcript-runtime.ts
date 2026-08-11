@@ -11,7 +11,6 @@ import {
   readTranscriptRawDelta,
   readSessionTranscriptVisibleMessageDelta as readVisibleMessageDelta,
   readLatestTranscriptAssistantText,
-  resolveSessionTranscriptRuntimeReadTarget,
   resolveSessionTranscriptRuntimeTarget,
   withTranscriptWriteLock,
   type TranscriptMessageAppendOptions,
@@ -182,7 +181,7 @@ type SessionTranscriptMirrorAppendResult =
 export async function resolveSessionTranscriptIdentity(
   params: SessionTranscriptReadParams,
 ): Promise<SessionTranscriptIdentity> {
-  const target = await resolveSessionTranscriptRuntimeReadTarget(params);
+  const target = await resolveSessionTranscriptRuntimeTarget(params);
   const agentId = normalizeAgentId(target.agentId);
   return {
     agentId,
@@ -199,7 +198,7 @@ export async function resolveSessionTranscriptIdentity(
 export async function resolveSessionTranscriptTarget(
   params: SessionTranscriptTargetParams,
 ): Promise<SessionTranscriptTarget> {
-  const target = await resolveSessionTranscriptRuntimeReadTarget(params);
+  const target = await resolveSessionTranscriptRuntimeTarget(params);
   return projectPublicTarget({
     ...target,
     targetKind: "runtime-session",
@@ -314,7 +313,7 @@ export async function appendAssistantMirrorMessageByIdentity(
       ...params,
       sessionId: currentEntry.sessionId,
     };
-    const target = await resolveSessionTranscriptRuntimeReadTarget(scope);
+    const target = await resolveSessionTranscriptRuntimeTarget(scope);
     const latestEquivalentAssistantId =
       !params.idempotencyKey && isDeliveryMirrorAssistantMessage(message)
         ? findLatestEquivalentAssistantMessageId(

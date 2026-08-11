@@ -80,7 +80,10 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
 
     await dispatchWithContext({ context });
 
-    expect(answerDraftStream.update).toHaveBeenCalledWith("Final answer");
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      "Final answer",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(answerDraftStream.stop).toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(editMessageTelegram).not.toHaveBeenCalled();
@@ -318,7 +321,10 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
     await dispatchWithContext({ context: createContext() });
 
     expect(answerDraftStream.update).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.update).toHaveBeenCalledWith("Final answer");
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      "Final answer",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
@@ -351,6 +357,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
 
     expect(answerDraftStream.update).toHaveBeenCalledWith(
       "FY25 outlook\n\nRevenue mix (pie chart)\n- Product: 60\n- Services: 40",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
     );
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(deliverInboundReplyWithMessageSendContext).not.toHaveBeenCalled();
@@ -385,6 +392,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
 
     expect(answerDraftStream.update).toHaveBeenCalledWith(
       "FY25 outlook\n\nPipeline (table)\n- Account: Acme; Stage: Won; ARR: 125000\n- Account: Globex; Stage: Review; ARR: 82000",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
     );
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(deliverInboundReplyWithMessageSendContext).not.toHaveBeenCalled();
@@ -419,6 +427,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
 
     expect(answerDraftStream.update).toHaveBeenCalledWith(
       "Quarterly results\n\nFY25 outlook\n\nDo not duplicate this block\n\nRevenue (bar chart)\n- USD: Q1: 12; Q2: 18",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
     );
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(deliverInboundReplyWithMessageSendContext).not.toHaveBeenCalled();

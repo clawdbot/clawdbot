@@ -20,6 +20,10 @@ import { fileURLToPath } from "node:url";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolveNpmRunner } from "./npm-runner.mts";
 import { createPrepublishPluginRegistryArtifact } from "./prepublish-plugin-registry-artifact.mjs";
@@ -673,7 +677,7 @@ export async function readArtifactPackageCandidateMetadata(dir: string) {
     throw error;
   }
   const parsed: unknown = JSON.parse(raw);
-  if (!isRecord(parsed)) {
+  if (!isJsonRecord(parsed)) {
     throw new Error(`artifact package-candidate.json must contain a JSON object`);
   }
   const packageSourceSha =
@@ -825,7 +829,7 @@ async function moveNewestPackedTarball(outputDir: string, packOutput: string, ou
   if (parsed !== undefined) {
     const packedEntry = resolveNpmJsonEntries(parsed).find(
       (entry): entry is Record<string, unknown> =>
-        isRecord(entry) && typeof entry.filename === "string",
+        isJsonRecord(entry) && typeof entry.filename === "string",
     );
     const packedFilename =
       packedEntry && typeof packedEntry.filename === "string" ? packedEntry.filename : "";
@@ -1138,7 +1142,7 @@ function normalizeTrustedPackageSource(id: string, raw: unknown): TrustedPackage
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(id)) {
     throw new Error(`Invalid trusted package source id: ${id}`);
   }
-  if (!isRecord(raw)) {
+  if (!isJsonRecord(raw)) {
     throw new Error(`trusted package source ${id} must be an object`);
   }
   const hosts = toUniqueNormalizedHostList(raw.hosts, "hosts", id);
@@ -1148,7 +1152,7 @@ function normalizeTrustedPackageSource(id: string, raw: unknown): TrustedPackage
   const rawAuth = raw.auth;
   let auth: TrustedPackageSource["auth"];
   if (rawAuth !== undefined) {
-    if (!isRecord(rawAuth) || rawAuth.type !== "bearer") {
+    if (!isJsonRecord(rawAuth) || rawAuth.type !== "bearer") {
       throw new Error(`trusted package source ${id} auth must be {"type":"bearer"}`);
     }
     const authKeys = Object.keys(rawAuth);
@@ -1185,11 +1189,11 @@ export async function loadTrustedPackageSource(
       cause: error,
     });
   }
-  if (!isRecord(policy) || policy.schemaVersion !== 1) {
+  if (!isJsonRecord(policy) || policy.schemaVersion !== 1) {
     throw new Error(`Trusted package source policy must use schemaVersion 1: ${policyPath}`);
   }
   const sources = policy.sources;
-  if (!isRecord(sources)) {
+  if (!isJsonRecord(sources)) {
     throw new Error(`Trusted package source policy must define sources: ${policyPath}`);
   }
   if (!Object.hasOwn(sources, sourceId)) {
@@ -1282,8 +1286,8 @@ function normalizeLookupResults(results: unknown): LookupAddress[] {
   const entries = Array.isArray(results) ? results : [results];
   return entries
     .map((entry) => ({
-      address: isRecord(entry) && typeof entry.address === "string" ? entry.address : "",
-      family: Number(isRecord(entry) ? (entry.family ?? 0) : 0),
+      address: isJsonRecord(entry) && typeof entry.address === "string" ? entry.address : "",
+      family: Number(isJsonRecord(entry) ? (entry.family ?? 0) : 0),
     }))
     .filter((entry) => entry.address && (entry.family === 4 || entry.family === 6));
 }
@@ -1659,8 +1663,8 @@ async function readPackageJson(tarball: string) {
   const raw = await run("tar", ["-xOf", tarball, "package/package.json"], { capture: true });
   const pkg: unknown = JSON.parse(raw);
   return {
-    name: isRecord(pkg) && typeof pkg.name === "string" ? pkg.name : "",
-    version: isRecord(pkg) && typeof pkg.version === "string" ? pkg.version : "",
+    name: isJsonRecord(pkg) && typeof pkg.name === "string" ? pkg.name : "",
+    version: isJsonRecord(pkg) && typeof pkg.version === "string" ? pkg.version : "",
   };
 }
 
@@ -1676,7 +1680,7 @@ export async function readPackageBuildSourceSha(tarball: string) {
   }
   const buildInfo: unknown = JSON.parse(raw);
   const commit =
-    isRecord(buildInfo) && typeof buildInfo.commit === "string" ? buildInfo.commit.trim() : "";
+    isJsonRecord(buildInfo) && typeof buildInfo.commit === "string" ? buildInfo.commit.trim() : "";
   return /^[0-9a-f]{40}$/iu.test(commit) ? commit.toLowerCase() : "";
 }
 
@@ -1909,10 +1913,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     console.error(usage());
     process.exit(1);
   });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function errorCode(value: unknown) {

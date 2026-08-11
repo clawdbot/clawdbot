@@ -432,6 +432,8 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChat
     messaging: {
       targetPrefixes: ["twilio-sms"],
       normalizeTarget: (target) => normalizeSmsPhoneNumber(target),
+      inferTargetChatType: ({ to }) =>
+        looksLikeSmsPhoneNumber(normalizeSmsPhoneNumber(to)) ? "direct" : undefined,
       resolveOutboundSessionRoute: (params) => resolveSmsOutboundSessionRoute(params),
       targetResolver: {
         looksLikeId: looksLikeSmsPhoneNumber,

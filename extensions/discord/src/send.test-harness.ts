@@ -25,7 +25,9 @@ type DiscordLoopbackRequest = {
   path: string | undefined;
 };
 
-export async function createDiscordLoopbackRest(): Promise<{
+export async function createDiscordLoopbackRest(options?: {
+  respond?: (request: DiscordLoopbackRequest) => unknown;
+}): Promise<{
   rest: RequestClient;
   requests: DiscordLoopbackRequest[];
   close: () => Promise<void>;
@@ -36,18 +38,20 @@ export async function createDiscordLoopbackRest(): Promise<{
     request.on("data", (chunk: Buffer) => chunks.push(chunk));
     request.on("error", (error) => response.destroy(error));
     request.on("end", () => {
-      requests.push({
+      const received = {
         body: Buffer.concat(chunks).toString("utf8"),
         contentType: request.headers["content-type"],
         method: request.method,
         path: request.url,
-      });
+      };
+      requests.push(received);
       response.writeHead(200, { "Content-Type": "application/json" });
       response.end(
         JSON.stringify(
-          request.method === "GET"
-            ? { id: "789", type: 0 }
-            : { id: "loopback-message", channel_id: "789" },
+          options?.respond?.(received) ??
+            (request.method === "GET"
+              ? { id: "789", type: 0 }
+              : { id: "loopback-message", channel_id: "789" }),
         ),
       );
     });

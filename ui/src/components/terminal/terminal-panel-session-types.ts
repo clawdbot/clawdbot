@@ -11,17 +11,11 @@ import { persistTerminalSessionIds } from "./terminal-session-storage.ts";
 import type { StartupInputBuffer } from "./terminal-startup-input.ts";
 import type { TerminalTabReadinessState } from "./terminal-tab-readiness.ts";
 
-export type TerminalControllerFactory = (
-  parent: HTMLElement,
-  options?: { readOnly?: boolean },
-) => Promise<GhosttyTerminalController>;
-
 export type TerminalPanelSessionTab = TerminalPanelTab &
   TerminalTabReadinessState & {
     gatewaySessionId: string;
     pendingInput: StartupInputBuffer;
     defaultColorQueries: ReturnType<typeof createTerminalDefaultColorQueryResponder>;
-    createController: TerminalControllerFactory;
     controller: GhosttyTerminalController;
     shell: string;
     host: HTMLDivElement;

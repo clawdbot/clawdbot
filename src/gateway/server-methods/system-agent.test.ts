@@ -188,6 +188,10 @@ function makeVerifiedEngine(): SystemAgentChatEngine {
   });
 }
 
+async function runSensitiveChannelSetup(_channel: string, prompter: WizardPrompter) {
+  await prompter.text({ message: "Bot token", sensitive: true });
+}
+
 function stubEngineOverview() {
   return vi.spyOn(SystemAgentChatEngine.prototype, "loadOverview").mockResolvedValue({
     config: { path: "/tmp/openclaw.json", exists: true, valid: true, issues: [], hash: null },
@@ -763,16 +767,16 @@ describe("openclaw.chat", () => {
   });
 
   it("persists only the mask marker for a sensitive hosted-wizard answer", async () => {
-    const engine = new SystemAgentChatEngine({
-      surface: "gateway",
-      verifiedInference: requireVerifiedInferenceFixture(),
-      deps: requireVerifiedInferenceDeps(),
-      runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
-      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
-        await prompter.text({ message: "Bot token", sensitive: true });
+    const engine = new SystemAgentChatEngine(
+      {
+        surface: "gateway",
+        verifiedInference: requireVerifiedInferenceFixture(),
+        deps: requireVerifiedInferenceDeps(),
+        runAgentTurn: async () => null,
+        planWithAssistant: async () => null,
       },
-    });
+      { wizardDependencies: { runChannelSetupWizard: runSensitiveChannelSetup } },
+    );
     const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
     const context = makeContext(sessions);
 

@@ -8,8 +8,7 @@ import {
 import { captureWsEvent } from "openclaw/plugin-sdk/proxy-capture";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
-  asFiniteNumber,
-  asOptionalRecord as asObjectRecord,
+  asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -23,14 +22,11 @@ const OPENAI_REALTIME_SSRF_POLICY = {
 // with the maintained realtime Talk live smoke.
 const OPENAI_REALTIME_CLIENT_SECRET_REQUEST_TIMEOUT_MS = 30_000;
 
-export const trimToUndefined = normalizeOptionalString;
-export { asFiniteNumber, asObjectRecord };
-
 export function readRealtimeErrorDetail(error: unknown): string {
   if (typeof error === "string" && error) {
     return error;
   }
-  const message = asObjectRecord(error)?.message;
+  const message = asOptionalRecord(error)?.message;
   if (typeof message === "string" && message) {
     return message;
   }
@@ -40,9 +36,11 @@ export function readRealtimeErrorDetail(error: unknown): string {
 export function resolveOpenAIProviderConfigRecord(
   config: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
-  const providers = asObjectRecord(config.providers);
+  const providers = asOptionalRecord(config.providers);
   return (
-    asObjectRecord(providers?.openai) ?? asObjectRecord(config.openai) ?? asObjectRecord(config)
+    asOptionalRecord(providers?.openai) ??
+    asOptionalRecord(config.openai) ??
+    asOptionalRecord(config)
   );
 }
 
@@ -84,14 +82,6 @@ type OpenAIRealtimeSecretRequest = {
   authRejectedMessage?: string;
   missingValueMessage: string;
 };
-
-function readStringField(value: unknown, key: string): string | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const raw = (value as Record<string, unknown>)[key];
-  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
-}
 
 async function createOpenAIRealtimeSecret(
   params: OpenAIRealtimeSecretRequest,
@@ -140,7 +130,9 @@ async function createOpenAIRealtimeSecret(
     payload && typeof payload === "object"
       ? (payload as Record<string, unknown>).client_secret
       : undefined;
-  const clientSecret = readStringField(payload, "value") ?? readStringField(nestedSecret, "value");
+  const clientSecret =
+    normalizeOptionalString(asOptionalRecord(payload)?.value) ??
+    normalizeOptionalString(asOptionalRecord(nestedSecret)?.value);
   if (!clientSecret) {
     throw new Error(params.missingValueMessage);
   }

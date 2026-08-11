@@ -962,7 +962,7 @@ describe("subagent registry archive behavior", () => {
       cleanup: "keep",
     });
 
-    const replaced = mod.replaceSubagentRunAfterSteer({
+    const replaced = mod.replaceSubagentRunAfterSteerCore({
       previousRunId: "run-old",
       nextRunId: "run-new",
     });
@@ -991,7 +991,7 @@ describe("subagent registry archive behavior", () => {
 
     await vi.advanceTimersByTimeAsync(5_000);
 
-    const replaced = mod.replaceSubagentRunAfterSteer({
+    const replaced = mod.replaceSubagentRunAfterSteerCore({
       previousRunId: "run-delete-old",
       nextRunId: "run-delete-new",
     });
@@ -1022,7 +1022,7 @@ describe("subagent registry archive behavior", () => {
       attachmentsDir,
     });
 
-    const replaced = mod.replaceSubagentRunAfterSteer({
+    const replaced = mod.replaceSubagentRunAfterSteerCore({
       previousRunId: "run-delete-attachments-old",
       nextRunId: "run-delete-attachments-new",
     });

@@ -19,7 +19,7 @@ import type { CliEventHandlers } from "./execute-events.js";
 import {
   createCliAbortError,
   executeNodeClaudeRun,
-  type resolveNodeClaudePlacement,
+  type resolveNodeClaudeTarget,
 } from "./execute-node-claude.js";
 import { appendCliOutputTail } from "./execute-output-buffer.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
@@ -66,7 +66,7 @@ export async function executeCliProcess(params: {
   events: CliEventHandlers;
   toolTracking: CliToolTracking;
   diagnostics: ReturnType<typeof createClaudeCliModelCallDiagnostics>;
-  nodePlacement: ReturnType<typeof resolveNodeClaudePlacement>;
+  nodePlacement: ReturnType<typeof resolveNodeClaudeTarget>;
   nodeSystemPrompt?: string;
   nodeEnv?: Record<string, string>;
   nodeClearEnv?: string[];

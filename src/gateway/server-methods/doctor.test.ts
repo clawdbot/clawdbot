@@ -54,7 +54,7 @@ vi.mock("../../agents/memory-search.js", () => ({
 }));
 
 vi.mock("../../plugins/memory-runtime.js", () => ({
-  getActiveMemorySearchManager: getMemorySearchManager,
+  getActiveMemorySearchManagerCore: getMemorySearchManager,
 }));
 
 vi.mock("./doctor.memory-core-runtime.js", () => ({

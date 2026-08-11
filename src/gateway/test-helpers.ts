@@ -6,7 +6,7 @@ export {
   cronIsolatedRun,
   dispatchInboundMessageMock,
   embeddedRunMock,
-  getReplyFromConfig,
+  gatewayReplyMock,
   mockGetReplyFromConfigOnce,
   agentDiscoveryMock,
   testState,

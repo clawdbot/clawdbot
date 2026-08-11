@@ -182,7 +182,7 @@ const { subagentRegistryMock } = vi.hoisted(() => ({
     shouldIgnorePostCompletionAnnounceForSession: vi.fn((_sessionKey: string) => false),
     countActiveDescendantRuns: vi.fn((_sessionKey: string) => 0),
     countPendingDescendantRuns: vi.fn((_sessionKey: string) => 0),
-    countPendingDescendantRunsExcludingRun: vi.fn((_sessionKey: string, _runId: string) => 0),
+    hasDescendantRunAwaitingSettle: vi.fn((_sessionKey: string, _excludeRunId?: string) => false),
     getLatestSubagentRunByChildSessionKey: vi.fn(
       (_childSessionKey: string): MockSubagentRun | undefined => undefined,
     ),
@@ -336,6 +336,7 @@ function loadSessionStoreFixture(): Record<string, SessionEntry> {
 }
 
 vi.mock("../registry/subagent-registry.js", () => subagentRegistryMock);
+vi.mock("../registry/subagent-registry-read.js", () => subagentRegistryMock);
 vi.mock("../registry/subagent-registry-runtime.js", () => subagentRegistryMock);
 
 describe("subagent announce formatting", () => {
@@ -479,10 +480,11 @@ describe("subagent announce formatting", () => {
       .mockImplementation((sessionKey: string) =>
         subagentRegistryMock.countActiveDescendantRuns(sessionKey),
       );
-    subagentRegistryMock.countPendingDescendantRunsExcludingRun
+    subagentRegistryMock.hasDescendantRunAwaitingSettle
       .mockClear()
-      .mockImplementation((sessionKey: string, _runId: string) =>
-        subagentRegistryMock.countPendingDescendantRuns(sessionKey),
+      .mockImplementation(
+        (sessionKey: string, _excludeRunId?: string) =>
+          subagentRegistryMock.countPendingDescendantRuns(sessionKey) > 0,
       );
     subagentRegistryMock.getLatestSubagentRunByChildSessionKey
       .mockClear()
@@ -836,10 +838,6 @@ describe("subagent announce formatting", () => {
     });
     subagentRegistryMock.countPendingDescendantRuns.mockImplementation((sessionKey: string) =>
       sessionKey === "agent:main:main" ? 2 : 0,
-    );
-    subagentRegistryMock.countPendingDescendantRunsExcludingRun.mockImplementation(
-      (sessionKey: string, runId: string) =>
-        sessionKey === "agent:main:main" && runId === "run-direct-self-pending" ? 1 : 2,
     );
 
     const didAnnounce = await runSubagentAnnounceFlow({

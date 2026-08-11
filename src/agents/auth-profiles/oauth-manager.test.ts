@@ -17,8 +17,8 @@ import {
   isSafeToAdoptBootstrapOAuthIdentity,
   isSafeToAdoptMainStoreOAuthIdentity,
 } from "./oauth-shared.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import {
-  clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,

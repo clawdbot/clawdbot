@@ -1627,6 +1627,7 @@ export async function performGatewaySessionReset(params: {
               ? undefined
               : (preparedLifecycle?.worktree ?? currentEntry?.worktree),
             parentSessionKey: currentEntry?.parentSessionKey,
+            parentSessionId: currentEntry?.parentSessionId,
             ...creationStamp,
             forkSource: currentEntry?.forkSource,
             forkedFromParent: sessionEntryForkedFromParent(currentEntry) ? true : undefined,
@@ -1636,6 +1637,7 @@ export async function performGatewaySessionReset(params: {
             label: currentEntry?.label,
             displayName: currentEntry?.displayName,
             delivery: currentEntry?.delivery,
+            pendingDeliveryNotice: currentEntry?.pendingDeliveryNotice,
             groupId: currentEntry?.groupId,
             subject: currentEntry?.subject,
             groupChannel: currentEntry?.groupChannel,

@@ -31,13 +31,13 @@ type NormalizedReply = {
   text?: string;
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(isRecord(value)).toBe(true);
-  if (!isRecord(value)) {
+  expect(isObjectRecord(value)).toBe(true);
+  if (!isObjectRecord(value)) {
     throw new Error(`${label} was not an object`);
   }
   return value;

@@ -17,7 +17,7 @@ import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { loadExactSessionEntryReadOnlyResult } from "../config/sessions/session-accessor.sqlite-entry-availability.js";
-import { resolveSqliteSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { resolveSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
   resolveExistingAgentSessionStoreTargetsReadOnlyResult,
   type SessionStoreTargetsReadCache,
@@ -993,7 +993,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
     let targetEntry = exact.value?.entry;
     if (!targetEntry) {
       try {
-        targetEntry = resolveSqliteSessionEntry(
+        targetEntry = resolveSessionEntry(
           {
             agentId: ownerAgentId,
             clone: false,

@@ -87,7 +87,7 @@ import {
   parseTranscriptPage,
   readControlCursor,
   readGatewayParams,
-  readOptionalString,
+  readBoundedOptionalString,
   readPageParams,
   requireBoundThread,
   requireOnlyKeys,
@@ -731,11 +731,11 @@ function readNodeTranscriptParams(value: unknown): CodexNodeSessionTranscriptPar
     throw new CatalogParamsError("Codex session read parameters must be an object");
   }
   requireOnlyKeys(value, new Set(["threadId", "cursor", "limit"]));
-  const threadId = readOptionalString(value, "threadId", MAX_SESSION_ID_LENGTH);
+  const threadId = readBoundedOptionalString(value, "threadId", MAX_SESSION_ID_LENGTH);
   if (!threadId) {
     throw new CatalogParamsError("threadId is required");
   }
-  const cursor = readOptionalString(value, "cursor", MAX_CURSOR_LENGTH);
+  const cursor = readBoundedOptionalString(value, "cursor", MAX_CURSOR_LENGTH);
   const limit = readBoundedLimit(
     value.limit,
     "limit",

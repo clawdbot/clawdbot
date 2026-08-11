@@ -248,7 +248,6 @@ export function renderApplicationShell(host: ShellViewHost) {
       onPairMobile: () => void context.overlays.openDevicePairSetup(),
       onNavigate: (routeId: string, options?: ApplicationNavigationOptions) =>
         host.navigate(routeId, options),
-      onCloseNavDrawer: () => host.closeNavDrawer({ restoreFocus: true }),
       onPreloadRoute: (routeId: string) =>
         isRouteId(routeId) ? context.preload(routeId) : Promise.resolve(),
     });

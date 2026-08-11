@@ -2,16 +2,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   clearActiveEmbeddedRun: vi.fn(),
+  completeAfterTurn: vi.fn(),
   completeResult: vi.fn(),
-  finalizeStream: vi.fn(),
   logDebug: vi.fn(),
   logError: vi.fn(),
+  logWarn: vi.fn(),
   settleRequesterAfterSessionSpawns: vi.fn(),
+  settleStream: vi.fn(),
   runPrompt: vi.fn(),
 }));
 
 vi.mock("../logger.js", () => ({
-  log: { debug: mocks.logDebug, error: mocks.logError },
+  log: { debug: mocks.logDebug, error: mocks.logError, warn: mocks.logWarn },
 }));
 vi.mock("../../subagents/registry/subagent-registry.js", () => ({
   settleRequesterAfterSessionSpawns: mocks.settleRequesterAfterSessionSpawns,
@@ -23,8 +25,15 @@ vi.mock("./attempt-prompt-phase.js", () => ({
 vi.mock("./attempt-result.js", () => ({
   completeEmbeddedAttemptResult: mocks.completeResult,
 }));
-vi.mock("./attempt-stream-finalize.js", () => ({
-  finalizeEmbeddedAttemptStreamPhase: mocks.finalizeStream,
+vi.mock("./attempt-finalize.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./attempt-finalize.js")>();
+  return {
+    ...actual,
+    completeEmbeddedAttemptAfterTurn: mocks.completeAfterTurn,
+  };
+});
+vi.mock("./attempt-stream-settle.js", () => ({
+  settleEmbeddedAttemptStream: mocks.settleStream,
 }));
 
 import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
@@ -41,12 +50,17 @@ function createFixture() {
   const detachBackend = vi.fn(() => order.push("detach-backend"));
   const clearTimers = vi.fn(() => order.push("clear-timers"));
   const getBeforeAgentFinalizeRevisionReason = vi.fn(() => "revision");
+  const getBeforeAgentFinalizeRevisionEntryId = vi.fn(() => undefined);
   const promptActiveSession = vi.fn(async () => undefined);
   const activeSession = {
+    agent: { state: { messages: [] } },
     sessionId: "active-session",
     getActiveToolNames: vi.fn(() => ["read"]),
   };
-  const sessionManager = { kind: "session-manager" };
+  const sessionManager = {
+    kind: "session-manager",
+    buildSessionContext: vi.fn(() => ({ messages: [] })),
+  };
   const hookRunner = { kind: "hook-runner" };
   const cacheTrace = { kind: "cache-trace" };
   const trajectoryRecorder = { kind: "trajectory" };
@@ -58,7 +72,6 @@ function createFixture() {
     systemPromptText: "system prompt",
   };
   const state: SettledInput["state"] = {
-    beforeAgentRunBlocked: false,
     beforeAgentRunBlockedBy: undefined,
     terminal: { kind: "ok" },
     trajectoryEndRecorded: false,
@@ -83,6 +96,7 @@ function createFixture() {
       queueHandle,
       stopAcceptingSteerMessages: vi.fn(),
       getBeforeAgentFinalizeRevisionReason,
+      getBeforeAgentFinalizeRevisionEntryId,
     },
     timeout: {
       getRunAbortDeadlineAtMs: vi.fn(() => 123),
@@ -197,9 +211,9 @@ function createFixture() {
     promptInput.lifecycle.markBeforeAgentRunBlocked({ blockedBy: "before_agent" });
     return { promptStartedAt: 100 };
   });
-  mocks.finalizeStream.mockImplementation(async (finalizeInput) => {
+  mocks.settleStream.mockImplementation(async () => {
     order.push("finalize");
-    finalizeInput.onSettled({
+    return {
       promptError: null,
       promptErrorSource: null,
       timedOutDuringCompaction: false,
@@ -207,10 +221,15 @@ function createFixture() {
       sessionIdUsed: "settled-session",
       lastAssistant: { role: "assistant", content: "done" },
       currentAttemptAssistant: { role: "assistant", content: "done" },
+      currentAttemptCompletedAssistant: undefined,
       attemptUsage: { input: 1, output: 2, total: 3 },
       cacheBreak: null,
       promptCache: { cacheRead: 1 },
-    });
+      lastCallUsage: undefined,
+      compactionOccurredThisAttempt: false,
+    };
+  });
+  mocks.completeAfterTurn.mockImplementation(async () => {
     return { sessionIdUsed: "final-session", sessionFileUsed: "/tmp/final.jsonl" };
   });
   mocks.completeResult.mockImplementation(() => {
@@ -258,7 +277,6 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     ]);
     expect(fixture.state).toEqual(
       expect.objectContaining({
-        beforeAgentRunBlocked: true,
         beforeAgentRunBlockedBy: "before_agent",
         terminal: { kind: "ok" },
         trajectoryEndRecorded: true,
@@ -320,7 +338,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
 
     await expect(runEmbeddedAttemptSettledPhase(fixture.input)).rejects.toBe(failure);
 
-    expect(mocks.finalizeStream).not.toHaveBeenCalled();
+    expect(mocks.settleStream).not.toHaveBeenCalled();
     expect(mocks.completeResult).not.toHaveBeenCalled();
     expect(fixture.clearTimers).toHaveBeenCalledOnce();
     expect(fixture.detachBackend).toHaveBeenCalledWith(fixture.queueHandle);
@@ -437,8 +455,8 @@ describe("runEmbeddedAttemptSettledPhase", () => {
   it("defaults a source-less settlement failure without dropping it", async () => {
     const fixture = createFixture();
     const failure = new Error("settlement failed");
-    mocks.finalizeStream.mockImplementationOnce(async (finalizeInput) => {
-      finalizeInput.onSettled({
+    mocks.settleStream.mockImplementationOnce(async () => {
+      return {
         promptError: failure,
         promptErrorSource: null,
         timedOutDuringCompaction: true,
@@ -449,8 +467,9 @@ describe("runEmbeddedAttemptSettledPhase", () => {
         attemptUsage: undefined,
         cacheBreak: null,
         promptCache: undefined,
-      });
-      return { sessionIdUsed: "settled-session" };
+        lastCallUsage: undefined,
+        compactionOccurredThisAttempt: false,
+      };
     });
 
     await runEmbeddedAttemptSettledPhase(fixture.input);

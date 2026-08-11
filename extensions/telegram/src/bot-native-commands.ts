@@ -1777,7 +1777,7 @@ export const registerTelegramNativeCommands = ({
             },
           },
           delivery: {
-            deliverWithProviderMessageSending: async (payload) => {
+            deliverWithProviderMessageSending: async (payload, info) => {
               if (
                 shouldSuppressLocalTelegramExecApprovalPrompt({
                   cfg: runtimeCfg,
@@ -1791,17 +1791,20 @@ export const registerTelegramNativeCommands = ({
                   suppression: { reason: "no_visible_result" },
                 };
               }
+              const targetedPayload = payload.replyToId
+                ? payload
+                : { ...payload, replyToId: String(msg.message_id) };
               const result = await deliverReplies({
+                // Bind custody so a lost response on the native-command path is
+                // recorded as ambiguous instead of silently unaccounted.
                 replies: [
-                  payload.replyToId
-                    ? payload
-                    : {
-                        ...payload,
-                        replyToId: String(msg.message_id),
-                      },
+                  info.bindPendingFinalDelivery
+                    ? info.bindPendingFinalDelivery(targetedPayload)
+                    : targetedPayload,
                 ],
                 ...deliveryBaseOptions,
                 silent: runtimeTelegramCfg.silentErrorReplies === true && payload.isError === true,
+                onPlatformSendDispatch: info.onPlatformSendDispatch,
               });
               if (result.delivered) {
                 deliveryState.delivered = true;

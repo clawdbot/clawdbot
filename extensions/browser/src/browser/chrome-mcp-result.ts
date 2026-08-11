@@ -1,12 +1,12 @@
 // Parses Chrome MCP tool results and formats redacted tool failures.
 import path from "node:path";
 import {
+  asNullableRecord,
   normalizeOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { toErrorObject } from "../infra/errors.js";
 import { redactToolPayloadText } from "../logging/redact.js";
-import { asRecord } from "../record-shared.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
 import {
   CHROME_CONNECTION_TOOL_ERROR_RE,
@@ -28,7 +28,7 @@ function asPages(value: unknown): ChromeMcpStructuredPage[] {
   }
   const out: ChromeMcpStructuredPage[] = [];
   for (const entry of value) {
-    const record = asRecord(entry);
+    const record = asNullableRecord(entry);
     if (!record || typeof record.id !== "number") {
       continue;
     }
@@ -42,14 +42,14 @@ function asPages(value: unknown): ChromeMcpStructuredPage[] {
 }
 
 function extractStructuredContent(result: ChromeMcpToolResult): Record<string, unknown> {
-  return asRecord(result.structuredContent) ?? {};
+  return asNullableRecord(result.structuredContent) ?? {};
 }
 
 function extractTextContent(result: ChromeMcpToolResult): string[] {
   const content = Array.isArray(result.content) ? result.content : [];
   return content
     .map((entry) => {
-      const record = asRecord(entry);
+      const record = asNullableRecord(entry);
       return record && typeof record.text === "string" ? record.text : "";
     })
     .filter(Boolean);
@@ -80,7 +80,7 @@ export function extractStructuredPages(result: ChromeMcpToolResult): ChromeMcpSt
 
 export function extractSnapshot(result: ChromeMcpToolResult): ChromeMcpSnapshotNode {
   const structured = extractStructuredContent(result);
-  const snapshot = asRecord(structured.snapshot);
+  const snapshot = asNullableRecord(structured.snapshot);
   if (!snapshot) {
     throw new Error("Chrome MCP snapshot response was missing structured snapshot data.");
   }

@@ -6,6 +6,7 @@ export {
   asFiniteNumberInRange,
   asSafeIntegerInRange,
   isFutureDateTimestampMs,
+  parseDateTimestampMs,
   parseFiniteNumber,
   clampTimerTimeoutMs,
   clampPositiveTimerTimeoutMs,

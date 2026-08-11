@@ -48,7 +48,6 @@ function createInput(overrides: Record<string, unknown> = {}) {
     timedOutDuringToolExecution: false,
     timedOutByRunBudget: false,
     promptError: null,
-    beforeAgentRunBlocked: false,
   };
   return {
     attempt,
@@ -98,6 +97,28 @@ describe("cleanupEmbeddedAttemptSessionPhase", () => {
     expect(input.emitDiagnosticRunCompleted).toHaveBeenCalledWith("completed", null, undefined);
   });
 
+  it("emits the before-agent blocked status and owner", async () => {
+    const input = createInput({
+      readState: () => ({
+        aborted: false,
+        externalAbort: false,
+        timedOut: false,
+        idleTimedOut: false,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        timedOutByRunBudget: false,
+        promptError: null,
+        beforeAgentRunBlockedBy: "before_agent",
+      }),
+    });
+
+    await cleanupEmbeddedAttemptSessionPhase(input as never);
+
+    expect(input.emitDiagnosticRunCompleted).toHaveBeenCalledWith("blocked", null, {
+      blockedBy: "before_agent",
+    });
+  });
+
   it("re-reads abort state after trajectory flushing", async () => {
     let aborted = false;
     hoisted.flushEmbeddedAttemptTrajectoryRecorder.mockImplementation(async () => {
@@ -113,7 +134,6 @@ describe("cleanupEmbeddedAttemptSessionPhase", () => {
         timedOutDuringToolExecution: false,
         timedOutByRunBudget: false,
         promptError: aborted ? new Error("request aborted") : null,
-        beforeAgentRunBlocked: false,
       }),
     });
 

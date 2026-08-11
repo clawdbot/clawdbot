@@ -13,12 +13,16 @@ import {
   type WorkerLiveEventParams,
   type WorkerLiveEventResult,
   type WorkerProtocolCloseReason,
+  type WorkerSessionsSendParams,
+  type WorkerSessionsSpawnParams,
+  type WorkerSessionToolResult,
   type WorkerTranscriptCommitErrorReason,
   type WorkerTranscriptCommitErrorShape,
   type WorkerTranscriptCommitParams,
   type WorkerTranscriptCommitResult,
   WORKER_HEARTBEAT_INTERVAL_MS,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
+  WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
   WORKER_PROTOCOL_MAX_METHOD_LENGTH,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
@@ -28,6 +32,8 @@ import {
   validateWorkerConnectRequestFrame,
   validateWorkerHeartbeatParams,
   validateWorkerLiveEventParams,
+  validateWorkerSessionsSendParams,
+  validateWorkerSessionsSpawnParams,
   validateWorkerTranscriptCommitParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import {
@@ -47,8 +53,12 @@ import {
 } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { GATEWAY_STARTUP_RETRY_AFTER_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { rawDataByteLength } from "../../../infra/ws.js";
-import { tryBeginGatewayRootWorkAdmission } from "../../../process/gateway-work-admission.js";
+import {
+  runWithGatewayIndependentRootWorkContinuation,
+  tryBeginGatewayRootWorkAdmission,
+} from "../../../process/gateway-work-admission.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
+import { MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS } from "../../worker-environments/placement-session-tool-operations.js";
 import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
 
 type WorkerServiceResult<TResult, TFailure> =
@@ -77,6 +87,12 @@ export type WorkerConnectionService = {
   validateWorkerConnection: (
     identity: WorkerConnectionIdentity,
   ) => WorkerProtocolCloseReason | null;
+  executeSessionTool?: (
+    identity: WorkerConnectionIdentity,
+    toolName: "sessions_spawn" | "sessions_send",
+    request: WorkerSessionsSpawnParams | WorkerSessionsSendParams,
+    signal?: AbortSignal,
+  ) => Promise<WorkerServiceResult<WorkerSessionToolResult, { reason: WorkerProtocolCloseReason }>>;
 };
 
 type WorkerInferenceConnectionService = WorkerConnectionService & {
@@ -225,6 +241,7 @@ async function dispatchWorkerRequest(params: {
   respond: WorkerRespond;
   close(code: number, reason: WorkerProtocolCloseReason): void;
   warn(message: string): void;
+  signal?: AbortSignal;
 }): Promise<void> {
   const service = params.service;
   if (!service) {
@@ -333,6 +350,43 @@ async function dispatchWorkerRequest(params: {
     params.respond(false, undefined, workerLiveEventError(outcome.details));
     return;
   }
+  if (
+    params.request.method === WORKER_PROTOCOL_METHODS[3] ||
+    params.request.method === WORKER_PROTOCOL_METHODS[4]
+  ) {
+    if (!params.identity.protocolFeatures.includes(WORKER_SESSION_TOOLS_PROTOCOL_FEATURE)) {
+      rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
+      return;
+    }
+    if (!service.executeSessionTool) {
+      rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
+      return;
+    }
+    const isSpawn = params.request.method === WORKER_PROTOCOL_METHODS[3];
+    const requestValid = isSpawn
+      ? validateWorkerSessionsSpawnParams(params.request.params)
+      : validateWorkerSessionsSendParams(params.request.params);
+    if (!requestValid) {
+      params.respond(false, undefined, workerProtocolError("invalid-frame"));
+      return;
+    }
+    const outcome = await service.executeSessionTool(
+      params.identity,
+      isSpawn ? "sessions_spawn" : "sessions_send",
+      params.request.params as WorkerSessionsSpawnParams | WorkerSessionsSendParams,
+      params.signal,
+    );
+    if (outcome.ok) {
+      params.respond(true, outcome.result);
+      return;
+    }
+    if ("closeReason" in outcome) {
+      rejectWorkerRequest({ ...params, reason: outcome.closeReason });
+      return;
+    }
+    params.respond(false, undefined, workerProtocolError(outcome.reason));
+    return;
+  }
   if (params.request.method !== WORKER_PROTOCOL_METHODS[0]) {
     rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
     return;
@@ -353,12 +407,14 @@ async function dispatchWorkerRequest(params: {
 export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParams): () => void {
   let expiryTimer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
+  const sessionOperations = new Set<string>();
   const cleanup = () => {
     if (disposed) {
       return;
     }
     disposed = true;
     clearTimeout(expiryTimer);
+    sessionOperations.clear();
     params.socket.off("message", onMessage);
   };
   const closeWorker = (code: number, reason: WorkerProtocolCloseReason) => {
@@ -459,7 +515,17 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
     params.send({ type: "res", id, ok: true, payload: buildWorkerHello(admission.identity) });
     params.advanceHandshakePhase("ready");
     expiryTimer = setTimeout(
-      () => closeWorker(1008, "credential-expired"),
+      () => {
+        // Credential TTL fences unattached workers. An exact durable turn may
+        // remain connected (and reconnect with the same claim-bound secret)
+        // until terminal ACK releases its placement claim.
+        const failure = params.service?.validateWorkerConnection(admission.identity);
+        if (failure) {
+          closeWorker(1008, failure);
+        } else if (!params.service) {
+          closeWorker(1008, "credential-expired");
+        }
+      },
       Math.max(0, admission.identity.credentialExpiresAtMs - Date.now()),
     );
     expiryTimer.unref?.();
@@ -527,6 +593,8 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       parsed.method === WORKER_PROTOCOL_METHODS[0] ||
       parsed.method === WORKER_PROTOCOL_METHODS[1] ||
       parsed.method === WORKER_PROTOCOL_METHODS[2] ||
+      parsed.method === WORKER_PROTOCOL_METHODS[3] ||
+      parsed.method === WORKER_PROTOCOL_METHODS[4] ||
       parsed.method === WORKER_INFERENCE_METHODS[0] ||
       parsed.method === WORKER_INFERENCE_METHODS[1]
     ) {
@@ -536,21 +604,55 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       closeWorker(1008, "environment-unavailable");
       return;
     }
-    await dispatchWorkerRequest({
-      request: parsed,
-      identity: client.worker,
-      connectionId: params.connId,
-      service: params.service,
-      send: (frame) => params.send(frame),
-      respond: (ok, payload, error) =>
-        params.send(
-          ok
-            ? { type: "res", id: parsed.id, ok, payload }
-            : { type: "res", id: parsed.id, ok, error },
-        ),
-      close: closeWorker,
-      warn: (message) => params.logGateway.warn(message),
-    });
+    const respond = (ok: boolean, payload?: unknown, error?: Parameters<WorkerRespond>[2]) => {
+      if (disposed || params.isClosed() || params.getClient() !== client || client.invalidated) {
+        return;
+      }
+      params.send(
+        ok
+          ? { type: "res", id: parsed.id, ok, payload }
+          : { type: "res", id: parsed.id, ok, error },
+      );
+    };
+    const dispatch = (signal?: AbortSignal) =>
+      dispatchWorkerRequest({
+        request: parsed,
+        identity: client.worker!,
+        connectionId: params.connId,
+        service: params.service,
+        send: (frame) => params.send(frame),
+        respond,
+        close: closeWorker,
+        warn: (message) => params.logGateway.warn(message),
+        ...(signal ? { signal } : {}),
+      });
+    const isLongSessionOperation =
+      parsed.method === WORKER_PROTOCOL_METHODS[3] || parsed.method === WORKER_PROTOCOL_METHODS[4];
+    if (isLongSessionOperation) {
+      if (sessionOperations.has(parsed.id)) {
+        failFrame(1008, "invalid-frame");
+        return;
+      }
+      if (sessionOperations.size >= MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS) {
+        respond(false, undefined, workerProtocolError("gateway-unavailable"));
+        return;
+      }
+      sessionOperations.add(parsed.id);
+      // Provisioning and recipient turns can take minutes. Retain independent
+      // shutdown admission while releasing this connection's ordered frame
+      // queue so heartbeats, cancellation, and terminal ACKs keep flowing. A
+      // socket is only a response transport: disconnecting it must not cancel
+      // an admitted durable operation after external effects may have begun.
+      void runWithGatewayIndependentRootWorkContinuation(() => dispatch())
+        .catch(() => {
+          respond(false, undefined, workerProtocolError("gateway-unavailable"));
+        })
+        .finally(() => {
+          sessionOperations.delete(parsed.id);
+        });
+      return;
+    }
+    await dispatch();
   };
 
   let queue = Promise.resolve();

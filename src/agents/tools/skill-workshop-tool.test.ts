@@ -49,8 +49,8 @@ describe("skill_workshop tool", () => {
     });
 
     expect(JSON.stringify(tool.parameters)).toContain('"enum":["read","reconcile"]');
-    expect(tool.description).toContain("Never drop a skill only because it is specialized");
-    expect(tool.description).not.toContain("Drop narrow");
+    expect(tool.description).toContain("exactly one keep, write, or drop decision");
+    expect(tool.description).toContain(SKILL_AUTHORING_STANDARDS_PROMPT);
     await tool.execute("read", { action: "read", skill_name: "duplicate" });
     await tool.execute("reconcile", {
       action: "reconcile",

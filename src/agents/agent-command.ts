@@ -37,13 +37,14 @@ import {
 } from "./agent-command-restart-recovery.js";
 import { runAcpAgentCommand } from "./command/acp-execution.js";
 import { repairPendingAssistantTranscriptTurns } from "./command/assistant-transcript-repair.js";
+import { persistAgentSession } from "./command/attempt-execution.shared.js";
 import { emitIngressModelUsageDiagnostic } from "./command/ingress-diagnostics.js";
 import { resolveEmbeddedModelSelection } from "./command/model-selection.js";
 import { finalizeEmbeddedAgentCommand } from "./command/post-run.js";
 import { prepareAgentCommandExecution } from "./command/prepare.js";
 import { runEmbeddedAgentAttempt } from "./command/run-embedded-attempt.js";
 import { loadSessionStoreRuntime, resolveAgentCommandDeps } from "./command/runtime-loaders.js";
-import { persistSessionEntry, prepareCurrentRunDelivery } from "./command/session-helpers.js";
+import { prepareCurrentRunDelivery } from "./command/session-helpers.js";
 import { prepareEmbeddedSessionState } from "./command/session-preparation.js";
 import { clearRotatedSessionMetadata } from "./command/session.js";
 import type {
@@ -354,7 +355,7 @@ async function agentCommandInternal(
             suppressTextDelivery: opts.internalDeliverySuppressText,
           }),
         };
-        const persisted = await persistSessionEntry({
+        const persisted = await persistAgentSession({
           sessionStore,
           sessionKey,
           storePath,
@@ -566,7 +567,7 @@ async function agentCommandInternal(
             }),
             updatedAt: Date.now(),
           };
-          const persisted = await persistSessionEntry({
+          const persisted = await persistAgentSession({
             sessionStore,
             sessionKey,
             storePath,

@@ -11,6 +11,7 @@ import { redactSensitiveText } from "../../logging/redact.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { OAUTH_REFRESH_CALL_TIMEOUT_MS, OAUTH_REFRESH_LOCK_OPTIONS, log } from "./constants.js";
+import { hasUsableOAuthCredential } from "./credential-state.js";
 import { shouldMirrorRefreshedOAuthCredential } from "./oauth-identity.js";
 import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
 import {
@@ -20,7 +21,6 @@ import {
 import {
   areOAuthCredentialsEquivalent,
   hasMatchingOAuthIdentity,
-  hasUsableOAuthCredential,
   isSafeToAdoptBootstrapOAuthIdentity,
   isSafeToAdoptMainStoreOAuthIdentity,
   shouldBootstrapFromExternalCliCredential,
@@ -258,7 +258,7 @@ async function loadFreshStoredOAuthCredential(params: {
 }
 
 /** Select local OAuth unless a safe external bootstrap credential should win. */
-export function resolveEffectiveOAuthCredential(params: {
+export function resolveEffectiveOAuthCredentialCore(params: {
   store: AuthProfileStore;
   profileId: string;
   credential: OAuthCredential;
@@ -712,7 +712,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         agentDir: params.agentDir,
         credential: params.credential,
       }) ?? params.credential;
-    const effectiveCredential = resolveEffectiveOAuthCredential({
+    const effectiveCredential = resolveEffectiveOAuthCredentialCore({
       store: params.store,
       profileId: params.profileId,
       credential: adoptedCredential,

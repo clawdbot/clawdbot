@@ -7,13 +7,17 @@
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { logWarn } from "../../../logger.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
-import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import {
   type DeliveryContext,
   normalizeDeliveryContext,
 } from "../../../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
+import {
+  getLatestSubagentRunByChildSessionKey,
+  hasDescendantRunAwaitingSettle,
+  listSubagentRunsForRequester,
+} from "../registry/subagent-registry-read.js";
 import type {
   RequesterSettleWakeState,
   SubagentRunRecord,
@@ -32,32 +36,6 @@ import {
   filterCurrentDirectChildCompletionRows,
 } from "./subagent-announce-output.js";
 import { hasUsableSessionEntry } from "./subagent-announce.js";
-
-const subagentRegistryRuntimeLoader = createLazyImportLoader(
-  () => import("../registry/subagent-registry-runtime.js"),
-);
-
-function loadSubagentRegistryRuntime() {
-  return subagentRegistryRuntimeLoader.load();
-}
-
-type RequesterSettleWakeDeps = {
-  loadSubagentRegistryRuntime: typeof loadSubagentRegistryRuntime;
-};
-
-const defaultRequesterSettleWakeDeps: RequesterSettleWakeDeps = {
-  loadSubagentRegistryRuntime,
-};
-
-let requesterSettleWakeDeps: RequesterSettleWakeDeps = defaultRequesterSettleWakeDeps;
-
-export const testing = {
-  setDepsForTest(overrides?: Partial<RequesterSettleWakeDeps>) {
-    requesterSettleWakeDeps = overrides
-      ? { ...defaultRequesterSettleWakeDeps, ...overrides }
-      : defaultRequesterSettleWakeDeps;
-  },
-};
 
 export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "retireAfterSettle">;
 
@@ -251,8 +229,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
     return false;
   }
 
-  const registryRuntime = await requesterSettleWakeDeps.loadSubagentRegistryRuntime();
-  const listedRuns = registryRuntime.listSubagentRunsForRequester(requesterSessionKey);
+  const listedRuns = listSubagentRunsForRequester(requesterSessionKey);
   const requesterRuns = Array.isArray(listedRuns) ? listedRuns : [];
   const currentSettledEntry =
     requesterRuns.find((entry) => entry.runId === params.settledEntry.runId) ?? params.settledEntry;
@@ -263,7 +240,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
     return false;
   }
   const requesterHasUnsettledDescendants = () =>
-    registryRuntime.hasDescendantRunAwaitingSettle(requesterSessionKey, currentSettledEntry.runId);
+    hasDescendantRunAwaitingSettle(requesterSessionKey, currentSettledEntry.runId);
 
   const frozenBatchRunIds = currentState.batchRunIds;
   const currentRearmGeneration = currentState.rearmGeneration;
@@ -356,8 +333,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
     dedupeLatestChildCompletionRows(
       filterCurrentDirectChildCompletionRows(settledBatch, {
         requesterSessionKey,
-        getLatestSubagentRunByChildSessionKey:
-          registryRuntime.getLatestSubagentRunByChildSessionKey,
+        getLatestSubagentRunByChildSessionKey,
       }),
     ),
   );

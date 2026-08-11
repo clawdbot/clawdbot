@@ -15,7 +15,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { SESSION_VIEWER_PRESENCE_MAX_KEYS } from "../../packages/gateway-protocol/src/schema/sessions-viewer-presence.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "../agents/subagents/registry/subagent-lifecycle-events.js";
-import { createSubagentRegistryLifecycleController } from "../agents/subagents/registry/subagent-registry-lifecycle.js";
+import { SubagentLifecycleController } from "../agents/subagents/registry/subagent-registry-lifecycle.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
@@ -646,7 +646,7 @@ describe("session.message websocket events", () => {
     });
 
     const emitSubagentProgressEndedForRun = vi.fn(async () => {});
-    const controller = createSubagentRegistryLifecycleController({
+    const controller = new SubagentLifecycleController({
       runs: new Map([[entry.runId, entry]]),
       resumedRuns: new Set(),
       subagentAnnounceTimeoutMs: 1_000,

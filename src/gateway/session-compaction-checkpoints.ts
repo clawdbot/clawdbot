@@ -24,8 +24,8 @@ import {
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import {
-  branchSqliteCompactionCheckpointSession,
-  restoreSqliteCompactionCheckpointSession,
+  branchCompactionCheckpointSession,
+  restoreCompactionCheckpointSession,
 } from "../config/sessions/session-accessor.sqlite-checkpoint.js";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
@@ -539,7 +539,7 @@ async function branchCheckpointSessionFromStoredBoundary(
   const legacySource = await prepareLegacyCheckpointSource(
     findCheckpoint(entry, params.checkpointId),
   );
-  return await branchSqliteCompactionCheckpointSession({
+  return await branchCompactionCheckpointSession({
     ...(params.agentId ? { agentId: params.agentId } : {}),
     storePath: params.storePath,
     sourceKey: params.sourceKey,
@@ -562,7 +562,7 @@ async function restoreCheckpointSessionFromStoredBoundary(
   const legacySource = await prepareLegacyCheckpointSource(
     findCheckpoint(entry, params.checkpointId),
   );
-  return await restoreSqliteCompactionCheckpointSession({
+  return await restoreCompactionCheckpointSession({
     ...(params.agentId ? { agentId: params.agentId } : {}),
     storePath: params.storePath,
     sessionKey: params.sessionKey,

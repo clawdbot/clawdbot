@@ -170,6 +170,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         ? html`<div
             class="agent-chat__input ${props.offline ? "agent-chat__input--offline" : ""}"
             @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}
+            ${ref(state.composerInputRef ?? undefined)}
           >
             ${props.offline
               ? html`<div class="agent-chat__offline-hint" role="status" aria-live="polite">

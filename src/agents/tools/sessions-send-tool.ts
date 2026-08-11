@@ -59,7 +59,7 @@ import {
   SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readNonNegativeIntegerParam, readStringParam } from "./common.js";
+import { jsonResult, readNonNegativeIntegerParam, readToolStringParam } from "./common.js";
 import {
   callAgentToolGatewayRequest,
   callInProcessGatewayToolWithCreation,
@@ -156,7 +156,7 @@ function normalizeSessionsSendArguments(args: unknown): Record<string, unknown> 
 
   if (typeof params.message !== "string" || !params.message.trim()) {
     for (const alias of SESSIONS_SEND_MESSAGE_ALIASES) {
-      const value = readStringParam(params, alias);
+      const value = readToolStringParam(params, alias);
       if (value) {
         params.message = stripFormattedReasoningMessage(value);
         break;
@@ -342,6 +342,8 @@ async function startAgentRun(params: {
   sessionKey: string;
   deliveryTimeoutMs?: number;
   allowActiveRunQueueDelivery?: boolean;
+  allowActiveRunQueueFallback?: boolean;
+  expectedSessionId?: string;
 }): Promise<
   | {
       ok: true;
@@ -357,6 +359,13 @@ async function startAgentRun(params: {
       params.allowActiveRunQueueDelivery && isRunScopedAgentSessionKey(params.sessionKey)
         ? resolveActiveEmbeddedRunSessionId(params.sessionKey)
         : undefined;
+    if (
+      activeRunSessionId &&
+      params.expectedSessionId &&
+      activeRunSessionId !== params.expectedSessionId
+    ) {
+      throw new Error("active run session incarnation changed");
+    }
     const messageText =
       typeof params.sendParams.message === "string" ? params.sendParams.message : undefined;
     if (activeRunSessionId && messageText) {
@@ -390,7 +399,11 @@ async function startAgentRun(params: {
         return { ok: true, runId: params.runId, activeRunQueue: true };
       }
       const fallbackSessionKey = resolveCronRunScopedFallbackSessionKey(params.sessionKey);
-      if (fallbackSessionKey && shouldFallbackCronRunScopedActiveDelivery(queueOutcome)) {
+      if (
+        params.allowActiveRunQueueFallback !== false &&
+        fallbackSessionKey &&
+        shouldFallbackCronRunScopedActiveDelivery(queueOutcome)
+      ) {
         const response = await params.callGateway<{ runId: string }>({
           method: "agent",
           params: {
@@ -442,6 +455,11 @@ export function createSessionsSendTool(opts?: {
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
+  /** Backend-derived target incarnation; never sourced from model arguments. */
+  expectedTargetSessionId?: string;
+  /** Backend-owned downstream operation id; never sourced from model arguments. */
+  idempotencyKey?: string;
+  signal?: AbortSignal;
 }): AnyAgentTool {
   return {
     label: "Session Send",
@@ -454,7 +472,7 @@ export function createSessionsSendTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = normalizeSessionsSendArguments(args);
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
-      const message = readStringParam(params, "message", { required: true });
+      const message = readToolStringParam(params, "message", { required: true });
       const timeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30;
       const { cfg, mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSessionToolContext(opts);
@@ -465,9 +483,9 @@ export function createSessionsSendTool(opts?: {
         sandboxed: opts?.sandboxed === true,
       });
 
-      const sessionKeyParam = readStringParam(params, "sessionKey");
-      const labelParam = normalizeOptionalString(readStringParam(params, "label"));
-      const labelAgentIdParam = normalizeOptionalString(readStringParam(params, "agentId"));
+      const sessionKeyParam = readToolStringParam(params, "sessionKey");
+      const labelParam = normalizeOptionalString(readToolStringParam(params, "label"));
+      const labelAgentIdParam = normalizeOptionalString(readToolStringParam(params, "agentId"));
 
       let sessionKey = sessionKeyParam;
       if (!sessionKey && !labelParam && labelAgentIdParam) {
@@ -708,7 +726,7 @@ export function createSessionsSendTool(opts?: {
           floorSeconds: true,
         }) ?? 0;
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
-      const idempotencyKey = crypto.randomUUID();
+      const idempotencyKey = opts?.idempotencyKey ?? crypto.randomUUID();
       let runId: string = idempotencyKey;
       // Fire-and-forget self-send remains a channel-delivery path. A synchronous
       // self-send would wait behind its own active session lane until timeout.
@@ -746,10 +764,12 @@ export function createSessionsSendTool(opts?: {
           sessionKey: unresolvedDisplayKey,
         });
       }
+      const expectedSessionId = opts?.expectedTargetSessionId ?? access.expectedSessionId;
 
       return await runWithScopedSessionAccess({
         cfg,
-        expectedSessionId: access.expectedSessionId,
+        expectedSessionId,
+        ...(opts?.signal ? { signal: opts.signal } : {}),
         targetSessionKey: resolvedKey,
         run: async () => {
           const ensuredSession = await ensureConfiguredAgentMainSession({
@@ -779,7 +799,7 @@ export function createSessionsSendTool(opts?: {
           const registerWatchIfRequested = (targetSessionKey: string) => {
             const watched =
               watchRequested &&
-              !access.expectedSessionId &&
+              !expectedSessionId &&
               replyRequesterSessionKey &&
               replyRequesterSessionKey !== targetSessionKey
                 ? registerSessionStateWatch({
@@ -887,7 +907,7 @@ export function createSessionsSendTool(opts?: {
           // A scoped grant belongs to one exact session incarnation. Do not create
           // post-return work or durable watches that could follow a reused key.
           const skipA2AFlow =
-            skipAcpA2AFlow || skipNativeParentA2AFlow || Boolean(access.expectedSessionId);
+            skipAcpA2AFlow || skipNativeParentA2AFlow || Boolean(expectedSessionId);
           // When the A2A flow is skipped, no follow-up announcement will fire and
           // the reply (when present) is returned inline via the `reply` field.
           // Reflect that in the metadata so the parent LLM does not wait for a
@@ -947,6 +967,11 @@ export function createSessionsSendTool(opts?: {
               sessionKey: displayKey,
               deliveryTimeoutMs: announceTimeoutMs,
               allowActiveRunQueueDelivery: true,
+              // An exact-incarnation grant authorizes only this target. Never
+              // reroute a worker-owned send to a durable Cron parent outside
+              // the scoped lifecycle admission or replace its stable key.
+              allowActiveRunQueueFallback: !expectedSessionId,
+              expectedSessionId,
             });
             if (!start.ok) {
               return start.result;

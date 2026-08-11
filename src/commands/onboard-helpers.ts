@@ -537,7 +537,5 @@ function summarizeError(err: unknown): string {
   return line.length > 120 ? `${truncateUtf16Safe(line, 119)}…` : line;
 }
 
-export const testing = { summarizeError };
-
 /** Default workspace path shown by onboarding prompts. */
 export const DEFAULT_WORKSPACE = DEFAULT_AGENT_WORKSPACE_DIR;

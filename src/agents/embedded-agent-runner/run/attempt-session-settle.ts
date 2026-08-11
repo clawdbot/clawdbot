@@ -91,7 +91,6 @@ type CleanupEmbeddedAttemptSessionInput = {
     timedOutDuringToolExecution: boolean;
     timedOutByRunBudget: boolean;
     promptError: unknown;
-    beforeAgentRunBlocked: boolean;
     beforeAgentRunBlockedBy?: string;
   };
 };
@@ -175,10 +174,11 @@ export async function cleanupEmbeddedAttemptSessionPhase(
 
   const finalState = input.readState();
   const cleanupFailure = cleanupError;
+  const beforeAgentRunBlocked = finalState.beforeAgentRunBlockedBy !== undefined;
   input.emitDiagnosticRunCompleted?.(
     cleanupFailure
       ? "error"
-      : finalState.beforeAgentRunBlocked
+      : beforeAgentRunBlocked
         ? "blocked"
         : finalState.promptError
           ? "error"
@@ -189,9 +189,7 @@ export async function cleanupEmbeddedAttemptSessionPhase(
             ? "aborted"
             : "completed",
     cleanupFailure ?? finalState.promptError,
-    finalState.beforeAgentRunBlocked
-      ? { blockedBy: finalState.beforeAgentRunBlockedBy ?? "before_agent_run" }
-      : undefined,
+    beforeAgentRunBlocked ? { blockedBy: finalState.beforeAgentRunBlockedBy } : undefined,
   );
 
   if (!cleanupFailure) {

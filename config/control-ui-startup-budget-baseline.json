@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 325675,
-  "reason": "fullscreen terminal route and toolbar open action (PR #121451); CI-measured QA-profile bytes",
-  "updatedAt": "2026-08-10"
+  "startupJsGzipBytes": 326657,
+  "reason": "chat header project lead-in (#121734); CI-measured merge-ref bytes",
+  "updatedAt": "2026-08-11"
 }

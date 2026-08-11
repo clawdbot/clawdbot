@@ -2108,6 +2108,42 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     },
   );
 
+  it("installs same-version worker session tool tables before runtime schema validation", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const shippedSchema = new DatabaseSync(databasePath);
+    try {
+      shippedSchema.exec(`
+        DROP TABLE worker_session_tool_operations;
+        DROP TABLE worker_turn_tool_authorities;
+      `);
+      expect(readSqliteNumberPragma(shippedSchema, "user_version")).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
+    } finally {
+      shippedSchema.close();
+    }
+
+    const reopened = openOpenClawStateDatabase({ env });
+    const tables = reopened.db
+      .prepare(
+        `SELECT name FROM sqlite_schema
+         WHERE type = 'table' AND name IN (?, ?)
+         ORDER BY name`,
+      )
+      .all("worker_session_tool_operations", "worker_turn_tool_authorities");
+    expect(tables).toEqual([
+      { name: "worker_session_tool_operations" },
+      { name: "worker_turn_tool_authorities" },
+    ]);
+    expect(() =>
+      assertOpenClawStateDatabaseForMaintenance(reopened.db, { pathname: reopened.path }),
+    ).not.toThrow();
+  });
+
   it("does not add Claw bootstrap columns before rejecting unrelated index corruption", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };

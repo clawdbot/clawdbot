@@ -21,7 +21,11 @@ import {
 } from "../../../tasks/runtime-internal.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import { ensureDeliveryState } from "../registry/subagent-delivery-state.js";
-import { ANNOUNCE_COMPLETION_HARD_EXPIRY_MS } from "../registry/subagent-registry-helpers.js";
+import {
+  ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
+  safeRemoveAttachmentsDir,
+} from "../registry/subagent-registry-helpers.js";
+import type { SubagentLifecycleController } from "../registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
@@ -35,6 +39,12 @@ const SUSPENDED_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const MAX_DELIVERY_GENERATION = 10;
 const CANONICAL_RESULT_PROMPT =
   "A completed subagent task is ready for parent review. The canonical result follows.";
+type CompletionDeliveryRecoveryResult = {
+  ok: boolean;
+  reason?: string;
+  task?: TaskRecord;
+  duplicateRisk?: boolean;
+};
 
 function resolveTask(entry: SubagentRunRecord): TaskRecord | undefined {
   return findTaskByRunId(entry.taskRunId ?? entry.runId);
@@ -236,12 +246,7 @@ export async function settleCorrelatedSubagentDelivery(
 export async function retrySubagentCompletionDelivery(
   taskId: string,
   databaseOptions?: OpenClawStateDatabaseOptions,
-): Promise<{
-  ok: boolean;
-  reason?: string;
-  task?: TaskRecord;
-  duplicateRisk?: boolean;
-}> {
+): Promise<CompletionDeliveryRecoveryResult> {
   const task = getTaskById(taskId);
   const current = task ? findSubagentForTask(task) : undefined;
   if (!task || !current || current.expectsCompletionMessage !== true) {
@@ -309,11 +314,13 @@ export async function retrySubagentCompletionDelivery(
   return { ok: true, task: getTaskById(taskId), duplicateRisk: true };
 }
 
-export function dismissSubagentCompletionDelivery(taskId: string): {
-  ok: boolean;
-  reason?: string;
-  task?: TaskRecord;
-} {
+export async function dismissSubagentCompletionDelivery(
+  taskId: string,
+  options: {
+    discardTerminalDelivery: typeof SubagentLifecycleController.discardTerminalDelivery;
+    databaseOptions?: OpenClawStateDatabaseOptions;
+  },
+): Promise<CompletionDeliveryRecoveryResult> {
   const task = getTaskById(taskId);
   const current = task ? findSubagentForTask(task) : undefined;
   if (!task || !current || current.delivery?.status !== "suspended") {
@@ -321,12 +328,6 @@ export function dismissSubagentCompletionDelivery(taskId: string): {
   }
   const now = Date.now();
   const subagent = structuredClone(current);
-  const delivery = ensureDeliveryState(subagent);
-  delivery.status = "discarded";
-  delivery.disposition = "intentional_non_delivery";
-  delivery.dismissedAt = now;
-  delivery.queueId = undefined;
-  delivery.nextAttemptAt = undefined;
   const projectedTask: TaskRecord = {
     ...task,
     deliveryStatus: "dismissed",
@@ -336,7 +337,15 @@ export function dismissSubagentCompletionDelivery(taskId: string): {
     cleanupAfter: Math.max(task.cleanupAfter ?? 0, now + SUSPENDED_RETENTION_MS),
     lastEventAt: now,
   };
-  settleSubagentCompletionDelivery({ subagent, task: projectedTask });
+  settleSubagentCompletionDelivery({
+    subagent,
+    task: projectedTask,
+    databaseOptions: options.databaseOptions,
+    mutateSubagent: (entry) => options.discardTerminalDelivery(entry, now),
+  });
   publishCommittedRecords(subagent, projectedTask);
+  if (subagent.cleanup === "delete" || !subagent.retainAttachmentsOnKeep) {
+    await safeRemoveAttachmentsDir(subagent);
+  }
   return { ok: true, task: getTaskById(taskId) };
 }

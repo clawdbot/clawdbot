@@ -27,7 +27,6 @@ import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
 import { createCliRuntimeCapture, getMockCallOutput } from "./test-runtime-capture.js";
-import { isOwningNpmCommand } from "./update-cli.test-helpers.js";
 
 const confirm = vi.fn();
 const select = vi.fn();
@@ -5365,6 +5364,9 @@ describe("update-cli", () => {
     const pkgRoot = path.join(brewRoot, "openclaw");
     const brewNpm = path.join(brewPrefix, "bin", "npm");
     const win32PrefixNpm = path.join(brewPrefix, "npm.cmd");
+    const owningNpmCommands = new Set([brewNpm, win32PrefixNpm].map(path.normalize));
+    const isOwningNpmCommand = (value: unknown) =>
+      typeof value === "string" && owningNpmCommands.has(path.normalize(value));
     const pathNpmRoot = createCaseDir("nvm-root");
     mockPackageInstallStatus(pkgRoot);
     pathExists.mockResolvedValue(false);
@@ -5376,7 +5378,7 @@ describe("update-cli", () => {
       if (argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
         return commandResult({ stdout: `${pathNpmRoot}\n` });
       }
-      if (isOwningNpmCommand(argv[0], brewPrefix) && argv[1] === "root" && argv[2] === "-g") {
+      if (isOwningNpmCommand(argv[0]) && argv[1] === "root" && argv[2] === "-g") {
         return commandResult({ stdout: `${brewRoot}\n` });
       }
       return commandResult();
@@ -5395,7 +5397,7 @@ describe("update-cli", () => {
       .mock.calls.find(
         ([argv]) =>
           Array.isArray(argv) &&
-          isOwningNpmCommand(argv[0], brewPrefix) &&
+          isOwningNpmCommand(argv[0]) &&
           argv[1] === "i" &&
           argv[2] === "-g" &&
           argv.includes("openclaw@9999.0.0"),

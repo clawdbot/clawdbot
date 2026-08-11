@@ -72,8 +72,7 @@ export function loadQaRuntimeModule(): QaRuntimeSurface {
   });
 }
 
-/** Check whether the bundled QA lab runtime surface is present without hiding other load errors. */
-export function isQaRuntimeAvailable(): boolean {
+function isQaRuntimeAvailableStrict(): boolean {
   try {
     loadQaRuntimeModule();
     return true;
@@ -84,6 +83,8 @@ export function isQaRuntimeAvailable(): boolean {
     throw error;
   }
 }
+
+export { isQaRuntimeAvailableStrict as isQaRuntimeAvailable };
 
 /** Docker command runner abstraction used by QA Docker helpers and tests. */
 export type QaDockerRunCommand = (

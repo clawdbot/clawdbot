@@ -10,6 +10,8 @@ import {
   type WorkerConnectParams,
   type WorkerLiveEventErrorDetails,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
+  WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
+  type WorkerSessionToolResult,
   type WorkerTranscriptCommitErrorReason,
   WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
 } from "../../../../packages/gateway-protocol/src/index.js";
@@ -23,6 +25,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
+import { createDeferred } from "../../../shared/deferred.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
 import { createGatewayWsTestSocket } from "../ws-connection.test-helpers.js";
 import type { GatewayWsClient } from "../ws-types.js";
@@ -36,6 +39,7 @@ const HANDSHAKE = {
     "worker-heartbeat-v1",
     WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
     WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
+    WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
     WORKER_INFERENCE_PROTOCOL_FEATURE,
   ],
 };
@@ -139,6 +143,7 @@ function attachHarness(
     identity?: WorkerConnectionIdentity;
     liveFailure?: WorkerLiveEventErrorDetails;
     onInferenceLaunch?: (sink: InferenceSink) => void;
+    onSessionTool?: (signal: AbortSignal | undefined) => Promise<WorkerSessionToolResult>;
     validationFailure?: ReturnType<WorkerConnectionService["validateWorkerConnection"]>;
   } = {},
 ) {
@@ -181,6 +186,12 @@ function attachHarness(
       ok: true as const,
       result: { status: "cancelled" as const },
     })),
+    executeSessionTool: vi.fn(async (_identity, _toolName, _request, signal) => ({
+      ok: true as const,
+      result: options.onSessionTool
+        ? await options.onSessionTool(signal)
+        : { resultJson: JSON.stringify({ content: [] }) },
+    })),
     validateWorkerConnection: vi.fn(() => options.validationFailure ?? null),
   };
   let client: GatewayWsClient | null = null;
@@ -212,6 +223,7 @@ function attachHarness(
   const send = (frame: unknown) => socket.emit("message", Buffer.from(JSON.stringify(frame)));
   return {
     client: () => client,
+    cleanup,
     close,
     logGateway,
     logWsControl,
@@ -332,6 +344,66 @@ describe("dedicated worker websocket protocol", () => {
       payload: { status: "cancelled" },
     });
     expect(harness.service.cancelInference).toHaveBeenCalledWith(ATTACHED_IDENTITY, INFERENCE_IDS);
+  });
+
+  it("keeps heartbeats flowing while a session operation is pending", async () => {
+    const operation = createDeferred<WorkerSessionToolResult>();
+    const harness = attachHarness({
+      identity: ATTACHED_IDENTITY,
+      onSessionTool: () => operation.promise,
+    });
+    await admit(harness);
+    harness.sendRequest(
+      "worker.sessions.spawn",
+      { toolCallId: "call-spawn", task: "run the child" },
+      "spawn-1",
+    );
+    await waitForWorkerProtocol(() =>
+      expect(harness.service.executeSessionTool).toHaveBeenCalledOnce(),
+    );
+
+    harness.sendRequest("worker.heartbeat", { sentAtMs: 1, status: "busy" }, "heartbeat-1");
+    await waitForWorkerProtocol(() => expect(harness.responses).toHaveLength(2));
+    expect(harness.responses[1]).toMatchObject({
+      id: "heartbeat-1",
+      ok: true,
+      payload: { status: "ok" },
+    });
+
+    operation.resolve({ resultJson: JSON.stringify({ content: [] }) });
+    await waitForWorkerProtocol(() => expect(harness.responses).toHaveLength(3));
+    expect(harness.responses[2]).toMatchObject({ id: "spawn-1", ok: true });
+  });
+
+  it("continues durable session work but suppresses its response after connection cleanup", async () => {
+    let operationStarted = false;
+    let operationSignal: AbortSignal | undefined;
+    const operation = createDeferred<WorkerSessionToolResult>();
+    const harness = attachHarness({
+      identity: ATTACHED_IDENTITY,
+      onSessionTool: (signal) => {
+        operationStarted = true;
+        operationSignal = signal;
+        return operation.promise;
+      },
+    });
+    await admit(harness);
+    harness.sendRequest(
+      "worker.sessions.send",
+      {
+        toolCallId: "call-send",
+        sessionKey: "agent:main:dashboard:child",
+        message: "status",
+      },
+      "send-1",
+    );
+    await waitForWorkerProtocol(() => expect(operationStarted).toBe(true));
+
+    harness.cleanup();
+    expect(operationSignal).toBeUndefined();
+    operation.resolve({ resultJson: JSON.stringify({ content: [] }) });
+    await Promise.resolve();
+    expect(harness.responses).toHaveLength(1);
   });
 
   it("dispatches semantic transcript commits on the closed worker allowlist", async () => {
@@ -502,6 +574,25 @@ describe("dedicated worker websocket protocol", () => {
 
     await waitForWorkerProtocol(() =>
       expect(harness.close).toHaveBeenCalledWith(1008, "credential-replaced"),
+    );
+  });
+
+  it("keeps an expired credential connected only while its durable turn remains valid", async () => {
+    const harness = attachHarness({
+      identity: { ...ATTACHED_IDENTITY, credentialExpiresAtMs: Date.now() + 20 },
+    });
+    await admit(harness);
+    vi.mocked(harness.service.validateWorkerConnection).mockClear();
+
+    await waitForWorkerProtocol(() =>
+      expect(harness.service.validateWorkerConnection).toHaveBeenCalled(),
+    );
+    expect(harness.close).not.toHaveBeenCalled();
+
+    vi.mocked(harness.service.validateWorkerConnection).mockReturnValue("credential-expired");
+    harness.sendRequest("worker.heartbeat", { sentAtMs: 1, status: "busy" });
+    await waitForWorkerProtocol(() =>
+      expect(harness.close).toHaveBeenCalledWith(1008, "credential-expired"),
     );
   });
 

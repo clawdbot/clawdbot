@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { listCoreGatewayMethodMetadata } from "./core-descriptors.js";
 
-const CURRENT_TRAIN_METHODS = [
+const TRAIN_2026_7_METHODS = [
   "question.request",
   "question.waitAnswer",
   "question.resolve",
@@ -80,6 +80,20 @@ const CURRENT_TRAIN_METHODS = [
   "tasks.dismiss",
 ] as const;
 
+const CURRENT_TRAIN_METHODS = [
+  "sessions.patchMany",
+  "update.hold",
+  "sessions.catalog.startTerminal",
+  "worker.desktop.observe",
+  "projects.list",
+  "projects.register",
+  "projects.remove",
+  "worker.desktop.launch",
+  "secrets.store.list",
+  "secrets.store.set",
+  "secrets.store.delete",
+] as const;
+
 describe("core gateway method release trains", () => {
   it("records a valid train for every method and dates the 2026.7 families", () => {
     const methods = listCoreGatewayMethodMetadata();
@@ -91,6 +105,12 @@ describe("core gateway method release trains", () => {
     expect(
       methods
         .filter((method) => method.since === "2026.7")
+        .map((method) => method.name)
+        .toSorted(),
+    ).toEqual(TRAIN_2026_7_METHODS.toSorted());
+    expect(
+      methods
+        .filter((method) => method.since === "2026.8")
         .map((method) => method.name)
         .toSorted(),
     ).toEqual(CURRENT_TRAIN_METHODS.toSorted());

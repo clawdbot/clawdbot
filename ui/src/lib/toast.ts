@@ -17,14 +17,28 @@ export type ToastOptions = {
 
 const DEFAULT_TOAST_DURATION_MS = 6_000;
 
+function activeModalToastLayer() {
+  return [...(document.openClawModalToastLayers ?? [])].findLast(
+    (candidate) => candidate.isConnected,
+  );
+}
+
 class OpenClawToastHost extends OpenClawLightDomContentsElement {
   @state() private toast: ToastOptions | null = null;
   private dismissTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 
   override disconnectedCallback() {
-    this.dismiss("disconnected");
+    const target = activeModalToastLayer() ?? document.querySelector(".shell");
+    if (!this.isConnected && this.parentElement?.localName === "openclaw-modal-dialog" && target) {
+      target.append(this);
+    } else {
+      this.dismiss("disconnected");
+    }
     super.disconnectedCallback();
   }
+
+  /** Keep the active outcome intact while moveBefore() crosses top-layer owners. */
+  connectedMoveCallback() {}
 
   show(options: ToastOptions) {
     this.dismiss("replaced");
@@ -88,6 +102,20 @@ export function showToast(options: ToastOptions): boolean {
   const host = document.querySelector<OpenClawToastHost>("openclaw-toast-host");
   if (!host) {
     return false;
+  }
+  const modal = activeModalToastLayer();
+  if (modal && host.parentElement !== modal) {
+    modal.moveBefore(host, null);
+    const handoff = (event: Event) => {
+      if (event.target !== modal) {
+        return;
+      }
+      modal.removeEventListener("wa-after-hide", handoff);
+      queueMicrotask(() =>
+        (activeModalToastLayer() ?? document.querySelector(".shell"))?.moveBefore(host, null),
+      );
+    };
+    modal.addEventListener("wa-after-hide", handoff);
   }
   host.show(options);
   return true;

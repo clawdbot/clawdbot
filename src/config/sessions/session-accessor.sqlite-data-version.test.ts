@@ -18,7 +18,7 @@ import {
   openSessionEntryReadView,
   upsertSessionEntry,
 } from "./session-accessor.js";
-import { readSqliteSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
+import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 
 const parseSessionEntryCalls = vi.hoisted(() => vi.fn());
@@ -53,11 +53,9 @@ vi.mock("./session-accessor.sqlite-status.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-accessor.sqlite-status.js")>();
   return {
     ...actual,
-    parseSqliteSessionEntryJson: (
-      row: Parameters<typeof actual.parseSqliteSessionEntryJson>[0],
-    ) => {
+    parseSessionEntryJson: (row: Parameters<typeof actual.parseSessionEntryJson>[0]) => {
       parseSessionEntryCalls();
-      const entry = actual.parseSqliteSessionEntryJson(row);
+      const entry = actual.parseSessionEntryJson(row);
       if (entry?.label?.startsWith("projection-probe")) {
         Object.defineProperty(entry, "__projectionProbe", {
           configurable: true,
@@ -232,7 +230,7 @@ describe("SQLite session entry cache", () => {
 
     try {
       parseSessionEntryCalls.mockClear();
-      const alternateSnapshot = readSqliteSessionEntryCache(
+      const alternateSnapshot = readSessionEntryCache(
         { agentId: primary.agentId, db: alternate },
         { cache: true },
       );
@@ -247,7 +245,7 @@ describe("SQLite session entry cache", () => {
       expect(parseSessionEntryCalls).not.toHaveBeenCalled();
 
       parseSessionEntryCalls.mockClear();
-      const alternateAgain = readSqliteSessionEntryCache(
+      const alternateAgain = readSessionEntryCache(
         { agentId: primary.agentId, db: alternate },
         { cache: true },
       );
@@ -632,7 +630,7 @@ describe("SQLite session entry cache", () => {
     const scope = createSessionScope("placeholder-key");
     await upsertSessionEntry(scope, { sessionId: "entry", updatedAt: 1 });
     const database = openOpenClawAgentDatabase(scope);
-    const before = readSqliteSessionEntryCache(database, { cache: true });
+    const before = readSessionEntryCache(database, { cache: true });
     expect(before.keys).toEqual([scope.sessionKey]);
 
     const placeholderKey = "agent:main:placeholder-only";
@@ -649,7 +647,7 @@ describe("SQLite session entry cache", () => {
       );
     }, scope);
 
-    const after = readSqliteSessionEntryCache(database, { cache: true });
+    const after = readSessionEntryCache(database, { cache: true });
     expect(after.keys).toEqual([scope.sessionKey, placeholderKey]);
     expect(after.entries.get(scope.sessionKey)).not.toBe(before.entries.get(scope.sessionKey));
   });

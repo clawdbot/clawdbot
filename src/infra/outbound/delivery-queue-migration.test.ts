@@ -329,6 +329,7 @@ describe("outbound prepared queue migration", () => {
     expect(hookMocks.runMessageSending).not.toHaveBeenCalled();
     expect(completionMocks.failDurableDelivery).toHaveBeenCalledWith(
       interrupted.deliveryCompletion,
+      tmpDir(),
     );
     expect(getDeliveryQueueEntryStatus(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir())).toBe(
       "failed",

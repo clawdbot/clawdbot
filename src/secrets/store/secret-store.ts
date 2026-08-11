@@ -38,7 +38,10 @@ type SecretStoreReadError =
   | { code: "SECRET_STORE_INVALID_NAME"; message: string }
   | { code: "SECRET_STORE_UNAVAILABLE"; message: string; cause: unknown };
 
-type SecretStoreValidationCode = "SECRET_STORE_INVALID_NAME" | "SECRET_STORE_VALUE_TOO_LARGE";
+type SecretStoreValidationCode =
+  | "SECRET_STORE_INVALID_NAME"
+  | "SECRET_STORE_VALUE_TOO_LARGE"
+  | "SECRET_STORE_VALUE_EMPTY";
 
 export class SecretStoreValidationError extends Error {
   constructor(
@@ -66,12 +69,22 @@ function assertSecretStoreName(name: string): void {
   }
 }
 
-function assertSecretStoreValue(value: string): void {
+function assertSecretStoreValue(value: string, kind: SecretStoreKind): void {
   const bytes = Buffer.byteLength(value, "utf8");
   if (bytes > SECRET_STORE_VALUE_MAX_BYTES) {
     throw new SecretStoreValidationError(
       "SECRET_STORE_VALUE_TOO_LARGE",
       `Secret store value exceeds ${SECRET_STORE_VALUE_MAX_BYTES} UTF-8 bytes.`,
+    );
+  }
+  // An empty credential is never meaningful and cannot be diagnosed later: `get`
+  // refuses secret kinds and listings mask them, so a silently-empty secret (a
+  // failed `op read |` pipe, for example) would surface only as a confusing 401.
+  // Env entries may legitimately be empty.
+  if (kind === "secret" && value.length === 0) {
+    throw new SecretStoreValidationError(
+      "SECRET_STORE_VALUE_EMPTY",
+      "Secret store value is empty. Secret entries require a value; check the command that produced it.",
     );
   }
 }
@@ -188,7 +201,7 @@ export function writeSecretStoreEntry(params: {
   database?: OpenClawStateDatabaseOptions;
 }): void {
   assertSecretStoreName(params.name);
-  assertSecretStoreValue(params.value);
+  assertSecretStoreValue(params.value, params.kind);
   const { scopeKind, scopeId } = normalizeScope(params.scope);
   const now = Date.now();
   runOpenClawStateWriteTransaction(

@@ -98,6 +98,17 @@ export function formatToolDetail(display: ToolDisplay): string | undefined {
   return formatToolDetailText(detailRaw);
 }
 
+/** Infers compact display metadata for a tool invocation from its arguments. */
+export function inferToolMetaFromArgsCore(
+  toolName: string,
+  args: unknown,
+  options?: { detailMode?: ToolDetailMode },
+): string | undefined {
+  return formatToolDetail(
+    resolveToolDisplay({ name: toolName, args, detailMode: options?.detailMode }),
+  );
+}
+
 /**
  * Shell-family tools render their command as the whole line instead of
  * "Label: detail". Backends spell the same tool differently — the Claude CLI

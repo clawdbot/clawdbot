@@ -377,12 +377,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       this.sessionData.sessionCatalogs.find((catalog) => catalog.id === catalogId)?.label ??
       catalogId;
     setStoredSessionCatalogHidden(catalogId, true);
-    // On a phone this menu was opened inside the navigation drawer, which is a modal
-    // dialog: a toast raised behind it is occluded and inert, so the operator would get
-    // the same silent hide this repair exists to remove. Hand the drawer back first —
-    // the section is already gone from it, and the outcome belongs on the main surface.
-    // No-op wherever the drawer is not open.
-    this.onCloseNavDrawer?.();
     // Reuse the settings-search destination for the Sidebar preferences block so the
     // toast opens the same place the rest of the app calls "Appearance > Sidebar".
     const recovery = SETTINGS_SEARCH_TARGETS.appearanceSidebar;

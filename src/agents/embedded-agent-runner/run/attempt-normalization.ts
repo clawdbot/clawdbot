@@ -246,6 +246,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
         cfg: params.config,
         sessionKey: runInput.resolvedSessionKey ?? params.sessionId,
         provider: activeErrorContext.provider,
+        providerOwner: runtime.providerRuntimeHandle?.plugin,
         model: activeErrorContext.model,
         authMode: runtime.lastProfileId
           ? preparedRuntime.attemptAuthProfileStore.profiles?.[runtime.lastProfileId]?.type

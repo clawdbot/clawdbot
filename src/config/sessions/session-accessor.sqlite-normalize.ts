@@ -10,17 +10,17 @@ export function createFallbackSessionEntry(patch: Partial<SessionEntry>): Sessio
   };
 }
 
-export function normalizeSqliteText(value: unknown): string | null {
+export function normalizeText(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-export function normalizeSqliteChatType(value: unknown): "direct" | "group" | "channel" | null {
+export function normalizeSessionRowChatType(value: unknown): "direct" | "group" | "channel" | null {
   if (value === "direct" || value === "group" || value === "channel") {
     return value;
   }
   return null;
 }
 
-export function normalizeSqliteNumber(value: number | bigint): number {
+export function coerceSqliteNumber(value: number | bigint): number {
   return typeof value === "bigint" ? Number(value) : value;
 }

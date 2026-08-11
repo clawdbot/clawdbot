@@ -11,13 +11,12 @@ import { addEnvBackedAgentCredentials } from "../agent-auth-discovery-core.js";
 import { overlayExternalAuthProfiles } from "./external-auth.js";
 import { testing } from "./external-auth.test-support.js";
 import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
-import { registerRuntimeAuthProfileStoreMutationListener } from "./runtime-snapshots.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
-  ensureAuthProfileStore,
-  getRuntimeAuthProfileStoreSnapshot,
+  registerRuntimeAuthProfileStoreMutationListener,
   replaceRuntimeAuthProfileStoreSnapshots,
-} from "./store.js";
+} from "./runtime-snapshots.js";
+import { ensureAuthProfileStore, getRuntimeAuthProfileStoreSnapshot } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 const resolveExternalAuthProfilesWithPluginsMock = vi.fn<

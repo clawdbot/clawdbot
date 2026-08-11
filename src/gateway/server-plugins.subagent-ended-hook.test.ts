@@ -9,12 +9,29 @@ import type { GatewayRequestContext, GatewayRequestOptions } from "./server-meth
 type HandleGatewayRequestOptions = GatewayRequestOptions & {
   extraHandlers?: Record<string, unknown>;
 };
+type InternalAgentTurnFacadeOptions = {
+  client: NonNullable<GatewayRequestOptions["client"]>;
+};
 const handleGatewayRequest = vi.hoisted(() =>
   vi.fn(async (_opts: HandleGatewayRequestOptions) => {}),
 );
+const internalAgentTurnFacade = vi.hoisted(() => ({
+  create: vi.fn(),
+  dispatch: vi.fn(),
+  wait: vi.fn(),
+}));
 
 vi.mock("./server-methods.js", () => ({
   handleGatewayRequest,
+}));
+vi.mock("./agent-turn/internal-facade.runtime.js", () => ({
+  createInternalAgentTurnFacade: (options: InternalAgentTurnFacadeOptions) => {
+    internalAgentTurnFacade.create(options);
+    return {
+      dispatch: internalAgentTurnFacade.dispatch,
+      wait: internalAgentTurnFacade.wait,
+    };
+  },
 }));
 
 type ServerPluginsModule = typeof import("./server-plugins.js");
@@ -47,27 +64,29 @@ async function loadSubagentRequesterContext(): Promise<SubagentRequesterContextM
   return await import("../plugins/runtime/subagent-requester-context.js");
 }
 
-function lastGatewayRequest(): HandleGatewayRequestOptions {
-  const call = handleGatewayRequest.mock.calls.at(-1)?.[0];
-  if (!call) {
-    throw new Error("expected handleGatewayRequest call");
+function lastAgentTurnRequest(): {
+  client: NonNullable<GatewayRequestOptions["client"]>;
+  params: Record<string, unknown>;
+} {
+  const params = internalAgentTurnFacade.dispatch.mock.calls.at(-1)?.[0] as
+    | Record<string, unknown>
+    | undefined;
+  const options = internalAgentTurnFacade.create.mock.calls.at(-1)?.[0] as
+    | InternalAgentTurnFacadeOptions
+    | undefined;
+  if (!params || !options) {
+    throw new Error("expected internal agent turn dispatch");
   }
-  return call;
+  return { client: options.client, params };
 }
 
 beforeEach(() => {
+  internalAgentTurnFacade.create.mockReset();
+  internalAgentTurnFacade.dispatch.mockReset().mockResolvedValue({ runId: "plugin-run-1" });
+  internalAgentTurnFacade.wait.mockReset().mockResolvedValue({ status: "ok" });
   handleGatewayRequest.mockReset();
   handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
-    switch (opts.req.method) {
-      case "agent":
-        opts.respond(true, { runId: "plugin-run-1" });
-        return;
-      case "agent.wait":
-        opts.respond(true, { status: "ok" });
-        return;
-      default:
-        opts.respond(true, {});
-    }
+    opts.respond(true, {});
   });
 });
 
@@ -103,11 +122,10 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
     );
 
     expect(result.runId).toBe("plugin-run-1");
-    const request = lastGatewayRequest();
-    expect(request.req.method).toBe("agent");
-    expect(request.client?.internal?.agentRunTracking).toBe("plugin_subagent");
-    expect(request.client?.internal?.pluginRuntimeOwnerId).toBeUndefined();
-    expect(request.client?.internal?.pluginSubagentRequester).toBeUndefined();
+    const request = lastAgentTurnRequest();
+    expect(request.client.internal?.agentRunTracking).toBe("plugin_subagent");
+    expect(request.client.internal?.pluginRuntimeOwnerId).toBeUndefined();
+    expect(request.client.internal?.pluginSubagentRequester).toBeUndefined();
   });
 
   test("attaches only host-owned requester lineage for explicit completion delivery", async () => {
@@ -145,14 +163,14 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
       } as Parameters<typeof runtime.run>[0] & Record<string, unknown>);
     });
 
-    const request = lastGatewayRequest();
-    expect(request.req.params).not.toHaveProperty("requesterSessionKey");
-    expect(request.req.params).not.toHaveProperty("expectsCompletionMessage");
-    expect(request.req.params).not.toHaveProperty("approvalGrant");
-    expect(request.req.params).not.toHaveProperty("inputProvenance");
-    expect(request.req.params).not.toHaveProperty("channel");
-    expect(request.req.params).not.toHaveProperty("to");
-    expect(request.client?.internal?.pluginSubagentRequester).toEqual({
+    const request = lastAgentTurnRequest();
+    expect(request.params).not.toHaveProperty("requesterSessionKey");
+    expect(request.params).not.toHaveProperty("expectsCompletionMessage");
+    expect(request.params).not.toHaveProperty("approvalGrant");
+    expect(request.params).not.toHaveProperty("inputProvenance");
+    expect(request.params).not.toHaveProperty("channel");
+    expect(request.params).not.toHaveProperty("to");
+    expect(request.client.internal?.pluginSubagentRequester).toEqual({
       sessionKey: "agent:main:telegram:direct:123",
       origin: {
         channel: "telegram",
@@ -179,7 +197,7 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
       }),
     ).rejects.toThrow(/requester-bound plugin hook invocation/);
 
-    expect(handleGatewayRequest).not.toHaveBeenCalled();
+    expect(internalAgentTurnFacade.dispatch).not.toHaveBeenCalled();
   });
 
   test("rejects unsupported runtime completion destinations", async () => {
@@ -198,7 +216,7 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
       } as unknown as Parameters<typeof runtime.run>[0]),
     ).rejects.toThrow(/Unsupported plugin subagent completionDelivery/);
 
-    expect(handleGatewayRequest).not.toHaveBeenCalled();
+    expect(internalAgentTurnFacade.dispatch).not.toHaveBeenCalled();
   });
 
   test("preserves plugin identity on the tracked Gateway agent request", async () => {
@@ -220,10 +238,9 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
       }),
     );
 
-    const request = lastGatewayRequest();
-    expect(request.req.method).toBe("agent");
-    expect(request.client?.internal?.agentRunTracking).toBe("plugin_subagent");
-    expect(request.client?.internal?.pluginRuntimeOwnerId).toBe("memory-core");
+    const request = lastAgentTurnRequest();
+    expect(request.client.internal?.agentRunTracking).toBe("plugin_subagent");
+    expect(request.client.internal?.pluginRuntimeOwnerId).toBe("memory-core");
   });
 
   test("does not dispatch when no runtime config is available", async () => {
@@ -238,7 +255,7 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
       }),
     ).rejects.toThrow(/gateway request scope/);
 
-    expect(handleGatewayRequest).not.toHaveBeenCalled();
+    expect(internalAgentTurnFacade.dispatch).not.toHaveBeenCalled();
   });
 
   test("preserves the child session so the transcript stays readable until the plugin deletes it", async () => {
@@ -253,16 +270,11 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
     const sessionStore = new Map<string, { messages: unknown[] }>([
       ["agent:main:subagent:plugin-readback", { messages: transcript }],
     ]);
+    internalAgentTurnFacade.dispatch.mockResolvedValue({ runId: "plugin-run-readback" });
 
     handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
       const req = opts.req as { method: string; params?: { key?: string } };
       switch (req.method) {
-        case "agent":
-          opts.respond(true, { runId: "plugin-run-readback" });
-          return;
-        case "agent.wait":
-          opts.respond(true, { status: "ok" });
-          return;
         case "sessions.get": {
           const key = req.params?.key ?? "";
           const stored = sessionStore.get(key);
@@ -318,15 +330,7 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
     const runtime = serverPlugins.createGatewaySubagentRuntime();
     serverPlugins.setFallbackGatewayContext(createTestContext("plugin-wait", createTestCfg()));
 
-    handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
-      switch (opts.req.method) {
-        case "agent.wait":
-          opts.respond(true, { status: "completed" });
-          return;
-        default:
-          opts.respond(true, {});
-      }
-    });
+    internalAgentTurnFacade.wait.mockResolvedValue({ status: "completed" });
 
     await expect(runtime.waitForRun({ runId: "plugin-run-completed" })).resolves.toEqual({
       status: "ok",
@@ -340,15 +344,7 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
       createTestContext("plugin-wait-error", createTestCfg()),
     );
 
-    handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
-      switch (opts.req.method) {
-        case "agent.wait":
-          opts.respond(true, { status: "error", error: "completed" });
-          return;
-        default:
-          opts.respond(true, {});
-      }
-    });
+    internalAgentTurnFacade.wait.mockResolvedValue({ status: "error", error: "completed" });
 
     await expect(runtime.waitForRun({ runId: "plugin-run-error-completed" })).resolves.toEqual({
       status: "ok",

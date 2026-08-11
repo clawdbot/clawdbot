@@ -19,7 +19,7 @@ import {
 } from "../subagents/registry/subagent-control.js";
 import { buildSubagentList } from "../subagents/registry/subagent-list.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readPositiveIntegerParam, readStringParam } from "./common.js";
+import { jsonResult, readPositiveIntegerParam, readToolStringParam } from "./common.js";
 
 const SUBAGENT_ACTIONS = ["list", "cancel"] as const;
 type SubagentAction = (typeof SUBAGENT_ACTIONS)[number];
@@ -104,7 +104,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
     parameters: SubagentsToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const action = (readStringParam(params, "action") ?? "list") as SubagentAction;
+      const action = (readToolStringParam(params, "action") ?? "list") as SubagentAction;
       const cfg = opts.config ?? getRuntimeConfig();
       const recentMinutesRaw = readPositiveIntegerParam(params, "recentMinutes");
       const recentMinutes =
@@ -154,7 +154,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
       }
 
       if (action === "cancel") {
-        const taskId = readStringParam(params, "taskId", { required: true });
+        const taskId = readToolStringParam(params, "taskId", { required: true });
         const target = treeTasks.find((task) => task.taskId === taskId);
         if (!target) {
           return jsonResult({ status: "forbidden", error: "Task outside session tree." });

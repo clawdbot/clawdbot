@@ -585,7 +585,7 @@ export function renderChat(props: ChatProps) {
           resolveAsciiShortcutKey(event) === "f"
         ) {
           event.preventDefault();
-          toggleChatThreadSearch(props.paneId, requestUpdate);
+          toggleChatThreadSearch(props.paneId, requestUpdate, event);
         }
       }}
     >

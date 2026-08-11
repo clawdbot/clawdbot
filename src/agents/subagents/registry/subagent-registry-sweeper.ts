@@ -9,7 +9,10 @@ import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { reconcileOrphanedRun, safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
-import type { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
+import type {
+  SubagentLifecycleController,
+  SubagentLifecycleOptions,
+} from "./subagent-registry-lifecycle.js";
 import { createInterruptedRecoveryCoordinator } from "./subagent-registry-restart-recovery-coordinator.js";
 import { isRestoredQueuedFailureSettlementClaimed } from "./subagent-registry-restore.js";
 import type { createSubagentRunManager } from "./subagent-registry-run-manager.js";
@@ -45,9 +48,6 @@ const restartRecoveryLoader = createLazyImportLoader(
   () => import("./subagent-registry-restart-recovery.js"),
 );
 const killRuntimeLoader = createLazyImportLoader(() => import("./subagent-control.runtime.js"));
-
-type LifecycleController = ReturnType<typeof createSubagentRegistryLifecycleController>;
-type LifecycleOptions = Parameters<typeof createSubagentRegistryLifecycleController>[0];
 
 export function createSubagentRegistrySweeper(params: {
   runs: Map<string, SubagentRunRecord>;
@@ -91,11 +91,12 @@ export function createSubagentRegistrySweeper(params: {
   finalizeInterruptedSubagentRun: ReturnType<
     typeof createSubagentRegistryCompletionRuntime
   >["finalizeInterruptedSubagentRun"];
-  resumeRequesterSettleWake: LifecycleController["resumeRequesterSettleWake"];
-  startSubagentAnnounceCleanupFlow: LifecycleController["startSubagentAnnounceCleanupFlow"];
-  completeCleanupBookkeeping: LifecycleController["completeCleanupBookkeeping"];
-  shouldEmitEndedHookForRun: LifecycleOptions["shouldEmitEndedHookForRun"];
-  emitSubagentEndedHookForRun: LifecycleOptions["emitSubagentEndedHookForRun"];
+  resumeRequesterSettleWake: SubagentLifecycleController["resumeRequesterSettleWake"];
+  startSubagentAnnounceCleanupFlow: SubagentLifecycleController["startSubagentAnnounceCleanupFlow"];
+  completeCleanupBookkeeping: SubagentLifecycleController["completeCleanupBookkeeping"];
+  discardTerminalDelivery: typeof SubagentLifecycleController.discardTerminalDelivery;
+  shouldEmitEndedHookForRun: SubagentLifecycleOptions["shouldEmitEndedHookForRun"];
+  emitSubagentEndedHookForRun: SubagentLifecycleOptions["emitSubagentEndedHookForRun"];
   callGateway: typeof callGateway;
   cleanupCollectorLaunchResources: (entry: SubagentRunRecord) => Promise<boolean>;
   runContextEngineSubagentEnded: (params: ContextEngineSubagentEndedParams) => Promise<void>;
@@ -306,6 +307,7 @@ export function createSubagentRegistrySweeper(params: {
               resumedRuns,
               clearPendingLifecycleError: params.clearPendingLifecycleError,
               clearPendingLifecycleTimeout: params.clearPendingLifecycleTimeout,
+              discardTerminalDelivery: params.discardTerminalDelivery,
               completeCleanupBookkeeping: params.completeCleanupBookkeeping,
               shouldEmitEndedHookForRun: params.shouldEmitEndedHookForRun,
               emitSubagentEndedHookForRun: params.emitSubagentEndedHookForRun,

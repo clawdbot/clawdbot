@@ -202,6 +202,33 @@ describe("session transcript reader facade", () => {
     });
   });
 
+  test("preserves Date.parse semantics for numeric-looking record timestamps", async () => {
+    const scope = await writeTranscript("reader-numeric-looking-timestamps", [
+      { type: "session", version: 3, id: "reader-numeric-looking-timestamps" },
+      {
+        type: "message",
+        id: "numeric-zero",
+        parentId: null,
+        timestamp: "0",
+        message: { role: "user", content: "zero" },
+      },
+      {
+        type: "message",
+        id: "numeric-year",
+        parentId: "numeric-zero",
+        timestamp: "2026",
+        message: { role: "assistant", content: "year" },
+      },
+    ]);
+
+    await expect(
+      readSessionMessagesAsync(scope, { mode: "full", reason: "timestamp contract test" }),
+    ).resolves.toMatchObject([
+      { __openclaw: { recordTimestampMs: Date.parse("0") } },
+      { __openclaw: { recordTimestampMs: Date.parse("2026") } },
+    ]);
+  });
+
   test("finds an anchored reset-archive message by historical session id", async () => {
     const sessionId = "reader-file-archive-anchor";
     const scope = await writeTranscript(sessionId, [
