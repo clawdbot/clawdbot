@@ -371,6 +371,21 @@ function readFirstStringParam(params: Record<string, unknown>, keys: readonly st
   return "";
 }
 
+// Media source keys accepted by the outbound send contract, including the
+// snake_case aliases some models emit into tool arguments.
+const SEND_MEDIA_SOURCE_KEYS = [
+  "media",
+  "mediaUrl",
+  "media_url",
+  "path",
+  "filePath",
+  "file_path",
+  "fileUrl",
+  "file_url",
+  "image",
+  "image_url",
+] as const;
+
 function readStructuredAttachmentMediaParams(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -381,7 +396,7 @@ function readStructuredAttachmentMediaParams(value: unknown): string[] {
       continue;
     }
     const record = attachment as Record<string, unknown>;
-    for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl", "url"]) {
+    for (const key of [...SEND_MEDIA_SOURCE_KEYS, "url"]) {
       const candidate = readToolStringParam(record, key);
       if (candidate) {
         values.push(candidate);
@@ -398,17 +413,24 @@ export function hasSanitizedSendPayloadContent(params: Record<string, unknown>):
     .join("\n");
   const mediaUrls = [
     ...(readStringArrayParam(params, "mediaUrls") ?? []),
+    ...(readStringArrayParam(params, "media_urls") ?? []),
     ...readStructuredAttachmentMediaParams(params.attachments),
   ];
   return hasReplyPayloadContent(
     {
       text,
-      mediaUrl: readFirstStringParam(params, ["media", "mediaUrl", "path", "filePath", "fileUrl"]),
+      mediaUrl: readFirstStringParam(params, SEND_MEDIA_SOURCE_KEYS),
       mediaUrls,
       presentation: params.presentation,
       interactive: params.interactive,
+      channelData: params.channelData,
+      location: params.location,
     },
-    { trimText: true },
+    {
+      trimText: true,
+      extraContent:
+        Boolean(readToolStringParam(params, "buffer", { trim: false })) || params.location != null,
+    },
   );
 }
 

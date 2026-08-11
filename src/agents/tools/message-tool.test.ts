@@ -4752,6 +4752,60 @@ describe("message tool internal-runtime-context sanitization", () => {
     expect(call?.action).toBe("broadcast");
   });
 
+  it("keeps a heartbeat-captioned raw buffer send dispatching", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const call = await executeSend({
+      action: {
+        action: "send",
+        channel: "telegram",
+        target: "telegram:123",
+        caption: "HEARTBEAT_OK",
+        buffer: "aGVsbG8=",
+      },
+    });
+
+    expect(call).toBeDefined();
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
+    expect(call?.params?.caption ?? call?.params?.text).not.toContain("HEARTBEAT_OK");
+  });
+
+  it("keeps a heartbeat-captioned location send dispatching", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const call = await executeSend({
+      action: {
+        action: "send",
+        channel: "telegram",
+        target: "telegram:123",
+        caption: "HEARTBEAT_OK",
+        location: { latitude: 31.23, longitude: 121.47 },
+      },
+    });
+
+    expect(call).toBeDefined();
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
+    expect(call?.params?.caption ?? call?.params?.text).not.toContain("HEARTBEAT_OK");
+  });
+
+  it("keeps a heartbeat-captioned snake_case media send dispatching", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const call = await executeSend({
+      action: {
+        action: "send",
+        channel: "telegram",
+        target: "telegram:123",
+        caption: "HEARTBEAT_OK",
+        media_url: "media://inbound/photo.jpg",
+      },
+    });
+
+    expect(call).toBeDefined();
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
+    expect(call?.params?.caption ?? call?.params?.text).not.toContain("HEARTBEAT_OK");
+  });
+
   it("suppresses a heartbeat-only reply", async () => {
     const { call, result } = await executeSendWithResult({
       action: {
