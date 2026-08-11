@@ -215,7 +215,7 @@ async function expectListedGlobalSessionActiveRun(params: {
     extra: { loadGatewayModelCatalog: vi.fn().mockResolvedValue([]) },
   });
   listSessionsFromStoreAsyncMock.mockResolvedValue({
-    sessions: [{ key: "global", hasActiveRun: false }],
+    sessions: [{ key: "global", agentId: params.agentId, hasActiveRun: false }],
   });
   const respond = await callSessions(
     "sessions.list",
@@ -327,6 +327,7 @@ describe("sessions.abort agent scope", () => {
     expectChatAbortParams({
       sessionKey: "agent:work:dashboard:worker",
       runId: "run-worker",
+      agentId: "work",
     });
     expect(context.dedupe?.size).toBe(0);
   });
@@ -455,6 +456,7 @@ describe("sessions.abort agent scope", () => {
         }),
         new Set(["conn-1"]),
         {
+          agentId: "main",
           dropIfSlow: true,
           sessionKeys: ["agent:main:openclaw-weixin:direct:wechat-user"],
         },
@@ -801,7 +803,7 @@ describe("sessions.abort agent scope", () => {
     await callSessions("sessions.abort", { runId: "run-work" }, { context, reqId: "req-3" });
 
     expect(resolveSessionKeyForRunMock).not.toHaveBeenCalled();
-    expectChatAbortParams({ sessionKey: "main", runId: "run-work" });
+    expectChatAbortParams({ sessionKey: "main", runId: "run-work", agentId: "work" });
   });
 
   it("rejects key-based aborts when key agent does not match agentId", async () => {
@@ -893,7 +895,11 @@ describe("sessions.abort agent scope", () => {
       { context, reqId: "req-5" },
     );
 
-    expectChatAbortParams({ sessionKey: "agent:work:main", runId: undefined });
+    expectChatAbortParams({
+      sessionKey: "agent:work:main",
+      runId: undefined,
+      agentId: "work",
+    });
   });
 
   it("does not use a raw legacy key alias that belongs to another agent", async () => {
@@ -906,7 +912,11 @@ describe("sessions.abort agent scope", () => {
       { context, reqId: "req-6" },
     );
 
-    expectChatAbortParams({ sessionKey: "agent:work:main", runId: undefined });
+    expectChatAbortParams({
+      sessionKey: "agent:work:main",
+      runId: undefined,
+      agentId: "work",
+    });
   });
 
   it("keeps the raw legacy key alias when it belongs to the requested agent", async () => {
@@ -922,6 +932,6 @@ describe("sessions.abort agent scope", () => {
       { context, reqId: "req-7" },
     );
 
-    expectChatAbortParams({ sessionKey: "main", runId: undefined });
+    expectChatAbortParams({ sessionKey: "main", runId: undefined, agentId: "work" });
   });
 });

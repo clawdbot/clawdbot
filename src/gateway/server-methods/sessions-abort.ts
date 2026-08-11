@@ -163,12 +163,10 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     const activeRunAgentId = normalizeOptionalString(activeRun?.agentId);
     let inferredRunAgentId =
       requestedParamAgentId ??
+      activeRunAgentId ??
       requestedKeyAgentId ??
       workerRunTarget?.agentId ??
-      activeRunAgentId ??
-      (activeRunSessionKey
-        ? tryResolveSessionCompatibilityOwnerAgentId(cfg, activeRunSessionKey)
-        : undefined);
+      resolveSessionKeyAgentId(activeRunSessionKey, cfg);
     if (requestedRunId && !inferredRunAgentId) {
       const runOwner = resolveRequestedGlobalAgentId(
         cfg,

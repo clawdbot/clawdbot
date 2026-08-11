@@ -189,7 +189,11 @@ describe("session observer", () => {
       "session.observer",
       expect.objectContaining({ agentId: "ops", sessionKey: "global" }),
       new Set(["conn-scoped", "conn-global"]),
-      { dropIfSlow: true },
+      expect.objectContaining({
+        agentId: "ops",
+        dropIfSlow: true,
+        sessionKeys: ["agent:ops:global", "global"],
+      }),
     );
     harness.observer.dispose();
   });

@@ -260,11 +260,13 @@ async function handleTranscriptUpdateBroadcast(
   const effectiveAgentId = compatibleLegacyMarker?.agentId ?? targetAgentId ?? update.agentId;
   const compatibilityDefaultAgentId = tryResolveCompatibilityDefaultAgentId();
   const persistedOwner = resolvePersistedSessionStoreOwnerForKey(getRuntimeConfig(), sessionKey);
+  const stableCompatibilityAgentId =
+    persistedOwner.kind === "configured"
+      ? persistedOwner.agentId
+      : compatibilityDefaultAgentId;
   const stableUnscopedOwner =
     !parseAgentSessionKey(sessionKey) && !effectiveAgentId
-      ? persistedOwner.kind === "configured"
-        ? persistedOwner.agentId
-        : compatibilityDefaultAgentId
+      ? stableCompatibilityAgentId
       : undefined;
   const storageAgentId = effectiveAgentId ?? stableUnscopedOwner;
   const visibleAgentId = effectiveAgentId;
@@ -274,12 +276,11 @@ async function handleTranscriptUpdateBroadcast(
     connIds.add(connId);
   }
   let broadcastKeys = [sessionKey];
-  if (sessionKey === "global") {
-    const defaultAgentId = resolveDefaultAgentId(getRuntimeConfig());
+  if (sessionKey === "global" && routingAgentId) {
     broadcastKeys = resolveSessionSubscriptionKeys(
       sessionKey,
-      routingAgentId ?? defaultAgentId,
-      defaultAgentId,
+      routingAgentId,
+      stableCompatibilityAgentId,
     );
   }
   for (const broadcastKey of broadcastKeys) {
