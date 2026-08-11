@@ -1008,6 +1008,45 @@ describe("createInboundDebouncer", () => {
     expect(calls).toEqual(["1", "2"]);
   });
 
+  it("releases serialized keys when custom completion rejects before admission", async () => {
+    const failure = new Error("custom flush failed");
+    const calls: string[] = [];
+    const reported: unknown[] = [];
+    const pendingAdmission = new Promise<void>(() => {});
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      serializeImmediate: true,
+      buildKey: (item) => item.key,
+      onFlush: (items) => {
+        const id = items[0]?.id ?? "";
+        calls.push(id);
+        if (id === "first") {
+          return { admission: pendingAdmission, completion: Promise.reject(failure) };
+        }
+        return flushOnCompletion(() => {});
+      },
+      onError: (error) => {
+        reported.push(error);
+        throw new Error("observer failed");
+      },
+    });
+
+    const first = debouncer.enqueue({ key: "a", id: "first" });
+    await vi.waitFor(() => expect(calls).toEqual(["first"]));
+    const second = debouncer.enqueue({ key: "a", id: "second" });
+    const secondOutcome = await Promise.race([
+      second.then(() => "completed" as const),
+      new Promise<"stalled">((resolve) => {
+        setTimeout(() => resolve("stalled"), 100);
+      }),
+    ]);
+
+    expect(secondOutcome).toBe("completed");
+    await Promise.all([first, second, debouncer.drain()]);
+    expect(calls).toEqual(["first", "second"]);
+    expect(reported).toEqual([failure]);
+  });
+
   it("does not leak unhandled rejections when a keyed flush failure is awaited", async () => {
     const debouncer = createInboundDebouncer<{ key: string; id: string }>({
       debounceMs: 0,

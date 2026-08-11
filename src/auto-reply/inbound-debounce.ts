@@ -127,13 +127,13 @@ function createInboundDebounceFlush(params: {
   }
   // A failed dispatch must settle its source claim before releasing the keyed
   // lane; an already-admitted turn owns its later completion failure.
-  void completion
-    .then(markAdmitted, async (error: unknown) => {
-      if (!admitted) {
-        await lifecycle.onFailed?.(error);
-      }
-    })
-    .then(markAdmitted, markAdmitted);
+  completion = completion.then(markAdmitted).catch(async (error: unknown) => {
+    if (!admitted && lifecycle.onFailed) {
+      await Promise.allSettled([lifecycle.onFailed(error)]);
+    }
+    markAdmitted();
+    throw error;
+  });
   return { admission, completion };
 }
 
@@ -197,7 +197,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     activeCompletions.add(completion);
     const cleanup = () => activeCompletions.delete(completion);
     void completion.then(cleanup, cleanup);
-    await admission;
+    await Promise.race([admission, completion]);
   };
 
   const cancelItems = (items: T[]) => {
