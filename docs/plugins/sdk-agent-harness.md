@@ -354,7 +354,9 @@ attempt returns. Calls made after attempt settlement fail closed.
 New harnesses should implement `AgentHarnessV2` and type prepared attempts as
 `AgentHarnessAttemptParamsV2`, `EmbeddedRunAttemptParamsV2`, and
 `AgentHarnessSideQuestionParamsV2`; those contracts require
-`hostCapabilities`. Import the parameter types from the runtime subpath:
+`hostCapabilities`. Packages adopting V2 must declare
+`openclaw.compat.pluginApi: ">=2026.8.1"` (or a newer floor) so older hosts
+reject them before load. Import the parameter types from the runtime subpath:
 
 ```typescript
 import type {

@@ -878,7 +878,9 @@ timeline for current status.
     `AgentHarnessAttemptParamsV2`, `EmbeddedRunAttemptParamsV2`, or
     `AgentHarnessSideQuestionParamsV2`. The V2 parameter types require
     `hostCapabilities`, matching what core supplies at the selected-harness
-    boundary.
+    boundary. A plugin that adopts these V2 contracts must declare
+    `openclaw.compat.pluginApi: ">=2026.8.1"` (or a newer floor) in its package
+    manifest so an older host rejects the plugin before loading it.
 
     Existing plugins may continue implementing `AgentHarness` and constructing
     the legacy `AgentHarnessAttemptParams`, `EmbeddedRunAttemptParams`, or
