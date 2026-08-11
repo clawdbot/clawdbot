@@ -3,6 +3,7 @@ import {
   type SqliteSchemaCompatibility,
   type SqliteSchemaIssue,
 } from "../infra/sqlite-schema-contract.js";
+import { CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "./openclaw-state-db-additive-columns.js";
 import {
   FIRST_USE_STATE_INDEXES,
   FIRST_USE_STATE_TABLES,
@@ -13,21 +14,9 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 // Same-version databases may lack additive columns that only a writable open
 // can ensure, while read-only planning must keep accepting the older shape.
-const CLAW_LAZY_ADDITIVE_STATE_COLUMNS = [
-  "claw_installs.bootstrap_content_digest",
-  "claw_installs.bootstrap_source_path",
-  "worker_environments.desktop_json",
-  "claw_package_refs.extension_adapter_identity",
-  "claw_package_refs.extension_detected_format",
-  "claw_package_refs.extension_format",
-  "claw_package_refs.extension_id",
-  "claw_package_refs.extension_mapped_json",
-  "claw_package_refs.extension_unavailable_json",
-  "worker_environments.shared_host",
-  "worker_session_placements.terminal_reason",
-  "worker_session_placements.terminal_at_ms",
-  "worktrees.run_end_cleanup_json",
-] as const;
+const CLAW_LAZY_ADDITIVE_STATE_COLUMNS = CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
+  ({ columnName, tableName }) => `${tableName}.${columnName}`,
+);
 
 const CLAW_LAZY_ADDITIVE_STATE_COLUMN_SET = new Set<string>(CLAW_LAZY_ADDITIVE_STATE_COLUMNS);
 const CLAW_STARTUP_ADDITIVE_STATE_TABLES = [

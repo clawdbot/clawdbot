@@ -397,7 +397,6 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
     "conversation_kind TEXT NOT NULL DEFAULT 'channel'",
   );
   ensureColumn(db, "device_bootstrap_tokens", "pending_profile_json TEXT");
-  ensureColumn(db, "device_bootstrap_tokens", "setup_id TEXT");
   ensureColumn(db, "gateway_restart_handoff", "restart_trace_started_at INTEGER");
   ensureColumn(db, "gateway_restart_handoff", "restart_trace_last_at INTEGER");
   ensureColumn(db, "gateway_restart_intent", "reason TEXT");

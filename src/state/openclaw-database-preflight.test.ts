@@ -333,6 +333,22 @@ describe("OpenClaw database schema preflight", () => {
     expect(() => assertOpenClawDatabasesReadyForRestart({ env })).not.toThrow();
   });
 
+  it("accepts an older v6 state database without the lazy setup id during restart preflight", () => {
+    const stateDir = tempDirs.make("openclaw-database-preflight-older-v6-setup-id-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const statePath = openOpenClawStateDatabase({ env }).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const state = new DatabaseSync(statePath);
+    try {
+      state.exec("ALTER TABLE device_bootstrap_tokens DROP COLUMN setup_id;");
+    } finally {
+      state.close();
+    }
+    expect(() => assertOpenClawDatabasesReadyForRestart({ env })).not.toThrow();
+  });
+
   it("reports a current but noncanonical state schema as indeterminate", () => {
     const stateDir = tempDirs.make("openclaw-database-preflight-noncanonical-state-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
