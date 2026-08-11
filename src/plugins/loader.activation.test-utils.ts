@@ -9,7 +9,7 @@ import { writePersistedInstalledPluginIndexInstallRecordsSync } from "./installe
 import { loadOpenClawPlugins } from "./loader.js";
 import {
   EMPTY_PLUGIN_SCHEMA,
-  makeTempDir,
+  makePluginLoaderTempDir,
   mkdirSafe,
   useNoBundledPlugins,
   writePlugin,
@@ -48,9 +48,9 @@ describe("loadOpenClawPlugins", () => {
       name: "does not reuse cached registries when env-resolved install paths change",
       setup: () => {
         useNoBundledPlugins();
-        const openclawHome = makeTempDir();
-        const ignoredHome = makeTempDir();
-        const stateDir = makeTempDir();
+        const openclawHome = makePluginLoaderTempDir();
+        const ignoredHome = makePluginLoaderTempDir();
+        const stateDir = makePluginLoaderTempDir();
         const pluginDir = path.join(openclawHome, "plugins", "tracked-install-cache");
         mkdirSafe(pluginDir);
         const plugin = writePlugin({
@@ -80,7 +80,7 @@ describe("loadOpenClawPlugins", () => {
           },
         };
 
-        const secondHome = makeTempDir();
+        const secondHome = makePluginLoaderTempDir();
         return {
           loadFirst: () =>
             loadOpenClawPlugins({
@@ -178,7 +178,7 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("normalizes bundled plugin env overrides against the provided env", () => {
-    const bundledDir = makeTempDir();
+    const bundledDir = makePluginLoaderTempDir();
     const homeDir = path.dirname(bundledDir);
     const override = `~/${path.basename(bundledDir)}`;
     const plugin = writePlugin({
@@ -211,10 +211,10 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("prefers OPENCLAW_HOME over HOME for env-expanded load paths", () => {
-    const ignoredHome = makeTempDir();
-    const openclawHome = makeTempDir();
-    const stateDir = makeTempDir();
-    const bundledDir = makeTempDir();
+    const ignoredHome = makePluginLoaderTempDir();
+    const openclawHome = makePluginLoaderTempDir();
+    const stateDir = makePluginLoaderTempDir();
+    const bundledDir = makePluginLoaderTempDir();
     const plugin = writePlugin({
       id: "openclaw-home-demo",
       dir: path.join(openclawHome, "plugins", "openclaw-home-demo"),
@@ -1104,7 +1104,7 @@ describe("loadOpenClawPlugins", () => {
 
   it("loads bundled channel entries through nested default export wrappers", () => {
     useNoBundledPlugins();
-    const pluginDir = makeTempDir();
+    const pluginDir = makePluginLoaderTempDir();
     const fullMarker = path.join(pluginDir, "full-loaded.txt");
 
     fs.writeFileSync(
@@ -1239,7 +1239,7 @@ describe("loadOpenClawPlugins", () => {
 
   it("does not setup-load an explicitly disabled channel plugin even when the caller scopes to it", () => {
     useNoBundledPlugins();
-    const marker = path.join(makeTempDir(), "lazy-channel-imported.txt");
+    const marker = path.join(makePluginLoaderTempDir(), "lazy-channel-imported.txt");
     const plugin = writePlugin({
       id: "lazy-channel-plugin",
       filename: "lazy-channel.cjs",
@@ -1332,7 +1332,7 @@ describe("loadOpenClawPlugins", () => {
 
   it("blocks untrusted setup-only workspace channel plugins when explicitly scoped", () => {
     useNoBundledPlugins();
-    const marker = path.join(makeTempDir(), "workspace-setup-only-loaded.txt");
+    const marker = path.join(makePluginLoaderTempDir(), "workspace-setup-only-loaded.txt");
     const { workspaceDir, workspacePluginDir } = writeWorkspacePlugin({
       id: "workspace-shadow",
       body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
@@ -1398,7 +1398,7 @@ describe("loadOpenClawPlugins", () => {
 
   it("keeps trusted setup-only workspace channel plugins available when explicitly scoped", () => {
     useNoBundledPlugins();
-    const marker = path.join(makeTempDir(), "trusted-workspace-setup-only-loaded.txt");
+    const marker = path.join(makePluginLoaderTempDir(), "trusted-workspace-setup-only-loaded.txt");
     const { workspaceDir, workspacePluginDir } = writeWorkspacePlugin({
       id: "trusted-workspace-shadow",
       body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
@@ -1466,7 +1466,7 @@ describe("loadOpenClawPlugins", () => {
 
   it("does not setup-load an untrusted config-origin channel plugin when the caller scopes to it", () => {
     useNoBundledPlugins();
-    const marker = path.join(makeTempDir(), "untrusted-load-path-channel-imported.txt");
+    const marker = path.join(makePluginLoaderTempDir(), "untrusted-load-path-channel-imported.txt");
     const plugin = writePlugin({
       id: "untrusted-load-path-channel",
       filename: "untrusted-load-path-channel.cjs",
@@ -1531,7 +1531,10 @@ describe("loadOpenClawPlugins", () => {
 
   it("does not setup-load a denylisted config-origin channel plugin even when explicitly allowed", () => {
     useNoBundledPlugins();
-    const marker = path.join(makeTempDir(), "denylisted-load-path-channel-imported.txt");
+    const marker = path.join(
+      makePluginLoaderTempDir(),
+      "denylisted-load-path-channel-imported.txt",
+    );
     const plugin = writePlugin({
       id: "denylisted-load-path-channel",
       filename: "denylisted-load-path-channel.cjs",
@@ -1598,7 +1601,7 @@ describe("loadOpenClawPlugins", () => {
 
   it("does not setup-load an untrusted global channel plugin when the caller scopes to it", () => {
     useNoBundledPlugins();
-    const marker = path.join(makeTempDir(), "untrusted-global-channel-imported.txt");
+    const marker = path.join(makePluginLoaderTempDir(), "untrusted-global-channel-imported.txt");
     withStateDir((stateDir) => {
       const globalDir = path.join(stateDir, "extensions", "untrusted-global-channel");
       mkdirSafe(globalDir);

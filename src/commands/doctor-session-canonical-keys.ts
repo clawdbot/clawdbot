@@ -9,8 +9,8 @@ import {
   loadTranscriptEvents,
   rehomeSessionDeliveryReferencesForCanonicalRepair,
   rehomeSessionDeliveryReferencesForCanonicalRepairBatch,
+  type SessionEntryLifecycleRemoval,
 } from "../config/sessions/session-accessor.js";
-import type { SessionEntryLifecycleRemoval } from "../config/sessions/session-accessor.lifecycle-types.js";
 import { writeTranscriptArchive } from "../config/sessions/session-accessor.sqlite-archive.js";
 import {
   copySessionNodeArtifactsForRepair,

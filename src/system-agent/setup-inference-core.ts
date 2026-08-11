@@ -38,7 +38,7 @@ import {
   type SystemAgentVerifiedInferenceDeps,
 } from "./verified-inference.js";
 
-export const log = createSubsystemLogger("system-agent/setup-inference");
+export const setupInferenceLog = createSubsystemLogger("system-agent/setup-inference");
 
 /**
  * Inference is the one required onboarding step (docs/cli/setup.md

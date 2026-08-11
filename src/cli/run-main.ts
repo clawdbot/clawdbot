@@ -68,7 +68,7 @@ import {
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 import {
   configureGatewayStartupTraceConsoleFormatting,
-  createGatewayStartupTrace,
+  createGatewayDispatchStartupTrace,
 } from "./startup-trace.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
@@ -161,7 +161,7 @@ function isGatewayRunInvocationArgv(argv: string[]): boolean {
 
 async function tryRunGatewayRunFastPath(
   argv: string[],
-  startupTrace: ReturnType<typeof createGatewayStartupTrace>,
+  startupTrace: ReturnType<typeof createGatewayDispatchStartupTrace>,
 ): Promise<boolean> {
   if (!isGatewayRunFastPathArgv(argv)) {
     return false;
@@ -1025,7 +1025,7 @@ async function resolveUnownedCliPrimaryMessage(params: {
 }
 
 async function bootstrapCliProxyCaptureAndDispatcher(
-  startupTrace: ReturnType<typeof createGatewayStartupTrace>,
+  startupTrace: ReturnType<typeof createGatewayDispatchStartupTrace>,
   options: { ensureDispatcher?: boolean } = {},
 ): Promise<void> {
   const [
@@ -1047,7 +1047,7 @@ async function bootstrapCliProxyCaptureAndDispatcher(
 export async function runCli(
   argv: string[] = process.argv,
   options: {
-    additionalStartupTrace?: ReturnType<typeof createGatewayStartupTrace>;
+    additionalStartupTrace?: ReturnType<typeof createGatewayDispatchStartupTrace>;
     retainConsoleRoutingUntilProcessExit?: boolean;
   } = {},
 ) {
@@ -1067,11 +1067,11 @@ export async function runCli(
 async function runCliWithPreparedOutputMode(
   originalArgv: string[],
   options: {
-    additionalStartupTrace?: ReturnType<typeof createGatewayStartupTrace>;
+    additionalStartupTrace?: ReturnType<typeof createGatewayDispatchStartupTrace>;
     builtInMachineOutput: boolean;
   },
 ) {
-  const startupTrace = createGatewayStartupTrace(originalArgv, "cli.main");
+  const startupTrace = createGatewayDispatchStartupTrace(originalArgv, "cli.main");
   const earlyProfile = parseCliProfileArgs(originalArgv);
   if (earlyProfile.ok && earlyProfile.profile) {
     applyCliProfileEnv({ profile: earlyProfile.profile });
@@ -1222,7 +1222,7 @@ async function runCliWithPreparedOutputMode(
     return await bestEffortConfigPromise;
   };
   const startupTraces = [startupTrace, options.additionalStartupTrace].filter(
-    (trace): trace is ReturnType<typeof createGatewayStartupTrace> => Boolean(trace),
+    (trace): trace is ReturnType<typeof createGatewayDispatchStartupTrace> => Boolean(trace),
   );
   if (
     !isDatabaseInvocation &&
