@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { createStreamingJsonPreview, type StreamingJsonPreview } from "./llm.js";
 
 /**
@@ -15,7 +14,11 @@ function streamFragments(preview: StreamingJsonPreview, fragments: readonly stri
 }
 
 function splitIntoChars(text: string): string[] {
-  return [...text];
+  return text.split("");
+}
+
+function asStringArg(value: unknown): string {
+  return typeof value === "string" ? value : "";
 }
 
 describe("plugin SDK streaming JSON preview contract", () => {
@@ -24,7 +27,7 @@ describe("plugin SDK streaming JSON preview contract", () => {
 
     expect(typeof preview.push).toBe("function");
     expect(typeof preview.finalize).toBe("function");
-    expect(Object.keys(preview).sort()).toEqual(["finalize", "push"]);
+    expect(Object.keys(preview).toSorted()).toEqual(["finalize", "push"]);
   });
 
   it("returns the arguments as they stand after each fragment", () => {
@@ -37,7 +40,7 @@ describe("plugin SDK streaming JSON preview contract", () => {
   });
 
   it("resolves the complete value from finalize regardless of fragmentation", () => {
-    const args = { path: "src/index.ts", body: "line one\nline two\ttabbed \"quoted\"" };
+    const args = { path: "src/index.ts", body: 'line one\nline two\ttabbed "quoted"' };
     const serialized = JSON.stringify(args);
 
     const wholeAtOnce = createStreamingJsonPreview();
@@ -57,7 +60,7 @@ describe("plugin SDK streaming JSON preview contract", () => {
     preview.push('{"body":"');
     const lengths = splitIntoChars(body).map((char) => {
       const value = preview.push(char);
-      return String(value.body ?? "").length;
+      return asStringArg(value.body).length;
     });
 
     // No staleness window: every delta moves the exposed value forward by one.
@@ -118,7 +121,7 @@ describe("plugin SDK streaming JSON preview contract", () => {
     const elapsedMs = performance.now() - started;
     preview.push('"}');
 
-    const body = String(preview.finalize().body ?? "");
+    const body = asStringArg(preview.finalize().body);
     expect(body).toHaveLength(chunk.length * chunkCount);
     // Quadratic accumulation over a ~200KB body needs far longer than this;
     // the bound is loose enough to stay stable on a loaded CI runner.
