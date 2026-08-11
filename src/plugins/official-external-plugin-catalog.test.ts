@@ -2,9 +2,11 @@ import crypto from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { EnvHttpProxyAgent } from "undici";
 import { describe, expect, it, vi } from "vitest";
 import officialExternalPluginCatalog from "../../scripts/lib/official-external-plugin-catalog.json" with { type: "json" };
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { createSqliteHostedOfficialExternalPluginCatalogSnapshotStore } from "./official-external-plugin-catalog-snapshot-store.js";
 import {
   type HostedOfficialExternalPluginCatalogSnapshot,
@@ -411,26 +413,39 @@ describe("official external plugin catalog", () => {
       const headers = new Headers(init?.headers);
       expect(headers.get("accept")).toBe("application/vnd.dsse+json");
       expect(headers.has("if-modified-since")).toBe(false);
+      expect((init as RequestInit & { dispatcher?: unknown }).dispatcher).toBeInstanceOf(
+        EnvHttpProxyAgent,
+      );
       return dsseResponse(signed.body, { status: 200 });
     });
 
-    const result = await loadHostedCatalog({
-      catalogConfig: {
-        feeds: {
-          "clawhub-public": {
-            url: "https://clawhub.ai/v1/feeds/plugins",
-            feedId: "clawhub-official",
-            verification: {
-              mode: "signed",
-              keys: [{ keyId: "acme-root", publicKey: signed.publicKeyPem }],
+    const result = await withEnvAsync(
+      {
+        HTTPS_PROXY: "http://127.0.0.1:7890",
+        https_proxy: undefined,
+        NO_PROXY: "",
+        no_proxy: undefined,
+        OPENCLAW_PROXY_ACTIVE: undefined,
+      },
+      async () =>
+        await loadHostedCatalog({
+          catalogConfig: {
+            feeds: {
+              "clawhub-public": {
+                url: "https://clawhub.ai/v1/feeds/plugins",
+                feedId: "clawhub-official",
+                verification: {
+                  mode: "signed",
+                  keys: [{ keyId: "acme-root", publicKey: signed.publicKeyPem }],
+                },
+              },
             },
           },
-        },
-      },
-      ifModifiedSince: "Mon, 22 Jun 2026 00:00:00 GMT",
-      fetchImpl,
-      snapshotStore: null,
-    });
+          ifModifiedSince: "Mon, 22 Jun 2026 00:00:00 GMT",
+          fetchImpl,
+          snapshotStore: null,
+        }),
+    );
 
     expect(fetchImpl).toHaveBeenCalledOnce();
     expectHosted(result);

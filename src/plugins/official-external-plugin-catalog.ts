@@ -1120,17 +1120,20 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   let response: Response | undefined;
   let release: (() => Promise<void>) | undefined;
   try {
-    const { fetchWithSsrFGuard } = await import("../infra/net/fetch-guard.js");
-    const guarded = await fetchWithSsrFGuard({
-      url: url.href,
-      fetchImpl: params?.fetchImpl,
-      init: { method: "GET", headers },
-      requireHttps: true,
-      maxRedirects: 2,
-      timeoutMs: params?.timeoutMs ?? DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_TIMEOUT_MS,
-      policy: { hostnameAllowlist: source.hostnameAllowlist },
-      auditContext: "official-external-plugin-catalog-feed",
-    });
+    const { fetchWithSsrFGuard, withTrustedEnvProxyGuardedFetchMode } =
+      await import("../infra/net/fetch-guard.js");
+    const guarded = await fetchWithSsrFGuard(
+      withTrustedEnvProxyGuardedFetchMode({
+        url: url.href,
+        fetchImpl: params?.fetchImpl,
+        init: { method: "GET", headers },
+        requireHttps: true,
+        maxRedirects: 2,
+        timeoutMs: params?.timeoutMs ?? DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_TIMEOUT_MS,
+        policy: { hostnameAllowlist: source.hostnameAllowlist },
+        auditContext: "official-external-plugin-catalog-feed",
+      }),
+    );
     response = guarded.response;
     release = guarded.release;
     const base = metadataBase(response);
