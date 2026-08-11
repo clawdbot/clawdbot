@@ -332,7 +332,7 @@ describe("openclaw attach (action)", () => {
     }
   });
 
-  it("does not report SIGKILL when kill delivery fails (child already exited)", async () => {
+  it("preserves the child's exit status when SIGKILL delivery fails", async () => {
     vi.useFakeTimers();
     try {
       await runAttach("--session", "agent:main:spawn");
@@ -340,17 +340,19 @@ describe("openclaw attach (action)", () => {
       const handler = sigintListeners[sigintListeners.length - 1] as () => void;
       handler();
       expect(spawnedChild.kill).toHaveBeenCalledWith("SIGINT");
-      // kill() returns false: the child has already exited, so the
-      // forced signal was not delivered. The child exit handler owns
-      // the authoritative outcome.
+      // kill() returns false: the child has already exited or delivery
+      // was not confirmed. The timer must not finalize until the child
+      // exit handler records the authoritative outcome.
       spawnedChild.kill.mockReturnValueOnce(false);
       vi.advanceTimersByTime(5_000);
       expect(spawnedChild.kill).toHaveBeenCalledWith("SIGKILL");
-      // The timer path revokes and finishes, but exitCode must reflect
-      // the already-delivered child exit status (0), not SIGKILL.
+      // The child exit event reports a nonzero status after the failed
+      // SIGKILL delivery. The CLI must reflect this code, not SIGKILL
+      // and not the fallback default of 0.
+      spawnedChild.emit("exit", 7, null);
       await vi.runAllTimersAsync();
       expect(gatewayCalls.find((c) => c.method === "attach.revoke")?.params.token).toBe("tok-123");
-      expect(exitCode).toBe(0);
+      expect(exitCode).toBe(7);
     } finally {
       vi.useRealTimers();
     }

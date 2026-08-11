@@ -221,6 +221,9 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
           // keep the parent alive indefinitely by ignoring SIGINT.
           forceKillTimer = setTimeout(() => {
             forceKillTimer = undefined;
+            if (isFinished) {
+              return;
+            }
             const delivered = child.kill("SIGKILL");
             // Node child-process contract: kill() returns true when the
             // signal was successfully delivered. A false return means the
@@ -229,11 +232,17 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
             // — do not overwrite it.
             if (delivered) {
               childExitSignal = "SIGKILL";
+              void (async () => {
+                await revokeOnce();
+                finish();
+              })();
+            } else {
+              // SIGKILL could not be delivered; the child exit handler owns
+              // the authoritative status. Revoke the grant now, but wait
+              // for that event before finalizing so a nonzero exit is not
+              // overwritten by the fallback default.
+              void revokeOnce();
             }
-            void (async () => {
-              await revokeOnce();
-              finish();
-            })();
           }, 5_000);
         };
         const onSigterm = () => child.kill("SIGTERM");
