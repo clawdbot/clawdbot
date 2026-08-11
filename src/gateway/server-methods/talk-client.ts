@@ -313,8 +313,10 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         const gatewayControlOwner = wantsGatewayControl
           ? createTalkClientGatewayControlOwner({
               voiceSessionId: activeVoiceSessionId!,
+              providerId: resolution.provider.id,
               sessionKey,
               connId: ownerConnId!,
+              context,
               runAgentConsult: consultRunner.runArgs,
               appendTranscript: ({ entryId, role, text }) =>
                 appendClientVoiceTranscript({
@@ -339,7 +341,6 @@ export const talkClientHandlers: GatewayRequestHandlers = {
                   config: runtimeConfig,
                 });
               },
-              warn: (message) => context.logGateway.warn(message),
             })
           : undefined;
         const browserSessionRequest: InternalRealtimeVoiceBrowserSessionCreateRequest = {
