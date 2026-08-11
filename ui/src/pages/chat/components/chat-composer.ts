@@ -1,7 +1,6 @@
 // Chat-owned composer orchestration.
 import { nothing } from "lit";
 import { loadSettings, normalizeChatSendShortcut, patchSettings } from "../../../app/settings.ts";
-import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { ComposerDictationController, insertComposerDictation } from "../composer-dictation.ts";
@@ -54,6 +53,7 @@ import {
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 import { renderChatComposerView } from "./chat-composer-view.ts";
 import { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
+import "./composer-resize-handle.ts";
 
 export { isChatRunWorking, resetChatComposerState } from "./chat-composer-state.ts";
 
