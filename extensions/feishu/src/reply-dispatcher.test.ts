@@ -2780,7 +2780,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "card",
-        streaming: { mode: "partial" },
+        streaming: { mode: "partial", preview: { commandText: "raw" } },
       },
     });
 

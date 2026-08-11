@@ -512,7 +512,12 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress", progress: { label: "Cracking" } } },
+      telegramCfg: {
+        streaming: {
+          mode: "progress",
+          progress: { label: "Cracking", commandText: "raw" },
+        },
+      },
     });
 
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(

@@ -239,7 +239,7 @@ describe("slack exec approvals", () => {
     ).toBe(false);
   });
 
-  it("rejects requests bound to another channel or Slack account", () => {
+  it("reports a foreign-channel candidate but rejects another Slack account", () => {
     const cfg = buildConfig({
       enabled: true,
       approvers: ["U123"],
@@ -261,7 +261,7 @@ describe("slack exec approvals", () => {
           expiresAtMs: 1000,
         },
       }),
-    ).toBe(false);
+    ).toBe(true);
 
     expect(
       slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
