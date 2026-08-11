@@ -107,7 +107,10 @@ function rejectsNestedKey(
   }
   const parent = asSchema(schema.properties?.[parentKey]);
   if (!parent) {
-    return false;
+    // A closed component that omits the parent entirely refuses the leaf too, so
+    // treating that as "not rejecting" would leave the contract green while real
+    // config loading fails on the parent property.
+    return schema.additionalProperties === false;
   }
   return rejectsKey(parent, childKey);
 }
@@ -141,6 +144,38 @@ describe("channel healthMonitor contract", () => {
 
     expect(propertySchema(composed, "healthMonitor")).toBeDefined();
     expect(rejectsNestedKey(composed, "healthMonitor", "enabled")).toBe(true);
+  });
+
+  it("treats a closed sibling that omits the parent as refusing the leaf", () => {
+    // The remaining hole: the sibling does not declare `healthMonitor` at all.
+    // Real validation refuses the parent property, so reporting "not rejected"
+    // here would keep the contract green on a schema that cannot load.
+    const composed: JsonSchemaLike = {
+      allOf: [
+        {
+          properties: {
+            healthMonitor: { properties: { enabled: {} }, additionalProperties: false },
+          },
+          additionalProperties: false,
+        },
+        { properties: { other: {} }, additionalProperties: false },
+      ],
+    };
+
+    expect(rejectsNestedKey(composed, "healthMonitor", "enabled")).toBe(true);
+    // An open sibling that omits the parent adds no restriction.
+    const permissive: JsonSchemaLike = {
+      allOf: [
+        {
+          properties: {
+            healthMonitor: { properties: { enabled: {} }, additionalProperties: false },
+          },
+          additionalProperties: false,
+        },
+        { properties: { other: {} } },
+      ],
+    };
+    expect(rejectsNestedKey(permissive, "healthMonitor", "enabled")).toBe(false);
   });
 
   it.each(HEALTH_MONITOR_CHANNELS)("%s accepts channels.<id>.healthMonitor", (channelId) => {
