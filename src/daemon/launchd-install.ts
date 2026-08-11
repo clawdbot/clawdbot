@@ -30,7 +30,11 @@ import {
 import { assertNoSystemLaunchDaemonOwnership } from "./launchd-system.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
 import { resolveDaemonHomeDir } from "./paths.js";
-import type { GatewayServiceInstallArgs, GatewayServiceManageArgs } from "./service-types.js";
+import type {
+  GatewayServiceEnv,
+  GatewayServiceInstallArgs,
+  GatewayServiceManageArgs,
+} from "./service-types.js";
 
 export async function uninstallLaunchAgent({
   env,
