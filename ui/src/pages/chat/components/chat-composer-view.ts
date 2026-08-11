@@ -410,14 +410,14 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 ></textarea>
                 <span
                   id=${slashMenuAnnouncementId}
-                  class="agent-chat__sr-only"
+                  class="sr-only"
                   role="status"
                   aria-live="polite"
                   aria-atomic="true"
                   >${activeSlashMenuOptionLabel}</span
                 >
                 <span
-                  class="agent-chat__run-status-announcement agent-chat__sr-only"
+                  class="agent-chat__run-status-announcement sr-only"
                   role="status"
                   aria-live="polite"
                   aria-atomic="true"

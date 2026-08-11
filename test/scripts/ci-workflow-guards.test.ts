@@ -2690,29 +2690,67 @@ NODE
   it("covers Android app variants, lint, and benchmark compilation", () => {
     const workflow = readCiWorkflow();
     const source = readFileSync(".github/workflows/ci.yml", "utf8");
-    const runStep = workflow.jobs.android.steps.find(
-      (step: WorkflowStep) => step.name === "Run Android ${{ matrix.task }}",
+    const androidJob = workflow.jobs.android;
+    const runStep = expectDefined(
+      androidJob.steps.find((step: WorkflowStep) => step.name === "Run Android ${{ matrix.task }}"),
+      "Android task runner",
     );
     const nativeResourcesSetup = expectDefined(
-      workflow.jobs.android.steps.find(
+      androidJob.steps.find(
         (step: WorkflowStep) => step.name === "Setup Node environment for native resources",
       ),
       "Android native resources Node setup",
     );
+    const buildPlayCase = expectDefined(
+      runStep.run?.match(/^\s*build-play\)\n([\s\S]*?)^\s*;;$/mu)?.[1],
+      "Android build-play case",
+    );
+    const buildPlayBranches = expectDefined(
+      buildPlayCase.match(
+        /if \[ "\$GITHUB_EVENT_NAME" = "workflow_dispatch" \]; then\n([\s\S]*?)\n\s*else\n([\s\S]*?)\n\s*fi/u,
+      ),
+      "Android build-play event branches",
+    );
+    const dispatchBuild = expectDefined(buildPlayBranches[1], "hosted dispatch build branch");
+    const blacksmithBuild = expectDefined(buildPlayBranches[2], "Blacksmith build branch");
+    const readTasks = (script: string) =>
+      [...script.matchAll(/^\s+(:[a-z][A-Za-z0-9:-]*)\s*\\?$/gmu)].map((match) => match[1]);
+    const dispatchTasks = readTasks(dispatchBuild);
+    const blacksmithTasks = readTasks(blacksmithBuild);
 
     expect(source).toContain('task: useCompatibleAndroidCi ? "test-play-compat" : "test-play"');
     expect(source).toContain(
       '{ check_name: "android-test-third-party", task: "test-third-party" }',
     );
-    expect(source).toContain('check_name: "android-build-play"');
+    expect(source.match(/check_name: "android-build-play"/gu)).toHaveLength(1);
     expect(source).toContain('task: useCompatibleAndroidCi ? "build-play-compat" : "build-play"');
+    expect(androidJob.name).toBe("${{ matrix.check_name }}");
+    expect(androidJob["runs-on"]).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
+    );
     expect(runStep.run).toContain(":app:testPlayDebugUnitTest");
     expect(runStep.run).toContain(":app:testThirdPartyDebugUnitTest");
-    expect(runStep.run).toContain(":app:assemblePlayDebug");
-    expect(runStep.run).toContain(":app:assembleThirdPartyDebug");
-    expect(runStep.run).toContain(":app:lintPlayDebug");
-    expect(runStep.run).toContain(":app:lintThirdPartyDebug");
-    expect(runStep.run).toContain(":benchmark:assembleDebug");
+    expect(dispatchBuild.match(/^\s*\.\/gradlew\b/gmu)).toHaveLength(3);
+    expect(dispatchTasks).toEqual([
+      ":app:assemblePlayDebug",
+      ":app:lintPlayDebug",
+      ":app:assembleThirdPartyDebug",
+      ":app:lintThirdPartyDebug",
+      ":benchmark:assembleDebug",
+      ":wear-shared:assembleDebug",
+      ":wear-shared:lintDebug",
+    ]);
+    expect(new Set(dispatchTasks).size).toBe(dispatchTasks.length);
+    expect(blacksmithBuild.match(/^\s*\.\/gradlew\b/gmu)).toHaveLength(1);
+    expect(blacksmithTasks).toEqual([
+      ":app:assemblePlayDebug",
+      ":app:assembleThirdPartyDebug",
+      ":app:lintPlayDebug",
+      ":app:lintThirdPartyDebug",
+      ":benchmark:assembleDebug",
+      ":wear-shared:assembleDebug",
+      ":wear-shared:lintDebug",
+    ]);
     expect(nativeResourcesSetup.uses).toBe("./.github/actions/setup-node-env");
     expect(nativeResourcesSetup.if).toBe(
       "needs.preflight.outputs.use_compatible_android_ci != 'true'",
