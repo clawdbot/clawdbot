@@ -320,8 +320,10 @@ describe("resolveMcpTransport", () => {
     expect(options.requestInit).toBeUndefined();
     expect(oauthBearerMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        serverName: "probe",
-        resourceUrl: "https://mcp.example.com/mcp",
+        identity: expect.objectContaining({
+          serverName: "probe",
+          serverUrl: "https://mcp.example.com/mcp",
+        }),
       }),
     );
   });

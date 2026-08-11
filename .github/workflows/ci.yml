@@ -3686,14 +3686,29 @@ jobs:
               ./gradlew --no-daemon --build-cache :wear:testDebugUnitTest
               ;;
             build-play)
-              ./gradlew --no-daemon --build-cache \
-                :app:assemblePlayDebug \
-                :app:assembleThirdPartyDebug \
-                :app:lintPlayDebug \
-                :app:lintThirdPartyDebug \
-                :benchmark:assembleDebug \
-                :wear-shared:assembleDebug \
-                :wear-shared:lintDebug
+              if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+                # GitHub-hosted runners have less memory headroom. Separate Gradle
+                # processes release each variant's build state before the next starts.
+                ./gradlew --no-daemon --build-cache \
+                  :app:assemblePlayDebug \
+                  :app:lintPlayDebug
+                ./gradlew --no-daemon --build-cache \
+                  :app:assembleThirdPartyDebug \
+                  :app:lintThirdPartyDebug
+                ./gradlew --no-daemon --build-cache \
+                  :benchmark:assembleDebug \
+                  :wear-shared:assembleDebug \
+                  :wear-shared:lintDebug
+              else
+                ./gradlew --no-daemon --build-cache \
+                  :app:assemblePlayDebug \
+                  :app:assembleThirdPartyDebug \
+                  :app:lintPlayDebug \
+                  :app:lintThirdPartyDebug \
+                  :benchmark:assembleDebug \
+                  :wear-shared:assembleDebug \
+                  :wear-shared:lintDebug
+              fi
               ;;
             build-wear)
               ./gradlew --no-daemon --build-cache \

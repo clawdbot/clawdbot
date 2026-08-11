@@ -10,10 +10,6 @@ import {
   type PluginSdkDocEntrypoint,
 } from "../../scripts/lib/plugin-sdk-doc-metadata.ts";
 import {
-  diffPluginSdkApiBaselineContract,
-  type PluginSdkApiBaselineContractDiff,
-} from "./api-baseline-contract.js";
-import {
   createDeclarationClosureRenderer,
   formatPluginSdkDiagnostics,
 } from "./api-baseline-declaration-closure.js";
@@ -80,33 +76,54 @@ export type PluginSdkApiBaseline = {
   modules: PluginSdkApiModule[];
 };
 
-/** Rendered baseline variants written to JSON and statefile outputs. */
+/** One committed Plugin SDK module contract file. */
+export type PluginSdkApiBaselineContractFile = {
+  /** Complete one-line JSON record, including its trailing newline. */
+  content: string;
+  /** Filename relative to the committed contract directory. */
+  fileName: string;
+};
+
+/** Rendered baseline variants written to local and committed outputs. */
 export type PluginSdkApiBaselineRender = {
   /** Structured baseline data before serialization. */
   baseline: PluginSdkApiBaseline;
+  /** One deterministic committed contract file per public SDK entrypoint. */
+  contractFiles: PluginSdkApiBaselineContractFile[];
   /** Pretty JSON artifact for humans and docs tooling. */
   json: string;
-  /** Line-delimited export records used by lightweight contract checks. */
-  jsonl: string;
+};
+
+/** File-level drift in the committed Plugin SDK API contract directory. */
+export type PluginSdkApiBaselineContractDiff = {
+  /** Expected records whose committed content differs. */
+  modified: string[];
+  /** Expected records absent from the committed directory. */
+  missing: string[];
+  /** Unexpected JSON records left in the committed directory. */
+  stale: string[];
 };
 
 /** Result returned when writing SDK API baseline artifacts. */
 export type PluginSdkApiBaselineWriteResult = {
-  /** True when the generated JSONL contract differs from disk. */
+  /** True when the generated contract directory differs from disk. */
   changed: boolean;
-  /** Bounded record-level diff when a check finds contract drift. */
+  /** File-level drift when a check finds contract differences. */
   contractDiff: PluginSdkApiBaselineContractDiff | null;
-  /** Committed JSONL contract path. */
-  contractPath: string;
+  /** Committed per-entrypoint contract directory. */
+  contractDirectory: string;
   /** True when generated artifacts were actually written. */
   wrote: boolean;
   /** JSON baseline artifact path. */
   jsonPath: string;
+  /** Number of stale JSON records removed in write mode. */
+  removedStaleCount: number;
 };
 
 const GENERATED_BY = "scripts/generate-plugin-sdk-api-baseline.ts" as const;
 const DEFAULT_JSON_OUTPUT = "docs/.generated/plugin-sdk-api-baseline.json";
-const DEFAULT_CONTRACT_OUTPUT = "docs/.generated/plugin-sdk-api-baseline.jsonl";
+const DEFAULT_CONTRACT_DIRECTORY = "docs/.generated/plugin-sdk-api-baseline";
+const SAFE_ENTRYPOINT_FILE_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 type DeclarationClosureRenderer = ReturnType<typeof createDeclarationClosureRenderer>;
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -354,8 +371,12 @@ function sha256(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
 }
 
-function buildJsonlLines(baseline: PluginSdkApiBaseline): string[] {
+function buildContractFiles(baseline: PluginSdkApiBaseline): PluginSdkApiBaselineContractFile[] {
   return baseline.modules.map((moduleSurface) => {
+    assert(
+      SAFE_ENTRYPOINT_FILE_NAME.test(moduleSurface.entrypoint),
+      `Plugin SDK entrypoint is not filename-safe: ${moduleSurface.entrypoint}`,
+    );
     const contractSurface = {
       category: moduleSurface.category,
       entrypoint: moduleSurface.entrypoint,
@@ -367,11 +388,14 @@ function buildJsonlLines(baseline: PluginSdkApiBaseline): string[] {
       })),
       importSpecifier: moduleSurface.importSpecifier,
     };
-    return JSON.stringify({
-      contentHash: sha256(JSON.stringify(contractSurface)),
-      entrypoint: moduleSurface.entrypoint,
-      importSpecifier: moduleSurface.importSpecifier,
-    });
+    return {
+      content: `${JSON.stringify({
+        contentHash: sha256(JSON.stringify(contractSurface)),
+        entrypoint: moduleSurface.entrypoint,
+        importSpecifier: moduleSurface.importSpecifier,
+      })}\n`,
+      fileName: `${moduleSurface.entrypoint}.json`,
+    };
   });
 }
 
@@ -414,8 +438,8 @@ export function renderPluginSdkApiBaselineModules(
 
   return {
     baseline,
+    contractFiles: buildContractFiles(baseline),
     json: `${JSON.stringify(baseline, null, 2)}\n`,
-    jsonl: `${buildJsonlLines(baseline).join("\n")}\n`,
   };
 }
 
@@ -442,39 +466,78 @@ function validateMetadata(): void {
   }
 }
 
+async function listContractFileNames(contractDirectory: string): Promise<string[]> {
+  try {
+    return (await fs.readdir(contractDirectory, { withFileTypes: true }))
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+      .map((entry) => entry.name)
+      .toSorted(compareText);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+}
+
 /** Compare or write an already-rendered SDK API contract. */
 export async function writeRenderedPluginSdkApiBaselineArtifacts(params: {
   check?: boolean;
-  contractPath: string;
+  contractDirectory: string;
   jsonPath: string;
   rendered: PluginSdkApiBaselineRender;
 }): Promise<PluginSdkApiBaselineWriteResult> {
-  const currentContract = await loadCurrentFile(params.contractPath);
-  const changed = currentContract !== params.rendered.jsonl;
+  const currentFileNames = await listContractFileNames(params.contractDirectory);
+  const expectedFileNames = new Set(params.rendered.contractFiles.map((file) => file.fileName));
+  const contractDiff: PluginSdkApiBaselineContractDiff = {
+    modified: [],
+    missing: [],
+    stale: currentFileNames.filter((fileName) => !expectedFileNames.has(fileName)),
+  };
+  for (const contractFile of params.rendered.contractFiles) {
+    const current = await loadCurrentFile(
+      path.join(params.contractDirectory, contractFile.fileName),
+    );
+    if (current === null) {
+      contractDiff.missing.push(contractFile.fileName);
+    } else if (current !== contractFile.content) {
+      contractDiff.modified.push(contractFile.fileName);
+    }
+  }
+  const changed = Object.values(contractDiff).some((fileNames) => fileNames.length > 0);
 
   if (params.check) {
     return {
       changed,
-      contractDiff: changed
-        ? diffPluginSdkApiBaselineContract(currentContract, params.rendered.jsonl)
-        : null,
-      contractPath: params.contractPath,
+      contractDiff: changed ? contractDiff : null,
+      contractDirectory: params.contractDirectory,
       wrote: false,
       jsonPath: params.jsonPath,
+      removedStaleCount: 0,
     };
   }
 
-  await fs.mkdir(path.dirname(params.contractPath), { recursive: true });
-  await fs.writeFile(params.contractPath, params.rendered.jsonl, "utf8");
+  await fs.mkdir(params.contractDirectory, { recursive: true });
+  for (const contractFile of params.rendered.contractFiles) {
+    await fs.writeFile(
+      path.join(params.contractDirectory, contractFile.fileName),
+      contractFile.content,
+      "utf8",
+    );
+  }
+  for (const fileName of contractDiff.stale) {
+    await fs.unlink(path.join(params.contractDirectory, fileName));
+  }
   await fs.mkdir(path.dirname(params.jsonPath), { recursive: true });
   await fs.writeFile(params.jsonPath, params.rendered.json, "utf8");
 
   return {
     changed,
     contractDiff: null,
-    contractPath: params.contractPath,
+    contractDirectory: params.contractDirectory,
     wrote: true,
     jsonPath: params.jsonPath,
+    removedStaleCount: contractDiff.stale.length,
   };
 }
 
@@ -482,13 +545,16 @@ export async function writeRenderedPluginSdkApiBaselineArtifacts(params: {
 export async function writePluginSdkApiBaselineArtifacts(params?: {
   repoRoot?: string;
   check?: boolean;
-  contractPath?: string;
+  contractDirectory?: string;
   jsonPath?: string;
 }): Promise<PluginSdkApiBaselineWriteResult> {
   const repoRoot = params?.repoRoot ?? resolveRepoRoot();
   return writeRenderedPluginSdkApiBaselineArtifacts({
     check: params?.check,
-    contractPath: path.resolve(repoRoot, params?.contractPath ?? DEFAULT_CONTRACT_OUTPUT),
+    contractDirectory: path.resolve(
+      repoRoot,
+      params?.contractDirectory ?? DEFAULT_CONTRACT_DIRECTORY,
+    ),
     jsonPath: path.resolve(repoRoot, params?.jsonPath ?? DEFAULT_JSON_OUTPUT),
     rendered: await renderPluginSdkApiBaseline({ repoRoot }),
   });

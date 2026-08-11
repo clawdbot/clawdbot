@@ -15,6 +15,11 @@ export const modelsHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateModelsListParams, "models.list", respond)) {
       return;
     }
-    respond(true, await buildModelsListResult({ context, params }), undefined);
+    const agentId = typeof params.agentId === "string" ? params.agentId : undefined;
+    respond(
+      true,
+      await buildModelsListResult({ context, params, ...(agentId ? { agentId } : {}) }),
+      undefined,
+    );
   },
 };

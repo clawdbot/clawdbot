@@ -334,6 +334,14 @@ suite.define(() => {
       defaultAgentId: "ops",
       deferredMethods: ["chat.startup"],
       historyMessages: [],
+      models: [
+        {
+          available: true,
+          id: "startup-model",
+          name: "Startup Model",
+          provider: "openai",
+        },
+      ],
       sessionKey: "global",
     });
 
@@ -438,7 +446,7 @@ suite.define(() => {
         commands: (await gateway.getRequests("commands.list")).length,
         metadata: (await gateway.getRequests("chat.metadata")).length,
         models: (await gateway.getRequests("models.list")).length,
-      }).toEqual({ commands: 0, metadata: 0, models: 0 });
+      }).toEqual({ commands: 0, metadata: 0, models: 1 });
       expect(await gateway.getRequests("agents.list")).toHaveLength(0);
     } finally {
       await suite.closeBrowserContext(context);
