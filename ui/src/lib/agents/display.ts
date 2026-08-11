@@ -3,7 +3,7 @@ import { formatByteSize } from "@openclaw/normalization-core";
 import { html, nothing } from "lit";
 import {
   expandToolGroups,
-  normalizeToolName,
+  normalizeToolPolicyName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
 import type {
@@ -628,7 +628,7 @@ type CompiledPattern =
   | { kind: "regex"; value: RegExp };
 
 function compilePattern(pattern: string): CompiledPattern {
-  const normalized = normalizeToolName(pattern);
+  const normalized = normalizeToolPolicyName(pattern);
   if (!normalized) {
     return { kind: "exact", value: "" };
   }
@@ -672,7 +672,7 @@ export function isAllowedByPolicy(name: string, policy?: ToolPolicy) {
   if (!policy) {
     return true;
   }
-  const normalized = normalizeToolName(name);
+  const normalized = normalizeToolPolicyName(name);
   const deny = compilePatterns(policy.deny);
   if (matchesAny(normalized, deny)) {
     return false;
@@ -694,7 +694,7 @@ export function matchesList(name: string, list?: string[]) {
   if (!Array.isArray(list) || list.length === 0) {
     return false;
   }
-  const normalized = normalizeToolName(name);
+  const normalized = normalizeToolPolicyName(name);
   const patterns = compilePatterns(list);
   if (matchesAny(normalized, patterns)) {
     return true;

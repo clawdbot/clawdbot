@@ -6,7 +6,7 @@ import {
   setTtsMachinePrefsPathResolver,
 } from "./runtime-api.js";
 import { persistTtsAudioToMediaStore } from "./tts-audio-store.js";
-import { maybeApplyTtsToPayload as maybeApplyTtsToPayloadCore } from "./tts-payload.js";
+import { maybeApplyTtsToPayloadCore } from "./tts-payload.js";
 import { textToSpeech as textToSpeechCore } from "./tts-synthesis.js";
 
 setSpeechRuntimeAvailabilityGuard(() => {

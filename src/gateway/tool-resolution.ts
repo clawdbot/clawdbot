@@ -26,7 +26,7 @@ import {
   collectExplicitDenylist,
   hasRestrictiveAllowPolicy,
   mergeAlsoAllowPolicy,
-  normalizeToolName,
+  normalizeToolPolicyName,
   replaceWithEffectiveToolAllowlist,
   resolveToolProfilePolicy,
 } from "../agents/tool-policy.js";
@@ -193,7 +193,9 @@ export function resolveGatewayScopedTools(params: {
   const sandboxPolicy = sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined;
   const excludedToolNames = params.excludeToolNames ? Array.from(params.excludeToolNames) : [];
   const mediatedToolNames = new Set(
-    Array.from(params.mediatedToolNames ?? [], (name) => normalizeToolName(name)).filter(Boolean),
+    Array.from(params.mediatedToolNames ?? [], (name) => normalizeToolPolicyName(name)).filter(
+      Boolean,
+    ),
   );
   const gatewayToolsCfg = params.cfg.gateway?.tools;
   const defaultGatewayDeny =
@@ -203,7 +205,7 @@ export function resolveGatewayScopedTools(params: {
           // normalize both sides so they still lift the matching default deny.
           (name) =>
             !gatewayToolsCfg?.allow?.some(
-              (allowed) => normalizeToolName(allowed) === normalizeToolName(name),
+              (allowed) => normalizeToolPolicyName(allowed) === normalizeToolPolicyName(name),
             ),
         )
       : [];
@@ -403,7 +405,7 @@ export function resolveGatewayScopedTools(params: {
     // Once a name is server-minted as mediated, only the canonical coding
     // factory may supply it. A policy-filtered tool must not fall back to a
     // coincidentally named Gateway/plugin implementation.
-    ...baseTools.filter((tool) => !mediatedToolNames.has(normalizeToolName(tool.name))),
+    ...baseTools.filter((tool) => !mediatedToolNames.has(normalizeToolPolicyName(tool.name))),
     ...mediatedCodingTools,
   ];
   const allTools = nodeExecDefaults

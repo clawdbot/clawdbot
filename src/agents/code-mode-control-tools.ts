@@ -3,7 +3,7 @@
  * exec-compatible before-tool-call surface.
  */
 import { isPlainObject } from "../utils.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 /** Model-visible Code Mode exec tool name. */
@@ -44,7 +44,9 @@ export function isCodeModeControlTool(tool: object): boolean {
 }
 
 function isCodeModeExecTool(tool: AnyAgentTool): boolean {
-  return isCodeModeControlTool(tool) && normalizeToolName(tool.name) === CODE_MODE_EXEC_TOOL_NAME;
+  return (
+    isCodeModeControlTool(tool) && normalizeToolPolicyName(tool.name) === CODE_MODE_EXEC_TOOL_NAME
+  );
 }
 
 function resolveCodeModeExecToolInputKind(params: unknown): CodeModeExecToolInputKind | undefined {

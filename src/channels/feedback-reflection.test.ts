@@ -5,7 +5,7 @@ import { recordChannelFeedbackEvent, runChannelFeedbackReflection } from "./feed
 const appendTranscriptEvent = vi.hoisted(() => vi.fn(async () => undefined));
 const dispatchRoutedChannelTurn = vi.hoisted(() => vi.fn());
 const loadSessionEntry = vi.hoisted(() => vi.fn());
-const readSessionUpdatedAt = vi.hoisted(() => vi.fn());
+const readSessionUpdatedAtCore = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/state/main/sessions.json"));
 
 vi.mock("../config/sessions/paths.js", () => ({ resolveStorePath }));
@@ -13,7 +13,7 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
   appendTranscriptEvent,
   loadSessionEntry,
   loadSessionEntryReadOnly: loadSessionEntry,
-  readSessionUpdatedAt,
+  readSessionUpdatedAtCore,
 }));
 vi.mock("./turn/lifecycle.js", () => ({ dispatchRoutedChannelTurn }));
 

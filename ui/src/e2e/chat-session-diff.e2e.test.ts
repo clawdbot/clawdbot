@@ -163,10 +163,10 @@ describeControlUiE2e("session diff panel", () => {
     await expect.poll(() => modified.locator(".chat-diff").count()).toBe(1);
   });
 
-  it("disables the diff toggle for a workspace outside a git checkout", async () => {
+  it("hides the diff toggle until the workspace becomes a git checkout", async () => {
     const context = await newBrowserContext();
     const page = await context.newPage();
-    await installMockGateway(page, {
+    const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
       methodResponses: {
         "sessions.files.list": {
@@ -186,20 +186,28 @@ describeControlUiE2e("session diff panel", () => {
       },
     });
     await page.goto(`${server.baseUrl}chat`);
-
-    const toggle = page.locator(".chat-session-diff-toggle").first();
-    await expect.poll(() => toggle.isDisabled()).toBe(true);
-    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Show session changes");
     await expect
-      .poll(() =>
-        toggle.evaluate(
-          (element) =>
-            (element.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
-              ?.content,
-        ),
-      )
-      .toBe("This session's workspace is not a git checkout.");
+      .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
+      .toBe(1);
+
+    const toggles = page.locator(".chat-session-diff-toggle");
+    await expect.poll(() => toggles.count()).toBe(0);
     await expect.poll(() => page.locator(".session-diff").count()).toBe(0);
+
+    await gateway.setMethodResponse("sessions.files.list", {
+      sessionKey: "main",
+      root: "/tmp/plain-workspace",
+      gitCheckout: true,
+      files: [],
+      browser: { path: "", entries: [] },
+    });
+    await gateway.emitChatFinal({ runId: "git-init-run", text: "Initialized repository." });
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
+      .toBe(2);
+
+    await expect.poll(() => toggles.count()).toBe(1);
+    await expect.poll(() => toggles.first().isEnabled()).toBe(true);
   });
 
   it("keeps the panel fallback for gateways that omit checkout capability", async () => {

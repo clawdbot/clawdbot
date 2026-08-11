@@ -56,7 +56,7 @@ export function resolveLiveVideoResolution(params: {
   return "480P";
 }
 
-export function parseCsvFilter(raw?: string): Set<string> | null {
+export function parseVideoProviderFilter(raw?: string): Set<string> | null {
   return parseLiveCsvFilter(raw);
 }
 

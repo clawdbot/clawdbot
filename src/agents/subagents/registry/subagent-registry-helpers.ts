@@ -9,7 +9,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES } from "../../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { resolveAgentIdFromSessionKey, resolveStorePath } from "../../../config/sessions.js";
-import { patchSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { computeBackoff } from "../../../infra/backoff.js";
 import { defaultRuntime } from "../../../runtime.js";
@@ -120,7 +120,7 @@ export async function persistSubagentSessionTiming(
       : getSubagentSessionRuntimeMs(entry);
   const status = resolveSubagentSessionStatus(entry);
 
-  await patchSessionEntry(
+  await patchSessionEntryCore(
     { storePath, sessionKey: childSessionKey },
     (sessionEntry) => {
       // Recheck under the session-store write lock. A completion may have

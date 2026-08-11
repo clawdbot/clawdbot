@@ -1,6 +1,6 @@
 import { getRuntimeConfig } from "../../../config/config.js";
 import { resolveAgentIdFromSessionKey, resolveStorePath } from "../../../config/sessions.js";
-import { loadSessionEntry, patchSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { loadSessionEntry, patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import {
   extractMessageRole,
@@ -191,7 +191,7 @@ export async function recoverInterruptedSubagentRow(
       if (!alreadyWedged) {
         let wedged: SessionEntry | null;
         try {
-          wedged = await patchSessionEntry(
+          wedged = await patchSessionEntryCore(
             { storePath, sessionKey: childSessionKey },
             (current) => {
               current.abortedLastRun = false;

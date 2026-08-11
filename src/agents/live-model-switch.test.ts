@@ -35,7 +35,7 @@ vi.mock("../config/sessions/session-accessor.js", () => {
   return {
     loadSessionEntry,
     loadSessionEntryReadOnly: loadSessionEntry,
-    patchSessionEntry: (...args: unknown[]) => state.updateSessionStoreMock(...args),
+    patchSessionEntryCore: (...args: unknown[]) => state.updateSessionStoreMock(...args),
   };
 });
 

@@ -11,7 +11,10 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
-import { patchSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  patchSessionEntryCore,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -384,7 +387,7 @@ export async function incrementCompactionCount(params: {
     ? resolveSessionStorePathForScope({ agentId, sessionKey, storePath })
     : undefined;
   if (effectiveStorePath) {
-    const persistedEntry = await patchSessionEntry(
+    const persistedEntry = await patchSessionEntryCore(
       { ...(agentId ? { agentId } : {}), storePath: effectiveStorePath, sessionKey },
       () => updates,
       // Preserve the pre-rotation identity so a first-write merge can detect sessionId rollover.

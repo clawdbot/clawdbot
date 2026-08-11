@@ -15,7 +15,7 @@ import {
   parseStrictPositiveInteger,
 } from "../../infra/parse-finite-number.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { pad, truncate } from "./list.format.js";
+import { padTerminalCell, truncate } from "./list.format.js";
 import { loadModelsConfig } from "./load-config.js";
 import { formatMs, formatTokenK, updateConfig } from "./shared.js";
 
@@ -123,27 +123,27 @@ function printMetadataOnlyNotice(params: {
 
 function printScanTable(results: ModelScanResult[], runtime: RuntimeEnv) {
   const header = [
-    pad("Model", MODEL_PAD),
-    pad("Tool", 10),
-    pad("Image", 10),
-    pad("Ctx", CTX_PAD),
-    pad("Params", 8),
+    padTerminalCell("Model", MODEL_PAD),
+    padTerminalCell("Tool", 10),
+    padTerminalCell("Image", 10),
+    padTerminalCell("Ctx", CTX_PAD),
+    padTerminalCell("Params", 8),
     "Notes",
   ].join(" ");
   runtime.log(header);
 
   for (const entry of results) {
-    const modelLabel = pad(truncate(entry.modelRef, MODEL_PAD), MODEL_PAD);
-    const toolLabel = pad(
+    const modelLabel = padTerminalCell(truncate(entry.modelRef, MODEL_PAD), MODEL_PAD);
+    const toolLabel = padTerminalCell(
       entry.tool.skipped ? "skip" : entry.tool.ok ? formatMs(entry.tool.latencyMs) : "fail",
       10,
     );
-    const imageLabel = pad(
+    const imageLabel = padTerminalCell(
       entry.image.ok ? formatMs(entry.image.latencyMs) : entry.image.skipped ? "skip" : "fail",
       10,
     );
-    const ctxLabel = pad(formatTokenK(entry.contextLength), CTX_PAD);
-    const paramsLabel = pad(entry.inferredParamB ? `${entry.inferredParamB}b` : "-", 8);
+    const ctxLabel = padTerminalCell(formatTokenK(entry.contextLength), CTX_PAD);
+    const paramsLabel = padTerminalCell(entry.inferredParamB ? `${entry.inferredParamB}b` : "-", 8);
     const notes = entry.modality ? `modality:${sanitizeTerminalText(entry.modality)}` : "";
 
     runtime.log([modelLabel, toolLabel, imageLabel, ctxLabel, paramsLabel, notes].join(" "));

@@ -72,7 +72,7 @@ vi.mock("./subagent-announce.runtime.js", () => ({
   loadConfig: () => mockConfig,
   loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
   readSessionMessagesAsync: vi.fn(async () => []),
-  readSessionEntry: (storePath: string, sessionKey: string) => {
+  readSubagentSessionEntry: (storePath: string, sessionKey: string) => {
     const store = loadSessionStoreMock(storePath) as Record<string, unknown> | undefined;
     return store?.[sessionKey];
   },

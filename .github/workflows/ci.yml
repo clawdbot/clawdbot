@@ -2355,7 +2355,7 @@ jobs:
               fi
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
-              pnpm dup:check:coverage
+              pnpm dup:check
               if has_package_script "check:coercion-helpers"; then
                 pnpm check:coercion-helpers
               elif [[ "$HISTORICAL_TARGET" == "true" ]]; then

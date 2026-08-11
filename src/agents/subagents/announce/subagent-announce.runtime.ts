@@ -95,7 +95,7 @@ export async function persistInitialChildRuntimeState(params: {
   }
 }
 
-export function readSessionEntry(storePath: string, sessionKey: string) {
+export function readSubagentSessionEntry(storePath: string, sessionKey: string) {
   return loadSessionEntry({ storePath, sessionKey });
 }
 export { callGateway } from "../../../gateway/call.js";

@@ -9,9 +9,9 @@ import {
   installPluginFromNpmPackArchiveMock,
   installPluginFromNpmSpecMock,
   installPluginFromPathMock,
-  parseClawHubPluginSpec,
+  parseClawHubPluginSpecMock,
   promptYesNoMock,
-  readConfigFileSnapshotForWrite,
+  readConfigFileSnapshotForWriteMock,
   resetPluginsCliTestState,
   resolveMarketplaceInstallShortcut,
   runPluginsCommand,
@@ -30,7 +30,7 @@ vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
 
 function expectNoPluginInstallSideEffects(): void {
   expect(withPluginLifecycleLeaseMock).not.toHaveBeenCalled();
-  expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
+  expect(readConfigFileSnapshotForWriteMock).not.toHaveBeenCalled();
   expect(promptYesNoMock).not.toHaveBeenCalled();
   expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
   expect(installPluginFromGitSpecMock).not.toHaveBeenCalled();
@@ -179,7 +179,7 @@ describe("plugin install mutation-free preflight", () => {
     },
   ])("rejects $label before the lifecycle lease", async ({ args, error }) => {
     if (args[0] === "clawhub:demo") {
-      parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
+      parseClawHubPluginSpecMock.mockReturnValue({ name: "demo" });
     }
 
     await expect(runPluginsCommand(["plugins", "install", ...args, "--force"])).rejects.toThrow(

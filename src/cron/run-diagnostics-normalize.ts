@@ -68,7 +68,7 @@ export function formatUnknownError(error: unknown): string {
   return String(error);
 }
 
-export function normalizeToolName(value: unknown): string | undefined {
+export function normalizeDiagnosticToolName(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -121,7 +121,7 @@ export function normalizeCronRunDiagnosticSummary(value: string | undefined): st
 }
 
 /** Normalizes stored cron diagnostic payloads into bounded entries. */
-export function normalizeCronRunDiagnostics(
+export function normalizeCronRunDiagnosticsCore(
   value: unknown,
   opts?: CronRunDiagnosticsNormalizeOptions,
 ): NormalizedCronRunDiagnostics | undefined {

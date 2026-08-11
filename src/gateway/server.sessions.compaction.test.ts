@@ -24,7 +24,7 @@ import {
   appendTranscriptEvent,
   loadSessionEntry as loadAccessorSessionEntry,
   loadTranscriptEvents,
-  patchSessionEntry as patchAccessorSessionEntry,
+  patchSessionEntryCore as patchAccessorSessionEntry,
   replaceSessionEntry,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";

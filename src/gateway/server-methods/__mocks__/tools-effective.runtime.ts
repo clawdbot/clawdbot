@@ -55,7 +55,6 @@ export const resolveEffectiveToolInventory =
   toolsEffectiveGlobalAgentRuntimeMocks.resolveEffectiveToolInventory;
 export const resolveEffectiveToolInventoryRuntimeModelContextAsync =
   toolsEffectiveGlobalAgentRuntimeMocks.resolveEffectiveToolInventoryRuntimeModelContextAsync;
-export const peekSessionMcpRuntime = vi.fn(() => undefined);
 export const resolveSessionMcpConfigSummary = vi.fn(() => ({
   fingerprint: "mcp:0",
   serverNames: [] as string[],
@@ -67,4 +66,5 @@ export const toolsEffectiveRuntimeMockModule = {
   ),
   getActivePluginRegistryVersion: vi.fn(() => 1),
   getActivePluginChannelRegistryVersion: vi.fn(() => 1),
+  peekSessionMcpRuntime: vi.fn(() => undefined),
 };

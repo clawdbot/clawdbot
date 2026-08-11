@@ -21,10 +21,10 @@ export {
 /** Materialize static configured MCP under a scheduled Codex authority envelope. */
 export async function materializeStaticMcpToolsForScheduledHarnessRun(
   params: Parameters<
-    typeof import("../agents/agent-bundle-mcp-harness.js").materializeStaticMcpToolsForScheduledHarnessRun
+    typeof import("../agents/agent-bundle-mcp-harness.js").materializeStaticMcpToolsForScheduledHarnessRunCore
   >[0],
 ) {
-  const { materializeStaticMcpToolsForScheduledHarnessRun: materialize } =
+  const { materializeStaticMcpToolsForScheduledHarnessRunCore: materialize } =
     await import("../agents/agent-bundle-mcp-harness.js");
   return materialize(params);
 }

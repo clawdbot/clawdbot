@@ -189,7 +189,7 @@ vi.mock("./subagent-announce.runtime.js", () => ({
   loadConfig: () => configOverride,
   loadSessionStore: vi.fn(() => sessionStore),
   readSessionMessagesAsync: vi.fn(async () => []),
-  readSessionEntry: (_storePath: string, sessionKey: string) =>
+  readSubagentSessionEntry: (_storePath: string, sessionKey: string) =>
     (sessionStore as Record<string, unknown>)?.[sessionKey],
   resolveContinuationRuntimeConfig: () => ({
     maxChainLength: 10,

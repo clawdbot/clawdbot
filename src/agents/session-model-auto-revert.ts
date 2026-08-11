@@ -2,7 +2,7 @@
 import {
   appendTranscriptMessage,
   loadSessionEntry,
-  patchSessionEntry,
+  patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import {
   createAgentPatchedSessionModelFallback,
@@ -47,7 +47,7 @@ async function reconcileAgentPatchedSessionModel(params: {
   let note: string | undefined;
   let sessionId: string | undefined;
   let result: "cleared" | "promoted" | "reverted" | "none" = "none";
-  await patchSessionEntry(
+  await patchSessionEntryCore(
     {
       agentId: params.agentId,
       sessionKey: params.sessionKey,

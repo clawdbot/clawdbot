@@ -24,7 +24,7 @@ import {
   buildGatewaySessionInfo,
   filterAndSortSessionEntries,
   listSessionsFromStore,
-  loadCombinedSessionStoreForGateway,
+  loadCombinedSessionStoreForGatewayCore,
   resolveDeletedAgentIdFromSessionKey,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils.js";
@@ -231,7 +231,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
   if (hasSessionId) {
     // sessionId can collide across stores; delegate selection so exact key
     // matches and ambiguity rules stay shared with other session-id callers.
-    const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
+    const { store } = loadCombinedSessionStoreForGatewayCore(cfg, { agentId: p.agentId });
     const matches = findVisibleSessionIdMatches({ cfg, store, p, sessionId, entryFilter });
     const selection = resolveSessionIdMatchSelection(matches, sessionId);
     if (selection.kind === "none") {
@@ -270,7 +270,9 @@ export async function resolveSessionKeyFromResolveParams(params: {
         ),
       };
     }
-    const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
+    const { storePath, store } = loadCombinedSessionStoreForGatewayCore(cfg, {
+      agentId: p.agentId,
+    });
     const matches = findVisibleShortIdMatches({
       cfg,
       storePath,
@@ -304,7 +306,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
+  const { storePath, store } = loadCombinedSessionStoreForGatewayCore(cfg, { agentId: p.agentId });
   const list = listSessionsFromStore({
     cfg,
     ...(entryFilter ? { entryFilter } : {}),

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntry,
@@ -214,7 +214,7 @@ describe("sessions.patch archive attribution", () => {
       ]);
       const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       const readCandidateState = () => ({
-        entries: listSessionEntries({ agentId: "main" })
+        entries: listSessionEntriesCore({ agentId: "main" })
           .filter(({ sessionKey }) => sessionKey === canonicalKey || sessionKey === aliasKey)
           .toSorted((left, right) => left.sessionKey.localeCompare(right.sessionKey)),
         members: listSessionMembers(memberScope),

@@ -6,7 +6,10 @@ import {
   sortSubagentRuns,
 } from "../../../auto-reply/reply/subagents-utils.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
-import { loadSessionEntry, patchSessionEntry } from "../../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  patchSessionEntryCore,
+} from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { callGateway } from "../../../gateway/call.js";
@@ -79,7 +82,7 @@ const log = createSubsystemLogger("agents/subagent-control");
 const steerRateLimit = new Map<string, number>();
 
 type GatewayCaller = typeof callGateway;
-type PatchSessionEntry = typeof patchSessionEntry;
+type PatchSessionEntry = typeof patchSessionEntryCore;
 type AbortEmbeddedAgentRun = (sessionId: string) => boolean;
 type IsEmbeddedAgentRunActive = (sessionId: string) => boolean;
 type ClearSessionQueues = (keys: Array<string | undefined>) => ClearSessionQueueResult;
@@ -103,12 +106,12 @@ const callSubagentControlGateway: GatewayCaller = async (request) => {
 
 const defaultSubagentControlDeps = {
   callGateway: callSubagentControlGateway,
-  patchSessionEntry,
+  patchSessionEntryCore,
 };
 
 let subagentControlDeps: {
   callGateway: GatewayCaller;
-  patchSessionEntry: PatchSessionEntry;
+  patchSessionEntryCore: PatchSessionEntry;
   abortEmbeddedAgentRun?: AbortEmbeddedAgentRun;
   isEmbeddedAgentRunActive?: IsEmbeddedAgentRunActive;
   clearSessionQueues?: ClearSessionQueues;
@@ -312,7 +315,7 @@ async function persistSubagentAbortedLastRun(params: {
     return true;
   }
   try {
-    await subagentControlDeps.patchSessionEntry(
+    await subagentControlDeps.patchSessionEntryCore(
       { storePath: params.storePath, sessionKey: params.childSessionKey },
       (current) =>
         current.sessionId !== params.expectedSessionId ||
@@ -1455,7 +1458,7 @@ const testing = {
   setDepsForTest(
     overrides?: Partial<{
       callGateway: GatewayCaller;
-      patchSessionEntry: PatchSessionEntry;
+      patchSessionEntryCore: PatchSessionEntry;
       abortEmbeddedAgentRun: AbortEmbeddedAgentRun;
       isEmbeddedAgentRunActive: IsEmbeddedAgentRunActive;
       clearSessionQueues: ClearSessionQueues;

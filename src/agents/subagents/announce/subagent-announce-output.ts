@@ -25,7 +25,7 @@ import {
 import {
   callGateway,
   getRuntimeConfig,
-  readSessionEntry,
+  readSubagentSessionEntry,
   readSessionMessagesAsync,
   resolveAgentIdFromSessionKey,
   resolveStorePath,
@@ -48,7 +48,7 @@ const ASSISTANT_TOOL_CALL_BLOCK_TYPES = new Set([
 type SubagentAnnounceOutputDeps = {
   callGateway: typeof callGateway;
   getRuntimeConfig: typeof getRuntimeConfig;
-  readSessionEntry: typeof readSessionEntry;
+  readSubagentSessionEntry: typeof readSubagentSessionEntry;
   readSessionMessagesAsync: typeof readSessionMessagesAsync;
   resolveAgentIdFromSessionKey: typeof resolveAgentIdFromSessionKey;
   resolveStorePath: typeof resolveStorePath;
@@ -57,7 +57,7 @@ type SubagentAnnounceOutputDeps = {
 const defaultSubagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = {
   callGateway,
   getRuntimeConfig,
-  readSessionEntry,
+  readSubagentSessionEntry,
   readSessionMessagesAsync,
   resolveAgentIdFromSessionKey,
   resolveStorePath,
@@ -643,7 +643,7 @@ export async function buildCompactAnnounceStatsLine(params: {
   const cfg = subagentAnnounceOutputDeps.getRuntimeConfig();
   const agentId = subagentAnnounceOutputDeps.resolveAgentIdFromSessionKey(params.sessionKey);
   const storePath = subagentAnnounceOutputDeps.resolveStorePath(cfg.session?.store, { agentId });
-  let entry = subagentAnnounceOutputDeps.readSessionEntry(storePath, params.sessionKey);
+  let entry = subagentAnnounceOutputDeps.readSubagentSessionEntry(storePath, params.sessionKey);
   const tokenWaitAttempts = isFastTestMode() ? 1 : 3;
   for (let attempt = 0; attempt < tokenWaitAttempts; attempt += 1) {
     const hasTokenData =
@@ -658,7 +658,7 @@ export async function buildCompactAnnounceStatsLine(params: {
         setTimeout(resolve, 150);
       });
     }
-    entry = subagentAnnounceOutputDeps.readSessionEntry(storePath, params.sessionKey);
+    entry = subagentAnnounceOutputDeps.readSubagentSessionEntry(storePath, params.sessionKey);
   }
 
   const input = typeof entry?.inputTokens === "number" ? entry.inputTokens : 0;

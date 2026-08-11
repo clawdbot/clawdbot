@@ -115,7 +115,7 @@ vi.mock("../../secrets/resolve.js", () => ({
   resolveSecretRefString: resolveSecretRefStringMock,
 }));
 vi.mock("../status-all/format.js", () => ({
-  redactSecrets: (value: string) => value,
+  redactStatusSecrets: (value: string) => value,
 }));
 vi.mock("./shared.js", () => ({
   DEFAULT_PROVIDER: "openai",
