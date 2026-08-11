@@ -19,7 +19,7 @@ import {
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn as resolveEmbeddedAgentStreamFnImpl,
 } from "../stream-resolution.js";
-import { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
+import { buildContextEnginePromptCacheInfo } from "./attempt-context-engine-helpers.js";
 import {
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
@@ -29,14 +29,14 @@ import {
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   shouldWarnOnOrphanedUserRepair,
-} from "./attempt.prompt-helpers.js";
-import { composeSystemPromptWithHookContext } from "./attempt.thread-helpers.js";
+} from "./attempt-prompt-helpers.js";
+import { composeSystemPromptWithHookContext } from "./attempt-thread-helpers.js";
+import { buildEmbeddedAttemptToolRunContext } from "./attempt-tool-run-context.js";
 import { wrapStreamFnRepairMalformedToolCallArguments } from "./attempt.tool-call-argument-repair.js";
 import {
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.tool-call-normalization.js";
-import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
 
 const llmRuntime = {
   ...defaultLlmRuntime,

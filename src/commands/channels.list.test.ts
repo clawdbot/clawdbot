@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
     diagnostics: [],
   })),
   listReadOnlyChannelPluginsForConfig: vi.fn<() => ChannelPlugin[]>(() => []),
-  buildChannelAccountSnapshot: vi.fn(),
+  resolveChannelAccountSnapshot: vi.fn(),
   listTrustedChannelPluginCatalogEntries: vi.fn<() => ChannelPluginCatalogEntry[]>(() => []),
   listManifestInstalledChannelIds: vi.fn<() => Set<string>>(() => new Set()),
   resolveMissingOfficialExternalChannelPluginRepairHint: vi.fn(),
@@ -53,7 +53,7 @@ vi.mock("../channels/plugins/read-only.js", () => ({
 }));
 
 vi.mock("../channels/plugins/status.js", () => ({
-  buildChannelAccountSnapshot: mocks.buildChannelAccountSnapshot,
+  resolveChannelAccountSnapshot: mocks.resolveChannelAccountSnapshot,
 }));
 
 vi.mock("./channel-setup/trusted-catalog.js", () => ({
@@ -130,7 +130,7 @@ describe("channels list", () => {
     mocks.resolveCommandConfigWithSecrets.mockClear();
     mocks.listReadOnlyChannelPluginsForConfig.mockReset();
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
-    mocks.buildChannelAccountSnapshot.mockReset();
+    mocks.resolveChannelAccountSnapshot.mockReset();
     mocks.listTrustedChannelPluginCatalogEntries.mockReset();
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([]);
     mocks.listManifestInstalledChannelIds.mockReset();
@@ -213,7 +213,7 @@ describe("channels list", () => {
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
       createMockChannelPlugin({ accountIds: ["default"] }),
     ]);
-    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
       accountId: "default",
       configured: true,
       tokenSource: "config",
@@ -253,7 +253,7 @@ describe("channels list", () => {
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
       createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: ["default"] }),
     ]);
-    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
       accountId: "default",
       configured: false,
       tokenSource: "none",
@@ -302,7 +302,7 @@ describe("channels list", () => {
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
       createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: ["default"] }),
     ]);
-    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
       accountId: "default",
       configured: false,
       tokenSource: "none",
@@ -331,7 +331,7 @@ describe("channels list", () => {
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
       createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: ["default"] }),
     ]);
-    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
       accountId: "default",
       configured: true,
       tokenSource: "config",
@@ -488,7 +488,7 @@ describe("channels list", () => {
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
       createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: [] }),
     ]);
-    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
       accountId: "default",
       configured: false,
       enabled: false,
@@ -520,7 +520,7 @@ describe("channels list", () => {
       createMockChannelPlugin({ id: "telegram", accountIds: ["default"] }),
       createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: [] }),
     ]);
-    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
       accountId: "default",
       configured: false,
       enabled: false,

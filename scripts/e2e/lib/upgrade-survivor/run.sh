@@ -434,7 +434,7 @@ restore_prepublish_authored_config() {
 configure_plugin_registry() {
   local fixture_root="$ARTIFACT_ROOT/plugin-registry"
   local package_dir="$fixture_root/package"
-  local tarball="$fixture_root/openclaw-brave-plugin-2026.5.2.tgz"
+  local tarball="$fixture_root/openclaw-brave-plugin-${candidate_version}.tgz"
   local port_file="$fixture_root/npm-registry-port"
   local log_file="$fixture_root/npm-registry.log"
   local registry_args=()
@@ -473,17 +473,21 @@ NODE
 
   if configured_plugin_installs_enabled; then
     mkdir -p "$package_dir"
-    FIXTURE_PACKAGE_DIR="$package_dir" node <<'NODE'
+    FIXTURE_PACKAGE_DIR="$package_dir" FIXTURE_PACKAGE_VERSION="$candidate_version" node <<'NODE'
 const fs = require("node:fs");
 const path = require("node:path");
 const root = process.env.FIXTURE_PACKAGE_DIR;
+const version = process.env.FIXTURE_PACKAGE_VERSION;
+if (!version) {
+  throw new Error("missing fixture package version");
+}
 fs.mkdirSync(root, { recursive: true });
 fs.writeFileSync(
   path.join(root, "package.json"),
   `${JSON.stringify(
     {
       name: "@openclaw/brave-plugin",
-      version: "2026.5.2",
+      version,
       openclaw: { extensions: ["./index.js"] },
     },
     null,
@@ -524,7 +528,7 @@ fs.writeFileSync(
 );
 NODE
     tar -czf "$tarball" -C "$fixture_root" package
-    registry_args+=("@openclaw/brave-plugin" "2026.5.2" "$tarball")
+    registry_args+=("@openclaw/brave-plugin" "$candidate_version" "$tarball")
   fi
 
   if [ "${#registry_args[@]}" -eq 0 ]; then
@@ -812,7 +816,14 @@ seed_state() {
 }
 
 apply_baseline_config_recipe() {
-  node scripts/e2e/lib/upgrade-survivor/config-recipe.mjs apply \
+  local tsx_import="${OPENCLAW_UPGRADE_SURVIVOR_TSX_IMPORT:-tsx}"
+  local recipe_runner=(
+    node --import "$tsx_import" scripts/e2e/lib/upgrade-survivor/config-recipe.mts
+  )
+  if [ ! -f scripts/e2e/lib/upgrade-survivor/config-recipe.mts ]; then
+    recipe_runner=(node scripts/e2e/lib/upgrade-survivor/config-recipe.mjs)
+  fi
+  "${recipe_runner[@]}" apply \
     --summary "$CONFIG_COVERAGE_JSON" \
     --baseline-version "$baseline_version"
 }
@@ -1529,9 +1540,19 @@ phase prepare-update-restart-probe prepare_update_restart_probe
 phase configure-plugin-registry configure_plugin_registry
 phase update-candidate update_candidate
 if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
+  clawhub_security_mode="required"
+  prepublish_package="@openclaw/whatsapp"
+  if [ "$SCENARIO" = "configured-plugin-installs" ]; then
+    prepublish_package="@openclaw/matrix"
+  fi
+  # 2026.6.35 predates the release-security endpoint. The trusted fixture still
+  # asserts its exact older request contract instead of accepting arbitrary IO.
+  if [ "$candidate_version" = "2026.6.35" ]; then
+    clawhub_security_mode="absent"
+  fi
   phase assert-prepublish-requests node \
     "${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER:-scripts/e2e/lib/clawhub-fixture-server.cjs}" \
-    assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "@openclaw/whatsapp" "$candidate_version"
+    assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "$prepublish_package" "$candidate_version" "$clawhub_security_mode"
 fi
 phase root-managed-vps-cli-usable assert_root_managed_vps_cli_usable
 phase assert-legacy-plugin-dependency-debris-before-doctor assert_legacy_plugin_dependency_debris_before_doctor

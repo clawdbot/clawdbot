@@ -9,13 +9,23 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { ConfigMutationConflictError, replaceConfigFile } from "../config/config.js";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { logConfigUpdated } from "../config/logging.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
+import { withSetupMigrationTargetLock } from "../wizard/setup.migration-snapshot.js";
 import { createNonInteractiveLoggingPrompter } from "./non-interactive-prompter.js";
 import { runNonInteractiveLocalSetup } from "./onboard-non-interactive/local.js";
 import { runNonInteractiveRemoteSetup } from "./onboard-non-interactive/remote.js";
 import type { OnboardOptions } from "./onboard-types.js";
+
+function isMigrationImport(opts: OnboardOptions): boolean {
+  return Boolean(
+    opts.importFrom || opts.importSource || opts.importSecrets || opts.flow === "import",
+  );
+}
 
 /** Runs a setup migration import with non-interactive prompt failures. */
 async function runNonInteractiveMigrationImport(params: {
@@ -80,11 +90,7 @@ async function runNonInteractiveMigrationImport(params: {
   await outcome.acknowledgePromotion?.();
 }
 
-/** Runs non-interactive onboarding in local, remote, or migration-import mode. */
-export async function runNonInteractiveSetup(
-  opts: OnboardOptions,
-  runtime: RuntimeEnv = defaultRuntime,
-) {
+async function runNonInteractiveSetupExclusive(opts: OnboardOptions, runtime: RuntimeEnv) {
   const snapshot = await readConfigFileSnapshot();
   if (snapshot.exists && !snapshot.valid) {
     // Avoid rewriting an invalid config snapshot; doctor owns recovery so setup
@@ -110,7 +116,7 @@ export async function runNonInteractiveSetup(
     return;
   }
 
-  if (opts.importFrom || opts.importSource || opts.importSecrets || opts.flow === "import") {
+  if (isMigrationImport(opts)) {
     // Import flow owns its own commit path because migrations may intentionally
     // shrink legacy config after extracting credentials.
     await runNonInteractiveMigrationImport({ opts, runtime, baseConfig });
@@ -123,4 +129,34 @@ export async function runNonInteractiveSetup(
   }
 
   await runNonInteractiveLocalSetup({ opts, runtime, baseConfig, baseHash: snapshot.hash });
+}
+
+/** Runs non-interactive onboarding in local, remote, or migration-import mode. */
+export async function runNonInteractiveSetup(
+  opts: OnboardOptions,
+  runtime: RuntimeEnv = defaultRuntime,
+) {
+  await withSetupMigrationTargetLock(resolveStateDir(), async () => {
+    if (isMigrationImport(opts)) {
+      // Migration must inspect freshness before opening the shared lease DB.
+      await runNonInteractiveSetupExclusive(opts, runtime);
+      return;
+    }
+    await withOpenClawStateLease(
+      {
+        scope: "core:onboarding",
+        key: "global",
+        database: { scope: "shared" },
+        // Bound one run to five minutes while allowing one predecessor to finish.
+        leaseMs: 5 * 60_000,
+        waitMs: 10 * 60_000,
+        leaseLabel: "non-interactive onboarding lease",
+        operationLabel: "onboarding.non-interactive.lease",
+      },
+      async () =>
+        await withPluginLifecycleLease({}, async () =>
+          runNonInteractiveSetupExclusive(opts, runtime),
+        ),
+    );
+  });
 }

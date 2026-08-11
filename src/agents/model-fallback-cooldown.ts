@@ -2,8 +2,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { isActiveUnusableWindow } from "./auth-profiles/usage-state.js";
-import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 import { shouldUseTransientCooldownProbeSlot } from "./failover-policy.js";
+import type { FailoverReason } from "./failover/signal.js";
 import type { ModelFallbackAuthRuntime } from "./model-fallback-attempt.js";
 import type { ModelCandidate } from "./model-fallback.types.js";
 

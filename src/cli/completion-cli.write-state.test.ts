@@ -63,7 +63,7 @@ vi.mock("./program/program-context.js", () => ({
 
 vi.mock("./program/register.subclis-core.js", () => ({
   getSubCliEntries: getSubCliEntriesMock,
-  registerSubCliByName: registerSubCliByNameMock,
+  registerSubCliByNameCore: registerSubCliByNameMock,
 }));
 
 vi.mock("../plugins/cli.js", () => ({

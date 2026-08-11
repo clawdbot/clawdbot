@@ -530,7 +530,7 @@ function isRuntimeTrajectoryEvent(value: unknown): value is TrajectoryEvent {
     value.source === "runtime" &&
     typeof value.type === "string" &&
     typeof value.ts === "string" &&
-    !Number.isNaN(Date.parse(value.ts)) &&
+    Number.isFinite(Date.parse(value.ts)) &&
     isFiniteNumber(value.seq) &&
     typeof value.sessionId === "string" &&
     (!("data" in value) || value.data === undefined || isRecord(value.data))

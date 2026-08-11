@@ -18,24 +18,33 @@ async function main(): Promise<void> {
   const result = await writePluginSdkApiBaselineArtifacts({ repoRoot, check: checkOnly });
   if (checkOnly) {
     if (result.changed) {
+      const contractPath = path.relative(repoRoot, result.contractPath);
+      const diff = result.contractDiff;
       console.error(
         [
           "Plugin SDK API contract drift detected.",
-          `Manifest mismatch: ${path.relative(repoRoot, result.hashPath)}`,
-          "If this Plugin SDK surface change is intentional, run `pnpm plugin-sdk:api:gen` and commit the updated manifest.",
+          `Contract mismatch: ${contractPath}`,
+          `--- ${contractPath} (committed)`,
+          `+++ ${contractPath} (generated)`,
+          ...(diff?.previewLines ?? []),
+          `Changed JSONL lines: ${diff?.changedLineCount ?? 0}${
+            diff && diff.shownLineCount < diff.changedLineCount
+              ? ` (showing first ${diff.shownLineCount})`
+              : ""
+          }`,
+          "If this Plugin SDK surface change is intentional, run `pnpm plugin-sdk:api:gen` and commit the updated contract.",
           "If not intentional, fix the plugin-sdk exports or metadata first.",
         ].join("\n"),
       );
       process.exit(1);
     }
-    console.log(`OK ${path.relative(repoRoot, result.hashPath)}`);
+    console.log(`OK ${path.relative(repoRoot, result.contractPath)}`);
     return;
   }
   console.log(
     [
-      `Wrote ${path.relative(repoRoot, result.hashPath)}`,
+      `Wrote ${path.relative(repoRoot, result.contractPath)}`,
       `Wrote ${path.relative(repoRoot, result.jsonPath)} (gitignored, local only)`,
-      `Wrote ${path.relative(repoRoot, result.statefilePath)} (gitignored, local only)`,
     ].join("\n"),
   );
 }

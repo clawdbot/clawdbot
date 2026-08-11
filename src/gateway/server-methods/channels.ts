@@ -17,7 +17,7 @@ import {
   listChannelPlugins,
   normalizeChannelId,
 } from "../../channels/plugins/index.js";
-import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
+import { resolveChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
@@ -449,7 +449,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
         }
       }
       const runtimeSnapshot = resolveRuntimeSnapshot(channelId, accountId, defaultAccountId);
-      const snapshot = await buildChannelAccountSnapshot({
+      const snapshot = await resolveChannelAccountSnapshot({
         plugin,
         cfg,
         accountId,

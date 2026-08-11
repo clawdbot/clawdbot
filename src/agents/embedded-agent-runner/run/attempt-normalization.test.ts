@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
 import { buildContextEngineCompactionSessionTarget } from "./session-bootstrap.js";
+import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
 const sessionAccessorMocks = vi.hoisted(() => ({
   listSessionEntries: vi.fn(() => []),
@@ -60,6 +61,47 @@ describe("buildContextEngineCompactionSessionTarget", () => {
       agentId: "main",
       sessionId: "adopted-session",
       storePath: "/tmp/sessions.json",
+    });
+  });
+});
+
+describe("createEmbeddedRunSessionPromptState", () => {
+  it("keeps the admitted writer fence private across context-engine target adoption", () => {
+    const state = createEmbeddedRunSessionPromptState({
+      runParams: {
+        agentId: "main",
+        prompt: "hello",
+        runId: "run-b",
+        sessionFile: "agent:main:main",
+        sessionId: "session-before",
+        sessionKey: "agent:main:main",
+        sessionTarget: {
+          agentId: "main",
+          expectedLifecycleRevision: "revision-a",
+          expectedWriterRunId: "run-b",
+          sessionId: "session-before",
+          sessionKey: "agent:main:main",
+          storePath: "/tmp/sessions.json",
+        },
+        timeoutMs: 30_000,
+        workspaceDir: "/tmp",
+      } as never,
+      lifecycleGeneration: "generation-a",
+      resolvedSessionKey: "agent:main:main",
+      sessionAgentId: "main",
+    });
+
+    state.sessionTarget = {
+      agentId: "main",
+      sessionId: "session-after",
+      sessionKey: "agent:main:main",
+      storePath: "/tmp/sessions.json",
+    };
+
+    expect(state.sessionTarget).not.toHaveProperty("expectedWriterRunId");
+    expect(state.sessionWriterFence).toEqual({
+      expectedLifecycleRevision: "revision-a",
+      expectedWriterRunId: "run-b",
     });
   });
 });

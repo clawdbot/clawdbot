@@ -316,7 +316,12 @@ describe("qa-channel plugin", () => {
           kind === "payload"
             ? await adapter.send!.payload!({
                 ...context,
-                payload: { text: context.text, mediaUrl: mediaPath, mediaUrls: [mediaPath] },
+                payload: {
+                  text: context.text,
+                  mediaUrl: mediaPath,
+                  mediaUrls: [mediaPath],
+                  isError: true,
+                },
               })
             : await adapter.send!.media!(context);
         expect(result.receipt.parts[0]).toMatchObject({
@@ -324,6 +329,9 @@ describe("qa-channel plugin", () => {
           replyToId: "parent-1",
           threadId: "thread-1",
         });
+        if (kind === "payload") {
+          expect(harness.state.getSnapshot().messages.at(-1)?.isError).toBe(true);
+        }
       };
 
       await verifyChannelMessageAdapterCapabilityProofs({

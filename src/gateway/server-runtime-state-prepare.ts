@@ -16,11 +16,12 @@ import { resolveGatewayAuth } from "./auth.js";
 import { isLoopbackHost } from "./net.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
 import { resolveGatewayPluginConfig } from "./runtime-plugin-config.js";
+import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createGatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
 import type { GatewayInstanceRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import { createGatewayRuntimeState } from "./server-runtime-state.js";
+import { createGatewayHttpTransport } from "./server-runtime-state.js";
 import type { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import type { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
@@ -127,7 +128,8 @@ export async function prepareGatewayRuntimeState(params: {
           });
         })
       : {};
-  const { workerEnvironmentService, workerLiveEvents } = workerEnvironmentRuntime;
+  const { workerEnvironmentService, workerLiveEvents, workerTunnelManager } =
+    workerEnvironmentRuntime;
   // Assigned once approval managers exist; placement dispatch must not run before then.
   const workerDispatchAuthority = {
     revoke: (_params: { sessionId: string; sessionKeys: readonly string[] }): void => {
@@ -147,11 +149,18 @@ export async function prepareGatewayRuntimeState(params: {
           });
         })
       : undefined;
+  if (workerPlacementRuntime) {
+    workerEnvironmentRuntime.bindWorkerSessionDispatch?.(
+      workerPlacementRuntime.dispatchService.dispatch,
+    );
+  }
   // Without configured profiles, existing placements still reconcile but new dispatches stay off.
   const workerPlacementControlAvailable = workerPlacementRuntime?.dispatchService;
   const workerPlacementDispatchAvailable = hasConfiguredWorkerProfiles
     ? workerPlacementControlAvailable
     : undefined;
+  const workerDesktopObserveAvailable =
+    Boolean(workerEnvironmentService) && gatewayPluginConfigAtStart.cloudWorkers?.desktop === true;
   const channelLogs = Object.fromEntries(
     listGatewayStartupChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
@@ -172,7 +181,9 @@ export async function prepareGatewayRuntimeState(params: {
     uniqueStrings([...nextBaseGatewayMethods, ...listStartupChannelGatewayMethods()]).filter(
       (method) =>
         (workerPlacementDispatchAvailable || method !== "sessions.dispatch") &&
-        (workerPlacementControlAvailable || method !== "sessions.reclaim"),
+        (workerPlacementControlAvailable || method !== "sessions.reclaim") &&
+        (workerDesktopObserveAvailable ||
+          (method !== "worker.desktop.observe" && method !== "worker.desktop.launch")),
     );
   const runtimeConfig = await startupTrace.measure("runtime.config", async () => {
     const { resolveGatewayRuntimeConfig } = await import("./server-runtime-config.js");
@@ -348,13 +359,53 @@ export async function prepareGatewayRuntimeState(params: {
   const watchNodeRequestHandler: {
     current?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   } = {};
+  const { connectionState, httpTransport } = await startupTrace.measure(
+    "runtime.state",
+    async () => {
+      const createdConnectionState = createGatewayConnectionState({
+        cfg: cfgAtStart,
+        getRuntimeConfig,
+      });
+      const createdHttpTransport = await createGatewayHttpTransport({
+        cfg: cfgAtStart,
+        getRuntimeConfig,
+        bindHost,
+        port,
+        controlUiEnabled,
+        controlUiBasePath,
+        controlUiRoot: controlUiRootLifecycle.state,
+        openAiChatCompletionsEnabled,
+        openAiChatCompletionsConfig,
+        openResponsesEnabled,
+        openResponsesConfig,
+        strictTransportSecurityHeader,
+        resolvedAuth,
+        rateLimiter: authRateLimiter,
+        isTerminalEnabled: terminalLaunchPolicy.isEnabled,
+        gatewayTls,
+        getResolvedAuth,
+        hooksConfig: () => runtimeStateRef.current?.hooksConfig ?? initialHooksConfig,
+        getHookClientIpConfig: () =>
+          runtimeStateRef.current?.hookClientIpConfig ?? initialHookClientIpConfig,
+        pluginRegistry: pluginRuntime.registry,
+        getPluginRouteRegistry: () => pluginRuntime.registry,
+        isStartupPluginRuntimeReady: () => startupState.sidecarsReady,
+        getGatewayRequestContext: () => pluginGatewayContext.current,
+        deps,
+        log,
+        logHooks,
+        logPlugins,
+        getReadiness,
+        handleWatchNodeRequest: async (req, res) =>
+          (await watchNodeRequestHandler.current?.(req, res)) ?? false,
+        workerIngressEnabled: Boolean(workerEnvironmentService),
+        workerDesktopTunnels: workerTunnelManager?.desktop,
+        clients: createdConnectionState.clients,
+      });
+      return { connectionState: createdConnectionState, httpTransport: createdHttpTransport };
+    },
+  );
   const {
-    httpServer,
-    httpServers,
-    httpBindHosts,
-    startListening,
-    wss,
-    preauthConnectionBudget,
     clients,
     broadcast,
     broadcastToConnIds,
@@ -370,45 +421,18 @@ export async function prepareGatewayRuntimeState(params: {
     toolEventRecipients,
     sessionEventSubscribers,
     sessionMessageSubscribers,
+  } = connectionState;
+  const {
+    httpServer,
+    httpServers,
+    httpBindHosts,
+    startListening,
+    wss,
+    preauthConnectionBudget,
     getWorkerIngressEndpoint,
     getMcpAppSandboxPort,
     ensureSandboxHostPort,
-  } = await startupTrace.measure("runtime.state", () =>
-    createGatewayRuntimeState({
-      cfg: cfgAtStart,
-      getRuntimeConfig,
-      bindHost,
-      port,
-      controlUiEnabled,
-      controlUiBasePath,
-      controlUiRoot: controlUiRootLifecycle.state,
-      openAiChatCompletionsEnabled,
-      openAiChatCompletionsConfig,
-      openResponsesEnabled,
-      openResponsesConfig,
-      strictTransportSecurityHeader,
-      resolvedAuth,
-      rateLimiter: authRateLimiter,
-      isTerminalEnabled: terminalLaunchPolicy.isEnabled,
-      gatewayTls,
-      getResolvedAuth,
-      hooksConfig: () => runtimeStateRef.current?.hooksConfig ?? initialHooksConfig,
-      getHookClientIpConfig: () =>
-        runtimeStateRef.current?.hookClientIpConfig ?? initialHookClientIpConfig,
-      pluginRegistry: pluginRuntime.registry,
-      getPluginRouteRegistry: () => pluginRuntime.registry,
-      isStartupPluginRuntimeReady: () => startupState.sidecarsReady,
-      getGatewayRequestContext: () => pluginGatewayContext.current,
-      deps,
-      log,
-      logHooks,
-      logPlugins,
-      getReadiness,
-      handleWatchNodeRequest: async (req, res) =>
-        (await watchNodeRequestHandler.current?.(req, res)) ?? false,
-      workerIngressEnabled: Boolean(workerEnvironmentService),
-    }),
-  );
+  } = httpTransport;
 
   return {
     ...bootstrap,
@@ -420,6 +444,7 @@ export async function prepareGatewayRuntimeState(params: {
     workerPlacementRuntime,
     workerPlacementControlAvailable,
     workerPlacementDispatchAvailable,
+    workerDesktopObserveAvailable,
     channelLogs,
     channelRuntimeEnvs,
     listStartupChannelGatewayMethods,

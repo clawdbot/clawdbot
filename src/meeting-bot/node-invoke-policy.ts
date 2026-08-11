@@ -38,7 +38,7 @@ type PolicyDecision =
   | { approved: true; params: Record<string, unknown> }
   | { approved: false; result: OpenClawPluginNodeInvokePolicyResult };
 
-function readString(value: unknown): string | undefined {
+function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
@@ -123,7 +123,7 @@ function buildStartParams(
       ),
     };
   }
-  const mode = readString(params.mode);
+  const mode = readNonEmptyString(params.mode);
   if (mode && !options.supportedModes.has(mode)) {
     return {
       approved: false,
@@ -159,18 +159,18 @@ function buildForwardParams(
   params: Record<string, unknown>,
   options: MeetingBrowserNodePolicyOptions,
 ): PolicyDecision | null {
-  const action = readString(params.action);
+  const action = readNonEmptyString(params.action);
   switch (action) {
     case "setup":
       return approved({ action });
     case "status": {
-      const bridgeId = readString(params.bridgeId);
+      const bridgeId = readNonEmptyString(params.bridgeId);
       return approved(bridgeId ? { action, bridgeId } : { action });
     }
     case "list": {
       const forwarded: Record<string, unknown> = { action };
-      const url = readString(params.url);
-      const mode = readString(params.mode);
+      const url = readNonEmptyString(params.url);
+      const mode = readNonEmptyString(params.mode);
       if (url) {
         try {
           forwarded.url = options.normalizeUrl(url);
@@ -191,9 +191,9 @@ function buildForwardParams(
     }
     case "stopByUrl": {
       const forwarded: Record<string, unknown> = { action };
-      const url = readString(params.url);
-      const mode = readString(params.mode);
-      const exceptBridgeId = readString(params.exceptBridgeId);
+      const url = readNonEmptyString(params.url);
+      const mode = readNonEmptyString(params.mode);
+      const exceptBridgeId = readNonEmptyString(params.exceptBridgeId);
       if (!url) {
         return denyMissing(options, action, "url");
       }
@@ -218,7 +218,7 @@ function buildForwardParams(
     }
     case "pullAudio": {
       const forwarded: Record<string, unknown> = { action };
-      const bridgeId = readString(params.bridgeId);
+      const bridgeId = readNonEmptyString(params.bridgeId);
       const timeoutMs = readPositiveNumber(params.timeoutMs);
       if (!bridgeId) {
         return denyMissing(options, action, "bridgeId");
@@ -231,8 +231,8 @@ function buildForwardParams(
     }
     case "pushAudio": {
       const forwarded: Record<string, unknown> = { action };
-      const bridgeId = readString(params.bridgeId);
-      const base64 = readString(params.base64);
+      const bridgeId = readNonEmptyString(params.bridgeId);
+      const base64 = readNonEmptyString(params.base64);
       if (!bridgeId) {
         return denyMissing(options, action, "bridgeId");
       }
@@ -260,7 +260,7 @@ function buildForwardParams(
       return approved(forwarded);
     }
     case "clearAudio": {
-      const bridgeId = readString(params.bridgeId);
+      const bridgeId = readNonEmptyString(params.bridgeId);
       if (!bridgeId) {
         return denyMissing(options, action, "bridgeId");
       }
@@ -278,7 +278,7 @@ function buildForwardParams(
       });
     }
     case "stop": {
-      const bridgeId = readString(params.bridgeId);
+      const bridgeId = readNonEmptyString(params.bridgeId);
       return approved(bridgeId ? { action, bridgeId } : { action });
     }
     default:
@@ -297,7 +297,7 @@ export function createMeetingBrowserNodeInvokePolicy(
         return denied(options, `unsupported ${options.displayName} node command: ${ctx.command}`);
       }
       const params = asOptionalRecord(ctx.params) ?? {};
-      const action = readString(params.action);
+      const action = readNonEmptyString(params.action);
       if (action === "setup" && options.useConfiguredSetupCommands) {
         const setupParams: Record<string, unknown> = { action };
         copyConfiguredAudio(setupParams, options.start);

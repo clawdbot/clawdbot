@@ -73,6 +73,7 @@ import {
 } from "./server/ws-types.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 import { canonicalizeUserProfileAvatarPath } from "./user-profiles-http-path.js";
+import type { WorkerDesktopTunnels } from "./worker-environments/desktop-tunnel.js";
 
 type PluginGatewayDispatchContext = {
   gatewayAuthSatisfied?: boolean;
@@ -813,6 +814,7 @@ export function attachGatewayUpgradeHandler(opts: {
   rateLimiter?: AuthRateLimiter;
   /** Optional logger for error diagnostics. */
   log?: { warn: (msg: string) => void };
+  workerDesktopTunnels?: WorkerDesktopTunnels;
 }) {
   const {
     httpServer,
@@ -911,6 +913,27 @@ export function attachGatewayUpgradeHandler(opts: {
         ) {
           return;
         }
+      }
+      if (requestPath === "/worker-desktop/observe") {
+        if (!opts.workerDesktopTunnels) {
+          writeGatewayUpgradeServiceUnavailable(socket, "desktop observe unavailable");
+          socket.destroy();
+          return;
+        }
+        // Desktop observers are long-lived Gateway sockets, so they obey the same
+        // suspension/restart admission boundary as core upgrades. Without this a
+        // drained Gateway would keep accepting new desktop streams.
+        if (isGatewayWorkAdmissionClosed()) {
+          writeGatewayUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
+          socket.destroy();
+          return;
+        }
+        const { handleWorkerDesktopUpgrade } =
+          await import("./worker-environments/desktop-observe.js");
+        handleWorkerDesktopUpgrade(req, socket, head, {
+          tunnels: opts.workerDesktopTunnels,
+        });
+        return;
       }
       // Plugin-owned upgrade routes have already had the opportunity to claim the socket.
       // Core Gateway upgrades must stop at the HTTP boundary so a client cannot hold an

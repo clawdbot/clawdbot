@@ -1,5 +1,6 @@
 // Channel setup plugin install tests cover install decisions, registry reloads, scoped snapshots, and trust boundaries.
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createRequireRecord,
   bundledPluginRoot,
@@ -312,10 +313,6 @@ function expectPluginLoadedFromLocalPath(
   const expectedPath = path.resolve(process.cwd(), bundledPluginRoot("bundled-chat"));
   expect(result.installed).toBe(true);
   expect(result.cfg.plugins?.load?.paths).toContain(expectedPath);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object");

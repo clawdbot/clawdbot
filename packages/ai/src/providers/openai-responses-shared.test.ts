@@ -972,7 +972,6 @@ describe("processResponsesStream", () => {
           },
         }),
         buildParams: () => ({ model: nativeOpenAIModel.id, input: [], stream: true }),
-        formatError: (error) => (error instanceof Error ? error.message : String(error)),
       });
 
       await vi.advanceTimersByTimeAsync(5);
@@ -1048,7 +1047,6 @@ describe("processResponsesStream", () => {
         },
       }),
       buildParams: () => ({ model: nativeOpenAIModel.id, input: [], stream: true }),
-      formatError: (error) => (error instanceof Error ? error.message : String(error)),
     });
 
     expect(requestMaxRetries).toBe(expected);
@@ -1121,7 +1119,6 @@ describe("processResponsesStream", () => {
         }),
         stream: true,
       }),
-      formatError: (error) => (error instanceof Error ? error.message : String(error)),
     });
 
     expect(requests).toHaveLength(2);
@@ -1604,15 +1601,31 @@ describe("processResponsesStream", () => {
         },
       }),
       buildParams: () => ({ model: nativeOpenAIModel.id, input: [], stream: true }),
-      formatError: (error) => (error instanceof Error ? error.message : String(error)),
     });
 
     expect(lifecycleOutput.stopReason).toBe("error");
     expect(lifecycleOutput.errorMessage).toBe("Provider incomplete_reason: content_filter");
   });
 
-  it("preserves failed terminal response details", async () => {
+  it("preserves failed terminal response details and accounting", async () => {
+    const model = {
+      ...nativeOpenAIModel,
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+    } satisfies Model<"openai-responses">;
     const output = createAssistantOutput();
+    const resolveServiceTier = vi.fn(
+      (
+        responseTier: ResponseCreateParamsStreaming["service_tier"],
+        requestTier: ResponseCreateParamsStreaming["service_tier"],
+      ) => responseTier ?? requestTier,
+    );
+    const applyServiceTierPricing = vi.fn(
+      (usage: AssistantMessage["usage"], tier: ResponseCreateParamsStreaming["service_tier"]) => {
+        if (tier === "priority") {
+          usage.cost.total *= 2;
+        }
+      },
+    );
 
     await expect(
       processResponsesStream(
@@ -1622,20 +1635,46 @@ describe("processResponsesStream", () => {
             response: {
               id: "resp_failed",
               status: "failed",
+              model: "gpt-5.6-luna",
+              service_tier: "priority",
               error: { code: "server_error", message: "provider failed" },
+              usage: {
+                input_tokens: 21,
+                output_tokens: 4,
+                total_tokens: 25,
+                input_tokens_details: { cached_tokens: 6, cache_write_tokens: 2 },
+                output_tokens_details: { reasoning_tokens: 3 },
+              },
             },
           },
         ]),
         output,
         new AssistantMessageEventStream(),
-        nativeOpenAIModel,
+        model,
+        { serviceTier: "default", resolveServiceTier, applyServiceTierPricing },
       ),
     ).rejects.toThrow("server_error: provider failed");
 
     expect(output).toMatchObject({
       responseId: "resp_failed",
+      responseModel: "gpt-5.6-luna",
       stopReason: "stop",
+      usage: {
+        input: 13,
+        output: 4,
+        cacheRead: 6,
+        cacheWrite: 2,
+        reasoningTokens: 3,
+        totalTokens: 25,
+      },
     });
+    expect(output.usage.cost.input).toBeCloseTo(0.000065, 10);
+    expect(output.usage.cost.output).toBeCloseTo(0.00012, 10);
+    expect(output.usage.cost.cacheRead).toBeCloseTo(0.000003, 10);
+    expect(output.usage.cost.cacheWrite).toBeCloseTo(0.0000125, 10);
+    expect(output.usage.cost.total).toBeCloseTo(0.000401, 10);
+    expect(resolveServiceTier).toHaveBeenCalledWith("priority", "default");
+    expect(applyServiceTierPricing).toHaveBeenCalledWith(output.usage, "priority");
   });
 
   it("rejects streams that end without a terminal response event", async () => {
@@ -1651,6 +1690,26 @@ describe("processResponsesStream", () => {
       ),
     ).rejects.toThrow("OpenAI Responses stream ended before a terminal response event");
     expect(output.usage.input).toBe(7);
+  });
+
+  it("preserves cancellation when the SDK swallows the abort and ends iteration", async () => {
+    const abort = new AbortController();
+    const output = createAssistantOutput();
+    async function* silentlyAbortedStream() {
+      yield { type: "response.created", response: { id: "resp_aborted" } };
+      abort.abort();
+    }
+
+    await expect(
+      processResponsesStream(
+        silentlyAbortedStream(),
+        output,
+        new AssistantMessageEventStream(),
+        nativeOpenAIModel,
+        { signal: abort.signal },
+      ),
+    ).rejects.toThrow("Request was aborted");
+    expect(output.responseId).toBe("resp_aborted");
   });
 
   it.each([

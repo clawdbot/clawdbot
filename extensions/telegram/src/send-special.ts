@@ -1,10 +1,12 @@
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveTelegramMessageThreadSpec, type TelegramThreadSpec } from "./bot/helpers.js";
 import { resolveTelegramEffectiveGroupPolicy } from "./group-access.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
 import { beginTelegramPollRegistration } from "./poll-answer-context.js";
 import {
   createTelegramPollRegistryEntry,
   recordTelegramPollRegistryEntry,
+  type TelegramPollRegistryEntry,
 } from "./poll-registry.js";
 import {
   resolveTelegramApiContext,
@@ -30,6 +32,20 @@ type TelegramPollSendResult = {
   pollAnswerRouting?: "enabled" | "unavailable";
   warning?: string;
 };
+
+function resolveTelegramPollThreadSpec(
+  threadSpec: TelegramThreadSpec,
+): TelegramPollRegistryEntry["threadSpec"] | undefined {
+  if (threadSpec.scope === "none") {
+    return { scope: "none" };
+  }
+  if (threadSpec.scope === "dm") {
+    return threadSpec.id === undefined ? { scope: "dm" } : { scope: "dm", id: threadSpec.id };
+  }
+  return threadSpec.scope === "forum" && threadSpec.id !== undefined
+    ? { scope: "forum", id: threadSpec.id }
+    : undefined;
+}
 
 /**
  * Send a sticker to a Telegram chat by file_id.
@@ -86,7 +102,7 @@ async function sendStickerTelegramWithContext(
 }
 
 type TelegramPollOpts = TelegramThreadedSendOpts &
-  Pick<TelegramSendOpts, "silent"> & {
+  Pick<TelegramSendOpts, "onPlatformSendDispatch" | "silent"> & {
     /** Whether votes are anonymous. Defaults to true (Telegram default). */
     isAnonymous?: boolean;
   };
@@ -147,6 +163,7 @@ async function sendPollTelegramWithContext(
     ...(opts.silent === true ? { disable_notification: true } : {}),
   };
 
+  await opts.onPlatformSendDispatch?.();
   const result = await prepared.request(
     () =>
       api.sendPoll(prepared.chatId, normalizedPoll.question, normalizedPoll.options, pollParams),
@@ -154,14 +171,27 @@ async function sendPollTelegramWithContext(
   );
   const pollId = result.poll.id;
   const routeChat = result.chat.type === "channel" ? undefined : result.chat;
-  const messageThreadId = result.message_thread_id ?? prepared.threadSpec?.id;
+  const routeMessage =
+    result.message_thread_id === undefined && prepared.threadSpec?.id !== undefined
+      ? { ...result, message_thread_id: prepared.threadSpec.id }
+      : result;
+  const resolvedThreadSpec = routeChat
+    ? resolveTelegramMessageThreadSpec(
+        routeMessage,
+        prepared.threadSpec?.scope === "forum" || result.chat.is_forum === true,
+      )
+    : undefined;
+  const threadSpec = resolvedThreadSpec
+    ? resolveTelegramPollThreadSpec(resolvedThreadSpec)
+    : undefined;
+  const messageThreadId = threadSpec && "id" in threadSpec ? threadSpec.id : undefined;
   const provisionalEntry =
-    opts.isAnonymous === false && routeChat
+    opts.isAnonymous === false && routeChat && threadSpec
       ? createTelegramPollRegistryEntry({
           pollId,
           chat: routeChat,
           messageId: result.message_id,
-          messageThreadId,
+          threadSpec,
           question: normalizedPoll.question,
           options: normalizedPoll.options,
         })
@@ -213,7 +243,6 @@ async function sendPollTelegramWithContext(
             telegramCfg: context.account.config,
             groupConfig: groupPolicyConfig,
             topicConfig,
-            useTopicAndGroupOverrides: true,
           }) === "disabled";
         if (groupIngressDisabled) {
           pollAnswerRouting = "unavailable";

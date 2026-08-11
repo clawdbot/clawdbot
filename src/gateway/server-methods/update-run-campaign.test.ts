@@ -2,11 +2,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateScheduleState } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import type { UpdateCampaignController } from "../../infra/update-campaign.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
-import { createDeferred } from "../../test-utils/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 
 let currentCampaignId: string | undefined;
@@ -38,7 +38,9 @@ type UpdateInstallSurface = Awaited<
 >;
 const resolveUpdateInstallSurfaceMock = vi.fn<() => Promise<UpdateInstallSurface>>();
 const detectRespawnSupervisorMock = vi.fn<() => RespawnSupervisor | null>();
-const startManagedServiceUpdateHandoffMock = vi.fn(async () => ({
+const startManagedServiceUpdateHandoffMock = vi.fn<
+  typeof import("../../infra/update-managed-service-handoff.js").startManagedServiceUpdateHandoff
+>(async () => ({
   status: "started" as const,
   pid: 12345,
   command: "openclaw update --yes --timeout 1800",
@@ -323,7 +325,11 @@ describe("update.run campaign ownership", () => {
     expect(runGatewayUpdateMock).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "dev",
-        devTargetRef: "frozen-upstream-sha",
+        devTarget: {
+          mode: "tracked",
+          upstreamRef: "origin/main",
+          upstreamSha: "frozen-upstream-sha",
+        },
       }),
     );
   });
@@ -336,9 +342,11 @@ describe("update.run campaign ownership", () => {
 
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        env: expect.objectContaining({
-          OPENCLAW_UPDATE_DEV_TARGET_REF: "frozen-upstream-sha",
-        }),
+        devTarget: {
+          mode: "tracked",
+          upstreamRef: "origin/main",
+          upstreamSha: "frozen-upstream-sha",
+        },
       }),
     );
   });
@@ -350,7 +358,7 @@ describe("update.run campaign ownership", () => {
     await invokeUpdateRun();
 
     expect(runGatewayUpdateMock).toHaveBeenCalledWith(
-      expect.not.objectContaining({ devTargetRef: expect.anything() }),
+      expect.not.objectContaining({ devTarget: expect.anything() }),
     );
   });
 
@@ -385,7 +393,7 @@ describe("update.run campaign ownership", () => {
     expect(getCampaignStateMock).not.toHaveBeenCalled();
     expect(clearCampaignMock).not.toHaveBeenCalled();
     expect(runGatewayUpdateMock).toHaveBeenCalledWith(
-      expect.not.objectContaining({ devTargetRef: expect.anything() }),
+      expect.not.objectContaining({ devTarget: expect.anything() }),
     );
   });
 

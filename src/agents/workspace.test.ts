@@ -151,6 +151,23 @@ function expectCronAllowedBootstrapNames(files: WorkspaceBootstrapFile[]) {
 }
 
 describe("ensureAgentWorkspace", () => {
+  it("registers workspace aliases in the selected state database", async () => {
+    const root = testState!.root;
+    const workspace = path.join(root, "custom-db-workspace");
+    const workspaceAlias = path.join(root, "custom-db-workspace-alias");
+    const databasePath = path.join(root, "custom-state.sqlite");
+    const options = { path: databasePath };
+    const seededAt = "2026-07-31T12:00:00.000Z";
+    await fs.mkdir(workspace);
+    await fs.symlink(workspace, workspaceAlias, process.platform === "win32" ? "junction" : "dir");
+    mergeWorkspaceSetupState(workspace, { bootstrapSeededAt: seededAt }, Date.now(), options);
+
+    expect(readWorkspaceStateSnapshot(workspaceAlias, options).setup).toEqual({
+      version: 1,
+      bootstrapSeededAt: seededAt,
+    });
+  });
+
   it("creates BOOTSTRAP.md and records a seeded marker for brand new workspaces", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
 

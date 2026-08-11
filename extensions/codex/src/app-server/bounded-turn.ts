@@ -3,6 +3,7 @@ import path from "node:path";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import {
   CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
@@ -42,8 +43,8 @@ import {
 } from "./shared-client.js";
 import { buildCodexRuntimeThreadConfig } from "./thread-lifecycle.js";
 import {
-  assertCodexRingZeroHasNoManagedHooks,
-  attestCodexRingZeroThreadHasNoMcpServers,
+  assertCodexRestrictedToolSurfaceHasNoManagedHooks,
+  attestCodexRestrictedToolSurfaceMcpServersDisabled,
   buildCodexRingZeroThreadConfigPatch,
   readCodexInheritedMcpServerNames,
 } from "./thread-requests.js";
@@ -108,6 +109,8 @@ type CodexBoundedTurnParams = {
   threadConfig?: JsonObject;
   historyItems?: JsonValue[];
   requireNoExternalCapabilities?: boolean;
+  /** Finalizer-only: preserve a completed turn whose protocol carries no answer item. */
+  allowEmptyText?: boolean;
 };
 
 export async function runBoundedCodexAppServerTurn(
@@ -230,8 +233,12 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       ? await readCodexInheritedMcpServerNames(client, workspace.cwd, abortController.signal)
       : [];
     if (params.requireNoExternalCapabilities) {
-      await assertCodexRingZeroHasNoManagedHooks(client, abortController.signal);
+      await assertCodexRestrictedToolSurfaceHasNoManagedHooks(client, abortController.signal);
     }
+    const threadConfig = buildCodexRuntimeThreadConfig(
+      resolveBoundedThreadConfig(params, workspace, inheritedMcpServerNames),
+      { nativeCodeModeEnabled: false },
+    );
     const thread = assertCodexThreadStartResponse(
       await client.request<unknown>(
         "thread/start",
@@ -244,10 +251,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
           serviceName: "OpenClaw",
           ...(params.requireNoExternalCapabilities ? { baseInstructions: "" } : {}),
           developerInstructions: params.developerInstructions,
-          config: buildCodexRuntimeThreadConfig(
-            resolveBoundedThreadConfig(params, workspace, inheritedMcpServerNames),
-            { nativeCodeModeEnabled: false },
-          ),
+          config: threadConfig,
           environments: [],
           dynamicTools: [],
           experimentalRawEvents: true,
@@ -263,9 +267,10 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     if (params.requireNoExternalCapabilities) {
       // Attest the started thread before injecting historical tool evidence.
       // Otherwise inherited MCP state could act on a finalization-only turn.
-      await attestCodexRingZeroThreadHasNoMcpServers(
+      await attestCodexRestrictedToolSurfaceMcpServersDisabled(
         client,
         thread.thread.id,
+        threadConfig,
         abortController.signal,
       );
     }
@@ -276,7 +281,11 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         { timeoutMs, signal: abortController.signal },
       );
     }
-    const collector = createCodexBoundedTurnCollector(thread.thread.id, params.taskLabel);
+    const collector = createCodexBoundedTurnCollector(
+      thread.thread.id,
+      params.taskLabel,
+      params.allowEmptyText === true,
+    );
     const cleanup = client.addNotificationHandler(collector.handleNotification);
     const requestCleanup = client.addRequestHandler(
       createCodexBoundedApprovalHandler(params.taskLabel),
@@ -476,7 +485,11 @@ async function resolveCodexBoundedTurnModel(params: {
   return model;
 }
 
-function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
+function createCodexBoundedTurnCollector(
+  threadId: string,
+  taskLabel: string,
+  allowEmptyText: boolean,
+) {
   let turnId: string | undefined;
   let completedTurn: CodexTurn | undefined;
   let promptError: string | undefined;
@@ -593,7 +606,7 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
         .join("\n\n")
         .trim();
       const text = (itemText || deltaText).trim();
-      if (!text) {
+      if (!text && !allowEmptyText) {
         throw new Error(`Codex app-server ${taskLabel} turn returned no text.`);
       }
       return { text, items, ...(responseUsage ? { usage: responseUsage } : {}) };
@@ -658,9 +671,4 @@ function collectAssistantTextFromItems(items: CodexThreadItem[] | undefined): st
     .filter(Boolean)
     .join("\n\n")
     .trim();
-}
-
-function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
 }

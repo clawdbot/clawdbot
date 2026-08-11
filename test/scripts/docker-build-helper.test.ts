@@ -10,10 +10,10 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const HELPER_PATH = "scripts/lib/docker-build.sh";
-const DOCKER_ALL_SCHEDULER_PATH = "scripts/test-docker-all.mjs";
+const DOCKER_ALL_SCHEDULER_PATH = "scripts/test-docker-all.mts";
 const DOCKER_E2E_PACKAGE_HELPER_PATH = "scripts/lib/docker-e2e-package.sh";
 const DOCKER_E2E_IMAGE_HELPER_PATH = "scripts/lib/docker-e2e-image.sh";
-const DOCKER_E2E_SCENARIOS_PATH = "scripts/lib/docker-e2e-scenarios.mjs";
+const DOCKER_E2E_SCENARIOS_PATH = "scripts/lib/docker-e2e-scenarios.mts";
 const COMPOSE_SETUP_E2E_PATH = "scripts/e2e/compose-setup.sh";
 const CLI_INSTALLER_DISTRIBUTION_E2E_PATH = "scripts/e2e/cli-installer-distribution-docker.sh";
 const DOCKER_PACKAGE_INSTALL_E2E_PATH = "scripts/e2e/docker-package-install.sh";
@@ -54,7 +54,6 @@ const MULTI_NODE_UPDATE_DOCKER_E2E_PATH = "scripts/e2e/multi-node-update-docker.
 const BUNDLED_PLUGIN_INSTALL_UNINSTALL_E2E_PATH =
   "scripts/e2e/bundled-plugin-install-uninstall-docker.sh";
 const AGENT_BUNDLE_MCP_TOOLS_DOCKER_E2E_PATH = "scripts/e2e/agent-bundle-mcp-tools-docker.sh";
-const COMMITMENTS_SAFETY_DOCKER_E2E_PATH = "scripts/e2e/commitments-safety-docker.sh";
 const SYSTEM_AGENT_FIRST_RUN_DOCKER_E2E_PATH = "scripts/e2e/system-agent-first-run-docker.sh";
 const SYSTEM_AGENT_RESCUE_DOCKER_E2E_PATH = "scripts/e2e/system-agent-rescue-docker.sh";
 const SESSION_RUNTIME_CONTEXT_DOCKER_E2E_PATH = "scripts/e2e/session-runtime-context-docker.sh";
@@ -534,6 +533,38 @@ print_log_tail "$LOG_PATH"
     expect(liveCliBackend).not.toContain(
       'echo "==> Reuse live-test image: $LIVE_IMAGE_NAME (OPENCLAW_SKIP_DOCKER_BUILD=1)"',
     );
+  });
+
+  it("resolves source and compiled candidate test-state entrypoints", () => {
+    const resolveEntrypoint = (rootDir: string) =>
+      spawnSync(
+        "bash",
+        ["-c", `source "${DOCKER_E2E_IMAGE_HELPER_PATH}"; docker_e2e_test_state_entrypoint`],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: { ...process.env, ROOT_DIR: rootDir },
+        },
+      );
+
+    const sourceResult = resolveEntrypoint(process.cwd());
+    expect(sourceResult.status, sourceResult.stderr).toBe(0);
+    expect(sourceResult.stdout.trim()).toBe(
+      join(process.cwd(), "scripts/lib/openclaw-test-state.mts"),
+    );
+
+    const compiledRoot = tempDirs.make("openclaw-compiled-test-state-");
+    const missingResult = resolveEntrypoint(compiledRoot);
+    expect(missingResult.status).toBe(1);
+    expect(missingResult.stderr).toContain("OpenClaw test-state entrypoint not found");
+
+    const compiledDir = join(compiledRoot, "scripts/lib");
+    mkdirSync(compiledDir, { recursive: true });
+    const compiledEntrypoint = join(compiledDir, "openclaw-test-state.mjs");
+    writeFileSync(compiledEntrypoint, "", "utf8");
+    const compiledResult = resolveEntrypoint(compiledRoot);
+    expect(compiledResult.status, compiledResult.stderr).toBe(0);
+    expect(compiledResult.stdout.trim()).toBe(compiledEntrypoint);
   });
 
   it("rejects malformed Docker E2E resource limits before a suite starts", () => {
@@ -2338,6 +2369,22 @@ docker_e2e_docker_run_cmd run demo
     expect(publishedRunner.indexOf("phase update-candidate update_candidate")).toBeLessThan(
       publishedRunner.indexOf("phase assert-prepublish-requests node"),
     );
+    expect(publishedRunner).toContain('if [ "$candidate_version" = "2026.6.35" ]; then');
+    expect(publishedRunner).toContain('prepublish_package="@openclaw/whatsapp"');
+    expect(publishedRunner).toContain('if [ "$SCENARIO" = "configured-plugin-installs" ]; then');
+    expect(publishedRunner).toContain('prepublish_package="@openclaw/matrix"');
+    expect(publishedRunner).toContain(
+      'assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "$prepublish_package" "$candidate_version"',
+    );
+    expect(publishedRunner).toContain(
+      'local tarball="$fixture_root/openclaw-brave-plugin-${candidate_version}.tgz"',
+    );
+    expect(publishedRunner).toContain('FIXTURE_PACKAGE_VERSION="$candidate_version"');
+    expect(publishedRunner).toContain("version,");
+    expect(publishedRunner).toContain(
+      'registry_args+=("@openclaw/brave-plugin" "$candidate_version" "$tarball")',
+    );
+    expect(publishedRunner).toContain('"$clawhub_security_mode"');
     expect(publishedRunner.indexOf("phase assert-prepublish-requests node")).toBeLessThan(
       publishedRunner.indexOf("phase doctor run_doctor"),
     );
@@ -2443,6 +2490,21 @@ docker_e2e_docker_run_cmd run demo
       encoding: "utf8",
     });
     expect(inner.status, inner.stderr).toBe(0);
+  });
+
+  it("selects the live model test runner shipped by the staged candidate", () => {
+    for (const scriptPath of [
+      "scripts/test-live-gateway-models-docker.sh",
+      "scripts/test-live-models-docker.sh",
+    ]) {
+      const script = readFileSync(scriptPath, "utf8");
+      const legacyRunnerIndex = script.indexOf("node scripts/test-live.mjs --");
+      const currentRunnerIndex = script.indexOf("node --import tsx scripts/test-live.mts --");
+
+      expect(script).toContain("if [[ -f scripts/test-live.mjs ]]; then");
+      expect(legacyRunnerIndex).toBeGreaterThan(-1);
+      expect(currentRunnerIndex).toBeGreaterThan(legacyRunnerIndex);
+    }
   });
 
   it("wraps package-backed scenario OpenClaw CLI calls with the shared timeout helper", () => {
@@ -3274,6 +3336,7 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
 
   it("wires the Codex npm plugin live assertion boundary into Docker", () => {
     const runner = readFileSync(CODEX_NPM_PLUGIN_LIVE_DOCKER_E2E_PATH, "utf8");
+    const assertions = readFileSync("scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs", "utf8");
     expectTextToIncludeAll(runner, [
       "docker_e2e_print_log /tmp/openclaw-codex-plugin-pack.log",
       "scripts/e2e/lib/plugins/npm-registry-server.mjs",
@@ -3296,6 +3359,11 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     expect(runner).not.toContain("trap 'openclaw_e2e_stop_process \"${registry_pid:-}\"' EXIT");
     expect(runner).not.toContain("final=false");
     expect(runner).not.toContain("--timeout 420");
+    expectTextToIncludeAll(assertions, [
+      'Requested agent harness "codex" is not registered',
+      "Unknown model: codex/",
+      'Agent harness runtime "codex" is not present in the prepared registry.',
+    ]);
   });
 
   it("prints the OpenAI chat-tools gateway log when startup exits early", () => {
@@ -3763,7 +3831,6 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
   it("keeps captured Docker E2E run log replay bounded", () => {
     for (const path of [
       AGENT_BUNDLE_MCP_TOOLS_DOCKER_E2E_PATH,
-      COMMITMENTS_SAFETY_DOCKER_E2E_PATH,
       SYSTEM_AGENT_FIRST_RUN_DOCKER_E2E_PATH,
       SYSTEM_AGENT_RESCUE_DOCKER_E2E_PATH,
       PLUGIN_BINDING_COMMAND_ESCAPE_DOCKER_E2E_PATH,
@@ -4008,7 +4075,7 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 
   it("forwards every kitchen-sink RPC runtime env knob into Docker", () => {
     const runner = readFileSync(KITCHEN_SINK_RPC_DOCKER_E2E_PATH, "utf8");
-    const walk = readFileSync("scripts/e2e/kitchen-sink-rpc-walk.mjs", "utf8");
+    const walk = readFileSync("scripts/e2e/kitchen-sink-rpc-walk.mts", "utf8");
     const consumed = new Set(
       [...walk.matchAll(/\b(?:env|process\.env)\.(OPENCLAW_KITCHEN_SINK_[A-Z0-9_]+)/gu)]
         .map((match) => match[1])
@@ -4261,8 +4328,13 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     expect(scheduler).toContain("env.npm_execpath ? path.dirname(env.npm_execpath)");
     expect(scheduler).toContain("path.dirname(process.execPath)");
     expect(scheduler).toContain("env.PATH = [...new Set(pathEntries)].join(path.delimiter)");
-    expect(scheduler).toContain("withResolvedPnpmCommand");
-    expect(scheduler).toContain("OPENCLAW_DOCKER_ALL_PNPM_COMMAND");
+    expect(scheduler).toContain(
+      "const pnpmCommand = env.OPENCLAW_DOCKER_ALL_PNPM_COMMAND?.trim();",
+    );
+    expect(scheduler).toContain("lane.command.replace(/(^|\\s)pnpm(?=\\s)/g");
+    expect(scheduler).toContain(
+      'env.push(["OPENCLAW_DOCKER_ALL_PNPM_COMMAND", baseEnv.OPENCLAW_DOCKER_ALL_PNPM_COMMAND]);',
+    );
   });
 
   it("runs release installer E2E against the npm beta tag", () => {

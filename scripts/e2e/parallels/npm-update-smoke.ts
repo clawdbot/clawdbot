@@ -12,6 +12,7 @@ import {
   finiteSecondsToTimerSafeMilliseconds,
 } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import prettyMilliseconds from "pretty-ms";
 import {
   die,
@@ -565,10 +566,6 @@ function parseOpenClawPackageSpecVersion(spec: string): string {
   return resolveOpenClawRegistryVersion(value) || "";
 }
 
-function readString(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
 export function parseRegistryPackageMetadata(raw: string): {
   gitHead: string;
   tarball: string;
@@ -585,9 +582,9 @@ export function parseRegistryPackageMetadata(raw: string): {
     }
     const dist = isRecord(parsed.dist) ? parsed.dist : {};
     return {
-      gitHead: readString(parsed.gitHead),
-      tarball: readString(parsed["dist.tarball"]) || readString(dist.tarball),
-      version: readString(parsed.version),
+      gitHead: readStringValue(parsed.gitHead) ?? "",
+      tarball: readStringValue(parsed["dist.tarball"]) || readStringValue(dist.tarball) || "",
+      version: readStringValue(parsed.version) ?? "",
     };
   } catch {
     return { gitHead: "", tarball: "", version: "" };

@@ -261,6 +261,7 @@ export function prepareChatSendUserTurn(params: {
     attachments.explicitOriginTargetsPlugin && attachments.parsedImages.length > 0
       ? persistedMediaForTranscriptPromise.then(resolveChatSendManagedMedia)
       : Promise.resolve([]);
+  void pluginBoundMediaPromise.catch(() => undefined);
   const messageContext = buildChatSendMessageContext({
     agentId: session.agentId,
     client,

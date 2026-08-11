@@ -168,9 +168,6 @@ vi.mock("../../agents/auth-profiles/store.js", () => {
     profiles: authProfilesStoreMock.profiles,
   });
   return {
-    clearRuntimeAuthProfileStoreSnapshots: () => {
-      authProfilesStoreMock.profiles = {};
-    },
     ensureAuthProfileStore: store,
     ensureAuthProfileStoreForLocalUpdate: store,
     findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
@@ -181,13 +178,6 @@ vi.mock("../../agents/auth-profiles/store.js", () => {
     loadAuthProfileStoreForRuntime: store,
     loadAuthProfileStoreForSecretsRuntime: store,
     loadAuthProfileStoreWithoutExternalProfiles: store,
-    replaceRuntimeAuthProfileStoreSnapshots: (
-      snapshots: Array<{
-        store?: { profiles?: Record<string, AuthProfileForTest> };
-      }>,
-    ) => {
-      authProfilesStoreMock.profiles = snapshots[0]?.store?.profiles ?? {};
-    },
     saveAuthProfileStore: vi.fn(),
     updateAuthProfileStoreWithLock: vi.fn(async ({ update }) => update(store())),
   };

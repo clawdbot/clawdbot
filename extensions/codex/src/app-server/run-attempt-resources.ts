@@ -204,6 +204,13 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     decision: { action: "resume"; binding: CodexAppServerThreadBinding } | { action: "start" },
   ) => {
     state.nativeHookRelay?.unregister();
+    if (params.pluginHarnessToolPolicyRestricted === true) {
+      state.nativeHookRelay = undefined;
+      return {
+        configPatch: buildCodexNativeHookRelayDisabledConfig(),
+        nativeHookRelayGeneration: undefined,
+      };
+    }
     state.nativeHookRelay = createCodexNativeHookRelay({
       options: options.nativeHookRelay,
       generation:
@@ -233,6 +240,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       turnStartTimeoutMs: params.timeoutMs,
       loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
       signal: runAbortController.signal,
+      hostCapabilities: params.hostCapabilities,
       onPreToolUseFailure: (failure) => {
         const projector = projectorRef.current;
         if (projector) {

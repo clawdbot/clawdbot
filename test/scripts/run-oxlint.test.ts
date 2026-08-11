@@ -4,7 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { runWithFailedTrailer } from "../../scripts/lib/failed-trailer.mjs";
+import { runWithFailedTrailer } from "../../scripts/lib/failed-trailer.mts";
 import {
   createOxlintShards,
   filterOxlintShards,
@@ -16,19 +16,20 @@ import {
   resolveOxlintShardConcurrency,
   resolveWindowsExtensionChunkSize,
   runShard,
+  shouldPrepareExtensionPackageBoundaryArtifactsForShards,
   shouldRunOxlintShardsSerial,
-} from "../../scripts/run-oxlint-shards.mjs";
+} from "../../scripts/run-oxlint-shards.mts";
 import {
   filterSparseMissingOxlintTargets,
   shouldPrepareExtensionPackageBoundaryArtifacts,
-} from "../../scripts/run-oxlint.mjs";
+} from "../../scripts/run-oxlint.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 const CONSTRAINED_HOST = { totalMemoryBytes: 8 * 1024 ** 3, logicalCpuCount: 4 };
 const ROOMY_HOST = { totalMemoryBytes: 64 * 1024 ** 3, logicalCpuCount: 16 };
 const RUN_OXLINT_SHARDS_URL = pathToFileURL(
-  join(process.cwd(), "scripts/run-oxlint-shards.mjs"),
+  join(process.cwd(), "scripts/run-oxlint-shards.mts"),
 ).href;
 type SignalScenario = "forward" | "group" | "ignore";
 
@@ -192,6 +193,27 @@ describe("run-oxlint", () => {
     expect(shouldPrepareExtensionPackageBoundaryArtifacts([])).toBe(true);
     expect(shouldPrepareExtensionPackageBoundaryArtifacts(["src/index.ts"])).toBe(true);
     expect(shouldPrepareExtensionPackageBoundaryArtifacts(["--type-aware"])).toBe(true);
+    expect(
+      shouldPrepareExtensionPackageBoundaryArtifacts([
+        "--tsconfig",
+        "config/tsconfig/oxlint.extensions.json",
+        "extensions/telegram/src/index.ts",
+      ]),
+    ).toBe(true);
+    expect(
+      shouldPrepareExtensionPackageBoundaryArtifacts([
+        "--tsconfig=config/tsconfig/oxlint.core.json",
+        "--tsconfig=config/tsconfig/oxlint.extensions.json",
+      ]),
+    ).toBe(true);
+  });
+
+  it.each([
+    ["--tsconfig", "config/tsconfig/oxlint.core.json", "src/index.ts"],
+    ["--tsconfig=config/tsconfig/oxlint.core.json", "src/index.ts"],
+    ["--tsconfig", "config/tsconfig/oxlint.scripts.json", "scripts/check-changed.mts"],
+  ])("skips extension artifacts for an exact source-backed config: %s", (...args) => {
+    expect(shouldPrepareExtensionPackageBoundaryArtifacts(args)).toBe(false);
   });
 
   it("skips artifact preparation for metadata-only oxlint commands", () => {
@@ -201,21 +223,30 @@ describe("run-oxlint", () => {
     expect(shouldPrepareExtensionPackageBoundaryArtifacts(["--rules"])).toBe(false);
   });
 
+  it("prepares shard artifacts only when a selected config consumes them", () => {
+    const core = oxlintShard("core", "core", "src");
+    const scripts = oxlintShard("scripts", "scripts", "scripts");
+    const extensions = oxlintShard("extensions", "extensions", "extensions");
+
+    expect(shouldPrepareExtensionPackageBoundaryArtifactsForShards([core, scripts])).toBe(false);
+    expect(shouldPrepareExtensionPackageBoundaryArtifactsForShards([core, extensions])).toBe(true);
+  });
+
   it("does not run package-boundary artifact prep twice in pnpm check", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
       scripts: Record<string, string>;
     };
-    const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mjs", "utf8");
+    const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mts", "utf8");
 
-    expect(packageJson.scripts.check).toBe("node scripts/check.mjs");
-    expect(packageJson.scripts.lint).toBe("node scripts/run-lint.mjs");
+    expect(packageJson.scripts.check).toBe("node --import tsx scripts/check.mts");
+    expect(packageJson.scripts.lint).toBe("node --import tsx scripts/run-lint.mts");
     expect(packageJson.scripts["lint:core"]).toBe(
-      "node scripts/run-oxlint-shards.mjs --only=core --split-core",
+      "node --import tsx scripts/run-oxlint-shards.mts --only=core --split-core",
     );
     expect(packageJson.scripts.check).not.toContain(
-      "node scripts/prepare-extension-package-boundary-artifacts.mjs",
+      "node --import tsx scripts/prepare-extension-package-boundary-artifacts.mts",
     );
-    expect(shardedLintRunner).toContain("prepare-extension-package-boundary-artifacts.mjs");
+    expect(shardedLintRunner).toContain("prepare-extension-package-boundary-artifacts.mts");
     expect(shardedLintRunner).toContain('OPENCLAW_OXLINT_SKIP_PREPARE: "1"');
   });
 
@@ -223,20 +254,20 @@ describe("run-oxlint", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
       scripts: Record<string, string>;
     };
-    const lintRunner = readFileSync("scripts/run-lint.mjs", "utf8");
+    const lintRunner = readFileSync("scripts/run-lint.mts", "utf8");
 
-    expect(packageJson.scripts.lint).toBe("node scripts/run-lint.mjs");
+    expect(packageJson.scripts.lint).toBe("node --import tsx scripts/run-lint.mts");
     expect(lintRunner.indexOf("ensureRepoToolNodeModulesLink(")).toBeGreaterThan(-1);
     expect(
       lintRunner.indexOf('path.resolve("scripts", "control-ui-i18n-verify.ts")'),
     ).toBeGreaterThan(lintRunner.indexOf("ensureRepoToolNodeModulesLink("));
-    expect(lintRunner.indexOf('path.resolve("scripts", "run-oxlint-shards.mjs")')).toBeGreaterThan(
+    expect(lintRunner.indexOf('path.resolve("scripts", "run-oxlint-shards.mts")')).toBeGreaterThan(
       lintRunner.indexOf('path.resolve("scripts", "control-ui-i18n-verify.ts")'),
     );
   });
 
   it("holds one parent heavy-check lock for sharded lint runs", () => {
-    const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mjs", "utf8");
+    const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mts", "utf8");
     const skipLockIndex = shardedLintRunner.indexOf('env.OPENCLAW_OXLINT_SKIP_LOCK === "1"');
     const lockIndex = shardedLintRunner.indexOf("acquireLocalHeavyCheckLockSync({");
     const childSkipIndex = shardedLintRunner.indexOf('OPENCLAW_OXLINT_SKIP_LOCK: "1"');

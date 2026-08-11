@@ -1,28 +1,29 @@
 // Gateway client bootstrap tests keep URL override provenance wired into shared
 // auth resolution so CLI and env callers authenticate against the intended target.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
+import type { buildGatewayConnectionDetailsWithResolvers } from "./connection-details.js";
 import type { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 
 type AuthResolutionParams = Parameters<typeof resolveGatewayCredentialsWithSecretInputs>[0];
 
 const mockState = vi.hoisted(() => ({
-  buildGatewayConnectionDetails: vi.fn(),
-  loadGatewayTlsRuntime: vi.fn(),
-  resolveGatewayCredentialsWithSecretInputs: vi.fn(),
+  buildGatewayConnectionDetails: vi.fn<typeof buildGatewayConnectionDetailsWithResolvers>(),
+  loadGatewayTlsRuntime: vi.fn<typeof loadGatewayTlsRuntime>(),
+  resolveGatewayCredentialsWithSecretInputs:
+    vi.fn<typeof resolveGatewayCredentialsWithSecretInputs>(),
 }));
 
 vi.mock("../infra/tls/gateway.js", () => ({
-  loadGatewayTlsRuntime: (...args: unknown[]) => mockState.loadGatewayTlsRuntime(...args),
+  loadGatewayTlsRuntime: mockState.loadGatewayTlsRuntime,
 }));
 
 vi.mock("./connection-details.js", () => ({
-  buildGatewayConnectionDetailsWithResolvers: (...args: unknown[]) =>
-    mockState.buildGatewayConnectionDetails(...args),
+  buildGatewayConnectionDetailsWithResolvers: mockState.buildGatewayConnectionDetails,
 }));
 
 vi.mock("./credentials-secret-inputs.js", () => ({
-  resolveGatewayCredentialsWithSecretInputs: (...args: unknown[]) =>
-    mockState.resolveGatewayCredentialsWithSecretInputs(...args),
+  resolveGatewayCredentialsWithSecretInputs: mockState.resolveGatewayCredentialsWithSecretInputs,
 }));
 const { resolveGatewayClientBootstrap } = await import("./client-bootstrap.js");
 
@@ -59,6 +60,7 @@ describe("resolveGatewayClientBootstrap", () => {
     mockState.buildGatewayConnectionDetails.mockReturnValueOnce({
       url: "wss://override.example/ws",
       urlSource: "cli --url",
+      message: "Gateway target: wss://override.example/ws",
     });
 
     const result = await resolveGatewayClientBootstrap({
@@ -70,6 +72,13 @@ describe("resolveGatewayClientBootstrap", () => {
     expect(result).toEqual({
       url: "wss://override.example/ws",
       urlSource: "cli --url",
+      connectionDetails: {
+        url: "wss://override.example/ws",
+        urlSource: "cli --url",
+        message: "Gateway target: wss://override.example/ws",
+      },
+      urlOverrideSource: "cli",
+      deviceAuthScope: "wss://override.example/ws",
       preauthHandshakeTimeoutMs: undefined,
       auth: {
         token: undefined,
@@ -86,6 +95,7 @@ describe("resolveGatewayClientBootstrap", () => {
     mockState.buildGatewayConnectionDetails.mockReturnValue({
       url: "wss://gateway.example/ws",
       urlSource: "config gateway.remote.url",
+      message: "Gateway target: wss://gateway.example/ws",
     });
 
     await resolveGatewayClientBootstrap({
@@ -104,6 +114,7 @@ describe("resolveGatewayClientBootstrap", () => {
     mockState.buildGatewayConnectionDetails.mockReturnValue({
       url: "wss://127.0.0.1:18789",
       urlSource: "local loopback",
+      message: "Gateway target: wss://127.0.0.1:18789",
     });
     mockState.loadGatewayTlsRuntime.mockResolvedValue({
       enabled: true,
@@ -130,7 +141,11 @@ describe("resolveGatewayClientBootstrap", () => {
       urlSource: "env OPENCLAW_GATEWAY_URL",
     },
   ])("returns the configured remote pin for $urlSource", async ({ url, urlSource }) => {
-    mockState.buildGatewayConnectionDetails.mockReturnValue({ url, urlSource });
+    mockState.buildGatewayConnectionDetails.mockReturnValue({
+      url,
+      urlSource,
+      message: `Gateway target: ${url}`,
+    });
 
     const result = await resolveGatewayClientBootstrap({
       config: {
@@ -154,6 +169,7 @@ describe("resolveGatewayClientBootstrap", () => {
     mockState.buildGatewayConnectionDetails.mockReturnValue({
       url,
       urlSource: "cli --url",
+      message: `Gateway target: ${url}`,
     });
 
     const result = await resolveGatewayClientBootstrap({
@@ -179,6 +195,7 @@ describe("resolveGatewayClientBootstrap", () => {
     mockState.buildGatewayConnectionDetails.mockReturnValue({
       url,
       urlSource: "config gateway.remote.url",
+      message: `Gateway target: ${url}`,
     });
 
     const result = await resolveGatewayClientBootstrap({
@@ -203,6 +220,7 @@ describe("resolveGatewayClientBootstrap", () => {
     mockState.buildGatewayConnectionDetails.mockReturnValue({
       url: "wss://127.0.0.1:18789",
       urlSource: "missing gateway.remote.url (fallback local)",
+      message: "Gateway target: wss://127.0.0.1:18789",
     });
     mockState.loadGatewayTlsRuntime.mockResolvedValue({
       enabled: true,

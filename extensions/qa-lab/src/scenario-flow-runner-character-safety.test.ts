@@ -11,18 +11,22 @@ const classifiedFailureReplies = [
   {
     failureName: "provider failure",
     failureText: '⚠️ No API key found for provider "openai".',
+    isError: true,
   },
   {
     failureName: "delivery failure",
     failureText: "⚠️ ✉️ Message failed",
+    isError: true,
   },
   {
     failureName: "missing tool failure",
     failureText: "Read: AGENT.md\nEvidence snippet: Tool read not found\nStatus: blocked",
+    isError: false,
   },
   {
     failureName: "internal coordination leak",
     failureText: "checking thread context; then post a tight progress reply here.",
+    isError: false,
   },
 ] as const;
 
@@ -113,15 +117,16 @@ describe("character scenario transcript safety", () => {
 
   it.each(
     characterScenarioIds.flatMap((scenarioId) =>
-      classifiedFailureReplies.map(({ failureName, failureText }) => ({
+      classifiedFailureReplies.map(({ failureName, failureText, isError }) => ({
         scenarioId,
         failureName,
         failureText,
+        isError,
       })),
     ),
   )(
     "rejects a $failureName after an actual reply in $scenarioId",
-    async ({ scenarioId, failureText }) => {
+    async ({ scenarioId, failureText, isError }) => {
       const state = createQaBusState();
       const firstReply = "The build is green, and I am here.";
       let waitCount = 0;
@@ -134,6 +139,7 @@ describe("character scenario transcript safety", () => {
               accountId: "qa-channel",
               to: "dm:alice",
               text: waitCount++ === 0 ? firstReply : failureText,
+              ...(waitCount > 1 && isError ? { isError: true } : {}),
             });
           }),
         }),

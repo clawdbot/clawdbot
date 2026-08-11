@@ -416,7 +416,7 @@ OPENCLAW_LIVE_CODEX_HARNESS=1 \
   OPENCLAW_LIVE_CODEX_HARNESS_COMPACTION_STRESS_TURNS=8 \
   OPENCLAW_LIVE_CODEX_HARNESS_LARGE_OUTPUT_BYTES=800000 \
   OPENCLAW_LIVE_CODEX_HARNESS_DEBUG=1 \
-  node scripts/test-live.mjs --quiet src/gateway/gateway-codex-harness.live.test.ts
+  node --import tsx scripts/test-live.mts --quiet src/gateway/gateway-codex-harness.live.test.ts
 ```
 
 GPT-5.6 native Codex matrix:
@@ -456,7 +456,7 @@ OPENCLAW_LIVE_OPENAI_LONG_CONTEXT=1 \
   OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_PROFILE=full \
   OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_METRICS=1 \
   OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_OUTPUT=1 \
-  node scripts/test-live.mjs --quiet src/gateway/gateway-openai-long-context.live.test.ts
+  node --import tsx scripts/test-live.mts --quiet src/gateway/gateway-openai-long-context.live.test.ts
 ```
 
 Reduced-budget recipe:
@@ -466,7 +466,7 @@ OPENCLAW_LIVE_OPENAI_LONG_CONTEXT=1 \
   OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_PROFILE=reduced \
   OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_METRICS=1 \
   OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_OUTPUT=1 \
-  node scripts/test-live.mjs --quiet src/gateway/gateway-openai-long-context.live.test.ts
+  node --import tsx scripts/test-live.mts --quiet src/gateway/gateway-openai-long-context.live.test.ts
 ```
 
 ### Long-context hard oracles

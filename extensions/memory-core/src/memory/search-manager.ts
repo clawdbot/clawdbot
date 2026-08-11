@@ -3,7 +3,6 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemorySearchManager } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import type { PluginStateLeaseRunner } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 
@@ -16,7 +15,6 @@ type MemorySearchManagerParams = {
   agentId: string;
   purpose?: MemorySearchManagerPurpose;
   acquireLocalService?: MemoryCoreAcquireLocalService;
-  withLease?: PluginStateLeaseRunner;
 };
 
 type MemorySearchManagerResult = {

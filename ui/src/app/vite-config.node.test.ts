@@ -78,26 +78,28 @@ describe("Control UI Vite config", () => {
     expect(readGitCommitTimestamp).toHaveBeenCalledWith("0123456789abcdef0123456789abcdef01234567");
   });
 
-  it("falls back to Git and the current UTC time only when inputs are absent", () => {
-    expect(
-      resolveControlUiBuildInfo({
-        env: {},
-        now: () => new Date("2026-07-10T13:14:15.000Z"),
-        readGitCommit: () => "a".repeat(40),
-        readGitCommitTimestamp: () => null,
-        readGitBranch: () => null,
-        readGitDirty: () => null,
-        readPackageVersion: () => null,
-      }),
-    ).toEqual({
+  it("keeps source-build identity stable when no build timestamp is provided", () => {
+    const sources = {
+      env: {},
+      readGitCommit: () => "a".repeat(40),
+      readGitCommitTimestamp: () => null,
+      readGitBranch: () => null,
+      readGitDirty: () => null,
+      readPackageVersion: () => null,
+    };
+    const first = resolveControlUiBuildInfo(sources);
+    const second = resolveControlUiBuildInfo(sources);
+
+    expect(first).toEqual(second);
+    expect(first).toEqual({
       version: null,
       commit: "a".repeat(40),
       commitAt: null,
-      builtAt: "2026-07-10T13:14:15.000Z",
+      builtAt: null,
       branch: null,
       dirty: null,
       release: false,
-      buildId: "aaaaaaaaaaaa-2026-07-10T13-14-15.000Z",
+      buildId: "aaaaaaaaaaaa",
     });
   });
 
@@ -182,7 +184,6 @@ describe("Control UI Vite config", () => {
     expect(
       resolveControlUiBuildInfo({
         env: { GITHUB_SHA: "b".repeat(40) },
-        now: () => new Date("2026-07-10T13:14:15.000Z"),
         readGitCommit,
         readPackageVersion: () => null,
       }),
@@ -191,7 +192,6 @@ describe("Control UI Vite config", () => {
     expect(
       resolveControlUiBuildInfo({
         env: { GITHUB_SHA: "b".repeat(40) },
-        now: () => new Date("2026-07-10T13:14:15.000Z"),
         readGitCommit: () => null,
         readPackageVersion: () => null,
       }).commit,
@@ -210,7 +210,6 @@ describe("Control UI Vite config", () => {
     expect(
       resolveControlUiBuildInfo({
         env: { GIT_SHA: "A".repeat(40), GITHUB_SHA: "b".repeat(40) },
-        now: () => new Date("2026-07-10T13:14:15.000Z"),
         readGitCommit,
         readPackageVersion: () => null,
       }).commit,

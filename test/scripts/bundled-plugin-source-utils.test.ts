@@ -1,9 +1,9 @@
 // Bundled Plugin Source Utils tests cover bundled plugin source utils script behavior.
 import { describe, expect, it } from "vitest";
-import { collectBundledPluginSources } from "../../scripts/lib/bundled-plugin-source-utils.mjs";
+import { collectBundledPluginSources } from "../../scripts/lib/bundled-plugin-source-utils.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 
-describe("scripts/lib/bundled-plugin-source-utils.mjs", () => {
+describe("scripts/lib/bundled-plugin-source-utils.mts", () => {
   it("collects bundled plugin sources with package metadata", () => {
     const sources = collectBundledPluginSources({
       repoRoot: process.cwd(),
@@ -22,7 +22,7 @@ describe("scripts/lib/bundled-plugin-source-utils.mjs", () => {
       channels: number;
       sources: number;
     }>(`
-      const utils = await import("./scripts/lib/bundled-plugin-source-utils.mjs");
+      const utils = await import("./scripts/lib/bundled-plugin-source-utils.mts");
       const sources = utils.collectBundledPluginSources({
         repoRoot: process.cwd(),
         requirePackageJson: true,

@@ -186,6 +186,7 @@ function setup(entry: SessionEntry = sessionEntry) {
     allowGatewaySubagentBinding: true,
     workspaceDir: WORKSPACE,
     config,
+    authModes: {},
     metadataSnapshot: { plugins: [] } as never,
     modelCatalog: {
       entries: [
@@ -771,6 +772,30 @@ describe("worker inference provider runtime", () => {
 
     expect(toolCalls.delta(1, " ", message)).toBe("invalid");
     expect(emitted).toBe(64 * 1024);
+  });
+
+  it("synthesizes canonical arguments after deferred provider deltas", () => {
+    const complete = { ...TOOL_CALL, arguments: { env: { NODE_ENV: "test" } } };
+    const message = finalMessage();
+    message.content = [...message.content.slice(0, -1), complete];
+    const emitted: Parameters<Execution["emit"]>[0][] = [];
+    const toolCalls = createWorkerToolCallStream({
+      emit: (event) => emitted.push(event),
+      isCurrent: () => true,
+    });
+
+    expect(toolCalls.start(1, message)).toBe("ok");
+    expect(toolCalls.delta(1, "", message)).toBe("ok");
+    expect(toolCalls.end(1, message, complete)).toBe("ok");
+    expect(emitted).toEqual([
+      { type: "toolcall_start", contentIndex: 1, id: "call-1", toolName: "lookup" },
+      {
+        type: "toolcall_delta",
+        contentIndex: 1,
+        delta: '{"env":{"NODE_ENV":"test"}}',
+      },
+      { type: "toolcall_end", contentIndex: 1 },
+    ]);
   });
 
   it("fences terminal tool-call synthesis after owner rotation", async () => {

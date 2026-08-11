@@ -11,7 +11,7 @@ import type {
   SessionTranscriptReadScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
-import { normalizeSqliteNumber } from "./session-accessor.sqlite-normalize.js";
+import { coerceSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import {
   getSessionKysely,
   resolveSqliteTranscriptReadScope,
@@ -183,7 +183,7 @@ function readRawDeltaInTransaction(
       .limit(1),
   );
   const maxSeq = Math.min(
-    frontier ? normalizeSqliteNumber(frontier.seq) : -1,
+    frontier ? coerceSqliteNumber(frontier.seq) : -1,
     beforeEventSeq === undefined ? Number.POSITIVE_INFINITY : beforeEventSeq - 1,
   );
   if (cursor.lastSeq > maxSeq) {
@@ -210,8 +210,8 @@ function readRawDeltaInTransaction(
       .orderBy("seq", "asc")
       .limit(maxEvents + 1),
   ).rows.map((row) => ({
-    seq: normalizeSqliteNumber(row.seq),
-    serializedBytes: normalizeSqliteNumber(row.serialized_bytes),
+    seq: coerceSqliteNumber(row.seq),
+    serializedBytes: coerceSqliteNumber(row.serialized_bytes),
   }));
 
   let serializedBytes = 0;
@@ -239,7 +239,7 @@ function readRawDeltaInTransaction(
             .orderBy("seq", "asc"),
         ).rows.map((row) => ({
           event: JSON.parse(row.event_json) as TranscriptEvent,
-          seq: normalizeSqliteNumber(row.seq),
+          seq: coerceSqliteNumber(row.seq),
         }));
   const nextCursor = encodeRawTranscriptCursor({ ...cursor, lastSeq });
   const requiredBytes =

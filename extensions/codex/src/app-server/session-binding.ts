@@ -15,6 +15,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -493,7 +494,7 @@ export function createStoredCodexAppServerBinding(
     lookup?: Omit<CodexAppServerAuthProfileLookup, "authProfileId">;
   } = {},
 ): Extract<StoredCodexAppServerBinding, { state: "active" }> | undefined {
-  const rawRecord = asRecord(value);
+  const rawRecord = asOptionalRecord(value);
   if (!rawRecord) {
     return undefined;
   }
@@ -1392,12 +1393,6 @@ function stripUndefinedValue(value: unknown): unknown {
   );
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function readTimestamp(value: unknown): string | undefined {
   return optionalTimestampSchema.parse(value);
 }
@@ -1406,17 +1401,17 @@ function readPluginAppPolicyContext(
   value: unknown,
   bindingSchemaVersion: 1 | 2,
 ): PluginAppPolicyContext | undefined {
-  const record = asRecord(value);
+  const record = asOptionalRecord(value);
   if (!record || typeof record.fingerprint !== "string") {
     return undefined;
   }
-  const apps = asRecord(record.apps);
+  const apps = asOptionalRecord(record.apps);
   if (!apps) {
     return undefined;
   }
   const parsedApps: PluginAppPolicyContext["apps"] = {};
   for (const [appId, rawEntry] of Object.entries(apps)) {
-    const entry = asRecord(rawEntry);
+    const entry = asOptionalRecord(rawEntry);
     if (!entry) {
       return undefined;
     }
@@ -1580,13 +1575,4 @@ export function normalizeCodexAppServerBindingModelProvider(params: {
   return modelProvider;
 }
 
-/** Restores the sole provider intentionally omitted from canonical binding rows. */
-export function resolveCodexAppServerBindingModelProvider(
-  params: CodexAppServerAuthProfileLookup & { modelProvider?: string },
-): string | undefined {
-  return (
-    params.modelProvider?.trim() ||
-    (isCodexAppServerNativeAuthProfile(params) ? PUBLIC_OPENAI_MODEL_PROVIDER : undefined)
-  );
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

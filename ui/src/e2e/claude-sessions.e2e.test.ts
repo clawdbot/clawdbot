@@ -198,6 +198,36 @@ function hostGroupedNativeCatalogs() {
   return { catalogs: [catalog("claude", "Claude Code"), catalog("codex", "Codex")] };
 }
 
+async function catalogHeaderAffordances(header: Locator) {
+  return header.evaluate((element) => {
+    const toggle = element.querySelector<HTMLElement>(".sidebar-session-group-toggle");
+    const providerIcon = element.querySelector<HTMLElement>(
+      ".sidebar-session-catalog-provider-icon",
+    );
+    const chevron = element.querySelector<HTMLElement>(".sidebar-session-group-toggle__icon");
+    const grip = element.querySelector<HTMLElement>(".sidebar-session-group-drag-handle");
+    const actions = element.querySelector<HTMLElement>(".sidebar-session-group-actions");
+    if (!toggle || !providerIcon || !chevron || !grip || !actions) {
+      throw new Error("expected complete branded catalog header affordances");
+    }
+    return {
+      actionFocusVisible: actions.matches(":focus-visible"),
+      actionFocused: document.activeElement === actions,
+      actionsOpacity: getComputedStyle(actions).opacity,
+      actionsPointerEvents: getComputedStyle(actions).pointerEvents,
+      chevronOpacity: getComputedStyle(chevron).opacity,
+      finePointer: matchMedia("(pointer: fine)").matches,
+      focusWithin: element.matches(":focus-within"),
+      gripOpacity: getComputedStyle(grip).opacity,
+      hoverCapable: matchMedia("(hover: hover)").matches,
+      hovered: element.matches(":hover"),
+      providerOpacity: getComputedStyle(providerIcon).opacity,
+      toggleFocusVisible: toggle.matches(":focus-visible"),
+      toggleFocused: document.activeElement === toggle,
+    };
+  });
+}
+
 async function expandCodingSection(page: Page) {
   const toggle = page.locator('[data-session-section="work"] .sidebar-session-group-toggle');
   await page.waitForFunction(() =>
@@ -225,6 +255,104 @@ async function openClaudeCatalogTerminal(page: Page) {
 }
 
 suite.define(() => {
+  it("shows catalog header affordances only for hover or keyboard-visible focus", async () => {
+    await suite.withPage(
+      { hasTouch: false, viewport: { width: 1440, height: 900 } },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          featureMethods: [
+            "chat.metadata",
+            "chat.startup",
+            "sessions.catalog.list",
+            "sessions.groups.put",
+          ],
+          methodResponses: { "sessions.catalog.list": hostGroupedNativeCatalogs() },
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await expandCodingSection(page);
+
+        const header = page.locator(
+          '[data-session-section="catalog:claude"] .sidebar-recent-sessions__head',
+        );
+        const toggle = header.locator(".sidebar-session-group-toggle");
+        await header.hover();
+        await expect
+          .poll(() => catalogHeaderAffordances(header))
+          .toMatchObject({
+            actionsOpacity: "1",
+            actionsPointerEvents: "auto",
+            chevronOpacity: "0.75",
+            finePointer: true,
+            gripOpacity: "0.55",
+            hoverCapable: true,
+            hovered: true,
+            providerOpacity: "0",
+          });
+
+        await toggle.click();
+        await page.locator(".chat-main__conversation").hover({ position: { x: 40, y: 40 } });
+        await expect
+          .poll(() =>
+            header.evaluate((element) => {
+              const focusedToggle = element.querySelector<HTMLElement>(
+                ".sidebar-session-group-toggle",
+              );
+              return {
+                focusWithin: element.matches(":focus-within"),
+                hovered: element.matches(":hover"),
+                toggleFocusVisible: focusedToggle?.matches(":focus-visible") ?? false,
+                toggleFocused: document.activeElement === focusedToggle,
+              };
+            }),
+          )
+          .toEqual({
+            focusWithin: true,
+            hovered: false,
+            toggleFocusVisible: false,
+            toggleFocused: true,
+          });
+
+        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        if (artifactDir) {
+          await fs.mkdir(artifactDir, { recursive: true });
+          await header.screenshot({
+            animations: "disabled",
+            path: path.join(artifactDir, "catalog-header-pointer-away.png"),
+          });
+        }
+
+        await expect
+          .poll(() => catalogHeaderAffordances(header))
+          .toMatchObject({
+            actionsOpacity: "0",
+            actionsPointerEvents: "none",
+            chevronOpacity: "0",
+            focusWithin: true,
+            gripOpacity: "0",
+            hovered: false,
+            providerOpacity: "1",
+            toggleFocusVisible: false,
+            toggleFocused: true,
+          });
+
+        await page.keyboard.press("Tab");
+        await expect
+          .poll(() => catalogHeaderAffordances(header))
+          .toMatchObject({
+            actionFocusVisible: true,
+            actionFocused: true,
+            actionsOpacity: "1",
+            actionsPointerEvents: "auto",
+            chevronOpacity: "0.75",
+            focusWithin: true,
+            gripOpacity: "0.55",
+            hovered: false,
+            providerOpacity: "0",
+          });
+      },
+    );
+  });
+
   it("groups Claude and Codex sessions by Gateway and paired-node host", async () => {
     const page = await suite.browser.newPage({
       hasTouch: true,
@@ -501,7 +629,8 @@ suite.define(() => {
     await page.getByText("Older remote review", { exact: true }).waitFor();
     await page.getByText("Remote architecture review", { exact: true }).click();
     await expect.poll(() => page.getByText("newer answer", { exact: true }).count()).toBe(1);
-    const thread = page.locator(".chat-thread");
+    const catalogPane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+    const thread = catalogPane.locator(".chat-thread");
     await expect
       .poll(() => thread.evaluate((element) => element.scrollHeight > element.clientHeight + 100))
       .toBe(true);
@@ -517,37 +646,40 @@ suite.define(() => {
       element.dispatchEvent(new Event("scroll"));
     });
     await page.clock.runFor(100);
-    await page.locator('.chat-virtual-row:not([data-virtual-row-key="history"])').first().waitFor();
+    await catalogPane
+      .locator('.chat-virtual-row:not([data-virtual-row-key="history"])')
+      .first()
+      .waitFor();
     await expect
       .poll(() => gateway.getRequests("sessions.catalog.read").then((requests) => requests.length))
       .toBe(initialReadCount + 1);
-    await page.locator(".chat-history-loading").waitFor();
-    expect(await page.getByRole("button", { name: "Load older" }).count()).toBe(0);
+    await catalogPane.locator(".chat-history-loading").waitFor();
+    expect(await catalogPane.getByRole("button", { name: "Load older" }).count()).toBe(0);
     const anchor = await firstVisibleVirtualRow(thread);
     await startVirtualRowPrependProbe(thread, anchor);
     await gateway.resolveDeferred("sessions.catalog.read");
     await expect
       .poll(() =>
-        page
-          .locator("openclaw-chat-pane")
-          .evaluate(
-            (element) =>
-              (element as HTMLElement & { catalogMessages: unknown[] }).catalogMessages.length,
-          ),
+        catalogPane.evaluate(
+          (element) =>
+            (element as HTMLElement & { catalogMessages: unknown[] }).catalogMessages.length,
+        ),
       )
       .toBe(41);
     await page.clock.runFor(100);
     expectStableVirtualRowPrepend(anchor, await finishVirtualRowPrependProbe(thread));
-    expect(await page.locator(".agent-chat__composer-combobox > textarea").isDisabled()).toBe(true);
+    expect(
+      await catalogPane.locator(".agent-chat__composer-combobox > textarea").isDisabled(),
+    ).toBe(true);
     await expect
       .poll(() => page.getByText("This session is on a paired device and is view-only.").count())
       .toBe(1);
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const expectCenteredLayout = async (screenshotName: string) => {
       const [workbenchBox, threadBox, composerBox] = await Promise.all([
-        page.locator(".chat-workbench").boundingBox(),
-        page.locator(".chat-thread-inner").boundingBox(),
-        page.locator(".agent-chat__composer-shell").boundingBox(),
+        catalogPane.locator(".chat-workbench").boundingBox(),
+        catalogPane.locator(".chat-thread-inner").boundingBox(),
+        catalogPane.locator(".agent-chat__composer-shell").boundingBox(),
       ]);
       expect(workbenchBox).not.toBeNull();
       expect(threadBox).not.toBeNull();
@@ -581,8 +713,8 @@ suite.define(() => {
     await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
     await expect.poll(() => page.getByText("older question", { exact: true }).count()).toBe(1);
     await page.clock.runFor(500);
-    expect(await page.locator(".chat-history-loading").count()).toBe(0);
-    expect(await page.getByRole("button", { name: "Load older" }).count()).toBe(0);
+    expect(await catalogPane.locator(".chat-history-loading").count()).toBe(0);
+    expect(await catalogPane.getByRole("button", { name: "Load older" }).count()).toBe(0);
     expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(exhaustedReadCount);
     await page.close();
   });

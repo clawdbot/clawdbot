@@ -46,6 +46,7 @@ import {
   type WorkboardWorkerProtocol,
   type WorkboardWorkspace,
 } from "@openclaw/workboard-contract";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   MAX_ATTACHMENT_BYTES,
   MAX_CARD_ARTIFACTS,
@@ -67,10 +68,6 @@ import type {
   WorkboardProofInput,
 } from "./store-inputs.js";
 import { isAbsoluteWorkspacePath } from "./workspace-path.js";
-
-export function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 export function normalizeBoardId(value: unknown, fallback?: string): string | undefined {
   const raw = normalizeBoundedString(value, fallback, 80, "board id");

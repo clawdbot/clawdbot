@@ -1,4 +1,6 @@
 /** Cron service dependency, event, state, and public result types. */
+
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
@@ -233,7 +235,7 @@ export type CronServiceDeps = {
   }) => void | Promise<void>;
   sendCronFailureAlert?: (params: {
     job: CronJob;
-    text: string;
+    payload: ReplyPayload;
     runAtMs?: number;
     channel: CronMessageChannel;
     to?: string;
@@ -399,6 +401,11 @@ export type CronUpdateOptions = {
   scheduledToolPolicy?: CronScheduledToolPolicy;
   toolsAllowProvenance?: CronToolsAllowProvenance;
   /** Synchronous Gateway-owned guard consumed immediately before mutation. */
+  commitGuard?: () => void;
+};
+
+export type CronCommitGuardOptions = {
+  /** Synchronous Gateway-owned guard consumed at the mutation owner. */
   commitGuard?: () => void;
 };
 /** Cron-store-locked guard evaluated against the current job before an update applies. */

@@ -1,6 +1,7 @@
 // @vitest-environment node
 // Control UI tests cover skill workshop controller behavior.
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { SkillWorkshopProposal } from "../../lib/skill-workshop/index.ts";
 import {
@@ -128,17 +129,6 @@ function proposal(overrides: Partial<SkillWorkshopProposal> = {}): SkillWorkshop
     isNew: false,
     ...overrides,
   };
-}
-
-function createDeferred<T>() {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  if (!resolve) {
-    throw new Error("Expected deferred promise callback to be initialized");
-  }
-  return { promise, resolve };
 }
 
 function clearNoticeTimer(state: SkillWorkshopState): void {

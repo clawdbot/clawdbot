@@ -199,7 +199,6 @@ describe("workspace .env blocklist completeness", () => {
           "MATRIX_HOMESERVER",
           "MINIMAX_API_HOST",
           "BUZZ_RELAY_URL",
-          "SLACK_FORWARDER_URL",
           "SMS_ALLOWED_USERS",
           "SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION",
           "SMS_PUBLIC_WEBHOOK_URL",

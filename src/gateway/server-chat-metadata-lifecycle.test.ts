@@ -18,7 +18,8 @@ const mocks = vi.hoisted(() => ({
   unregisterSkillsListener: vi.fn(),
 }));
 
-vi.mock("./server-methods/chat-metadata-runtime.js", () => ({
+vi.mock("./server-methods/chat-metadata-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-methods/chat-metadata-runtime.js")>()),
   createGatewayChatMetadataRuntime: mocks.createRuntime,
 }));
 vi.mock("../agents/auth-profiles/runtime-snapshots.js", () => ({
@@ -33,6 +34,8 @@ vi.mock("../skills/runtime/refresh.js", () => ({
 }));
 
 const { createGatewayChatMetadataLifecycle } = await import("./server-chat-metadata-lifecycle.js");
+const { ChatMetadataSnapshotUnavailableError } =
+  await import("./server-methods/chat-metadata-runtime.js");
 
 const config = {} as OpenClawConfig;
 const context = {} as GatewayRequestContext;
@@ -86,42 +89,34 @@ describe("gateway chat metadata lifecycle", () => {
     expect(sidecars).toEqual([]);
   });
 
-  it("registers full Gateway listeners and awaits one catch-up refresh", async () => {
-    let releaseRefresh!: () => void;
-    mocks.refresh.mockReturnValueOnce(
-      new Promise<void>((resolve) => {
-        releaseRefresh = resolve;
-      }),
-    );
-    const { lifecycle: pendingLifecycle } = createLifecycle(false);
+  it("treats an unavailable catch-up snapshot as expected before owner publication", async () => {
+    mocks.refresh.mockRejectedValueOnce(new ChatMetadataSnapshotUnavailableError());
+    const { lifecycle: pendingLifecycle, warn } = createLifecycle(false);
     const lifecycle = await pendingLifecycle;
     const sidecars: Array<{ stop: () => Promise<void> }> = [];
-    let attached = false;
 
-    const attach = lifecycle.attachContext(context, sidecars).then(() => {
-      attached = true;
-    });
-    await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledOnce());
+    await lifecycle.attachContext(context, sidecars);
 
     expect(mocks.registerAuthListener).toHaveBeenCalledOnce();
     expect(mocks.registerModelListener).toHaveBeenCalledOnce();
     expect(mocks.registerSkillsListener).toHaveBeenCalledOnce();
     expect(sidecars).toHaveLength(1);
-    expect(attached).toBe(false);
-
-    releaseRefresh();
-    await attach;
-    expect(attached).toBe(true);
     expect(mocks.refresh).toHaveBeenCalledOnce();
+    expect(warn).not.toHaveBeenCalled();
+
+    const listener = mocks.registerModelListener.mock.calls[0]?.[0];
+    expect(listener).toEqual(expect.any(Function));
+    listener({ phase: "published" });
+
+    await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
   });
 
-  it("logs catch-up failures without rejecting full Gateway startup", async () => {
+  it("logs unexpected catch-up failures without rejecting startup", async () => {
     mocks.refresh.mockRejectedValueOnce(new Error("metadata unavailable"));
     const { lifecycle: pendingLifecycle, warn } = createLifecycle(false);
     const lifecycle = await pendingLifecycle;
 
     await expect(lifecycle.attachContext(context, [])).resolves.toBeUndefined();
-
     expect(warn).toHaveBeenCalledWith(
       "chat metadata catch-up refresh failed: Error: metadata unavailable",
     );

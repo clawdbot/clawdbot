@@ -1,7 +1,11 @@
 // Telegram tests cover bot native commands.group auth plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelGroupPolicy } from "openclaw/plugin-sdk/config-contracts";
-import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  TelegramAccountConfig,
+  TelegramGroupConfig,
+  TelegramTopicConfig,
+} from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
   createNativeCommandsHarness,
@@ -18,7 +22,8 @@ describe("native command auth in groups", () => {
     groupAllowFrom?: string[];
     storeAllowFrom?: string[];
     useAccessGroups?: boolean;
-    groupConfig?: Record<string, unknown>;
+    groupConfig?: TelegramGroupConfig;
+    topicConfig?: TelegramTopicConfig;
     resolveGroupPolicy?: () => ChannelGroupPolicy;
   }) {
     return createNativeCommandsHarness({
@@ -36,6 +41,7 @@ describe("native command auth in groups", () => {
             allowed: true,
           }) as ChannelGroupPolicy),
       groupConfig: params.groupConfig,
+      topicConfig: params.topicConfig,
     });
   }
 
@@ -114,7 +120,7 @@ describe("native command auth in groups", () => {
     );
   });
 
-  it("keeps groupPolicy disabled enforced when commands.allowFrom is configured", async () => {
+  it("silently drops account-disabled native commands", async () => {
     const { handlers, sendMessage } = setup({
       cfg: {
         channels: {
@@ -140,12 +146,52 @@ describe("native command auth in groups", () => {
 
     await handlers.status?.(ctx);
 
-    expect(sendMessage).toHaveBeenCalledWith(-100999, "Telegram group commands are disabled.", {
-      message_thread_id: 42,
-    });
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("keeps group chat allowlists enforced when commands.allowFrom is configured", async () => {
+  it("silently drops topic-disabled native commands before dispatch", async () => {
+    const cfg = {
+      commands: {
+        allowFrom: {
+          telegram: ["12345"],
+        },
+      },
+    } as OpenClawConfig;
+    const disabled = setup({
+      cfg,
+      telegramCfg: { groupPolicy: "open" } as TelegramAccountConfig,
+      groupConfig: { groupPolicy: "open" },
+      topicConfig: { groupPolicy: "disabled" },
+      useAccessGroups: true,
+    });
+
+    await disabled.handlers.status?.(createTelegramGroupCommandContext({ threadId: 42 }));
+
+    expect(disabled.sendMessage).not.toHaveBeenCalled();
+    expect(disabled.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("silently drops native commands that inherit disabled group policy", async () => {
+    const { handlers, sendMessage, dispatchReplyWithBufferedBlockDispatcher } = setup({
+      cfg: {
+        commands: {
+          allowFrom: {
+            telegram: ["12345"],
+          },
+        },
+      } as OpenClawConfig,
+      telegramCfg: { groupPolicy: "open" } as TelegramAccountConfig,
+      groupConfig: { groupPolicy: "disabled" },
+      useAccessGroups: true,
+    });
+
+    await handlers.status?.(createTelegramGroupCommandContext());
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("silently drops native commands from groups outside the chat allowlist", async () => {
     const { handlers, sendMessage } = setup({
       cfg: {
         commands: {
@@ -166,9 +212,7 @@ describe("native command auth in groups", () => {
 
     await handlers.status?.(ctx);
 
-    expect(sendMessage).toHaveBeenCalledWith(-100999, "This group is not allowed.", {
-      message_thread_id: 42,
-    });
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("rejects native commands in groups when sender is in neither allowlist", async () => {

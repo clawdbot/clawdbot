@@ -612,14 +612,30 @@ export function resolveProviderTransportTurnStateWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  runtimeHandle?: ProviderRuntimePluginHandle;
   allowRuntimePluginLoad?: boolean;
   context: ProviderResolveTransportTurnStateContext;
 }): ProviderTransportTurnState | undefined {
-  const plugin =
-    params.allowRuntimePluginLoad === false
+  const plugin = params.runtimeHandle
+    ? ensureProviderRuntimePluginHandle(params).plugin
+    : params.allowRuntimePluginLoad === false
       ? resolveLoadedProviderRuntimePlugin(params)
       : resolveProviderRuntimePlugin(params);
-  return plugin?.resolveTransportTurnState?.(params.context) ?? undefined;
+  const turnState = plugin?.resolveTransportTurnState?.(params.context) ?? undefined;
+  if (params.context.transport !== "websocket") {
+    return turnState;
+  }
+  const legacyPolicy = plugin?.resolveWebSocketSessionPolicy?.(params.context);
+  if (!legacyPolicy) {
+    return turnState;
+  }
+  return {
+    ...turnState,
+    websocket: {
+      ...legacyPolicy,
+      ...turnState?.websocket,
+    },
+  };
 }
 
 export async function createProviderEmbeddingProvider(params: {
@@ -761,23 +777,7 @@ export function listProviderUsagePluginDescriptors(params: {
   return [...descriptors.values()].toSorted((a, b) => a.provider.localeCompare(b.provider));
 }
 
-export function matchesProviderContextOverflowWithPlugin(params: {
-  provider?: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  context: ProviderFailoverErrorContext;
-}): boolean {
-  const plugins = resolveProviderPluginsForScopedHook(params);
-  for (const plugin of plugins) {
-    if (plugin.matchesContextOverflowError?.(params.context)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-export function classifyProviderFailoverReasonWithPlugin(params: {
+export function classifyProviderFailoverSignalWithPlugin(params: {
   provider?: string;
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -786,6 +786,9 @@ export function classifyProviderFailoverReasonWithPlugin(params: {
 }) {
   const plugins = resolveProviderPluginsForScopedHook(params);
   for (const plugin of plugins) {
+    if (plugin.matchesContextOverflowError?.(params.context)) {
+      return "context_overflow";
+    }
     const reason = plugin.classifyFailoverReason?.(params.context);
     if (reason) {
       return reason;

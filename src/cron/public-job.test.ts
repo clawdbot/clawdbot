@@ -4,10 +4,12 @@ import { toPublicCronJob } from "./public-job.js";
 import type { CronStoredJob } from "./types.js";
 
 describe("toPublicCronJob", () => {
-  it("strips scheduler-only pacing slots without mutating stored state", () => {
+  it("strips scheduler-only state without mutating the stored job", () => {
     const job = makeCronJob({
       state: {
         nextRunAtMs: 2_000,
+        queuedAtMs: 1_900,
+        startupCatchupAtMs: 2_000,
         pacedNextRunAtMs: 2_000,
         forcePreservedNextRunAtMs: 2_000,
       },
@@ -15,8 +17,12 @@ describe("toPublicCronJob", () => {
 
     const publicJob = toPublicCronJob(job);
 
+    expect(publicJob.state.queuedAtMs).toBeUndefined();
+    expect(publicJob.state.startupCatchupAtMs).toBeUndefined();
     expect(publicJob.state.pacedNextRunAtMs).toBeUndefined();
     expect(publicJob.state.forcePreservedNextRunAtMs).toBeUndefined();
+    expect(job.state.queuedAtMs).toBe(1_900);
+    expect(job.state.startupCatchupAtMs).toBe(2_000);
     expect(job.state.pacedNextRunAtMs).toBe(2_000);
     expect(job.state.forcePreservedNextRunAtMs).toBe(2_000);
   });

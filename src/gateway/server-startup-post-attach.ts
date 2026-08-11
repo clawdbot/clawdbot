@@ -27,7 +27,6 @@ import {
   projectUpdateAvailable,
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
-import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
 import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
@@ -54,11 +53,11 @@ const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
 type Awaitable<T> = T | Promise<T>;
 
 const loadMainSessionRestartRecoveryModule = createLazyRuntimeModule(
-  () => import("../agents/main-session-restart-recovery.js"),
+  () => import("../agents/main-session-recovery/main-session-restart-recovery.js"),
 );
 // Startup only needs orphan marking; keep resume and delivery runtime out of the pre-channel path.
 const loadMainSessionRestartRecoveryMarkingModule = createLazyRuntimeModule(
-  () => import("../agents/main-session-restart-recovery-marking.js"),
+  () => import("../agents/main-session-recovery/main-session-restart-recovery-marking.js"),
 );
 
 const loadAgentDefaultsModule = createLazyRuntimeModule(() => import("../agents/defaults.js"));
@@ -448,6 +447,67 @@ async function prewarmConfiguredPrimaryModel(params: {
   await publishConfiguredModelRuntimeSnapshots(params);
 }
 
+type StartupExternalAuthHydrationDeps = {
+  listAgentIds: (cfg: OpenClawConfig) => string[];
+  resolveAgentDir: (cfg: OpenClawConfig, agentId: string) => string;
+  collectConfiguredRefs: (cfg: OpenClawConfig, agentId: string) => readonly { value: string }[];
+  hydrate: (agentDir: string, providers: readonly string[]) => void;
+};
+
+async function hydrateConfiguredExternalCliAuth(params: {
+  cfg: OpenClawConfig;
+  log: { warn: (msg: string) => void };
+  deps?: StartupExternalAuthHydrationDeps;
+}): Promise<void> {
+  const deps: StartupExternalAuthHydrationDeps =
+    params.deps ??
+    (await Promise.all([
+      import("../agents/agent-scope.js"),
+      import("../agents/prepared-model-runtime.configured.js"),
+      import("../agents/auth-profiles/store.js"),
+      import("../agents/auth-profiles/external-cli-discovery.js"),
+    ]).then(([scope, configured, store, external]) => ({
+      listAgentIds: scope.listAgentIds,
+      resolveAgentDir: scope.resolveAgentDir,
+      collectConfiguredRefs: configured.collectPreparedModelRuntimeConfiguredRefs,
+      hydrate: (agentDir: string, providers: readonly string[]) => {
+        const discovery = external.externalCliDiscoveryForProviders({
+          cfg: params.cfg,
+          providers,
+        });
+        if (discovery.mode === "none") {
+          return;
+        }
+        store.ensureAuthProfileStore(agentDir, {
+          config: params.cfg,
+          externalCli: discovery,
+          allowKeychainPrompt: false,
+          readOnly: true,
+          syncExternalCli: false,
+        });
+      },
+    })));
+  const hydratedDirs = new Set<string>();
+  for (const agentId of deps.listAgentIds(params.cfg)) {
+    const providers = deps.collectConfiguredRefs(params.cfg, agentId).flatMap(({ value }) => {
+      const separator = value.indexOf("/");
+      return separator > 0 ? [value.slice(0, separator)] : [];
+    });
+    const agentDir = deps.resolveAgentDir(params.cfg, agentId);
+    if (providers.length === 0 || hydratedDirs.has(agentDir)) {
+      continue;
+    }
+    hydratedDirs.add(agentDir);
+    try {
+      deps.hydrate(agentDir, providers);
+    } catch (error) {
+      params.log.warn(
+        `startup external CLI auth hydration failed for agent ${agentId}: ${String(error)}`,
+      );
+    }
+  }
+}
+
 async function publishConfiguredModelRuntimeSnapshots(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
@@ -587,6 +647,9 @@ export async function startGatewaySidecars(params: {
       );
     }
   });
+  await measureStartup(params.startupTrace, "sidecars.model-auth", () =>
+    hydrateConfiguredExternalCliAuth({ cfg: params.cfg, log: params.log }),
+  );
   // Agent RPC remains available when transports are disabled. Publish configured/static facts before
   // accepting work; live provider catalogs stay advisory and never enter the Gateway lifecycle.
   await measureStartup(params.startupTrace, "sidecars.model-runtime", () =>
@@ -1012,7 +1075,7 @@ export async function startGatewayPostAttachRuntime(
       error: (msg: string) => void;
     };
     logChannels: { info: (msg: string) => void; error: (msg: string) => void };
-    unavailableGatewayMethods: Set<string>;
+    unlockStartupMethods: () => void;
     loadStartupPlugins?: () => Awaitable<{
       pluginRegistry: PluginRegistry;
       gatewayMethods: string[];
@@ -1246,16 +1309,15 @@ export async function startGatewayPostAttachRuntime(
           params.log.warn(`main-session restart recovery failed to schedule: ${String(err)}`);
         }
         try {
-          const { scheduleSubagentRegistrySweep } = await import("../agents/subagent-registry.js");
+          const { scheduleSubagentRegistrySweep } =
+            await import("../agents/subagents/registry/subagent-registry.js");
           scheduleSubagentRegistrySweep();
         } catch (err) {
           params.log.warn(`subagent restart recovery failed to schedule: ${String(err)}`);
         }
         // Capture the orphan-recovery cutoff before new startup-gated agent
         // work can create sessions that the recovery scan must leave alone.
-        for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
-          params.unavailableGatewayMethods.delete(method);
-        }
+        params.unlockStartupMethods();
         if (!pluginServicesReported) {
           reportPluginServices(result.pluginServices);
         }
@@ -1385,6 +1447,7 @@ export const testing = {
   providerAuthPrewarmStartDelayMs: PROVIDER_AUTH_PREWARM_START_DELAY_MS,
   hasRestartSentinelFast,
   prewarmConfiguredPrimaryModel,
+  hydrateConfiguredExternalCliAuth,
   publishConfiguredModelRuntimeSnapshots,
   publishStartupModelRuntime,
   refreshLatestUpdateRestartSentinelIfPresent,
@@ -1393,5 +1456,4 @@ export const testing = {
   shouldSkipStartupModelPrewarm,
   stopPostReadySidecarsAfterCloseStarted,
 };
-export { testing as __testing };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

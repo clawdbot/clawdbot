@@ -32,6 +32,7 @@ import type {
   HookContext,
   HookOutcome,
 } from "./agent-tools.before-tool-call.types.js";
+import { withGatewayToolApprovalOwner } from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 type PluginApprovalRequest = NonNullable<PluginHookBeforeToolCallResult["requireApproval"]>;
@@ -276,32 +277,35 @@ async function requestPluginToolApproval(params: {
       status?: string;
       decision?: unknown;
       deliveryRoute?: string;
-    } = await callGatewayTool(
-      "plugin.approval.request",
-      // Buffer beyond the approval timeout so the gateway can clean up
-      // and respond before the client-side RPC timeout fires.
-      { timeoutMs: gatewayTimeoutMs },
-      {
-        pluginId: approval.pluginId,
-        title: approval.title,
-        description: approval.description,
-        severity: approval.severity,
-        allowedDecisions: approval.allowedDecisions,
-        toolName: params.toolName,
-        toolCallId: params.toolCallId,
-        agentId: params.ctx?.agentId,
-        sessionKey: params.ctx?.sessionKey,
-        ...(params.ctx?.approvalReviewerDeviceId
-          ? { approvalReviewerDeviceIds: [params.ctx.approvalReviewerDeviceId] }
-          : {}),
-        turnSourceChannel: params.ctx?.turnSourceChannel,
-        turnSourceTo: params.ctx?.turnSourceTo,
-        turnSourceAccountId: params.ctx?.turnSourceAccountId,
-        turnSourceThreadId: params.ctx?.turnSourceThreadId,
-        timeoutMs,
-        twoPhase: true,
-      },
-      { expectFinal: false },
+    } = await withGatewayToolApprovalOwner(
+      approval.pluginId,
+      async () =>
+        await callGatewayTool(
+          "plugin.approval.request",
+          // Buffer beyond the approval timeout so the gateway can clean up
+          // and respond before the client-side RPC timeout fires.
+          { timeoutMs: gatewayTimeoutMs },
+          {
+            title: approval.title,
+            description: approval.description,
+            severity: approval.severity,
+            allowedDecisions: approval.allowedDecisions,
+            toolName: params.toolName,
+            toolCallId: params.toolCallId,
+            agentId: params.ctx?.agentId,
+            sessionKey: params.ctx?.sessionKey,
+            ...(params.ctx?.approvalReviewerDeviceId
+              ? { approvalReviewerDeviceIds: [params.ctx.approvalReviewerDeviceId] }
+              : {}),
+            turnSourceChannel: params.ctx?.turnSourceChannel,
+            turnSourceTo: params.ctx?.turnSourceTo,
+            turnSourceAccountId: params.ctx?.turnSourceAccountId,
+            turnSourceThreadId: params.ctx?.turnSourceThreadId,
+            timeoutMs,
+            twoPhase: true,
+          },
+          { expectFinal: false },
+        ),
     );
     gatewayApprovalPhase = "none";
     const id = requestResult?.id;

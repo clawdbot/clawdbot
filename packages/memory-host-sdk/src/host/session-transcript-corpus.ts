@@ -284,8 +284,13 @@ function listSessionTranscriptArtifactFiles(sessionsDir: string): string[] {
       .filter((name) => isUsageCountedSessionTranscriptFileName(name))
       .filter((name) => isSessionArchiveArtifactName(name))
       .map((name) => path.join(sessionsDir, name));
-  } catch {
-    return [];
+  } catch (err) {
+    // A missing artifact directory is authoritatively empty. Other failures
+    // make the corpus incomplete, so destructive consumers must not proceed.
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw err;
   }
 }
 

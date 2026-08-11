@@ -9,7 +9,7 @@ import {
   refreshPluginRegistry,
   resetPluginsCliTestState,
   runtimeErrors,
-  runtimeLogs,
+  pluginsCliRuntimeLogs,
   runPluginsCommand,
   writeConfigFile,
 } from "./plugins-cli-test-helpers.js";
@@ -135,7 +135,7 @@ describe("plugins cli policy mutations", () => {
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
     expect(runtimeErrors).toContain(`Plugin "alpha" could not be enabled (${reason}).`);
-    expect(runtimeLogs).not.toContain(`Plugin "alpha" could not be enabled (${reason}).`);
+    expect(pluginsCliRuntimeLogs).not.toContain(`Plugin "alpha" could not be enabled (${reason}).`);
   });
 
   it("refuses plugin enablement in Nix mode before config mutation", async () => {

@@ -748,7 +748,7 @@ export function formatContextUsageLine(params: {
   return `tokens ${totalLabel}/${ctxLabel}${extra ? ` (${extra})` : ""}`;
 }
 
-export function asString(value: unknown, fallback = ""): string {
+export function formatPrimitiveString(value: unknown, fallback = ""): string {
   if (typeof value === "string") {
     return value;
   }

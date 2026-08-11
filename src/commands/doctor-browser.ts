@@ -45,6 +45,10 @@ type BrowserDoctorSurface = {
     cfg: OpenClawConfig,
     deps?: BrowserDoctorRepairDeps,
   ) => Promise<{ changes: string[]; warnings: string[] }>;
+  maybeRepairOwnedChromeExtensionNativeHosts?: () => Promise<{
+    changes: string[];
+    warnings: string[];
+  }>;
 };
 
 function loadBrowserDoctorSurface(): BrowserDoctorSurface {
@@ -52,6 +56,24 @@ function loadBrowserDoctorSurface(): BrowserDoctorSurface {
     dirName: "browser",
     artifactBasename: "browser-doctor.js",
   });
+}
+
+/** Repairs only already-owned Chrome native-host registration drift. */
+export async function maybeRepairOwnedChromeExtensionNativeHosts(): Promise<{
+  changes: string[];
+  warnings: string[];
+}> {
+  try {
+    const repair = loadBrowserDoctorSurface().maybeRepairOwnedChromeExtensionNativeHosts;
+    return repair ? await repair() : { changes: [], warnings: [] };
+  } catch (error) {
+    return {
+      changes: [],
+      warnings: [
+        `Browser extension native-host repair is unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      ],
+    };
+  }
 }
 
 function mayHaveLegacyClawdBrowserProfileResidue(deps?: BrowserDoctorRepairDeps): boolean {

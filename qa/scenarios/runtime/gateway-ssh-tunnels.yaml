@@ -24,7 +24,9 @@ scenario:
     - src/commands/gateway-status/probe-run.ts
     - test/e2e/qa-lab/runtime/gateway-ssh-tunnels.ts
   execution:
+    allowBlockedEvidence: true
     kind: script
+    parallelSafe: true
     path: test/e2e/qa-lab/runtime/gateway-ssh-tunnels.ts
     summary: Starts an isolated real sshd and loopback Gateway with scenario-owned host trust, then exercises success, cleanup, host-key rejection, unreachable-daemon diagnostics, overlap, and forced termination.
     timeoutMs: 120000

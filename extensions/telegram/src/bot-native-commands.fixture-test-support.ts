@@ -12,14 +12,6 @@ export type NativeCommandTestParams = RegisterTelegramNativeCommandsParams & {
   replyToMode?: RegisterTelegramNativeCommandsParams["opts"]["replyToMode"];
 };
 
-export function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
-
 export function createNativeCommandTestParams(
   params: Partial<NativeCommandTestParams> = {},
 ): RegisterTelegramNativeCommandsParams {

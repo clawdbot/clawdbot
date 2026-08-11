@@ -175,9 +175,9 @@ vi.mock("../infra/net/fetch-guard.js", async () => {
   };
 });
 
-const { describeImageWithModel, describeImagesWithModel } = await import("./image.js");
+const { describeImageWithModelCore, describeImagesWithModelCore } = await import("./image.js");
 
-describe("describeImageWithModel", () => {
+describe("describeImageWithModelCore", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
@@ -278,7 +278,7 @@ describe("describeImageWithModel", () => {
   it("routes minimax-portal image models through the MiniMax VLM endpoint", async () => {
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     const authStore = { version: 1, profiles: {} };
-    const result = await describeImageWithModel({
+    const result = await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "minimax-portal",
@@ -333,7 +333,7 @@ describe("describeImageWithModel", () => {
     });
 
     await expect(
-      describeImagesWithModel({
+      describeImagesWithModelCore({
         cfg: {},
         agentDir: "/tmp/openclaw-agent",
         provider: "minimax-portal",
@@ -368,7 +368,7 @@ describe("describeImageWithModel", () => {
       ),
     });
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "minimax-portal",
@@ -398,7 +398,7 @@ describe("describeImageWithModel", () => {
     });
     unwrapSecretSentinelsForProviderEgressMock.mockReturnValueOnce("test-token");
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "minimax-portal",
@@ -439,7 +439,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "generic ok" }],
     });
 
-    const result = await describeImageWithModel({
+    const result = await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "minimax-portal",
@@ -509,7 +509,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "an orange tabby cat" }],
     });
 
-    const result = await describeImageWithModel({
+    const result = await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "amazon-bedrock",
@@ -545,7 +545,7 @@ describe("describeImageWithModel", () => {
     });
 
     await expect(
-      describeImageWithModel({
+      describeImageWithModelCore({
         cfg: {},
         agentDir: "/tmp/openclaw-agent",
         workspaceDir: "/tmp/openclaw-workspace",
@@ -583,7 +583,7 @@ describe("describeImageWithModel", () => {
     });
 
     await expect(
-      describeImageWithModel({
+      describeImageWithModelCore({
         cfg: {
           models: {
             providers: {
@@ -629,7 +629,7 @@ describe("describeImageWithModel", () => {
     });
 
     await expect(
-      describeImageWithModel({
+      describeImageWithModelCore({
         cfg: {
           models: {
             providers: {
@@ -679,7 +679,7 @@ describe("describeImageWithModel", () => {
     });
 
     await expect(
-      describeImageWithModel({
+      describeImageWithModelCore({
         cfg: {
           models: {
             providers: {
@@ -724,7 +724,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "workspace ok" }],
     });
 
-    const result = await describeImageWithModel({
+    const result = await describeImageWithModelCore({
       cfg: {},
       agentId: "vision-agent",
       agentDir: "/tmp/openclaw-agent",
@@ -812,7 +812,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "normalized ok" }],
     });
 
-    const result = await describeImageWithModel({
+    const result = await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "openai",
@@ -885,7 +885,7 @@ describe("describeImageWithModel", () => {
     const streamFn = vi.fn(() => streamResult);
     registerProviderStreamForModelMock.mockReturnValueOnce(streamFn);
 
-    const result = await describeImageWithModel({
+    const result = await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "ollama",
@@ -937,7 +937,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "local vision ok" }],
     });
 
-    const result = await describeImageWithModel({
+    const result = await describeImageWithModelCore({
       cfg: {
         models: {
           providers: {

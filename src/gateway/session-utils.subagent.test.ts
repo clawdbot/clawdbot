@@ -6,13 +6,13 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { canonicalSubagentRunFixtures } from "../agents/subagent-registry.persistence.test-support.js";
-import type { SubagentRunFixture } from "../agents/subagent-registry.persistence.test-support.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagent-registry.store.sqlite.js";
+import { canonicalSubagentRunFixtures } from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import type { SubagentRunFixture } from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
-} from "../agents/subagent-registry.test-helpers.js";
+} from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { canPrewarmCombinedSessionStoresForGateway } from "../config/sessions/combined-store-gateway.js";

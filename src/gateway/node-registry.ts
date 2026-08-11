@@ -7,6 +7,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 // NodeSession is plugin-SDK-reachable; importing these types from the
 // gateway-protocol index would retain the whole ProtocolSchemas registry in
@@ -19,7 +20,6 @@ import { setActiveNodeContext } from "../infra/active-node-context.js";
 import type { PairedDeviceNodeBinding } from "../infra/device-pairing-node-state.js";
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
-import { normalizeString } from "./node-normalize.js";
 import {
   createRegisteredNodePluginToolDescriptorMap,
   normalizeNodePluginToolDescriptors,
@@ -106,12 +106,12 @@ function resolvePendingSystemRunEvent(params: {
     return undefined;
   }
   const obj = params.params as Record<string, unknown>;
-  const runId = normalizeString(obj.runId);
+  const runId = normalizeOptionalString(obj.runId) ?? "";
   if (!runId) {
     return undefined;
   }
   const timeoutMs = normalizeSystemRunTimeoutMs(obj.timeoutMs);
-  const sessionKey = normalizeString(obj.sessionKey);
+  const sessionKey = normalizeOptionalString(obj.sessionKey) ?? "";
   return {
     runId,
     ...(sessionKey ? { sessionKey } : {}),
@@ -132,7 +132,7 @@ function normalizeSystemRunInvokeParams(params: { command: string; params?: unkn
   const obj = params.params as Record<string, unknown>;
   const normalized: Record<string, unknown> = {
     ...obj,
-    runId: normalizeString(obj.runId) || randomUUID(),
+    runId: normalizeOptionalString(obj.runId) || randomUUID(),
   };
   const timeoutMs = normalizeSystemRunTimeoutMs(obj.timeoutMs);
   if (timeoutMs === undefined) {
@@ -1077,6 +1077,8 @@ export class NodeRegistry {
     sessionKey?: string;
     /** Receives the id after pairing validation and a successful dispatch. */
     onDispatchReady?: (invokeId: string) => void;
+    /** Revalidates caller authority at the registry-owned transport handoff. */
+    isDispatchAuthorized?: () => boolean;
   }): Promise<NodeInvokeResult> {
     if (params.signal?.aborted) {
       return { ok: false, error: { code: "ABORTED", message: "node invoke cancelled" } };
@@ -1140,6 +1142,17 @@ export class NodeRegistry {
         };
       }
     }
+    // Pairing resolution may yield after the caller's last authority check. The
+    // registry owns the raw send, so closure must win before pending state is armed.
+    if (params.isDispatchAuthorized?.() === false) {
+      return {
+        ok: false,
+        error: {
+          code: "APPROVAL_AUTHORITY_CLOSED",
+          message: "runtime authority closed before node dispatch",
+        },
+      };
+    }
     const requestId = randomUUID();
     const invokeParams = normalizeSystemRunInvokeParams({
       command: params.command,
@@ -1155,7 +1168,7 @@ export class NodeRegistry {
         "params" in params && invokeParams !== undefined ? JSON.stringify(invokeParams) : null,
       timeoutMs,
       idempotencyKey: params.idempotencyKey,
-      sessionKey: normalizeString(params.sessionKey) || undefined,
+      sessionKey: normalizeOptionalString(params.sessionKey),
     };
     const systemRunEvent = resolvePendingSystemRunEvent({
       command: params.command,

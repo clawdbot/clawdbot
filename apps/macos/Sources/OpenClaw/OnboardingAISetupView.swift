@@ -113,8 +113,10 @@ struct OnboardingAISetupView: View {
             switch self.model.phase {
             case .idle, .detecting:
                 self.detectingView
-            default:
+            case .ready, .testing:
                 self.resultsView
+            case .connected:
+                EmptyView()
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -152,18 +154,13 @@ struct OnboardingAISetupView: View {
 
     @ViewBuilder
     private var resultsView: some View {
-        if self.model.connected {
-            self.connectedBanner
-        }
-
         if !self.model.candidates.isEmpty {
             VStack(spacing: 8) {
                 ForEach(self.model.candidates) { candidate in
                     self.candidateRow(candidate)
                 }
             }
-        } else if self.model.phase != .connected,
-                  self.model.detectError == nil,
+        } else if self.model.detectError == nil,
                   self.model.configuredGatewayAuthIssue == nil
         {
             // A failed detect must not claim "nothing found" — the error card
@@ -214,7 +211,7 @@ struct OnboardingAISetupView: View {
             }
         }
 
-        if self.model.exhaustedAutoCandidates, !self.model.connected {
+        if self.model.exhaustedAutoCandidates {
             OnboardingErrorCard(
                 title: "None of the found options worked",
                 message: """
@@ -228,64 +225,11 @@ struct OnboardingAISetupView: View {
             }
         }
 
-        if !self.model.connected, self.model.providerCatalogLoaded {
+        if self.model.providerCatalogLoaded {
             self.providerPrepareSection
             self.providerAuthSection
             self.manualSection
         }
-    }
-
-    private var connectedBanner: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 10) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(.green)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Your AI is ready")
-                        .font(.headline)
-                    Text(self.model.connectedSummary)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-            }
-
-            if !self.model.connectedSetupLines.isEmpty {
-                Divider()
-                Text("Setup details")
-                    .font(.caption.weight(.semibold))
-                ScrollView(.vertical) {
-                    Text(self.model.connectedSetupCopyText)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(maxHeight: 150)
-                Button {
-                    OnboardingErrorDetails.copy(self.model.connectedSetupCopyText)
-                } label: {
-                    Label("Copy setup details", systemImage: "doc.on.doc")
-                }
-                .buttonStyle(.link)
-                .font(.caption)
-            }
-
-            Button {
-                self.model.chooseDifferentAI()
-            } label: {
-                Label("Choose a different AI…", systemImage: "arrow.triangle.2.circlepath")
-            }
-            .buttonStyle(.link)
-            .font(.caption)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.green.opacity(0.12)))
     }
 
     private var noCandidatesIntro: some View {
@@ -368,9 +312,13 @@ struct OnboardingAISetupView: View {
                     Spacer(minLength: 0)
                     self.trailingIndicator(status: status, selected: selected)
                 }
+                // Plain buttons hit-test only opaque label pixels; without this the
+                // row's blank stretch (between texts, over the Spacer) ignores clicks
+                // and a mid-testing candidate pick silently does nothing.
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(self.model.isBusy || self.model.connected)
+            .disabled(!self.model.canSelectCandidate(kind: candidate.kind))
 
             if case let .failed(failure) = status {
                 OnboardingErrorDetails(text: failure.copyText)
@@ -390,8 +338,6 @@ struct OnboardingAISetupView: View {
             "Testing — asking \(candidate.modelRef) for a quick reply…"
         case let .failed(failure):
             failure.summary
-        case .connected:
-            self.model.connectedSummary
         case .untried:
             "\(candidate.modelRef) · \(candidate.detail)"
         }
@@ -415,9 +361,6 @@ struct OnboardingAISetupView: View {
         case .testing:
             ProgressView()
                 .controlSize(.small)
-        case .connected:
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.green)
         case .failed:
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)

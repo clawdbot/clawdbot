@@ -17,14 +17,6 @@ import {
   type PluginSessionOwnershipAction,
 } from "../session-plugin-ownership.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "../session-store-key.js";
-import type {
-  GatewaySessionStoreTarget,
-  GatewaySessionStoreTargetWithStore,
-} from "../session-utils-contracts.js";
-import type {
-  GatewaySessionStoreCache,
-  GatewaySessionStoreDiscoveryCache,
-} from "../session-utils-store-lookup.js";
 import {
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
@@ -34,6 +26,7 @@ import {
   isWorkerPlacementSessionRuntimeSupported,
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
+import { isWorkerPlacementSafeForArchive } from "../worker-environments/session-placement-lifecycle.js";
 export {
   resolveSessionWorkerPlacementMutationError,
   retireSessionWorkerPlacementBeforeMutation,
@@ -68,8 +61,10 @@ export function resolveSessionWorkerPlacementPatchError(params: {
   if (!placement || placement.state === "local") {
     return undefined;
   }
-  if (params.patch.archived !== undefined) {
-    return `Session ${params.key} cannot change archive state while cloud worker placement is ${placement.state}.`;
+  if (params.patch.archived === false) {
+    if (!isWorkerPlacementSafeForArchive(params.context, placement)) {
+      return `Session ${params.key} cannot change archive state while cloud worker placement is ${placement.state}.`;
+    }
   }
   if (!params.validateModelRuntime || params.patch.model === undefined || !params.entry) {
     return undefined;
@@ -157,54 +152,16 @@ export function rejectPluginRuntimeSessionOwnershipMismatch(params: {
   return true;
 }
 
-type GatewaySessionTargetOptions = {
-  agentId?: string;
-  exactRead?: boolean;
-  storeCache?: GatewaySessionStoreCache;
-  targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
-};
-
-type HydratedGatewaySessionTargetOptions = GatewaySessionTargetOptions &
-  (
-    | { exactRead: true }
-    | { storeCache: GatewaySessionStoreCache }
-    | { targetDiscoveryCache: GatewaySessionStoreDiscoveryCache }
-  );
-
 export function resolveGatewaySessionTargetFromKey(
   key: string,
   cfg: OpenClawConfig,
-  opts: HydratedGatewaySessionTargetOptions,
-): { cfg: OpenClawConfig; target: GatewaySessionStoreTargetWithStore; storePath: string };
-export function resolveGatewaySessionTargetFromKey(
-  key: string,
-  cfg: OpenClawConfig,
-  opts?: GatewaySessionTargetOptions,
-): { cfg: OpenClawConfig; target: GatewaySessionStoreTarget; storePath: string };
-export function resolveGatewaySessionTargetFromKey(
-  key: string,
-  cfg: OpenClawConfig,
-  opts?: GatewaySessionTargetOptions,
+  opts?: { agentId?: string },
 ) {
-  const targetOptions = {
+  const target = resolveGatewaySessionStoreTarget({
     cfg,
     key,
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
-  };
-  const needsStore =
-    opts?.exactRead === true ||
-    opts?.storeCache !== undefined ||
-    opts?.targetDiscoveryCache !== undefined;
-  const target = needsStore
-    ? resolveGatewaySessionStoreTargetWithStore({
-        ...targetOptions,
-        ...(opts?.exactRead === true ? { exactRead: true } : {}),
-        ...(opts?.storeCache !== undefined ? { storeCache: opts.storeCache } : {}),
-        ...(opts?.targetDiscoveryCache !== undefined
-          ? { targetDiscoveryCache: opts.targetDiscoveryCache }
-          : {}),
-      })
-    : resolveGatewaySessionStoreTarget(targetOptions);
+  });
   return { cfg, target, storePath: target.storePath };
 }
 

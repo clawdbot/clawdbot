@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { recordAcpParentStreamEvents } from "../../agents/acp-parent-stream-store.sqlite.js";
+import { recordAcpParentStreamEvents } from "../../agents/subagents/spawn/acp-parent-stream-store.sqlite.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -29,7 +29,7 @@ import {
   planSqliteSessionStateDeleteIfUnreferenced,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import { touchTranscriptMutationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
-import { replaceSqliteTranscriptEvents } from "./session-accessor.sqlite.js";
+import { replaceSqliteTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 type TestTranscriptEvent = {

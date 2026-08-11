@@ -13,6 +13,7 @@ import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
@@ -76,7 +77,7 @@ import {
   createReadTool,
   createWriteTool,
 } from "./sessions/index.js";
-import type { TrustedSubagentCompletionHandoff } from "./subagent-announce-handoff.js";
+import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
 import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
@@ -374,6 +375,8 @@ type OpenClawCodingToolsOptions = {
   skillUsagePaths?: SkillUsagePath[];
   /** Prepared conversation-scoped facts for callers that already resolved this run context. */
   conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
+  /** Trusted conversation policy prepared at channel ingress. */
+  conversationToolPolicy?: GroupToolPolicyConfig;
   inputProvenance?: InputProvenance;
   /** Consumed in-process completion capability; never derived from model-facing input. */
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
@@ -410,6 +413,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       chatType: options?.chatType,
       messageTo: options?.messageTo,
       messageThreadId: options?.messageThreadId,
+      conversationToolPolicy: options?.conversationToolPolicy,
       currentChannelId: options?.currentChannelId,
       currentMessagingTarget: options?.currentMessagingTarget,
       currentThreadTs: options?.currentThreadTs,

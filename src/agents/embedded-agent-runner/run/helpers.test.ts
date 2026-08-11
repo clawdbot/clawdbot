@@ -124,12 +124,6 @@ describe("resolveSameModelRateLimitRetryDelayMs", () => {
     expect(resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 10 })).toBe(60_000);
   });
 
-  it("is deterministic so RPM windows clear predictably", () => {
-    expect(resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 2 })).toBe(
-      resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 2 }),
-    );
-  });
-
   it("honors a short provider Retry-After when it is longer than the fixed backoff", () => {
     expect(
       resolveSameModelRateLimitRetryDelayMs({

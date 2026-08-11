@@ -66,7 +66,7 @@ export function readNonEmptyString(value: unknown, name: string): string {
   throw new Error(`native hook relay ${name} is required`);
 }
 
-export function readOptionalString(value: unknown): string | undefined {
+export function readOptionalNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
@@ -212,6 +212,6 @@ function snapshotString(value: string, state: { remainingStringLength: number })
   return `${prefix}...[truncated]`;
 }
 
-export function truncateText(value: string, maxLength: number): string {
+export function truncateRelayText(value: string, maxLength: number): string {
   return truncateWithMarker(value, maxLength, { marker: "...", reserve: 3, trimEnd: false });
 }

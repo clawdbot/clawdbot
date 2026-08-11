@@ -328,9 +328,22 @@ describe("resolveInitialTuiAgentId", () => {
         cfg,
         fallbackAgentId: "main",
         initialSessionInput: "agent:main:incident",
+        agentId: "ops",
         cwd: "/tmp/openclaw/projects/ops/src",
       }),
     ).toBe("main");
+  });
+
+  it("keeps an explicit global-session agent ahead of workspace inference", () => {
+    expect(
+      resolveInitialTuiAgentId({
+        cfg,
+        fallbackAgentId: "main",
+        initialSessionInput: "global",
+        agentId: "ops",
+        cwd: "/tmp/openclaw",
+      }),
+    ).toBe("ops");
   });
 
   it("falls back when cwd has no matching workspace", () => {

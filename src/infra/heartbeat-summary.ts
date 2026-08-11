@@ -27,10 +27,11 @@ export type HeartbeatSummary = {
   prompt: string;
   target: string;
   model?: string;
+  session?: string;
   ackMaxChars: number;
 };
 
-const DEFAULT_HEARTBEAT_TARGET = "none";
+const DEFAULT_HEARTBEAT_TARGET = "last";
 
 function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
   const list = listAgentEntries(cfg);
@@ -90,6 +91,7 @@ export function resolveHeartbeatSummaryForAgent(
 ): HeartbeatSummary {
   const defaults = cfg.agents?.defaults?.heartbeat;
   const overrides = agentId ? resolveAgentConfig(cfg, agentId)?.heartbeat : undefined;
+  const merged = defaults || overrides ? { ...defaults, ...overrides } : undefined;
   const enabled = isHeartbeatEnabledForAgent(cfg, agentId);
 
   if (!enabled) {
@@ -97,22 +99,20 @@ export function resolveHeartbeatSummaryForAgent(
       enabled: false,
       every: "disabled",
       everyMs: null,
-      prompt: resolveHeartbeatPromptText(defaults?.prompt),
-      target: defaults?.target ?? DEFAULT_HEARTBEAT_TARGET,
-      model: defaults?.model,
+      prompt: resolveHeartbeatPromptText(merged?.prompt),
+      target: merged?.target ?? DEFAULT_HEARTBEAT_TARGET,
+      model: merged?.model,
+      session: merged?.session,
       ackMaxChars: DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
     };
   }
 
-  const merged = defaults || overrides ? { ...defaults, ...overrides } : undefined;
-  const every = merged?.every ?? defaults?.every ?? overrides?.every ?? DEFAULT_HEARTBEAT_EVERY;
+  const every = merged?.every ?? DEFAULT_HEARTBEAT_EVERY;
   const everyMs = resolveHeartbeatIntervalMs(cfg, undefined, merged);
-  const prompt = resolveHeartbeatPromptText(
-    merged?.prompt ?? defaults?.prompt ?? overrides?.prompt,
-  );
-  const target =
-    merged?.target ?? defaults?.target ?? overrides?.target ?? DEFAULT_HEARTBEAT_TARGET;
-  const model = merged?.model ?? defaults?.model ?? overrides?.model;
+  const prompt = resolveHeartbeatPromptText(merged?.prompt);
+  const target = merged?.target ?? DEFAULT_HEARTBEAT_TARGET;
+  const model = merged?.model;
+  const session = merged?.session;
   const ackMaxChars = DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
 
   return {
@@ -122,6 +122,7 @@ export function resolveHeartbeatSummaryForAgent(
     prompt,
     target,
     model,
+    session,
     ackMaxChars,
   };
 }

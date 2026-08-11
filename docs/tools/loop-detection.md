@@ -48,16 +48,16 @@ Per-agent override (optional, at `agents.entries.*.tools.loopDetection`):
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "safe-runner",
+    entries: {
+      "safe-runner": {
+        default: true,
         tools: {
           loopDetection: {
             enabled: true,
           },
         },
       },
-    ],
+    },
   },
 }
 ```

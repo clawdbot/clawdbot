@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withEnv, withEnvAsync } from "../../test-utils/env.js";
-import { loadWorkspaceSkillEntries } from "../loading/workspace.js";
+import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { SkillEntry } from "../types.js";
@@ -194,7 +194,7 @@ describe("buildWorkspaceSkillStatus", () => {
   it("requires explicit enablement before exposing bundled coding-agent", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     const bundledSkillsDir = path.resolve("skills");
-    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+    const entries = loadWorkspaceSkills(workspaceDir, {
       managedSkillsDir: path.join(workspaceDir, ".managed"),
       bundledSkillsDir,
       config: {

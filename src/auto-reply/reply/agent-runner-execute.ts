@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { isLikelyContextOverflowError } from "../../agents/embedded-agent-helpers/errors.js";
+import { isLikelyContextOverflowError } from "../../agents/failover/classify.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
@@ -73,9 +73,6 @@ type ExecutePreparedReplyAgentRunInput = Pick<
   checkpointBeforeAgentReply: ReturnType<
     typeof createReplyRestartRecoveryClaimController
   >["checkpointBeforeAgentReply"];
-  confirmRestartRecoveryArmedAfterLeaseLoss: ReturnType<
-    typeof createReplyRestartRecoveryClaimController
-  >["confirmRestartRecoveryArmedAfterLeaseLoss"];
   getActiveIsNewSession: () => boolean;
   getActiveSessionEntry: () => SessionEntry | undefined;
   isHeartbeat: boolean;
@@ -114,7 +111,6 @@ export async function executePreparedReplyAgentRun(
     blockStreamingEnabled,
     cfg,
     checkpointBeforeAgentReply: checkpointBeforeAgentReplyWithRecovery,
-    confirmRestartRecoveryArmedAfterLeaseLoss,
     commandBody,
     defaultModel,
     followupRun,
@@ -323,15 +319,25 @@ export async function executePreparedReplyAgentRun(
           });
           if (!sourceReplyPolicy.suppressDelivery) {
             const pendingFinalDeliveryIntentId = crypto.randomUUID();
+            const pendingFinalDeliveryDeliveryId = crypto.randomUUID();
             setReplyPayloadMetadata(hookReply, {
-              pendingFinalDeliveryIntentId,
-              pendingFinalDeliveryRetryText: hookFinalDeliveryText,
+              pendingFinalDeliveryCompletion: {
+                deliveryId: pendingFinalDeliveryDeliveryId,
+                intentId: pendingFinalDeliveryIntentId,
+                ...(activeSessionEntry?.restartRecoveryDeliveryRunId
+                  ? { recoveryRunId: activeSessionEntry.restartRecoveryDeliveryRunId }
+                  : {}),
+                sessionId: replyOperation.sessionId,
+                sessionKey,
+                storePath,
+              },
             });
             hookCheckpoint = {
               state: hookFinalDeliveryText ? "handled-reply" : "handled-unrecoverable",
               pendingFinalDelivery: {
                 text: hookFinalDeliveryText ?? "",
                 intentId: pendingFinalDeliveryIntentId,
+                deliveries: [{ id: pendingFinalDeliveryDeliveryId, state: "prepared" }],
                 context: resolveReplyRunDeliveryContext({
                   cfg,
                   sessionCtx,
@@ -381,7 +387,6 @@ export async function executePreparedReplyAgentRun(
           resolvedVerboseLevel,
           toolProgressDetail,
           replyMediaContext,
-          confirmRestartRecoveryArmedAfterLeaseLoss,
           isRestartRecoveryArmed,
         }),
       ),
@@ -479,7 +484,6 @@ export function createReplyAgentRestartRecoveryController(
     beginBeforeAgentReply,
     checkpointBeforeAgentReply,
     clear: clearRestartRecoveryDeliveryClaim,
-    confirmRestartRecoveryArmedAfterLeaseLoss,
     isArmed: isRestartRecoveryArmed,
   } = createReplyRestartRecoveryClaimController({
     admissionRunId:
@@ -548,7 +552,6 @@ export function createReplyAgentRestartRecoveryController(
     admitUserTurn,
     beginBeforeAgentReply,
     checkpointBeforeAgentReply,
-    confirmRestartRecoveryArmedAfterLeaseLoss,
     clear: clearRestartRecoveryDeliveryClaim,
     isArmed: isRestartRecoveryArmed,
   };

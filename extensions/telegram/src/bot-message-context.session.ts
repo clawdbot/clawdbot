@@ -54,7 +54,10 @@ import {
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
-import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
+import {
+  resolveTelegramDirectToolPolicy,
+  resolveTelegramGroupPromptSettings,
+} from "./group-config-helpers.js";
 import {
   isTelegramHistoryEntryAfterAmbientWatermark,
   isTelegramChatWindowPromptContext,
@@ -639,6 +642,14 @@ export async function buildTelegramInboundContextPayload(params: {
       commands: {
         authorized: commandAuthorized,
       },
+      toolPolicy: isGroup
+        ? undefined
+        : resolveTelegramDirectToolPolicy({
+            directConfig: groupConfig,
+            senderId,
+            senderName,
+            senderUsername,
+          }),
       mentions: mentionFacts,
     },
     command:

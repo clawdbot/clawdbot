@@ -1,8 +1,10 @@
 import AppKit
 import Darwin
+import Dispatch
 import Foundation
 import MenuBarExtraAccess
 import Observation
+import OpenClawKit
 import OSLog
 import Security
 import SwiftUI
@@ -13,14 +15,25 @@ struct OpenClawApp: App {
     @Environment(\.openWindow) private var openWindow
     @State private var state: AppState
     private static let logger = Logger(subsystem: "ai.openclaw", category: "app")
-    private let gatewayManager = GatewayProcessManager.shared
-    private let controlChannel = ControlChannel.shared
-    private let activityStore = WorkActivityStore.shared
+    private var gatewayManager: GatewayProcessManager {
+        .shared
+    }
+
+    private var controlChannel: ControlChannel {
+        .shared
+    }
+
+    private var activityStore: WorkActivityStore {
+        .shared
+    }
+
     @State private var statusItem: NSStatusItem?
     @State private var statusItemMouseRouter = StatusItemMouseRouter()
     @State private var isMenuPresented = false
     @State private var isChatWindowVisible = false
-    @State private var tailscaleService = TailscaleService.shared
+    private var tailscaleService: TailscaleService {
+        .shared
+    }
 
     @MainActor
     private func updateStatusHighlight() {
@@ -28,6 +41,22 @@ struct OpenClawApp: App {
     }
 
     init() {
+        if let error = AppProfile.current.validationError {
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "OpenClaw profile is invalid"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+            Darwin.exit(2)
+        }
+        if AppProfile.current.isActive,
+           !DeviceIdentityStore.configureStateDirectory(OpenClawPaths.stateDirURL)
+        {
+            fatalError("Device identity state root was already used before app profile configuration")
+        }
+        guard GatewayTLSStore.configureKeychainServiceSuffix(AppProfile.current.keychainServiceSuffix) else {
+            fatalError("Gateway TLS Keychain namespace was already used by another app profile")
+        }
         OpenClawLogging.bootstrapIfNeeded()
 
         Self.applyAttachOnlyOverrideIfNeeded()
@@ -366,11 +395,11 @@ private struct SettingsWindowOpenRegistrar: View {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private static let dashboardURL = URL(string: "openclaw://dashboard")!
     private var state: AppState?
     private var terminationCleanupTask: Task<Void, Never>?
     private var terminationDeadlineTask: Task<Void, Never>?
     private var terminationCleanupFinished = false
+    private var profileInstanceLock: AppInstanceLock?
     private let webChatAutoLogger = Logger(subsystem: "ai.openclaw", category: "Chat")
     var nodeTerminationCleanup: @MainActor () async -> Void = {
         await TalkMLXSpeechSynthesizer.shared.shutdown()
@@ -386,7 +415,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     var openDashboardAction: @MainActor () -> Void = { AppNavigationActions.openDashboard() }
-    let updaterController: UpdaterProviding = makeUpdaterController()
+    let updaterController: UpdaterProviding
+
+    override init() {
+        let environment = ProcessInfo.processInfo.environment
+        let hasReplacementMetadata = ApplicationRelocator.hasReplacementHandoffMetadata(
+            environment: environment)
+        let isReplacementHandoff = hasReplacementMetadata &&
+            ApplicationRelocator.acceptReplacementHandoff(environment: environment)
+        if hasReplacementMetadata, !isReplacementHandoff {
+            fputs("OpenClaw replacement handoff authentication failed.\n", stderr)
+            Darwin.exit(2)
+        }
+        let ownership = AppInstanceLock.acquire(
+            url: AppProfile.current.instanceLockURL(),
+            waitMilliseconds: isReplacementHandoff ? 5000 : 0)
+        if let exitCode = Self.processExitCode(for: ownership) {
+            fputs("OpenClaw profile is already running.\n", stderr)
+            Darwin.exit(exitCode)
+        }
+        var profileInstanceLock: AppInstanceLock?
+        var instanceOwnershipFailure: String?
+        switch ownership {
+        case let .acquired(lock):
+            profileInstanceLock = lock
+        case .busy:
+            break
+        case let .failed(message):
+            instanceOwnershipFailure = message
+        }
+        self.profileInstanceLock = profileInstanceLock
+        self.updaterController = instanceOwnershipFailure == nil
+            ? makeUpdaterController()
+            : DisabledUpdaterController()
+        super.init()
+        if let instanceOwnershipFailure {
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "OpenClaw could not claim its instance lock"
+            alert.informativeText = instanceOwnershipFailure
+            alert.runModal()
+            Darwin.exit(2)
+        }
+    }
+
+    static func processExitCode(for ownership: AppInstanceLockAcquisition) -> Int32? {
+        if case .busy = ownership { return 0 }
+        return nil
+    }
 
     func applicationWillFinishLaunching(_: Notification) {
         // URL/reopen callbacks can create the dashboard before didFinishLaunching.
@@ -471,34 +547,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         #endif
-        let environment = ProcessInfo.processInfo.environment
         let launchPolicy = AppLaunchPresentationPolicy.current
-        let hasReplacementHandoff = ApplicationRelocator.hasReplacementHandoffMetadata(
-            environment: environment)
-        let isReplacementHandoff = ApplicationRelocator.acceptReplacementHandoff(
-            environment: environment)
-        if hasReplacementHandoff, !isReplacementHandoff {
-            NSApp.terminate(nil)
-            return
-        }
-        // Only a child whose signed parent and inherited readiness pipe authenticate
-        // may overlap the old process during replacement handoff.
-        if !isReplacementHandoff, self.isDuplicateInstance() {
-            if launchPolicy.allowsAutomaticPresentation {
-                NSWorkspace.shared.open(Self.dashboardURL)
-            }
-            NSApp.terminate(nil)
-            return
-        }
-        switch ApplicationRelocator.handleLaunch() {
-        case .terminating:
-            return
-        case let .continueLaunch(startUpdater):
-            if startUpdater {
-                if OpenClawConfigFile.gatewayUpdateChannel() == nil {
-                    self.updaterController.startAfterResolvingGatewayUpdateChannel()
-                } else {
-                    self.updaterController.start()
+        if !AppProfile.current.isActive {
+            switch ApplicationRelocator.handleLaunch() {
+            case .terminating:
+                return
+            case let .continueLaunch(startUpdater):
+                if startUpdater {
+                    if OpenClawConfigFile.gatewayUpdateChannel() == nil {
+                        self.updaterController.startAfterResolvingGatewayUpdateChannel()
+                    } else {
+                        self.updaterController.start()
+                    }
                 }
             }
         }
@@ -741,7 +801,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         expectedConnectionMode: AppState.ConnectionMode,
         expectedRouteIdentity: String?)
     {
-        let seenVersion = UserDefaults.standard.integer(forKey: onboardingVersionKey)
+        let seenVersion = AppDefaults.standard.integer(forKey: onboardingVersionKey)
         let shouldShow = seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
         guard shouldShow else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
@@ -756,11 +816,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             OnboardingController.shared.show()
         }
     }
+}
 
-    private func isDuplicateInstance() -> Bool {
-        guard let bundleID = Bundle.main.bundleIdentifier else { return false }
-        let running = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleID }
-        return running.count > 1
+enum AppInstanceLockAcquisition {
+    case acquired(AppInstanceLock)
+    case busy
+    case failed(String)
+}
+
+final class AppInstanceLock {
+    /// Keep the descriptor open for the process lifetime. Never unlink the path:
+    /// another opener could then lock a different inode and admit a duplicate.
+    private let descriptor: Int32
+
+    private init(descriptor: Int32) {
+        self.descriptor = descriptor
+    }
+
+    static func acquire(url: URL, waitMilliseconds: Int = 0) -> AppInstanceLockAcquisition {
+        if let error = self.preparePrivateStateRoot(url.deletingLastPathComponent()) {
+            return .failed(error)
+        }
+        let descriptor = Darwin.open(url.path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
+        guard descriptor >= 0 else { return .failed(String(cString: strerror(errno))) }
+        var status = stat()
+        guard fstat(descriptor, &status) == 0,
+              status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+              status.st_uid == geteuid()
+        else {
+            Darwin.close(descriptor)
+            return .failed("Instance lock is not a safe file owned by the current user.")
+        }
+        _ = fchmod(descriptor, 0o600)
+        let deadline = DispatchTime.now() + .milliseconds(max(0, waitMilliseconds))
+        while flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
+            guard errno == EWOULDBLOCK, DispatchTime.now() < deadline else {
+                let result: AppInstanceLockAcquisition = errno == EWOULDBLOCK
+                    ? .busy
+                    : .failed(String(cString: strerror(errno)))
+                Darwin.close(descriptor)
+                return result
+            }
+            usleep(50000)
+        }
+        return .acquired(AppInstanceLock(descriptor: descriptor))
+    }
+
+    private static func preparePrivateStateRoot(_ root: URL) -> String? {
+        var status = stat()
+        if lstat(root.path, &status) != 0 {
+            guard errno == ENOENT else { return String(cString: strerror(errno)) }
+            guard mkdir(root.path, 0o700) == 0 else { return String(cString: strerror(errno)) }
+            guard lstat(root.path, &status) == 0 else { return String(cString: strerror(errno)) }
+        }
+        guard status.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
+              status.st_uid == geteuid(),
+              status.st_mode & 0o777 == 0o700
+        else {
+            return "App profile state directory must be an owner-only 0700 directory."
+        }
+        return nil
+    }
+
+    deinit {
+        _ = flock(self.descriptor, LOCK_UN)
+        Darwin.close(self.descriptor)
     }
 }
 
@@ -991,11 +1111,14 @@ private func isDeveloperIDSigned(bundleURL: URL) -> Bool {
 
 @MainActor
 private func makeUpdaterController() -> UpdaterProviding {
+    guard AppProfile.current.validationError == nil, !AppProfile.current.isActive else {
+        return DisabledUpdaterController()
+    }
     let bundleURL = Bundle.main.bundleURL
     let isBundledApp = bundleURL.pathExtension == "app"
     guard isBundledApp, isDeveloperIDSigned(bundleURL: bundleURL) else { return DisabledUpdaterController() }
 
-    let defaults = UserDefaults.standard
+    let defaults = AppDefaults.standard
     let autoUpdateKey = "autoUpdateEnabled"
     // Default to true; honor the user's last choice otherwise.
     let savedAutoUpdate = (defaults.object(forKey: autoUpdateKey) as? Bool) ?? true

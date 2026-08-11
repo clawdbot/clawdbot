@@ -19,7 +19,7 @@ import {
   appendTranscriptMessage,
   type TranscriptEvent,
 } from "../../src/config/sessions/session-accessor.js";
-import { importSqliteSessionRows } from "../../src/config/sessions/session-accessor.sqlite.js";
+import { importSqliteSessionRows } from "../../src/config/sessions/session-accessor.sqlite-import.js";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
 import {
   connectGatewayClient,

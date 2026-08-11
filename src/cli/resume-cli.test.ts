@@ -1,35 +1,33 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseAgentSessionKey } from "../routing/session-key.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { startMinimalRealGateway } from "../gateway/minimal-gateway.test-helpers.js";
 import type { TuiSessionList } from "../tui/tui-backend.js";
 import { resolveResumeSession } from "../tui/tui-session-picker.js";
 import { runResumeCommand } from "./resume-cli.runtime.js";
 
-const gatewayMocks = vi.hoisted(() => ({
+const mocks = vi.hoisted(() => ({
   connect: vi.fn(),
+  error: vi.fn(),
+  exit: vi.fn(),
   runTui: vi.fn(),
   selectStyled: vi.fn(),
 }));
 
-const runtimeMocks = vi.hoisted(() => ({
-  error: vi.fn(),
-  exit: vi.fn(),
-}));
-
 vi.mock("../../packages/terminal-core/src/prompt-select-styled.js", () => ({
-  selectStyled: gatewayMocks.selectStyled,
+  selectStyled: mocks.selectStyled,
 }));
 
 vi.mock("../tui/gateway-chat.js", () => ({
-  GatewayChatClient: { connect: gatewayMocks.connect },
+  GatewayChatClient: { connect: mocks.connect },
 }));
 
 vi.mock("../tui/tui.js", () => ({
   resolveGatewayDisconnectState: vi.fn(),
-  runTui: gatewayMocks.runTui,
+  runTui: mocks.runTui,
 }));
 
 vi.mock("../runtime.js", () => ({
-  defaultRuntime: runtimeMocks,
+  defaultRuntime: mocks,
 }));
 
 type SessionRow = TuiSessionList["sessions"][number];
@@ -40,19 +38,9 @@ const sessions: SessionRow[] = [
   { key: "agent:work:gamma", displayName: "Gamma review", label: "checklist" },
 ];
 
-const stdinTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-const stdoutTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-
-function restoreTty(
-  stream: NodeJS.ReadStream | NodeJS.WriteStream,
-  descriptor: PropertyDescriptor | undefined,
-) {
-  if (descriptor) {
-    Object.defineProperty(stream, "isTTY", descriptor);
-  } else {
-    Reflect.deleteProperty(stream, "isTTY");
-  }
-}
+const ttyDescriptors = [process.stdin, process.stdout].map(
+  (stream) => [stream, Object.getOwnPropertyDescriptor(stream, "isTTY")] as const,
+);
 
 function createGatewayClient(rows: SessionRow[]) {
   const client = {
@@ -63,21 +51,26 @@ function createGatewayClient(rows: SessionRow[]) {
     start: vi.fn(() => client.onConnected?.()),
     stop: vi.fn().mockResolvedValue(undefined),
   };
-  gatewayMocks.connect.mockResolvedValue(client);
+  mocks.connect.mockResolvedValue(client);
   return client;
 }
 
 beforeEach(() => {
-  gatewayMocks.connect.mockReset();
-  gatewayMocks.runTui.mockReset().mockResolvedValue(undefined);
-  gatewayMocks.selectStyled.mockReset();
-  runtimeMocks.error.mockReset();
-  runtimeMocks.exit.mockReset();
+  Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+  mocks.connect.mockReset();
+  mocks.runTui.mockReset().mockResolvedValue(undefined);
+  mocks.selectStyled.mockReset();
+  mocks.error.mockReset();
+  mocks.exit.mockReset();
 });
 
 afterEach(() => {
-  restoreTty(process.stdin, stdinTtyDescriptor);
-  restoreTty(process.stdout, stdoutTtyDescriptor);
+  for (const [stream, descriptor] of ttyDescriptors) {
+    void (descriptor
+      ? Object.defineProperty(stream, "isTTY", descriptor)
+      : Reflect.deleteProperty(stream, "isTTY"));
+  }
 });
 
 describe("resolveResumeSession", () => {
@@ -140,8 +133,6 @@ describe("resolveResumeSession", () => {
 
 describe("runResumeCommand", () => {
   it("excludes the bare global session from query resolution", async () => {
-    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
-    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
     const client = createGatewayClient([]);
 
     await runResumeCommand("global", {});
@@ -149,56 +140,32 @@ describe("runResumeCommand", () => {
     expect(client.listSessions).toHaveBeenCalledWith(
       expect.objectContaining({ includeGlobal: false }),
     );
-    expect(runtimeMocks.exit).toHaveBeenCalledWith(1);
-    expect(gatewayMocks.runTui).not.toHaveBeenCalled();
+    expect(mocks.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runTui).not.toHaveBeenCalled();
   });
 
   it("omits the bare global session from the interactive picker", async () => {
-    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
-    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
     const client = createGatewayClient([
       { key: "agent:main:alpha", displayName: "Alpha planning", label: "roadmap" },
     ]);
-    gatewayMocks.selectStyled.mockResolvedValue("agent:main:alpha");
+    mocks.selectStyled.mockResolvedValue("agent:main:alpha");
 
     await runResumeCommand(undefined, {});
 
     expect(client.listSessions).toHaveBeenCalledWith(
       expect.objectContaining({ includeGlobal: false }),
     );
-    expect(gatewayMocks.selectStyled).toHaveBeenCalledWith(
+    expect(mocks.selectStyled).toHaveBeenCalledWith(
       expect.objectContaining({
         options: [expect.objectContaining({ value: "agent:main:alpha" })],
       }),
     );
-    expect(gatewayMocks.runTui).toHaveBeenCalledWith(
+    expect(mocks.runTui).toHaveBeenCalledWith(
       expect.objectContaining({
         session: "agent:main:alpha",
         forceProcessExitOnReturn: true,
       }),
     );
-  });
-
-  it("preserves an explicitly agent-qualified global session", async () => {
-    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
-    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
-    const client = createGatewayClient([{ key: "global", displayName: "global" }]);
-
-    await runResumeCommand("agent:work:global", {});
-
-    expect(client.listSessions).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "work", includeGlobal: true }),
-    );
-    expect(gatewayMocks.runTui).toHaveBeenCalledWith(
-      expect.objectContaining({
-        session: "agent:work:global",
-        forceProcessExitOnReturn: true,
-      }),
-    );
-    expect(parseAgentSessionKey(gatewayMocks.runTui.mock.lastCall?.[0]?.session)).toEqual({
-      agentId: "work",
-      rest: "global",
-    });
   });
 
   it("rejects a non-interactive queried resume before connecting or launching the TUI", async () => {
@@ -208,7 +175,47 @@ describe("runResumeCommand", () => {
     await expect(runResumeCommand("global", {})).rejects.toThrow(
       "Attaching to a session requires an interactive terminal. Re-run `openclaw resume [query]` from an interactive terminal.",
     );
-    expect(gatewayMocks.connect).not.toHaveBeenCalled();
-    expect(gatewayMocks.runTui).not.toHaveBeenCalled();
+    expect(mocks.connect).not.toHaveBeenCalled();
+    expect(mocks.runTui).not.toHaveBeenCalled();
+  });
+});
+
+describe("real Gateway session boundary", () => {
+  let harness: Awaited<ReturnType<typeof startMinimalRealGateway>>;
+
+  beforeAll(async () => {
+    harness = await startMinimalRealGateway([
+      { agentId: "work", key: "agent:work:global", visibility: "shared" },
+    ]);
+  });
+
+  afterAll(() => harness.close());
+
+  it("preserves an agent-qualified global session through the TUI handoff", async () => {
+    const { GatewayChatClient } =
+      await vi.importActual<typeof import("../tui/gateway-chat.js")>("../tui/gateway-chat.js");
+    mocks.connect.mockImplementation((options) => GatewayChatClient.connect(options));
+    await runResumeCommand("agent:work:global", { url: harness.url, token: harness.token });
+
+    expect(harness.sessionListRequests).toContainEqual(
+      expect.objectContaining({ agentId: "work", includeGlobal: true }),
+    );
+    expect(mocks.runTui).toHaveBeenCalledWith(
+      expect.objectContaining({ session: "agent:work:global", forceProcessExitOnReturn: true }),
+    );
+  });
+
+  it("accepts a bootstrap-signed identity and rejects a mismatched signature", async () => {
+    await expect(harness.connectBootstrap()).resolves.toMatchObject({ ok: true });
+    expect(harness.hellos).toContainEqual(expect.objectContaining({ type: "hello-ok" }));
+
+    await harness.connectBootstrap(true);
+    expect(harness.connectFailures).toContainEqual(
+      expect.objectContaining({
+        details: expect.objectContaining({
+          code: ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_INVALID,
+        }),
+      }),
+    );
   });
 });

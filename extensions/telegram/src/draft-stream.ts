@@ -61,7 +61,7 @@ const MAX_PREVIEW_FLOOD_SUSPEND_MS = 60_000;
 const MIN_PREVIEW_DWELL_MS = 4_000;
 
 export type TelegramDraftStream = {
-  update: (text: string) => void;
+  update: (text: string, options?: { onPlatformSendDispatch?: () => Promise<void> }) => void;
   updateLazy: (resolveText: () => string | undefined) => void;
   updatePreview: (preview: TelegramDraftPreview) => void;
   flush: () => Promise<void>;
@@ -323,6 +323,7 @@ export function createTelegramDraftStream(params: {
   let lastDeliveredText = "";
   let lastRequestedText = "";
   let lastRequestedPreview: TelegramDraftPreview | undefined;
+  let pendingPlatformSendDispatch: (() => Promise<void>) | undefined;
   let generation = 0;
   let finalPagePlan: { pages: PlannedTelegramDraftPage[]; nextPageIndex: number } | undefined;
   // Generations whose in-flight FIRST send was superseded by a reposition
@@ -450,6 +451,10 @@ export function createTelegramDraftStream(params: {
     page: PlannedTelegramDraftPage,
     sendGeneration: number,
   ): Promise<boolean> => {
+    if (pendingPlatformSendDispatch) {
+      await pendingPlatformSendDispatch();
+      pendingPlatformSendDispatch = undefined;
+    }
     const targetMessageId = streamMessageId;
     if (typeof targetMessageId === "number") {
       streamVisibleSinceMs ??= Date.now();
@@ -771,12 +776,17 @@ export function createTelegramDraftStream(params: {
     throwTerminalDeliveryError();
   };
 
-  const requestDraftUpdate = (text: string, preview?: TelegramDraftPreview) => {
+  const requestDraftUpdate = (
+    text: string,
+    preview?: TelegramDraftPreview,
+    onPlatformSendDispatch?: () => Promise<void>,
+  ) => {
     if (streamState.stopped || streamState.final) {
       return;
     }
     lastRequestedPreview = preview;
     lastRequestedText = text;
+    pendingPlatformSendDispatch = onPlatformSendDispatch;
     updateDraft(text);
   };
 
@@ -849,6 +859,7 @@ export function createTelegramDraftStream(params: {
     streamState.final = true;
     observeCurrentProviderMessage();
     await drainProviderMessageObservations();
+    pendingPlatformSendDispatch = undefined;
   };
 
   const remainingFinalContent = (): TelegramDraftMessageSnapshot | undefined => {
@@ -1049,7 +1060,7 @@ export function createTelegramDraftStream(params: {
   params.log?.(`telegram stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
 
   return {
-    update: requestDraftUpdate,
+    update: (text, options) => requestDraftUpdate(text, undefined, options?.onPlatformSendDispatch),
     updateLazy: requestLazyDraftUpdate,
     updatePreview,
     flush,

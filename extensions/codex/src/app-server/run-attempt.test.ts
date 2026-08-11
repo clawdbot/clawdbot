@@ -1,9 +1,10 @@
 // Codex tests cover run attempt plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import {
   embeddedAgentLog,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
@@ -2249,6 +2250,7 @@ describe("runCodexAppServerAttempt", () => {
     ]);
     const params = createRunParams();
     params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.toolsAllow = [];
     params.extraSystemPrompt = "Tool and file actions are disabled for this sender by chat policy.";
@@ -2302,6 +2304,62 @@ describe("runCodexAppServerAttempt", () => {
     expect(startParams?.config?.apps?.["google-calendar-app"]?.enabled).toBeUndefined();
     expect(request.mock.calls.map(([method]) => method)).not.toContain("app/installed");
     expect(request.mock.calls.map(([method]) => method)).not.toContain("app/read");
+  });
+
+  it("replaces the native surface with an exact conversation-policy-filtered catalog", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests((options) =>
+      createOpenClawCodingTools(options).filter((tool) =>
+        ["read", "write", "edit", "apply_patch", "exec", "process"].includes(tool.name),
+      ),
+    );
+    const params = createRunParams();
+    params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.conversationToolPolicy = {
+      deny: ["exec", "process", "write", "edit"],
+    };
+    params.pluginHarnessToolPolicyRestricted = true;
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "mcpServerStatus/list") {
+        return { data: [], nextCursor: null };
+      }
+      return undefined;
+    });
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const startParams = startRequest?.params as
+      | {
+          dynamicTools?: CodexDynamicToolSpec[];
+          environments?: unknown[];
+          config?: Record<string, unknown>;
+        }
+      | undefined;
+    const dynamicToolNames = flattenSpecsWithNamespace(startParams?.dynamicTools ?? []).map(
+      (tool) => tool.name,
+    );
+
+    expect(startParams?.environments).toEqual([]);
+    expect(dynamicToolNames.toSorted()).toEqual(["apply_patch", "read"]);
+    expect(startParams?.config).toMatchObject({
+      "features.hooks": false,
+      "hooks.PreToolUse": [],
+      "hooks.PostToolUse": [],
+      "hooks.PermissionRequest": [],
+      "hooks.Stop": [],
+    });
+    expect(harness.requests.map((request) => request.method)).toContain("mcpServerStatus/list");
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
   });
 
   it("fails closed for Codex app defaults when restricted native tools have no plugin config", async () => {
@@ -4957,6 +5015,90 @@ describe("runCodexAppServerAttempt", () => {
     const resumeRequest = requests.find((request) => request.method === "thread/resume");
     const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;
     expect(resumeRequestParams?.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+  });
+  it("sends the current recorded sender on successive turns of one resumed Codex thread", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const turnIds = ["turn-ada", "turn-grace"] as const;
+    let nextTurnIndex = 0;
+    const harness = createAppServerHarness(async (method, params) => {
+      if (method === "thread/resume") {
+        return threadStartResult((params as { threadId?: string }).threadId ?? "thread-existing");
+      }
+      if (method === "turn/start") {
+        const turnId = turnIds[nextTurnIndex++];
+        if (!turnId) {
+          throw new Error("unexpected extra turn/start");
+        }
+        return turnStartResult(turnId);
+      }
+      return {};
+    });
+
+    const runTurn = async (sender: { id: string; name: string }, prompt: string, runId: string) => {
+      const expectedTurnStarts =
+        harness.requests.filter((request) => request.method === "turn/start").length + 1;
+      const params = createParams(sessionFile, workspaceDir, { prompt, runId });
+      params.trigger = "user";
+      const message = {
+        role: "user" as const,
+        content: prompt,
+        timestamp: Date.now(),
+        __openclaw: { senderId: sender.id, senderName: sender.name },
+      };
+      params.userTurnTranscriptRecorder = {
+        message,
+        resolveMessage: async () => message,
+        getAdmissionReceipt: () => undefined,
+        markRuntimePersistencePending() {},
+        markRuntimePersisted() {},
+      } as unknown as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
+      const run = runCodexAppServerAttempt(params);
+      await vi.waitFor(
+        () =>
+          expect(
+            harness.requests.filter((request) => request.method === "turn/start"),
+          ).toHaveLength(expectedTurnStarts),
+        fastWait,
+      );
+      await harness.completeTurn({
+        threadId: "thread-existing",
+        turnId: `turn-${sender.name.toLowerCase()}`,
+      });
+      await run;
+    };
+
+    await runTurn({ id: "profile-ada", name: "Ada" }, "first request", "run-ada");
+    await runTurn({ id: "profile-grace", name: "Grace" }, "second request", "run-grace");
+
+    expect(
+      harness.requests
+        .filter((request) =>
+          ["thread/start", "thread/resume", "turn/start"].includes(request.method),
+        )
+        .map((request) => request.method),
+    ).toEqual(["thread/resume", "turn/start", "turn/start"]);
+    expect(
+      harness.requests
+        .filter((request) => request.method === "turn/start")
+        .map(
+          (request) =>
+            (
+              request.params as {
+                additionalContext?: Record<string, { kind: string; value: string }>;
+              }
+            ).additionalContext?.openclaw_current_sender,
+        ),
+    ).toEqual([
+      {
+        kind: "untrusted",
+        value: '{"sender":{"id":"profile-ada","name":"Ada"}}',
+      },
+      {
+        kind: "untrusted",
+        value: '{"sender":{"id":"profile-grace","name":"Grace"}}',
+      },
+    ]);
   });
   it("starts a fresh Codex thread before resume when the native rollout reaches the fallback fuse", async () => {
     const { sessionFile, workspaceDir, agentDir } = createRunPaths();

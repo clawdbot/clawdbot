@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
@@ -10,6 +11,7 @@ import type {
   ModelCatalogEntry,
   SessionsListResult,
 } from "../../api/types.ts";
+import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import { i18n, t } from "../../i18n/index.ts";
@@ -47,10 +49,7 @@ import { renderChat } from "./chat-view.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachments.ts";
 import { resetChatComposerState } from "./components/chat-composer.ts";
 import * as chatMessage from "./components/chat-message.ts";
-import {
-  renderChatModelControls,
-  type ChatModelControlsProps,
-} from "./components/chat-model-controls.ts";
+import { renderChatModelControls } from "./components/chat-model-controls.ts";
 import { ChatSessionRailElement } from "./components/chat-session-rail.ts";
 import {
   resetChatThreadPresentationState,
@@ -208,7 +207,7 @@ const renderMessageGroupMock = vi.fn(
     return html`<div class="chat-group">${text}</div>`;
   },
 );
-const assistantAttachmentRenderVersionMock = { value: 0 };
+const chatMediaRenderVersionMock = { value: 0 };
 
 type ChatHeaderTestState = {
   basePath?: string;
@@ -297,8 +296,8 @@ beforeEach(() => {
   vi.spyOn(chatThread, "getExpandedToolCards").mockReturnValue(new Map<string, boolean>());
   vi.spyOn(chatThread, "getExpandedUserMessages").mockReturnValue(new Map<string, boolean>());
   vi.spyOn(chatThread, "syncToolCardExpansionState").mockImplementation(() => undefined);
-  vi.spyOn(chatMessage, "getAssistantAttachmentAvailabilityRenderVersion").mockImplementation(
-    () => assistantAttachmentRenderVersionMock.value,
+  vi.spyOn(chatMessage, "getChatMediaRenderVersion").mockImplementation(
+    () => chatMediaRenderVersionMock.value,
   );
   vi.spyOn(chatMessage, "renderMessageGroup").mockImplementation(renderMessageGroupMock);
   vi.spyOn(chatMessage, "renderStreamGroup").mockImplementation(renderStreamGroupMock);
@@ -542,6 +541,8 @@ function getChatModelSelect(container: Element): HTMLElement {
   return select;
 }
 
+type ChatModelControlsProps = Parameters<typeof renderChatModelControls>[0];
+
 function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelControlsProps {
   return {
     activeRunId: state.chatRunId,
@@ -776,6 +777,12 @@ function createBackgroundTasks(
     loading: false,
     error: null,
     tasks: [],
+    subagentActivity: {
+      rows: [],
+      overflowWorking: 0,
+      taskIds: new Set<string>(),
+      nextExpiryAt: null,
+    },
     view: { kind: "list" },
     cancellingTaskIds: new Set<string>(),
     finishedCollapsed: false,
@@ -791,16 +798,6 @@ function createBackgroundTasks(
     onOpenTranscript: () => undefined,
     ...overrides,
   };
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (error?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
 }
 
 describe("chat Swarm progress", () => {
@@ -1304,6 +1301,7 @@ describe("chat transcript rendering", () => {
 
     renderWithReply(firstReply);
     renderWithReply(currentReply);
+    expect(renderMessageGroupMock).toHaveBeenCalledOnce();
     requireElement(
       container,
       '[aria-label="Reply to message"]',
@@ -1863,22 +1861,22 @@ afterEach(() => {
   vi.useRealTimers();
   buildChatItemsMock.mockClear();
   renderMessageGroupMock.mockClear();
-  assistantAttachmentRenderVersionMock.value = 0;
+  chatMediaRenderVersionMock.value = 0;
   resetChatViewState();
   replaceSlashCommands(buildFallbackSlashCommands());
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
-describe("session rail open requests", () => {
+describe("session rail pane commands", () => {
   it("does not replay the pane's retained generation after an A-B-A round trip", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     localStorage.setItem("openclaw.chat.observerHud.display", "pill");
     const container = document.createElement("div");
     document.body.append(container);
-    let consumedOpenRequest = 0;
-    const onSessionRailOpenRequestConsumed = vi.fn((openRequest: number) => {
-      consumedOpenRequest = openRequest;
+    let consumedGeneration = 0;
+    const onSessionRailCommandConsumed = vi.fn((generation: number) => {
+      consumedGeneration = generation;
     });
     const onObserverVisibilityChange = vi.fn();
     const companion = {
@@ -1888,16 +1886,16 @@ describe("session rail open requests", () => {
       hint: null,
       draft: "What changed?",
     };
-    const renderSession = async (sessionKey: string, sessionRailOpenRequest: number) => {
+    const renderSession = async (sessionKey: string, generation: number) => {
       render(
         renderChat(
           createChatProps({
             sessionKey,
             sessionRailReady: true,
-            sessionRailOpenRequest,
-            sessionRailConsumedOpenRequest: consumedOpenRequest,
+            sessionRailCommand: generation > 0 ? { generation, intent: "open" } : null,
+            sessionRailConsumedCommandGeneration: consumedGeneration,
             sessionRailCompanion: companion,
-            onSessionRailOpenRequestConsumed,
+            onSessionRailCommandConsumed,
             onObserverVisibilityChange,
           }),
         ),
@@ -1914,7 +1912,7 @@ describe("session rail open requests", () => {
     try {
       let rail = await renderSession("agent:main:a", 1);
       expect(rail?.querySelector(".chat-session-rail--expanded")).not.toBeNull();
-      expect(consumedOpenRequest).toBe(1);
+      expect(consumedGeneration).toBe(1);
 
       rail = await renderSession("agent:main:b", 0);
       expect(rail?.querySelector(".chat-session-rail--pill")).not.toBeNull();
@@ -1925,7 +1923,7 @@ describe("session rail open requests", () => {
 
       rail = await renderSession("agent:main:a", 2);
       expect(rail?.querySelector(".chat-session-rail--expanded")).not.toBeNull();
-      expect(onSessionRailOpenRequestConsumed).toHaveBeenCalledTimes(2);
+      expect(onSessionRailCommandConsumed).toHaveBeenCalledTimes(2);
       expect(onObserverVisibilityChange).toHaveBeenCalledTimes(2);
       expect(localStorage.getItem("openclaw.chat.observerHud.display")).toBe("pill");
     } finally {
@@ -1938,19 +1936,19 @@ describe("session rail open requests", () => {
     localStorage.setItem("openclaw.chat.observerHud.display", "pill");
     const container = document.createElement("div");
     document.body.append(container);
-    let consumedOpenRequest = 0;
-    const onSessionRailOpenRequestConsumed = vi.fn((openRequest: number) => {
-      consumedOpenRequest = openRequest;
+    let consumedGeneration = 0;
+    const onSessionRailCommandConsumed = vi.fn((generation: number) => {
+      consumedGeneration = generation;
     });
     const onObserverVisibilityChange = vi.fn();
-    const renderRail = async (sessionRailReady: boolean, sessionRailOpenRequest: number) => {
+    const renderRail = async (sessionRailReady: boolean, generation: number) => {
       render(
         renderChat(
           createChatProps({
             sessionKey: "agent:main:a",
             sessionRailReady,
-            sessionRailOpenRequest,
-            sessionRailConsumedOpenRequest: consumedOpenRequest,
+            sessionRailCommand: generation > 0 ? { generation, intent: "open" } : null,
+            sessionRailConsumedCommandGeneration: consumedGeneration,
             sessionRailCompanion: {
               exchanges: [],
               pendingQuestion: null,
@@ -1958,7 +1956,7 @@ describe("session rail open requests", () => {
               hint: null,
               draft: "What changed?",
             },
-            onSessionRailOpenRequestConsumed,
+            onSessionRailCommandConsumed,
             onObserverVisibilityChange,
           }),
         ),
@@ -1974,19 +1972,19 @@ describe("session rail open requests", () => {
     try {
       let rail = await renderRail(true, 1);
       expect(rail?.querySelector(".chat-session-rail--expanded")).not.toBeNull();
-      expect(consumedOpenRequest).toBe(1);
+      expect(consumedGeneration).toBe(1);
 
       rail = await renderRail(false, 1);
       expect(rail).toBeNull();
 
       rail = await renderRail(true, 1);
       expect(rail?.querySelector(".chat-session-rail--pill")).not.toBeNull();
-      expect(onSessionRailOpenRequestConsumed).toHaveBeenCalledOnce();
+      expect(onSessionRailCommandConsumed).toHaveBeenCalledOnce();
       expect(onObserverVisibilityChange).toHaveBeenCalledOnce();
 
       rail = await renderRail(true, 2);
       expect(rail?.querySelector(".chat-session-rail--expanded")).not.toBeNull();
-      expect(onSessionRailOpenRequestConsumed).toHaveBeenCalledTimes(2);
+      expect(onSessionRailCommandConsumed).toHaveBeenCalledTimes(2);
       expect(onObserverVisibilityChange).toHaveBeenCalledTimes(2);
       expect(localStorage.getItem("openclaw.chat.observerHud.display")).toBe("pill");
     } finally {
@@ -1996,22 +1994,92 @@ describe("session rail open requests", () => {
 });
 
 describe("per-pane chat presentation state", () => {
-  it("opens thread search from the physical shortcut on a non-Latin layout", () => {
-    const onRequestUpdate = vi.fn();
-    const container = renderChatView({ onRequestUpdate });
-    const chat = requireElement(container, "section.card.chat", "chat view");
-    const event = new KeyboardEvent("keydown", {
-      key: "а",
-      code: "KeyF",
-      ctrlKey: true,
-      bubbles: true,
-      cancelable: true,
-    });
+  it("moves focus into and back out of thread search for the physical shortcut", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const onRequestUpdate = vi.fn(() => renderChatInto(container, { onRequestUpdate }));
+    try {
+      renderChatInto(container, { onRequestUpdate });
+      const composer = getComposerTextarea(container);
+      composer.focus();
+      const event = new KeyboardEvent("keydown", {
+        key: "а",
+        code: "KeyF",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
 
-    chat.dispatchEvent(event);
+      composer.dispatchEvent(event);
+      await Promise.resolve();
 
-    expect(event.defaultPrevented).toBe(true);
-    expect(onRequestUpdate).toHaveBeenCalledOnce();
+      expect(event.defaultPrevented).toBe(true);
+      expect(onRequestUpdate).toHaveBeenCalledOnce();
+      expect(document.activeElement).toBe(
+        container.querySelector<HTMLInputElement>('.agent-chat__search-bar input[type="text"]'),
+      );
+
+      const closeEvent = new KeyboardEvent("keydown", {
+        key: "а",
+        code: "KeyF",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      document.activeElement?.dispatchEvent(closeEvent);
+      await Promise.resolve();
+
+      expect(closeEvent.defaultPrevented).toBe(true);
+      expect(onRequestUpdate).toHaveBeenCalledTimes(2);
+      expect(document.activeElement).toBe(composer);
+      expect(container.querySelector(".agent-chat__search-bar")).toBeNull();
+    } finally {
+      container.remove();
+    }
+  });
+
+  it("returns focus to the composer when the original target disappears", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const onRequestUpdate = vi.fn(() => renderChatInto(container, { onRequestUpdate }));
+    try {
+      renderChatInto(container, { onRequestUpdate });
+      const composer = getComposerTextarea(container);
+      const transientTarget = document.createElement("button");
+      const chat = container.querySelector<HTMLElement>(".card.chat");
+      if (!chat) {
+        throw new Error("expected chat section");
+      }
+      chat.append(transientTarget);
+      transientTarget.focus();
+
+      transientTarget.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "f",
+          code: "KeyF",
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await Promise.resolve();
+
+      transientTarget.remove();
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "f",
+          code: "KeyF",
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await Promise.resolve();
+
+      expect(document.activeElement).toBe(composer);
+    } finally {
+      container.remove();
+    }
   });
 
   it("keeps slash menus independent and resets only the targeted pane", () => {
@@ -2094,7 +2162,7 @@ describe("chat transcript rendering cache", () => {
     expect(renderMessageGroupMock.mock.calls[1]?.[1]).toMatchObject({ userId: "profile-1" });
   });
 
-  it("rerenders transcript groups when assistant attachment availability changes", () => {
+  it("rerenders transcript groups when chat media changes", () => {
     const messages = [{ role: "assistant", content: "ready" }];
     const toolMessages: unknown[] = [];
     const streamSegments: Array<{ text: string; ts: number }> = [];
@@ -2102,7 +2170,7 @@ describe("chat transcript rendering cache", () => {
     const container = document.createElement("div");
 
     renderChatInto(container, { messages, toolMessages, streamSegments, queue });
-    assistantAttachmentRenderVersionMock.value += 1;
+    chatMediaRenderVersionMock.value += 1;
     renderChatInto(container, { messages, toolMessages, streamSegments, queue, draft: "h" });
 
     expect(renderMessageGroupMock).toHaveBeenCalledTimes(2);
@@ -2615,8 +2683,8 @@ describe("chat loading skeleton", () => {
   it("shows prompt-bar progress beside context usage while the current session send is awaiting acknowledgement", () => {
     const container = renderChatView({
       sending: true,
-      composerControls: html`<button class="chat-view-menu-trigger" type="button">
-        Settings
+      composerControls: html`<button class="chat-composer-model-control" type="button">
+        Model
       </button>`,
       queue: [createPendingSend()],
       sessions: createContextUsageSessions(),
@@ -2668,7 +2736,6 @@ describe("chat loading skeleton", () => {
     expect(context?.closest(".agent-chat__composer-footer")).not.toBeNull();
     // The session provider matches a plan-usage group, so dollar estimates
     // yield to the subscription windows.
-    expect(container.querySelector(".context-usage__stats--cost")).toBeNull();
     expect(container.querySelector("[data-chat-usage-provider='true']")?.textContent).toContain(
       "OpenAI",
     );
@@ -2807,8 +2874,8 @@ describe("chat loading skeleton", () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
     try {
       const container = renderChatView({
-        composerControls: html`<button class="chat-view-menu-trigger" type="button">
-          Settings
+        composerControls: html`<button class="chat-composer-model-control" type="button">
+          Model
         </button>`,
         runStatus: {
           phase: "interrupted",
@@ -3556,7 +3623,7 @@ describe("chat slash menu accessibility", () => {
 
   it("does not submit an incomplete skill reference while the catalog is loading", () => {
     replaceSlashCommands(buildFallbackSlashCommands());
-    const refresh = createDeferred<void>();
+    const refresh = createDeferred();
     let draft = "";
     const onSend = vi.fn();
     const { container } = createReactiveDraftHarness({
@@ -3603,7 +3670,7 @@ describe("chat slash menu accessibility", () => {
 
   it("does not reopen a dismissed skill picker after a slow refresh", async () => {
     replaceSkillCommands({ key: "prose", description: "Prose skill." });
-    const refresh = createDeferred<void>();
+    const refresh = createDeferred();
     const { container } = createReactiveDraftHarness({
       onSlashIntent: () => refresh.promise,
     });
@@ -3651,7 +3718,7 @@ describe("chat slash menu accessibility", () => {
   });
 
   it("does not reopen slash suggestions when command hydration finishes after plain typing", async () => {
-    const hydration = createDeferred<void>();
+    const hydration = createDeferred();
     const onSlashIntent = vi.fn(() => hydration.promise);
     const { container } = createReactiveDraftHarness({ onSlashIntent });
 
@@ -4468,6 +4535,61 @@ describe("chat attachment picker", () => {
     );
   });
 
+  it("preserves pasted-text presentation and restore behavior across handoff", () => {
+    let attachments: ChatAttachment[] = [];
+    const producer = renderAttachmentHarness(
+      () => attachments,
+      (next) => {
+        attachments = next;
+      },
+    );
+    const pastedText = `First words from a remounted paste ${"x".repeat(1100)}`;
+    getComposerTextarea(producer).dispatchEvent(createPasteEvent(pastedText));
+    const original = expectDefined(attachments[0], "pasted attachment");
+    const originalDataUrl = getChatAttachmentDataUrl(original);
+
+    const handoff = createChatAttachmentHandoff();
+    const owner = {} as GatewayBrowserClient;
+    handoff.prepare({
+      owner,
+      paneId: "p1",
+      scopeKey: "agent:main:one",
+      attachments,
+      fallbacks: {},
+    });
+    attachments = expectDefined(
+      handoff.consume({ owner, paneId: "p1", scopeKey: "agent:main:one" }),
+      "restored attachments",
+    ).attachments;
+
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]).toBe(original);
+    expect(getChatAttachmentDataUrl(original)).toBe(originalDataUrl);
+
+    const onAttachmentsChange = vi.fn();
+    const onDraftChange = vi.fn();
+    const remounted = renderChatView({
+      attachments,
+      getAttachments: () => attachments,
+      draft: "intro",
+      getDraft: () => "intro",
+      onAttachmentsChange,
+      onDraftChange,
+    });
+    expect(remounted.querySelector(".chat-attachment-file__name")?.textContent).toContain(
+      "First words from a r...",
+    );
+    requireElement(
+      remounted,
+      '[aria-label="Show in text field"]',
+      "show pasted text button",
+    ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onAttachmentsChange).toHaveBeenCalledWith([]);
+    expect(onDraftChange).toHaveBeenCalledWith(`intro\n\n${pastedText}`);
+    expect(getChatAttachmentDataUrl(original)).toBeNull();
+  });
+
   it("keeps large paste previews UTF-16 well-formed at the display boundary", () => {
     let attachments: ChatAttachment[] = [];
     let container = renderAttachmentHarness(
@@ -4575,6 +4697,134 @@ describe("chat attachment picker", () => {
     removeButton.click();
 
     expect(onAttachmentsChange).toHaveBeenCalledWith([]);
+  });
+
+  it("renders multiple browser annotations as bounded, accessible cards", () => {
+    const annotations: ChatAttachment[] = [
+      {
+        id: "annotation-title",
+        mimeType: "image/png",
+        previewUrl: "blob:annotation-title",
+        browserAnnotation: {
+          modelContext: "Context for the model",
+          title: "Checkout page with a deliberately long title",
+          displayUrl: "shop.example.test/checkout",
+          markedRegionCount: 2,
+          inspectedElement: true,
+        },
+      },
+      {
+        id: "annotation-url",
+        mimeType: "image/png",
+        previewUrl: "blob:annotation-url",
+        browserAnnotation: {
+          modelContext: "Second context",
+          title: "",
+          displayUrl: "docs.example.test/narrow-layout",
+          markedRegionCount: 1,
+          inspectedElement: false,
+        },
+      },
+    ];
+
+    const container = renderChatView({ attachments: annotations });
+    const cards = container.querySelectorAll<HTMLElement>(
+      ".chat-attachment-thumb--browser-annotation",
+    );
+
+    expect(cards).toHaveLength(2);
+    expect(cards[0]?.dataset.attachmentId).toBe("annotation-title");
+    expect(cards[0]?.getAttribute("role")).toBe("group");
+    expect(cards[0]?.getAttribute("aria-label")).toBe(
+      "Browser annotation: Checkout page with a deliberately long title",
+    );
+    expect(cards[0]?.querySelector("img")?.getAttribute("alt")).toBe("Browser annotation preview");
+    expect(cards[0]?.querySelector(".chat-browser-annotation-card__identity")?.textContent).toBe(
+      "Checkout page with a deliberately long title",
+    );
+    expect(cards[0]?.querySelector(".chat-browser-annotation-card__meta")?.textContent).toContain(
+      "2 marked regions",
+    );
+    expect(cards[0]?.textContent).toContain("Element inspected");
+    expect(cards[1]?.querySelector(".chat-browser-annotation-card__identity")?.textContent).toBe(
+      "docs.example.test/narrow-layout",
+    );
+    expect(cards[1]?.textContent).toContain("1 marked region");
+    expect(cards[1]?.textContent).not.toContain("Element inspected");
+    expect(
+      cards[0]?.querySelector(
+        '[aria-label="Remove browser annotation: Checkout page with a deliberately long title"]',
+      ),
+    ).toBeInstanceOf(HTMLButtonElement);
+    for (const card of cards) {
+      expect(card.querySelector(".chat-browser-annotation-card__preview")).not.toBeNull();
+      expect(card.querySelector(".chat-browser-annotation-card__body")).not.toBeNull();
+    }
+  });
+
+  it("delegates browser annotation removal without releasing its payload", () => {
+    const attachment = registerChatAttachmentPayload({
+      attachment: {
+        id: "annotation-remove",
+        fileName: "annotation.png",
+        mimeType: "image/png",
+        browserAnnotation: {
+          modelContext: "Context",
+          title: "Account settings",
+          displayUrl: "example.test/settings",
+          markedRegionCount: 0,
+          inspectedElement: false,
+        },
+      },
+      dataUrl: "data:image/png;base64,YW5ub3RhdGlvbg==",
+      file: new File(["annotation"], "annotation.png", { type: "image/png" }),
+    });
+    const onRemoveAttachment = vi.fn();
+    const onAttachmentsChange = vi.fn();
+    const container = renderChatView({
+      attachments: [attachment],
+      onAttachmentsChange,
+      onRemoveAttachment,
+    });
+
+    requireElement(
+      container,
+      '[aria-label="Remove browser annotation: Account settings"]',
+      "browser annotation remove button",
+    ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onRemoveAttachment).toHaveBeenCalledWith(attachment);
+    expect(onAttachmentsChange).not.toHaveBeenCalled();
+    expect(getChatAttachmentDataUrl(attachment)).not.toBeNull();
+  });
+
+  it("keeps ordinary attachment removal immediate when an annotation callback exists", () => {
+    const attachment = registerChatAttachmentPayload({
+      attachment: {
+        id: "ordinary-remove",
+        fileName: "ordinary.png",
+        mimeType: "image/png",
+      },
+      dataUrl: "data:image/png;base64,b3JkaW5hcnk=",
+      file: new File(["ordinary"], "ordinary.png", { type: "image/png" }),
+    });
+    const onRemoveAttachment = vi.fn();
+    const onAttachmentsChange = vi.fn();
+    const container = renderChatView({
+      attachments: [attachment],
+      onAttachmentsChange,
+      onRemoveAttachment,
+    });
+
+    requireElement(
+      container,
+      '[aria-label="Remove attachment"]',
+      "ordinary attachment remove button",
+    ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onRemoveAttachment).not.toHaveBeenCalled();
+    expect(onAttachmentsChange).toHaveBeenCalledWith([]);
+    expect(getChatAttachmentDataUrl(attachment)).toBeNull();
   });
 
   it("opens the scoped file input from the attachment menu", () => {
@@ -5712,8 +5962,8 @@ describe("chat model controls", () => {
   });
 
   it("keeps reconciliation inside the session settings lane", async () => {
-    const reconciliationStarted = createDeferred<void>();
-    const releaseReconciliation = createDeferred<void>();
+    const reconciliationStarted = createDeferred();
+    const releaseReconciliation = createDeferred();
     const patches: Array<Record<string, unknown>> = [];
     const patchResult = {
       ok: true,

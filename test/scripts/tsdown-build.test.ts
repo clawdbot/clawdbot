@@ -9,7 +9,7 @@ import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
-} from "../../scripts/lib/tsdown-config-groups.mjs";
+} from "../../scripts/lib/tsdown-config-groups.mts";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
   cleanTsdownOutputRoots,
@@ -25,7 +25,7 @@ import {
   resolveTsdownCleanOutputRoots,
   runTsdownBuildInvocation,
   signalTsdownBuildProcessTree,
-} from "../../scripts/tsdown-build.mjs";
+} from "../../scripts/tsdown-build.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -131,14 +131,18 @@ describe("resolveTsdownBuildInvocation", () => {
   });
 
   it("prints wrapper help without invoking pnpm or tsdown", () => {
-    const result = spawnSync(process.execPath, ["scripts/tsdown-build.mjs", "--help"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/tsdown-build.mts", "--help"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Usage: node scripts/tsdown-build.mjs");
+    expect(result.stdout).toContain("Usage: node --import tsx scripts/tsdown-build.mts");
     expect(result.stdout).not.toContain("Scope:");
     expect(result.stdout).not.toContain("pnpm");
   });
@@ -1229,7 +1233,7 @@ describe("runTsdownBuildInvocation", () => {
       const rootDir = createTempDir("openclaw-tsdown-parent-signal-");
       const childPidPath = path.join(rootDir, "child.pid");
       const readyPath = path.join(rootDir, "child.ready");
-      const scriptUrl = pathToFileURL(path.resolve("scripts/tsdown-build.mjs")).href;
+      const scriptUrl = pathToFileURL(path.resolve("scripts/tsdown-build.mts")).href;
       let childPid = 0;
       let runner: ReturnType<typeof spawn> | undefined;
 

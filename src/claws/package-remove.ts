@@ -1,5 +1,5 @@
 import { runPluginUninstallCommand } from "../cli/plugins-uninstall-command.js";
-import { normalizeClawHubSha256Integrity } from "../infra/clawhub.js";
+import { normalizeClawHubSha256Integrity } from "../infra/clawhub-artifacts.js";
 import { resolveInstalledClawHubPlugin } from "../plugins/plugin-install-preflight.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {

@@ -7,6 +7,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   assertBrowserProxyFileBytesWithinLimits,
   assertBrowserProxyFileCountWithinLimit,
@@ -16,7 +17,6 @@ import {
   type BrowserProxyUploadV1,
 } from "./browser-proxy-envelope.js";
 import { DEFAULT_UPLOAD_DIR, resolveExistingUploadPaths } from "./browser/paths.js";
-import { asRecord } from "./record-shared.js";
 
 const logger = createSubsystemLogger("browser");
 const BROWSER_PROXY_UPLOAD_ROOT_NAME = ".proxy-uploads";
@@ -73,7 +73,7 @@ export function isBrowserProxyUploadRequest(params: {
   if (!isFileChooserRequest(params.method, params.path)) {
     return false;
   }
-  const body = asRecord(params.body);
+  const body = asNullableRecord(params.body);
   return Boolean(body && Array.isArray(body.paths) && body.paths.length > 0);
 }
 
@@ -125,7 +125,7 @@ export async function prepareBrowserProxyUploadRequest(params: {
   if (!isFileChooserRequest(params.method, params.path)) {
     return { body: params.body };
   }
-  const body = asRecord(params.body);
+  const body = asNullableRecord(params.body);
   if (!body) {
     return { body: params.body };
   }
@@ -497,7 +497,7 @@ export async function stageBrowserProxyUploadRequest(params: {
   if (!isFileChooserRequest(params.method, params.path)) {
     throw new Error("INVALID_REQUEST: browser proxy upload requires the file chooser route");
   }
-  const body = asRecord(params.body);
+  const body = asNullableRecord(params.body);
   if (!body || Object.hasOwn(body, "paths")) {
     throw new Error("INVALID_REQUEST: browser proxy upload body must omit paths");
   }

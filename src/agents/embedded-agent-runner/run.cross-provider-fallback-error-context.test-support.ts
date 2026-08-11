@@ -21,7 +21,7 @@ import {
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
-let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
+let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 const DEEPSEEK_ERROR_MESSAGE = "429 insufficient quota";
 const COMPACTION_REMOVED_ERROR_MESSAGE = "current candidate model unavailable";
 type CurrentAttemptAssistantWithError = NonNullable<

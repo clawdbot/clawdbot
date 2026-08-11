@@ -1,6 +1,7 @@
 import { readCodexCliCredentialsCached } from "openclaw/plugin-sdk/provider-auth";
 import { describe, expect, it } from "vitest";
 import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
+import type { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import {
   OpenAIQuicksilverAudioPeer,
@@ -17,7 +18,7 @@ const LIVE_TIMEOUT_MS = 60_000;
 const MAX_PENDING_AUDIO_BYTES = 240_000;
 
 type TestableGatewayBridge = {
-  pendingAudio: Buffer;
+  pendingAudio: OpenAIQuicksilverPendingAudio;
 };
 
 async function waitForLiveCondition(

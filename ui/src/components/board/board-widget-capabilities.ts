@@ -1,9 +1,10 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
-import type { BoardGrantDecision, BoardViewWidget } from "../../lib/board/view-types.ts";
+import type { BoardWidget } from "../../lib/board/types.ts";
+import type { BoardGrantDecision } from "../../lib/board/view-types.ts";
 
 export function renderBoardPendingCapabilities(options: {
-  widget: BoardViewWidget;
+  widget: BoardWidget;
   disabled: boolean;
   onGrant: (decision: BoardGrantDecision) => void;
   error?: TemplateResult;
@@ -65,7 +66,7 @@ export function renderBoardPendingCapabilities(options: {
 }
 
 export function renderBoardGrantedCapabilities(
-  widget: BoardViewWidget,
+  widget: BoardWidget,
 ): TemplateResult | typeof nothing {
   if (widget.grantState !== "granted" || !widget.declared) {
     return nothing;

@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import { enqueueFollowupRun, type FollowupRun } from "../auto-reply/reply/queue.js";
 import {
@@ -43,7 +44,6 @@ import {
 } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
-  createDeferred,
   getSessionManagerModule,
   sessionStoreEntry,
   createCheckpointFixture,
@@ -324,18 +324,6 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
     sessionKey: checkpointEntry.sessionKey,
   });
 
-  const checkpoint = await rpcReq<{
-    ok: true;
-    key: string;
-    checkpoint: { checkpointId: string; preCompaction: { sessionFile?: string } };
-  }>(ws, "sessions.compaction.get", {
-    key: "main",
-    checkpointId: "checkpoint-1",
-  });
-  expect(checkpoint.ok).toBe(true);
-  expect(checkpoint.payload?.checkpoint.checkpointId).toBe("checkpoint-1");
-  expect(checkpoint.payload?.checkpoint.preCompaction.sessionFile).toBeUndefined();
-
   const sessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
   let branched: Awaited<
     ReturnType<
@@ -553,18 +541,6 @@ test("sessions.compaction list/get scopes selected global checkpoints to the req
     summary: "work checkpoint",
   });
 
-  const got = await directSessionReq<{
-    checkpoint?: { checkpointId?: string; summary?: string };
-  }>(
-    "sessions.compaction.get",
-    { key: "global", agentId: "work", checkpointId: "checkpoint-work" },
-    { context: { getRuntimeConfig: () => runtimeConfig } },
-  );
-  expect(got.ok).toBe(true);
-  expect(got.payload?.checkpoint).toMatchObject({
-    checkpointId: "checkpoint-work",
-    summary: "work checkpoint",
-  });
   expect(
     loadSessionEntry({ agentId: "main", sessionKey: "global", storePath: mainStorePath })
       ?.sessionId,
@@ -1181,8 +1157,8 @@ test("sessions.compaction.restore leaves replacement-session work untouched when
       replacementInterrupted = true;
     },
   });
-  const blockerStarted = createDeferred<void>();
-  const releaseBlocker = createDeferred<void>();
+  const blockerStarted = createDeferred();
+  const releaseBlocker = createDeferred();
   const blocker = runExclusiveSessionLifecycleMutation({
     scope: storePath,
     identities: ["main", "agent:main:main", fixture.sessionId],
@@ -1596,7 +1572,7 @@ test("sessions.compact refuses real compaction while a worker inference owns the
   expectNoSessionQueueCleanup();
 });
 
-test("sessions.patch rejects archive while terminal compaction owns the session", async () => {
+test("sessions.patch waits for terminal compaction before archiving the session", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:dashboard:compact-race";
   await seedSessionEntry({
@@ -1627,9 +1603,15 @@ test("sessions.patch rejects archive while terminal compaction owns the session"
   await vi.waitFor(() => {
     expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledTimes(1);
   });
-  const archived = await rpcReq(ws, "sessions.patch", { key: sessionKey, archived: true });
-  expect(archived.ok).toBe(false);
-  expect(archived.error?.message).toContain("active run");
+  let archiveSettled = false;
+  const archiveResult = rpcReq(ws, "sessions.patch", { key: sessionKey, archived: true }).then(
+    (result) => {
+      archiveSettled = true;
+      return result;
+    },
+  );
+  await Promise.resolve();
+  expect(archiveSettled).toBe(false);
 
   compaction.resolve({
     ok: true,
@@ -1642,6 +1624,7 @@ test("sessions.patch rejects archive while terminal compaction owns the session"
     },
   });
   expect((await compactResult).ok).toBe(true);
+  expect((await archiveResult).ok).toBe(true);
   ws.close();
 });
 

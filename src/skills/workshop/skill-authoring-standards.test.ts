@@ -7,9 +7,12 @@ import { SKILL_AUTHORING_STANDARDS_PROMPT } from "./skill-authoring-standards.js
 describe("skill authoring standards", () => {
   it("defines routing, naming, body, token, evidence, and durable-fix requirements", () => {
     expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("first ~60 characters");
+    expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("one trigger per actual branch");
     expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("notes, helpers, or workflows");
     expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("class-level name");
-    expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("exact procedure steps");
+    expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("checkable completion criterion");
+    expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("direct pointer");
+    expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("one source for each meaning");
     expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("Every sentence must earn its tokens");
     expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("never invent flags");
     expect(SKILL_AUTHORING_STANDARDS_PROMPT).toContain("capture the working fix");

@@ -232,11 +232,11 @@ describe("openclaw-tools update_plan gating", () => {
       taskSuggestionDeliveryMode: "gateway",
     });
 
-    expect(withoutSession).not.toContain("spawn_task");
+    expect(withoutSession).not.toContain("suggest_task");
     expect(withoutSession).not.toContain("dismiss_task");
-    expect(withoutSink).not.toContain("spawn_task");
+    expect(withoutSink).not.toContain("suggest_task");
     expect(withoutSink).not.toContain("dismiss_task");
-    expect(withSink).toEqual(expect.arrayContaining(["spawn_task", "dismiss_task"]));
+    expect(withSink).toEqual(expect.arrayContaining(["suggest_task", "dismiss_task"]));
   });
 
   it("keeps explicitly allowed message tool in embedded completions", () => {
@@ -529,7 +529,7 @@ describe("sessions_yield completion ownership", () => {
     ["the controller when the run owner is blank", "   ", controllerSessionKey],
     ["the controller when the run owner is absent", undefined, controllerSessionKey],
   ] as const)("records yield intent against %s", async (_, runSessionKey, expectedSessionKey) => {
-    const registry = await import("./subagent-registry.js");
+    const registry = await import("./subagents/registry/subagent-registry.js");
     const markRequesterTurnYielded = vi
       .spyOn(registry, "markRequesterTurnYielded")
       .mockReturnValue(1);
