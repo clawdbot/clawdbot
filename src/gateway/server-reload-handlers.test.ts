@@ -1225,7 +1225,10 @@ describe("gateway hot reload model state", () => {
     });
   });
 
-  it("scopes the refresh for a whole new agent entry (no leaf suffix)", async () => {
+  it("falls back to full refresh for a whole-agent entry change (add or remove)", async () => {
+    // Adding or removing a whole `agents.entries.<id>` may introduce or retire a default agent,
+    // which reshapes the `inheritedAuthDir` shared by every configured owner. A scoped refresh
+    // would leave other owners bound to stale default-derived auth artifacts.
     const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const { applyHotReload } = createReloadHandlersForTest(logReload);
     const nextConfig = {} as OpenClawConfig;
@@ -1235,7 +1238,6 @@ describe("gateway hot reload model state", () => {
     expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
       allowGatewaySubagentBinding: true,
       catalogMode: "static",
-      agentIds: new Set(["agentd"]),
     });
   });
 

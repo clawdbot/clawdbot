@@ -60,8 +60,11 @@ const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
  * Machine-managed metadata paths (e.g. `meta.*`) are scope-neutral: they are filtered out before
  * the agent-scope decision so they never disable agent-scoped reloads.
  *
- * Changes to an agent's `default` marker or its `agentDir` affect the default-agent-derived
- * `inheritedAuthDir` shared by every configured owner, so they force a full refresh (undefined).
+ * Whole-entry changes (added or removed `agents.entries.<id>` with no leaf suffix) and changes to
+ * an agent's `default` marker or `agentDir` affect the default-agent-derived `inheritedAuthDir`
+ * shared by every configured owner, so they force a full refresh (undefined). This covers adding
+ * or removing a `default: true` agent entry, which otherwise would leave other owners retaining
+ * stale default-derived auth artifacts.
  */
 function resolveModelRuntimeAgentIdsFromChangedPaths(
   changedPaths: readonly string[],
@@ -79,7 +82,15 @@ function resolveModelRuntimeAgentIdsFromChangedPaths(
       return undefined;
     }
     const field = path.slice(`agents.entries.${match[1]}`.length + 1);
-    if (field === "default" || field === "agentDir" || field.startsWith("agentDir.")) {
+    // Whole-entry changes (no leaf) may add or remove a default agent, which reshapes the
+    // shared `inheritedAuthDir` every configured owner derives from. Fall back to a full
+    // refresh instead of risking other owners retaining stale default-derived artifacts.
+    if (
+      field === "" ||
+      field === "default" ||
+      field === "agentDir" ||
+      field.startsWith("agentDir.")
+    ) {
       return undefined;
     }
     agentIds.add(normalizeAgentId(match[1]!));
