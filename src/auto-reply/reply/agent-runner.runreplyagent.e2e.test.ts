@@ -34,6 +34,7 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
+import { resolveReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -999,7 +1000,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     await run();
 
     expect(runState.admission).toEqual({ status: "owned" });
-    expect(runState.agentTurn).toEqual({ status: "ok" });
+    expect(resolveReplyOperationAgentTurn(runState)).toBe("ok");
   });
 
   it("records a failed heartbeat turn when a visible reply replaces its synthetic failure", async () => {
@@ -1021,7 +1022,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     const payloads = Array.isArray(result) ? result : [result];
 
     expect(payloads.map((payload) => payload?.text)).toEqual(["Visible terminal failure."]);
-    expect(runState.agentTurn).toEqual({ status: "failed" });
+    expect(resolveReplyOperationAgentTurn(runState)).toBe("failed");
   });
 
   it("runs visible turns with the session id returned by admission", async () => {
@@ -1271,7 +1272,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
         opts: { [REPLY_OPERATION_RUN_STATE]: runState },
       });
       await expect(run()).rejects.toThrow("persist exploded");
-      expect(runState.agentTurn).toEqual({ status: "failed" });
+      expect(resolveReplyOperationAgentTurn(runState)).toBe("failed");
       expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
     } finally {
       persistSpy.mockRestore();

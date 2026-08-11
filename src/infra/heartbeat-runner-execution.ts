@@ -15,6 +15,7 @@ import {
   resolveHeartbeatToolResponseFromReplyResult,
 } from "../auto-reply/heartbeat-tool-response.js";
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
+import { resolveReplyOperationAgentTurn } from "../auto-reply/reply/reply-operation-agent-turn-state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -681,7 +682,7 @@ export async function invokeHeartbeatAgentRun(
     resolveHeartbeatTerminalToolFailure(replyResult);
   const selectedReplyPayload = resolveHeartbeatReplyPayload(replyResult);
   const replyPayload = selectedReplyPayload;
-  const agentRunFailed = replyOperationRunState.agentTurn?.status === "failed";
+  const agentRunFailed = resolveReplyOperationAgentTurn(replyOperationRunState) === "failed";
   if (
     heartbeatScratchProposal !== undefined &&
     heartbeatToolResponse &&

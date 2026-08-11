@@ -27,7 +27,8 @@ import {
 } from "./pending-final-delivery.js";
 import type { FollowupRun } from "./queue.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
-import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
+import { recordReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
@@ -82,7 +83,6 @@ type ExecutePreparedReplyAgentRunInput = Pick<
   performSessionReset: (options: SessionResetOptions) => Promise<boolean>;
   replyMediaContext: ReplyMediaContext;
   replyOperation: ReplyOperation;
-  replyOperationRunState: ReplyOperationRunState | undefined;
   replyRouteThreadId: ReturnType<typeof resolveRoutedDeliveryThreadId>;
   replyToChannel: OriginatingChannelType | undefined;
   replyToMode: ReturnType<typeof resolveReplyToMode>;
@@ -126,7 +126,6 @@ export async function executePreparedReplyAgentRun(
     queueKey,
     replyMediaContext,
     replyOperation,
-    replyOperationRunState,
     replyRouteThreadId,
     replyThreadingOverride,
     replyToChannel,
@@ -394,11 +393,10 @@ export async function executePreparedReplyAgentRun(
         }),
       ),
   );
-  if (replyOperationRunState) {
-    replyOperationRunState.agentTurn = {
-      status: runOutcome.outcome.kind === "settled" ? runOutcome.outcome.status : "failed",
-    };
-  }
+  recordReplyOperationAgentTurn(
+    resolveReplyOperationRunState(opts),
+    runOutcome.outcome.kind === "settled" ? runOutcome.outcome.status : "failed",
+  );
   activeSessionEntry = getActiveSessionEntry();
   activeIsNewSession = getActiveIsNewSession();
 

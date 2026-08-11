@@ -13,6 +13,7 @@ import {
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../auto-reply/reply-payload.js";
+import { recordReplyOperationAgentTurn } from "../auto-reply/reply/reply-operation-agent-turn-state.js";
 import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -181,7 +182,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     if (!runState) {
       throw new Error("Expected heartbeat reply operation run state");
     }
-    runState.agentTurn = { status };
+    recordReplyOperationAgentTurn(runState, status);
   }
 
   function replyContext(replySpy: ReturnType<typeof vi.fn>): {
