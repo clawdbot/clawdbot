@@ -10,6 +10,7 @@ import type {
   WorkerInferenceTerminalFrame,
   WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { WorkerConnection, WorkerConnectionState } from "./worker-connection.js";
 import {
   WorkerConnectionInterruptedError,
@@ -361,8 +362,174 @@ describe("worker live-event client", () => {
 
     await expect(Promise.all([first, second])).resolves.toEqual([{ ackedSeq: 1 }, { ackedSeq: 2 }]);
     expect(harness.requestLiveEvent).toHaveBeenCalledTimes(2);
-    expect(client.ackedSeq).toBe(2);
-    expect(client.unackedCount).toBe(0);
+    client.dispose();
+  });
+
+  it("accepts out-of-order cumulative ACKs while a no-progress response has peers in flight", async () => {
+    const harness = connectionHarness();
+    const firstResponse =
+      createDeferred<Awaited<ReturnType<WorkerConnection["requestLiveEvent"]>>>();
+    const secondResponse =
+      createDeferred<Awaited<ReturnType<WorkerConnection["requestLiveEvent"]>>>();
+    harness.requestLiveEvent.mockImplementation(async (request) => {
+      return await (request.seq === 1 ? firstResponse.promise : secondResponse.promise);
+    });
+    const client = new WorkerLiveEventClient(harness.connection, { runEpoch: 3 });
+
+    const first = client.emit("run-1", LIVE_EVENT);
+    const second = client.emit("run-1", {
+      kind: "thinking",
+      payload: { text: "second", delta: "second" },
+    });
+    await vi.waitFor(() => expect(harness.requestLiveEvent).toHaveBeenCalledTimes(2));
+    secondResponse.resolve({
+      type: "res",
+      id: "live-response-2",
+      ok: true,
+      payload: { ackedSeq: 0 },
+    });
+    await Promise.resolve();
+    expect(harness.requestLiveEvent).toHaveBeenCalledTimes(2);
+    firstResponse.resolve({
+      type: "res",
+      id: "live-response-1",
+      ok: true,
+      payload: { ackedSeq: 2 },
+    });
+
+    await expect(Promise.all([first, second])).resolves.toEqual([{ ackedSeq: 2 }, { ackedSeq: 2 }]);
+    client.dispose();
+  });
+
+  it("recovers finishing after a concurrent preview rejection wins the response race", async () => {
+    const harness = connectionHarness();
+    const previewResponse =
+      createDeferred<Awaited<ReturnType<WorkerConnection["requestLiveEvent"]>>>();
+    const firstTerminalResponse =
+      createDeferred<Awaited<ReturnType<WorkerConnection["requestLiveEvent"]>>>();
+    harness.requestLiveEvent
+      .mockImplementationOnce(async () => await previewResponse.promise)
+      .mockImplementationOnce(async () => await firstTerminalResponse.promise)
+      .mockImplementationOnce(async (request) =>
+        request.lastAckedSeq > 0
+          ? {
+              type: "res",
+              id: "live-response-resync",
+              ok: false,
+              error: {
+                code: "INVALID_REQUEST",
+                message: "Replay required",
+                details: { reason: "resync-required", ackedSeq: 0, expectedSeq: 1 },
+              },
+            }
+          : {
+              type: "res",
+              id: "live-response-gap",
+              ok: true,
+              payload: { ackedSeq: 0 },
+            },
+      )
+      .mockResolvedValueOnce({
+        type: "res",
+        id: "live-response-finishing",
+        ok: true,
+        payload: { ackedSeq: 1 },
+      });
+    const client = new WorkerLiveEventClient(harness.connection, { runEpoch: 3 });
+
+    const preview = client.emit("run-1", LIVE_EVENT);
+    const finishing = client.emit("run-1", {
+      kind: "lifecycle",
+      payload: { phase: "finishing", startedAt: 1, endedAt: 2 },
+    });
+    await vi.waitFor(() => expect(harness.requestLiveEvent).toHaveBeenCalledTimes(2));
+    previewResponse.resolve({
+      type: "res",
+      id: "live-response-preview",
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Preview rejected",
+        details: { reason: "invalid-event" },
+      },
+    });
+    await expect(preview).rejects.toMatchObject({
+      name: "WorkerLiveEventError",
+      reason: "invalid-event",
+    });
+    firstTerminalResponse.resolve({
+      type: "res",
+      id: "live-response-stale-finishing",
+      ok: true,
+      payload: { ackedSeq: 0 },
+    });
+
+    await expect(finishing).resolves.toEqual({ ackedSeq: 1 });
+    expect(harness.requestLiveEvent.mock.calls.map((call) => call[0])).toEqual([
+      expect.objectContaining({ seq: 1, lastAckedSeq: 0, event: LIVE_EVENT }),
+      expect.objectContaining({ seq: 2, lastAckedSeq: 0 }),
+      expect.objectContaining({ seq: 2, lastAckedSeq: 2 }),
+      expect.objectContaining({ seq: 1, lastAckedSeq: 0 }),
+    ]);
+    client.dispose();
+  });
+
+  it("recovers finishing emitted after an earlier preview rejection", async () => {
+    const harness = connectionHarness();
+    harness.requestLiveEvent
+      .mockResolvedValueOnce({
+        type: "res",
+        id: "live-response-preview",
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "Preview rejected",
+          details: { reason: "invalid-event" },
+        },
+      })
+      .mockImplementationOnce(async (request) =>
+        request.lastAckedSeq > 0
+          ? {
+              type: "res",
+              id: "live-response-resync",
+              ok: false,
+              error: {
+                code: "INVALID_REQUEST",
+                message: "Replay required",
+                details: { reason: "resync-required", ackedSeq: 0, expectedSeq: 1 },
+              },
+            }
+          : {
+              type: "res",
+              id: "live-response-gap",
+              ok: true,
+              payload: { ackedSeq: 0 },
+            },
+      )
+      .mockResolvedValueOnce({
+        type: "res",
+        id: "live-response-finishing",
+        ok: true,
+        payload: { ackedSeq: 1 },
+      });
+    const client = new WorkerLiveEventClient(harness.connection, { runEpoch: 3 });
+
+    await expect(client.emit("run-1", LIVE_EVENT)).rejects.toMatchObject({
+      name: "WorkerLiveEventError",
+      reason: "invalid-event",
+    });
+    await expect(
+      client.emit("run-1", {
+        kind: "lifecycle",
+        payload: { phase: "finishing", startedAt: 1, endedAt: 2 },
+      }),
+    ).resolves.toEqual({ ackedSeq: 1 });
+
+    expect(harness.requestLiveEvent.mock.calls.map((call) => call[0])).toEqual([
+      expect.objectContaining({ seq: 1, lastAckedSeq: 0, event: LIVE_EVENT }),
+      expect.objectContaining({ seq: 2, lastAckedSeq: 1 }),
+      expect.objectContaining({ seq: 1, lastAckedSeq: 0 }),
+    ]);
     client.dispose();
   });
 
@@ -443,14 +610,13 @@ describe("worker live-event client", () => {
     };
     const second = client.emit("run-1", secondEvent);
 
-    await expect(Promise.all([first, second])).resolves.toEqual([{ ackedSeq: 1 }, { ackedSeq: 2 }]);
+    await expect(Promise.all([first, second])).resolves.toEqual([{ ackedSeq: 2 }, { ackedSeq: 2 }]);
     expect(harness.requestLiveEvent.mock.calls.map((call) => call[0])).toEqual([
       expect.objectContaining({ seq: 6, lastAckedSeq: 5, event: LIVE_EVENT }),
+      expect.objectContaining({ seq: 7, lastAckedSeq: 5, event: secondEvent }),
       expect.objectContaining({ seq: 1, lastAckedSeq: 0, event: LIVE_EVENT }),
-      expect.objectContaining({ seq: 2, lastAckedSeq: 1, event: secondEvent }),
+      expect.objectContaining({ seq: 2, lastAckedSeq: 0, event: secondEvent }),
     ]);
-    expect(client.ackedSeq).toBe(2);
-    expect(client.unackedCount).toBe(0);
     client.dispose();
   });
 
