@@ -1,4 +1,5 @@
 import { isContextOverflowError } from "../../agents/embedded-agent-helpers.js";
+import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
   PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
   renderControlUiAgentFailureCopy,
@@ -20,6 +21,7 @@ import type {
   AgentFallbackCycleResult,
 } from "./agent-runner-fallback-cycle.types.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
+import { classifyPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import {
   isReplyOperationRestartAbort,
   isReplyOperationUserAbort,
@@ -125,6 +127,21 @@ export async function settleAgentFallbackCycle(params: {
     };
   }
   const terminalMetadata = fallbackResult.terminal.metadata;
+  const sourceReplyDeliveryMode = turn.followupRun.run.sourceReplyDeliveryMode;
+  const finalText = runResult.meta?.finalAssistantVisibleText?.trim() ?? "";
+  const successfulSourceReplyDelivery = hasCompletedSourceReplyDeliveryEvidence(runResult);
+  const hasPendingContinuation =
+    runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0;
+  const privateFinalTerminalReply =
+    !hasPendingContinuation &&
+    classifyPrivateMessageToolFinal({
+      sourceReplyDeliveryMode,
+      sendPolicyDenied: false,
+      successfulSourceReplyDelivery,
+      finalText,
+    }) === "short"
+      ? ({ disposition: "empty", code: "message-tool-not-called" } as const)
+      : undefined;
   let terminalRunFailed = false;
   if (fallbackExhausted) {
     const exhaustionError = new Error(
@@ -148,7 +165,11 @@ export async function settleAgentFallbackCycle(params: {
     turn.replyOperation?.retainFailureUntilComplete();
     turn.replyOperation?.fail("run_failed", terminalError);
   } else {
-    settledLifecycleTerminal?.emit("end", runResult);
+    settledLifecycleTerminal?.emit(
+      "end",
+      runResult,
+      privateFinalTerminalReply ? { terminalReply: privateFinalTerminalReply } : undefined,
+    );
   }
   return {
     kind: "completed",
