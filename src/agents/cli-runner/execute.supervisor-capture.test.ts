@@ -1,5 +1,8 @@
 // Covers CLI execution paths where the process supervisor keeps stdout capture
 // disabled and the runner must parse streamed chunks without relying on tails.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -258,6 +261,53 @@ describe("executePreparedCliRun supervisor output capture", () => {
     await executePreparedCliRun(context);
 
     expect(requireSupervisorSpawnInput()).toEqual(expect.objectContaining({ secretInput }));
+  });
+
+  it("inherits the per-attempt Gemini settings descriptor in preference to the prepared one", async () => {
+    const settingsDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gemini-attempt-fd-"));
+    const settingsPath = path.join(settingsDir, "settings.json");
+    await fs.writeFile(
+      settingsPath,
+      `${JSON.stringify({
+        mcpServers: { openclaw: { type: "http", url: "http://127.0.0.1:23119/mcp" } },
+      })}\n`,
+      "utf-8",
+    );
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(
+        `${JSON.stringify({ type: "result", session_id: "session-jsonl", result: "done" })}\n`,
+      );
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+    context.backendResolved.bundleMcpMode = "gemini-system-settings";
+    context.mcpDeliveryCapture = true;
+    context.preparedBackend.env = { GEMINI_CLI_SYSTEM_SETTINGS_PATH: settingsPath };
+    // A stand-in for the prepared settings' descriptor. The attempt env
+    // supersedes the prepared settings path for this child, so the spawn must
+    // hand over the ATTEMPT descriptor, not this one.
+    context.preparedBackend.ownershipFd = 41;
+
+    try {
+      await executePreparedCliRun(context);
+      const spawnInput = requireSupervisorSpawnInput();
+      // `inheritFd` only exists on the child arm of the SpawnInput union.
+      const inheritFd = spawnInput.mode === "child" ? spawnInput.inheritFd : undefined;
+      expect(typeof inheritFd).toBe("number");
+      expect(inheritFd).not.toBe(41);
+    } finally {
+      await fs.rm(settingsDir, { recursive: true, force: true });
+    }
   });
 
   it("rejects oversized successful stdout instead of parsing a truncated tail", async () => {

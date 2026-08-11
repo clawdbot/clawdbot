@@ -85,6 +85,12 @@ export async function executeCliProcess(params: {
   outputMode: CliBackendConfig["output"];
   logOutputText: boolean;
   cliTurnStartedAt: number;
+  /**
+   * Descriptor on the per-attempt settings the child actually reads (Gemini
+   * capture attempts). Preferred over the prepared backend's descriptor: the
+   * attempt env supersedes the prepared settings path for this child.
+   */
+  attemptOwnershipFd?: number;
   fallbackCleanup?: () => Promise<void>;
   claimFallbackCleanup: () => void;
   observeForkSuccessor: (sessionId: string) => void;
@@ -260,6 +266,11 @@ export async function executeCliProcess(params: {
     // the caller's run id before awaiting the child or replacement fence.
     const abortManagedRun = () => supervisor.cancel(runParams.runId, "manual-cancel");
     runParams.abortSignal?.addEventListener("abort", abortManagedRun, { once: true });
+    // Inherited at `fork`, so the child holds a claim on its MCP temp dir from
+    // before it `exec`s — the window in which argv cannot show one. The
+    // per-attempt descriptor (Gemini capture) wins over the prepared one: it
+    // points at the settings this child's env actually names.
+    const inheritOwnershipFd = params.attemptOwnershipFd ?? context.preparedBackend.ownershipFd;
     try {
       const managedRun = await supervisor.spawn({
         runId: runParams.runId,
@@ -275,11 +286,7 @@ export async function executeCliProcess(params: {
         env: params.env,
         input: params.stdin ?? "",
         secretInput: context.preparedBackend.secretInput,
-        // Inherited at `fork`, so the child holds a claim on its MCP temp dir
-        // from before it `exec`s — the window in which argv cannot show one.
-        ...(context.preparedBackend.ownershipFd === undefined
-          ? {}
-          : { inheritFd: context.preparedBackend.ownershipFd }),
+        ...(inheritOwnershipFd === undefined ? {} : { inheritFd: inheritOwnershipFd }),
         captureOutput: false,
         onStdout: consumeStdout,
         onStderr: consumeStderr,

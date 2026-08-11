@@ -175,6 +175,51 @@ describe("prepareCliBundleMcpConfig gemini", () => {
     }
   });
 
+  it("gives Gemini settings dirs the crash-recovery ownership boundary: owner-encoded names plus an ownership descriptor", async () => {
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "gemini-system-settings",
+      backend: { command: "gemini", args: ["--prompt", "{prompt}"] },
+      workspaceDir: "/tmp/openclaw-bundle-mcp-gemini",
+      config: { plugins: { enabled: false } },
+      additionalConfig: {
+        mcpServers: {
+          openclaw: { type: "http", url: "http://127.0.0.1:23119/mcp" },
+        },
+      },
+    });
+    const attempt = await prepareCliBundleMcpCaptureAttempt({
+      mode: "gemini-system-settings",
+      env: prepared.env,
+      captureKey: "attempt-owned",
+    });
+    try {
+      // Owner-encoded dir names: <prefix><pid>-<boot|nobootid>-<ns|nons>-<start>-<suffix>.
+      // Without this a gateway crash strands the settings (resolved header
+      // credentials included) with no sweep able to prove them reclaimable.
+      const ownedName = new RegExp(
+        `^openclaw-gemini-mcp-(?:attempt-)?${process.pid}-[^-]+-[^-]+-\\d+-`,
+      );
+      const preparedDirName = path.basename(
+        path.dirname(prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH as string),
+      );
+      const attemptDirName = path.basename(
+        path.dirname(attempt.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH as string),
+      );
+      expect(preparedDirName).toMatch(ownedName);
+      expect(attemptDirName).toMatch(ownedName);
+      expect(attemptDirName.startsWith("openclaw-gemini-mcp-attempt-")).toBe(true);
+      // The descriptors the spawn hands to the child (durable in-flight claim,
+      // since the Gemini settings path travels via env, invisible to argv).
+      expect(typeof prepared.ownershipFd).toBe("number");
+      expect(typeof attempt.ownershipFd).toBe("number");
+      expect(attempt.ownershipFd).not.toBe(prepared.ownershipFd);
+    } finally {
+      await attempt.cleanup?.();
+      await prepared.cleanup?.();
+    }
+  });
+
   it("preserves inherited Gemini auth selection in generated system settings", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gemini-settings-"));
     const inheritedSettingsPath = path.join(dir, "settings.json");

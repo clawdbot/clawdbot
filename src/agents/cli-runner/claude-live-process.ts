@@ -453,8 +453,11 @@ export async function spawnClaudeProcess(params: {
     captureKey: params.mcpCaptureKey,
   });
   // Inherited at `fork`, so the child holds a claim on its MCP temp dir from
-  // before it `exec`s — the window in which argv cannot show one.
-  const inheritOwnershipFd = params.context.preparedBackend.ownershipFd;
+  // before it `exec`s — the window in which argv cannot show one. A per-attempt
+  // descriptor (env-carried settings) supersedes the prepared one: it points at
+  // the settings this child's env actually names.
+  const inheritOwnershipFd =
+    mcpCaptureAttempt.ownershipFd ?? params.context.preparedBackend.ownershipFd;
   let managedRun: ManagedRun;
   try {
     managedRun = await params.supervisor.spawn({

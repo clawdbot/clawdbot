@@ -1,9 +1,11 @@
 /**
- * Reclaims bundled MCP temp config dirs (`openclaw-cli-mcp-*`) orphaned by
- * gateway death. The per-run cleanup callback (bundle-mcp.ts) lives in gateway
- * memory: when the gateway process exits with runs in flight (restart, crash,
- * SIGKILL), the callback dies with it and the temp dir — including the rendered
- * `mcp.json` with the loopback URL and resolved tokens — leaks.
+ * Reclaims bundled MCP temp config dirs (`openclaw-cli-mcp-*`, plus the Gemini
+ * `openclaw-gemini-mcp-*` settings families) orphaned by gateway death. The
+ * per-run cleanup callback (bundle-mcp.ts) lives in gateway memory: when the
+ * gateway process exits with runs in flight (restart, crash, SIGKILL), the
+ * callback dies with it and the temp dir — the rendered `mcp.json` with the
+ * loopback URL and resolved tokens, or Gemini `settings.json` with resolved
+ * header credentials — leaks.
  *
  * Orphan detection is liveness-based, not age-based: live CLI subprocesses
  * carry the config path in their argv (`--mcp-config <dir>/mcp.json`, see
@@ -51,6 +53,26 @@ import { getWindowsPowerShellExePath } from "../../infra/windows-install-roots.j
 const execFileAsync = promisify(execFile);
 
 const BUNDLE_MCP_TEMP_PREFIX = "openclaw-cli-mcp-";
+/**
+ * Gemini renders its temporary system settings — including header values
+ * resolved to concrete credentials — through the same shared writer and the
+ * same in-memory-cleanup lifecycle, so gateway death strands them identically.
+ * Both Gemini prefixes are swept here under one policy. Unlike Claude configs,
+ * Gemini settings reach the child via env (`GEMINI_CLI_SYSTEM_SETTINGS_PATH`),
+ * not argv, so the argv scans can never prove a live Gemini holder: env-carried
+ * dirs are reclaimed only where the descriptor probe exists (Linux), and are
+ * kept — fail closed — where it does not.
+ */
+export const GEMINI_MCP_TEMP_PREFIX = "openclaw-gemini-mcp-";
+export const GEMINI_MCP_ATTEMPT_TEMP_PREFIX = "openclaw-gemini-mcp-attempt-";
+// Longest-first: the attempt prefix begins with the plain Gemini prefix, so the
+// owner parse below must try it first or an attempt dir's owner tuple would be
+// misread (and misjudged legacy) against the shorter prefix.
+const SWEPT_BASE_PREFIXES = [
+  GEMINI_MCP_ATTEMPT_TEMP_PREFIX,
+  GEMINI_MCP_TEMP_PREFIX,
+  BUNDLE_MCP_TEMP_PREFIX,
+] as const;
 
 const PROCESS_SCAN_TIMEOUT_MS = 10_000;
 
@@ -184,40 +206,45 @@ async function defaultReadStartTicks(pid: number): Promise<string | undefined> {
   }
 }
 
-let ownedMkdtempPrefixName: Promise<string> | undefined;
+let ownedIdentitySuffix: Promise<string> | undefined;
 
 /**
  * The `mkdtemp` prefix *name* that encodes the creating gateway's identity into
- * the temp dir name (pid + boot tag + PID-namespace tag + process start ticks).
- * The random `mkdtemp` suffix is appended atomically — so ownership exists from
- * the instant the dir does. Callers join it onto the temp root themselves; the
- * shared `writeTemporaryBundleMcpJson` does exactly that before calling
- * `fs.mkdtemp`.
+ * the temp dir name (pid + boot tag + PID-namespace tag + process start ticks),
+ * composed onto the given base prefix (Claude's by default, the Gemini ones for
+ * that backend's settings). The random `mkdtemp` suffix is appended atomically —
+ * so ownership exists from the instant the dir does. Callers join it onto the
+ * temp root themselves; the shared `writeTemporaryBundleMcpJson` does exactly
+ * that before calling `fs.mkdtemp`.
  */
-export async function bundleMcpOwnedMkdtempPrefixName(): Promise<string> {
+export async function bundleMcpOwnedMkdtempPrefixName(
+  basePrefix: string = BUNDLE_MCP_TEMP_PREFIX,
+): Promise<string> {
   // Every component here is fixed for this process's lifetime: the pid, the
   // boot id, the PID namespace and this process's own start ticks. Resolve them
-  // once — otherwise each Claude bundle-MCP preparation pays three `/proc` reads
+  // once — otherwise each bundle-MCP preparation pays three `/proc` reads
   // before queue admission, on the hot path of every run.
   //
   // Memoizing the promise (not the value) also collapses concurrent first-time
   // callers onto a single read. It cannot poison the cache: all three readers
   // swallow their own errors and resolve to a fallback, so this never settles
   // rejected.
-  ownedMkdtempPrefixName ??= (async () => {
+  ownedIdentitySuffix ??= (async () => {
     const boot = await readBootTag();
     const ns = await readPidNamespaceTag();
     const start = (await defaultReadStartTicks(process.pid)) ?? UNKNOWN_START;
-    return `${BUNDLE_MCP_TEMP_PREFIX}${process.pid}-${boot}-${ns}-${start}-`;
+    return `${process.pid}-${boot}-${ns}-${start}-`;
   })();
-  return ownedMkdtempPrefixName;
+  return `${basePrefix}${await ownedIdentitySuffix}`;
 }
 
 type BundleMcpOwner = { pid: number; boot: string; ns: string; start: string };
 
 // <prefix><pid>-<boot8|nobootid>-<nsInode|nons>-<startTicks>-<mkdtemp suffix>
+// The alternation is ordered longest-first (SWEPT_BASE_PREFIXES), which JS
+// regex alternation honors left to right.
 const OWNER_NAME_RE = new RegExp(
-  `^${BUNDLE_MCP_TEMP_PREFIX}(\\d+)-([0-9a-f]{8}|${NO_BOOT_ID})-(\\d+|${NO_NS})-(\\d+)-`,
+  `^(?:${SWEPT_BASE_PREFIXES.join("|")})(\\d+)-([0-9a-f]{8}|${NO_BOOT_ID})-(\\d+|${NO_NS})-(\\d+)-`,
 );
 
 function parseBundleMcpOwner(entryName: string): BundleMcpOwner | undefined {
@@ -373,6 +400,19 @@ async function listDirsHeldByOpenDescriptors(tmpRoot: string): Promise<Set<strin
   if (process.platform !== "linux") {
     return undefined;
   }
+  // `/proc/<pid>/fd` links report the RESOLVED target path, while the caller's
+  // candidates keep the tmpRoot's own spelling — which may travel through a
+  // symlink (a symlinked TMPDIR, Debian's /tmp arrangements). Comparing the raw
+  // spelling against resolved targets would then never match, silently blinding
+  // the probe to every live holder. Canonicalize the root once and compare in
+  // canonical space; record hits under the caller's spelling so they equal the
+  // caller's candidate paths.
+  let canonicalRoot: string;
+  try {
+    canonicalRoot = await fs.realpath(tmpRoot);
+  } catch {
+    return undefined; // Root unreadable — the probe cannot be trusted at all.
+  }
   let pids: string[];
   try {
     pids = (await fs.readdir("/proc")).filter((entry) => /^\d+$/.test(entry));
@@ -380,7 +420,7 @@ async function listDirsHeldByOpenDescriptors(tmpRoot: string): Promise<Set<strin
     return undefined;
   }
   const held = new Set<string>();
-  const rootPrefix = `${tmpRoot}${path.sep}`;
+  const rootPrefix = `${canonicalRoot}${path.sep}`;
   for (const pid of pids) {
     let fds: string[];
     try {
@@ -420,9 +460,9 @@ function lineReferencesDir(line: string, dir: string): boolean {
 }
 
 /**
- * Remove `openclaw-cli-mcp-*` temp dirs that no live process references.
- * Intended to run once at gateway startup (post-ready sidecar), mirroring
- * `cleanupStaleSessionLocks`.
+ * Remove bundle-MCP temp dirs (`openclaw-cli-mcp-*`, `openclaw-gemini-mcp-*`)
+ * that no live process references. Intended to run once at gateway startup
+ * (post-ready sidecar), mirroring `cleanupStaleSessionLocks`.
  */
 export async function sweepOrphanedBundleMcpTempDirs(params?: {
   /** Override the scanned root (tests). Defaults to `os.tmpdir()`. */
@@ -460,7 +500,14 @@ export async function sweepOrphanedBundleMcpTempDirs(params?: {
   let entries: string[];
   try {
     entries = (await fs.readdir(tmpRoot, { withFileTypes: true }))
-      .filter((entry) => entry.isDirectory() && entry.name.startsWith(BUNDLE_MCP_TEMP_PREFIX))
+      .filter(
+        (entry) =>
+          entry.isDirectory() &&
+          // The attempt prefix begins with the Gemini prefix, so two checks
+          // cover all three swept families.
+          (entry.name.startsWith(BUNDLE_MCP_TEMP_PREFIX) ||
+            entry.name.startsWith(GEMINI_MCP_TEMP_PREFIX)),
+      )
       .map((entry) => entry.name);
   } catch {
     return { removed, kept };
@@ -524,7 +571,8 @@ export async function sweepOrphanedBundleMcpTempDirs(params?: {
     params?.log?.warn(
       `bundle MCP temp sweep: retained ${legacyRetained} legacy (pre-ownership) temp dir(s); ` +
         "these are never auto-removed to stay rolling-upgrade safe. To reclaim pre-upgrade " +
-        `leaks, stop the gateway and remove stale ${BUNDLE_MCP_TEMP_PREFIX}* dirs by hand.`,
+        `leaks, stop the gateway and remove stale ${BUNDLE_MCP_TEMP_PREFIX}* and ` +
+        `${GEMINI_MCP_TEMP_PREFIX}* dirs by hand.`,
     );
   }
 
@@ -561,10 +609,25 @@ export async function sweepOrphanedBundleMcpTempDirs(params?: {
   const heldDirs = await (params?.listHeldDirs ?? listDirsHeldByOpenDescriptors)(tmpRoot);
   const recheck = await (params?.listCommandLines ?? listProcessCommandLines)();
   const recheckUsable = recheck.length > 0;
-  for (const dir of candidates) {
+  for (const [index, dir] of candidates.entries()) {
+    // A close can land during the probe/re-scan awaits above, or between the
+    // removals themselves. Re-check per iteration — once cancellation has
+    // begun, this and every remaining candidate is kept, so no removal ever
+    // outlives the gateway generation that scheduled it.
+    if (params?.signal?.aborted) {
+      kept.push(...candidates.slice(index));
+      break;
+    }
     if (heldDirs?.has(dir)) {
       // Someone holds a descriptor into it — claimed, whether or not it has
       // execed yet. This is the pre-exec case argv cannot answer.
+      kept.push(dir);
+      continue;
+    }
+    if (heldDirs === undefined && path.basename(dir).startsWith(GEMINI_MCP_TEMP_PREFIX)) {
+      // Gemini settings travel to the child via env, never argv, so with the
+      // descriptor probe unavailable (off-Linux/`/proc` unreadable) NO signal
+      // can prove an env-carried dir unheld. Keep it — fail closed.
       kept.push(dir);
       continue;
     }

@@ -263,6 +263,7 @@ async function prepareModeSpecificBundleMcpConfig(params: {
       mcpResumeHash,
       env: settings.env,
       cleanup: settings.cleanup,
+      ...(settings.ownershipFd === undefined ? {} : { ownershipFd: settings.ownershipFd }),
     };
   }
 
@@ -310,6 +311,7 @@ async function prepareCliWebSearchDisabled(params: {
       cleanup: settings.cleanup,
       mcpConfigHash: fingerprint,
       mcpResumeHash: fingerprint,
+      ...(settings.ownershipFd === undefined ? {} : { ownershipFd: settings.ownershipFd }),
     };
   }
   const backend = injectBundleMcpBackendArgs(params.backend, (args) =>
@@ -438,7 +440,16 @@ export async function prepareCliBundleMcpCaptureAttempt(params: {
   backend?: CliBackendConfig;
   env?: Record<string, string>;
   captureKey?: string;
-}): Promise<{ env?: Record<string, string>; cleanup?: () => Promise<void> }> {
+}): Promise<{
+  env?: Record<string, string>;
+  cleanup?: () => Promise<void>;
+  /**
+   * Descriptor on the attempt settings the child actually reads (Gemini). The
+   * spawn should inherit this in preference to the prepared backend's — the
+   * attempt env supersedes the prepared settings path for this child.
+   */
+  ownershipFd?: number;
+}> {
   if (!params.captureKey) {
     return { env: params.env };
   }

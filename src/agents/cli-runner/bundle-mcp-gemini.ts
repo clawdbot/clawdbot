@@ -11,6 +11,11 @@ import {
   normalizeStringRecord,
 } from "../bundle-mcp-adapter.js";
 import { withOpenClawMcpCaptureHeader, writeTemporaryBundleMcpJson } from "./bundle-mcp-runtime.js";
+import {
+  bundleMcpOwnedMkdtempPrefixName,
+  GEMINI_MCP_ATTEMPT_TEMP_PREFIX,
+  GEMINI_MCP_TEMP_PREFIX,
+} from "./bundle-mcp-sweep.js";
 
 const GEMINI_MCP_SERVER_FIELDS = { strings: ["type"], booleans: ["trust"] } as const;
 
@@ -44,11 +49,24 @@ function mergeGeminiWebSearchDisabled(base: Record<string, unknown>): Record<str
 async function writeGeminiSettings(
   settings: Record<string, unknown>,
   inheritedEnv: Record<string, string> | undefined,
-): Promise<{ env: Record<string, string>; cleanup: () => Promise<void> }> {
-  const temporary = await writeTemporaryBundleMcpJson("openclaw-gemini-mcp-", settings);
+): Promise<{ env: Record<string, string>; cleanup: () => Promise<void>; ownershipFd?: number }> {
+  // The owner-encoded prefix and the ownership descriptor give Gemini settings
+  // the same crash-recovery boundary as Claude configs: the startup sweep can
+  // reclaim them once the creating gateway is provably dead, while the
+  // descriptor — inherited by the CLI child at `fork` — marks a dir as claimed
+  // even in the window argv cannot cover. For Gemini this matters doubly: the
+  // settings path travels via env, so argv NEVER shows a live holder.
+  const temporary = await writeTemporaryBundleMcpJson(
+    await bundleMcpOwnedMkdtempPrefixName(GEMINI_MCP_TEMP_PREFIX),
+    settings,
+    "settings.json",
+    true,
+    { openOwnershipFd: true },
+  );
   return {
     env: { ...inheritedEnv, GEMINI_CLI_SYSTEM_SETTINGS_PATH: temporary.filePath },
     cleanup: temporary.cleanup,
+    ...(temporary.ownershipFd === undefined ? {} : { ownershipFd: temporary.ownershipFd }),
   };
 }
 
@@ -105,7 +123,7 @@ export async function writeGeminiSystemSettings(
   inheritedEnv: Record<string, string> | undefined,
   mcpToolsDeny?: Record<string, string[]>,
   webSearchEnabled?: boolean,
-): Promise<{ env: Record<string, string>; cleanup: () => Promise<void> }> {
+): Promise<{ env: Record<string, string>; cleanup: () => Promise<void>; ownershipFd?: number }> {
   const base = await readGeminiBaseSettings(inheritedEnv);
   const normalizedConfig: BundleMcpConfig = {
     mcpServers: Object.fromEntries(
@@ -138,15 +156,21 @@ export async function writeGeminiSystemSettings(
 export async function writeGeminiMcpCaptureSettings(params: {
   inheritedEnv: Record<string, string> | undefined;
   captureKey: string;
-}): Promise<{ env: Record<string, string>; cleanup: () => Promise<void> }> {
+}): Promise<{ env: Record<string, string>; cleanup: () => Promise<void>; ownershipFd?: number }> {
   const existingSettingsPath = params.inheritedEnv?.GEMINI_CLI_SYSTEM_SETTINGS_PATH;
   if (!existingSettingsPath) {
     throw new Error("Gemini MCP capture requires prepared system settings");
   }
   const settings = await readJsonObject(existingSettingsPath);
+  // The attempt settings are what the child actually reads (its env points
+  // here, not at the prepared dir), so THIS descriptor is the one the spawn
+  // hands to the child.
   const temporary = await writeTemporaryBundleMcpJson(
-    "openclaw-gemini-mcp-attempt-",
+    await bundleMcpOwnedMkdtempPrefixName(GEMINI_MCP_ATTEMPT_TEMP_PREFIX),
     withOpenClawMcpCaptureHeader(settings, params.captureKey),
+    "settings.json",
+    true,
+    { openOwnershipFd: true },
   );
   return {
     env: {
@@ -154,5 +178,6 @@ export async function writeGeminiMcpCaptureSettings(params: {
       GEMINI_CLI_SYSTEM_SETTINGS_PATH: temporary.filePath,
     },
     cleanup: temporary.cleanup,
+    ...(temporary.ownershipFd === undefined ? {} : { ownershipFd: temporary.ownershipFd }),
   };
 }

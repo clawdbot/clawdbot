@@ -9,6 +9,8 @@ import {
 
 // Kept in sync with the module-private prefix in bundle-mcp-sweep.ts.
 const BUNDLE_MCP_TEMP_PREFIX = "openclaw-cli-mcp-";
+const GEMINI_MCP_TEMP_PREFIX = "openclaw-gemini-mcp-";
+const GEMINI_MCP_ATTEMPT_TEMP_PREFIX = "openclaw-gemini-mcp-attempt-";
 const OLD_MTIME = new Date(Date.now() - 24 * 60 * 60 * 1000);
 const BOOT = "a1b2c3d4"; // 8-hex test boot tag
 const NS = "4026531836"; // default owner PID-namespace inode tag
@@ -17,19 +19,19 @@ const START = "100"; // default owner process start ticks
 type Owner = { pid: number; boot?: string; ns?: string; start?: string };
 
 /** Build a temp dir name; owner identity is encoded in the name (or omitted = legacy). */
-function dirName(suffix: string, owner?: Owner): string {
+function dirName(suffix: string, owner?: Owner, prefix = BUNDLE_MCP_TEMP_PREFIX): string {
   if (!owner) {
-    return `${BUNDLE_MCP_TEMP_PREFIX}legacy${suffix}`;
+    return `${prefix}legacy${suffix}`;
   }
-  return `${BUNDLE_MCP_TEMP_PREFIX}${owner.pid}-${owner.boot ?? BOOT}-${owner.ns ?? NS}-${owner.start ?? START}-${suffix}`;
+  return `${prefix}${owner.pid}-${owner.boot ?? BOOT}-${owner.ns ?? NS}-${owner.start ?? START}-${suffix}`;
 }
 
 async function createDir(
   root: string,
   suffix: string,
-  options?: { old?: boolean; owner?: Owner; withMcpJson?: boolean },
+  options?: { old?: boolean; owner?: Owner; withMcpJson?: boolean; prefix?: string },
 ) {
-  const dir = path.join(root, dirName(suffix, options?.owner));
+  const dir = path.join(root, dirName(suffix, options?.owner, options?.prefix));
   await fs.mkdir(dir, { recursive: true });
   if (options?.withMcpJson !== false) {
     await fs.writeFile(path.join(dir, "mcp.json"), `{"mcpServers":{}}\n`, "utf-8");
@@ -394,6 +396,137 @@ describe("sweepOrphanedBundleMcpTempDirs", () => {
       listHeldDirs: async () => undefined, // unknown, e.g. /proc unreadable
     });
     expect(result.removed).toEqual([doomed]); // argv re-scan still governs
+  });
+
+  it("removes nothing when the close lands during the phase-two probes (abort after the settle)", async () => {
+    const first = await createDir(root, "late-abort-1", { owner: { pid: 4242 } });
+    const second = await createDir(root, "late-abort-2", { owner: { pid: 4242 } });
+    const controller = new AbortController();
+    const result = await sweep(root, {
+      isPidAlive: () => false,
+      signal: controller.signal,
+      listHeldDirs: async () => {
+        // The close arrives while the descriptor probe is still in flight —
+        // after the settle's own abort check has already passed.
+        controller.abort();
+        return new Set<string>();
+      },
+    });
+    expect(result.removed).toEqual([]);
+    expect(result.kept).toEqual(expect.arrayContaining([first, second]));
+    await expect(fs.stat(first)).resolves.toBeDefined();
+    await expect(fs.stat(second)).resolves.toBeDefined();
+  });
+
+  it.runIf(process.platform === "linux")(
+    "the real descriptor probe sees a holder through a symlinked temp root (canonical identity)",
+    async () => {
+      // A symlinked TMPDIR makes /proc/<pid>/fd report the RESOLVED target
+      // while the sweep's candidates keep the symlink spelling — without
+      // canonicalization the probe never matches and a held dir is deleted.
+      const realRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-sweep-realroot-"));
+      const linkRoot = `${realRoot}-link`;
+      await fs.symlink(realRoot, linkRoot);
+      try {
+        const heldDir = await createDir(linkRoot, "sym-held", { owner: { pid: 4242 } });
+        const handle = await fs.open(path.join(heldDir, "mcp.json"), "r");
+        try {
+          // No listHeldDirs override: this exercises the module's own /proc scan.
+          const result = await sweep(linkRoot, { isPidAlive: () => false });
+          expect(result.removed).toEqual([]);
+          expect(result.kept).toContain(heldDir);
+          await expect(fs.stat(heldDir)).resolves.toBeDefined();
+        } finally {
+          await handle.close();
+        }
+        // Control: with the descriptor closed, the same dir through the same
+        // symlinked root is reclaimed — the keep above was the fd, not an
+        // artifact of the symlink.
+        const afterClose = await sweep(linkRoot, { isPidAlive: () => false });
+        expect(afterClose.removed).toEqual([heldDir]);
+      } finally {
+        await fs.rm(linkRoot, { force: true });
+        await fs.rm(realRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("reclaims a dead-owner Gemini settings dir when the descriptor probe proves it unheld", async () => {
+    const gemini = await createDir(root, "gem-dead", {
+      owner: { pid: 4242 },
+      prefix: GEMINI_MCP_TEMP_PREFIX,
+    });
+    const result = await sweep(root, {
+      isPidAlive: () => false,
+      listHeldDirs: async () => new Set<string>(),
+    });
+    expect(result.removed).toEqual([gemini]);
+  });
+
+  it("parses the owner of an attempt-prefixed Gemini dir (longest prefix wins, not misread as legacy)", async () => {
+    const attempt = await createDir(root, "gem-attempt", {
+      owner: { pid: 4242 },
+      prefix: GEMINI_MCP_ATTEMPT_TEMP_PREFIX,
+    });
+    const result = await sweep(root, {
+      isPidAlive: () => false,
+      listHeldDirs: async () => new Set<string>(),
+    });
+    // A misparse against the shorter Gemini prefix would classify this dir as
+    // legacy and keep it forever.
+    expect(result.removed).toEqual([attempt]);
+  });
+
+  it("keeps a dead-owner Gemini dir when the descriptor probe is unavailable — env-carried, argv can never clear it", async () => {
+    const gemini = await createDir(root, "gem-no-probe", {
+      owner: { pid: 4242 },
+      prefix: GEMINI_MCP_TEMP_PREFIX,
+    });
+    const claude = await createDir(root, "cli-no-probe", { owner: { pid: 4242 } });
+    const result = await sweep(root, {
+      isPidAlive: () => false,
+      listHeldDirs: async () => undefined, // unknown, e.g. off-Linux
+    });
+    // The argv re-scan still governs Claude configs (their path travels in
+    // argv), but a Gemini settings path travels via env: with the probe gone
+    // there is no signal that can prove it unheld, so it is kept.
+    expect(result.removed).toEqual([claude]);
+    expect(result.kept).toContain(gemini);
+    await expect(fs.stat(gemini)).resolves.toBeDefined();
+  });
+
+  it("keeps a live-owned Gemini dir and never auto-removes a legacy Gemini dir", async () => {
+    const alive = await createDir(root, "gem-alive", {
+      owner: { pid: 4242 },
+      prefix: GEMINI_MCP_TEMP_PREFIX,
+    });
+    const legacy = await createDir(root, "gem-legacy", { prefix: GEMINI_MCP_TEMP_PREFIX });
+    const warn = vi.fn();
+    const result = await sweep(root, {
+      isPidAlive: () => true,
+      listHeldDirs: async () => new Set<string>(),
+      log: { warn },
+    });
+    expect(result.removed).toEqual([]);
+    expect(result.kept).toEqual(expect.arrayContaining([alive, legacy]));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("1 legacy"));
+  });
+
+  it("recognizes a Gemini name produced by bundleMcpOwnedMkdtempPrefixName as owned by the live gateway", async () => {
+    const prefix = await bundleMcpOwnedMkdtempPrefixName(GEMINI_MCP_TEMP_PREFIX);
+    expect(prefix.startsWith(GEMINI_MCP_TEMP_PREFIX)).toBe(true);
+    const dir = path.join(root, `${prefix}XXXXXX`);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.utimes(dir, OLD_MTIME, OLD_MTIME);
+    const result = await sweepOrphanedBundleMcpTempDirs({
+      tmpRoot: root,
+      listCommandLines: () => ["node /usr/bin/unrelated"],
+      listHeldDirs: async () => new Set<string>(),
+      settleMs: 0,
+    });
+    // The encoded owner is THIS process (alive), so the aged dir is kept.
+    expect(result.removed).toEqual([]);
+    expect(result.kept).toContain(dir);
   });
 
   it("keeps legacy empty dirs (mcp.json already gone) — still never auto-removed", async () => {

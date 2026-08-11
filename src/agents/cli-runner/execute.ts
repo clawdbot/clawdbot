@@ -550,6 +550,7 @@ export async function executePreparedCliRun(
         outputMode,
         logOutputText,
         cliTurnStartedAt,
+        attemptOwnershipFd: mcpCaptureAttempt.ownershipFd,
         fallbackCleanup: fallbackClaudeSkillsPlugin?.cleanup,
         claimFallbackCleanup: () => {
           fallbackClaudeSkillsPluginCleanupOwned = fallbackClaudeSkillsPlugin !== undefined;
