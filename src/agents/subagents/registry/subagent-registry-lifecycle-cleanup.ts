@@ -44,9 +44,7 @@ import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-re
 
 type BrowserCleanup = typeof cleanupBrowserSessionsForLifecycleEnd;
 
-export async function removeSubagentAttachmentsForCleanup(
-  entry: SubagentRunRecord,
-): Promise<void> {
+export async function removeSubagentAttachmentsForCleanup(entry: SubagentRunRecord): Promise<void> {
   if (!(await safeRemoveAttachmentsDir(entry))) {
     throw new Error("subagent attachment cleanup failed; retaining registry owner for retry");
   }

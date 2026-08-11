@@ -77,7 +77,6 @@ describe("sandbox bind mounts", () => {
       ]),
     ).toBe(false);
   });
-
 });
 
 describe("resolveSandboxFsPathWithMounts", () => {

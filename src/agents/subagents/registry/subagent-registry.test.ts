@@ -1907,9 +1907,7 @@ describe("subagent registry seam flow", () => {
     expect(mod.getSubagentRunByRunId("run-queued-failure")).toMatchObject({
       contextEngineCleanupCompletedAt: expect.any(Number),
     });
-    expect(
-      mod.getSubagentRunByRunId("run-queued-failure")?.launchCleanupPending,
-    ).toBeUndefined();
+    expect(mod.getSubagentRunByRunId("run-queued-failure")?.launchCleanupPending).toBeUndefined();
     const contextEndCalls = mocks.onSubagentEnded.mock.calls.length;
     await mod.testing.sweepOnceForTests();
     expect(mocks.onSubagentEnded).toHaveBeenCalledTimes(contextEndCalls);
