@@ -3,7 +3,7 @@ import { z } from "zod";
 import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
 import {
   expandToolGroups,
-  normalizeToolName,
+  normalizeToolPolicyName,
   resolveToolProfilePolicy,
 } from "../agents/tool-policy-shared.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
@@ -42,7 +42,7 @@ const nonEmptyString = z
 const optionalString = nonEmptyString.optional();
 
 function isBoundedClawToolGrant(value: string): boolean {
-  const normalized = normalizeToolName(value);
+  const normalized = normalizeToolPolicyName(value);
   if (
     /[*?[\]{}]/u.test(normalized) ||
     normalized === "group:plugins" ||
