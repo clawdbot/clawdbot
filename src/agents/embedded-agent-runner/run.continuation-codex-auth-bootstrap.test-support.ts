@@ -266,7 +266,7 @@ describe("runEmbeddedAgent Codex auth bootstrap continuation", () => {
     });
     mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
     mockedGetApiKeyForModel.mockImplementationOnce(async (params) =>
-      actualModelAuth.getApiKeyForModel(params as never),
+      actualModelAuth.getApiKeyForModelCore(params as never),
     );
 
     try {
