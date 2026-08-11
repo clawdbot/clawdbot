@@ -34,7 +34,7 @@ import type {
   PoolKey,
 } from "./src/runtime.js";
 
-type AgentHarnessIsolatedCompletion = NonNullable<AgentHarness["runIsolatedCompletion"]>;
+type AgentHarnessIsolatedCompletion = NonNullable<AgentHarness["runIsolatedCompletionV2"]>;
 type AgentHarnessIsolatedCompletionParams = Parameters<AgentHarnessIsolatedCompletion>[0];
 type AgentHarnessIsolatedCompletionResult = Awaited<ReturnType<AgentHarnessIsolatedCompletion>>;
 type CopilotSettledTurnFinalizationAttemptParams = Parameters<
@@ -896,7 +896,7 @@ export function createCopilotAgentHarness(
     }
   }
 
-  async function runIsolatedCompletion(
+  async function runIsolatedCompletionV2(
     params: AgentHarnessIsolatedCompletionParams,
   ): Promise<AgentHarnessIsolatedCompletionResult> {
     const completionPromise = (async () => {
@@ -974,7 +974,7 @@ export function createCopilotAgentHarness(
 
     runAttempt: (params) => runHarnessAttempt(params, "attempt"),
 
-    runIsolatedCompletion,
+    runIsolatedCompletionV2,
 
     finalizeSettledTurn: async ({ attempt }) => {
       const result = await runHarnessAttempt(attempt, "settled-tool-finalization");

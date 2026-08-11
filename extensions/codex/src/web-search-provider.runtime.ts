@@ -26,6 +26,7 @@ export async function executeCodexWebSearchProviderTool(
   const result = await runBoundedCodexAppServerTurn({
     config: ctx.config,
     model: { mode: "live-default" },
+    modelProvider: "openai",
     timeoutMs: resolveSearchTimeoutSeconds(ctx.searchConfig as SearchConfigRecord) * 1_000,
     signal: executionContext?.signal,
     agentDir: ctx.agentDir,

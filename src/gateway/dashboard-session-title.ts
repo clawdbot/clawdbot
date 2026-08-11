@@ -5,6 +5,7 @@ import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { generateConversationLabelWithFallback } from "../auto-reply/reply/conversation-label-generator.js";
+import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -12,6 +13,7 @@ import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { isValidAttachmentBase64, type ChatAttachment } from "./chat-attachments.js";
+import { readSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 
 type DashboardSessionTitleModelEntry = Pick<
   SessionEntry,
@@ -23,11 +25,11 @@ const DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS = 1_000;
 const DASHBOARD_SESSION_TITLE_PROMPT =
   "Generate a concise session title (3-6 words, max 60 characters) from the user's first message. Use the same language as the message. No emoji. Return only the title.";
 
-// One title request per first turn. Concurrent sends cannot race duplicate model
+// One title request per session generation. Concurrent triggers cannot race duplicate model
 // calls or metadata writes; late callers receive the in-flight promise so they
 // may await the persisted title before proceeding. Stored promises always
-// settle: the label generator aborts internally (TIMEOUT_MS), so a hung model
-// call cannot pin an entry here and block future attempts.
+// settle: isolated completion enforces a timeout, so a hung model call cannot
+// pin an entry here and block future attempts.
 const sessionTitleRequests = new Map<string, Promise<boolean>>();
 
 function decodeTextAttachmentPrefix(attachment: ChatAttachment, maxChars: number): string | null {
@@ -197,6 +199,7 @@ export async function maybeGenerateDashboardSessionTitle(params: {
   sessionId: string;
   sessionKey: string;
   storePath: string;
+  currentUserMessage?: string;
   userMessage: string;
 }): Promise<boolean> {
   const sourceText = params.userMessage.trim();
@@ -221,14 +224,10 @@ export async function maybeGenerateSessionTitle(params: {
   sessionId: string;
   sessionKey: string;
   storePath: string;
+  currentUserMessage?: string;
   userMessage: string;
 }): Promise<SessionTitleAttempt> {
-  const sourceText = params.userMessage.trim();
-  if (
-    hasExplicitSessionName(params.entry) ||
-    params.entry?.systemSent === true ||
-    params.entry?.sessionId !== params.sessionId
-  ) {
+  if (hasExplicitSessionName(params.entry) || params.entry?.sessionId !== params.sessionId) {
     return { kind: "skipped" };
   }
 
@@ -237,6 +236,32 @@ export async function maybeGenerateSessionTitle(params: {
   if (existing) {
     return { kind: "in-flight", settled: existing };
   }
+
+  // A retry may be triggered by a later send or by discussion open. Always
+  // title the session from its original user message when the transcript owns it.
+  const transcriptSource = readSessionTitleFieldsFromTranscript({
+    agentId: params.agentId,
+    sessionEntry: params.entry,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  }).firstUserMessage;
+  const transcriptText = transcriptSource
+    ? stripInlineDirectiveTagsForDisplay(stripInboundMetadata(transcriptSource)).text.trim()
+    : "";
+  const currentText = params.currentUserMessage
+    ? stripInlineDirectiveTagsForDisplay(params.currentUserMessage).text.trim()
+    : "";
+  // A first-turn transcript may win the persistence race before title work starts.
+  // When it is the current turn, retain the supplied attachment-enriched source.
+  const sourceText =
+    !transcriptText || (currentText && currentText === transcriptText)
+      ? params.userMessage.trim()
+      : transcriptText;
+  if (!sourceText) {
+    return { kind: "skipped" };
+  }
+
   const request = getOrCreatePromise(
     sessionTitleRequests,
     requestKey,

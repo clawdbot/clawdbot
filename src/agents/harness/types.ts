@@ -134,6 +134,7 @@ export type AgentHarnessSettledTurnFinalizationResult = {
   assistantMessageIndex?: number;
   diagnosticTrace?: import("../../infra/diagnostic-trace-context.js").DiagnosticTraceContext;
 };
+/** @deprecated Use AgentHarnessIsolatedCompletionParamsV2. Remove after 2026-10-12. */
 type AgentHarnessIsolatedCompletionParams = {
   /** Logical provider selected by the caller before harness dispatch. */
   provider: string;
@@ -159,7 +160,29 @@ type AgentHarnessIsolatedCompletionParams = {
     temperature?: number;
   };
 };
-type AgentHarnessIsolatedCompletionResult = {
+export type AgentHarnessIsolatedCompletionAuthorization =
+  | {
+      /** OpenClaw resolved the exact transport model and credential before handoff. */
+      owner: "host";
+      model: import("../../llm/types.js").Model;
+      auth: import("../model-auth-runtime-shared.js").ResolvedProviderAuth;
+      /** Non-reversible proof of the prepared credential owner when available. */
+      sourceAuthFingerprint?: string;
+    }
+  | {
+      /** The selected harness owns credential resolution for this prepared route. */
+      owner: "harness";
+      plan: import("../runtime-plan/types.js").AgentRuntimeAuthPlan;
+      /** Credential snapshot restricted to the single profile selected for this call. */
+      authProfileStore: import("../auth-profiles/types.js").AuthProfileStore;
+    };
+export type AgentHarnessIsolatedCompletionParamsV2 = Omit<
+  AgentHarnessIsolatedCompletionParams,
+  "model" | "auth" | "sourceAuthFingerprint"
+> & {
+  authorization: AgentHarnessIsolatedCompletionAuthorization;
+};
+export type AgentHarnessIsolatedCompletionResult = {
   /** The single assistant completion. Core rejects tool-shaped or failed results. */
   assistant: import("../../llm/types.js").AssistantMessage;
 };
@@ -335,12 +358,16 @@ type AgentHarnessRunCapability<
   finalizeSettledTurn?(
     params: AgentHarnessSettledTurnFinalizationParams<TAttemptParams>,
   ): Promise<AgentHarnessSettledTurnFinalizationResult>;
+  /** @deprecated Implement runIsolatedCompletionV2. Remove after 2026-10-12. */
+  runIsolatedCompletion?(
+    params: AgentHarnessIsolatedCompletionParams,
+  ): Promise<AgentHarnessIsolatedCompletionResult>;
   /**
    * Runs one fresh prompt-only completion with a literal zero-tool model surface.
    * The harness must fail closed when it cannot enforce that native boundary.
    */
-  runIsolatedCompletion?(
-    params: AgentHarnessIsolatedCompletionParams,
+  runIsolatedCompletionV2?(
+    params: AgentHarnessIsolatedCompletionParamsV2,
   ): Promise<AgentHarnessIsolatedCompletionResult>;
 };
 
