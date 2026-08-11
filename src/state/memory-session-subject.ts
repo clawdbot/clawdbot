@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { consumeAdmittedChannelMemoryIdentityFromContext } from "../channels/message-access/memory-identity-admission.js";
 import { generateSecureUuid } from "../infra/secure-random.js";
+import { isMemoryIsolationSubjectAdmitted } from "../plugins/memory-cutover.js";
 import {
   ensureMemoryOperationalPrincipal,
   recheckMemoryIdentityBinding,
@@ -69,6 +70,7 @@ export type MemorySessionContextCheck =
         | "session-rebound"
         | "binding-revoked"
         | "principal-revoked"
+        | "shadow-subject-mismatch"
         | "merge-head-mismatch";
     }>;
 
@@ -349,6 +351,15 @@ export function createCurrentMemorySessionContext(params: {
       return { kind: "principal-revoked" };
     }
     authorityRevision = principal.revision;
+  }
+  if (
+    !isMemoryIsolationSubjectAdmitted({
+      agentId: params.options.agentId,
+      subject: { kind: persisted.subject.kind, principalId: persisted.subject.principalId },
+      options: params.options,
+    })
+  ) {
+    return { kind: "shadow-subject-mismatch" };
   }
   const fingerprint = createHash("sha256")
     .update(

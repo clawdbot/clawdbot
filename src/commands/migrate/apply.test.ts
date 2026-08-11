@@ -3,6 +3,12 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { MigrationPlan, MigrationProviderPlugin } from "../../plugins/types.js";
 import { createNonExitingRuntime } from "../../runtime.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
+
+const memoryIsolationMocks = vi.hoisted(() => ({
+  isMemoryIsolationCutoverAgent: vi.fn(() => false),
+}));
+
+vi.mock("../../plugins/memory-cutover.js", () => memoryIsolationMocks);
 import { runMigrationApply } from "./apply.js";
 
 let stateDir = "";
@@ -121,5 +127,38 @@ describe("runMigrationApply", () => {
     expect(result.summary.errors).toBe(1);
     expect(result.items[0]?.details?.recoveryPath).toBe("/tmp/staged-memory");
     expect(result.reportDir).toContain("codex");
+  });
+
+  it("rejects a selected memory import before the provider writes under memory isolation", async () => {
+    memoryIsolationMocks.isMemoryIsolationCutoverAgent.mockReturnValueOnce(true);
+    const plan: MigrationPlan = {
+      ...buildEmptyPlan(),
+      summary: { ...buildEmptyPlan().summary, total: 1, planned: 1 },
+      items: [
+        {
+          id: "memory:one",
+          kind: "memory",
+          action: "copy",
+          status: "planned",
+        },
+      ],
+    };
+    const apply = vi.fn(async () => plan);
+    const provider: MigrationProviderPlugin = {
+      id: "codex",
+      label: "Codex",
+      plan: vi.fn(async () => plan),
+      apply,
+    };
+
+    await expect(
+      runMigrationApply({
+        runtime: createNonExitingRuntime(),
+        opts: { yes: true, json: true, noBackup: true, configOverride: {} },
+        providerId: "codex",
+        provider,
+      }),
+    ).rejects.toThrow("memory import is unavailable while memory isolation is enforced");
+    expect(apply).not.toHaveBeenCalled();
   });
 });

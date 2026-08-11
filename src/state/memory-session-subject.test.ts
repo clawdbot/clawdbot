@@ -12,6 +12,11 @@ import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-en
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.js";
 import { linkAdmittedMemoryIdentityFromGateway } from "../gateway/memory-identity-admin.js";
 import {
+  enableMemoryShadowReadOnlyMode,
+  isMemoryIsolationSubjectAdmitted,
+  resetMemoryIsolationCutoverForTest,
+} from "../plugins/memory-cutover.js";
+import {
   captureTrustedMemoryAccessFacts,
   createTrustedMemoryAccessContext,
   isTrustedMemoryAccessContext,
@@ -102,6 +107,7 @@ function fixture() {
 }
 
 afterEach(() => {
+  resetMemoryIsolationCutoverForTest();
   for (const root of roots.splice(0)) {
     // Vitest owns the temporary test fixture; files stay outside repository state.
     rmSync(root, { force: true, recursive: true });
@@ -109,6 +115,99 @@ afterEach(() => {
 });
 
 describe("memory session subject", () => {
+  it("rejects a second verified subject before it can mint a protected context in the shadow pilot", () => {
+    const { agentOptions, env, profileId } = fixture();
+    const alice = adminLinkAdmittedMemoryIdentity({
+      admission: admitMemoryIdentity({
+        channel: "telegram",
+        accountId: "default",
+        stableSenderId: "alice",
+        adapterId: "plugin:telegram",
+        assurance: "adapter-attested",
+        verificationMethod: "test",
+        evidenceRevision: "test:alice",
+      }),
+      authenticatedOperatorProfileId: profileId,
+      authenticatedOperatorScopes: ["operator.admin"],
+      options: { env },
+    });
+    persistMemorySessionSubject({
+      sessionKey: "agent:main:direct:dm",
+      sessionId: "session-1",
+      bindingId: alice.bindingId,
+      options: agentOptions,
+    });
+    expect(enableMemoryShadowReadOnlyMode({ agentId: "main", options: agentOptions })).toBe(
+      "shadow-read-only",
+    );
+    resetMemoryIsolationCutoverForTest();
+
+    const database = openOpenClawAgentDatabase(agentOptions);
+    database.db
+      .prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+      )
+      .run("agent:main:direct:bob", "bob-session", "{}", 1);
+    database.db
+      .prepare(
+        `INSERT INTO session_windows
+         (session_id, session_key, created_at, updated_at, chat_type, channel, account_id)
+         VALUES (?, ?, 1, 1, 'direct', 'telegram', 'default')`,
+      )
+      .run("bob-session", "agent:main:direct:bob");
+    const bobProfile = ensureProfileForEmail("bob@example.com", { env });
+    const bob = adminLinkAdmittedMemoryIdentity({
+      admission: admitMemoryIdentity({
+        channel: "telegram",
+        accountId: "default",
+        stableSenderId: "bob",
+        adapterId: "plugin:telegram",
+        assurance: "adapter-attested",
+        verificationMethod: "test",
+        evidenceRevision: "test:bob",
+      }),
+      authenticatedOperatorProfileId: profileId,
+      authenticatedOperatorScopes: ["operator.admin"],
+      targetProfileId: bobProfile.id,
+      options: { env },
+    });
+    persistMemorySessionSubject({
+      sessionKey: "agent:main:direct:bob",
+      sessionId: "bob-session",
+      bindingId: bob.bindingId,
+      options: agentOptions,
+    });
+    expect(
+      isMemoryIsolationSubjectAdmitted({
+        agentId: "main",
+        subject: { kind: "user", principalId: alice.principalId },
+        options: agentOptions,
+      }),
+    ).toBe(true);
+    expect(
+      isMemoryIsolationSubjectAdmitted({
+        agentId: "main",
+        subject: { kind: "user", principalId: bob.principalId },
+        options: agentOptions,
+      }),
+    ).toBe(false);
+
+    expect(
+      createCurrentMemorySessionContext({
+        sessionKey: "agent:main:direct:bob",
+        sessionId: "bob-session",
+        options: agentOptions,
+      }),
+    ).toEqual({ kind: "shadow-subject-mismatch" });
+    expect(
+      createCurrentMemorySessionContext({
+        sessionKey: "agent:main:direct:dm",
+        sessionId: "session-1",
+        options: agentOptions,
+      }),
+    ).toMatchObject({ kind: "current", context: { principalId: alice.principalId } });
+  });
+
   it("consumes the loader-bound Telegram proof at the persisted session owner", () => {
     const { agentOptions, env, profileId } = fixture();
     const binding = adminLinkAdmittedMemoryIdentity({

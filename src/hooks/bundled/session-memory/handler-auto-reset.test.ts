@@ -1,11 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.js";
 import { createInternalHookEvent } from "../../internal-hooks.js";
+
+const memoryIsolationMocks = vi.hoisted(() => ({
+  isMemoryIsolationCutoverAgent: vi.fn(() => false),
+}));
+
+vi.mock("../../../plugins/memory-cutover.js", () => memoryIsolationMocks);
 import handler, { flushSessionMemoryWritesForTest } from "./handler.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -18,7 +24,32 @@ describe("session-memory automatic reset", () => {
   });
 
   afterEach(async () => {
+    memoryIsolationMocks.isMemoryIsolationCutoverAgent.mockReset().mockReturnValue(false);
     await flushSessionMemoryWritesForTest();
+  });
+
+  it("does not read transcripts or create workspace memory for an enforced agent", async () => {
+    const sessionKey = "agent:main:main";
+    const sessionId = "enforced-session";
+    const storePath = path.join(tempDir, "sessions.json");
+    const cfg = {
+      agents: { defaults: { workspace: tempDir } },
+      session: { store: storePath },
+    } satisfies OpenClawConfig;
+    memoryIsolationMocks.isMemoryIsolationCutoverAgent.mockReturnValue(true);
+    const event = createInternalHookEvent("session", "auto-reset", sessionKey, {
+      cfg,
+      agentId: "main",
+      workspaceDir: tempDir,
+      storePath,
+      sessionEntry: { sessionId },
+      reason: "daily",
+    });
+
+    await handler(event);
+
+    expect(memoryIsolationMocks.isMemoryIsolationCutoverAgent).toHaveBeenCalledWith("main");
+    await expect(fs.access(path.join(tempDir, "memory"))).rejects.toThrow();
   });
 
   it.each(["daily", "idle"] as const)(

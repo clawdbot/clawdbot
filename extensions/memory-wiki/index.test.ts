@@ -36,11 +36,31 @@ const toolMocks = vi.hoisted(() => {
   };
 });
 
+const legacyMemoryAccessMocks = vi.hoisted(() => ({
+  assertLegacyMemoryWikiAccessAvailable: vi.fn(),
+}));
+
 vi.mock("./src/tool.js", () => toolMocks);
+vi.mock("./src/legacy-memory-access.js", () => legacyMemoryAccessMocks);
 
 const { createPluginApi, createTempDir } = createMemoryWikiTestHarness();
 
 describe("memory-wiki plugin", () => {
+  it("does not start the legacy vault/cache service for an enforced owner", async () => {
+    const rootDir = await createTempDir("memory-wiki-index-enforced-");
+    const { api, registerService } = createPluginApi();
+    api.pluginConfig = { vault: { path: rootDir } };
+    legacyMemoryAccessMocks.assertLegacyMemoryWikiAccessAvailable.mockImplementationOnce(() => {
+      throw new Error("Memory Wiki is unavailable after scoped-memory cutover.");
+    });
+
+    plugin.register(api);
+    const service = registerService.mock.calls[0]?.[0];
+
+    await expect(service?.start?.()).rejects.toThrow("Memory Wiki is unavailable");
+    await expect(fs.access(path.join(rootDir, ".openclaw-wiki", "log.jsonl"))).rejects.toThrow();
+  });
+
   it("registers prompt supplement, gateway methods, tools, and wiki cli surface", () => {
     const {
       api,

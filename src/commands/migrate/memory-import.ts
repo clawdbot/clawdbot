@@ -3,6 +3,7 @@ import { MAX_MEMORY_MIGRATION_ITEMS } from "../../../packages/gateway-protocol/s
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bindMemoryMigrationPlanSources } from "../../plugin-sdk/memory-migration-source.js";
 import { summarizeMigrationItems } from "../../plugin-sdk/migration.js";
+import { isMemoryIsolationCutoverAgent } from "../../plugins/memory-cutover.js";
 import {
   ensureStandaloneMigrationProviderRegistryLoaded,
   resolvePluginMigrationProviders,
@@ -104,6 +105,11 @@ export async function applyProviderMemoryImport(params: {
   preflightPlan: MigrationPlan;
   runtime?: RuntimeEnv;
 }): Promise<MigrationApplyResult> {
+  if (isMemoryIsolationCutoverAgent(params.agentId)) {
+    // P1C permits only verified shadow reads. Importing into legacy workspace memory would
+    // create durable, unlabelled content outside the selected runtime's transaction owner.
+    throw new Error("memory import is unavailable while memory isolation is enforced");
+  }
   return await runMigrationApply({
     // Default silent: embedded surfaces (wizard, gateway) render their own
     // summaries; the apply writer would dump raw JSON into their output.

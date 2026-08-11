@@ -1,12 +1,19 @@
 /** Applies migration plans with backup, filtering, reporting, and progress output. */
 import fs from "node:fs/promises";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { withProgress } from "../../cli/progress.js";
 import type { ProgressReporter } from "../../cli/progress.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { isMemoryIsolationCutoverAgent } from "../../plugins/memory-cutover.js";
 import type { MigrationApplyResult, MigrationProviderPlugin } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { backupCreateCommand } from "../backup.js";
-import { buildMigrationContext, buildMigrationReportDir } from "./context.js";
+import {
+  buildMigrationContext,
+  buildMigrationReportDir,
+  resolveMigrationTargetAgentId,
+} from "./context.js";
 import { applyMigrationItemSelection } from "./item-selection.js";
 import { assertApplySucceeded, assertConflictFreePlan, writeApplyResult } from "./output.js";
 import { buildMigrationProviderOptions } from "./providers.js";
@@ -43,6 +50,22 @@ async function createPreMigrationBackup(opts: { output?: string }): Promise<stri
       return undefined;
     }
     throw err;
+  }
+}
+
+function assertMemoryMigrationAllowed(params: {
+  configOverride?: MigrateApplyOptions["configOverride"];
+  selectedPlan: { items: readonly { kind: string }[] };
+  targetAgentId?: string;
+}): void {
+  if (!params.selectedPlan.items.some((item) => item.kind === "memory")) {
+    return;
+  }
+  const config = params.configOverride ?? getRuntimeConfig();
+  const agentId =
+    resolveMigrationTargetAgentId(config, params.targetAgentId) ?? resolveDefaultAgentId(config);
+  if (isMemoryIsolationCutoverAgent(agentId)) {
+    throw new Error("memory import is unavailable while memory isolation is enforced");
   }
 }
 
@@ -88,6 +111,11 @@ export async function runMigrationApply(params: {
       ),
       params.opts.itemIds,
     );
+    assertMemoryMigrationAllowed({
+      configOverride: params.opts.configOverride,
+      selectedPlan,
+      targetAgentId: params.opts.targetAgentId,
+    });
     // Selection is applied before conflict checks so deselected conflicting items
     // cannot block an otherwise safe migration.
     assertConflictFreePlan(selectedPlan, params.providerId);

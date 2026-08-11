@@ -26,6 +26,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../../../infra/env.js";
 import { root } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import { isMemoryIsolationCutoverAgent } from "../../../plugins/memory-cutover.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { parseAgentSessionKey, toAgentStoreSessionKey } from "../../../routing/session-key.js";
 import { shortenHomePath } from "../../../utils.js";
@@ -383,6 +384,12 @@ const saveSessionToMemory: HookHandler = (event) => {
     return undefined;
   }
   const agentId = requireSessionMemoryAgentId(event);
+  // Phase 1C makes enforced agents read-only. Do this before transcript projection
+  // or workspace creation, so reset capture cannot recreate legacy memory.
+  if (isMemoryIsolationCutoverAgent(agentId)) {
+    log.debug("Skipping session-memory capture for enforced memory isolation", { agentId });
+    return undefined;
+  }
 
   let capturedEvents: TranscriptEvent[] | undefined;
   try {
