@@ -10,10 +10,11 @@ type ReplyOperationAdmissionSnapshot =
 
 export type ReplyOperationRunState = {
   admission?: ReplyOperationAdmissionSnapshot;
+  agentTurn?: { status: "ok" | "failed" };
 };
 
-// Carries this invocation's admission decision through reply option spreads so
-// heartbeat cleanup never infers it from whichever operation is active later.
+// Carries this invocation's admission and terminal agent-turn facts through
+// reply option spreads so heartbeat cleanup never re-derives them from payloads.
 export const REPLY_OPERATION_RUN_STATE = Symbol("openclaw.replyOperationRunState");
 
 export type ReplyOptionsWithOperationRunState = {

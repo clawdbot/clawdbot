@@ -533,6 +533,7 @@ export async function runReplyAgent(
       queueKey,
       replyMediaContext,
       replyOperation,
+      replyOperationRunState,
       replyRouteThreadId,
       replyThreadingOverride,
       replyToChannel,
@@ -566,6 +567,9 @@ export async function runReplyAgent(
       typingSignals,
     });
   } catch (error) {
+    if (replyOperationRunState) {
+      replyOperationRunState.agentTurn = { status: "failed" };
+    }
     return await handleReplyAgentRunError(error, {
       blockReplyPipeline,
       cfg,
