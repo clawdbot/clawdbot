@@ -208,7 +208,7 @@ describe("doctor canonical session-key retention repair", () => {
     });
   });
 
-  it("copies a lone cross-store winner's normalized delivery key", async () => {
+  it("preserves receipt provenance when cross-store repair installs a lazy destination", async () => {
     await withStateDirEnv(
       "openclaw-doctor-canonical-cross-store-delivery-",
       async ({ stateDir }) => {
@@ -227,6 +227,15 @@ describe("doctor canonical session-key retention repair", () => {
           sessionKey: "agent:main:main ",
           storePath: opsStore,
         });
+        const destinationDatabase = openOpenClawAgentDatabase({
+          agentId: "main",
+          env,
+          path: resolveSqliteTargetFromSessionStorePath(mainStore, { agentId: "main", env }).path,
+        });
+        destinationDatabase.db.exec(
+          "ALTER TABLE conversation_deliveries DROP COLUMN platform_message_id_source;",
+        );
+        closeOpenClawAgentDatabasesForTest();
         const sourceDatabase = openOpenClawAgentDatabase({
           agentId: "ops",
           env,
@@ -239,7 +248,7 @@ describe("doctor canonical session-key retention repair", () => {
           .run();
         sourceDatabase.db
           .prepare(
-            "INSERT INTO conversation_deliveries (operation_id, operation_kind, conversation_id, source_session_key, message_hash, status, created_at, updated_at) VALUES ('winner-operation', 'turn', 'winner-conversation', 'agent:main:main', 'hash', 'sent', 10, 10)",
+            "INSERT INTO conversation_deliveries (operation_id, operation_kind, conversation_id, source_session_key, message_hash, status, platform_message_id, platform_message_id_source, created_at, updated_at) VALUES ('winner-operation', 'turn', 'winner-conversation', 'agent:main:main', 'hash', 'sent', 'receipt-123', 'receipt', 10, 10)",
           )
           .run();
         sourceDatabase.db
@@ -253,30 +262,46 @@ describe("doctor canonical session-key retention repair", () => {
           )
           .run();
 
-        expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
+        closeOpenClawAgentDatabasesForTest();
+        const report = await repairCanonicalSessionKeys({ apply: true, cfg, env });
+        expect(report).toMatchObject({
           foundGroups: 1,
           repairedGroups: 1,
         });
-        const destinationDatabase = openOpenClawAgentDatabase({
+        const repairedDestinationDatabase = openOpenClawAgentDatabase({
           agentId: "main",
           env,
           path: resolveSqliteTargetFromSessionStorePath(mainStore, { agentId: "main", env }).path,
         });
-        expect(
-          destinationDatabase.db
-            .prepare(
-              "SELECT operation_id, source_session_key FROM conversation_deliveries ORDER BY operation_id",
-            )
-            .all(),
-        ).toEqual([
-          { operation_id: "canonical-operation", source_session_key: "agent:main:work" },
-          { operation_id: "winner-operation", source_session_key: "agent:main:work" },
+        const repairedDeliveries = repairedDestinationDatabase.db
+          .prepare(
+            "SELECT operation_id, platform_message_id, platform_message_id_source, source_session_key FROM conversation_deliveries ORDER BY operation_id",
+          )
+          .all();
+        const repairedSourceDatabase = openOpenClawAgentDatabase({
+          agentId: "ops",
+          env,
+          path: resolveSqliteTargetFromSessionStorePath(opsStore, { agentId: "ops", env }).path,
+        });
+        const retainedSourceDeliveries = repairedSourceDatabase.db
+          .prepare("SELECT operation_id FROM conversation_deliveries ORDER BY operation_id")
+          .all();
+        closeOpenClawAgentDatabasesForTest();
+        expect(repairedDeliveries).toEqual([
+          {
+            operation_id: "canonical-operation",
+            platform_message_id: null,
+            platform_message_id_source: null,
+            source_session_key: "agent:main:work",
+          },
+          {
+            operation_id: "winner-operation",
+            platform_message_id: "receipt-123",
+            platform_message_id_source: "receipt",
+            source_session_key: "agent:main:work",
+          },
         ]);
-        expect(
-          sourceDatabase.db
-            .prepare("SELECT operation_id FROM conversation_deliveries ORDER BY operation_id")
-            .all(),
-        ).toEqual([{ operation_id: "unrelated-operation" }]);
+        expect(retainedSourceDeliveries).toEqual([{ operation_id: "unrelated-operation" }]);
       },
     );
   });

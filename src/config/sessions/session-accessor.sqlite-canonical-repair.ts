@@ -5,6 +5,7 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import { ensureConversationDeliveryReceiptSourceProjection } from "../../state/openclaw-agent-db-session-migrations.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
@@ -433,6 +434,9 @@ function copySqliteSessionOwnedStateForRepair(params: {
     ...deliveries.map((delivery) => delivery.conversation_id),
   ]);
   if (conversationIds.length > 0) {
+    if (deliveries.length > 0) {
+      ensureConversationDeliveryReceiptSourceProjection(params.destination.db);
+    }
     const conversations = executeSqliteQuerySync(
       params.source.db,
       sourceDb
