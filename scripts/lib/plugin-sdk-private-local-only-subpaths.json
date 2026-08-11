@@ -80,6 +80,7 @@
   "memory-host-events",
   "memory-host-markdown",
   "memory-host-search",
+  "memory-migration-runtime",
   "message-tool-delivery-hints",
   "migration",
   "migration-runtime",

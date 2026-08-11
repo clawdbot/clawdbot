@@ -8,6 +8,7 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
+import { builtinScopedMemoryConformanceAdapter } from "./src/memory/scoped-memory-policy.js";
 import { buildPromptSection } from "./src/prompt-section.js";
 
 const closeMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -224,10 +225,11 @@ describe("memory-core plugin runtime registration", () => {
     expect(closeMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
   });
 
-  it("declares the selected lazy capability as legacy-only without synthesizing runtime authority", () => {
+  it("registers the tested scoped-policy adapter while keeping legacy reads unenforced", () => {
     const capability = registerMemoryCoreCapability();
 
     expect(capability.authorization).toEqual(LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES);
+    expect(capability.authorizationConformance).toBe(builtinScopedMemoryConformanceAdapter);
     expect("authorization" in (capability.runtime ?? {})).toBe(false);
   });
 

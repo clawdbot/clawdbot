@@ -21,6 +21,7 @@ import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import type { MemoryCoreAcquireLocalService } from "./src/memory/embedding-local-service.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
+import { builtinScopedMemoryConformanceAdapter } from "./src/memory/scoped-memory-policy.js";
 import { buildPromptSection } from "./src/prompt-section.js";
 import { registerSessionBackfillGatewayMethods } from "./src/session-backfill-gateway.js";
 
@@ -285,6 +286,8 @@ export default definePluginEntry({
     registerSessionBackfillGatewayMethods(api);
     api.registerMemoryCapability({
       authorization: MEMORY_CORE_AUTHORIZATION_CAPABILITIES,
+      // Phase 1B publishes the tested policy adapter; Phase 1C owns admitting it for reads.
+      authorizationConformance: builtinScopedMemoryConformanceAdapter,
       promptBuilder: buildPromptSection,
       flushPlanResolver: buildMemoryFlushPlan,
       runtime: memoryRuntime,
