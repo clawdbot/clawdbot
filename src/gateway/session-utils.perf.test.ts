@@ -2,12 +2,14 @@
 // session lists with repeated provider/model tuples.
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, test, expect, vi } from "vitest";
+import { afterAll, describe, test, expect, vi } from "vitest";
 import {
   readAcpSessionMetaBatch,
   readAcpSessionMetaForEntry,
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
+import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
+import * as subagentRegistryRead from "../agents/subagents/registry/subagent-registry-read.js";
 import * as thinking from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
@@ -23,11 +25,13 @@ import { resolveGatewaySessionThinkingProjectionInternal } from "./session-utils
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { listSessionsFromStore, listSessionsFromStoreAsync } from "./session-utils.js";
 
-// Runtime selection is outside these cache, metadata, and transcript batching
-// contracts. Keep its cold plugin/provider discovery off this focused file.
-vi.mock("../agents/harness/policy.js", () => ({
-  resolveAgentHarnessPolicy: () => ({ runtime: "openclaw", runtimeSource: "implicit" }),
-}));
+// Persisted subagent state is outside these cache, metadata, and transcript
+// batching contracts. Keep its state-database startup off this focused file.
+const subagentIndexSpy = vi
+  .spyOn(subagentRegistryRead, "buildSubagentSessionListReadIndex")
+  .mockImplementation((now) => buildSubagentRunReadIndexFromRuns({ runs: new Map(), now }));
+
+afterAll(() => subagentIndexSpy.mockRestore());
 
 /**
  * Regression smoke for the per-list rowContext resolver cache. The bug we are
