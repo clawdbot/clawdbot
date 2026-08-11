@@ -3,11 +3,30 @@ import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
-import type {
-  WorkerPlacementBinding,
-  WorkerPlacementTurnBinding,
-  WorkerSessionPlacementGate,
-} from "./service.js";
+
+type WorkerPlacementBinding = Readonly<{
+  sessionId: string;
+  environmentId: string;
+  ownerEpoch: number;
+}>;
+
+export type WorkerPlacementTurnBinding = WorkerPlacementBinding &
+  Readonly<{
+    runId: string;
+  }>;
+
+export type WorkerSessionPlacementGate = {
+  hasWorkerTurn(binding: WorkerPlacementBinding): boolean;
+  validateWorkerTurn(binding: WorkerPlacementTurnBinding): boolean;
+  isWorkerTurnToolAuthorized(binding: WorkerPlacementTurnBinding, toolName: string): boolean;
+  updateAckCursors(
+    binding: WorkerPlacementTurnBinding & {
+      transcriptSeq?: number;
+      liveSeq?: number;
+      workspaceResultPending?: boolean;
+    },
+  ): void;
+};
 
 function claimForBinding(
   record: WorkerSessionPlacementRecord | undefined,
