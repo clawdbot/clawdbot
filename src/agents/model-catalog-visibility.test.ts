@@ -18,6 +18,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
     baseUrl: "https://chatgpt.com/backend-api/codex",
     authRequirement: "subscription" as const,
     requestTransportOverrides: "none" as const,
+    runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
   };
   const platform: ModelCatalogEntry = {
     provider: "openai",
@@ -449,6 +450,58 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       policy,
       routePolicy: openAIModelCatalogRoutePolicy,
       evaluateEntry: evaluateAvailableEntry,
+    });
+
+    expect(result).toEqual([]);
+  });
+
+  it("does not synthesize a runtime binding for an incompatible provider route", async () => {
+    const cfg = {
+      agents: {
+        defaults: { model: { primary: "openai/future-model" } },
+        list: [
+          {
+            id: "main",
+            models: {
+              "openai/future-model": { agentRuntime: { id: "codex" } },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const policy = createModelVisibilityPolicy({
+      cfg,
+      catalog: [],
+      defaultProvider: "openai",
+      defaultModel: "openai/future-model",
+      agentId: "main",
+      allowManifestNormalization: false,
+      allowPluginNormalization: false,
+    });
+    const openClawOnlyRoute = {
+      ...selectedRoute,
+      runtimePolicy: { compatibleIds: ["openclaw"] },
+    };
+
+    const result = await resolveLogicalVisibleModelCatalog({
+      cfg,
+      catalog: [],
+      defaultProvider: "openai",
+      defaultModel: "openai/future-model",
+      agentId: "main",
+      view: "configured",
+      policy,
+      routePolicy: openAIModelCatalogRoutePolicy,
+      evaluateEntry: async (entry) =>
+        resolveLogicalModelCatalogEntryState({
+          entry,
+          evaluation: {
+            availability: true,
+            routeResolution: { kind: "routes", routes: [openClawOnlyRoute] },
+            selectedRoute: openClawOnlyRoute,
+          },
+          routePolicy: openAIModelCatalogRoutePolicy,
+        }),
     });
 
     expect(result).toEqual([]);

@@ -328,7 +328,15 @@ export async function resolveLogicalVisibleModelCatalog(params: {
           agentId: params.agentId,
         }).policy?.id,
       );
-      if (isDefaultAgentRuntimeId(runtimeId) || !(await evaluateEntry(entry)).routeManaged) {
+      const state = await evaluateEntry(entry);
+      const route =
+        state.routeProjection.kind === "selected" ? state.routeProjection.route : undefined;
+      const runtimeCompatible =
+        runtimeId !== undefined &&
+        route?.runtimePolicy?.compatibleIds.some(
+          (candidateId) => normalizeOptionalAgentRuntimeId(candidateId) === runtimeId,
+        ) === true;
+      if (isDefaultAgentRuntimeId(runtimeId) || !runtimeCompatible) {
         continue;
       }
       // Provider-managed runtime bindings remain projectable when prepared inventory has no row.
