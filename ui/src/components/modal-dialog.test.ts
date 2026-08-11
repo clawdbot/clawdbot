@@ -112,16 +112,15 @@ describe("openclaw-modal-dialog", () => {
     document.body.append(shell);
     try {
       const { modal } = await renderModal();
-      const moveIntoModal = vi.spyOn(modal, "moveBefore");
-      const moveBackToShell = vi.spyOn(shell, "moveBefore");
+      const moveBefore = vi.spyOn(Element.prototype, "moveBefore");
 
       showToast({ message: "Saved" });
       modal.hide();
       await modal.updateComplete;
       await appHost.updateComplete;
 
-      expect(moveIntoModal).toHaveBeenCalledWith(appHost, null);
-      expect(moveBackToShell).toHaveBeenCalledWith(appHost, null);
+      expect(moveBefore).toHaveBeenCalledWith(appHost, null);
+      expect(moveBefore.mock.contexts).toContain(modal);
       expect(appHost.querySelector(".app-toast__message")?.textContent).toBe("Saved");
       expect(modal.querySelector(".app-toast")).toBeNull();
     } finally {

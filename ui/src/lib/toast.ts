@@ -17,14 +17,20 @@ export type ToastOptions = {
 
 const DEFAULT_TOAST_DURATION_MS = 6_000;
 
+function activeModalToastLayer() {
+  return [...(document.openClawModalToastLayers ?? [])].findLast(
+    (candidate) => candidate.isConnected,
+  );
+}
+
 class OpenClawToastHost extends OpenClawLightDomContentsElement {
   @state() private toast: ToastOptions | null = null;
   private dismissTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 
   override disconnectedCallback() {
-    const shell = document.querySelector(".shell");
-    if (!this.isConnected && this.parentElement?.localName === "openclaw-modal-dialog" && shell) {
-      shell.append(this);
+    const target = activeModalToastLayer() ?? document.querySelector(".shell");
+    if (!this.isConnected && this.parentElement?.localName === "openclaw-modal-dialog" && target) {
+      target.append(this);
     } else {
       this.dismiss("disconnected");
     }
@@ -97,16 +103,15 @@ export function showToast(options: ToastOptions): boolean {
   if (!host) {
     return false;
   }
-  // Native modal dialogs own the browser top layer, so move the one toast host
-  // into the last open overlay before presenting its outcome.
-  const modal = [...document.querySelectorAll<HTMLElement>("openclaw-modal-dialog")].findLast(
-    (candidate) => (candidate as HTMLElement & { open?: boolean }).open,
-  );
+  const modal = activeModalToastLayer();
   if (modal && host.parentElement !== modal) {
     modal.moveBefore(host, null);
     modal.addEventListener(
-      "wa-hide",
-      () => document.querySelector(".shell")?.moveBefore(host, null),
+      "wa-after-hide",
+      () =>
+        queueMicrotask(() =>
+          (activeModalToastLayer() ?? document.querySelector(".shell"))?.moveBefore(host, null),
+        ),
       { once: true },
     );
   }

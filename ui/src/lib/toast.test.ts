@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setModalToastLayer } from "../components/modal-dialog.ts";
 import { showToast } from "./toast.ts";
 
 async function mountHost() {
@@ -12,6 +13,7 @@ async function mountHost() {
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -38,13 +40,34 @@ describe("shared toast", () => {
     const modal = document.createElement("openclaw-modal-dialog");
     modal.open = true;
     document.body.append(modal);
-    const moveBefore = vi.spyOn(modal, "moveBefore");
+    setModalToastLayer(modal, true);
+    const moveBefore = vi.spyOn(Element.prototype, "moveBefore");
 
     showToast({ message: "Above overlay" });
     await appHost.updateComplete;
 
     expect(moveBefore).toHaveBeenCalledWith(appHost, null);
+    expect(moveBefore.mock.contexts).toContain(modal);
     expect(appHost.textContent).toContain("Above overlay");
+  });
+
+  it("routes through an active modal inside a shadow root", async () => {
+    const appHost = await mountHost();
+    const shadowOwner = document.createElement("div");
+    const shadowRoot = shadowOwner.attachShadow({ mode: "open" });
+    const modal = document.createElement("openclaw-modal-dialog");
+    modal.open = true;
+    shadowRoot.append(modal);
+    document.body.append(shadowOwner);
+    setModalToastLayer(modal, true);
+    const moveBefore = vi.spyOn(Element.prototype, "moveBefore");
+
+    showToast({ message: "Critical session notice" });
+    await appHost.updateComplete;
+
+    expect(moveBefore).toHaveBeenCalledWith(appHost, null);
+    expect(moveBefore.mock.contexts).toContain(modal);
+    expect(appHost.textContent).toContain("Critical session notice");
   });
 
   it("auto-dismisses after the configured duration", async () => {
