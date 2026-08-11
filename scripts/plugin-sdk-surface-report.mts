@@ -271,7 +271,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: add canonical coercion exports while retaining the shipped asString compatibility name.
       // +2: add high-use coercion primitives while retaining shipped object-record exports.
       // +1: rooted directory creation for plugin sandbox bridges that must preserve private modes.
-      4869,
+      // +2: channel-neutral location and provider-update hook contracts.
+      4871,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
