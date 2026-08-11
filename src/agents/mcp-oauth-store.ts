@@ -1,5 +1,4 @@
 // Canonical MCP OAuth session state. Legacy JSON import belongs to doctor only.
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
@@ -26,7 +25,6 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
 
 type McpOAuthDatabase = Pick<OpenClawStateKyselyDatabase, "mcp_oauth_stores">;
 
@@ -206,12 +204,6 @@ export function parseMcpOAuthStoreJson(storeKey: string, raw: string): McpOAuthS
   assertDiscoveryState(storeKey, value.discoveryState);
   assertAuthorizationChallenge(storeKey, value.pendingAuthorizationChallenge);
   return value as McpOAuthStore;
-}
-
-export function resolveMcpOAuthStoreKey(serverName: string, serverUrl: string): string {
-  const safeServerName = sanitizeServerName(serverName, new Set<string>());
-  const hash = createHash("sha256").update(serverName).update("\0").update(serverUrl).digest("hex");
-  return `${safeServerName}-${hash.slice(0, 16)}`;
 }
 
 function storeFromRow(
