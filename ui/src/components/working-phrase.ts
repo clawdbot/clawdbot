@@ -1,7 +1,8 @@
-// Whimsical long-wait status word ("Clawing…") for the chat working row.
-// Silent for the first stretch of a run, then rotates through crab-themed
-// gerunds so long quiet runs feel alive without claiming progress data the
-// UI does not have. Decorative only — the row keeps its sr-only "Working…".
+// Whimsical long-wait status word ("Blistering…") for the chat working row.
+// Silent for the first stretch of a run, then rotates through exotic
+// sailor-swearing gerunds so long quiet runs feel alive without claiming
+// progress data the UI does not have. Decorative only — the row keeps its
+// sr-only "Working…".
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
@@ -10,25 +11,25 @@ import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { PollController } from "../lit/poll-controller.ts";
 
 const PHRASE_KEYS = [
-  "shelling",
-  "scuttling",
-  "clawing",
-  "pinching",
-  "molting",
-  "bubbling",
-  "tiding",
-  "reefing",
-  "cracking",
-  "sifting",
-  "brining",
-  "nautiling",
-  "krilling",
-  "barnacling",
-  "lobstering",
-  "tidepooling",
-  "pearling",
-  "snapping",
-  "surfacing",
+  "cussing",
+  "cursing",
+  "swearing",
+  "blaspheming",
+  "inveighing",
+  "fulminating",
+  "vituperating",
+  "execrating",
+  "imprecating",
+  "anathematizing",
+  "billingsgating",
+  "blistering",
+  "thundering",
+  "blathering",
+  "blustering",
+  "berating",
+  "railing",
+  "ranting",
+  "scallywagging",
 ] as const;
 
 /** Quiet grace period before the first phrase appears. Mirrored as literals

@@ -1130,15 +1130,17 @@
   color: inherit;
 }
 
-/* Reading indicator = working claw: the brand pincer claws in place where the
-   reply will materialize while the agent works with nothing visibly
+/* Reading indicator = working claw: a green crab pincer claws in place where
+   the reply will materialize while the agent works with nothing visibly
    streaming. Bubble chrome and sizing come from
    .chat-bubble.chat-reading-indicator (components.css). Filled silhouette;
    18px because the claw is denser than a star glyph. The row settles into
    stance once, then the solid claw carries the ongoing working signal. The
    default cycle is two jaw snips with a sympathetic body flex — no lateral
    travel, that read as too busy. Rare surprise moves layer over this loop
-   once after a short delay, then the default loop resumes. */
+   once after a short delay, then the default loop resumes. Color is a fixed
+   green (not var(--accent)) so the claw reads as a green crab across every
+   theme preset, not just the ones with a green accent. */
 .chat-reading-indicator {
   --claw-cycle: 2.4s;
   --claw-surprise-delay: 4.8s;
@@ -1146,7 +1148,7 @@
   position: relative;
   display: inline-flex;
   align-items: center;
-  color: var(--accent);
+  color: #35a55b;
 }
 
 .chat-working-indicator {
@@ -1636,7 +1638,7 @@
 .chat-tasks-status__claw {
   display: inline-flex;
   align-items: center;
-  color: var(--accent);
+  color: #35a55b;
   animation: chatTasksStatusBreath 2.8s ease-in-out infinite;
 }
 
