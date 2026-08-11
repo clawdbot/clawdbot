@@ -3,7 +3,7 @@
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { normalizeManifestChannelId } from "./channel-claimant-plugins.js";
 
-export type ChannelSchemaOwnerEntry = { schema?: Record<string, unknown>; pluginId?: string };
+type ChannelSchemaOwnerEntry = { schema?: Record<string, unknown>; pluginId?: string };
 
 /**
  * Iterates default hydration and ownership planning to STABILITY: schema defaults can make an

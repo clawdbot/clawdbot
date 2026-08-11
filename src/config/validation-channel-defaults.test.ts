@@ -4,10 +4,9 @@
 // whichever parity it expired on: the loop settles deterministically on the AUTHORED record's
 // owners, the config the gateway consumes before any default sticks.
 import { describe, expect, it } from "vitest";
-import {
-  type ChannelSchemaOwnerEntry,
-  settleDefaultedChannelSchemas,
-} from "./validation-channel-defaults.js";
+import { settleDefaultedChannelSchemas } from "./validation-channel-defaults.js";
+
+type ChannelSchemaOwnerEntry = { schema?: Record<string, unknown>; pluginId?: string };
 
 const DEFAULTED_SCHEMA = {
   type: "object",
