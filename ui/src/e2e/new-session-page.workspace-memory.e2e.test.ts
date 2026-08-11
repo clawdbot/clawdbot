@@ -1,3 +1,4 @@
+import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
@@ -5,12 +6,15 @@ import {
   PICKED,
   TARGET_REPO,
   WORKSPACE,
+  captureProjectUiProof,
   captureUiProof,
+  captureUiProofEnabled,
   choosePackagesFolder,
   createNewSessionPageE2eSuite,
   installMockGateway,
   navigateInApp,
   pollLocatorText,
+  projectProofArtifactDir,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
 
@@ -389,6 +393,123 @@ suite.define(() => {
       const storedWorktree = (await readMainPreference(page))?.worktree;
       expect(storedWorktree).toBe(false);
     });
+  });
+
+  it("migrates identity preferences once and mirrors gateway-first writes", async () => {
+    await withNewSessionPage(
+      {
+        ...DESKTOP_CONTEXT,
+        ...(captureUiProofEnabled
+          ? {
+              recordVideo: {
+                dir: projectProofArtifactDir,
+                size: { height: 900, width: 1280 },
+              },
+            }
+          : {}),
+      },
+      async (page) => {
+        const appUrl = new URL(suite.server.baseUrl);
+        const gatewayUrl = `${appUrl.protocol === "https:" ? "wss:" : "ws:"}//${appUrl.host}`;
+        const storageKey = `openclaw.new-session.preferences.v1:${gatewayOriginScope(gatewayUrl)}`;
+        await page.addInitScript(
+          ({ key, folder, workspace }) => {
+            localStorage.setItem(
+              key,
+              JSON.stringify({
+                agents: {
+                  main: {
+                    folder,
+                    workspace,
+                    worktree: true,
+                    model: "anthropic/claude-sonnet-4-6",
+                  },
+                },
+              }),
+            );
+          },
+          { key: storageKey, folder: PICKED, workspace: WORKSPACE },
+        );
+        const gateway = await installMockGateway(page, {
+          workspaceGit: true,
+          models: MODELS,
+          presenceUsers: [{ self: true, id: "profile-alice", name: "Alice" }],
+          featureMethods: [
+            "chat.metadata",
+            "chat.startup",
+            "fs.listDir",
+            "projects.list",
+            "sessions.create",
+            "users.prefs.get",
+            "users.prefs.set",
+            "worktrees.branches",
+          ],
+          methodResponses: {
+            "agents.list": mainAgentList(),
+            "fs.listDir": FOLDER_LISTINGS,
+            "projects.list": { projects: [], recents: [] },
+            "users.prefs.get": {
+              sequence: [
+                { status: "ok", entries: {} },
+                {
+                  status: "ok",
+                  entries: {
+                    "new-session.v1:main": {
+                      folder: PICKED,
+                      workspace: WORKSPACE,
+                      worktree: true,
+                      model: "anthropic/claude-sonnet-4-6",
+                    },
+                  },
+                },
+              ],
+            },
+            "users.prefs.set": { status: "ok" },
+            "worktrees.branches": GIT_BRANCHES,
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}new`);
+        const migrated = await gateway.waitForRequest("users.prefs.set");
+        expect(migrated.params).toMatchObject({
+          entries: {
+            "new-session.v1:main": {
+              folder: PICKED,
+              workspace: WORKSPACE,
+              worktree: true,
+              model: "anthropic/claude-sonnet-4-6",
+            },
+          },
+        });
+        const trigger = page.locator("#new-session-place-trigger");
+        await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("packages");
+        await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
+        await captureProjectUiProof(page, "identity-preferences-migrated.png");
+
+        await navigateInApp(page, "chat");
+        await waitForCommittedChatRoute(page);
+        await navigateInApp(page, "new-session");
+        await expect
+          .poll(async () => (await gateway.getRequests("users.prefs.get")).length)
+          .toBe(2);
+        await expect
+          .poll(async () => (await gateway.getRequests("users.prefs.set")).length)
+          .toBe(1);
+
+        await gateway.deferNext("users.prefs.set");
+        const modelSelect = page.locator('[data-chat-model-select="true"]');
+        await modelSelect.click();
+        await page.locator('[data-chat-model-option="openai/gpt-5.5"]').click();
+        await expect
+          .poll(async () => (await gateway.getRequests("users.prefs.set")).length)
+          .toBe(2);
+        expect((await gateway.getRequests("users.prefs.set")).at(-1)?.params).toMatchObject({
+          entries: { "new-session.v1:main": { model: "" } },
+        });
+        expect((await readMainPreference(page))?.model).toBe("anthropic/claude-sonnet-4-6");
+        await gateway.resolveDeferred("users.prefs.set", { status: "ok" });
+        await expect.poll(async () => (await readMainPreference(page))?.model).toBeUndefined();
+      },
+    );
   });
 
   it("blocks an immediate submit until remembered model and worktree choices validate", async () => {

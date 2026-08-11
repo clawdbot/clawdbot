@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import type {
   FsListDirResult,
   ProjectRecord,
+  ProjectRecent,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
@@ -156,6 +157,7 @@ export function renderPlaceSelect(params: {
   workspace: string;
   workspaceRoots: readonly string[];
   projects: readonly ProjectRecord[];
+  recents?: readonly ProjectRecent[];
   projectId: string;
   sessions: readonly RecentPlaceSource[];
   execNodes: DraftNode[];
@@ -227,26 +229,52 @@ export function renderPlaceSelect(params: {
       : gatewayLabel;
   const label = params.showDestinations ? `${folderLabel} · ${destinationLabel}` : folderLabel;
   const effectiveFolder = folder || params.workspace;
-  const recents = recentPlaces(params.sessions, {
-    workspace: params.workspace,
-    execNodes: params.execNodes,
-    allowGatewayFolder: (recentFolder) =>
-      params.isAdmin || isKnownWorkspacePath(params.workspaceRoots, recentFolder),
-  });
+  const allowGatewayFolder = (recentFolder: string) =>
+    params.isAdmin || isKnownWorkspacePath(params.workspaceRoots, recentFolder);
+  const serverRecents = params.recents?.filter((recent) =>
+    recent.kind === "project"
+      ? params.projects.some((project) => project.id === recent.projectId)
+      : recent.execNode
+        ? params.execNodes.some((node) => node.nodeId === recent.execNode)
+        : allowGatewayFolder(recent.folder),
+  );
+  const recents: ProjectRecent[] =
+    serverRecents ??
+    recentPlaces(params.sessions, {
+      workspace: params.workspace,
+      execNodes: params.execNodes,
+      allowGatewayFolder,
+    }).map((recent) => {
+      const item: ProjectRecent = {
+        kind: "folder",
+        folder: recent.folder,
+        displayName: folderDisplayName(recent.folder),
+      };
+      if (recent.execNode) {
+        item.execNode = recent.execNode;
+      }
+      return item;
+    });
   const recentItems = recents.map((recent) => {
-    const node = params.execNodes.find((candidate) => candidate.nodeId === recent.execNode);
+    const node =
+      recent.kind === "folder" && recent.execNode
+        ? params.execNodes.find((candidate) => candidate.nodeId === recent.execNode)
+        : undefined;
     const recentLabel =
       params.showDestinations && node
-        ? `${folderDisplayName(recent.folder)} · ${node.displayName}`
-        : folderDisplayName(recent.folder);
+        ? `${recent.displayName} · ${node.displayName}`
+        : recent.displayName;
     return { ...recent, label: recentLabel, node };
   });
   const recentSuffixes = disambiguate(recentItems, (recent) => recent.label, [
-    (recent) => parentFolderDisplayName(recent.folder),
-    (recent) => recent.folder,
+    (recent) => (recent.kind === "folder" ? parentFolderDisplayName(recent.folder) : undefined),
+    (recent) => (recent.kind === "folder" ? recent.folder : undefined),
     (recent) => recent.node?.modelIdentifier,
     (recent) => recent.node?.remoteIp,
-    (recent) => `${recent.folder}${recent.execNode ? ` · ${recent.execNode.slice(0, 8)}` : ""}`,
+    (recent) =>
+      recent.kind === "folder"
+        ? `${recent.folder}${recent.execNode ? ` · ${recent.execNode.slice(0, 8)}` : ""}`
+        : recent.projectId,
   ]);
   const nodeSuffixes = disambiguate(params.execNodes, (node) => node.displayName, [
     (node) => node.modelIdentifier,
@@ -372,15 +400,24 @@ export function renderPlaceSelect(params: {
                     ${recentItems.map((recent, index) => {
                       return renderSessionMenuItem(
                         {
-                          value: `recent:${recent.execNode}:${recent.folder}`,
+                          value:
+                            recent.kind === "project"
+                              ? `recent-project:${recent.projectId}`
+                              : `recent:${recent.execNode ?? ""}:${recent.folder}`,
                           label: recent.label,
+                          icon: recent.kind === "project" ? icons.gitBranch : icons.folder,
                           sub: recentSuffixes[index],
                           checked:
-                            !params.projectId &&
-                            params.execNode === recent.execNode &&
-                            folder === recent.folder,
-                          title: recent.folder,
-                          onSelect: () => params.onApplyFolder(recent.folder, recent.execNode),
+                            recent.kind === "project"
+                              ? params.projectId === recent.projectId
+                              : !params.projectId &&
+                                params.execNode === (recent.execNode ?? "") &&
+                                folder === recent.folder,
+                          title: recent.kind === "project" ? undefined : recent.folder,
+                          onSelect: () =>
+                            recent.kind === "project"
+                              ? params.onSelectProject(recent.projectId)
+                              : params.onApplyFolder(recent.folder, recent.execNode ?? ""),
                         },
                         params.submitting,
                       );

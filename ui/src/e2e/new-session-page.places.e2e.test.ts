@@ -721,6 +721,74 @@ suite.define(() => {
     }
   });
 
+  it("uses identity-scoped server project recents instead of the shared roster", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      ...(captureUiProofEnabled
+        ? {
+            recordVideo: {
+              dir: projectProofArtifactDir,
+              size: { height: 900, width: 1280 },
+            },
+            viewport: { height: 900, width: 1280 },
+          }
+        : {}),
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      presenceUsers: [{ self: true, id: "profile-alice", name: "Alice" }],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "projects.list",
+        "sessions.create",
+        "users.prefs.get",
+        "users.prefs.set",
+      ],
+      methodResponses: {
+        "projects.list": {
+          projects: [{ id: "registered", displayName: "Registered", source: "registered" }],
+          recents: [{ kind: "project", projectId: "registered", displayName: "Registered" }],
+        },
+        "sessions.list": {
+          count: 1,
+          defaults: SESSION_LIST_DEFAULTS,
+          path: "",
+          sessions: [
+            { key: "agent:main:shared", kind: "direct", updatedAt: 99, execCwd: "/shared" },
+          ],
+          ts: Date.now(),
+        },
+        "sessions.create": { key: "agent:main:identity-project" },
+        "users.prefs.get": { status: "ok", entries: {} },
+        "users.prefs.set": { status: "ok" },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      const trigger = page.locator("#new-session-place-trigger");
+      await trigger.click();
+      expect(await page.locator('[data-value="recent::/shared"]').count()).toBe(0);
+      const recent = page.locator('[data-value="recent-project:registered"]');
+      await recent.waitFor();
+      await captureProjectUiProof(page, "identity-project-recents.png");
+      await recent.click();
+      await page.locator(".new-session-page__message").fill("continue registered work");
+      await page.getByRole("button", { name: "Start session" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        projectId: "registered",
+        message: "continue registered work",
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("applies a recent folder and node as one place", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
