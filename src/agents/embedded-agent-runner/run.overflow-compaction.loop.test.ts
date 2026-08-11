@@ -79,7 +79,6 @@ function makeDispatchInput(
       provider: "openai",
       modelId: "gpt-5.6-luna",
       requestedModelId: "gpt-5.6-luna",
-      fallbackActive: false,
       fallbackReason: null,
       agentHarnessId: "codex",
       runtimePlan: {},

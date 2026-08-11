@@ -127,8 +127,6 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   modelId: string;
   /** Operator-requested or initial model id before any fallback resolution. */
   requestedModelId?: string | null;
-  /** True when this attempt is running after a model fallback decision. */
-  fallbackActive?: boolean;
   /** Concrete fallback reason that selected this attempt, when known. */
   fallbackReason?: string | null;
   /** Whether this attempt may start or redirect work to another agent/task. */

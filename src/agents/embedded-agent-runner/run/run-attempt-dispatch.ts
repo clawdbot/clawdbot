@@ -299,7 +299,6 @@ export async function dispatchEmbeddedRunAttempt(input: {
     provider: runtime.provider,
     modelId: runtime.modelId,
     requestedModelId: runtime.requestedModelId,
-    fallbackActive: runtime.fallbackActive,
     fallbackReason: runtime.fallbackReason,
     delegationCapability: resolveDelegationCapability({
       fallbackActive: runtime.fallbackActive,
