@@ -914,6 +914,7 @@ async function resolveSlackBlockActionCommandAuthorized(params: {
   let channelUsers: Array<string | number> = [];
   if (isRoom && params.parsed.channelId) {
     const channelConfig = resolveSlackChannelConfig({
+      teamId: params.eventScope?.teamId ?? params.ctx.teamId,
       channelId: params.parsed.channelId,
       channelName: params.auth.channelName,
       channels: params.ctx.channelsConfig,

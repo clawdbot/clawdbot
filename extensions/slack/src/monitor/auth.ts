@@ -541,6 +541,7 @@ export async function authorizeSlackSystemEventSender(params: {
     channelType = normalizeSlackChannelType(resolvedTypeSource, channelId);
     if (
       !params.ctx.isChannelAllowed({
+        teamId: params.eventScope?.teamId ?? params.ctx.teamId,
         channelId,
         channelName,
         channelType,
@@ -598,6 +599,7 @@ export async function authorizeSlackSystemEventSender(params: {
   });
   const channelConfig = channelId
     ? resolveSlackChannelConfig({
+        teamId: params.eventScope?.teamId ?? params.ctx.teamId,
         channelId,
         channelName,
         channels: params.ctx.channelsConfig,

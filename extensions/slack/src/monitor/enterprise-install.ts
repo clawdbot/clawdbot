@@ -52,6 +52,9 @@ function isStableSlackChannelEntry(value: unknown, options?: { allowWildcard?: b
   if (normalized === "*") {
     return options?.allowWildcard === true;
   }
+  if (isWorkspaceQualifiedSlackTarget(normalized, "channel")) {
+    return true;
+  }
   const prefixed = /^channel:([CDG][A-Z0-9]{8,})$/.exec(normalized);
   if (prefixed?.[1]) {
     return true;

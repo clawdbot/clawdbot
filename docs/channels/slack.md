@@ -324,11 +324,13 @@ validated listener-owned client remains in the active event turn. The
 in-memory send queue and thread-participation records are partitioned by that
 event's workspace; the client itself is never serialized or persisted.
 
-Channel policy keys accept raw stable Slack channel IDs, `channel:<id>`, or the
-`"*"` wildcard. `dm.groupChannels` accepts raw stable channel IDs or
-`channel:<id>`, but not `"*"`. OpenClaw normalizes the ID forms to the raw
-channel ID for runtime matching; the channel prefixes `slack:`, `group:`, and
-`mpim:` fail startup.
+Channel policy keys accept raw stable Slack channel IDs, `channel:<id>`,
+`team:<team-id>:channel:<channel-id>`, or the `"*"` wildcard.
+`dm.groupChannels` accepts the same ID forms except `"*"`. Workspace-qualified
+entries select only events from that workspace and take precedence over a bare
+entry for the same channel ID. Bare channel entries remain organization-wide
+for compatibility. The channel prefixes `slack:`, `group:`, and `mpim:` fail
+startup.
 
 User policy entries in `allowFrom`, `reactionAllowlist`, and per-channel `users`
 accept raw stable Slack user IDs, `slack:<user-id>`, `user:<user-id>`, or `"*"`.
@@ -1303,7 +1305,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     - `allowlist`
     - `disabled`
 
-    Channel allowlist lives under `channels.slack.channels` and **must use stable Slack channel IDs** (for example `C12345678`) as config keys.
+    Channel allowlist lives under `channels.slack.channels` and **must use stable Slack channel IDs** (for example `C12345678`) as config keys. Enterprise Grid installs can scope an entry to one workspace with `team:<team-id>:channel:<channel-id>`.
 
     Runtime note: if `channels.slack` is completely missing (env-only setup), runtime falls back to `groupPolicy="allowlist"` and logs a warning (even if `channels.defaults.groupPolicy` is set).
 
@@ -1936,7 +1938,7 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
     Check, in order:
 
     - `groupPolicy`
-    - channel allowlist (`channels.slack.channels`) — **keys must be channel IDs** (`C12345678`), not names (`#channel-name`). Name-based keys silently fail under `groupPolicy: "allowlist"` because channel routing is ID-first by default. To find an ID: right-click the channel in Slack → **Copy link** — the `C...` value at the end of the URL is the channel ID.
+    - channel allowlist (`channels.slack.channels`) — **keys must be channel IDs** (`C12345678`) or workspace-qualified channel targets (`team:<team-id>:channel:<channel-id>`), not names (`#channel-name`). Name-based keys silently fail under `groupPolicy: "allowlist"` because channel routing is ID-first by default. To find an ID: right-click the channel in Slack → **Copy link** — the `C...` value at the end of the URL is the channel ID.
     - `requireMention`
     - per-channel `users` allowlist
     - `messages.groupChat.visibleReplies`: normal group/channel requests default to `"automatic"`. If you opted into `"message_tool"` and logs show assistant text with no `message(action=send)` call, the model missed the visible message-tool path. Final text stays private in this mode; inspect the gateway verbose log for suppressed payload metadata, or set it to `"automatic"` if you want every normal assistant final reply posted through the legacy path.

@@ -538,6 +538,7 @@ async function resolveSlackConversationContext(params: {
   const isRoomish = isRoom || isGroupDm;
   const channelConfig = isRoom
     ? resolveSlackChannelConfig({
+        teamId: params.eventScope?.teamId ?? ctx.teamId,
         channelId: message.channel,
         channelName,
         channels: ctx.channelsConfig,
@@ -604,6 +605,7 @@ async function authorizeSlackInboundMessage(params: {
 
   if (
     !ctx.isChannelAllowed({
+      teamId: params.eventScope?.teamId ?? ctx.teamId,
       channelId: message.channel,
       channelName,
       channelType: resolvedChannelType,

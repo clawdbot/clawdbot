@@ -498,6 +498,7 @@ export async function registerSlackMonitorSlashCommands(params: {
 
       if (
         !ctx.isChannelAllowed({
+          teamId: eventScope?.teamId ?? ctx.teamId,
           channelId: command.channel_id,
           channelName: channelInfo?.name,
           channelType,
@@ -557,6 +558,7 @@ export async function registerSlackMonitorSlashCommands(params: {
 
       if (isRoom) {
         channelConfig = resolveSlackChannelConfig({
+          teamId: eventScope?.teamId ?? ctx.teamId,
           channelId: command.channel_id,
           channelName: channelInfo?.name,
           channels: ctx.channelsConfig,

@@ -94,7 +94,9 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
         accountId: "org",
         config: {
           allowFrom: ["U01234567", "slack:W01234567", "user:U12345678"],
-          dm: { groupChannels: ["G01234567", "channel:G12345678"] },
+          dm: {
+            groupChannels: ["G01234567", "channel:G12345678", "team:T01234567:channel:G01234567"],
+          },
           mentionPatterns: {
             mode: "allow",
             allowIn: ["team:T01234567:channel:C01234567"],
@@ -111,6 +113,7 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
               },
             },
             "channel:C12345678": {},
+            "team:T01234567:channel:C01234567": {},
             "*": {},
           },
         },

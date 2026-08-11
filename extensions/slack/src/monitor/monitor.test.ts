@@ -162,6 +162,40 @@ describe("resolveSlackChannelConfig", () => {
     });
   });
 
+  it("prefers a workspace-qualified channel over the same channel ID in another workspace", () => {
+    const channels = {
+      "team:T11111111:channel:C01234567": { enabled: true, requireMention: false },
+      "team:T22222222:channel:C01234567": { enabled: false, requireMention: true },
+    };
+
+    expectSlackChannelConfig(
+      resolveSlackChannelConfig({
+        teamId: "T11111111",
+        channelId: "C01234567",
+        channels,
+      }),
+      {
+        allowed: true,
+        requireMention: false,
+        matchKey: "team:T11111111:channel:C01234567",
+        matchSource: "direct",
+      },
+    );
+    expectSlackChannelConfig(
+      resolveSlackChannelConfig({
+        teamId: "T22222222",
+        channelId: "C01234567",
+        channels,
+      }),
+      {
+        allowed: false,
+        requireMention: true,
+        matchKey: "team:T22222222:channel:C01234567",
+        matchSource: "direct",
+      },
+    );
+  });
+
   it("blocks channel-name route matches by default", () => {
     const res = resolveSlackChannelConfig({
       channelId: "C1",

@@ -63,6 +63,7 @@ export function resolveSlackChannelLabel(params: { channelId?: string; channelNa
 }
 
 export function resolveSlackChannelConfig(params: {
+  teamId?: string;
   channelId: string;
   channelName?: string;
   channels?: SlackChannelConfigEntries;
@@ -83,7 +84,7 @@ export function resolveSlackChannelConfig(params: {
   const normalizedName = channelName ? normalizeSlackSlug(channelName) : "";
   const directName = channelName ? channelName.trim() : "";
   const candidates = buildChannelKeyCandidates(
-    ...buildSlackChannelIdCandidates(channelId),
+    ...buildSlackChannelIdCandidates(channelId, params.teamId),
     allowNameMatching ? (channelName ? `#${directName}` : undefined) : undefined,
     allowNameMatching ? directName : undefined,
     allowNameMatching ? normalizedName : undefined,

@@ -19,15 +19,24 @@ type SlackChannelPolicyEntry = {
   toolsBySender?: GroupToolPolicyBySenderConfig;
 };
 
-export function buildSlackChannelIdCandidates(channelId: string | null | undefined): string[] {
+export function buildSlackChannelIdCandidates(
+  channelId: string | null | undefined,
+  teamId?: string | null,
+): string[] {
   const trimmedId = channelId?.trim();
   if (!trimmedId) {
     return [];
   }
   const lowercaseId = trimmedId.toLowerCase();
   const uppercaseId = trimmedId.toUpperCase();
+  const exactTeamId = teamId || undefined;
+  const lowercaseTeamId = exactTeamId?.toLowerCase();
+  const uppercaseTeamId = exactTeamId?.toUpperCase();
   // Inbound Slack IDs are uppercase, but persisted session group IDs are lowercase.
   return buildChannelKeyCandidates(
+    exactTeamId ? `team:${exactTeamId}:channel:${trimmedId}` : undefined,
+    lowercaseTeamId ? `team:${lowercaseTeamId}:channel:${lowercaseId}` : undefined,
+    uppercaseTeamId ? `team:${uppercaseTeamId}:channel:${uppercaseId}` : undefined,
     trimmedId,
     lowercaseId,
     uppercaseId,
