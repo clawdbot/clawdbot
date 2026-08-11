@@ -35,14 +35,14 @@ extension DashboardWindowController {
         }
         switch status {
         case .denied:
-            "denied"
+            return "denied"
         case .notDetermined:
-            "notDetermined"
+            return "notDetermined"
         default:
             // .ephemeral is unavailable by name on macOS and cannot occur here;
             // map it and future cases to notDetermined so the UI offers the
             // permission request instead of claiming access.
-            "notDetermined"
+            return "notDetermined"
         }
     }
 
