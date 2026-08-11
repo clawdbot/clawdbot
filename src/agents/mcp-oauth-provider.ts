@@ -72,10 +72,6 @@ export function withMcpOAuthLeaseSignal(
   };
 }
 
-function sameMcpOAuthAuthorizationServer(a: string, b: string): boolean {
-  return URL.canParse(a) && URL.canParse(b) && new URL(a).href === new URL(b).href;
-}
-
 function beginMcpOAuthAuthorization(store: McpOAuthStore): McpOAuthStore {
   const next = { ...store };
   if (next.credentialState === "uninitialized") {
@@ -137,10 +133,7 @@ export function createMcpOAuthClientProvider(params: {
         return store.tokens;
       }
       return store.tokensAuthorizationServerUrl !== undefined &&
-        sameMcpOAuthAuthorizationServer(
-          discoveredAuthorizationServerUrl,
-          store.tokensAuthorizationServerUrl,
-        )
+        discoveredAuthorizationServerUrl === store.tokensAuthorizationServerUrl
         ? store.tokens
         : undefined;
     },

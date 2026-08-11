@@ -192,6 +192,42 @@ describe("MCP OAuth refresh issuer binding", () => {
     );
   });
 
+  it.each([
+    {
+      variant: "an explicit default port",
+      issuer: "https://auth-old.example:443",
+    },
+    {
+      variant: "different host casing",
+      issuer: "https://AUTH-OLD.example",
+    },
+    {
+      variant: "a trailing slash",
+      issuer: "https://auth-old.example/",
+    },
+  ])("does not disclose a refresh token when the issuer differs by $variant", async ({ issuer }) => {
+    await withTempHome(
+      async () => {
+        await seedAuthorizedStore("discovery-then-tokens");
+        const provider = createMcpOAuthClientProvider({
+          serverName: SERVER_NAME,
+          serverUrl: SERVER_URL,
+        });
+        await provider.saveDiscoveryState?.({
+          authorizationServerUrl: issuer,
+          resourceMetadataUrl: REPLACEMENT_METADATA_URL,
+        });
+
+        expect(provider.tokens()).toBeUndefined();
+        expect(readStore().tokens).toMatchObject({
+          access_token: STORED_ACCESS,
+          refresh_token: STORED_REFRESH,
+        });
+      },
+      { prefix: "openclaw-mcp-oauth-issuer-normalization-", ...TEMP_HOME_OPTIONS },
+    );
+  });
+
   it("refreshes an upgraded row whose issuer is recoverable from stored discovery", async () => {
     await withTempHome(
       async () => {
