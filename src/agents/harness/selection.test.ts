@@ -639,6 +639,33 @@ describe("runAgentHarnessAttempt", () => {
     },
   );
 
+  it("strips internal symbol metadata at the plugin harness handoff", async () => {
+    const internalKey = Symbol.for("openclaw.source-reply-delivery-runtime");
+    let handedOffSymbols: symbol[] = [];
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: async (attemptParams) => {
+          handedOffSymbols = Object.getOwnPropertySymbols(attemptParams);
+          return createAttemptResult("codex");
+        },
+      },
+      { ownerPluginId: "codex" },
+    );
+    const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
+    Object.defineProperty(params, internalKey, {
+      enumerable: true,
+      value: { preparedHarnessModeListener: vi.fn() },
+    });
+
+    await runAgentHarnessAttempt(params);
+
+    expect(Object.getOwnPropertySymbols(params)).toEqual([internalKey]);
+    expect(handedOffSymbols).toEqual([]);
+  });
+
   it.each(["heartbeat"] as const)(
     "records %s classification on the host-owned turn candidate",
     async (bootstrapContextRunKind) => {

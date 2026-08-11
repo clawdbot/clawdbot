@@ -47,6 +47,7 @@ describe("prepared harness source delivery", () => {
       expectedTransitions: ["message_tool_only", "automatic"],
       expectedDeliveries: 1,
       expectedPartials: 1,
+      expectedBlocks: 1,
       expectedFinals: 1,
     },
     {
@@ -57,6 +58,7 @@ describe("prepared harness source delivery", () => {
       expectedTransitions: ["message_tool_only"],
       expectedDeliveries: 0,
       expectedPartials: 0,
+      expectedBlocks: 0,
       expectedFinals: 0,
     },
     {
@@ -67,10 +69,18 @@ describe("prepared harness source delivery", () => {
       expectedTransitions: ["message_tool_only", "message_tool_only"],
       expectedDeliveries: 0,
       expectedPartials: 0,
+      expectedBlocks: 0,
       expectedFinals: 0,
     },
   ])("$name", async (testCase) => {
     await useProductionEmbeddedRunExecutionParamsForTest();
+    const { createBlockReplyDeliveryHandler } =
+      await vi.importActual<typeof import("./reply-delivery.js")>("./reply-delivery.js");
+    runnerState.createBlockReplyDeliveryHandlerMock.mockImplementation((params) =>
+      createBlockReplyDeliveryHandler(
+        params as Parameters<typeof createBlockReplyDeliveryHandler>[0],
+      ),
+    );
     const { runEmbeddedAgent, registerPreparedAgentHarness } =
       await loadRunOverflowCompactionHarness();
     mockedGlobalHookRunner.hasHooks.mockImplementation(
@@ -86,7 +96,7 @@ describe("prepared harness source delivery", () => {
       emittedStreamingCallbacks.push("partial");
       await attemptParams.onPartialReply?.({ text: "Short fallback final" });
       emittedStreamingCallbacks.push("block");
-      await attemptParams.onBlockReply?.({ text: "Short fallback final" });
+      await attemptParams.onBlockReply?.({ text: "Streaming progress" });
       return makeAttemptResult({ assistantTexts: ["Short fallback final"] });
     });
     useOpenAIPlatformAuthFixture();
@@ -144,7 +154,7 @@ describe("prepared harness source delivery", () => {
           emittedStreamingCallbacks.push("partial");
           await attemptParams.onPartialReply?.({ text: "Short fallback final" });
           emittedStreamingCallbacks.push("block");
-          await attemptParams.onBlockReply?.({ text: "Short fallback final" });
+          await attemptParams.onBlockReply?.({ text: "Streaming progress" });
           return makeAttemptResult({ assistantTexts: ["Short fallback final"] });
         }),
       });
@@ -237,9 +247,16 @@ describe("prepared harness source delivery", () => {
     expect(emittedStreamingCallbacks).toEqual(["partial", "block"]);
     expect(onPartialReply).toHaveBeenCalledTimes(testCase.expectedPartials);
     expect(result.queuedFinal).toBe(testCase.expectedDeliveries === 1);
+    expect(deliver).toHaveBeenCalledTimes(testCase.expectedDeliveries + testCase.expectedBlocks);
+    if (testCase.expectedBlocks === 1) {
+      expect(deliver).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "Streaming progress" }),
+        expect.objectContaining({ kind: "block" }),
+      );
+    }
     if (testCase.expectedDeliveries === 1) {
       expect(result.sourceReplyDeliveryMode).toBeUndefined();
-      expect(deliver).toHaveBeenCalledExactlyOnceWith(
+      expect(deliver).toHaveBeenCalledWith(
         expect.objectContaining({ text: "Short fallback final" }),
         expect.objectContaining({ kind: "final" }),
       );
@@ -249,7 +266,7 @@ describe("prepared harness source delivery", () => {
     }
     expect(dispatcher.getQueuedCounts()).toEqual({
       tool: 0,
-      block: 0,
+      block: testCase.expectedBlocks,
       final: testCase.expectedFinals,
     });
     expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
