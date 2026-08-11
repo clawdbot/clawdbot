@@ -364,8 +364,8 @@ describe("agent harness host capability", () => {
 
   it("revalidates the source boundary after awaited bound-tool policy", async () => {
     const { attempt, admission } = await admittedAttempt("run-bound-policy-race");
-    const policyStarted = createDeferred<void>();
-    const policyResult = createDeferred<void>();
+    const policyStarted = createDeferred();
+    const policyResult = createDeferred();
     mockRewrap.mockImplementationOnce((tool) => ({
       ...tool,
       execute: async (...args: Parameters<NonNullable<AnyAgentTool["execute"]>>) => {
@@ -389,8 +389,8 @@ describe("agent harness host capability", () => {
 
   it("aborts an in-flight bound tool when its host capability closes", async () => {
     const { attempt } = await admittedAttempt("run-bound-close-race");
-    const sourceStarted = createDeferred<void>();
-    const sourceResult = createDeferred<{ content: []; details: {} }>();
+    const sourceStarted = createDeferred();
+    const sourceResult = createDeferred<{ content: []; details: Record<string, never> }>();
     const { tool } = testTool(
       vi.fn(async () => {
         sourceStarted.resolve();
@@ -409,8 +409,8 @@ describe("agent harness host capability", () => {
 
   it("rejects a bound tool result after exact authority closes during execution", async () => {
     const { attempt } = await admittedAttempt("run-bound-release-race");
-    const sourceStarted = createDeferred<void>();
-    const sourceResult = createDeferred<{ content: []; details: {} }>();
+    const sourceStarted = createDeferred();
+    const sourceResult = createDeferred<{ content: []; details: Record<string, never> }>();
     const { tool } = testTool(
       vi.fn(async () => {
         sourceStarted.resolve();
@@ -429,7 +429,7 @@ describe("agent harness host capability", () => {
 
   it("disposes a prepared handle that resolves after host capability closure", async () => {
     const { attempt } = await admittedAttempt("run-preparation-close-race");
-    const preparationStarted = createDeferred<void>();
+    const preparationStarted = createDeferred();
     const preparationResult = createDeferred<Awaited<ReturnType<InternalToolExecutionPreparer>>>();
     const dispose = vi.fn();
     const { tool } = testTool();
@@ -458,8 +458,8 @@ describe("agent harness host capability", () => {
 
   it("aborts prepared execution when its host capability closes", async () => {
     const { attempt } = await admittedAttempt("run-prepared-close-race");
-    const executionStarted = createDeferred<void>();
-    const executionResult = createDeferred<{ content: []; details: {} }>();
+    const executionStarted = createDeferred();
+    const executionResult = createDeferred<{ content: []; details: Record<string, never> }>();
     const { tool } = testTool();
     attachInternalToolExecutionPreparer(tool, async () => ({
       kind: "ready",
@@ -493,8 +493,8 @@ describe("agent harness host capability", () => {
     const { attempt } = await admittedAttempt("run-bound-abort", {
       abortSignal: abortController.signal,
     });
-    const sourceStarted = createDeferred<void>();
-    const sourceResult = createDeferred<{ content: []; details: {} }>();
+    const sourceStarted = createDeferred();
+    const sourceResult = createDeferred<{ content: []; details: Record<string, never> }>();
     const { tool } = testTool(
       vi.fn(async () => {
         sourceStarted.resolve();

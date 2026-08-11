@@ -40,6 +40,7 @@ import { loadSessionEntryReadOnly, resolveGatewaySessionStoreTarget } from "../s
 import { resolveSessionPatchModelSelection } from "../sessions-patch.js";
 import {
   assertActiveAgentRuntimeAuthority,
+  ensureActiveAgentRuntimeAuthority,
   hasActiveAgentRuntimeAuthority,
 } from "./agent-runtime-authority.js";
 import { chatHandlers } from "./chat.js";
@@ -52,30 +53,10 @@ import {
 } from "./session-create-initial-turn.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { sessionLog } from "./sessions-shared.js";
-import type {
-  GatewayClient,
-  GatewayRequestContext,
-  GatewayRequestHandlers,
-  RespondFn,
-} from "./types.js";
+import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
 
-function ensureActiveAgentRuntimeAuthority(params: {
-  client: GatewayClient | null;
-  context: GatewayRequestContext;
-  respond: RespondFn;
-}): boolean {
-  if (hasActiveAgentRuntimeAuthority(params.client, params.context)) {
-    return true;
-  }
-  params.respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, "agent runtime authority is no longer active"),
-  );
-  return false;
-}
 export const sessionCreateHandlers: GatewayRequestHandlers = {
   "sessions.create": async ({ req, params, respond, context, client, isWebchatConnect }) => {
     if (!assertValidParams(params, validateSessionsCreateParams, "sessions.create", respond)) {

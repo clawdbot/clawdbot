@@ -3,6 +3,7 @@ import {
   WORKER_INFERENCE_MAX_CONTEXT_MESSAGES,
   WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
 import {
   isDefaultAgentRuntimeId,
   normalizeOptionalAgentRuntimeId,
@@ -37,6 +38,7 @@ import {
   mintAgentRuntimeIdentityToken,
   type AgentRuntimeIdentityTokenParams,
 } from "../agent-runtime-identity-token.js";
+import type { WorkerSessionTurnClaim } from "./placement-record.js";
 
 type WorkerInitialMessagePlan =
   | { kind: "complete"; messages: WorkerTranscriptMessage[] }
@@ -44,6 +46,37 @@ type WorkerInitialMessagePlan =
       kind: "provider-replay-unavailable";
       details: WorkerProviderReplayUnavailable | WorkerReplayMessageWindowUnavailable;
     };
+
+export function buildWorkerAgentRuntimeIdentity(params: {
+  admittedRunContext: AdmittedRunContext;
+  agentId: string;
+  sessionKey: string;
+  turn: Pick<
+    SessionPlacementTurnParams,
+    | "agentAccountId"
+    | "currentChannelId"
+    | "currentMessagingTarget"
+    | "currentThreadTs"
+    | "messageChannel"
+    | "messageProvider"
+  >;
+  turnClaim: WorkerSessionTurnClaim;
+}): AgentRuntimeIdentityTokenParams {
+  const { turn } = params;
+  // Worker-local process keys isolate ephemeral state only. The signed caller
+  // identity retains the host-owned session and route used by approvals.
+  return {
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    operationalRunInstance: params.admittedRunContext.operationalRunInstance,
+    executionIdentityToken: params.admittedRunContext.executionIdentityToken,
+    turnSourceChannel: turn.messageChannel ?? turn.messageProvider,
+    turnSourceTo: turn.currentMessagingTarget ?? turn.currentChannelId,
+    turnSourceAccountId: turn.agentAccountId,
+    turnSourceThreadId: turn.currentThreadTs,
+    workerTurnClaim: params.turnClaim,
+  };
+}
 
 export function emitProviderReplayRejected(
   config: SessionPlacementTurnParams["config"],

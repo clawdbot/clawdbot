@@ -33,6 +33,7 @@ import {
 import {
   assertSupportedTurn,
   assistantText,
+  buildWorkerAgentRuntimeIdentity,
   buildWorkerAgentMeta,
   emitProviderReplayRejected,
   fitLaunchDescriptorWithRuntimeIdentity,
@@ -320,21 +321,14 @@ async function executeWorkerTurn(params: {
     admittedRunContext: turn.admittedRunContext,
     preparedRunAdmission: turn.preparedRunAdmission,
   });
-  // Worker-local process keys isolate ephemeral state only. The signed caller
-  // identity must retain the host-owned session and route used by approvals.
-  const runtimeIdentityParams = {
-    agentId: placement.agentId,
-    sessionKey: placement.sessionKey,
-    operationalRunInstance: admittedRunContext.operationalRunInstance,
-    executionIdentityToken: admittedRunContext.executionIdentityToken,
-    turnSourceChannel: turn.messageChannel ?? turn.messageProvider,
-    turnSourceTo: turn.currentMessagingTarget ?? turn.currentChannelId,
-    turnSourceAccountId: turn.agentAccountId,
-    turnSourceThreadId: turn.currentThreadTs,
-    workerTurnClaim: params.turnClaim,
-  };
   const launchPlan = await fitLaunchDescriptorWithRuntimeIdentity({
-    runtimeIdentity: runtimeIdentityParams,
+    runtimeIdentity: buildWorkerAgentRuntimeIdentity({
+      admittedRunContext,
+      agentId: placement.agentId,
+      sessionKey: placement.sessionKey,
+      turn,
+      turnClaim: params.turnClaim,
+    }),
     messages: initialMessages,
     build: (agentRuntimeIdentityToken, windowedMessages) =>
       parseWorkerLaunchDescriptor({

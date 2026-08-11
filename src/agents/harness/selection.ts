@@ -576,15 +576,15 @@ async function runSelectedAgentHarnessAttempt(
         const preparedParams = selection.builtIn
           ? pluginAttempt.params
           : preparePluginHarnessParams(pluginAttempt.params);
-        const attemptParams =
+        const effectiveAttemptParams =
           hostOpenClawAuthority && preparedParams.pluginHarnessToolPolicyRestricted
             ? { ...preparedParams, pluginHarnessToolPolicyRestricted: false }
             : preparedParams;
         assertPluginHarnessConversationToolPolicySupport(
           harness,
-          attemptParams.pluginHarnessToolPolicyRestricted === true,
+          effectiveAttemptParams.pluginHarnessToolPolicyRestricted === true,
         );
-        return runAgentHarnessLifecycleAttempt(harness, attemptParams);
+        return runAgentHarnessLifecycleAttempt(harness, effectiveAttemptParams);
       }),
     );
   } finally {

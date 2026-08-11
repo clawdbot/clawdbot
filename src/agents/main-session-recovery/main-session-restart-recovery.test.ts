@@ -1402,9 +1402,13 @@ describe("main-session-restart-recovery", () => {
       .mock.calls.map(([request]) => request)
       .filter((request) => request.method === "agent");
     expect(requests).toHaveLength(2);
-    expect(requests[1]?.params).not.toHaveProperty("internalExecutionIdentityRetry");
+    const retryRequest = requests[1];
+    if (!retryRequest) {
+      throw new Error("expected retry request");
+    }
+    expect(retryRequest.params).not.toHaveProperty("internalExecutionIdentityRetry");
     expect(
-      (requests[1]?.params as Record<string, unknown>).internalExecutionIdentityRecoveryAttempt,
+      (retryRequest.params as Record<string, unknown>).internalExecutionIdentityRecoveryAttempt,
     ).toBe(2);
     expect(
       loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.mainRestartRecovery
