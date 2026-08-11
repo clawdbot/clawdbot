@@ -19,15 +19,35 @@ import type {
   EmbeddedAttemptExecutionPhaseInput,
   EmbeddedAttemptExecutionState,
 } from "./attempt-execution-types.js";
+import type { prepareEmbeddedAttemptHistory } from "./attempt-history.js";
 import { runEmbeddedAttemptPromptPhase } from "./attempt-prompt-phase.js";
 import { completeEmbeddedAttemptResult } from "./attempt-result.js";
 import { finalizeEmbeddedAttemptStreamPhase } from "./attempt-stream-finalize.js";
-import type { prepareEmbeddedAttemptStreamRuntime } from "./attempt-stream-runtime-prepare.js";
+import type { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
+import type { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
+import type { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 /** Runs prompt dispatch, stream settlement, cleanup, and result projection. */
 
-type PreparedStreamRuntime = Awaited<ReturnType<typeof prepareEmbeddedAttemptStreamRuntime>>;
+type PreparedStreamRuntime = {
+  abortable: <T>(promise: Promise<T>) => Promise<T>;
+  cache: {
+    observabilityEnabled: boolean;
+    promptTools: ReturnType<typeof installEmbeddedAttemptStreamGuards>["promptCacheTools"];
+  };
+  history: Awaited<ReturnType<typeof prepareEmbeddedAttemptHistory>>;
+  isProbeSession: boolean;
+  onBlockReplyFlush: Parameters<typeof prepareEmbeddedAttemptStream>[0]["onBlockReplyFlush"];
+  promptActiveSession: (
+    prompt: string,
+    options?: Parameters<
+      Parameters<typeof prepareEmbeddedAttemptStream>[0]["activeSession"]["prompt"]
+    >[1],
+  ) => Promise<void>;
+  stream: ReturnType<typeof prepareEmbeddedAttemptStream>;
+  timeout: ReturnType<typeof prepareEmbeddedAttemptTimeout>;
+};
 
 type StreamCleanupInput = {
   attempt: EmbeddedRunAttemptParams;
