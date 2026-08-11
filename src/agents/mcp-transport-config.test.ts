@@ -11,10 +11,11 @@ describe("resolveMcpTransportConfig", () => {
     vi.mocked(logWarn).mockClear();
   });
 
-  it("resolves stdio config with connection timeout", () => {
+  it("resolves stdio config when the URL is blank", () => {
     const resolved = resolveMcpTransportConfig("probe", {
       command: "node",
       args: ["./server.mjs"],
+      url: " \t ",
       connectionTimeoutMs: 12_345,
     });
 
@@ -30,6 +31,19 @@ describe("resolveMcpTransportConfig", () => {
       requestTimeoutMs: 60_000,
       supportsParallelToolCalls: false,
     });
+  });
+
+  it("rejects configs that mix command and URL transports", () => {
+    const resolved = resolveMcpTransportConfig("probe", {
+      command: "node",
+      url: "https://mcp.example.com/http",
+      transport: "streamable-http",
+    });
+
+    expect(resolved).toBeNull();
+    expect(logWarn).toHaveBeenCalledWith(
+      'bundle-mcp: skipped server "probe" because "command" and "url" cannot both be non-empty; remove "url" for stdio or remove "command" for an HTTP transport.',
+    );
   });
 
   it("resolves canonical timeouts and parallel capability", () => {

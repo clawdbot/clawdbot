@@ -300,6 +300,91 @@ describe("legacy MCP server config migrate", () => {
     ]);
   });
 
+  it("preserves historical stdio behavior for mixed root and node-host transports", () => {
+    const raw = {
+      mcp: {
+        servers: {
+          mixed: {
+            command: "node",
+            args: ["server.mjs"],
+            env: { MCP_MODE: "local" },
+            cwd: "/srv/mcp",
+            url: "https://mcp.example.com/mcp",
+            transport: "streamable-http",
+            headers: { Authorization: "Bearer test" },
+            auth: "oauth",
+            oauth: { scope: "docs.read" },
+            sslVerify: false,
+            clientCert: "cert.pem",
+            clientKey: "key.pem",
+            requestTimeoutMs: 12_000,
+            toolFilter: { include: ["search"] },
+          },
+          explicitStdio: {
+            command: "stdio-mcp",
+            url: "https://stdio.example.com/mcp",
+            transport: "stdio",
+          },
+        },
+      },
+      nodeHost: {
+        mcp: {
+          servers: {
+            mixed: {
+              command: "node-host-mcp",
+              url: "https://node.example.com/mcp",
+              type: "streamable-http",
+              headers: { "X-Test": "value" },
+              connectionTimeoutMs: 3_000,
+            },
+          },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "mcp.servers",
+          message: expect.stringContaining('both non-empty "command" and "url"'),
+        }),
+        expect.objectContaining({
+          path: "nodeHost.mcp.servers",
+          message: expect.stringContaining('both non-empty "command" and "url"'),
+        }),
+        expect.objectContaining({
+          path: "nodeHost.mcp.servers",
+          message: expect.stringContaining("CLI-native type aliases"),
+        }),
+      ]),
+    );
+
+    const res = migrateLegacyConfigForTest(raw);
+    expect(res.config?.mcp?.servers?.mixed).toEqual({
+      command: "node",
+      args: ["server.mjs"],
+      env: { MCP_MODE: "local" },
+      cwd: "/srv/mcp",
+      requestTimeoutMs: 12_000,
+      toolFilter: { include: ["search"] },
+    });
+    expect(res.config?.mcp?.servers?.explicitStdio).toEqual({
+      command: "stdio-mcp",
+      transport: "stdio",
+    });
+    expect(res.config?.nodeHost?.mcp?.servers?.mixed).toEqual({
+      command: "node-host-mcp",
+      connectionTimeoutMs: 3_000,
+    });
+    expect(res.changes).toEqual([
+      'Moved nodeHost.mcp.servers.mixed.type "streamable-http" → transport "streamable-http".',
+      "Preserved historical stdio behavior for nodeHost.mcp.servers.mixed by removing HTTP-only fields: url, transport, headers.",
+      "Preserved historical stdio behavior for mcp.servers.mixed by removing HTTP-only fields: url, transport, headers, auth, oauth, sslVerify, clientCert, clientKey.",
+      "Preserved historical stdio behavior for mcp.servers.explicitStdio by removing HTTP-only fields: url.",
+    ]);
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+  });
+
   it("moves MCP workingDirectory aliases to cwd with canonical values winning", () => {
     const raw = {
       mcp: {
