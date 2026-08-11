@@ -803,7 +803,7 @@
     <string name="native_788011833a5a0f22" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Notifications"</string>
     <string name="native_78af93f13a7e5044" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Apply, reject, and quarantine require operator.admin scope. Reconnect with shared gateway auth or approve an operator.admin device scope upgrade to enable lifecycle actions."</string>
     <string name="native_78f25f393aa9bcbf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"sticker upload"</string>
-    <string name="native_7900450859bdb8c2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Lobstering"</string>
+    <string name="native_7900450859bdb8c2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Clawing"</string>
     <string name="native_790d78931c21b895" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Messages to recover"</string>
     <string name="native_792175fb265c32bc" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"openclaw devices approve %1$s"</string>
     <string name="native_79a68a0d42388125" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Readable gateway log detail."</string>

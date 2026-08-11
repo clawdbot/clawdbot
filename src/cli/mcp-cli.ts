@@ -673,7 +673,7 @@ export function registerMcpCli(program: Command) {
 
   mcp
     .command("show")
-    .description("Show one OpenClaw-managed MCP server or the full mcp.servers config")
+    .description("Show one OpenCrustacean-managed MCP server or the full mcp.servers config")
     .argument("[name]", "MCP server name")
     .option("--json", "Print JSON")
     .action(async (name: string | undefined, opts: { json?: boolean }) => {

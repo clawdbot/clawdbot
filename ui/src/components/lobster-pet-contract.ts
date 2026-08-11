@@ -5,7 +5,7 @@ export type LobsterRunOutcome = "ok" | "error" | "aborted";
 export type LobsterPetPersonalityId = "sleepy" | "zoomy" | "friendly" | "showoff";
 
 export type LobsterPetPaletteId =
-  | "crimson"
+  | "emerald"
   | "blue"
   | "gold"
   | "lumen"

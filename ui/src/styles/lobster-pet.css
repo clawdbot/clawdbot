@@ -690,7 +690,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
 }
 
 .lob-tail {
-  fill: color-mix(in srgb, var(--lob-shell, #ff4f40) 78%, #10181f);
+  fill: color-mix(in srgb, var(--lob-shell, #35a55b) 78%, #10181f);
 }
 
 /* ---- Idle blinking: crossfade open pupils and closed-lid curves ---- */
@@ -959,7 +959,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   position: absolute;
   left: 58%;
   bottom: 72%;
-  color: var(--lob-claw, #ff775f);
+  color: var(--lob-claw, #57c785);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: calc(4.5px * var(--lob-scale, 2));
   font-weight: 700;
@@ -994,7 +994,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   bottom: 55%;
   width: calc(2px * var(--lob-scale, 2));
   height: calc(2px * var(--lob-scale, 2));
-  border: 1px solid var(--lob-claw, #ff775f);
+  border: 1px solid var(--lob-claw, #57c785);
   border-radius: 50%;
   opacity: 0;
   pointer-events: none;

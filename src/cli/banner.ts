@@ -57,8 +57,8 @@ export function formatCliBannerLine(version: string, options: BannerOptions = {}
     emojiOptions,
   );
   const rich = options.richTty ?? isRich();
-  const title = decorativePrefix("🦞", "OpenClaw", emojiOptions);
-  const prefix = decorativeEmoji("🦞", emojiOptions);
+  const title = decorativePrefix("🦀", "OpenCrustacean", emojiOptions);
+  const prefix = decorativeEmoji("🦀", emojiOptions);
   const indent = prefix ? `${prefix} ` : "";
   const columns = options.columns ?? process.stdout.columns ?? 120;
   const plainBaseLine = `${title} ${version} (${commitLabel})`;

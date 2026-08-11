@@ -1,8 +1,8 @@
 <svg viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="lobster-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#ff4d4d"/>
-      <stop offset="100%" stop-color="#991b1b"/>
+      <stop offset="0%" stop-color="#35a55b"/>
+      <stop offset="100%" stop-color="#1f6b38"/>
     </linearGradient>
   </defs>
   <!-- SMIL, not CSS: Chromium/Safari only run declarative SMIL inside <img>-loaded
@@ -29,13 +29,13 @@
         calcMode="spline" keySplines="0.42 0 0.58 1; 0.42 0 0.58 1; 0.42 0 0.58 1; 0.42 0 0.58 1"/>
     </path>
     <!-- Antenna -->
-    <path d="M45 15 Q35 5 30 8" stroke="#ff4d4d" stroke-width="3" stroke-linecap="round">
+    <path d="M45 15 Q35 5 30 8" stroke="#35a55b" stroke-width="3" stroke-linecap="round">
       <animateTransform attributeName="transform" type="rotate"
         values="0 37.5 11; -3 37.5 11; 3 37.5 11; 0 37.5 11" keyTimes="0; 0.25; 0.75; 1"
         dur="2s" repeatCount="indefinite"
         calcMode="spline" keySplines="0.42 0 0.58 1; 0.42 0 0.58 1; 0.42 0 0.58 1"/>
     </path>
-    <path d="M75 15 Q85 5 90 8" stroke="#ff4d4d" stroke-width="3" stroke-linecap="round">
+    <path d="M75 15 Q85 5 90 8" stroke="#35a55b" stroke-width="3" stroke-linecap="round">
       <animateTransform attributeName="transform" type="rotate"
         values="0 82.5 11; -3 82.5 11; 3 82.5 11; 0 82.5 11" keyTimes="0; 0.25; 0.75; 1"
         dur="2s" repeatCount="indefinite"

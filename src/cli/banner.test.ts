@@ -41,7 +41,7 @@ describe("formatCliBannerLine", () => {
       mode: "off",
     });
 
-    expect(line).toBe("🦞 OpenClaw 2026.3.7 (abc1234)");
+    expect(line).toBe("🦀 OpenCrustacean 2026.3.7 (abc1234)");
   });
 
   it("uses the default tagline when explicitly requested", () => {
@@ -54,7 +54,7 @@ describe("formatCliBannerLine", () => {
       mode: "default",
     });
 
-    expect(line).toBe("🦞 OpenClaw 2026.3.7 (abc1234) — All your chats, one OpenClaw.");
+    expect(line).toBe("🦀 OpenCrustacean 2026.3.7 (abc1234) — All your chats, one OpenCrustacean.");
   });
 
   it("drops decorative emoji for generic Linux terminals", () => {
@@ -67,7 +67,7 @@ describe("formatCliBannerLine", () => {
       mode: "off",
     });
 
-    expect(line).toBe("OpenClaw 2026.3.7 (abc1234)");
+    expect(line).toBe("OpenCrustacean 2026.3.7 (abc1234)");
   });
 });
 
@@ -104,11 +104,11 @@ describe("emitCliBanner", () => {
       richTty: false,
     });
 
-    expect(writeSpy).toHaveBeenCalledWith("\n🦞 OpenClaw 2026.3.7 (abc1234)\n\n");
+    expect(writeSpy).toHaveBeenCalledWith("\n🦀 OpenCrustacean 2026.3.7 (abc1234)\n\n");
     expect(hasEmittedCliBanner()).toBe(true);
   });
 
-  it("adds the ASCII lobster on lobster days for rich random-mode terminals", async () => {
+  it("adds the ASCII crab on lobster days for rich random-mode terminals", async () => {
     const { emitCliBanner } = await importFreshBannerModule();
     setStdoutIsTty(true);
     const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -125,7 +125,7 @@ describe("emitCliBanner", () => {
     });
 
     const written = writeSpy.mock.calls.map(([chunk]) => String(chunk)).join("");
-    expect(written).toContain("( o.o )");
+    expect(written).toContain("( v.v )");
   });
 
   it("keeps lobster day out of plain terminals and pinned tagline modes", async () => {

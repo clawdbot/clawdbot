@@ -1,4 +1,4 @@
-// The Lobsterdex: a quiet localStorage log of every lobster palette that has
+// The Crabdex: a quiet localStorage log of every crab palette that has
 // ever visited this browser, remembering who came first and when. Also home
 // to the familiarity counters the pet uses to warm up to (or grow wary of)
 // its human. Purely client-side; string-keyed so this stays a leaf module
@@ -27,7 +27,12 @@ function readDex(): Map<string, LobsterdexEntry> {
       // v1 stored a bare palette-id array; carry ids over without memories.
       for (const value of parsed) {
         if (typeof value === "string" && value) {
-          entries.set(value, { firstSeenAt: null, name: null, shinySeenAt: null });
+          // v1 stored the legacy crimson id; the emerald shell replaced it.
+          entries.set(value === "crimson" ? "emerald" : value, {
+            firstSeenAt: null,
+            name: null,
+            shinySeenAt: null,
+          });
         }
       }
       return entries;
@@ -37,7 +42,8 @@ function readDex(): Map<string, LobsterdexEntry> {
         if (!id) {
           continue;
         }
-        entries.set(id, {
+        const migratedId = id === "crimson" ? "emerald" : id;
+        entries.set(migratedId, {
           firstSeenAt: typeof value?.firstSeenAt === "number" ? value.firstSeenAt : null,
           name: typeof value?.name === "string" && value.name ? value.name : null,
           shinySeenAt: typeof value?.shinySeenAt === "number" ? value.shinySeenAt : null,

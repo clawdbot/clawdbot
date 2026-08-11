@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { pickTagline } from "./tagline.js";
 
-const EXPECTED_DEFAULT_TAGLINE = "All your chats, one OpenClaw.";
+const EXPECTED_DEFAULT_TAGLINE = "All your chats, one OpenCrustacean.";
 
 describe("pickTagline", () => {
   it("returns empty string when mode is off", () => {

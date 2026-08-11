@@ -91,8 +91,8 @@ export function lobsterRandomName(seed: number): string {
 // Like pet names and bottle fortunes, Lobsterdex lore is an English-only
 // easter-egg channel rather than product UI copy.
 export const LOBSTER_PALETTE_LORE: Record<LobsterPetPaletteId, LobsterPaletteLore> = {
-  crimson: {
-    flavor: "The classic red, first in every tide pool.",
+  emerald: {
+    flavor: "The classic green, first in every tide pool.",
     hint: "Where every story starts.",
   },
   blue: { flavor: "1 in 2 million, and knows it.", hint: "One in two million." },
