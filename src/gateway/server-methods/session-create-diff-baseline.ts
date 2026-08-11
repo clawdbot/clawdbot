@@ -7,7 +7,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { sessionLog } from "./sessions-shared.js";
 
-export async function prepareSessionDiffBaseline(params: {
+async function prepareSessionDiffBaseline(params: {
   agentId: string;
   cfg: OpenClawConfig;
   entry: SessionEntry;

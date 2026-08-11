@@ -21,7 +21,7 @@ export function assertActiveAgentRuntimeAuthority(
   }
 }
 
-export function ensureActiveAgentRuntimeAuthority(params: {
+function ensureActiveAgentRuntimeAuthority(params: {
   client: GatewayClient | null;
   context: GatewayRequestContext;
   respond: RespondFn;
