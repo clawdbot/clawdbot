@@ -28,6 +28,7 @@ import {
   isHeartbeatEnabledForAgent,
   resolveHeartbeatIntervalMs,
   resolveHeartbeatPrompt,
+  resolveHeartbeatSummaryForAgent,
   runHeartbeatOnce,
 } from "./heartbeat-runner.js";
 import { seedHeartbeatScratchForTest, seedSessionStore } from "./heartbeat-runner.test-utils.js";
@@ -37,7 +38,7 @@ import {
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
 import { telegramMessagingForTest } from "./outbound/targets.test-helpers.js";
-import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
+import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
 
 let previousRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
 let testRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
@@ -351,6 +352,10 @@ afterAll(async () => {
 });
 
 describe("resolveHeartbeatIntervalMs", () => {
+  it("reports last as the default delivery target", () => {
+    expect(resolveHeartbeatSummaryForAgent({}).target).toBe("last");
+  });
+
   it("returns default when unset", () => {
     expect(resolveHeartbeatIntervalMs({})).toBe(30 * 60_000);
   });
@@ -476,14 +481,26 @@ describe("resolveHeartbeatDeliveryTarget", () => {
         },
       },
       {
-        name: "target defaults to none when unset",
+        name: "target defaults to last when unset",
         cfg: {},
         entry: entryWithDelivery("whatsapp", "120363401234567890@g.us"),
         expected: {
-          channel: "none",
-          reason: "target-none",
+          channel: "whatsapp",
+          to: "120363401234567890@g.us",
           accountId: undefined,
           lastChannel: "whatsapp",
+          lastAccountId: undefined,
+        },
+      },
+      {
+        name: "unset target without a route",
+        cfg: {},
+        entry: baseEntry,
+        expected: {
+          channel: "none",
+          reason: "no-target",
+          accountId: undefined,
+          lastChannel: undefined,
           lastAccountId: undefined,
         },
       },
@@ -510,7 +527,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
         entry: entryWithDelivery("webchat", "web"),
         expected: {
           channel: "none",
-          reason: "target-none",
+          reason: "no-target",
           accountId: undefined,
           lastChannel: undefined,
           lastAccountId: undefined,
@@ -815,6 +832,34 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("skips before the agent run and preserves pending events when no route exists", async () => {
+    const tmpDir = await createCaseDir("hb-no-route");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace: tmpDir, heartbeat: { every: "5m" } } },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await seedSessionStore(storePath, sessionKey, {
+      sessionId: "sid-no-route",
+      updatedAt: Date.now(),
+    });
+    enqueueSystemEvent("Cron: route this later", {
+      sessionKey,
+      contextKey: "cron:route-later",
+    });
+    const replySpy = vi.fn().mockResolvedValue({ text: "should not run" });
+
+    const result = await runHeartbeatOnce({
+      cfg,
+      deps: createHeartbeatDeps(vi.fn(), { getReplyFromConfig: replySpy }),
+    });
+
+    expect(result).toEqual({ status: "skipped", reason: "no-route" });
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(peekSystemEvents(sessionKey)).toEqual(["Cron: route this later"]);
+  });
+
   it("keeps active-hours protection for cron-carried heartbeat tasks", async () => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -849,7 +894,7 @@ describe("runHeartbeatOnce", () => {
         agents: {
           defaults: {
             workspace: tmpDir,
-            heartbeat: { every: "5m", target: "whatsapp" },
+            heartbeat: { every: "5m" },
           },
         },
         channels: { whatsapp: { allowFrom: ["*"] } },

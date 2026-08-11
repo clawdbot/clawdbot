@@ -112,6 +112,9 @@ export function buildStatusHeartbeatValue(params: { summary: Pick<SummaryLike, "
       if (!agent.enabled || !agent.everyMs) {
         return `disabled (${agent.agentId})`;
       }
+      if (agent.waitingForRoute) {
+        return `${agent.every} (${agent.agentId}; waiting for delivery route — message your bot once, or set heartbeat.target)`;
+      }
       return `${agent.every} (${agent.agentId})`;
     })
     .filter(Boolean);

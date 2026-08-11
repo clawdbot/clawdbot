@@ -36,6 +36,7 @@ import {
   summarizeActionableTaskAuditFindings,
   summarizeRetainedLostTaskAuditFindings,
 } from "../tasks/task-registry.audit.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./types.js";
 
@@ -324,14 +325,35 @@ export async function getStatusSummary(
         resolveLinkChannelContext(cfg, { sourceConfig: options.sourceConfig }),
       )
     : null;
+  const candidateCache = new Map<string, SessionCandidate[]>();
+  const loadSessionCandidates = (storePath: string, agentId?: string) => {
+    const cacheKey = `${storePath}\0${agentId ?? ""}`;
+    const cached = candidateCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+    const candidates = listSessionCandidates(storePath, agentId);
+    candidateCache.set(cacheKey, candidates);
+    return candidates;
+  };
   const agentList = listGatewayAgentsBasic(cfg);
   const heartbeatAgents: HeartbeatStatus[] = agentList.agents.map((agent) => {
     const summary = resolveHeartbeatSummaryForAgent(cfg, agent.id);
+    const mainSessionKey =
+      agentList.scope === "global" ? "global" : `agent:${agent.id}:${agentList.mainKey}`;
+    const route = deliveryContextFromSession(
+      loadSessionCandidates(
+        resolveStorePath(cfg.session?.store, { agentId: agent.id }),
+        agent.id,
+      ).find((candidate) => candidate.key === mainSessionKey)?.entry,
+    );
     return {
       agentId: agent.id,
       enabled: summary.enabled,
       every: summary.every,
       everyMs: summary.everyMs,
+      waitingForRoute:
+        summary.enabled && summary.target === "last" && (!route?.channel || !route.to),
     } satisfies HeartbeatStatus;
   });
   const channelSummary = needsChannelPlugins
@@ -379,17 +401,6 @@ export async function getStatusSummary(
       allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
-  const candidateCache = new Map<string, SessionCandidate[]>();
-  const loadSessionCandidates = (storePath: string, agentId?: string) => {
-    const cacheKey = `${storePath}\0${agentId ?? ""}`;
-    const cached = candidateCache.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-    const candidates = listSessionCandidates(storePath, agentId);
-    candidateCache.set(cacheKey, candidates);
-    return candidates;
-  };
   const buildSessionRows = async (
     candidates: SessionCandidate[],
     opts: { agentIdOverride?: string } = {},
@@ -558,7 +569,6 @@ export async function getStatusSummary(
     selectRecentSessionCandidates(allSessions, RECENT_SESSION_LIMIT),
   );
   const totalSessions = allSessions.length;
-
   const summary: StatusSummary = {
     runtimeVersion: resolveRuntimeServiceVersion(process.env),
     linkChannel: linkContext

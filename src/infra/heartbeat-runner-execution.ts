@@ -410,16 +410,24 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     // to stale channels/threads because that base-session event context remains queued.
     turnSource: useIsolatedSession ? undefined : preflight.turnSourceDeliveryContext,
   });
+  if (delivery.channel === "none" && delivery.reason === "no-target") {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: "no-route",
+      durationMs: Date.now() - startedAt,
+    });
+    return { kind: "skipped", reason: "no-route" } as const;
+  }
   const heartbeatAccountId = heartbeat?.accountId?.trim();
   if (delivery.reason === "unknown-account") {
     log.warn("heartbeat: unknown accountId", {
       accountId: delivery.accountId ?? heartbeatAccountId ?? null,
-      target: heartbeat?.target ?? "none",
+      target: heartbeat?.target ?? "last",
     });
   } else if (heartbeatAccountId) {
     log.info("heartbeat: using explicit accountId", {
       accountId: delivery.accountId ?? heartbeatAccountId,
-      target: heartbeat?.target ?? "none",
+      target: heartbeat?.target ?? "last",
       channel: delivery.channel,
     });
   }
