@@ -97,6 +97,58 @@ describe("historical transcript anchor isolation", () => {
     expect(state.chatMessages).toEqual([historical]);
   });
 
+  it("retires a matching terminal run without replacing the anchored transcript", () => {
+    const current = message("user", "current tail", "current-tail", 9);
+    const historical = message("user", "historical hit", "historical-hit", 1);
+    const final = message("assistant", "new live reply", "live-final", 10);
+    const request = vi.fn();
+    const state = createHistoryState(request) as ChatPageHost;
+    state.requestUpdate = vi.fn();
+    state.chatMessages = [historical];
+    state.chatHistoryAnchorActive = true;
+    state.chatHistoryAnchorPending = {
+      sessionId: "session-history",
+      messageId: "historical-hit",
+      requestKey: "pending-anchor",
+    };
+    state.chatRunId = "live-run";
+    state.chatStream = "streaming reply";
+    state.chatStreamStartedAt = 100;
+    cacheChatSessionSnapshot(
+      state.chatMessagesBySession ?? new Map(),
+      state,
+      { sessionKey: state.sessionKey },
+      {
+        messages: [current],
+        pagination: { hasMore: false, completeSnapshot: true },
+        sessionId: "session-current",
+      },
+    );
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId: "live-run",
+        state: "final",
+        message: final,
+      },
+    });
+
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
+    expect(state.chatMessages).toEqual([historical]);
+    expect(
+      readChatMessagesFromCache(state.chatMessagesBySession ?? new Map(), state, {
+        sessionKey: state.sessionKey,
+      }),
+    ).toEqual([current, final]);
+    expect(state.chatHistoryAnchorPending?.deferredRefresh?.promise).toEqual(expect.any(Promise));
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("replays a terminal refresh only after the matching anchor is visibly complete", async () => {
     const current = message("user", "current tail", "current-tail", 9);
     const historical = message("user", "historical hit", "historical-hit", 1);
