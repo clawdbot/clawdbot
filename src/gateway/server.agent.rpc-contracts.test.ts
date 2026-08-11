@@ -15,6 +15,14 @@ type AgentResponse = {
   payload?: {
     runId?: string;
     status?: string;
+    result?: {
+      payloads?: Array<{ text?: string }>;
+      deliveryStatus?: {
+        requested?: boolean;
+        attempted?: boolean;
+        reason?: string;
+      };
+    };
   };
 };
 
@@ -55,10 +63,23 @@ function sendAgentRequest(params: {
 }
 
 describe("gateway agent RPC contracts", () => {
-  test("downgrades ambiguous delivery and replays one ordered run across reconnect", async () => {
+  test("preserves requested delivery status across ordered final response and replay", async () => {
     const runCompletion = createDeferred();
     vi.mocked(agentCommand).mockImplementationOnce(async () => {
       await runCompletion.promise;
+      return {
+        payloads: [{ text: "assistant reply" }],
+        meta: { durationMs: 1 },
+        deliverySucceeded: false,
+        deliveryStatus: {
+          requested: true,
+          attempted: false,
+          status: "failed",
+          succeeded: false,
+          error: true,
+          reason: "channel_resolved_to_internal",
+        },
+      };
     });
 
     const idempotencyKey = "gateway-agent-rpc-contract";
@@ -99,7 +120,7 @@ describe("gateway agent RPC contracts", () => {
       runId: idempotencyKey,
       channel: "webchat",
       messageChannel: "webchat",
-      deliver: false,
+      deliver: true,
       bestEffortDeliver: true,
     });
 
@@ -124,6 +145,14 @@ describe("gateway agent RPC contracts", () => {
       payload: {
         runId: idempotencyKey,
         status: "ok",
+        result: {
+          payloads: [{ text: "assistant reply" }],
+          deliveryStatus: {
+            requested: true,
+            attempted: false,
+            reason: "channel_resolved_to_internal",
+          },
+        },
       },
     });
 
@@ -148,6 +177,11 @@ describe("gateway agent RPC contracts", () => {
       const replay = await replayPromise;
       expect(replay.payload).toEqual(terminal.payload);
       expect(replay.payload?.status).toBe("ok");
+      expect(replay.payload?.result?.deliveryStatus).toMatchObject({
+        requested: true,
+        attempted: false,
+        reason: "channel_resolved_to_internal",
+      });
       expect(agentCommand).toHaveBeenCalledTimes(1);
     } finally {
       second.ws.close();
