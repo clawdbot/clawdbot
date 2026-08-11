@@ -1,6 +1,6 @@
 // Package-owned transcript transform used by providers and the inert transport host.
 import { resolveModelBoundThinkingReplayMode } from "./providers/anthropic-model-contract.js";
-import { hasMediaPayload } from "./providers/tool-result-text.js";
+import { hasMediaPayload, isImageWithMediaPayload } from "./providers/tool-result-text.js";
 import type {
   Api,
   AssistantMessage,
@@ -42,6 +42,23 @@ export function projectUserMediaForTransport(
   return result;
 }
 
+function projectToolResultImagesForTransport(content: ToolResultMessage["content"]) {
+  const result: ToolResultMessage["content"] = [];
+  for (const block of content) {
+    if (block.type !== "image") {
+      result.push(block);
+      continue;
+    }
+    const previous = result.at(-1);
+    const repeated =
+      previous?.type === "text" && previous.text === NON_VISION_TOOL_IMAGE_PLACEHOLDER;
+    if (isImageWithMediaPayload(block) && !repeated) {
+      result.push({ type: "text", text: NON_VISION_TOOL_IMAGE_PLACEHOLDER });
+    }
+  }
+  return result;
+}
+
 function downgradeUnsupportedMedia<TApi extends Api>(
   messages: Message[],
   model: Model<TApi>,
@@ -55,11 +72,7 @@ function downgradeUnsupportedMedia<TApi extends Api>(
     if (msg.role === "toolResult" && !supportsImages) {
       return {
         ...msg,
-        content: projectUserMediaForTransport(
-          msg.content,
-          false,
-          NON_VISION_TOOL_IMAGE_PLACEHOLDER,
-        ),
+        content: projectToolResultImagesForTransport(msg.content),
       };
     }
     return msg;
@@ -85,7 +98,6 @@ export function transformMessages<TApi extends Api>(
 
   // First pass: transform messages (unsupported media downgrade, thinking blocks, tool call ID normalization)
   const transformed = mediaAwareMessages.map((msg) => {
-    // User messages pass through unchanged
     if (msg.role === "user") {
       return msg;
     }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Message, Model } from "../types.js";
+import type { Message, Model, ToolResultMessage } from "../types.js";
 import { transformMessages } from "./transform-messages.js";
 
 const model: Model<"openai-completions"> = {
@@ -87,5 +87,40 @@ describe("transformMessages", () => {
       { type: "text", text: "after" },
       { type: "image", data: "image-two", mimeType: "image/jpeg" },
     ]);
+  });
+
+  it("preserves structured tool blocks while projecting only real images", () => {
+    const resource = { type: "resource", uri: "file:///tmp/result.json" };
+    const metadata = { type: "metadata", value: { count: 2 } };
+    const content = [
+      resource,
+      { type: "image", data: "image-one", mimeType: "image/png" },
+      { type: "image", data: "", mimeType: "image/png" },
+      { type: "image", data: "image-two", mimeType: "image/jpeg" },
+      metadata,
+      { type: "image", data: "image-three", mimeType: "image/webp" },
+    ] as unknown as ToolResultMessage["content"];
+    const messages: Message[] = [
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "lookup",
+        content,
+        isError: false,
+        timestamp: 1,
+      },
+    ];
+
+    const transformed = transformMessages(messages, model);
+    const projected = (transformed[0] as ToolResultMessage).content;
+
+    expect(projected).toEqual([
+      resource,
+      { type: "text", text: "(tool image omitted: model does not support images)" },
+      metadata,
+      { type: "text", text: "(tool image omitted: model does not support images)" },
+    ]);
+    expect(projected[0]).toBe(resource);
+    expect(projected[2]).toBe(metadata);
   });
 });
