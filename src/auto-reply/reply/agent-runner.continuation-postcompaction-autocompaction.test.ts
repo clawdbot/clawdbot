@@ -117,7 +117,7 @@ vi.mock("../../acp/control-plane/manager.js", () => ({
   }),
 }));
 
-vi.mock("../../agents/subagent-registry.js", () => ({
+vi.mock("../../agents/subagents/registry/subagent-registry.js", () => ({
   getLatestSubagentRunByChildSessionKey: () => null,
   getSwarmRunByLaunchReplayKey: () => undefined,
   initSubagentRegistry: () => {},

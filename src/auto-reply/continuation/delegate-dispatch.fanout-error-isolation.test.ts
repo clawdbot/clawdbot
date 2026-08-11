@@ -33,7 +33,7 @@ vi.mock("../../agents/subagents/spawn/subagent-spawn.js", () => ({
   spawnSubagentDirect: (...args: unknown[]) => spawnSubagentDirectMock(...args),
 }));
 
-vi.mock("../../agents/subagent-registry-read.js", () => ({
+vi.mock("../../agents/subagents/registry/subagent-registry-read.js", () => ({
   getSubagentRunByChildSessionKey: () => null,
   hasLiveContinuationDelegateChildRun: () => false,
   isSubagentRunLive: () => false,
