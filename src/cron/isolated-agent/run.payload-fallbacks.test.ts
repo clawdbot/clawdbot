@@ -8,6 +8,7 @@ import {
   loadRunCronIsolatedAgentTurn,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock,
   mockRunCronFallbackPassthrough,
+  patchSessionEntryMock,
   resolveAgentConfigMock,
   resolveConfiguredModelRefMock,
   resolveCliRuntimeExecutionProviderMock,
@@ -281,6 +282,48 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
     expect(result.error).toContain("authority captured for the codex runtime");
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(runCliAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("does not persist an authority-incompatible fallback on the run continuation", async () => {
+    resolveEffectiveAgentRuntimeMock.mockImplementation(({ provider }: { provider: string }) =>
+      provider === "openai" ? "codex" : "openclaw",
+    );
+    runEmbeddedAgentMock.mockRejectedValueOnce(new Error("primary failed"));
+    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
+      await expect(run(provider, model)).rejects.toThrow("primary failed");
+      return await run("anthropic", "claude-sonnet-4-6");
+    });
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        job: makeIsolatedAgentJobFixture({
+          runtimeAuthority: {
+            version: 1,
+            runtimeId: "codex",
+            namespace: "codex.apps",
+            payload: { version: 1 },
+          },
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("authority captured for the codex runtime");
+    const persistedRunRows = await Promise.all(
+      patchSessionEntryMock.mock.calls.flatMap((call, index) => {
+        const scope = call[0] as { sessionKey?: string };
+        const result = patchSessionEntryMock.mock.results[index];
+        return scope.sessionKey?.includes(":run:") && result?.type === "return"
+          ? [result.value]
+          : [];
+      }),
+    );
+    expect(persistedRunRows).not.toHaveLength(0);
+    expect(persistedRunRows).toEqual(
+      persistedRunRows.map((row) =>
+        expect.objectContaining({ modelProvider: "openai", model: "gpt-5.4" }),
+      ),
+    );
   });
 
   it("forwards subagent fallbacks into the embedded runner for internal failover decisions", async () => {

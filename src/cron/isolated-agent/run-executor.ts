@@ -441,11 +441,6 @@ function createCronPromptExecutor(params: {
         if (params.abortSignal?.aborted) {
           throw new Error(params.abortReason());
         }
-        // The candidate that admits detached work owns its continuation even
-        // if the provider throws before returning result metadata.
-        params.cronSession.sessionEntry.modelProvider = providerOverride;
-        params.cronSession.sessionEntry.model = modelOverride;
-        await params.persistRunContinuationSession?.();
         const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
           provider: providerOverride,
           entry: params.cronSession.sessionEntry,
@@ -520,6 +515,11 @@ function createCronPromptExecutor(params: {
           candidateRuntime,
           cliExecution,
         });
+        // The validated candidate that admits detached work owns its continuation
+        // even if the provider throws before returning result metadata.
+        params.cronSession.sessionEntry.modelProvider = providerOverride;
+        params.cronSession.sessionEntry.model = modelOverride;
+        await params.persistRunContinuationSession?.();
         await params.setRunContinuationCliExecutionProvider?.(
           cliExecution ? executionProvider : undefined,
         );
