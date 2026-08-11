@@ -13,7 +13,6 @@ import {
   resolveProfilesUnavailableReason,
   resolveSubscriptionAuthModeForProfiles,
 } from "../../auth-profiles.js";
-import { formatAuthProfileFailureMessage } from "../../auth-profiles/failure-copy.js";
 import {
   classifyFailoverReason,
   isFailoverErrorMessage,
@@ -21,11 +20,13 @@ import {
 } from "../../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { shouldUseTransientCooldownProbeSlot } from "../../failover-policy.js";
+import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
 import {
   getApiKeyForModel,
   MissingProviderAuthError,
   type ResolvedProviderAuth,
 } from "../../model-auth.js";
+import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint.js";
 import { providerModelRouteAcceptsAuthMode } from "../../provider-model-route-auth.js";
 import {
   applyPreparedRuntimeAuthToModel,
@@ -403,14 +404,19 @@ export function createEmbeddedRunAuthController(params: {
     });
     const message =
       failoverParams.message?.trim() ||
-      formatAuthProfileFailureMessage({
+      renderAuthProfileFailoverCopy({
         reason,
         provider,
         allInCooldown: failoverParams.allInCooldown,
-        cause: failoverParams.error,
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: process.env,
+        causeText: failoverParams.error
+          ? formatErrorMessage(failoverParams.error).trim()
+          : undefined,
+        recoveryHint: buildProviderAuthRecoveryHint({
+          provider,
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: process.env,
+        }),
       });
     if (params.fallbackConfigured) {
       const authMode =

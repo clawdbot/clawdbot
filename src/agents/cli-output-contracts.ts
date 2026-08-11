@@ -1,17 +1,15 @@
-import type { CliBackendConfig, CliBackendParseJsonlEvent } from "../plugins/cli-backend.types.js";
+import type {
+  CliBackendConfig,
+  CliBackendJsonlUsage,
+  CliBackendParseJsonlEvent,
+} from "../plugins/cli-backend.types.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "./embedded-agent-messaging.types.js";
 import type { ToolSummaryTrace } from "./embedded-agent-runner/types.js";
 
-export type CliUsage = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
-};
+export type CliUsage = CliBackendJsonlUsage;
 
 type CliProcessDiagnostics = {
   backendId: string;
@@ -26,10 +24,12 @@ type CliProcessDiagnostics = {
   useResume: boolean;
 };
 
-export type CliTerminalFailure = {
-  reason: "max_turns";
-  limit?: number;
-};
+export type CliTerminalFailure =
+  | {
+      reason: "max_turns";
+      limit?: number;
+    }
+  | { reason: "synthetic_no_response" };
 
 /** Normalized result from a CLI-backed model provider turn. */
 export type CliOutput = {

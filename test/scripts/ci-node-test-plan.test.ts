@@ -6,6 +6,7 @@ import {
   assignVitestFsCacheWriter,
   createNodeTestShardBundles,
   createNodeTestShards,
+  resolvePolicyTestTargets,
   type NodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
@@ -91,6 +92,15 @@ function listAllToolingTestFiles(): string[] {
 }
 
 describe("scripts/lib/ci-node-test-plan.mts", () => {
+  it("inventories source-scanning Control UI policy tests", () => {
+    expect(resolvePolicyTestTargets(["ui/src/pages/chat/view.ts"])).toEqual([
+      "ui/src/components/web-awesome-migration.node.test.ts",
+      "ui/src/styles/base-theme-tokens.node.test.ts",
+      "ui/src/styles/cursor-policy.node.test.ts",
+    ]);
+    expect(resolvePolicyTestTargets(["docs/web/control-ui.md"])).toEqual([]);
+  });
+
   it("assigns one semantic Vitest cache writer without changing shard order", () => {
     const full = createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false });
     const compact = createNodeTestShardBundles({
@@ -209,14 +219,16 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       compact: true,
     });
 
-    expect(compact.length).toBeGreaterThanOrEqual(12);
-    expect(compact.length).toBeLessThanOrEqual(28);
+    // Rebalancing may change ownership but must not add CI workers.
+    expect(compact).toHaveLength(23);
     expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
     expect(compact.every((shard) => shard.groups.length <= 10)).toBe(true);
     expect(compact.some((shard) => shard.requiresDist)).toBe(true);
     expect(
       compact.every((shard) =>
-        shard.groups.every((group) => group.requiresDist === shard.requiresDist),
+        shard.groups.every(
+          (group) => group.requiresDist === shard.requiresDist && group.runner === shard.runner,
+        ),
       ),
     ).toBe(true);
     // Runtime-balanced packing must keep the two heaviest measured groups in
@@ -249,11 +261,26 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         shard.groups.some((group) => exclusiveGroupRe.test(group.shard_name)),
       ).length,
     ).toBeGreaterThan(0);
-    // Both plans carry the same split stripes now; compact bundling must
-    // preserve base include coverage exactly.
+    const expectedEmbeddedAgentGroupNames = [
+      "agentic-agents-embedded-base",
+      "agentic-agents-embedded-incomplete-turn",
+      "agentic-agents-embedded-overflow-compaction",
+      "agentic-agents-embedded-run",
+    ];
+    const compactGroups = compact.flatMap((shard) => shard.groups);
+    const expectedGroupNames = base.flatMap((shard) =>
+      shard.shardName === "agentic-agents-embedded"
+        ? expectedEmbeddedAgentGroupNames
+        : [shard.shardName],
+    );
+    expect(compactGroups.map((group) => group.shard_name).toSorted()).toEqual(
+      expectedGroupNames.toSorted(),
+    );
+    // Both plans carry the same split stripes now; compact bundling must also
+    // preserve include-pattern coverage exactly.
     expect(
-      compact
-        .flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns ?? []))
+      compactGroups
+        .flatMap((group) => group.includePatterns ?? [])
         .toSorted((a, b) => a.localeCompare(b)),
     ).toEqual(
       base.flatMap((shard) => shard.includePatterns ?? []).toSorted((a, b) => a.localeCompare(b)),
@@ -295,16 +322,25 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const largeJobs = compact.filter(
       (shard) => shard.runner === DEFAULT_NODE_TEST_RUNNER && !shard.requiresDist,
     );
-    expect(largeJobs).toHaveLength(8);
+    const smallJobs = compact.filter(
+      (shard) => shard.runner !== DEFAULT_NODE_TEST_RUNNER && !shard.requiresDist,
+    );
+    const distJobs = compact.filter((shard) => shard.requiresDist);
+    expect(largeJobs).toHaveLength(7);
+    expect(smallJobs).toHaveLength(14);
+    expect(distJobs).toHaveLength(2);
+    expect(compact).toEqual(
+      createNodeTestShardBundles({
+        includeReleaseOnlyPluginShards: false,
+        compact: true,
+      }),
+    );
     const embeddedAgentGroups = compact
       .flatMap((shard) => shard.groups)
       .filter((group) => group.shard_name.startsWith("agentic-agents-embedded-"));
-    expect(embeddedAgentGroups.map((group) => group.shard_name).toSorted()).toEqual([
-      "agentic-agents-embedded-base",
-      "agentic-agents-embedded-incomplete-turn",
-      "agentic-agents-embedded-overflow-compaction",
-      "agentic-agents-embedded-run",
-    ]);
+    expect(embeddedAgentGroups.map((group) => group.shard_name).toSorted()).toEqual(
+      expectedEmbeddedAgentGroupNames,
+    );
     expect(
       compact.some((shard) =>
         shard.groups.some((group) => group.shard_name === "agentic-agents-embedded"),
@@ -318,10 +354,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         (group) => group.env?.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS === "660000",
       ),
     ).toBe(true);
-    const embeddedBaseJob = compact.find((shard) =>
-      shard.groups.some((group) => group.shard_name === "agentic-agents-embedded-base"),
-    );
-    expect(embeddedBaseJob?.groups).toHaveLength(1);
     expect(
       compact
         .filter((shard) => shard.groups.some((group) => !group.includePatterns))
@@ -1110,14 +1142,19 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     );
   });
 
-  it("covers every flat agents-core test exactly once across split shards", () => {
+  it("covers flat agents-core and explicitly nested isolated tests exactly once", () => {
     const actual = createNodeTestShards()
       .filter((shard) => shard.shardName.startsWith("agentic-agents-core-"))
       .flatMap((shard) => shard.includePatterns ?? [])
       .toSorted((a, b) => a.localeCompare(b));
-    const expected = listTestFiles("src/agents")
-      .filter((file) => !relative("src/agents", file).replaceAll("\\", "/").includes("/"))
-      .toSorted((a, b) => a.localeCompare(b));
+    const expected = [
+      ...listTestFiles("src/agents").filter(
+        (file) => !relative("src/agents", file).replaceAll("\\", "/").includes("/"),
+      ),
+      ...agentVitestProjectOwners.coreIsolated.include.filter((file) =>
+        relative("src/agents", file).replaceAll("\\", "/").includes("/"),
+      ),
+    ].toSorted((a, b) => a.localeCompare(b));
 
     expect(actual).toEqual(expected);
     expect(new Set(actual).size).toBe(actual.length);

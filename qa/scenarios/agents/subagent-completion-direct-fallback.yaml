@@ -32,8 +32,8 @@ scenario:
     - docs/channels/qa-channel.md
   codeRefs:
     - src/agents/agent-run-terminal-reply.ts
-    - src/agents/subagent-announce-delivery.ts
-    - src/agents/subagent-registry-lifecycle.ts
+    - src/agents/subagents/announce/subagent-announce-delivery.ts
+    - src/agents/subagents/registry/subagent-registry-lifecycle.ts
     - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:
     kind: flow

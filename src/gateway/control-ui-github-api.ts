@@ -28,7 +28,10 @@ export function requiredString(record: Record<string, unknown>, key: string): st
   return value;
 }
 
-export function optionalString(record: Record<string, unknown>, key: string): string | undefined {
+export function readOptionalGitHubString(
+  record: Record<string, unknown>,
+  key: string,
+): string | undefined {
   const value = record[key];
   return typeof value === "string" && value.trim() ? value : undefined;
 }

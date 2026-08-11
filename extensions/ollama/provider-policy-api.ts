@@ -1,10 +1,13 @@
 // Ollama API module exposes the plugin public contract.
 import type {
+  ProviderDefaultThinkingPolicyContext,
   ProviderNormalizeResolvedModelContext,
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { isCloudModelRef, normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { OLLAMA_CLOUD_PROVIDER_ID, OLLAMA_DEFAULT_BASE_URL } from "./src/defaults.js";
+import { supportsOllamaCloudFullThinkingEffort } from "./src/model-reasoning.js";
 
 type OllamaProviderConfigDraft = Partial<ModelProviderConfig>;
 
@@ -64,9 +67,16 @@ export function projectConfiguredModelRow(ctx: ProviderNormalizeResolvedModelCon
 }
 
 export function resolveThinkingProfile({
+  modelId,
+  provider,
   reasoning,
-}: {
-  reasoning?: boolean;
-}): ProviderThinkingProfile {
-  return reasoning ? OLLAMA_REASONING_THINKING_PROFILE : OLLAMA_NON_REASONING_THINKING_PROFILE;
+}: ProviderDefaultThinkingPolicyContext): ProviderThinkingProfile {
+  const isCloudRoute =
+    normalizeProviderId(provider) === OLLAMA_CLOUD_PROVIDER_ID || isCloudModelRef(modelId);
+  const supportsThinking =
+    reasoning === true ||
+    (reasoning === undefined && isCloudRoute && supportsOllamaCloudFullThinkingEffort(modelId));
+  return supportsThinking
+    ? OLLAMA_REASONING_THINKING_PROFILE
+    : OLLAMA_NON_REASONING_THINKING_PROFILE;
 }

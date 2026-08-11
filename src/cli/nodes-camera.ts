@@ -12,7 +12,7 @@ import {
   asBoolean,
   asNumber,
   asRecord,
-  asString,
+  readStringValue,
   resolveTempPathParts,
 } from "./nodes-media-utils.js";
 import { publishOutputFileAtomically } from "./output-file.runtime.js";
@@ -85,9 +85,9 @@ type CameraClipPayload = {
 /** Validate and normalize an unknown camera still-image payload. */
 export function parseCameraSnapPayload(value: unknown): CameraSnapPayload {
   const obj = asRecord(value);
-  const format = asString(obj.format);
-  const base64 = asString(obj.base64);
-  const url = asString(obj.url);
+  const format = readStringValue(obj.format);
+  const base64 = readStringValue(obj.base64);
+  const url = readStringValue(obj.url);
   const width = asNumber(obj.width);
   const height = asNumber(obj.height);
   if (!format || (!base64 && !url) || width === undefined || height === undefined) {
@@ -99,9 +99,9 @@ export function parseCameraSnapPayload(value: unknown): CameraSnapPayload {
 /** Validate and normalize an unknown camera clip payload. */
 export function parseCameraClipPayload(value: unknown): CameraClipPayload {
   const obj = asRecord(value);
-  const format = asString(obj.format);
-  const base64 = asString(obj.base64);
-  const url = asString(obj.url);
+  const format = readStringValue(obj.format);
+  const base64 = readStringValue(obj.base64);
+  const url = readStringValue(obj.url);
   const durationMs = asNumber(obj.durationMs);
   const hasAudio = asBoolean(obj.hasAudio);
   if (!format || (!base64 && !url) || durationMs === undefined || hasAudio === undefined) {

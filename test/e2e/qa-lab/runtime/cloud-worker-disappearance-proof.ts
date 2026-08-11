@@ -31,7 +31,7 @@ type ProducerOptions = { artifactBase: string; repoRoot: string };
 type Gateway = Awaited<ReturnType<typeof startQaGatewayChild>>;
 type SessionIdentity = { agentId: string; sessionId: string; sessionKey: string };
 
-function asRecord(value: unknown, label: string): Record<string, unknown> {
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${label} was not an object`);
   }
@@ -74,13 +74,13 @@ async function createQaSession(
   senderId: string,
   marker: string,
 ): Promise<SessionIdentity> {
-  const beforePayload = asRecord(
+  const beforePayload = requireRecord(
     await gateway.call("sessions.list", { limit: 100 }),
     "sessions.list before inbound",
   );
   const beforeIds = new Set(
     (Array.isArray(beforePayload.sessions) ? beforePayload.sessions : []).flatMap((entry) => {
-      const row = asRecord(entry, "session row");
+      const row = requireRecord(entry, "session row");
       return typeof row.sessionId === "string" ? [row.sessionId] : [];
     }),
   );
@@ -92,9 +92,12 @@ async function createQaSession(
     text: `Reply exactly: ${marker}`,
   });
   await waitForOutbound(state, cursor, marker);
-  const payload = asRecord(await gateway.call("sessions.list", { limit: 100 }), "sessions.list");
+  const payload = requireRecord(
+    await gateway.call("sessions.list", { limit: 100 }),
+    "sessions.list",
+  );
   const sessions = Array.isArray(payload.sessions) ? payload.sessions : [];
-  const rows = sessions.map((entry) => asRecord(entry, "session row"));
+  const rows = sessions.map((entry) => requireRecord(entry, "session row"));
   const session =
     rows.find((entry) => typeof entry.sessionId === "string" && !beforeIds.has(entry.sessionId)) ??
     rows.find((entry) =>
@@ -203,12 +206,12 @@ function seedUnknownWorkerState(
 }
 
 async function describePlacement(gateway: Gateway, session: SessionIdentity) {
-  const payload = asRecord(
+  const payload = requireRecord(
     await gateway.call("sessions.describe", { key: session.sessionKey }),
     "sessions.describe",
   );
-  const row = asRecord(payload.session, "described session");
-  return asRecord(row.placement, "session placement");
+  const row = requireRecord(payload.session, "described session");
+  return requireRecord(row.placement, "session placement");
 }
 
 async function waitForFailedPlacement(gateway: Gateway, session: SessionIdentity) {
@@ -301,15 +304,17 @@ async function runProof(options: ProducerOptions) {
       }
     }
 
-    const environmentPayload = asRecord(
+    const environmentPayload = requireRecord(
       await gateway.call("environments.list", {}),
       "environments.list",
     );
     const environments = Array.isArray(environmentPayload.environments)
-      ? environmentPayload.environments.map((entry) => asRecord(entry, "environment"))
+      ? environmentPayload.environments.map((entry) => requireRecord(entry, "environment"))
       : [];
     const environment = environments.find((entry) => entry.id === ENVIRONMENT_ID);
-    const worker = environment ? asRecord(environment.worker, "worker environment") : undefined;
+    const worker = environment
+      ? requireRecord(environment.worker, "worker environment")
+      : undefined;
     if (worker?.state !== "orphaned" || typeof worker.error !== "string") {
       throw new Error("environment-level orphaned diagnostic was not preserved");
     }

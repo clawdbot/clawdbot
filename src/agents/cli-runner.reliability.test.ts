@@ -43,6 +43,7 @@ import {
 } from "../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transcript.test-support.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import {
   restoreCliRunnerTestDeps,
@@ -199,8 +200,10 @@ function buildPreparedContext(params: PreparedContextOverrides = {}): PreparedCl
     sessionMode: "existing" as const,
     serialize: true,
   };
+  const runId = params?.runId ?? "run-2";
   return {
     params: {
+      admittedRunContext: createTestAdmittedRunContext(runId),
       sessionId: "s1",
       sessionKey: params?.sessionKey,
       sessionFile: "/tmp/session.jsonl",
@@ -210,7 +213,7 @@ function buildPreparedContext(params: PreparedContextOverrides = {}): PreparedCl
       model,
       thinkLevel: "low",
       timeoutMs: 1_000,
-      runId: params?.runId ?? "run-2",
+      runId,
       lane: params?.lane,
       executionMode: params?.executionMode,
       allowEmptyAssistantReplyAsSilent: params?.allowEmptyAssistantReplyAsSilent,
@@ -2405,7 +2408,7 @@ describe("runCliAgent reliability", () => {
     expect(clearBeforeRetry).not.toHaveBeenCalled();
   });
 
-  it.each(["timeout", "unknown", "context_overflow"] as const)(
+  it.each(["timeout", "unknown", "context_overflow", "format"] as const)(
     "retries a fresh CLI session after recoverable %s failover without a failed agent_end",
     async (reason) => {
       const runId = `run-retry-${reason}`;
@@ -2457,10 +2460,29 @@ describe("runCliAgent reliability", () => {
             stderr: "Prompt is too long",
           });
         }
+        if (spawnCount === 1 && reason === "format") {
+          return makeManagedRun({
+            stdout: [
+              JSON.stringify({
+                type: "assistant",
+                message: {
+                  model: "<synthetic>",
+                  content: [{ type: "text", text: "No response requested." }],
+                },
+              }),
+              JSON.stringify({ type: "result", subtype: "success", result: "" }),
+            ].join("\n"),
+          });
+        }
         if (spawnCount === 1) {
           return makeManagedRun({
             exitCode: 1,
             durationMs: 150,
+          });
+        }
+        if (reason === "format") {
+          return makeManagedRun({
+            stdout: JSON.stringify({ type: "result", result: "hello from fresh cli" }),
           });
         }
         return makeManagedRun({ stdout: "hello from fresh cli" });
@@ -2480,6 +2502,15 @@ describe("runCliAgent reliability", () => {
           cliSessionId: "stale-cli-session",
           openClawHistoryPrompt: CLI_RESEED_PROMPT,
         });
+        if (reason === "format") {
+          context.preparedBackend.backend = {
+            ...context.preparedBackend.backend,
+            output: "jsonl",
+            input: "stdin",
+            jsonlDialect: "claude-stream-json",
+          };
+          context.backendResolved.config = context.preparedBackend.backend;
+        }
         const result = await runPreparedCliAgent({
           ...context,
           params: {
@@ -4377,6 +4408,7 @@ describe("runCliAgent reliability", () => {
 
     try {
       const context = await prepareCliRunContext({
+        admittedRunContext: createTestAdmittedRunContext("run-history-hook"),
         sessionId: "s1",
         sessionFile,
         workspaceDir: dir,

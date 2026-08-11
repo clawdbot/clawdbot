@@ -19,19 +19,33 @@ const resolveLatestVersionFromPackageMock = vi.fn();
 const resolveCompatibilityHostVersionMock = vi.fn();
 const installPluginFromArchiveMock = vi.fn();
 
-vi.mock("../infra/clawhub.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/clawhub.js")>("../infra/clawhub.js");
+vi.mock("../infra/clawhub-spec.js", () => ({
+  parseClawHubPluginSpec: (...args: unknown[]) => parseClawHubPluginSpecMock(...args),
+}));
+
+vi.mock("../infra/clawhub-packages.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/clawhub-packages.js")>(
+    "../infra/clawhub-packages.js",
+  );
   return {
     ...actual,
-    parseClawHubPluginSpec: (...args: unknown[]) => parseClawHubPluginSpecMock(...args),
     fetchClawHubPackageDetail: (...args: unknown[]) => fetchClawHubPackageDetailMock(...args),
     fetchClawHubPackageArtifact: (...args: unknown[]) => fetchClawHubPackageArtifactMock(...args),
     fetchClawHubPackageSecurity: (...args: unknown[]) => fetchClawHubPackageSecurityMock(...args),
     fetchClawHubPackageVersion: (...args: unknown[]) => fetchClawHubPackageVersionMock(...args),
-    downloadClawHubPackageArchive: (...args: unknown[]) =>
-      downloadClawHubPackageArchiveMock(...args),
     resolveLatestVersionFromPackage: (...args: unknown[]) =>
       resolveLatestVersionFromPackageMock(...args),
+  };
+});
+
+vi.mock("../infra/clawhub-artifacts.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/clawhub-artifacts.js")>(
+    "../infra/clawhub-artifacts.js",
+  );
+  return {
+    ...actual,
+    downloadClawHubPackageArchive: (...args: unknown[]) =>
+      downloadClawHubPackageArchiveMock(...args),
   };
 });
 
@@ -57,8 +71,8 @@ vi.mock("../infra/archive.js", async () => {
   };
 });
 
-const { ClawHubRequestError } = await import("../infra/clawhub.js");
-type ClawHubResolvedArtifact = import("../infra/clawhub.js").ClawHubResolvedArtifact;
+const { ClawHubRequestError } = await import("../infra/clawhub-client.js");
+type ClawHubResolvedArtifact = import("../infra/clawhub-packages.js").ClawHubResolvedArtifact;
 type ClawHubRiskAcknowledgementRequest = import("./clawhub.js").ClawHubRiskAcknowledgementRequest;
 const { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } = await import("./clawhub.js");
 

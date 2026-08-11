@@ -29,7 +29,7 @@ import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
-  createFixedWindowRateLimiter,
+  createFixedWindowBudget,
   resolveFixedWindowRateLimitInteger,
 } from "../infra/fixed-window-rate-limit.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -89,7 +89,7 @@ export class AcpGatewayAgent implements Agent {
       this.approvalRelays,
       this.log,
     );
-    const sessionCreateRateLimiter = createFixedWindowRateLimiter({
+    const sessionCreateRateLimiter = createFixedWindowBudget({
       maxRequests: resolveFixedWindowRateLimitInteger(
         opts.sessionCreateRateLimit?.maxRequests,
         SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS,

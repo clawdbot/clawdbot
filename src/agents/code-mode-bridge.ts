@@ -11,8 +11,11 @@ import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import type { PendingBridgeRequest, SettledBridgeRequest } from "./code-mode-runtime.js";
 import { readCodeModeSkill } from "./code-mode-skills.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
-import { getSwarmRunByLaunchReplayKey, initSubagentRegistry } from "./subagent-registry.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import {
+  getSwarmRunByLaunchReplayKey,
+  initSubagentRegistry,
+} from "./subagents/registry/subagent-registry.js";
+import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,

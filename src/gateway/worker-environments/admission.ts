@@ -3,6 +3,7 @@ import {
   type WorkerAdmissionHandshake,
   type WorkerConnectParams,
   type WorkerProtocolCloseReason,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
@@ -17,6 +18,13 @@ export type ExpectedWorkerBuild = {
   openclawVersion: string;
   protocolFeatures: readonly string[];
 };
+
+/** True only for bundles that accept the exact admitted execution carrier. */
+export function supportsWorkerExecutionContextLaunch(
+  handshake: Pick<WorkerAdmissionHandshake, "protocolFeatures"> | null | undefined,
+): boolean {
+  return handshake?.protocolFeatures.includes(WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE) === true;
+}
 
 type WorkerConnectionAdmissionResult =
   | { ok: true; identity: WorkerConnectionIdentity }
@@ -49,6 +57,8 @@ export function admitWorkerConnection(params: {
   admission: WorkerConnectParams["admission"];
   expectedBuild: ExpectedWorkerBuild;
   nowMs: number;
+  /** Service-only: exact durable turn validation must follow before admission succeeds. */
+  allowExpiredCredential?: boolean;
 }): WorkerConnectionAdmissionResult {
   const { admission, store } = params;
   const credentialHash = hashWorkerCredential(admission.credential);
@@ -63,7 +73,7 @@ export function admitWorkerConnection(params: {
   if (credential.environmentId !== admission.environmentId) {
     return { ok: false, reason: "environment-mismatch" };
   }
-  if (params.nowMs >= credential.expiresAtMs) {
+  if (params.nowMs >= credential.expiresAtMs && params.allowExpiredCredential !== true) {
     return { ok: false, reason: "credential-expired" };
   }
   const environment = store.get(admission.environmentId);

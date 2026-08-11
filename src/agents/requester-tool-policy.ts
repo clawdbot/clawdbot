@@ -16,14 +16,14 @@ import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
 import {
   isTrustedSubagentCompletionHandoffForRun,
   type TrustedSubagentCompletionHandoff,
-} from "./subagent-announce-handoff.js";
+} from "./subagents/announce/subagent-announce-handoff.js";
+import { resolveRequesterStoreKey } from "./subagents/announce/subagent-requester-store-key.js";
 import {
   isSubagentEnvelopeSession,
   resolvePersistedSubagentToolPolicyEnvelope,
   resolveSubagentCapabilityStore,
   type SessionCapabilityStore,
-} from "./subagent-capabilities.js";
-import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
+} from "./subagents/spawn/subagent-capabilities.js";
 
 const MAX_DELEGATION_LINEAGE_DEPTH = 32;
 

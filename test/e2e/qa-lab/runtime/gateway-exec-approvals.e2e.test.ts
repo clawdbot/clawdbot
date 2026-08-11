@@ -10,7 +10,7 @@ import {
 import {
   getFreePort,
   installGatewayTestHooks,
-  startGatewayServer,
+  startTestGatewayServer,
 } from "../../../../src/gateway/test-helpers.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
 import { readExecApprovalsSnapshot } from "../../../../src/infra/exec-approvals.js";
@@ -43,7 +43,7 @@ describe("gateway exec approvals QA", () => {
       throw new Error("OPENCLAW_STATE_DIR is required for gateway QA fixtures");
     }
 
-    const server = await startGatewayServer(port, {
+    const server = await startTestGatewayServer(port, {
       bind: "loopback",
       auth: { mode: "token", token },
       controlUiEnabled: false,

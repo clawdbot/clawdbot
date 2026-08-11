@@ -7,7 +7,6 @@ import {
   hasBotMention,
   isBinaryContent,
   normalizeForwardedContext,
-  resolveTelegramDirectPeerId,
   resolveTelegramBotHasTopicsEnabled,
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
@@ -213,20 +212,6 @@ describe("resolveTelegramBotHasTopicsEnabled", () => {
     expect(resolveTelegramBotHasTopicsEnabled({ has_topics_enabled: false })).toBe(false);
     expect(resolveTelegramBotHasTopicsEnabled({ has_topics_enabled: "true" })).toBe(false);
     expect(resolveTelegramBotHasTopicsEnabled(null)).toBe(false);
-  });
-});
-
-describe("resolveTelegramDirectPeerId", () => {
-  it("prefers sender id when available", () => {
-    expect(resolveTelegramDirectPeerId({ chatId: 777777777, senderId: 123456789 })).toBe(
-      "123456789",
-    );
-  });
-
-  it("falls back to chat id when sender id is missing", () => {
-    expect(resolveTelegramDirectPeerId({ chatId: 777777777, senderId: undefined })).toBe(
-      "777777777",
-    );
   });
 });
 

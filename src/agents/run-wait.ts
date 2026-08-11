@@ -34,7 +34,7 @@ import {
   normalizeProviderStarted,
   type AgentRunTimeoutPhase,
 } from "./run-timeout-attribution.js";
-import { extractAssistantText, stripToolMessages } from "./tools/chat-history-text.js";
+import { extractStoredAssistantText, stripToolMessages } from "./tools/chat-history-text.js";
 
 type GatewayCaller = typeof callGateway;
 
@@ -197,7 +197,7 @@ function isWaitedReplyTurnBoundary(message: unknown): boolean {
 }
 
 function snapshotAssistantReply(message: unknown): AssistantReplySnapshot | undefined {
-  const text = extractAssistantText(message);
+  const text = extractStoredAssistantText(message);
   if (!text?.trim()) {
     return undefined;
   }

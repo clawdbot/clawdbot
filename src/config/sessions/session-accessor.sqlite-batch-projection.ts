@@ -1,10 +1,10 @@
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import type { SessionEntryBatchProjectionUpdate } from "./session-accessor.sqlite-contract.js";
-import { applySqliteSessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
+import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import type { SessionEntry } from "./types.js";
 
 /** Compatibility adapter for the shipped detached-store projection. */
-export async function applySqliteSessionEntryBatchProjection<T>(params: {
+export async function applySessionEntryBatchProjection<T>(params: {
   activeSessionKey?: string;
   agentId?: string;
   sessionKeys?: readonly string[];
@@ -14,7 +14,7 @@ export async function applySqliteSessionEntryBatchProjection<T>(params: {
     store: Record<string, SessionEntry>,
   ) => Promise<SessionEntryBatchProjectionUpdate<T>> | SessionEntryBatchProjectionUpdate<T>;
 }): Promise<T> {
-  return await applySqliteSessionEntryCanonicalReplacements({
+  return await applySessionEntryCanonicalReplacements({
     ...params,
     update: async (entries) => {
       const store = Object.fromEntries(

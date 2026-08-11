@@ -20,16 +20,13 @@ import {
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
 import { appendFailedDreamingEvent } from "./dreaming-events.js";
 import type { NarrativePhaseData } from "./dreaming-narrative.js";
-import {
-  formatErrorMessage,
-  includesSystemEventToken,
-  normalizeTrimmedString,
-} from "./dreaming-shared.js";
+import { formatErrorMessage, includesSystemEventToken } from "./dreaming-shared.js";
 
 const RUNTIME_CRON_RECONCILE_INTERVAL_MS = 60_000;
 const STARTUP_CRON_RETRY_DELAY_MS = 5_000;
@@ -201,25 +198,25 @@ function buildManagedDreamingCronJob(
 function resolveManagedDreamingPayloadToken(
   payload: ManagedCronJobLike["payload"],
 ): string | undefined {
-  const payloadKind = normalizeLowercaseStringOrEmpty(normalizeTrimmedString(payload?.kind));
+  const payloadKind = normalizeLowercaseStringOrEmpty(normalizeOptionalString(payload?.kind));
   if (payloadKind === "systemevent") {
-    return normalizeTrimmedString(payload?.text);
+    return normalizeOptionalString(payload?.text);
   }
   if (payloadKind === "agentturn") {
-    return normalizeTrimmedString(payload?.message);
+    return normalizeOptionalString(payload?.message);
   }
   return undefined;
 }
 
 function isManagedDreamingJob(job: ManagedCronJobLike): boolean {
-  if (normalizeTrimmedString(job.declarationKey) === MANAGED_DREAMING_DECLARATION_KEY) {
+  if (normalizeOptionalString(job.declarationKey) === MANAGED_DREAMING_DECLARATION_KEY) {
     return true;
   }
-  const name = normalizeTrimmedString(job.name);
+  const name = normalizeOptionalString(job.name);
   if (name !== MANAGED_DREAMING_CRON_NAME) {
     return false;
   }
-  const description = normalizeTrimmedString(job.description);
+  const description = normalizeOptionalString(job.description);
   if (description?.includes(MANAGED_DREAMING_CRON_TAG)) {
     return true;
   }
@@ -227,15 +224,15 @@ function isManagedDreamingJob(job: ManagedCronJobLike): boolean {
 }
 
 function isLegacyPhaseDreamingJob(job: ManagedCronJobLike): boolean {
-  const description = normalizeTrimmedString(job.description);
+  const description = normalizeOptionalString(job.description);
   if (
     description?.includes(LEGACY_LIGHT_SLEEP_CRON_TAG) ||
     description?.includes(LEGACY_REM_SLEEP_CRON_TAG)
   ) {
     return true;
   }
-  const name = normalizeTrimmedString(job.name);
-  const payloadText = normalizeTrimmedString(job.payload?.text);
+  const name = normalizeOptionalString(job.name);
+  const payloadText = normalizeOptionalString(job.payload?.text);
   if (name === LEGACY_LIGHT_SLEEP_CRON_NAME && payloadText === LEGACY_LIGHT_SLEEP_EVENT_TEXT) {
     return true;
   }
@@ -297,19 +294,19 @@ function buildManagedDreamingPatch(
 ): ManagedCronJobPatch | null {
   const patch: ManagedCronJobPatch = {};
 
-  if (!compareOptionalStrings(normalizeTrimmedString(job.name), desired.name)) {
+  if (!compareOptionalStrings(normalizeOptionalString(job.name), desired.name)) {
     patch.name = desired.name;
   }
-  if (!compareOptionalStrings(normalizeTrimmedString(job.description), desired.description)) {
+  if (!compareOptionalStrings(normalizeOptionalString(job.description), desired.description)) {
     patch.description = desired.description;
   }
   if (job.enabled !== true) {
     patch.enabled = true;
   }
 
-  const scheduleKind = normalizeLowercaseStringOrEmpty(normalizeTrimmedString(job.schedule?.kind));
-  const scheduleExpr = normalizeTrimmedString(job.schedule?.expr);
-  const scheduleTz = normalizeTrimmedString(job.schedule?.tz);
+  const scheduleKind = normalizeLowercaseStringOrEmpty(normalizeOptionalString(job.schedule?.kind));
+  const scheduleExpr = normalizeOptionalString(job.schedule?.expr);
+  const scheduleTz = normalizeOptionalString(job.schedule?.tz);
   if (
     scheduleKind !== "cron" ||
     !compareOptionalStrings(scheduleExpr, desired.schedule.expr) ||
@@ -318,16 +315,16 @@ function buildManagedDreamingPatch(
     patch.schedule = desired.schedule;
   }
 
-  const sessionTarget = normalizeLowercaseStringOrEmpty(normalizeTrimmedString(job.sessionTarget));
+  const sessionTarget = normalizeLowercaseStringOrEmpty(normalizeOptionalString(job.sessionTarget));
   if (sessionTarget !== desired.sessionTarget) {
     patch.sessionTarget = desired.sessionTarget;
   }
-  const wakeMode = normalizeLowercaseStringOrEmpty(normalizeTrimmedString(job.wakeMode));
+  const wakeMode = normalizeLowercaseStringOrEmpty(normalizeOptionalString(job.wakeMode));
   if (wakeMode !== "now") {
     patch.wakeMode = "now";
   }
 
-  const payloadKind = normalizeLowercaseStringOrEmpty(normalizeTrimmedString(job.payload?.kind));
+  const payloadKind = normalizeLowercaseStringOrEmpty(normalizeOptionalString(job.payload?.kind));
   const payloadToken = resolveManagedDreamingPayloadToken(job.payload);
   const desiredPayloadToken =
     desired.payload.kind === "systemEvent" ? desired.payload.text : desired.payload.message;
@@ -339,7 +336,7 @@ function buildManagedDreamingPatch(
   if (payloadNeedsUpdate) {
     patch.payload = desired.payload;
   }
-  const deliveryMode = normalizeLowercaseStringOrEmpty(normalizeTrimmedString(job.delivery?.mode));
+  const deliveryMode = normalizeLowercaseStringOrEmpty(normalizeOptionalString(job.delivery?.mode));
   if (deliveryMode !== "none") {
     patch.delivery = desired.delivery;
   }
@@ -386,7 +383,7 @@ function resolveCronServiceFromGatewayContext(context: { getCron?: () => unknown
 }
 
 function resolveDreamingTriggerSessionKeys(sessionKey?: string): string[] {
-  const normalized = normalizeTrimmedString(sessionKey);
+  const normalized = normalizeOptionalString(sessionKey);
   if (!normalized) {
     return [];
   }
@@ -409,7 +406,7 @@ function hasPendingManagedDreamingCronEvent(sessionKey?: string): boolean {
     peekSystemEventEntries(candidateSessionKey).some(
       (event) =>
         event.contextKey?.startsWith("cron:") === true &&
-        normalizeTrimmedString(event.text) === DREAMING_SYSTEM_EVENT_TEXT,
+        normalizeOptionalString(event.text) === DREAMING_SYSTEM_EVENT_TEXT,
     ),
   );
 }
@@ -573,7 +570,7 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
 
   const recencyHalfLifeDays =
     params.config.recencyHalfLifeDays ?? DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS;
-  const fallbackWorkspaceDir = normalizeTrimmedString(params.workspaceDir);
+  const fallbackWorkspaceDir = normalizeOptionalString(params.workspaceDir);
   // Narrative subagent sessions live in per-agent SQLite stores, so every swept workspace
   // carries its owning agent. The triggering agent owns whatever the roster cannot attribute.
   const triggerAgentId = normalizeLowercaseStringOrEmpty(params.agentId);

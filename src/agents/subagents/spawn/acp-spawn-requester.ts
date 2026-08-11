@@ -14,7 +14,6 @@ import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../../../routing/session-key.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { resolveRequesterOriginForChild } from "../../spawn-requester-origin.js";
-import type { SessionCapabilityStore } from "../../subagent-capabilities.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -23,6 +22,7 @@ import {
   hasSessionLocalHeartbeatRelayRoute,
   isHeartbeatEnabledForSessionAgent,
 } from "./acp-spawn-heartbeat.js";
+import type { SessionCapabilityStore } from "./subagent-capabilities.js";
 
 const log = createSubsystemLogger("agents/acp-spawn");
 

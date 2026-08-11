@@ -33,14 +33,14 @@ const noteImplicitFallbackClobberWarningsMock = vi.hoisted(() =>
   }),
 );
 const legacyConfigMigrationForTest = vi.hoisted(() => {
-  function asRecord(value: unknown): Record<string, unknown> | null {
+  function readNullableRecord(value: unknown): Record<string, unknown> | null {
     return value && typeof value === "object" && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : null;
   }
 
   function ensureRecord(parent: Record<string, unknown>, key: string): Record<string, unknown> {
-    const current = asRecord(parent[key]);
+    const current = readNullableRecord(parent[key]);
     if (current) {
       return current;
     }
@@ -50,8 +50,8 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
   }
 
   function migrateThreadBinding(value: unknown, changes: string[], pathLabel: string): void {
-    const record = asRecord(value);
-    const bindings = asRecord(record?.threadBindings);
+    const record = readNullableRecord(value);
+    const bindings = readNullableRecord(record?.threadBindings);
     if (!bindings || !("ttlHours" in bindings)) {
       return;
     }
@@ -74,7 +74,7 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
       delete channel.streamMode;
       return true;
     }
-    const streaming = asRecord(channel.streaming) ?? {};
+    const streaming = readNullableRecord(channel.streaming) ?? {};
     if (!("mode" in streaming)) {
       streaming.mode =
         channel.streamMode === "block"
@@ -91,8 +91,8 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
   function migrateNestedAllowAliases(channel: Record<string, unknown>, channelId: string): boolean {
     let changed = false;
     if (channelId === "slack") {
-      for (const room of Object.values(asRecord(channel.channels) ?? {})) {
-        const roomRecord = asRecord(room);
+      for (const room of Object.values(readNullableRecord(channel.channels) ?? {})) {
+        const roomRecord = readNullableRecord(room);
         if (roomRecord && "allow" in roomRecord) {
           roomRecord.enabled = roomRecord.allow;
           delete roomRecord.allow;
@@ -101,8 +101,8 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
       }
     }
     if (channelId === "googlechat") {
-      for (const group of Object.values(asRecord(channel.groups) ?? {})) {
-        const groupRecord = asRecord(group);
+      for (const group of Object.values(readNullableRecord(channel.groups) ?? {})) {
+        const groupRecord = readNullableRecord(group);
         if (groupRecord && "allow" in groupRecord) {
           groupRecord.enabled = groupRecord.allow;
           delete groupRecord.allow;
@@ -111,9 +111,11 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
       }
     }
     if (channelId === "discord") {
-      for (const guild of Object.values(asRecord(channel.guilds) ?? {})) {
-        for (const room of Object.values(asRecord(asRecord(guild)?.channels) ?? {})) {
-          const roomRecord = asRecord(room);
+      for (const guild of Object.values(readNullableRecord(channel.guilds) ?? {})) {
+        for (const room of Object.values(
+          readNullableRecord(readNullableRecord(guild)?.channels) ?? {},
+        )) {
+          const roomRecord = readNullableRecord(room);
           if (roomRecord && "allow" in roomRecord) {
             roomRecord.enabled = roomRecord.allow;
             delete roomRecord.allow;
@@ -126,14 +128,14 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
   }
 
   function migrate(raw: unknown): { next: Record<string, unknown> | null; changes: string[] } {
-    const root = asRecord(raw);
+    const root = readNullableRecord(raw);
     if (!root) {
       return { next: null, changes: [] };
     }
     const next = structuredClone(root);
     const changes: string[] = [];
 
-    const heartbeat = asRecord(next.heartbeat);
+    const heartbeat = readNullableRecord(next.heartbeat);
     if (heartbeat) {
       const agents = ensureRecord(next, "agents");
       const agentDefaults = ensureRecord(agents, "defaults");
@@ -153,13 +155,13 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
       }
       if (Object.keys(agentHeartbeat).length > 0) {
         agentDefaults.heartbeat = {
-          ...asRecord(agentDefaults.heartbeat),
+          ...readNullableRecord(agentDefaults.heartbeat),
           ...agentHeartbeat,
         };
       }
       if (Object.keys(channelHeartbeat).length > 0) {
         channelDefaults.heartbeat = {
-          ...asRecord(channelDefaults.heartbeat),
+          ...readNullableRecord(channelDefaults.heartbeat),
           ...channelHeartbeat,
         };
       }
@@ -167,14 +169,14 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
       changes.push("Moved heartbeat to agents.defaults.heartbeat and channels.defaults.heartbeat.");
     }
 
-    const internalHooks = asRecord(asRecord(next.hooks)?.internal);
+    const internalHooks = readNullableRecord(readNullableRecord(next.hooks)?.internal);
     if (internalHooks && "handlers" in internalHooks) {
       delete internalHooks.handlers;
       changes.push(
         "Removed retired hooks.internal.handlers registrations; hook files must be migrated separately.",
       );
-      const entries = asRecord(internalHooks.entries);
-      const extraDirs = asRecord(internalHooks.load)?.extraDirs;
+      const entries = readNullableRecord(internalHooks.entries);
+      const extraDirs = readNullableRecord(internalHooks.load)?.extraDirs;
       const hasNamedEntries = Boolean(entries && Object.keys(entries).length > 0);
       const hasExtraDirs =
         Array.isArray(extraDirs) &&
@@ -187,7 +189,7 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
       }
     }
 
-    const gateway = asRecord(next.gateway);
+    const gateway = readNullableRecord(next.gateway);
     if (gateway?.bind === "0.0.0.0") {
       gateway.bind = "lan";
       changes.push("Normalized gateway.bind host alias.");
@@ -197,17 +199,17 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
     }
 
     migrateThreadBinding(next.session, changes, "session");
-    const sessionMaintenance = asRecord(asRecord(next.session)?.maintenance);
+    const sessionMaintenance = readNullableRecord(readNullableRecord(next.session)?.maintenance);
     if (sessionMaintenance && "rotateBytes" in sessionMaintenance) {
       delete sessionMaintenance.rotateBytes;
       changes.push("Removed deprecated session.maintenance.rotateBytes.");
     }
-    const channels = asRecord(next.channels);
+    const channels = readNullableRecord(next.channels);
     for (const [channelId, channelRaw] of Object.entries(channels ?? {})) {
       if (channelId === "defaults") {
         continue;
       }
-      const channel = asRecord(channelRaw);
+      const channel = readNullableRecord(channelRaw);
       if (!channel) {
         continue;
       }
@@ -218,8 +220,10 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
       if (migrateNestedAllowAliases(channel, channelId)) {
         changes.push(`Normalized channels.${channelId} nested allow aliases.`);
       }
-      for (const [accountId, accountRaw] of Object.entries(asRecord(channel.accounts) ?? {})) {
-        const account = asRecord(accountRaw);
+      for (const [accountId, accountRaw] of Object.entries(
+        readNullableRecord(channel.accounts) ?? {},
+      )) {
+        const account = readNullableRecord(accountRaw);
         migrateThreadBinding(account, changes, `channels.${channelId}.accounts.${accountId}`);
         if (account && migrateStreamingAlias(account, channelId)) {
           changes.push(`Normalized channels.${channelId}.accounts.${accountId} streaming aliases.`);
@@ -227,7 +231,9 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
       }
     }
 
-    const sandbox = asRecord(asRecord(asRecord(next.agents)?.defaults)?.sandbox);
+    const sandbox = readNullableRecord(
+      readNullableRecord(readNullableRecord(next.agents)?.defaults)?.sandbox,
+    );
     if (sandbox && "perSession" in sandbox) {
       sandbox.scope = sandbox.perSession === true ? "session" : "workspace";
       delete sandbox.perSession;
@@ -343,7 +349,7 @@ vi.mock("../config/legacy.js", () => {
     requireSourceLiteral?: boolean;
   };
 
-  function asRecord(value: unknown): Record<string, unknown> | null {
+  function readNullableRecord(value: unknown): Record<string, unknown> | null {
     return value && typeof value === "object" && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : null;
@@ -352,7 +358,7 @@ vi.mock("../config/legacy.js", () => {
   function getPathValue(root: Record<string, unknown>, pathParts: readonly string[]): unknown {
     let cursor: unknown = root;
     for (const part of pathParts) {
-      const record = asRecord(cursor);
+      const record = readNullableRecord(cursor);
       if (!record) {
         return undefined;
       }
@@ -384,11 +390,11 @@ vi.mock("../config/legacy.js", () => {
 
   return {
     findLegacyConfigIssues: (raw: unknown, sourceRaw?: unknown, extraRules: LegacyRule[] = []) => {
-      const root = asRecord(raw);
+      const root = readNullableRecord(raw);
       if (!root) {
         return [];
       }
-      const sourceRoot = asRecord(sourceRaw) ?? root;
+      const sourceRoot = readNullableRecord(sourceRaw) ?? root;
       const issues: Array<{ path: string; message: string }> = [];
 
       if ("heartbeat" in root) {
@@ -405,7 +411,7 @@ vi.mock("../config/legacy.js", () => {
           'memorySearch is legacy; use memory.search. Run "openclaw doctor --fix".',
         );
       }
-      const gateway = asRecord(root.gateway);
+      const gateway = readNullableRecord(root.gateway);
       if (gateway && "bind" in gateway) {
         addIssue(
           issues,
@@ -413,7 +419,9 @@ vi.mock("../config/legacy.js", () => {
           'gateway.bind host aliases are legacy; use the canonical bind mode. Run "openclaw doctor --fix".',
         );
       }
-      const sessionThreadBindings = asRecord(asRecord(root.session)?.threadBindings);
+      const sessionThreadBindings = readNullableRecord(
+        readNullableRecord(root.session)?.threadBindings,
+      );
       if (sessionThreadBindings && "ttlHours" in sessionThreadBindings) {
         addIssue(
           issues,
@@ -421,7 +429,7 @@ vi.mock("../config/legacy.js", () => {
           'session.threadBindings.ttlHours is legacy; use session.threadBindings.idleHours. Run "openclaw doctor --fix".',
         );
       }
-      const sessionMaintenance = asRecord(asRecord(root.session)?.maintenance);
+      const sessionMaintenance = readNullableRecord(readNullableRecord(root.session)?.maintenance);
       if (sessionMaintenance && "rotateBytes" in sessionMaintenance) {
         addIssue(
           issues,
@@ -429,7 +437,9 @@ vi.mock("../config/legacy.js", () => {
           'session.maintenance.rotateBytes is deprecated and ignored; run "openclaw doctor --fix" to remove it.',
         );
       }
-      const xSearch = asRecord(asRecord(asRecord(root.tools)?.web)?.x_search);
+      const xSearch = readNullableRecord(
+        readNullableRecord(readNullableRecord(root.tools)?.web)?.x_search,
+      );
       if (xSearch && "apiKey" in xSearch) {
         addIssue(
           issues,
@@ -437,7 +447,9 @@ vi.mock("../config/legacy.js", () => {
           'tools.web.x_search.apiKey is legacy; use plugins.entries.xai.config.webSearch.apiKey. Run "openclaw doctor --fix".',
         );
       }
-      const sandbox = asRecord(asRecord(asRecord(root.agents)?.defaults)?.sandbox);
+      const sandbox = readNullableRecord(
+        readNullableRecord(readNullableRecord(root.agents)?.defaults)?.sandbox,
+      );
       if (sandbox && "perSession" in sandbox) {
         addIssue(
           issues,
@@ -445,7 +457,7 @@ vi.mock("../config/legacy.js", () => {
           'agents.defaults.sandbox.perSession is legacy; use agents.defaults.sandbox.scope. Run "openclaw doctor --fix".',
         );
       }
-      const internalHooks = asRecord(asRecord(root.hooks)?.internal);
+      const internalHooks = readNullableRecord(readNullableRecord(root.hooks)?.internal);
       if (internalHooks && "handlers" in internalHooks) {
         addIssue(
           issues,
@@ -454,12 +466,12 @@ vi.mock("../config/legacy.js", () => {
         );
       }
 
-      const channels = asRecord(root.channels);
+      const channels = readNullableRecord(root.channels);
       for (const [channelId, channelRaw] of Object.entries(channels ?? {})) {
         if (channelId === "defaults") {
           continue;
         }
-        const channel = asRecord(channelRaw);
+        const channel = readNullableRecord(channelRaw);
         if (!channel) {
           continue;
         }
@@ -472,7 +484,7 @@ vi.mock("../config/legacy.js", () => {
               : `channels.${channelId}.streamMode, channels.${channelId}.streaming aliases are legacy. Run "openclaw doctor --fix".`,
           );
         }
-        const threadBindings = asRecord(channel.threadBindings);
+        const threadBindings = readNullableRecord(channel.threadBindings);
         if (threadBindings && "ttlHours" in threadBindings) {
           addIssue(
             issues,
@@ -481,8 +493,8 @@ vi.mock("../config/legacy.js", () => {
           );
         }
         if (channelId === "slack") {
-          for (const roomRaw of Object.values(asRecord(channel.channels) ?? {})) {
-            if ("allow" in (asRecord(roomRaw) ?? {})) {
+          for (const roomRaw of Object.values(readNullableRecord(channel.channels) ?? {})) {
+            if ("allow" in (readNullableRecord(roomRaw) ?? {})) {
               addIssue(
                 issues,
                 ["channels", "slack"],
@@ -492,8 +504,8 @@ vi.mock("../config/legacy.js", () => {
           }
         }
         if (channelId === "googlechat") {
-          for (const spaceRaw of Object.values(asRecord(channel.groups) ?? {})) {
-            if ("allow" in (asRecord(spaceRaw) ?? {})) {
+          for (const spaceRaw of Object.values(readNullableRecord(channel.groups) ?? {})) {
+            if ("allow" in (readNullableRecord(spaceRaw) ?? {})) {
               addIssue(
                 issues,
                 ["channels", "googlechat"],
@@ -503,10 +515,10 @@ vi.mock("../config/legacy.js", () => {
           }
         }
         if (channelId === "discord") {
-          for (const guildRaw of Object.values(asRecord(channel.guilds) ?? {})) {
-            const guild = asRecord(guildRaw);
-            for (const roomRaw of Object.values(asRecord(guild?.channels) ?? {})) {
-              if ("allow" in (asRecord(roomRaw) ?? {})) {
+          for (const guildRaw of Object.values(readNullableRecord(channel.guilds) ?? {})) {
+            const guild = readNullableRecord(guildRaw);
+            for (const roomRaw of Object.values(readNullableRecord(guild?.channels) ?? {})) {
+              if ("allow" in (readNullableRecord(roomRaw) ?? {})) {
                 addIssue(
                   issues,
                   ["channels", "discord"],
@@ -516,9 +528,11 @@ vi.mock("../config/legacy.js", () => {
             }
           }
         }
-        for (const [accountId, accountRaw] of Object.entries(asRecord(channel.accounts) ?? {})) {
-          const account = asRecord(accountRaw);
-          const accountThreadBindings = asRecord(account?.threadBindings);
+        for (const [accountId, accountRaw] of Object.entries(
+          readNullableRecord(channel.accounts) ?? {},
+        )) {
+          const account = readNullableRecord(accountRaw);
+          const accountThreadBindings = readNullableRecord(account?.threadBindings);
           if (accountThreadBindings && "ttlHours" in accountThreadBindings) {
             addIssue(
               issues,
@@ -854,14 +868,14 @@ vi.mock("./doctor/channel-capabilities.js", () => {
 });
 
 vi.mock("../plugins/doctor-contract-registry.js", () => {
-  function asRecord(value: unknown): Record<string, unknown> | null {
+  function readNullableRecord(value: unknown): Record<string, unknown> | null {
     return value && typeof value === "object" && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : null;
   }
 
   function hasLegacyTalkFields(value: unknown): boolean {
-    const talk = asRecord(value);
+    const talk = readNullableRecord(value);
     return Boolean(
       talk &&
       ["voiceId", "voiceAliases", "modelId", "outputFormat", "apiKey"].some((key) =>
@@ -905,7 +919,7 @@ vi.mock("../plugins/doctor-contract-registry.js", () => {
     }
 
     let changed = false;
-    const streaming = asRecord(entry.streaming) ?? {};
+    const streaming = readNullableRecord(entry.streaming) ?? {};
     if (!("mode" in streaming) && ("streamMode" in entry || typeof entry.streaming !== "object")) {
       const mode = resolveDiscordStreamMode(entry);
       streaming.mode = mode;
@@ -926,7 +940,7 @@ vi.mock("../plugins/doctor-contract-registry.js", () => {
       changes.push(`Moved ${pathPrefix}.chunkMode → ${pathPrefix}.streaming.chunkMode.`);
       changed = true;
     }
-    const block = asRecord(streaming.block) ?? {};
+    const block = readNullableRecord(streaming.block) ?? {};
     if ("blockStreaming" in entry && !("enabled" in block)) {
       block.enabled = entry.blockStreaming;
       delete entry.blockStreaming;
@@ -944,7 +958,7 @@ vi.mock("../plugins/doctor-contract-registry.js", () => {
     if (Object.keys(block).length > 0) {
       streaming.block = block;
     }
-    const preview = asRecord(streaming.preview) ?? {};
+    const preview = readNullableRecord(streaming.preview) ?? {};
     if ("draftChunk" in entry && !("chunk" in preview)) {
       preview.chunk = entry.draftChunk;
       delete entry.draftChunk;
@@ -962,23 +976,23 @@ vi.mock("../plugins/doctor-contract-registry.js", () => {
     config: unknown;
     changes: string[];
   } {
-    const root = asRecord(cfg);
-    const discord = asRecord(asRecord(root?.channels)?.discord);
+    const root = readNullableRecord(cfg);
+    const discord = readNullableRecord(readNullableRecord(root?.channels)?.discord);
     if (!root || !discord) {
       return { config: cfg, changes: [] };
     }
 
     const next = structuredClone(root);
-    const nextDiscord = asRecord(asRecord(next.channels)?.discord);
+    const nextDiscord = readNullableRecord(readNullableRecord(next.channels)?.discord);
     if (!nextDiscord) {
       return { config: cfg, changes: [] };
     }
 
     const changes: string[] = [];
     normalizeDiscordStreamingEntry(nextDiscord, "channels.discord", changes);
-    const accounts = asRecord(nextDiscord.accounts);
+    const accounts = readNullableRecord(nextDiscord.accounts);
     for (const [accountId, accountRaw] of Object.entries(accounts ?? {})) {
-      const account = asRecord(accountRaw);
+      const account = readNullableRecord(accountRaw);
       if (account) {
         normalizeDiscordStreamingEntry(account, `channels.discord.accounts.${accountId}`, changes);
       }
@@ -989,8 +1003,8 @@ vi.mock("../plugins/doctor-contract-registry.js", () => {
   return {
     collectRelevantDoctorPluginIds: (raw: unknown): string[] => {
       const ids = new Set<string>();
-      const root = asRecord(raw);
-      const channels = asRecord(root?.channels);
+      const root = readNullableRecord(raw);
+      const channels = readNullableRecord(root?.channels);
       for (const channelId of Object.keys(channels ?? {})) {
         if (channelId !== "defaults") {
           ids.add(channelId);
@@ -1055,7 +1069,7 @@ vi.mock("../plugins/setup-registry.js", () => ({
 }));
 
 vi.mock("./doctor/shared/channel-doctor.js", () => {
-  function asRecord(value: unknown): Record<string, unknown> | null {
+  function readNullableRecord(value: unknown): Record<string, unknown> | null {
     return value && typeof value === "object" && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : null;
@@ -1076,7 +1090,7 @@ vi.mock("./doctor/shared/channel-doctor.js", () => {
       "roles",
     ]);
     const visit = (value: unknown) => {
-      const record = asRecord(value);
+      const record = readNullableRecord(value);
       if (!record) {
         return;
       }
@@ -1103,10 +1117,10 @@ vi.mock("./doctor/shared/channel-doctor.js", () => {
   function collectCompatibilityMutations(cfg: { channels?: Record<string, unknown> }) {
     const next = structuredClone(cfg);
     const changes: string[] = [];
-    const telegram = asRecord(next.channels?.telegram);
+    const telegram = readNullableRecord(next.channels?.telegram);
     if (telegram && "groupMentionsOnly" in telegram) {
-      const groups = asRecord(telegram.groups) ?? {};
-      const defaultGroup = asRecord(groups["*"]) ?? {};
+      const groups = readNullableRecord(telegram.groups) ?? {};
+      const defaultGroup = readNullableRecord(groups["*"]) ?? {};
       if (defaultGroup.requireMention === undefined) {
         defaultGroup.requireMention = telegram.groupMentionsOnly;
       }
@@ -1121,20 +1135,20 @@ vi.mock("./doctor/shared/channel-doctor.js", () => {
   }
 
   function collectInactiveTelegramWarnings(cfg: { channels?: Record<string, unknown> }): string[] {
-    const telegram = asRecord(cfg.channels?.telegram);
+    const telegram = readNullableRecord(cfg.channels?.telegram);
     if (!telegram) {
       return [];
     }
-    const accounts = asRecord(telegram.accounts);
+    const accounts = readNullableRecord(telegram.accounts);
     if (!accounts) {
       return [];
     }
     return Object.entries(accounts).flatMap(([accountId, accountRaw]) => {
-      const account = asRecord(accountRaw);
+      const account = readNullableRecord(accountRaw);
       if (
         !account ||
         account.enabled !== false ||
-        !asRecord(account.botToken) ||
+        !readNullableRecord(account.botToken) ||
         !hasOwnStringArray(account.allowFrom)
       ) {
         return [];
@@ -1163,7 +1177,8 @@ vi.mock("./doctor/shared/channel-doctor.js", () => {
     if (!botToken) {
       return false;
     }
-    const groups = asRecord(params.account.groups) ?? asRecord(params.parent?.groups);
+    const groups =
+      readNullableRecord(params.account.groups) ?? readNullableRecord(params.parent?.groups);
     const groupAllowFrom = params.account.groupAllowFrom ?? params.parent?.groupAllowFrom;
     return !groups && !hasOwnStringArray(groupAllowFrom);
   }
@@ -1190,16 +1205,16 @@ vi.mock("./doctor/shared/channel-doctor.js", () => {
     collectChannelDoctorEmptyAllowlistExtraWarnings: vi.fn(collectTelegramFirstTimeExtraWarnings),
     collectChannelDoctorMutableAllowlistWarnings: vi.fn(
       ({ cfg }: { cfg: { channels?: Record<string, unknown> } }) => {
-        const zalouser = asRecord(cfg.channels?.zalouser);
+        const zalouser = readNullableRecord(cfg.channels?.zalouser);
         if (!zalouser || zalouser.dangerouslyAllowNameMatching === true) {
           return [];
         }
-        const groups = asRecord(zalouser.groups);
+        const groups = readNullableRecord(zalouser.groups);
         if (!groups) {
           return [];
         }
         return Object.entries(groups).flatMap(([name, group]) =>
-          asRecord(group)?.allow === true
+          readNullableRecord(group)?.allow === true
             ? [
                 `- Found mutable allowlist entry across zalouser while name matching is disabled by default: channels.zalouser.groups: ${name}.`,
               ]
@@ -1211,10 +1226,10 @@ vi.mock("./doctor/shared/channel-doctor.js", () => {
     collectChannelDoctorRepairMutations: vi.fn(
       async ({ cfg }: { cfg: { channels?: Record<string, unknown> } }) => {
         const mutations: Array<{ config: unknown; changes: string[]; warnings?: string[] }> = [];
-        const discord = asRecord(cfg.channels?.discord);
+        const discord = readNullableRecord(cfg.channels?.discord);
         if (discord) {
           const next = structuredClone(cfg);
-          const nextDiscord = asRecord(next.channels?.discord);
+          const nextDiscord = readNullableRecord(next.channels?.discord);
           if (nextDiscord && stringifySelectedArrays(nextDiscord)) {
             mutations.push({
               config: next,
@@ -1244,7 +1259,7 @@ vi.mock("./doctor/shared/channel-doctor.js", () => {
 });
 
 vi.mock("./doctor/shared/preview-warnings.js", () => {
-  function asRecord(value: unknown): Record<string, unknown> | null {
+  function readNullableRecord(value: unknown): Record<string, unknown> | null {
     return value && typeof value === "object" && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : null;
@@ -1269,7 +1284,11 @@ vi.mock("./doctor/shared/preview-warnings.js", () => {
       return [];
     }
     const botToken = params.account.botToken ?? params.parent?.botToken;
-    if (!botToken || asRecord(params.account.groups) || asRecord(params.parent?.groups)) {
+    if (
+      !botToken ||
+      readNullableRecord(params.account.groups) ||
+      readNullableRecord(params.parent?.groups)
+    ) {
       return [];
     }
     if (hasStringEntries(params.account.groupAllowFrom ?? params.parent?.groupAllowFrom)) {
@@ -1290,7 +1309,7 @@ vi.mock("./doctor/shared/preview-warnings.js", () => {
     doctorFixCommand: string;
   }): Promise<string[]> {
     const warnings: string[] = [];
-    const telegram = asRecord(cfg.channels?.telegram);
+    const telegram = readNullableRecord(cfg.channels?.telegram);
     if (telegram) {
       const telegramBlocked =
         cfg.plugins?.enabled === false || cfg.plugins?.entries?.telegram?.enabled === false;
@@ -1307,9 +1326,9 @@ vi.mock("./doctor/shared/preview-warnings.js", () => {
             prefix: "channels.telegram",
           }),
         );
-        const accounts = asRecord(telegram.accounts);
+        const accounts = readNullableRecord(telegram.accounts);
         for (const [accountId, accountRaw] of Object.entries(accounts ?? {})) {
-          const account = asRecord(accountRaw);
+          const account = readNullableRecord(accountRaw);
           if (account) {
             warnings.push(
               ...telegramFirstTimeWarnings({
@@ -1322,7 +1341,7 @@ vi.mock("./doctor/shared/preview-warnings.js", () => {
         }
       }
     }
-    const imessage = asRecord(cfg.channels?.imessage);
+    const imessage = readNullableRecord(cfg.channels?.imessage);
     if (imessage?.groupPolicy === "allowlist" && !hasStringEntries(imessage.groupAllowFrom)) {
       warnings.push(
         '- channels.imessage.groupPolicy is "allowlist" but groupAllowFrom is empty — this channel does not fall back to allowFrom, so all group messages will be silently dropped.',
@@ -2129,6 +2148,40 @@ describe("doctor config flow", () => {
       params: { refresh: true },
       timeoutMs: 3000,
     });
+  });
+
+  it("emits warning-only stale channel cleanup without changing config", async () => {
+    const input = {
+      agents: { entries: { ops: { default: true } } },
+      channels: { matrix: { enabled: true } },
+    };
+    const channelDoctor = await import("./doctor/shared/channel-doctor.js");
+    vi.mocked(channelDoctor.collectChannelDoctorStaleConfigMutations).mockResolvedValueOnce([
+      {
+        config: { ...input, channels: { matrix: { enabled: false } } },
+        changes: [],
+        warnings: ["- matrix stale cleanup warning"],
+      },
+    ]);
+    runDoctorRepairSequenceMock.mockImplementation(async (params: { state: unknown }) => ({
+      state: params.state,
+      changeNotes: [],
+      warningNotes: [],
+      authProfilesRepaired: false,
+    }));
+
+    const result = await runDoctorConfigWithInput({
+      config: input,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(terminalNoteMock).toHaveBeenCalledWith(
+      "- matrix stale cleanup warning",
+      "Doctor warnings",
+    );
+    expect(result.cfg).toEqual(input);
+    expect(result.shouldWriteConfig).toBe(false);
   });
 
   it("previews and repairs hooks token reuse of gateway auth", async () => {

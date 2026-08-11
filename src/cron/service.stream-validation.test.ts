@@ -165,12 +165,13 @@ describe("cron stream schedule validation", () => {
       });
       expect(cron.getJob(created.id)?.state).toMatchObject({
         lastRunStatus: "error",
+        lastError: "stream source exhausted restarts",
         consecutiveErrors: 5,
         streamStatus: "error",
         streamRestartExhausted: true,
       });
       expect(enqueueSystemEvent).toHaveBeenCalledWith(
-        expect.stringContaining("stream source exhausted restarts"),
+        'Automation "stream" failed 5 times\nCheck automation history for details.',
         expect.any(Object),
       );
     } finally {

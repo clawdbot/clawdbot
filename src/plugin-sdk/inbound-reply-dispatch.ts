@@ -6,7 +6,7 @@ import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import {
-  deliverInboundReplyWithMessageSendContext,
+  deliverInboundReplyWithMessageSendContextCore,
   isDurableInboundReplyDeliveryHandled,
   throwIfDurableInboundReplyDeliveryFailed,
   type DurableInboundReplyDeliveryOptions,
@@ -90,7 +90,7 @@ async function recordInboundSessionAndDispatchReply(
         payload && typeof payload === "object" ? normalizeOutboundReplyPayload(payload) : {},
       deliver: async (payload, info) => {
         if (params.durable) {
-          const durable = await deliverInboundReplyWithMessageSendContext({
+          const durable = await deliverInboundReplyWithMessageSendContextCore({
             cfg: params.cfg,
             channel: params.channel,
             accountId: params.accountId,

@@ -42,7 +42,7 @@ import {
 import { resolveCliBackendConfig } from "./cli-backends.js";
 import type { CliOutput } from "./cli-output-contracts.js";
 import { CliAuthProfilePreparationError } from "./cli-runner/auth-profile-preparation-error.js";
-import { shouldUseClaudeLiveSession } from "./cli-runner/claude-live-session.js";
+import { acceptsClaudeLive } from "./cli-runner/claude-live-session-policy.js";
 import {
   attachCliMessagingDeliveryEvidence,
   getCliMessagingDeliveryEvidence,
@@ -197,6 +197,8 @@ function shouldRetryFreshCliSessionAfterFailover(params: {
       return params.error.code === "cli_unknown_empty_failure";
     case "empty_response":
       return params.error.code === "cli_unknown_empty_failure";
+    case "format":
+      return params.error.code === "cli_synthetic_no_response";
     case "timeout":
       return params.error.code === "cli_no_output_timeout";
     case "context_overflow":
@@ -728,9 +730,8 @@ async function runCliAgentInternal(
   };
   if (params.cleanupCliLiveSessionOnRunEnd === true) {
     try {
-      const { closeClaudeLiveSessionForContext } =
-        await import("./cli-runner/claude-live-session.js");
-      await closeClaudeLiveSessionForContext(context);
+      const { closeClaudeSession } = await import("./cli-runner/claude-live-registry.js");
+      await closeClaudeSession(context, "restart");
     } catch (error) {
       recordCleanupError(error);
     }
@@ -949,9 +950,7 @@ export async function runPreparedCliAgent(
   ): ReplyPayload[] => {
     return buildEmbeddedRunPayloads({
       assistantTexts: [],
-      toolMetas: [],
       lastAssistant: undefined,
-      inlineToolResultsAllowed: false,
       sessionKey: params.sessionKey ?? "",
       provider: params.provider,
       model: context.modelId,
@@ -1546,7 +1545,7 @@ export async function runPreparedCliAgent(
               effectiveCliSessionId,
               params.provider,
               context.cwd ?? context.workspaceDir,
-              { skipTranscriptProbe: shouldUseClaudeLiveSession(context) },
+              { skipTranscriptProbe: acceptsClaudeLive(context) },
             );
         await runCliAgentEndHook(params, {
           event: {

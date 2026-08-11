@@ -34,7 +34,10 @@ type NpmLockOptions = {
   installStrategy?: "hoisted" | "nested" | "shallow" | "linked" | "" | null;
 };
 
-const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const SCRIPT_ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT_DIR = path.resolve(
+  process.env.OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT?.trim() || SCRIPT_ROOT_DIR,
+);
 const EXACT_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u;
 const STABLE_VERSION_PATTERN = /^(\d+)\.(\d+)\.(\d+)$/u;
 const NPM_LOCK_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;

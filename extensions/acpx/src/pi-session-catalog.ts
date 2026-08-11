@@ -7,6 +7,7 @@ import type {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { listPiSummaryPage, readPiSessionById } from "./pi-session-store.js";
+import { parsePiSessionTimestampMs } from "./pi-session-timestamp.js";
 
 const LOCAL_HOST_ID = "gateway";
 const DEFAULT_PAGE_LIMIT = 20;
@@ -161,17 +162,6 @@ function textFromContent(content: unknown): string {
     .join("\n");
 }
 
-function timestampMs(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Date.parse(value);
-    return Number.isNaN(parsed) ? undefined : parsed;
-  }
-  return undefined;
-}
-
 function parseListParams(value: unknown): { searchTerm?: string; limit: number; cursor?: string } {
   if (value === undefined || value === null) {
     return { limit: DEFAULT_PAGE_LIMIT };
@@ -236,7 +226,8 @@ function isoTimestamp(
   message: Record<string, unknown>,
   entry: Record<string, unknown>,
 ): string | undefined {
-  const value = timestampMs(message.timestamp) ?? timestampMs(entry.timestamp);
+  const value =
+    parsePiSessionTimestampMs(message.timestamp) ?? parsePiSessionTimestampMs(entry.timestamp);
   if (value === undefined) {
     return undefined;
   }

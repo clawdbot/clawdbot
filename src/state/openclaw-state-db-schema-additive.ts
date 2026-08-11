@@ -13,8 +13,29 @@ import {
   repairLegacyTaskDeliveryStatuses,
   repairLegacySubagentExecutionPayloads,
   repairLegacySubagentRetainedResults,
+  repairLegacySubagentSuspensionReasons,
 } from "./openclaw-state-db-legacy-backfills.js";
 import { ensureColumn } from "./openclaw-state-db-schema-helpers.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+
+const SECRET_STORE_SCHEMA_START = "CREATE TABLE IF NOT EXISTS secret_store_entries (";
+const SECRET_STORE_SCHEMA_END =
+  "ON secret_store_entries (scope_kind, scope_id, name) WHERE deleted_at_ms IS NULL;";
+
+function secretStoreSchemaSql(): string {
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(SECRET_STORE_SCHEMA_START);
+  const endMarkerStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf(SECRET_STORE_SCHEMA_END, start);
+  const hasBoundedSchema = start >= 0 && endMarkerStart >= start;
+  if (!hasBoundedSchema) {
+    throw new Error("OpenClaw secret store schema marker is missing.");
+  }
+  return OPENCLAW_STATE_SCHEMA_SQL.slice(start, endMarkerStart + SECRET_STORE_SCHEMA_END.length);
+}
+
+/** Lazily install the additive secret store table and index on first write. */
+export function ensureSecretStoreSchema(database: DatabaseSync): void {
+  database.exec(secretStoreSchemaSql()); // sqlite-allow-raw -- Canonical additive DDL only.
+}
 
 export function ensureAgentDeletionJournalSchema(database: DatabaseSync): void {
   database.exec(`
@@ -94,7 +115,42 @@ function backfillLegacyManagedImageRoots(db: DatabaseSync): void {
   }
 }
 
+function ensureWorkerSessionToolStateSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS worker_turn_tool_authorities (
+      session_id TEXT NOT NULL PRIMARY KEY,
+      environment_id TEXT NOT NULL,
+      owner_epoch INTEGER NOT NULL CHECK (owner_epoch >= 1),
+      placement_generation INTEGER NOT NULL CHECK (placement_generation >= 0),
+      claim_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      tool_names_json TEXT NOT NULL,
+      updated_at_ms INTEGER NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
+    ) STRICT;
+
+    CREATE TABLE IF NOT EXISTS worker_session_tool_operations (
+      source_session_id TEXT NOT NULL,
+      source_claim_id TEXT NOT NULL,
+      tool_call_id TEXT NOT NULL,
+      tool_name TEXT NOT NULL CHECK (tool_name IN ('sessions_spawn', 'sessions_send')),
+      request_digest TEXT NOT NULL,
+      operation_seed TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'unknown')),
+      child_session_key TEXT,
+      result_json TEXT,
+      gateway_instance_id TEXT NOT NULL,
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (source_session_id, source_claim_id, tool_call_id),
+      FOREIGN KEY (source_session_id)
+        REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
+    ) STRICT;
+  `);
+}
+
 export function ensureAdditiveStateColumns(db: DatabaseSync): void {
+  ensureWorkerSessionToolStateSchema(db);
   for (const { columnName, dataType, tableName } of CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
     ensureColumn(db, tableName, `${columnName} ${dataType}`);
   }
@@ -347,6 +403,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "subagent_runs", "swarm_structured_json TEXT");
   ensureColumn(db, "subagent_runs", "swarm_schema_error TEXT");
   ensureColumn(db, "subagent_runs", "swarm_usage_json TEXT");
+  repairLegacySubagentSuspensionReasons(db);
   repairLegacySubagentExecutionPayloads(db);
   repairLegacySubagentRetainedResults(db);
   ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");

@@ -19,14 +19,14 @@ import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-trans
 const committedTranscriptMessageSequences = new WeakMap<object, number>();
 
 /** Reads the visible-message sequence captured from the final active branch. */
-export function readCommittedSqliteTranscriptMessageSequence(
+export function readCommittedTranscriptMessageSequence(
   message: TranscriptMessageAppendResult<unknown>,
 ): number | undefined {
   return committedTranscriptMessageSequences.get(message);
 }
 
 /** Captures atomic turn cursors from the final projection before SQLite commits. */
-export function rememberCommittedSqliteTranscriptMessageSequencesInTransaction(
+export function rememberCommittedTranscriptMessageSequencesInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
   messages: readonly TranscriptMessageAppendResult<unknown>[],
@@ -76,7 +76,7 @@ export function rememberCommittedSqliteTranscriptMessageSequencesInTransaction(
 }
 
 /** Resolves final cursors while an ordinary turn still owns its writer transaction. */
-export function rememberCommittedSqliteTranscriptMessageSequences(
+export function rememberCommittedTranscriptMessageSequences(
   scope: SessionTranscriptTurnWriteContext,
   messages: readonly TranscriptMessageAppendResult<unknown>[],
 ): void {
@@ -89,7 +89,7 @@ export function rememberCommittedSqliteTranscriptMessageSequences(
     sessionKey: scope.sessionKey,
     ...(scope.storePath ? { storePath: scope.storePath } : {}),
   });
-  rememberCommittedSqliteTranscriptMessageSequencesInTransaction(
+  rememberCommittedTranscriptMessageSequencesInTransaction(
     openOpenClawAgentDatabase(toDatabaseOptions(resolved)),
     resolved.sessionId,
     messages,

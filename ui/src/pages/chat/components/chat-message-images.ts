@@ -1,12 +1,14 @@
 import { html, noChange, nothing, type TemplateResult } from "lit";
 import { AsyncDirective, directive } from "lit/async-directive.js";
 import { until } from "lit/directives/until.js";
+import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import {
   openExternalUrlSafe,
   reserveExternalWindowForDeferredNavigation,
   resolveSafeExternalUrl,
 } from "../../../lib/open-external-url.ts";
+import { showToast } from "../../../lib/toast.ts";
 import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import {
@@ -33,6 +35,7 @@ import {
 
 const MANAGED_OUTGOING_IMAGE_FETCH_TIMEOUT_MS = 30_000;
 const MANAGED_OUTGOING_IMAGE_RETRY_MS = 5_000;
+type ManagedImageVariant = "full" | "thumbnail";
 
 class ManagedImageResourceDirective extends AsyncDirective {
   private cacheKey: string | undefined;
@@ -146,68 +149,81 @@ export function renderMessageImages(images: RenderableImageBlock[], opts?: Image
   const openImage = (img: RenderableImageBlock, previewUrl: string) => {
     const title = img.alt?.trim() || t("chat.imageLightbox.untitled");
     const requestVersion = opts?.onRequestOpenImage?.();
-    const managedSource = isManagedOutgoingImageSource(img.displayUrl);
-    const cacheKey = managedSource
-      ? resolveManagedOutgoingImageBlobUrlCacheKey(img.displayUrl, opts, img.artifactId)
-      : undefined;
-    const previewIsCurrent =
-      !managedSource ||
-      readManagedOutgoingImageBlobUrl(img.displayUrl, opts, img.artifactId) === previewUrl;
-    if (previewIsCurrent) {
-      const release =
-        opts?.onOpenImage && cacheKey ? retainManagedImageBlobUrl(cacheKey) : undefined;
-      openResolvedImage(opts?.onOpenImage, previewUrl, title, release, requestVersion);
+    if (!isManagedOutgoingImageSource(img.displayUrl)) {
+      openResolvedImage(opts?.onOpenImage, previewUrl, title, undefined, requestVersion);
       return;
     }
 
-    // A managed-image Blob URL may have been evicted after this row rendered.
-    // Re-resolve before opening so the modal never receives a revoked URL.
+    const cacheKey = resolveManagedOutgoingImageBlobUrlCacheKey(
+      img.displayUrl,
+      opts,
+      img.artifactId,
+      "full",
+    );
+    const cached = readManagedOutgoingImageBlobUrl(img.displayUrl, opts, img.artifactId, "full");
+    if (cached) {
+      const release = opts?.onOpenImage ? retainManagedImageBlobUrl(cacheKey) : undefined;
+      openResolvedImage(opts?.onOpenImage, cached, title, release, requestVersion);
+      return;
+    }
+
     if (!opts?.onOpenImage) {
       const pendingWindow = reserveExternalWindowForDeferredNavigation();
-      void resolveManagedOutgoingImageBlobUrl(img.displayUrl, opts, img.artifactId)
+      void resolveManagedOutgoingImageBlobUrl(img.displayUrl, opts, img.artifactId, "full")
         .then((freshUrl) => {
           const safeUrl = freshUrl
             ? resolveSafeExternalUrl(freshUrl, window.location.href, { allowDataImage: true })
             : null;
           if (!safeUrl) {
             pendingWindow?.close();
+            showToast({ message: t("chat.imageLightbox.loadFailed") });
           } else if (pendingWindow) {
             pendingWindow.location.replace(safeUrl);
           } else {
             openExternalUrlSafe(safeUrl, { allowDataImage: true });
           }
         })
-        .catch(() => pendingWindow?.close());
+        .catch(() => {
+          pendingWindow?.close();
+          showToast({ message: t("chat.imageLightbox.loadFailed") });
+        });
       return;
     }
-    void resolveManagedOutgoingImageBlobUrl(img.displayUrl, opts, img.artifactId)
+    void resolveManagedOutgoingImageBlobUrl(img.displayUrl, opts, img.artifactId, "full")
       .then((freshUrl) => {
         if (!freshUrl) {
+          showToast({ message: t("chat.imageLightbox.loadFailed") });
           return;
         }
         const release = cacheKey ? retainManagedImageBlobUrl(cacheKey) : undefined;
         openResolvedImage(opts.onOpenImage, freshUrl, title, release, requestVersion);
       })
-      .catch(() => {});
+      .catch(() => showToast({ message: t("chat.imageLightbox.loadFailed") }));
   };
 
   const renderImageElement = (img: RenderableImageBlock, previewUrl: string) => {
     const title = img.alt?.trim() || t("chat.imageLightbox.untitled");
+    const managed = isManagedOutgoingImageSource(img.displayUrl);
     return html`
-      <button
-        type="button"
-        class="chat-message-image-button"
-        aria-label=${t("chat.imageLightbox.open", { title })}
-        @click=${() => openImage(img, previewUrl)}
-      >
-        <img
-          src=${previewUrl}
-          alt=${title}
-          class="chat-message-image"
-          width=${img.width ?? nothing}
-          height=${img.height ?? nothing}
-        />
-      </button>
+      <span class="chat-image-frame ${managed ? "chat-image-frame--managed" : ""}">
+        <button
+          type="button"
+          class="chat-message-image-button"
+          aria-label=${t("chat.imageLightbox.open", { title })}
+          @click=${() => openImage(img, previewUrl)}
+        >
+          <img
+            src=${previewUrl}
+            alt=${title}
+            class="chat-message-image"
+            width=${img.width ?? nothing}
+            height=${img.height ?? nothing}
+          />
+        </button>
+        ${managed
+          ? renderManagedImageActions(img, opts, () => openImage(img, previewUrl))
+          : nothing}
+      </span>
     `;
   };
 
@@ -252,18 +268,20 @@ function resolveManagedOutgoingImageBlobUrlCacheKey(
   source: string,
   opts?: ImageRenderOptions,
   artifactId?: string,
+  variant: ManagedImageVariant = "thumbnail",
 ): string {
   const authToken = opts?.authToken?.trim() ?? "";
-  return `${source}::${authToken}::${artifactId?.trim() ?? ""}`;
+  return `${buildManagedOutgoingImageVariantUrl(source, variant)}::${authToken}::${artifactId?.trim() ?? ""}`;
 }
 
 function readManagedOutgoingImageBlobUrl(
   source: string,
   opts?: ImageRenderOptions,
   artifactId?: string,
+  variant: ManagedImageVariant = "thumbnail",
 ): string | undefined {
   return readManagedImageBlobUrl(
-    resolveManagedOutgoingImageBlobUrlCacheKey(source, opts, artifactId),
+    resolveManagedOutgoingImageBlobUrlCacheKey(source, opts, artifactId, variant),
   );
 }
 
@@ -271,14 +289,14 @@ async function resolveManagedOutgoingImageBlobUrl(
   source: string,
   opts?: ImageRenderOptions,
   artifactId?: string,
+  variant: ManagedImageVariant = "thumbnail",
 ): Promise<string | null> {
-  const authToken = opts?.authToken?.trim() ?? "";
-  const cacheKey = resolveManagedOutgoingImageBlobUrlCacheKey(source, opts, artifactId);
+  const cacheKey = resolveManagedOutgoingImageBlobUrlCacheKey(source, opts, artifactId, variant);
   const resource = observeChatMediaResource<string | null>(
     "managed-image",
     cacheKey,
     opts?.onRequestUpdate,
-    `${source}::${artifactId?.trim() ?? ""}`,
+    `${buildManagedOutgoingImageVariantUrl(source, variant)}::${artifactId?.trim() ?? ""}`,
   );
   const cached = readManagedImageBlobUrl(cacheKey);
   if (cached) {
@@ -302,61 +320,25 @@ async function resolveManagedOutgoingImageBlobUrl(
     const controller = new AbortController();
     resource.abortController = controller;
     const pending = (async () => {
-      const requesterSessionKey = resolveManagedOutgoingImageRequesterSessionKey(source);
-      const artifactDownload =
-        requesterSessionKey && artifactId && opts?.resolveArtifactDownload
-          ? await opts
-              .resolveArtifactDownload({ sessionKey: requesterSessionKey, artifactId })
-              .catch(() => null)
-          : null;
+      const blob = await fetchManagedOutgoingImageBlob(
+        source,
+        opts,
+        artifactId,
+        variant,
+        controller,
+      );
+      if (!blob) {
+        return markManagedOutgoingImageUnavailable(resource);
+      }
       if (!isChatMediaResourceCurrent(resource)) {
         return null;
       }
-      const requestUrl = artifactDownload?.url ?? source;
-      const headers = new Headers({ Accept: "image/*" });
-      if (!artifactDownload && authToken) {
-        headers.set("Authorization", `Bearer ${authToken}`);
-      }
-      if (!artifactDownload && requesterSessionKey) {
-        headers.set("x-openclaw-requester-session-key", requesterSessionKey);
-      }
-      const timeout = setTimeout(() => {
-        controller.abort(
-          new DOMException("managed outgoing image fetch timed out", "TimeoutError"),
-        );
-      }, MANAGED_OUTGOING_IMAGE_FETCH_TIMEOUT_MS);
-      try {
-        // Managed media is a Gateway API at the origin root. Rebasing it under
-        // the Control UI mount path serves the HTML shell instead of image bytes.
-        const res = await fetch(requestUrl, {
-          method: "GET",
-          headers,
-          credentials: "same-origin",
-          signal: controller.signal,
-        });
-        if (!res.ok) {
-          return markManagedOutgoingImageUnavailable(resource);
-        }
-        const blob = await res.blob();
-        if (!blob.type.startsWith("image/")) {
-          return markManagedOutgoingImageUnavailable(resource);
-        }
-        if (!isChatMediaResourceCurrent(resource)) {
-          return null;
-        }
-        const blobUrl = URL.createObjectURL(blob);
-        cacheManagedImageBlobUrl(cacheKey, blobUrl);
-        resource.value = blobUrl;
-        resource.retryAttempted = false;
-        resource.unavailableAt = undefined;
-        return blobUrl;
-      } catch {
-        // The render path treats a missing preview as `nothing`; never reject
-        // its `until` promise for an optional image fetch or body failure.
-        return markManagedOutgoingImageUnavailable(resource);
-      } finally {
-        clearTimeout(timeout);
-      }
+      const blobUrl = URL.createObjectURL(blob);
+      cacheManagedImageBlobUrl(cacheKey, blobUrl);
+      resource.value = blobUrl;
+      resource.retryAttempted = false;
+      resource.unavailableAt = undefined;
+      return blobUrl;
     })().finally(() => {
       if (resource.abortController === controller) {
         resource.abortController = undefined;
@@ -370,6 +352,191 @@ async function resolveManagedOutgoingImageBlobUrl(
     resource.pending = pending;
   }
   return resource.pending;
+}
+
+function buildManagedOutgoingImageVariantUrl(source: string, variant: ManagedImageVariant): string {
+  try {
+    const parsed = new URL(source, window.location.origin);
+    parsed.pathname = parsed.pathname.replace(/\/(?:full|thumbnail)$/u, `/${variant}`);
+    return /^https?:\/\//iu.test(source)
+      ? parsed.href
+      : `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return source.replace(/\/(?:full|thumbnail)(?=$|[?#])/u, `/${variant}`);
+  }
+}
+
+async function fetchManagedOutgoingImageBlob(
+  source: string,
+  opts: ImageRenderOptions | undefined,
+  artifactId: string | undefined,
+  variant: ManagedImageVariant,
+  controller = new AbortController(),
+): Promise<Blob | null> {
+  const requesterSessionKey = resolveManagedOutgoingImageRequesterSessionKey(source);
+  const artifactDownload =
+    requesterSessionKey && artifactId && opts?.resolveArtifactDownload
+      ? await opts
+          .resolveArtifactDownload({ sessionKey: requesterSessionKey, artifactId })
+          .catch(() => null)
+      : null;
+  const requestUrl = buildManagedOutgoingImageVariantUrl(artifactDownload?.url ?? source, variant);
+  const headers = new Headers({ Accept: "image/*" });
+  const authToken = opts?.authToken?.trim();
+  if (!artifactDownload && authToken) {
+    headers.set("Authorization", `Bearer ${authToken}`);
+  }
+  if (!artifactDownload && requesterSessionKey) {
+    headers.set("x-openclaw-requester-session-key", requesterSessionKey);
+  }
+  const timeout = globalThis.setTimeout(() => {
+    controller.abort(new DOMException("managed outgoing image fetch timed out", "TimeoutError"));
+  }, MANAGED_OUTGOING_IMAGE_FETCH_TIMEOUT_MS);
+  try {
+    // Managed media is a Gateway API at the origin root. Rebasing it under
+    // the Control UI mount path serves the HTML shell instead of image bytes.
+    const response = await fetch(requestUrl, {
+      method: "GET",
+      headers,
+      credentials: "same-origin",
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const blob = await response.blob();
+    return blob.type.startsWith("image/") ? blob : null;
+  } catch {
+    return null;
+  } finally {
+    globalThis.clearTimeout(timeout);
+  }
+}
+
+async function readManagedOutgoingImageBlob(
+  source: string,
+  opts?: ImageRenderOptions,
+  artifactId?: string,
+): Promise<Blob> {
+  const blobUrl = await resolveManagedOutgoingImageBlobUrl(source, opts, artifactId, "full");
+  if (!blobUrl) {
+    throw new Error("managed image is unavailable");
+  }
+  const response = await fetch(blobUrl);
+  const blob = await response.blob();
+  if (!blob.type.startsWith("image/")) {
+    throw new Error("managed image response is invalid");
+  }
+  return blob;
+}
+
+function imageDownloadFileName(title: string, mimeType: string): string {
+  const extension = mimeType === "image/jpeg" ? "jpg" : mimeType.split("/", 2)[1] || "img";
+  const stem = Array.from(title, (character) =>
+    character.codePointAt(0)! <= 0x1f || '<>:"/\\|?*'.includes(character) ? "-" : character,
+  )
+    .join("")
+    .replace(/\.[a-z0-9]{1,10}$/iu, "")
+    .replace(/[. -]+$/u, "")
+    .slice(0, 120);
+  return `${stem || "generated-image"}.${/^[a-z0-9.+-]{1,12}$/u.test(extension) ? extension : "img"}`;
+}
+
+function downloadImageBlob(blob: Blob, fileName: string): void {
+  const blobUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = blobUrl;
+  anchor.download = fileName;
+  anchor.click();
+  globalThis.setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
+}
+
+async function convertImageBlobToPng(blob: Blob): Promise<Blob> {
+  if (blob.type === "image/png") {
+    return blob;
+  }
+  const bitmap = await createImageBitmap(blob);
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("image conversion context is unavailable");
+    }
+    context.drawImage(bitmap, 0, 0);
+    return await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (converted) =>
+          converted ? resolve(converted) : reject(new Error("image conversion failed")),
+        "image/png",
+      );
+    });
+  } finally {
+    bitmap.close();
+  }
+}
+
+function renderManagedImageActions(
+  image: RenderableImageBlock,
+  opts: ImageRenderOptions | undefined,
+  onOpen: () => void,
+) {
+  const title = image.alt?.trim() || t("chat.imageLightbox.untitled");
+  const download = async () => {
+    try {
+      const blob = await readManagedOutgoingImageBlob(image.displayUrl, opts, image.artifactId);
+      downloadImageBlob(blob, imageDownloadFileName(title, blob.type));
+    } catch {
+      showToast({ message: t("chat.imageLightbox.downloadFailed") });
+    }
+  };
+  const copy = async () => {
+    try {
+      if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+        throw new Error("image clipboard is unavailable");
+      }
+      const png = readManagedOutgoingImageBlob(image.displayUrl, opts, image.artifactId).then(
+        convertImageBlobToPng,
+      );
+      void png.catch(() => {});
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+      showToast({ message: t("common.copied") });
+    } catch {
+      showToast({ message: t("chat.imageLightbox.copyFailed") });
+    }
+  };
+  return html`
+    <span class="chat-image-actions">
+      <button
+        type="button"
+        class="chat-image-action"
+        title=${t("chat.imageLightbox.openOriginal")}
+        aria-label=${t("chat.imageLightbox.open", { title })}
+        @click=${onOpen}
+      >
+        ${icons.externalLink}
+      </button>
+      <button
+        type="button"
+        class="chat-image-action"
+        title=${t("chat.imageLightbox.download")}
+        aria-label=${t("chat.imageLightbox.download")}
+        @click=${() => void download()}
+      >
+        ${icons.download}
+      </button>
+      <button
+        type="button"
+        class="chat-image-action"
+        title=${t("chat.imageLightbox.copy")}
+        aria-label=${t("chat.imageLightbox.copy")}
+        @click=${() => void copy()}
+      >
+        ${icons.copy}
+      </button>
+    </span>
+  `;
 }
 
 function markManagedOutgoingImageUnavailable(resource: ChatMediaResource<string | null>): null {

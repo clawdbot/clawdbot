@@ -19,6 +19,17 @@ import {
 } from "./test-fixtures.js";
 import { listNostrAccountIds, resolveDefaultNostrAccountId, resolveNostrAccount } from "./types.js";
 
+describe("nostr target classification", () => {
+  it("accepts only valid direct-message public keys", () => {
+    expect(nostrPlugin.messaging?.inferTargetChatType?.({ to: TEST_HEX_PUBLIC_KEY })).toBe(
+      "direct",
+    );
+    expect(
+      nostrPlugin.messaging?.inferTargetChatType?.({ to: "not-a-public-key" }),
+    ).toBeUndefined();
+  });
+});
+
 function normalizeNostrTestEntry(entry: string): string {
   return entry
     .trim()

@@ -181,6 +181,7 @@ function runCiManifestFixture(options: {
   qaSmokePlan?: boolean;
   formatCheck?: boolean;
   releaseCandidateCompatibility?: boolean;
+  targetContextCompatibility?: boolean;
   nodeFastOnly?: boolean;
   nodeFastPluginContracts?: boolean;
   nodeFastCiRouting?: boolean;
@@ -325,6 +326,8 @@ function runCiManifestFixture(options: {
             : "false",
         OPENCLAW_CI_RELEASE_CANDIDATE_TARGET:
           options.releaseCandidateCompatibility === true ? "true" : "false",
+        OPENCLAW_CI_TARGET_CONTEXT_TARGET:
+          options.targetContextCompatibility === true ? "true" : "false",
         OPENCLAW_CI_REPOSITORY: "openclaw/openclaw",
         OPENCLAW_CI_RUN_ANDROID: "true",
         OPENCLAW_CI_RUN_CONTROL_UI_I18N: "true",
@@ -355,6 +358,36 @@ function runCiManifestFixture(options: {
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
+}
+
+function runTargetContextValidation(targetContextRef: string, targetRef: string) {
+  const root = tempDirs.make("openclaw-ci-target-context-");
+  const outputPath = path.join(root, "github-output");
+  writeFileSync(outputPath, "", "utf8");
+  const step = expectDefined(
+    readCiWorkflow().jobs.preflight.steps.find(
+      (candidate: WorkflowStep) => candidate.name === "Validate target context",
+    ),
+    "target context validation step",
+  );
+  const run = spawnSync(
+    "bash",
+    ["-c", expectDefined(step.run, "target context validation script")],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GITHUB_OUTPUT: outputPath,
+        TARGET_CONTEXT_REF: targetContextRef,
+        TARGET_REF: targetRef,
+      },
+    },
+  );
+  return {
+    output: `${run.stdout}${run.stderr}`,
+    outputs: readWorkflowOutputs(outputPath),
+    status: run.status,
+  };
 }
 
 function readAndroidReleaseWorkflow() {
@@ -782,12 +815,19 @@ function writeExecutable(filePath: string, lines: string[]): void {
 
 function writeProtocolDescriptor(
   repo: string,
-  additions: Array<{ name: string; since?: string }> = [],
+  additions: Array<{
+    name: string;
+    since?: string;
+    compatibilityRestored?: boolean;
+  }> = [],
 ): void {
-  const rows = [{ name: "health", since: "2026.7" }, ...additions].map(({ name, since }) => {
-    const sinceProperty = since === undefined ? "" : `, since: ${JSON.stringify(since)}`;
-    return `  { name: ${JSON.stringify(name)}${sinceProperty} },`;
-  });
+  const rows = [{ name: "health", since: "2026.7" }, ...additions].map(
+    ({ name, since, compatibilityRestored }) => {
+      const sinceProperty = since === undefined ? "" : `, since: ${JSON.stringify(since)}`;
+      const compatibilityProperty = compatibilityRestored ? ", compatibilityRestored: true" : "";
+      return `  { name: ${JSON.stringify(name)}${sinceProperty}${compatibilityProperty} },`;
+    },
+  );
   const descriptor = path.join(repo, "src/gateway/methods/core-descriptors.ts");
   mkdirSync(path.dirname(descriptor), { recursive: true });
   writeFileSync(
@@ -827,6 +867,29 @@ function createQaProtocolTopology() {
   writeFileSync(path.join(origin, "main-tip.txt"), "later main tip\n");
   commitProtocolFixture(origin, "advance main");
 
+  runGit(origin, ["checkout", "-q", "-b", "compatibility/restore", mainBase]);
+  writeProtocolDescriptor(origin, [
+    {
+      name: "gateway.restart.preflight",
+      since: "<=2026.7",
+      compatibilityRestored: true,
+    },
+  ]);
+  const compatibilityHead = commitProtocolFixture(origin, "restore compatibility method");
+
+  runGit(origin, ["checkout", "-q", "-b", "compatibility/invalid", mainBase]);
+  writeProtocolDescriptor(origin, [
+    {
+      name: "gateway.restart.invalid",
+      since: "2026.8",
+      compatibilityRestored: true,
+    },
+  ]);
+  const invalidCompatibilityHead = commitProtocolFixture(
+    origin,
+    "mislabel new method as compatibility",
+  );
+
   runGit(origin, ["checkout", "-q", "-b", releaseBranch, mainBase]);
   writeProtocolDescriptor(origin, [{ name: "sessions.releaseOnly" }]);
   const releaseHead = commitProtocolFixture(origin, "add release protocol method");
@@ -848,8 +911,10 @@ function createQaProtocolTopology() {
 
   return {
     checkout,
+    compatibilityHead,
     fakeBin,
     featureHead,
+    invalidCompatibilityHead,
     mainBase,
     mainHead,
     mainReleaseTag,
@@ -938,7 +1003,11 @@ function runProtocolSinceFixture(checkout: string, baseSha: string) {
   });
 }
 
-function runDependencyCheckFixture(options: { historicalTarget: boolean; scripts: string[] }): {
+function runDependencyCheckFixture(options: {
+  historicalTarget: boolean;
+  releaseToolingEntry?: boolean;
+  scripts: string[];
+}): {
   calls: string[];
   output: string;
   status: number | null;
@@ -954,9 +1023,23 @@ function runDependencyCheckFixture(options: { historicalTarget: boolean; scripts
         scripts: Object.fromEntries(options.scripts.map((name) => [name, "true"])),
       })}\n`,
     );
+    if (options.releaseToolingEntry) {
+      mkdirSync(path.join(root, "config"), { recursive: true });
+      mkdirSync(path.join(root, "scripts"), { recursive: true });
+      writeFileSync(
+        path.join(root, "config/knip.config.ts"),
+        "const repositoryScriptEntries = [\n] as const;\n",
+      );
+      writeFileSync(path.join(root, "scripts/generate-dependency-release-evidence.mts"), "");
+    }
     writeExecutable(path.join(fakeBin, "pnpm"), [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
+      'if [ "${EXPECT_RELEASE_TOOLING_ENTRY:-false}" = "true" ] &&',
+      "  ! grep -Fq '\"scripts/generate-dependency-release-evidence.mts!\"' config/knip.config.ts; then",
+      '  echo "release-only helper is missing from Knip entries" >&2',
+      "  exit 1",
+      "fi",
       'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
     ]);
     const checkShardRun = readCiWorkflow().jobs["check-shard"].steps.find(
@@ -967,6 +1050,8 @@ function runDependencyCheckFixture(options: { historicalTarget: boolean; scripts
       encoding: "utf8",
       env: {
         ...process.env,
+        EXPECT_RELEASE_TOOLING_ENTRY: options.releaseToolingEntry ? "true" : "false",
+        FROZEN_TARGET: options.historicalTarget ? "true" : "false",
         FORMAT_CHECK: "false",
         HISTORICAL_TARGET: options.historicalTarget ? "true" : "false",
         PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
@@ -1363,6 +1448,18 @@ NODE
     expect(activityRun).toMatch(
       /push: \(if \$event_name == "push" then \{\s+before: \.before,\s+after: \.after,\s+ref: \.ref,\s+compare: \.compare,\s+head_commit: \.head_commit\.id\s+\} else null end\)/u,
     );
+
+    const exactReviewStep = expectDefined(
+      steps.find((step) => step.name === "Dispatch exact ClawSweeper review"),
+      "ClawSweeper exact-review dispatch",
+    );
+    expect(exactReviewStep.env?.TARGET_BRANCH).toBe(
+      "${{ github.event.repository.default_branch }}",
+    );
+    expect(exactReviewStep.run).toContain('--arg target_branch "$TARGET_BRANCH"');
+    expect(exactReviewStep.run).toContain("target_branch:$target_branch");
+    expect(exactReviewStep.run).toContain('ingress_route:"target_dispatcher"');
+    expect(exactReviewStep.run).toContain("ingress_fingerprint:$ingress_fingerprint");
   });
 
   it("runs the PR context and evidence gate only for relevant PR changes", () => {
@@ -2569,6 +2666,58 @@ NODE
     expect(installStep.run).toContain(
       'yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null || [[ "${PIPESTATUS[1]}" -eq 0 ]]',
     );
+  });
+
+  it("validates frozen target context without binding it to the live branch head", () => {
+    const workflow = readCiWorkflow();
+    const input = workflow.on.workflow_dispatch.inputs.target_context_ref;
+    const step = expectDefined(
+      workflow.jobs.preflight.steps.find(
+        (candidate: WorkflowStep) => candidate.name === "Validate target context",
+      ),
+      "target context validation step",
+    );
+    const targetSha = "a".repeat(40);
+
+    expect(input).toEqual({
+      description:
+        "Canonical release branch context authorizing compatibility fallbacks for an exact-SHA target",
+      required: false,
+      default: "",
+      type: "string",
+    });
+    expect(step.if).toBe("inputs.target_context_ref != ''");
+    expect(step.run).not.toContain("ls-remote");
+    expect(step.run).not.toContain("EXPECTED_SHA");
+    expect(step.run).not.toContain("git ");
+
+    for (const contextRef of ["release/2026.8.1", "extended-stable/2026.8.33"]) {
+      const result = runTargetContextValidation(contextRef, targetSha);
+      expect(result.status, `${contextRef}: ${result.output}`).toBe(0);
+      expect(result.outputs.eligible).toBe("true");
+    }
+
+    for (const contextRef of [
+      "v2026.8.1",
+      "main",
+      "release-ci/2026.8.1-beta.2-frozen",
+      "release/2026.8",
+      "refs/heads/release/2026.8.1",
+    ]) {
+      const result = runTargetContextValidation(contextRef, targetSha);
+      expect(result.status, contextRef).toBe(1);
+      expect(result.output).toContain(
+        "target_context_ref must be a canonical OpenClaw release branch.",
+      );
+    }
+
+    for (const targetRef of ["main", "a".repeat(39)]) {
+      const result = runTargetContextValidation("release/2026.8.1", targetRef);
+      expect(result.status, targetRef).toBe(1);
+      expect(result.output).toContain(
+        "target_context_ref requires target_ref to be a full commit SHA.",
+      );
+    }
   });
 
   it("loads Android CI setup from the workflow revision for frozen targets", () => {
@@ -4308,28 +4457,48 @@ NODE
     }
   });
 
-  it("prepares all Testbox checkouts from one maintained owner", () => {
+  it("prepares Testbox checkouts with one maintained owner and scoped history", () => {
     const workflowPaths = [
-      ".github/workflows/ci-check-testbox.yml",
-      ".github/workflows/ci-check-arm-testbox.yml",
-      ".github/workflows/ci-build-artifacts-testbox.yml",
-    ];
+      [
+        ".github/workflows/ci-check-testbox.yml",
+        "1",
+        "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'HEAD' }}",
+      ],
+      [
+        ".github/workflows/ci-check-arm-testbox.yml",
+        "0",
+        "${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}",
+      ],
+      [
+        ".github/workflows/ci-build-artifacts-testbox.yml",
+        "0",
+        "${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}",
+      ],
+    ] as const;
 
-    for (const workflowPath of workflowPaths) {
+    for (const [workflowPath, dispatchFetchDepth, baseRef] of workflowPaths) {
       const workflow = parse(readFileSync(workflowPath, "utf8"));
       const job = Object.values(workflow.jobs)[0] as { steps: WorkflowStep[] };
       const checkoutStep = job.steps.find((step) => step.name === "Checkout");
       const prepareStep = job.steps.find((step) => step.name === "Prepare Testbox shell");
 
       expect(checkoutStep?.uses, workflowPath).toBe(CHECKOUT_V6);
-      expect(checkoutStep?.with, workflowPath).toEqual({
-        "fetch-depth": "${{ github.event_name == 'pull_request' && '2' || '0' }}",
-        "persist-credentials": false,
-      });
+      expect(checkoutStep?.with?.["persist-credentials"], workflowPath).toBe(false);
+      for (const [eventName, expectedDepth] of [
+        ["pull_request", "2"],
+        ["workflow_dispatch", dispatchFetchDepth],
+      ] as const) {
+        expect(
+          evaluateWorkflowExpression(checkoutStep?.with?.["fetch-depth"], {
+            eventName,
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+          }),
+          `${workflowPath} ${eventName}`,
+        ).toBe(expectedDepth);
+      }
       expect(prepareStep?.uses, workflowPath).toBe("./.github/actions/prepare-testbox-shell");
-      expect(prepareStep?.with?.["base-ref"], workflowPath).toBe(
-        "${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}",
-      );
+      expect(prepareStep?.with?.["base-ref"], workflowPath).toBe(baseRef);
       const ensureBaseStep = job.steps.find(
         (step: WorkflowStep) => step.name === "Ensure Testbox base commit",
       );
@@ -4727,6 +4896,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(npmLockGuards).toContain("pnpm deps:npm-lock:check");
     expect(preflightGuards).toContain("pnpm deps:patches:check");
+    expect(preflightGuards).toContain('has_package_script "check:coercion-helpers"');
+    expect(preflightGuards).toContain("pnpm check:coercion-helpers");
+    expect(preflightGuards).toContain(
+      "[skip] historical target predates the coercion-helper declaration guard",
+    );
+    expect(preflightGuards).toContain(
+      "Current CI targets must provide the check:coercion-helpers package script.",
+    );
     expect(parsedWorkflow.jobs.preflight.outputs.diff_base_revision).toBe(
       "${{ steps.diff_base.outputs.sha }}",
     );
@@ -4798,6 +4975,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
     const frozenWithExports = runDependencyCheckFixture({
       historicalTarget: true,
+      releaseToolingEntry: true,
       scripts: ["deadcode:dependencies", "deadcode:unused-files", "deadcode:exports"],
     });
     expect(frozenWithExports.status, frozenWithExports.output).toBe(0);
@@ -5230,6 +5408,22 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       ).include,
     ).toContainEqual(expect.objectContaining({ check_name: "legacy-node-plan" }));
 
+    const frozenTargetContext = runCiManifestFixture({
+      bundledPlanner: false,
+      historicalCompatibility: false,
+      targetContextCompatibility: true,
+    });
+    expect(frozenTargetContext.status, frozenTargetContext.output).toBe(0);
+    expect(frozenTargetContext.outputs.compatibility_target).toBe("true");
+    expect(
+      JSON.parse(
+        expectDefined(
+          frozenTargetContext.outputs.checks_node_core_nondist_matrix,
+          "frozen target context node core nondist matrix output",
+        ),
+      ).include,
+    ).toContainEqual(expect.objectContaining({ check_name: "legacy-node-plan" }));
+
     const currentMissingProtocolCoverage = runCiManifestFixture({
       bundledPlanner: true,
       historicalCompatibility: false,
@@ -5393,8 +5587,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'",
     );
     expect(uiE2e["runs-on"]).not.toBe(ui["runs-on"]);
-    // Each Chromium worker keeps serial file ownership while all four shards
-    // together remain required by the aggregate CI gate.
+    // Three serial workers own Control UI files while the fourth owns browser
+    // extension E2E; all four remain required by the aggregate CI gate.
     expect(uiE2e["timeout-minutes"]).toBe(25);
     expect(uiE2e.env).toEqual({ OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" });
     expect(uiE2e.strategy).toEqual({
@@ -5539,15 +5733,18 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       uiE2e.steps.find((step: WorkflowStep) => step.name === "Test Control UI end-to-end"),
       "Control UI E2E suite",
     );
+    expect(scenario.if).toBe("matrix.shard != 4");
     expect(scenario.run).toBe(
-      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner --shard ${{ matrix.shard }}/4",
+      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner --shard ${{ matrix.shard }}/3",
     );
-    const browserCopilot = expectDefined(
-      uiE2e.steps.find((step: WorkflowStep) => step.name === "Test browser copilot end-to-end"),
-      "browser copilot E2E suite",
+    const browserExtension = expectDefined(
+      uiE2e.steps.find(
+        (step: WorkflowStep) => step.name === "Test browser extension bootstrap end-to-end",
+      ),
+      "browser extension bootstrap E2E suite",
     );
-    expect(browserCopilot.if).toBe("matrix.shard == 1");
-    expect(browserCopilot.run).toBe("pnpm test:e2e:browser-copilot");
+    expect(browserExtension.if).toBe("matrix.shard == 4");
+    expect(browserExtension.run).toBe("pnpm test:e2e:browser-extension");
     for (const { job } of routedUiE2eJobs) {
       const jobContract = JSON.stringify(job);
       expect(jobContract).not.toContain("OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM");
@@ -6055,6 +6252,24 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       const mainCheck = runProtocolSinceFixture(topology.checkout, topology.mainBase);
       expect(mainCheck.status, `${mainCheck.stdout}${mainCheck.stderr}`).toBe(0);
       expect(mainCheck.stdout).toContain("1 new core method");
+
+      runGit(topology.checkout, ["checkout", "-q", "--detach", topology.compatibilityHead]);
+      const compatibilityCheck = runProtocolSinceFixture(topology.checkout, topology.mainBase);
+      expect(
+        compatibilityCheck.status,
+        `${compatibilityCheck.stdout}${compatibilityCheck.stderr}`,
+      ).toBe(0);
+      expect(compatibilityCheck.stdout).toContain("1 restored compatibility method");
+
+      runGit(topology.checkout, ["checkout", "-q", "--detach", topology.invalidCompatibilityHead]);
+      const invalidCompatibilityCheck = runProtocolSinceFixture(
+        topology.checkout,
+        topology.mainBase,
+      );
+      expect(invalidCompatibilityCheck.status).not.toBe(0);
+      expect(invalidCompatibilityCheck.stderr).toContain(
+        "restored compatibility methods must retain <= vintage metadata",
+      );
 
       runGit(topology.checkout, ["checkout", "-q", "--detach", topology.releaseHead]);
       const releaseCheck = runProtocolSinceFixture(topology.checkout, topology.mainBase);
@@ -7001,6 +7216,86 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(destinationSymlink.escaped).toBe("outside\n");
     },
   );
+
+  it("keeps exact release validation identity separate from release context", () => {
+    const fullReleaseWorkflow = readWorkflow(".github/workflows/full-release-validation.yml");
+    const releaseWorkflow = readReleaseChecksWorkflow();
+    const telegramWorkflow = readWorkflow(".github/workflows/openclaw-release-telegram-qa.yml");
+    const fullReleaseDispatchStep = fullReleaseWorkflow.jobs.release_checks.steps.find(
+      (step: WorkflowStep) => step.name === "Dispatch and monitor release checks",
+    );
+    const dispatchStep = releaseWorkflow.jobs.qa_live_telegram_release_checks.steps.find(
+      (step: WorkflowStep) => step.name === "Dispatch and await trusted Telegram QA",
+    );
+    const identityStep = telegramWorkflow.jobs.trusted_identity.steps.find(
+      (step: WorkflowStep) => step.name === "Verify dispatched-main identity",
+    );
+    const provenanceSteps = [
+      telegramWorkflow.jobs.build_candidate.steps.find(
+        (step: WorkflowStep) => step.name === "Validate candidate release provenance",
+      ),
+      telegramWorkflow.jobs.run_telegram.steps.find(
+        (step: WorkflowStep) => step.name === "Revalidate candidate release provenance",
+      ),
+    ];
+
+    expect(fullReleaseWorkflow.on.workflow_dispatch.inputs.target_context_ref).toMatchObject({
+      required: false,
+      default: "",
+      type: "string",
+    });
+    expect(fullReleaseDispatchStep.run).toContain('-f ref="$TARGET_SHA"');
+    expect(fullReleaseDispatchStep.run).toContain('-f target_context_ref="$TARGET_CONTEXT_REF"');
+    expect(fullReleaseDispatchStep.run).not.toContain(
+      'release_checks_target_ref="${TARGET_CONTEXT_REF:-$TARGET_REF}"',
+    );
+    expect(releaseWorkflow.on.workflow_dispatch.inputs.target_context_ref).toMatchObject({
+      required: false,
+      default: "",
+      type: "string",
+    });
+    expect(telegramWorkflow.on.workflow_dispatch.inputs.target_context_ref).toMatchObject({
+      required: false,
+      default: "",
+      type: "string",
+    });
+    expect(dispatchStep.env.TARGET_SHA).toBe("${{ needs.resolve_target.outputs.revision }}");
+    expect(dispatchStep.env.TARGET_CONTEXT_REF).toBe("${{ inputs.target_context_ref }}");
+    expect(dispatchStep.run).toContain('-f target_context_ref="$TARGET_CONTEXT_REF"');
+    expect(dispatchStep.run).toContain('-f target_ref="$TARGET_SHA"');
+    expect(dispatchStep.run).not.toContain("telegram_target_ref=");
+    expect(identityStep.run).toContain(
+      "Telegram QA target context must be a canonical release branch or tag.",
+    );
+    expect(identityStep.run).toContain(
+      "Telegram QA release context requires an exact-SHA target ref.",
+    );
+    for (const provenanceStep of provenanceSteps) {
+      expect(provenanceStep.env.TARGET_CONTEXT_REF).toBe("${{ inputs.target_context_ref }}");
+      expect(provenanceStep.run).toContain("frozen-release-branch-head");
+      expect(provenanceStep.run).toContain(
+        'elif [[ "$candidate_version" =~ ^${release_version_pattern}-beta\\.[0-9]+$ ]]',
+      );
+      expect(provenanceStep.run).toContain(
+        'frozen_release_branch_pattern="^release/${candidate_version_pattern}-code-frozen(-r[1-9][0-9]*)?$"',
+      );
+      expect(provenanceStep.run).toContain('elif [[ -z "$frozen_release_branch_pattern" ]]; then');
+      expect(provenanceStep.run).toContain(
+        "Telegram candidate version ${candidate_version} does not belong to release ${release_version}.",
+      );
+      expect(provenanceStep.run).toContain(
+        "Telegram candidate version ${candidate_version} does not match context ${normalized_context_ref}.",
+      );
+      expect(provenanceStep.run).toContain('context_release_branch="$normalized_context_ref"');
+      expect(provenanceStep.run).toContain('context_release_tag="$normalized_context_ref"');
+      expect(provenanceStep.run).toContain(
+        "Frozen release candidate ${candidate_sha} requires a valid maintainer signature.",
+      );
+      expect(provenanceStep.run).toContain(
+        'select(.state == "OPEN" and .headRepository.nameWithOwner == $repo and',
+      );
+    }
+  });
 
   it("keeps maturity scorecard release docs opt-in from release checks", () => {
     const releaseWorkflow = readReleaseChecksWorkflow();

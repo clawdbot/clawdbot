@@ -534,7 +534,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.15.0"
+  NODE_VERSION: "24.16.0"
   OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
   OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}
   OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: ${{ github.workspace }}
@@ -542,6 +542,7 @@ env:
 jobs:
   validate_selected_ref:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     outputs:
       selected_sha: ${{ steps.validate.outputs.selected_sha }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
@@ -776,6 +777,7 @@ jobs:
   validate_live_suite_filter:
     runs-on: ubuntu-24.04
     if: inputs.live_suite_filter != ''
+    timeout-minutes: 10
     steps:
       - name: Validate focused live suite filter
         shell: bash
@@ -892,6 +894,7 @@ jobs:
   plan_release_workflow_matrices:
     needs: validate_selected_ref
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     outputs:
       docker_e2e_count: ${{ steps.plan.outputs.docker_e2e_count }}
       docker_e2e_matrix: ${{ steps.plan.outputs.docker_e2e_matrix }}

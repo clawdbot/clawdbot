@@ -18,7 +18,7 @@ import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-
 import {
   ArchivedTranscriptReader,
   buildSessionPreviewItems,
-  readLatestSessionUsageFromTranscriptAsync,
+  readLatestSessionUsageFromTranscriptFileAsync,
   resolveSessionTranscriptCandidates,
   type ReadRecentSessionMessagesOptions,
   type ReadSessionMessagesAsyncOptions,
@@ -1420,7 +1420,7 @@ describe("readLatestSessionUsageFromTranscript", () => {
     const readFileSpy = vi.spyOn(fs, "readFileSync");
 
     try {
-      const snapshot = await readLatestSessionUsageFromTranscriptAsync(sessionId, storePath);
+      const snapshot = await readLatestSessionUsageFromTranscriptFileAsync(sessionId, storePath);
       expectUsageFields(snapshot, {
         modelProvider: "anthropic",
         model: "claude-sonnet-4-6",
@@ -1464,12 +1464,15 @@ describe("readLatestSessionUsageFromTranscript", () => {
       },
     };
     writeTranscript(tmpDir, sessionId, [oldCumulative]);
-    const legacySnapshot = await readLatestSessionUsageFromTranscriptAsync(sessionId, storePath);
+    const legacySnapshot = await readLatestSessionUsageFromTranscriptFileAsync(
+      sessionId,
+      storePath,
+    );
     expect(legacySnapshot?.contextUsage).toEqual({ state: "unavailable" });
     expect(legacySnapshot?.totalTokens).toBeUndefined();
     writeTranscript(tmpDir, sessionId, [oldCumulative, unavailable]);
 
-    const unavailableSnapshot = await readLatestSessionUsageFromTranscriptAsync(
+    const unavailableSnapshot = await readLatestSessionUsageFromTranscriptFileAsync(
       sessionId,
       storePath,
     );
@@ -1489,7 +1492,7 @@ describe("readLatestSessionUsageFromTranscript", () => {
         },
       },
     ]);
-    expectUsageFields(await readLatestSessionUsageFromTranscriptAsync(sessionId, storePath), {
+    expectUsageFields(await readLatestSessionUsageFromTranscriptFileAsync(sessionId, storePath), {
       totalTokens: 86_876,
       totalTokensFresh: true,
     });
@@ -1515,7 +1518,7 @@ describe("readLatestSessionUsageFromTranscript", () => {
       estimateStringChars(userText) + estimateStringChars(assistantText),
     );
 
-    expectUsageFields(await readLatestSessionUsageFromTranscriptAsync(sessionId, storePath), {
+    expectUsageFields(await readLatestSessionUsageFromTranscriptFileAsync(sessionId, storePath), {
       modelProvider: "openai-completions",
       model: "local-llama",
       totalTokens: expectedTotalTokens,

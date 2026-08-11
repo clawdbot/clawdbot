@@ -37,6 +37,12 @@ export const WorkerTunnelStatusSchema = Type.Union([
   Type.Literal("reconnecting"),
 ]);
 
+/** Closed app ids a worker desktop may advertise and launch. */
+export const WorkerDesktopAppIdSchema = Type.Union([
+  Type.Literal("browser"),
+  Type.Literal("terminal"),
+]);
+
 /** Worker-only lifecycle metadata layered onto the existing environment projection. */
 export const WorkerEnvironmentMetadataSchema = closedObject({
   providerId: NonEmptyString,
@@ -48,6 +54,9 @@ export const WorkerEnvironmentMetadataSchema = closedObject({
   tunnelStatus: WorkerTunnelStatusSchema,
   error: Type.Optional(NonEmptyString),
   desktop: Type.Optional(Type.Boolean()),
+  desktopApps: Type.Optional(
+    Type.Array(WorkerDesktopAppIdSchema, { maxItems: 8, uniqueItems: true }),
+  ),
 });
 
 function createEnvironmentSummarySchema() {
@@ -118,9 +127,20 @@ export const WorkerDesktopObserveResultSchema = closedObject({
   vncPassword: Type.Optional(NonEmptyString),
 });
 
+export const WorkerDesktopLaunchParamsSchema = closedObject({
+  environmentId: NonEmptyString,
+  app: WorkerDesktopAppIdSchema,
+});
+
+export const WorkerDesktopLaunchResultSchema = closedObject({
+  app: WorkerDesktopAppIdSchema,
+  status: Type.Literal("ready"),
+});
+
 export type EnvironmentStatus = Static<typeof EnvironmentStatusSchema>;
 export type WorkerEnvironmentState = Static<typeof WorkerEnvironmentStateSchema>;
 export type WorkerTunnelStatus = Static<typeof WorkerTunnelStatusSchema>;
+export type WorkerDesktopAppId = Static<typeof WorkerDesktopAppIdSchema>;
 export type WorkerEnvironmentMetadata = Static<typeof WorkerEnvironmentMetadataSchema>;
 export type EnvironmentSummary = Static<typeof EnvironmentSummarySchema>;
 export type EnvironmentsCreateParams = Static<typeof EnvironmentsCreateParamsSchema>;
@@ -133,3 +153,5 @@ export type EnvironmentsStatusParams = Static<typeof EnvironmentsStatusParamsSch
 export type EnvironmentsStatusResult = Static<typeof EnvironmentsStatusResultSchema>;
 export type WorkerDesktopObserveParams = Static<typeof WorkerDesktopObserveParamsSchema>;
 export type WorkerDesktopObserveResult = Static<typeof WorkerDesktopObserveResultSchema>;
+export type WorkerDesktopLaunchParams = Static<typeof WorkerDesktopLaunchParamsSchema>;
+export type WorkerDesktopLaunchResult = Static<typeof WorkerDesktopLaunchResultSchema>;

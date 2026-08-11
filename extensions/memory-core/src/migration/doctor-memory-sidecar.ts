@@ -11,6 +11,7 @@ import {
   legacyStateFileExists,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 // sqlite-runtime re-exports the agent-db/kysely graph; keep it lazy so doctor
 // enumeration does not cold-load it with this closure.
 import {
@@ -28,10 +29,10 @@ type MemoryFtsTokenizer = "unicode61" | "trigram";
 
 function resolveConfiguredAgentIds(config: unknown): string[] {
   const cfg = config as { agents?: { entries?: unknown; list?: unknown } };
-  const entries = asRecord(cfg.agents?.entries);
+  const entries = asOptionalObjectRecord(cfg.agents?.entries);
   const listedIds = Array.isArray(cfg.agents?.list)
     ? cfg.agents.list.flatMap((entry) => {
-        const id = asRecord(entry)?.id;
+        const id = asOptionalObjectRecord(entry)?.id;
         return typeof id === "string" ? [id] : [];
       })
     : [];
@@ -39,46 +40,44 @@ function resolveConfiguredAgentIds(config: unknown): string[] {
   return ids.size > 0 ? [...ids] : [normalizeAgentId(undefined)];
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-
 function readAgentMemorySearch(
   config: unknown,
   agentId: string,
 ): Record<string, unknown> | undefined {
-  const agents = asRecord(asRecord(config)?.agents);
-  const keyedEntries = asRecord(agents?.entries);
+  const agents = asOptionalObjectRecord(asOptionalObjectRecord(config)?.agents);
+  const keyedEntries = asOptionalObjectRecord(agents?.entries);
   const keyedEntry = keyedEntries
     ? Object.entries(keyedEntries).find(([id]) => normalizeAgentId(id) === agentId)?.[1]
     : undefined;
-  const keyedSearch = asRecord(asRecord(asRecord(keyedEntry)?.memory)?.search);
+  const keyedSearch = asOptionalObjectRecord(
+    asOptionalObjectRecord(asOptionalObjectRecord(keyedEntry)?.memory)?.search,
+  );
   if (keyedSearch) {
     return keyedSearch;
   }
   const entries = Array.isArray(agents?.list) ? agents.list : [];
   const entry = entries
-    .map(asRecord)
+    .map(asOptionalObjectRecord)
     .find(
       (candidate) =>
         normalizeAgentId(typeof candidate?.id === "string" ? candidate.id : undefined) === agentId,
     );
-  return asRecord(asRecord(entry?.memory)?.search);
+  return asOptionalObjectRecord(asOptionalObjectRecord(entry?.memory)?.search);
 }
 
 function readMemorySearchLayers(config: unknown, agentId: string): Record<string, unknown>[] {
-  const cfg = asRecord(config);
+  const cfg = asOptionalObjectRecord(config);
   return [
     readAgentMemorySearch(config, agentId),
-    asRecord(asRecord(cfg?.memory)?.search),
+    asOptionalObjectRecord(asOptionalObjectRecord(cfg?.memory)?.search),
     // Doctor still inspects the retired root shape to migrate its persisted sidecar path.
-    asRecord(cfg?.memorySearch),
+    asOptionalObjectRecord(cfg?.memorySearch),
   ].filter((value): value is Record<string, unknown> => value !== undefined);
 }
 
 function readStoreLayers(config: unknown, agentId: string): Record<string, unknown>[] {
   return readMemorySearchLayers(config, agentId).flatMap((search) => {
-    const store = asRecord(search.store);
+    const store = asOptionalObjectRecord(search.store);
     return store ? [store] : [];
   });
 }
@@ -93,7 +92,7 @@ function readNestedStoreLayers(
   key: string,
 ): Record<string, unknown>[] {
   return readStoreLayers(config, agentId).flatMap((store) => {
-    const nested = asRecord(store[key]);
+    const nested = asOptionalObjectRecord(store[key]);
     return nested ? [nested] : [];
   });
 }

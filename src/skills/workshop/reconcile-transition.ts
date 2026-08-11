@@ -18,7 +18,7 @@ import { readStoredProposal } from "./store-sqlite-record.js";
 import { clearSkillProposalRollback, readSkillProposalRollback } from "./store-sqlite-rollback.js";
 import type { SkillWorkshopStoreOptions } from "./store-sqlite-schema.js";
 import { commitPendingSkillProposalTransition } from "./store-sqlite-transition.js";
-import { withSkillProposalTargetLock } from "./target-lock.js";
+import { withSkillProposalCommitLock } from "./target-lock.js";
 import type { SkillProposalRecord, SkillProposalRollback } from "./types.js";
 
 export async function reconcileInterruptedSkillProposalApply(params: {
@@ -29,7 +29,8 @@ export async function reconcileInterruptedSkillProposalApply(params: {
   config?: OpenClawConfig;
   store?: SkillWorkshopStoreOptions;
 }): Promise<boolean> {
-  return await withSkillProposalTargetLock(
+  return await withSkillProposalCommitLock(
+    params.workspaceDir,
     params.record,
     async () => {
       const stored = readStoredProposal(params.record.id, params.store);

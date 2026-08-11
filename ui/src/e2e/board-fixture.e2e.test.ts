@@ -246,7 +246,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
       await expect
         .poll(() =>
           page
-            .locator(".chat-thread .chat-bubble")
+            .locator(".chat-pane-cache__pane--active .chat-thread .chat-bubble")
             .allTextContents()
             .then((messages) => messages.map((message) => message.trim())),
         )

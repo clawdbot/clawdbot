@@ -20,11 +20,13 @@ import {
 } from "../../agent-run-terminal-outcome.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../../stream-message-shared.js";
+import { log } from "../logger.js";
 import { setActiveEmbeddedRun } from "../runs.js";
 import { testing as runsTesting } from "../runs.test-support.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
+import { claimAgentSessionWriter } from "./session-bootstrap.js";
 
 const fixture = useTempSessionsFixture("lane-writer-claim-");
 const sessionId = "writer-session";
@@ -52,6 +54,7 @@ describe("embedded run durable writer admission", () => {
   });
 
   it("supersedes the live prior writer, claims the row, and rejects its late append", async () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     await replaceSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }, {
       activeWriterRunId: "run-a",
       lifecycleRevision,
@@ -141,6 +144,7 @@ describe("embedded run durable writer admission", () => {
     }
 
     expect(cancelA).toHaveBeenCalledWith("superseded");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("live=true"));
     expect(takeoverOrder).toEqual(["record:run-b", "cancel:run-b"]);
     expect(supersededOutcome).toMatchObject({
       reason: "superseded",
@@ -184,6 +188,32 @@ describe("embedded run durable writer admission", () => {
       storePath: fixture.storePath(),
     });
     expect(staleAppend).toMatchObject({ ok: false, code: "session-rebound" });
+  });
+
+  it("silently replaces a persisted claim whose prior run is no longer live", async () => {
+    await replaceSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }, {
+      activeWriterRunId: "completed-run",
+      lifecycleRevision,
+      sessionId,
+      updatedAt: 1,
+    } as InternalSessionEntry);
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+
+    await claimAgentSessionWriter({
+      agentId: "main",
+      prompt: "next turn",
+      runId: "run-next",
+      sessionId,
+      sessionKey,
+      sessionTarget: { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() },
+      timeoutMs: 30_000,
+      workspaceDir: "/tmp",
+    });
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }),
+    ).toMatchObject({ activeWriterRunId: "run-next" });
   });
 
   it("leaves the incumbent live when the replacement claim does not commit", async () => {

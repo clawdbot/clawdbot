@@ -22,7 +22,7 @@ import {
   restoreGatewayToken,
   rpcReq,
   startRateLimitedTokenServerWithPairedDeviceToken,
-  startGatewayServer,
+  startTestGatewayServer,
   startServer,
   startServerWithClient,
   TEST_OPERATOR_CLIENT,
@@ -166,7 +166,7 @@ export function registerControlUiAndPairingSuite(): void {
   const withControlUiGatewayServer = async <T>(
     fn: (ctx: {
       port: number;
-      server: Awaited<ReturnType<typeof startGatewayServer>>;
+      server: Awaited<ReturnType<typeof startTestGatewayServer>>;
     }) => Promise<T>,
   ): Promise<T> => {
     return await withGatewayServer(fn, {
@@ -1074,6 +1074,7 @@ export function registerControlUiAndPairingSuite(): void {
             type?: string;
             auth?: {
               deviceToken?: string;
+              recoveryScope?: string;
               role?: string;
               scopes?: string[];
               deviceTokens?: Array<{
@@ -1867,6 +1868,7 @@ export function registerControlUiAndPairingSuite(): void {
             type?: string;
             auth?: {
               deviceToken?: string;
+              recoveryScope?: string;
               role?: string;
               scopes?: string[];
             };
@@ -1876,9 +1878,11 @@ export function registerControlUiAndPairingSuite(): void {
       expect(payload?.auth?.role).toBe("operator");
       expect(payload?.auth?.scopes).toEqual([...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES]);
       const deviceToken = payload?.auth?.deviceToken;
+      const recoveryScope = payload?.auth?.recoveryScope;
       if (!deviceToken) {
         throw new Error("expected control ui owner device token");
       }
+      expect(recoveryScope).toMatch(/^[A-Za-z0-9_-]+$/u);
       expect((await rpcReq(wsBootstrap, "set-heartbeats", { enabled: false })).ok).toBe(true);
       wsBootstrap.close();
 
@@ -1902,6 +1906,9 @@ export function registerControlUiAndPairingSuite(): void {
         deviceIdentityPath: identityPath,
       });
       expect(reload.ok).toBe(true);
+      expect(
+        (reload.payload as { auth?: { recoveryScope?: string } } | undefined)?.auth?.recoveryScope,
+      ).toBe(recoveryScope);
       wsReload.close();
 
       const sharedGatewaySessionGeneration = resolveSharedGatewaySessionGeneration({

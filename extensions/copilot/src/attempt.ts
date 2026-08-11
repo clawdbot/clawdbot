@@ -1,20 +1,23 @@
-import type { AgentHarnessAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { finalizeCopilotAttempt } from "./attempt-cleanup.js";
 import {
   createPromptError,
   createResult,
-  readString,
+  readNonEmptyString,
   resolvePoolAcquire,
-  toError,
+  toCopilotError,
 } from "./attempt-config.js";
 import { runCopilotExecution } from "./attempt-execution.js";
 import { prepareCopilotAttemptContext } from "./attempt-prepare.js";
-import type { AgentHarnessAttemptResult, CopilotAttemptDeps } from "./attempt-types.js";
+import type {
+  AgentHarnessAttemptResult,
+  CopilotAttemptDeps,
+  CopilotAttemptParams,
+} from "./attempt-types.js";
 import { resolveCopilotProvider } from "./provider-bridge.js";
 export type { CopilotSessionConfig } from "./attempt-types.js";
 export { resolvePoolAcquire };
 export async function runCopilotAttempt(
-  params: AgentHarnessAttemptParams,
+  params: CopilotAttemptParams,
   deps: CopilotAttemptDeps,
 ): Promise<AgentHarnessAttemptResult> {
   const now = deps.now ?? Date.now;
@@ -52,22 +55,22 @@ export async function runCopilotAttempt(
   try {
     resolveCopilotProvider({
       model: modelRef,
-      resolvedApiKey: readString(params.resolvedApiKey),
-      authProfileId: readString(params.authProfileId),
+      resolvedApiKey: readNonEmptyString(params.resolvedApiKey),
+      authProfileId: readNonEmptyString(params.authProfileId),
     });
   } catch (error) {
     return finishAttempt(
       createResult(input, {
         messagesSnapshot: messages,
         now,
-        promptError: createPromptError("model_not_supported", toError(error).message, error),
+        promptError: createPromptError("model_not_supported", toCopilotError(error).message, error),
         sdkSessionId: undefined,
         sessionIdUsed: input.sessionId,
       }),
     );
   }
   const settledFinalizationSessionId = settledToolFinalization
-    ? readString(input.initialReplayState?.sdkSessionId)
+    ? readNonEmptyString(input.initialReplayState?.sdkSessionId)
     : undefined;
   if (settledToolFinalization && !settledFinalizationSessionId) {
     return finishAttempt(

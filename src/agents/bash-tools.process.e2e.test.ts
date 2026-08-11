@@ -227,7 +227,7 @@ test.skipIf(process.platform === "win32")(
 );
 
 test.skipIf(process.platform === "win32")(
-  "controls one real interactive background child through exec and process tools",
+  "controls and cancels one real interactive background child through process tools",
   async () => {
     const scopeKey = "agent:main:process-control-roundtrip";
     const execTool = createExecTool({
@@ -252,7 +252,6 @@ test.skipIf(process.platform === "win32")(
         "  for (const char of chunk) {",
         '    if (char === "\\u0003") {',
         "      process.stdout.write(`CONTROL:CTRL-C:${lineCount}\\n`);",
-        "      setTimeout(() => process.exit(lineCount === 2 ? 0 : 3), 10);",
         "      continue;",
         "    }",
         '    if (char !== "\\r" && char !== "\\n") {',
@@ -389,6 +388,24 @@ test.skipIf(process.platform === "win32")(
         keys: ["C-c"],
       });
       expect(interrupt.details).toMatchObject({ status: "running", sessionId });
+      await expect
+        .poll(
+          async () => {
+            const log = await processTool.execute("process-control-interrupt-log", {
+              action: "log",
+              sessionId,
+            });
+            return textContent(log);
+          },
+          { timeout: 5_000, interval: 25 },
+        )
+        .toContain("CONTROL:CTRL-C:2");
+
+      const killed = await processTool.execute("process-control-kill", {
+        action: "kill",
+        sessionId,
+      });
+      expect(textContent(killed)).toBe(`Termination requested for session ${sessionId}.`);
 
       await expect
         .poll(
@@ -400,20 +417,20 @@ test.skipIf(process.platform === "win32")(
             });
             const details = poll.details as {
               status?: string;
-              exitCode?: number;
+              exitReason?: string;
               aggregated?: string;
             };
             return {
               status: details.status,
-              exitCode: details.exitCode,
+              exitReason: details.exitReason,
               aggregated: details.aggregated ?? "",
             };
           },
           { timeout: 5_000, interval: 25 },
         )
         .toEqual({
-          status: "completed",
-          exitCode: 0,
+          status: "failed",
+          exitReason: "manual-cancel",
           aggregated: expect.stringContaining("CONTROL:CTRL-C:2"),
         });
 
@@ -421,7 +438,7 @@ test.skipIf(process.platform === "win32")(
         action: "log",
         sessionId,
       });
-      expect(completedLog.details).toMatchObject({ status: "completed", sessionId });
+      expect(completedLog.details).toMatchObject({ status: "failed", sessionId });
       expect(textContent(completedLog)).toContain("LINE:alpha");
       expect(textContent(completedLog)).toContain("LINE:beta");
       expect(textContent(completedLog)).toContain("CONTROL:CTRL-C:2");

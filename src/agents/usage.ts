@@ -53,6 +53,14 @@ export type UsageLike = {
   cost?: Partial<Usage["cost"]>;
 };
 
+type CliUsageAliases = {
+  cached_input_tokens?: number;
+  cache_write_input_tokens?: number;
+  cached?: number;
+  input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
+  prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
+};
+
 /** Normalized token counts used by runtime accounting. */
 export type NormalizedUsage = {
   input?: number;
@@ -142,16 +150,28 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   if (!raw) {
     return undefined;
   }
+  const cli = raw as UsageLike & CliUsageAliases;
 
   const cacheRead = normalizeTokenCount(
     raw.cacheRead ??
       raw.cache_read ??
       raw.cache_read_input_tokens ??
+      cli.cached_input_tokens ??
+      cli.cached ??
       raw.cached_tokens ??
       raw.input_tokens_details?.cached_tokens ??
       raw.prompt_tokens_details?.cached_tokens,
   );
+  const cacheWrite = normalizeTokenCount(
+    raw.cacheWrite ??
+      raw.cache_write ??
+      raw.cache_creation_input_tokens ??
+      cli.cache_write_input_tokens ??
+      cli.input_tokens_details?.cache_write_tokens ??
+      cli.prompt_tokens_details?.cache_write_tokens,
+  );
 
+  const directInput = asFiniteNumber(raw.input);
   const rawInputValue =
     raw.input ??
     raw.inputTokens ??
@@ -161,20 +181,30 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     raw.prompt_n ??
     raw.timings?.prompt_n;
 
-  const usesOpenAIStylePromptTotals =
+  const cliCacheReadIncludedInInput =
+    cli.cached_input_tokens !== undefined || cli.cached !== undefined;
+  const openAiCacheReadIncludedInInput =
     raw.cached_tokens !== undefined ||
     raw.input_tokens_details?.cached_tokens !== undefined ||
     raw.prompt_tokens_details?.cached_tokens !== undefined;
+  const cacheWriteIncludedInInput =
+    cli.cache_write_input_tokens !== undefined ||
+    cli.input_tokens_details?.cache_write_tokens !== undefined ||
+    cli.prompt_tokens_details?.cache_write_tokens !== undefined;
 
   // Some providers (shared model runtime OpenAI-format) pre-subtract cached_tokens from
   // prompt/input totals upstream, while OpenAI-style prompt/input aliases
   // include cached tokens in the reported prompt total. Normalize both cases
   // to uncached input tokens so downstream prompt-token math does not double-
-  // count cache reads.
+  // count cache reads or writes.
   const rawInput = asFiniteNumber(rawInputValue);
+  const subtractCacheRead =
+    openAiCacheReadIncludedInInput || (directInput === undefined && cliCacheReadIncludedInInput);
   const normalizedInput =
-    rawInput !== undefined && usesOpenAIStylePromptTotals && cacheRead !== undefined
-      ? rawInput - cacheRead
+    rawInput !== undefined
+      ? rawInput -
+        (subtractCacheRead ? (cacheRead ?? 0) : 0) -
+        (directInput === undefined && cacheWriteIncludedInInput ? (cacheWrite ?? 0) : 0)
       : rawInput;
   const input = normalizeTokenCount(normalizedInput);
   const output = normalizeTokenCount(
@@ -185,9 +215,6 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
       raw.completion_tokens ??
       raw.predicted_n ??
       raw.timings?.predicted_n,
-  );
-  const cacheWrite = normalizeTokenCount(
-    raw.cacheWrite ?? raw.cache_write ?? raw.cache_creation_input_tokens,
   );
   const contextPromptTokens =
     raw.contextUsage?.state === "available"

@@ -2,7 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { resolveAgentIdentity, resolveResponsePrefix } from "../../agents/identity.js";
-import { readStringArrayParam, readStringParam } from "../../agents/tools/common.js";
+import { readStringArrayParam, readToolStringParam } from "../../agents/tools/common.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
 import { normalizeOutboundLocation } from "../../channels/location.js";
@@ -144,15 +144,15 @@ export async function buildMessagePayload(params: {
     }
   }
   const mediaHint =
-    readStringParam(actionParams, "media", { trim: false }) ??
-    readStringParam(actionParams, "mediaUrl", { trim: false }) ??
-    readStringParam(actionParams, "path", { trim: false }) ??
-    readStringParam(actionParams, "filePath", { trim: false }) ??
-    readStringParam(actionParams, "fileUrl", { trim: false }) ??
-    readStringParam(actionParams, "image", { trim: false });
+    readToolStringParam(actionParams, "media", { trim: false }) ??
+    readToolStringParam(actionParams, "mediaUrl", { trim: false }) ??
+    readToolStringParam(actionParams, "path", { trim: false }) ??
+    readToolStringParam(actionParams, "filePath", { trim: false }) ??
+    readToolStringParam(actionParams, "fileUrl", { trim: false }) ??
+    readToolStringParam(actionParams, "image", { trim: false });
   const mediaUrlHints = readStringArrayParam(actionParams, "mediaUrls") ?? [];
   const attachmentMediaHints = collectAttachmentSources(actionParams).map((source) => source.value);
-  const hasBuffer = Boolean(readStringParam(actionParams, "buffer", { trim: false }));
+  const hasBuffer = Boolean(readToolStringParam(actionParams, "buffer", { trim: false }));
   const hasMediaHint =
     hasBuffer || Boolean(mediaHint) || mediaUrlHints.length > 0 || attachmentMediaHints.length > 0;
   const hasPresentation = hasMessagePresentationBlocks(actionParams.presentation);
@@ -164,9 +164,9 @@ export async function buildMessagePayload(params: {
     typeof rawLocation === "string" && normalizeOptionalString(rawLocation) === undefined
       ? undefined
       : normalizeOutboundLocation(rawLocation);
-  const caption = readStringParam(actionParams, "caption", { allowEmpty: true }) ?? "";
+  const caption = readToolStringParam(actionParams, "caption", { allowEmpty: true }) ?? "";
   let message =
-    readStringParam(actionParams, "message", {
+    readToolStringParam(actionParams, "message", {
       required: !hasMediaHint && !hasPresentation && !hasInteractive && !location,
       allowEmpty: true,
     }) ?? "";
@@ -261,7 +261,7 @@ export async function buildMessagePayload(params: {
     });
   }
 
-  const mediaUrl = readStringParam(actionParams, "media", { trim: false });
+  const mediaUrl = readToolStringParam(actionParams, "media", { trim: false });
   if (
     !hasReplyPayloadContent({
       text: message,
@@ -350,7 +350,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   } = ctx;
   throwIfAborted(abortSignal);
   const action: ChannelMessageActionName = "send";
-  const to = readStringParam(params, "to", { required: true });
+  const to = readToolStringParam(params, "to", { required: true });
   let sendPayload = await buildMessagePayload({
     cfg,
     actionParams: params,
@@ -392,7 +392,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     applySendPayloadPartsToActionParams(params, sendPayload);
   }
 
-  const replyToIsExplicit = Boolean(readStringParam(params, "replyTo"));
+  const replyToIsExplicit = Boolean(readToolStringParam(params, "replyTo"));
   resolveAndApplyOutboundReplyToId(params, {
     channel,
     toolContext: input.toolContext,
@@ -415,7 +415,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     resolveOutboundSessionRoute,
     ensureOutboundSessionEntry,
   });
-  const resolvedReplyToId = readStringParam(params, "replyTo");
+  const resolvedReplyToId = readToolStringParam(params, "replyTo");
   throwIfAborted(abortSignal);
 
   const ttsPayload = await maybeApplyTtsToMessageActionSendPayload({
@@ -568,9 +568,9 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     payload: sendPayload.payload,
     mediaUrl: sendPayload.mediaUrl,
     mediaUrls: sendPayload.mediaUrls,
-    buffer: readStringParam(params, "buffer", { trim: false }) ?? undefined,
-    filename: readStringParam(params, "filename") ?? undefined,
-    contentType: readStringParam(params, "contentType") ?? undefined,
+    buffer: readToolStringParam(params, "buffer", { trim: false }) ?? undefined,
+    filename: readToolStringParam(params, "filename") ?? undefined,
+    contentType: readToolStringParam(params, "contentType") ?? undefined,
     asVoice: sendPayload.asVoice,
     gifPlayback: sendPayload.gifPlayback,
     forceDocument: sendPayload.forceDocument,

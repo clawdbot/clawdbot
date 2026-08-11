@@ -529,6 +529,7 @@ wa-dropdown.new-session-page__start-menu {
 .new-session-page__browser-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
   padding: 8px 10px;
   border-top: 1px solid var(--border);
 }
@@ -597,6 +598,22 @@ wa-dropdown.new-session-page__start-menu {
   cursor: default;
 }
 
+.new-session-page__browser-register {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: var(--cursor-action);
+}
+
+.new-session-page__browser-register:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* Phones (and short landscape): match the chat thread's mobile inset, and
    anchor menus to the trigger row instead of their trigger — a near
    viewport-wide panel under a non-leftmost trigger would otherwise run past
@@ -611,17 +628,17 @@ wa-dropdown.new-session-page__start-menu {
     gap: 4px 2px;
   }
 
-  /* The shared chat footer becomes a three-column grid on mobile, but a new
-     session has visibility pills instead of the chat settings slot. Keep
-     those pills intrinsic and let the model picker use the remaining width. */
+  /* A new session has visibility pills instead of the chat settings cluster.
+     Keep those pills intrinsic and let the model picker use the remaining width. */
   .new-session-page__composer .agent-chat__composer-controls {
     display: flex;
-    gap: 4px;
+    gap: 2px;
   }
 
-  .new-session-page__composer .chat-composer-model-control {
+  .new-session-page__composer .agent-chat__input .chat-composer-model-control {
     flex: 1 1 auto;
     width: auto;
+    min-width: 0;
     max-width: 100%;
     margin-left: auto;
   }

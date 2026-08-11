@@ -13,7 +13,7 @@ import {
   mapToolContextToSpawnedRunMetadata,
   resolveSpawnedWorkspaceInheritance,
 } from "../../spawned-context.js";
-import type { SubagentLaunchAuthorization } from "../../subagent-launch-authorization.js";
+import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import type {
   SpawnSubagentContext,
   SpawnSubagentParams,

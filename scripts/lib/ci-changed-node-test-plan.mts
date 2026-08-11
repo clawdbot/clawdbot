@@ -8,7 +8,11 @@ import {
   isTestFileTarget,
   resolveChangedTestTargetPlan,
 } from "../test-projects.test-support.mts";
-import { createNodeTestShards } from "./ci-node-test-plan.mts";
+import {
+  createNodeTestShards,
+  isPolicyTestOwnedPath,
+  resolvePolicyTestTargets,
+} from "./ci-node-test-plan.mts";
 import { buildPluginSdkEntrySources, publicPluginSdkEntrypoints } from "./plugin-sdk-entries.mts";
 
 type ChangedNodeTestShard = {
@@ -183,6 +187,11 @@ export function createChangedNodeTestShards(
     return null;
   }
 
+  const policyTargetsByPath = new Map(
+    livePaths.map((changedPath) => [changedPath, resolvePolicyTestTargets([changedPath])]),
+  );
+  const regularLivePaths = livePaths.filter((changedPath) => !isPolicyTestOwnedPath(changedPath));
+
   // Workspace package consumers often use package specifiers, which the
   // relative import graph cannot connect back to the changed package source.
   if (changedPaths.some((changedPath) => changedPath.startsWith("packages/"))) {
@@ -193,8 +202,8 @@ export function createChangedNodeTestShards(
   // Fail safe when a core change reaches a public SDK entrypoint indirectly.
   if (
     detectChangedLanes(changedPaths).extensionImpactFromCore ||
-    (livePaths.some((changedPath) => changedPath.startsWith("src/")) &&
-      hasImportGraphImpactOnTargets(livePaths, publicPluginSdkEntrySources, cwd))
+    (regularLivePaths.some((changedPath) => changedPath.startsWith("src/")) &&
+      hasImportGraphImpactOnTargets(regularLivePaths, publicPluginSdkEntrySources, cwd))
   ) {
     return null;
   }
@@ -208,11 +217,13 @@ export function createChangedNodeTestShards(
       includeExtensionImpact: false,
     });
   const plan =
-    livePaths.length > 0 ? resolveTargetPlan(livePaths) : { mode: "targets", targets: [] };
+    regularLivePaths.length > 0
+      ? resolveTargetPlan(regularLivePaths)
+      : { mode: "targets" as const, targets: [] };
   // Aggregate resolution must not let one precise path hide another path that
   // contributes no tests. Partial plans silently drop coverage.
   if (
-    livePaths.some((changedPath) => {
+    regularLivePaths.some((changedPath) => {
       const changedPathPlan = resolveTargetPlan([changedPath]);
       return changedPathPlan.mode !== "targets" || changedPathPlan.targets.length === 0;
     })
@@ -222,7 +233,7 @@ export function createChangedNodeTestShards(
   if (plan.mode !== "targets") {
     return null;
   }
-  const targets = [...new Set(plan.targets)];
+  const targets = [...new Set([...plan.targets, ...[...policyTargetsByPath.values()].flat()])];
   if (
     targets.length > MAX_CHANGED_NODE_TEST_TARGETS ||
     targets.some(

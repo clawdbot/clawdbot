@@ -36,6 +36,7 @@ const runningSubagent = {
   status: "running",
   title: "Map model routing code",
   agentId: "main",
+  sessionKey: chatSessionKey,
   ownerKey: chatSessionKey,
   childSessionKey: "agent:main:subagent:routing",
   createdAt: baseTime - 5_000,
@@ -317,6 +318,111 @@ suite.define(() => {
         expect(await mainTranscript.textContent()).toBe(mainTranscriptBefore);
         await page.screenshot({
           path: path.join(artifactDir, "07-cli-task-detail-restored.png"),
+          fullPage: true,
+        });
+      },
+    );
+  });
+
+  it("streams two subagent activity rows and retains final diff chips", async () => {
+    const activityDir = path.join(artifactDir, "subagent-activity");
+    await mkdir(activityDir, { recursive: true });
+    await suite.withPage(
+      {
+        locale: "en-US",
+        recordVideo: { dir: activityDir, size: { width: 1280, height: 800 } },
+        serviceWorkers: "block",
+        viewport: { width: 1280, height: 800 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          historyMessages: [
+            {
+              content: [{ type: "text", text: "Parallel subagent activity proof." }],
+              role: "assistant",
+              timestamp: Date.now(),
+            },
+          ],
+          methodResponses: { "tasks.list": { tasks: [] } },
+        });
+
+        const response = await page.goto(`${suite.server.baseUrl}chat`);
+        expect(response?.status()).toBe(200);
+        await page.getByText("Parallel subagent activity proof.").waitFor({ timeout: 10_000 });
+
+        const first = {
+          ...runningSubagent,
+          id: "task-parallel-one",
+          taskId: "task-parallel-one",
+          childSessionKey: "agent:main:subagent:parallel-one",
+          title: "Review session ownership",
+          lastActivity: "Reviewing session ownership",
+          diffStat: { files: 2, added: 14, removed: 3 },
+        };
+        const second = {
+          ...runningSubagent,
+          id: "task-parallel-two",
+          taskId: "task-parallel-two",
+          childSessionKey: "agent:main:subagent:parallel-two",
+          title: "Review tool card rendering",
+          lastActivity: "Checking tool card rendering",
+          diffStat: { files: 1, added: 5, removed: 0 },
+        };
+        await gateway.emitGatewayEvent("task", { action: "upserted", task: first });
+        await gateway.emitGatewayEvent("task", { action: "upserted", task: second });
+
+        const activity = page.locator(".chat-subagent-activity");
+        await expect.poll(() => activity.locator(".chat-subagent-activity__row").count()).toBe(2);
+        const firstRow = activity.locator('[data-subagent-task-id="task-parallel-one"]');
+        const secondRow = activity.locator('[data-subagent-task-id="task-parallel-two"]');
+        expect(await firstRow.textContent()).toContain("Reviewing session ownership");
+        expect(await secondRow.textContent()).toContain("Checking tool card rendering");
+        expect(await firstRow.locator(".chat-diffstat__add").textContent()).toBe("+14");
+        expect(await firstRow.locator(".chat-diffstat__del").textContent()).toBe("-3");
+        await page.screenshot({
+          path: path.join(activityDir, "01-two-subagents-streaming.png"),
+          fullPage: true,
+        });
+
+        await gateway.emitGatewayEvent("task", {
+          action: "upserted",
+          task: {
+            ...first,
+            updatedAt: baseTime + 1_000,
+            lastActivity: "Cross-checking requester ownership",
+          },
+        });
+        await firstRow.getByText("Cross-checking requester ownership").waitFor();
+
+        await gateway.emitGatewayEvent("task", {
+          action: "upserted",
+          task: {
+            id: first.id,
+            taskId: first.taskId,
+            kind: first.kind,
+            runtime: first.runtime,
+            status: "completed",
+            title: first.title,
+            agentId: first.agentId,
+            sessionKey: first.sessionKey,
+            ownerKey: first.ownerKey,
+            childSessionKey: first.childSessionKey,
+            createdAt: first.createdAt,
+            startedAt: first.startedAt,
+            updatedAt: baseTime + 2_000,
+            endedAt: baseTime + 2_000,
+            terminalSummary: "Ownership review complete",
+          },
+        });
+
+        await firstRow.getByText("Subagent finished").waitFor();
+        expect(await firstRow.textContent()).toContain("Ownership review complete");
+        expect(await firstRow.locator(".chat-diffstat__add").textContent()).toBe("+14");
+        expect(await firstRow.locator(".chat-diffstat__del").textContent()).toBe("-3");
+        expect(await secondRow.textContent()).toContain("Subagent working");
+        expect(await secondRow.textContent()).toContain("Checking tool card rendering");
+        await page.screenshot({
+          path: path.join(activityDir, "02-one-subagent-finished.png"),
           fullPage: true,
         });
       },

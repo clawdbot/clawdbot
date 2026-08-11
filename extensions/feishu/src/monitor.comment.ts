@@ -1,6 +1,11 @@
 // Feishu plugin module implements monitor.comment behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { asBoolean as readBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asBoolean as readBoolean,
+  isRecord,
+  normalizeOptionalString as normalizeString,
+  readStringValue as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { raceWithTimeoutAndAbort, waitForAbortableDelay } from "./async.js";
@@ -8,12 +13,9 @@ import { createFeishuClient } from "./client.js";
 import {
   encodeQuery,
   extractReplyText,
-  isRecord,
-  normalizeString,
   parseCommentContentElements,
   type ParsedCommentContent,
   type ParsedCommentLinkedDocument,
-  readString,
 } from "./comment-shared.js";
 import { normalizeCommentFileType, type CommentFileType } from "./comment-target.js";
 import type { ResolvedFeishuAccount } from "./types.js";

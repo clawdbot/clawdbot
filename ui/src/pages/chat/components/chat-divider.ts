@@ -54,6 +54,7 @@ export function renderChatDivider(
 export function renderChatNotice(item: Extract<ChatItem, { kind: "notice" }>) {
   return html`
     <div class="chat-notice" data-chat-row-key=${item.key} data-ts=${String(item.timestamp)}>
+      ${item.label ? html`<div class="chat-notice__label">${item.label}</div>` : nothing}
       <div class="chat-text" dir=${detectTextDirection(item.text)}>
         ${unsafeHTML(toSanitizedMarkdownHtml(item.text, { codeBlockChrome: "none" }))}
       </div>

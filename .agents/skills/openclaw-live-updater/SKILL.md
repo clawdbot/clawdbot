@@ -57,10 +57,12 @@ Load `$release-openclaw-ci` and `$openclaw-testing`. This is validation only, ne
 2. Only when the cadence is due, confirm no full/all run is active, then snapshot exact current `origin/main` after checking mirror invariants. Run the provider-secret preflight without printing secrets and dispatch the trusted workflow once:
 
    ```bash
+   MAIN_SHA="<exact-main-sha>"
    gh workflow run full-release-validation.yml \
      --repo openclaw/openclaw \
      --ref main \
-     -f ref=<exact-main-sha> \
+     -f ref="$MAIN_SHA" \
+     -f expected_sha="$MAIN_SHA" \
      -f provider=openai \
      -f mode=both \
      -f release_profile=full \

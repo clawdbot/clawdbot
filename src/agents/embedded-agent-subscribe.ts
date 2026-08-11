@@ -1,6 +1,7 @@
 /**
  * Subscribes to embedded-agent sessions and streams formatted replies/events.
  */
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { InlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
@@ -51,7 +52,6 @@ import type {
   EmbeddedAgentSubscribeContext,
   EmbeddedAgentSubscribeState,
 } from "./embedded-agent-subscribe.handlers.types.js";
-import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import {
   buildToolLifecycleErrorResult,
   extractToolResultMediaArtifact,
@@ -852,8 +852,13 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         }),
     });
   };
-  const emitToolSummary = (toolName?: string, meta?: string) => {
-    const agg = formatToolAggregate(toolName, meta ? [meta] : undefined, {
+  const emitToolSummary = (
+    toolName: string | undefined,
+    meta: string | undefined,
+    commandBearing: boolean,
+  ) => {
+    const visibleMeta = params.verboseLevel === "full" || !commandBearing ? meta : undefined;
+    const agg = formatToolAggregate(toolName, visibleMeta ? [visibleMeta] : undefined, {
       markdown: useMarkdown,
     });
     emitToolResultMessage(toolName, agg);

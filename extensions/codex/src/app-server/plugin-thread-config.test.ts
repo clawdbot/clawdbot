@@ -93,6 +93,7 @@ describe("Codex plugin thread config", () => {
       marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
       pluginName: "google-calendar",
       allowDestructiveActions: true,
+      allowOpenWorld: true,
       destructiveApprovalMode: "allow",
       mcpServerNames: ["google-calendar"],
     });
@@ -856,6 +857,7 @@ describe("Codex plugin thread config", () => {
         source: "account",
         appName: "ChatGPT Meetings",
         allowDestructiveActions: false,
+        allowOpenWorld: true,
         destructiveApprovalMode: "deny",
         mcpServerNames: [],
       },
@@ -863,6 +865,7 @@ describe("Codex plugin thread config", () => {
         source: "account",
         appName: "disabled-account-app",
         allowDestructiveActions: false,
+        allowOpenWorld: true,
         destructiveApprovalMode: "deny",
         mcpServerNames: [],
       },
@@ -870,6 +873,7 @@ describe("Codex plugin thread config", () => {
         source: "account",
         appName: "Slack",
         allowDestructiveActions: false,
+        allowOpenWorld: true,
         destructiveApprovalMode: "deny",
         mcpServerNames: [],
       },
@@ -1491,6 +1495,7 @@ describe("Codex plugin thread config", () => {
       marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
       pluginName: "google-calendar",
       allowDestructiveActions: true,
+      allowOpenWorld: true,
       destructiveApprovalMode: "allow",
       mcpServerNames: [],
     });
@@ -1983,6 +1988,7 @@ describe("Codex plugin thread config", () => {
       marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
       pluginName: "google-calendar",
       allowDestructiveActions: true,
+      allowOpenWorld: true,
       destructiveApprovalMode: "allow",
       mcpServerNames: [],
     });
@@ -2072,6 +2078,7 @@ describe("Codex plugin thread config", () => {
       marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
       pluginName: "google-calendar",
       allowDestructiveActions: true,
+      allowOpenWorld: true,
       destructiveApprovalMode: "allow",
       mcpServerNames: [],
     });

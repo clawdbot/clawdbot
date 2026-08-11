@@ -116,6 +116,13 @@ export const overflowCases = [
     expected: contextOverflow,
   },
   {
+    // FIXED(refactor-06): PR 2 removed the embedded-429 false positive; the provider wording is overflow.
+    id: "billing-context-input-length-model-limit",
+    source: billingSource,
+    signal: { message: "input length 14295 tokens exceeds the model limit" },
+    expected: contextOverflow,
+  },
+  {
     id: "billing-context-stop-reason",
     source: billingSource,
     signal: { message: "Unhandled stop reason: model_context_window_exceeded" },

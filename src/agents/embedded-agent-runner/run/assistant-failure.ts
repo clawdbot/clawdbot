@@ -1,5 +1,6 @@
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import { isReplayUnsafeAssistantError } from "../../../llm/utils/retry.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
 import {
@@ -13,6 +14,7 @@ import {
   parseImageDimensionError,
   pickFallbackThinkingLevel,
 } from "../../embedded-agent-helpers.js";
+import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
 import {
   resolveSessionSuspensionReason,
@@ -54,6 +56,7 @@ export async function handleEmbeddedAssistantFailure(input: {
   terminalState: EmbeddedRunTerminalState;
   activeErrorContext: { provider: string; model: string };
   provider: string;
+  providerOwner: PreparedProviderFailoverOwner | undefined;
   modelId: string;
   model: string;
   thinkLevel: ThinkLevel;
@@ -97,6 +100,12 @@ export async function handleEmbeddedAssistantFailure(input: {
     projectAgentRunAttemptTerminal(input.attempt.terminal);
   const terminalInterrupted = isEmbeddedRunTerminalInterrupted(input.terminalState.outcome);
   const { signalOwnedInterruption } = input.terminalState;
+  if (isReplayUnsafeAssistantError(input.attemptAssistant)) {
+    return buildOutcome(input, {
+      action: "proceed",
+      assistantProfileFailureReason: null,
+    });
+  }
   const fallbackThinking = pickFallbackThinkingLevel({
     message: input.attemptAssistant?.errorMessage,
     attempted: input.attemptedThinking,
@@ -117,7 +126,9 @@ export async function handleEmbeddedAssistantFailure(input: {
   const rateLimitFailure = isRateLimitAssistantError(input.attemptAssistant);
   const billingFailure = isBillingAssistantError(input.attemptAssistant);
   const failoverFailure = isFailoverAssistantError(input.attemptAssistant);
-  const assistantFailoverReason = classifyAssistantFailoverReason(input.attemptAssistant);
+  const assistantFailoverReason = classifyAssistantFailoverReason(input.attemptAssistant, {
+    provider: input.providerOwner?.id,
+  });
   const assistantProviderStarted =
     Boolean(input.currentAttemptAssistant?.provider) ||
     input.terminalState.outcome.providerStarted === true;
@@ -270,6 +281,7 @@ export async function handleEmbeddedAssistantFailure(input: {
     lastProfileId: input.authProfileId,
     modelId: input.modelId,
     provider: input.provider,
+    providerOwner: input.providerOwner,
     activeErrorContext: input.activeErrorContext,
     lastAssistant: input.attemptAssistant,
     config: input.runParams.config,

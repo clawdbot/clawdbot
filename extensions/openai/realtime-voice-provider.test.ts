@@ -6,6 +6,7 @@ import type {
   RealtimeVoiceBridgeEvent,
   RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
@@ -309,10 +310,6 @@ function createJsonResponse(body: unknown, init?: { status?: number }): Response
       "Content-Type": "application/json",
     },
   });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {

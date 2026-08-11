@@ -40,11 +40,16 @@ async function main() {
   // Ship only the runtime extension; colocated *.test.ts and *.d.ts stay out.
   await fs.cp(srcDir, outDir, {
     recursive: true,
-    filter: (source) =>
-      !source.endsWith(".test.ts") &&
-      !source.endsWith(".test-support.ts") &&
-      !source.endsWith(".test-harness.ts") &&
-      !source.endsWith(".d.ts"),
+    filter: (source) => {
+      const basename = path.basename(source);
+      return (
+        !/(?:sidepanel|copilot|page-share)/iu.test(basename) &&
+        !source.endsWith(".test.ts") &&
+        !source.endsWith(".test-support.ts") &&
+        !source.endsWith(".test-harness.ts") &&
+        !source.endsWith(".d.ts")
+      );
+    },
   });
 }
 

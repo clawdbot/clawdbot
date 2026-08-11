@@ -14,7 +14,7 @@ import { VERSION } from "../../version.js";
 
 const runtimeModelAuthMocks = vi.hoisted(() => ({
   getApiKeyForModel: vi.fn(),
-  getRuntimeAuthForModel: vi.fn(),
+  getRuntimeAuthForModelCore: vi.fn(),
   resolveApiKeyForProvider: vi.fn(),
 }));
 const sandboxContextMocks = vi.hoisted(() => ({
@@ -102,7 +102,7 @@ describe("plugin runtime command execution", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     runtimeModelAuthMocks.getApiKeyForModel.mockReset();
-    runtimeModelAuthMocks.getRuntimeAuthForModel.mockReset();
+    runtimeModelAuthMocks.getRuntimeAuthForModelCore.mockReset();
     runtimeModelAuthMocks.resolveApiKeyForProvider.mockReset();
     sandboxContextMocks.resolveSandboxContext.mockReset();
     resetConfigRuntimeState();

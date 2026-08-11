@@ -16,23 +16,11 @@ function describeContractLine(line: string): { identity: string | null; label: s
   try {
     const record = JSON.parse(line) as {
       entrypoint?: unknown;
-      exportName?: unknown;
-      recordType?: unknown;
     };
-    if (typeof record.entrypoint === "string" && record.recordType === "module") {
+    if (typeof record.entrypoint === "string") {
       return {
         identity: `module\0${record.entrypoint}`,
         label: `entrypoint=${record.entrypoint}`,
-      };
-    }
-    if (
-      typeof record.entrypoint === "string" &&
-      typeof record.exportName === "string" &&
-      record.recordType === "export"
-    ) {
-      return {
-        identity: `export\0${record.entrypoint}\0${record.exportName}`,
-        label: `entrypoint=${record.entrypoint} exportName=${record.exportName}`,
       };
     }
   } catch {

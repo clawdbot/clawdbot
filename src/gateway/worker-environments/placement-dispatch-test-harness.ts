@@ -82,6 +82,7 @@ export function createHarness(
       placementStore.recordWorkspaceResultConflict(claim, conflict),
     claimTurn: (params) => placementStore.claimTurn(params),
     claimReclaimWorkspaceResult: (params) => placementStore.claimReclaimWorkspaceResult(params),
+    closeWorkerTurnToolState: (claim) => placementStore.closeWorkerTurnToolState(claim),
     markWorkspaceResultPending: (claim) => placementStore.markWorkspaceResultPending(claim),
     acceptWorkspaceResult: (claim) => placementStore.acceptWorkspaceResult(claim),
     cancelWorkspaceResultAndReleaseTurn: (claim) =>
@@ -293,6 +294,10 @@ export function createHarness(
   };
   const environments: WorkerDispatchEnvironmentService = {
     create: vi.fn(async () => {
+      fail("create");
+      return currentEnvironment ?? ready;
+    }),
+    createFromProfileSnapshot: vi.fn(async () => {
       fail("create");
       return ready;
     }),

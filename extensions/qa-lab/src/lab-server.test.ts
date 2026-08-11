@@ -906,6 +906,37 @@ describe("qa-lab server", () => {
     await expect(fetch(`${lab.baseUrl}/healthz`)).rejects.toThrow();
   });
 
+  it("keeps the bus available until the embedded gateway finishes stopping", async () => {
+    let markGatewayStopping = () => {};
+    const gatewayStopping = new Promise<void>((resolve) => {
+      markGatewayStopping = resolve;
+    });
+    let finishGatewayStop = () => {};
+    const gatewayStopped = new Promise<void>((resolve) => {
+      finishGatewayStop = resolve;
+    });
+    qaChannelMock.startAccount.mockImplementationOnce(
+      async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
+        await new Promise<void>((resolve) => {
+          abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        markGatewayStopping();
+        await gatewayStopped;
+      },
+    );
+
+    const lab = await startQaLabServer({ host: "127.0.0.1", port: 0 });
+    const stopping = lab.stop();
+    await gatewayStopping;
+    try {
+      await expect(fetch(`${lab.baseUrl}/healthz`)).resolves.toMatchObject({ status: 200 });
+    } finally {
+      finishGatewayStop();
+      await stopping;
+    }
+    await expect(fetch(`${lab.baseUrl}/healthz`)).rejects.toThrow();
+  });
+
   it("serves bootstrap state and message state", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-test-"));
     cleanups.push(async () => {

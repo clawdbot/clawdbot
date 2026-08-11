@@ -8,6 +8,7 @@ import {
   validateEnvironmentsListParams,
   validateEnvironmentsStatusParams,
   validateWorkerDesktopObserveParams,
+  validateWorkerDesktopLaunchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing, resolveNodePairingState } from "../../infra/device-pairing.js";
@@ -84,6 +85,7 @@ export function summarizeWorkerEnvironment(
         ? { error: record.error }
         : {}),
       ...(record.desktopAvailable ? { desktop: true } : {}),
+      ...(record.desktopApps.length > 0 ? { desktopApps: [...record.desktopApps] } : {}),
     },
   };
 }
@@ -278,6 +280,44 @@ export const environmentsHandlers: GatewayRequestHandlers = {
         errorShape(
           invalid ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
           invalid && error instanceof Error ? error.message : "worker desktop observe unavailable",
+        ),
+      );
+    }
+  },
+  "worker.desktop.launch": async ({ params, respond, context }) => {
+    if (!validateWorkerDesktopLaunchParams(params)) {
+      return rejectInvalid(respond, "worker.desktop.launch", validateWorkerDesktopLaunchParams);
+    }
+    const service = context.workerEnvironmentService;
+    if (!service) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown environmentId"));
+      return;
+    }
+    try {
+      respond(
+        true,
+        await service.launchDesktopApp({
+          environmentId: params.environmentId,
+          app: params.app,
+        }),
+        undefined,
+      );
+    } catch (error) {
+      const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+      const invalid =
+        code === "environment_not_found" ||
+        code === "invalid_state" ||
+        code === "desktop_app_not_found" ||
+        code === "unsupported_platform";
+      const actionable = invalid || code === "launcher_failure";
+      respond(
+        false,
+        undefined,
+        errorShape(
+          invalid ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
+          actionable && error instanceof Error
+            ? error.message
+            : "worker desktop app launch unavailable; try again",
         ),
       );
     }

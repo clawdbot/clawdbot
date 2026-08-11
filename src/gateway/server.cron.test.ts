@@ -405,7 +405,7 @@ function expectFailureAnnounceCall(params: {
   if (params.includeRunStarted) {
     const lines = expectDefined(payload.text, "failure reply text").split("\n");
     expect(lines).toEqual([
-      params.message,
+      ...params.message.split("\n"),
       expect.stringMatching(/^Run started: \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})? \S+$/),
     ]);
   } else {
@@ -2044,7 +2044,9 @@ describe("gateway server cron", () => {
         jobId,
         channel: "last",
         sessionKey: "agent:main:telegram:direct:123:thread:99",
-        message: '⚠️ Automation "primary delivery fallback" failed: unknown error',
+        message:
+          '⚠️ Automation "primary delivery fallback" failed\n' +
+          "Check automation history for details.",
         includeRunStarted: true,
       });
     } finally {
@@ -2103,7 +2105,7 @@ describe("gateway server cron", () => {
         to: "#alerts",
         sessionKey: undefined,
         inheritSessionThread: false,
-        message: '⚠️ Automation "channel fd no mode" failed: unknown error',
+        message: '⚠️ Automation "channel fd no mode" failed\nCheck automation history for details.',
         includeRunStarted: true,
       });
       expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
@@ -2156,7 +2158,9 @@ describe("gateway server cron", () => {
         jobId,
         channel: "last",
         sessionKey: "agent:avery:feishu:direct:ou_founder",
-        message: '⚠️ Automation "session target failure fallback" failed: unknown error',
+        message:
+          '⚠️ Automation "session target failure fallback" failed\n' +
+          "Check automation history for details.",
         includeRunStarted: true,
       });
     } finally {

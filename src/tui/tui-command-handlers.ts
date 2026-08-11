@@ -734,12 +734,6 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       }
       const finishSessionTransition = beginSessionTransition("new");
       try {
-        // Clear token counts immediately to avoid stale display (#1523)
-        state.sessionInfo.inputTokens = null;
-        state.sessionInfo.outputTokens = null;
-        state.sessionInfo.totalTokens = null;
-        tui.requestRender();
-
         const uniqueKey = `tui-${randomUUID()}`;
         const result = await client.createSession({
           key: uniqueKey,
@@ -751,6 +745,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         if (!result.key) {
           throw new Error("sessions.create returned no session key");
         }
+        state.sessionInfo.inputTokens = null;
+        state.sessionInfo.outputTokens = null;
+        state.sessionInfo.totalTokens = null;
+        tui.requestRender();
         await setSession(result.key);
         chatLog.addSystem(`new session: ${result.key}`);
       } catch (err) {
@@ -767,12 +765,6 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       let resetResultSelection = resetSelection;
       const finishSessionTransition = beginSessionTransition("reset");
       try {
-        // Clear token counts immediately to avoid stale display (#1523)
-        state.sessionInfo.inputTokens = null;
-        state.sessionInfo.outputTokens = null;
-        state.sessionInfo.totalTokens = null;
-        tui.requestRender();
-
         const result = await client.resetSession(
           resetSelection.sessionKey,
           "reset",
@@ -781,6 +773,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         if (!isCurrentSessionSelection(resetSelection)) {
           return;
         }
+        state.sessionInfo.inputTokens = null;
+        state.sessionInfo.outputTokens = null;
+        state.sessionInfo.totalTokens = null;
+        tui.requestRender();
         if (applySessionMutationResult(result, resetSelection)) {
           resetResultSelection = captureSessionSelection();
           await refreshSessionInfo();

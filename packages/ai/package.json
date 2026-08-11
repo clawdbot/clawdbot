@@ -61,6 +61,11 @@
       "import": "./dist/types.mjs",
       "default": "./dist/types.mjs"
     },
+    "./provider-types": {
+      "types": "./dist/provider-types.d.mts",
+      "import": "./dist/provider-types.mjs",
+      "default": "./dist/provider-types.mjs"
+    },
     "./validation": {
       "types": "./dist/validation.d.mts",
       "import": "./dist/validation.mjs",

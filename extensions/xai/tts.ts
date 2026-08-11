@@ -6,11 +6,12 @@ import {
   readProviderBinaryResponse,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
-import { asObject, trimToUndefined, type SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
+import { trimToUndefined, type SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import WebSocket from "ws";
 import { XAI_BASE_URL } from "./model-definitions.js";
@@ -48,12 +49,12 @@ export async function listXaiTtsVoices(params: {
     const payload = await readProviderJsonResponse<unknown>(response, "xAI TTS voices", {
       maxBytes: XAI_TTS_VOICE_LIST_MAX_BYTES,
     });
-    const voices = asObject(payload)?.voices;
+    const voices = asOptionalRecord(payload)?.voices;
     if (!Array.isArray(voices)) {
       throw new Error("xAI TTS voices: malformed JSON response");
     }
     return voices.flatMap((value) => {
-      const voice = asObject(value);
+      const voice = asOptionalRecord(value);
       const id = trimToUndefined(voice?.voice_id);
       if (!id) {
         return [];

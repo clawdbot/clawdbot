@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import { privateLocalOnlyPluginSdkEntrypoints } from "../../../lib/plugin-sdk-entries.mts";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function isPackageJsonRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -16,10 +16,12 @@ if (!packageJsonPath) {
   throw new Error("trusted harness package.json path is missing");
 }
 const parsedPackageJson: unknown = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
-if (!isRecord(parsedPackageJson)) {
+if (!isPackageJsonRecord(parsedPackageJson)) {
   throw new Error("trusted harness package.json must be an object");
 }
-const packageExports = isRecord(parsedPackageJson.exports) ? parsedPackageJson.exports : {};
+const packageExports = isPackageJsonRecord(parsedPackageJson.exports)
+  ? parsedPackageJson.exports
+  : {};
 parsedPackageJson.exports = packageExports;
 
 // Private QA builds emit these two harness-only facades outside the regular SDK inventory.

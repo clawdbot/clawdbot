@@ -97,6 +97,7 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
         chatTypes: ["group"],
       },
       messaging: {
+        inferTargetChatType: ({ to }) => (normalizeTwitchMessagingTarget(to) ? "group" : undefined),
         resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
           const channel = normalizeTwitchMessagingTarget(target);
           if (!channel) {

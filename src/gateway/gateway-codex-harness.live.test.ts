@@ -1118,7 +1118,7 @@ function readCodexAppServerPluginApprovalId(event: EventFrame): string | undefin
     return undefined;
   }
   const requestRecord = request as Record<string, unknown>;
-  if (requestRecord.pluginId !== "openclaw-codex-app-server") {
+  if (requestRecord.pluginId !== "codex") {
     return undefined;
   }
   return typeof record.id === "string" && record.id ? record.id : undefined;

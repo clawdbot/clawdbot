@@ -15,6 +15,8 @@ export type RegistryState = {
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable";
   importedPluginIds: Set<string>;
   registrationContext?: { registry: PluginRegistry; pluginId: string };
+  commandRegistryClearTail?: Promise<void>;
+  commandRegistryClearRegistries?: Map<PluginRegistry, number>;
 };
 
 type GlobalRegistryState = typeof globalThis & {

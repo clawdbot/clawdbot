@@ -4,10 +4,9 @@
  * Sanitizes provider payloads, merges metadata, and formats streamed assistant events.
  */
 import type { Usage } from "@openclaw/llm-core";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
+import { projectProviderError, type ProviderErrorProjection } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
-import { redactSensitiveText } from "./transport-utils.js";
 
 type ContextUsage = NonNullable<Usage["contextUsage"]>;
 
@@ -26,12 +25,8 @@ export type WritableTransportStream = {
   end(): void;
 };
 
-type TransportOutputShape = {
+type TransportOutputShape = Partial<Omit<ProviderErrorProjection, "stopReason">> & {
   stopReason: string;
-  errorMessage?: string;
-  errorCode?: string;
-  errorType?: string;
-  errorBody?: string;
 };
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
@@ -193,128 +188,13 @@ export function finalizeTransportStream(params: {
   stream.end();
 }
 
-type TransportErrorDetails = {
-  errorCode?: string;
-  errorType?: string;
-  errorBody?: string;
-};
-
-const MAX_TRANSPORT_ERROR_CAUSE_DEPTH = 8;
-
-function readStringLikeProperty(value: unknown, key: string): string | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const raw = (value as Record<string, unknown>)[key];
-  if (typeof raw === "string") {
-    const trimmed = raw.trim();
-    return trimmed || undefined;
-  }
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return String(raw);
-  }
-  return undefined;
-}
-
-function readObjectProperty(value: unknown, key: string): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const raw = (value as Record<string, unknown>)[key];
-  return raw && typeof raw === "object" && !Array.isArray(raw)
-    ? (raw as Record<string, unknown>)
-    : undefined;
-}
-
-function readCauseChainErrorCode(value: unknown): string | undefined {
-  const seen = new Set<Record<string, unknown>>();
-  let cause = readObjectProperty(value, "cause");
-  for (
-    let depth = 0;
-    cause && depth < MAX_TRANSPORT_ERROR_CAUSE_DEPTH && !seen.has(cause);
-    depth += 1
-  ) {
-    seen.add(cause);
-    const code = readStringLikeProperty(cause, "code");
-    if (code) {
-      return code;
-    }
-    cause = readObjectProperty(cause, "cause");
-  }
-  return undefined;
-}
-
-function stringifyErrorBody(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return undefined;
-  }
-}
-
-function stringifyTransportErrorMessage(value: unknown): string | undefined {
-  if (value instanceof Error) {
-    return value.message;
-  }
-  const encoded = stringifyErrorBody(value);
-  if (encoded !== undefined) {
-    return encoded;
-  }
-  try {
-    return String(value);
-  } catch {
-    return undefined;
-  }
-}
-
-function normalizeTransportErrorBody(value: unknown): string | undefined {
-  const text = stringifyErrorBody(value);
-  if (!text?.trim()) {
-    return undefined;
-  }
-  const redacted = redactSensitiveText(text);
-  return redacted.length > 500 ? `${truncateUtf16Safe(redacted, 499)}…` : redacted;
-}
-
-function extractTransportErrorDetails(error: unknown): TransportErrorDetails {
-  const errorObject = error && typeof error === "object" ? error : undefined;
-  const nestedError = readObjectProperty(errorObject, "error");
-  const errorCode =
-    readStringLikeProperty(errorObject, "errorCode") ??
-    readStringLikeProperty(errorObject, "code") ??
-    readStringLikeProperty(nestedError, "code") ??
-    readCauseChainErrorCode(errorObject);
-  const errorType =
-    readStringLikeProperty(errorObject, "errorType") ??
-    readStringLikeProperty(errorObject, "type") ??
-    readStringLikeProperty(nestedError, "type");
-  const errorBody =
-    normalizeTransportErrorBody(readStringLikeProperty(errorObject, "errorBody")) ??
-    normalizeTransportErrorBody(readStringLikeProperty(errorObject, "body")) ??
-    normalizeTransportErrorBody(readObjectProperty(errorObject, "body")) ??
-    normalizeTransportErrorBody(nestedError);
-
-  return {
-    ...(errorCode ? { errorCode } : {}),
-    ...(errorType ? { errorType } : {}),
-    ...(errorBody ? { errorBody } : {}),
-  };
-}
-
+/** @deprecated Use projectProviderError. v2026.7.2-beta.5 compatibility; remove after 2026.10. */
 export function assignTransportErrorDetails(
   output: TransportOutputShape,
   error: unknown,
   signal?: AbortSignal,
 ): void {
-  output.stopReason = signal?.aborted ? "aborted" : "error";
-  output.errorMessage = stringifyTransportErrorMessage(error);
-  Object.assign(output, extractTransportErrorDetails(error));
+  Object.assign(output, projectProviderError(error, signal));
 }
 
 export function failTransportStream(params: {

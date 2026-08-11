@@ -94,7 +94,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.15.0"
+  NODE_VERSION: "24.16.0"
 
 jobs:
   resolve_release_target:
@@ -2423,6 +2423,20 @@ jobs:
     permissions:
       contents: read
       packages: write
+
+  publish_vcr:
+    name: Mirror Docker images to Vercel Container Registry
+    needs: [publish_docker]
+    if: ${{ always() && needs.publish_docker.result == 'success' }}
+    uses: ./.github/workflows/vercel-container-registry-publish.yml
+    with:
+      include_browser: ${{ needs.publish_docker.outputs.include_browser == 'true' }}
+      source_refs: ${{ needs.publish_docker.outputs.vcr_source_refs }}
+      version: ${{ needs.publish_docker.outputs.version }}
+    secrets:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+    permissions:
+      contents: read
 
   finalize_github_release:
     name: Finalize GitHub release

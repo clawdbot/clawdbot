@@ -75,6 +75,7 @@ function runIdentityVerification(params: {
   invocation?: "dispatch" | "reusable";
   oidcJobWorkflowSha?: string;
   oidcWorkflowSha?: string;
+  targetContextRef?: string;
   workflowSha?: string;
 }) {
   const repository = "openclaw/openclaw";
@@ -143,7 +144,8 @@ function runIdentityVerification(params: {
           workflow_sha: params.expectedTrustedWorkflowSha,
         }),
         PATH: `${fakeBin}:${process.env.PATH}`,
-        TARGET_REF: "refs/heads/release/2026.7.1",
+        TARGET_CONTEXT_REF: params.targetContextRef ?? "",
+        TARGET_REF: params.targetContextRef ? "a".repeat(40) : "refs/heads/release/2026.7.1",
         TARGET_SHA: "a".repeat(40),
         WORKFLOW_REF: workflowRef,
         WORKFLOW_SHA: workflowSha,
@@ -210,11 +212,33 @@ function runAdvisoryStatus(overrides: Record<string, string> = {}) {
   };
 }
 
-function runCandidateProvenance(params: { openPr?: boolean; unsignedWebFlow?: boolean } = {}) {
+function runCandidateProvenance(
+  params: {
+    branchHead?: string;
+    candidateVersion?: string;
+    openPr?: boolean;
+    remoteSha?: string;
+    targetContextRef?: string;
+    unsignedWebFlow?: boolean;
+  } = {},
+) {
   const candidateSha = "a".repeat(40);
+  const targetContextRef = params.targetContextRef ?? "";
+  const normalizedContextRef = targetContextRef
+    .replace(/^refs\/heads\//u, "")
+    .replace(/^refs\/tags\//u, "");
+  const branchHead = params.branchHead ?? "release/2026.7.1-beta.3-code-frozen-r1";
+  const remoteRef = normalizedContextRef.startsWith("v")
+    ? `refs/tags/${normalizedContextRef}`
+    : `refs/heads/${normalizedContextRef || "release/2026.7.1"}`;
   const workdir = tempDirs.make("openclaw-telegram-provenance-");
   const fakeBin = join(workdir, "bin");
   mkdirSync(fakeBin);
+  mkdirSync(join(workdir, ".candidate"));
+  writeFileSync(
+    join(workdir, ".candidate", "package.json"),
+    JSON.stringify({ version: params.candidateVersion ?? "2026.7.1-beta.3" }),
+  );
   const metadata = {
     data: {
       repository: {
@@ -256,6 +280,7 @@ function runCandidateProvenance(params: { openPr?: boolean; unsignedWebFlow?: bo
     `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "$*" == *"api graphql"* ]]; then printf '%s\\n' "$FAKE_METADATA"; exit 0; fi
+if [[ "$*" == *"/branches-where-head"* ]]; then printf '%s\\n' "$FAKE_BRANCH_HEAD"; exit 0; fi
 if [[ "$*" == *"/compare/"* ]]; then printf '%s\\n' "behind"; exit 0; fi
 if [[ "$*" == *"/collaborators/release-maintainer/permission"* ]]; then printf '%s\\n' '{"permission":"write","role_name":"maintain"}'; exit 0; fi
 exit 64
@@ -267,7 +292,11 @@ exit 64
     `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "$*" == *"rev-parse HEAD"* ]]; then printf '%s\\n' "$TARGET_SHA"; exit 0; fi
-if [[ "$*" == *"ls-remote"* ]]; then printf '%s\\trefs/heads/release/2026.7.1\\n' "$TARGET_SHA"; exit 0; fi
+if [[ "$*" == *"ls-remote"* ]]; then
+  if [[ "$*" == *"refs/tags/"* && "$FAKE_REMOTE_REF" != refs/tags/* ]]; then exit 0; fi
+  printf '%s\\t%s\\n' "$FAKE_REMOTE_SHA" "$FAKE_REMOTE_REF"
+  exit 0
+fi
 exit 64
 `,
     { mode: 0o755 },
@@ -280,11 +309,15 @@ exit 64
       encoding: "utf8",
       env: {
         ...process.env,
+        FAKE_BRANCH_HEAD: branchHead,
         FAKE_METADATA: JSON.stringify(metadata),
+        FAKE_REMOTE_REF: remoteRef,
+        FAKE_REMOTE_SHA: params.remoteSha ?? candidateSha,
         GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]",
         GITHUB_REPOSITORY: "openclaw/openclaw",
         PATH: `${fakeBin}:${process.env.PATH}`,
-        TARGET_REF: "refs/heads/release/2026.7.1",
+        TARGET_CONTEXT_REF: targetContextRef,
+        TARGET_REF: targetContextRef ? candidateSha : "refs/heads/release/2026.7.1",
         TARGET_SHA: candidateSha,
       },
     },
@@ -346,6 +379,18 @@ describe("release Telegram QA workflow", () => {
   it("accepts only the resolved trusted workflow identity", () => {
     const trustedSha = "b".repeat(40);
     expect(runIdentityVerification({ expectedTrustedWorkflowSha: trustedSha }).status).toBe(0);
+    for (const targetContextRef of [
+      "release/2026.7.1",
+      "extended-stable/2026.7.33",
+      "v2026.7.1",
+      "v2026.7.1-beta.3",
+    ]) {
+      const accepted = runIdentityVerification({
+        expectedTrustedWorkflowSha: trustedSha,
+        targetContextRef,
+      });
+      expect(accepted.status, `${targetContextRef}: ${accepted.stderr}`).toBe(0);
+    }
     expect(
       runIdentityVerification({
         expectedTrustedWorkflowSha: trustedSha,
@@ -371,6 +416,64 @@ describe("release Telegram QA workflow", () => {
     const openPr = runCandidateProvenance({ openPr: true });
     expect(openPr.status).toBe(1);
     expect(openPr.stderr).toContain("open same-repository PR head");
+  });
+
+  it("requires canonical signed frozen heads for beta release contexts", () => {
+    const matching = runCandidateProvenance({
+      candidateVersion: "2026.7.1-beta.3",
+      targetContextRef: "release/2026.7.1",
+    });
+    expect(matching.status, matching.stderr).toBe(0);
+
+    const unsigned = runCandidateProvenance({
+      candidateVersion: "2026.7.1-beta.3",
+      targetContextRef: "release/2026.7.1",
+      unsignedWebFlow: true,
+    });
+    expect(unsigned.status).toBe(1);
+    expect(unsigned.stderr).toContain("requires a valid maintainer signature");
+
+    const legacyFrozen = runCandidateProvenance({
+      branchHead: "release/2026.7.1-beta.3-frozen-r1",
+      candidateVersion: "2026.7.1-beta.3",
+      targetContextRef: "release/2026.7.1",
+    });
+    expect(legacyFrozen.status).toBe(1);
+
+    const alpha = runCandidateProvenance({
+      candidateVersion: "2026.7.1-alpha.1",
+      targetContextRef: "release/2026.7.1",
+    });
+    expect(alpha.status).toBe(1);
+    expect(alpha.stderr).toContain(
+      "Telegram candidate version 2026.7.1-alpha.1 does not belong to release 2026.7.1.",
+    );
+  });
+
+  it("binds every release context to candidate version and SHA", () => {
+    for (const [targetContextRef, candidateVersion] of [
+      ["release/2026.7.1", "2026.7.1"],
+      ["extended-stable/2026.7.33", "2026.7.33"],
+      ["v2026.7.1", "2026.7.1"],
+      ["v2026.7.1-alpha.2", "2026.7.1-alpha.2"],
+      ["v2026.7.1-beta.3", "2026.7.1-beta.3"],
+    ] as const) {
+      const accepted = runCandidateProvenance({ candidateVersion, targetContextRef });
+      expect(accepted.status, `${targetContextRef}: ${accepted.stderr}`).toBe(0);
+
+      const versionMismatch = runCandidateProvenance({
+        candidateVersion: "2026.8.1",
+        targetContextRef,
+      });
+      expect(versionMismatch.status, targetContextRef).toBe(1);
+
+      const shaMismatch = runCandidateProvenance({
+        candidateVersion,
+        remoteSha: "b".repeat(40),
+        targetContextRef,
+      });
+      expect(shaMismatch.status, targetContextRef).toBe(1);
+    }
   });
 
   it("writes terminal evidence only for complete successful producers", () => {

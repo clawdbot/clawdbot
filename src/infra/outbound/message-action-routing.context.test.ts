@@ -22,7 +22,7 @@ import {
   runDrySend,
   workspaceConfig,
   workspaceTestPlugin,
-} from "./message-action-runner.test-helpers.js";
+} from "./message-action-runner.test-support.js";
 
 const handleWorkspaceAction = vi.fn(async (_ctx: ChannelMessageActionContext) =>
   jsonResult({ ok: true }),

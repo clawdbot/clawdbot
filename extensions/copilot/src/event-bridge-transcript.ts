@@ -78,7 +78,7 @@ export function resolveAssistantUsage(
   latest: AssistantUsageSnapshot | undefined,
   byApiCallId: Map<string, AssistantUsageSnapshot>,
 ): AssistantUsageSnapshot | undefined {
-  const apiCallId = readString(event?.data.apiCallId);
+  const apiCallId = readNonEmptyString(event?.data.apiCallId);
   return apiCallId ? (byApiCallId.get(apiCallId) ?? latest) : latest;
 }
 
@@ -162,6 +162,6 @@ export function sanitizeToolDetailText(text: string): string {
   return typeof value === "string" ? value : "";
 }
 
-function readString(value: unknown): string | undefined {
+function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }

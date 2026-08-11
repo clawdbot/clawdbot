@@ -30,7 +30,7 @@ const DEPENDENCY_DIFF_PATHS = [
 
 type DependencyPayload = Record<string, string[]>;
 type DependencyFileChange = { oldPath: string | null; path: string; status: string };
-const optionalString = (value: string | null) => value;
+const nullableString = (value: string | null) => value;
 
 function payloadFromLockfile(lockfileText: string): DependencyPayload {
   const packages = collectAllResolvedPackagesFromLockfile(lockfileText);
@@ -261,11 +261,11 @@ function readRequiredValue(argv: string[], index: number, flag: string) {
 export function parseArgs(argv: string[]) {
   const options = {
     rootDir: process.cwd(),
-    baseRef: optionalString(null),
-    baseLockfile: optionalString(null),
+    baseRef: nullableString(null),
+    baseLockfile: nullableString(null),
     headLockfile: "pnpm-lock.yaml",
-    jsonPath: optionalString(null),
-    markdownPath: optionalString(null),
+    jsonPath: nullableString(null),
+    markdownPath: nullableString(null),
   };
   const seen = new Set<string>();
   const setOnce = (flag: string, key: keyof typeof options, value: string) => {

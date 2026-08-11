@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { resolveCliBackendConfig, type ResolvedCliBackend } from "../agents/cli-backends.js";
 import { normalizeCliModel } from "../agents/cli-runner/helpers.js";
 import { SessionManager } from "../agents/sessions/index.js";
@@ -316,6 +317,12 @@ async function runSystemAgentTurnWithDeps(
   const runId = `openclaw-turn-${randomUUID()}`;
   const sessionManager = params.session.sessionManager ?? SessionManager.inMemory(workspaceDir);
   params.session.sessionManager = sessionManager;
+  const preparedRunAdmission = prepareSystemAgentRunAdmission(
+    plan.runConfig,
+    runId,
+    SYSTEM_AGENT_ID,
+    "system-agent.turn",
+  );
   const shared = {
     sessionId: params.session.sessionId,
     sessionKey: buildAgentMainSessionKey({ agentId: SYSTEM_AGENT_ID }),
@@ -364,6 +371,7 @@ async function runSystemAgentTurnWithDeps(
       try {
         result = (await runCli({
           ...shared,
+          preparedRunAdmission,
           provider: plan.provider,
           model: plan.model,
           agentDir: plan.agentDir,
@@ -398,6 +406,7 @@ async function runSystemAgentTurnWithDeps(
         deps.runEmbeddedAgent ?? (await import("../agents/embedded-agent.js")).runEmbeddedAgent;
       result = (await runEmbedded({
         ...shared,
+        preparedRunAdmission,
         extraSystemPrompt: SYSTEM_AGENT_SYSTEM_PROMPT,
         toolsAllow: ["openclaw"],
         systemAgentTool,
@@ -436,6 +445,8 @@ async function runSystemAgentTurnWithDeps(
     const failures =
       error instanceof SystemAgentInferenceUnavailableError ? [...error.failures] : [error];
     return throwSystemAgentInferenceUnavailable({ session: params.session, failures });
+  } finally {
+    preparedRunAdmission.close();
   }
 }
 

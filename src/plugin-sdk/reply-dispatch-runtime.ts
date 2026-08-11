@@ -25,13 +25,13 @@ const loadProviderDispatcherRuntimeModule = createLazyPromise(
 /** Dispatches a reply with buffered block support after lazy-loading the runtime dispatcher. */
 export const dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher =
   async (params) => {
-    const { dispatchReplyWithBufferedBlockDispatcher: dispatch } =
+    const { dispatchReplyWithBufferedBlockDispatcherCore: dispatch } =
       await loadProviderDispatcherRuntimeModule();
     return await dispatch(params);
   };
 
 /** Dispatches a reply through the provider dispatcher after lazy-loading runtime code. */
 export const dispatchReplyWithDispatcher: DispatchReplyWithDispatcher = async (params) => {
-  const { dispatchReplyWithDispatcher: dispatch } = await loadProviderDispatcherRuntimeModule();
+  const { dispatchReplyWithDispatcherCore: dispatch } = await loadProviderDispatcherRuntimeModule();
   return await dispatch(params);
 };

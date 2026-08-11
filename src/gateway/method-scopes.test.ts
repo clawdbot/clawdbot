@@ -74,6 +74,9 @@ describe("method scope resolution", () => {
     ["worktrees.list", ["operator.read"]],
     ["worktrees.branches", ["operator.write"]],
     ["worktrees.create", ["operator.admin"]],
+    ["projects.list", ["operator.read"]],
+    ["projects.register", ["operator.admin"]],
+    ["projects.remove", ["operator.admin"]],
     ["sessions.groups.list", ["operator.read"]],
     ["sessions.groups.put", ["operator.write"]],
     ["sessions.groups.rename", ["operator.write"]],
@@ -87,6 +90,7 @@ describe("method scope resolution", () => {
     ["session.discussion.open", ["operator.write"]],
     ["environments.status", ["operator.read"]],
     ["diagnostics.stability", ["operator.read"]],
+    ["gateway.restart.preflight", ["operator.read"]],
     ["skills.curator.status", ["operator.read"]],
     ["hooks.status", ["operator.read"]],
     ["skills.curator.pin", ["operator.admin"]],
@@ -108,6 +112,9 @@ describe("method scope resolution", () => {
     ["talk.session.close", ["operator.talk"]],
     ["update.status", ["operator.admin"]],
     ["update.hold", ["operator.admin"]],
+    ["secrets.store.list", ["operator.admin"]],
+    ["secrets.store.set", ["operator.admin"]],
+    ["secrets.store.delete", ["operator.admin"]],
     ["config.schema", ["operator.admin"]],
     ["config.patch", ["operator.admin"]],
     ["nativeHook.invoke", ["operator.admin"]],
@@ -386,6 +393,16 @@ describe("method scope resolution", () => {
         nodeId: "macbook",
       }),
     ).toEqual({ allowed: false, missingScope: "operator.admin" });
+  });
+
+  it("keeps sessions.create project IDs at write scope", () => {
+    const params = { projectId: "openclaw", worktree: true };
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", params)).toEqual([
+      "operator.write",
+    ]);
+    expect(authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], params)).toEqual(
+      { allowed: true },
+    );
   });
 
   it("requires admin for incognito session creation and inheritance", () => {

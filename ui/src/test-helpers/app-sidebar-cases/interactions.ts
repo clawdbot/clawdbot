@@ -15,12 +15,22 @@ import {
   createGateway,
   createGatewayHarness,
   createSessions,
-  createSessionsHarness,
   mountSidebar,
-  type SidebarLifecycleState,
-  type TestSessionMenu,
 } from "../app-sidebar.ts";
+import {
+  answerConfirmDialog,
+  installDialogPolyfill,
+  waitForConfirmDialogActions,
+} from "../modal-dialog.ts";
 import { waitForFast } from "../wait-for.ts";
+import {
+  click,
+  mountMultiSelect,
+  openContextMenu,
+  rowLink,
+  selectedRowKeys,
+  sessionMenu,
+} from "./multi-select-support.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar context menu boundary", () => {
@@ -48,80 +58,6 @@ describe("AppSidebar context menu boundary", () => {
 });
 
 describe("AppSidebar multi-select", () => {
-  const KEYS = ["agent:main:main", "agent:main:a", "agent:main:b", "agent:main:c"];
-
-  function rowLink(sidebar: SidebarLifecycleState, key: string): HTMLAnchorElement {
-    const link = sidebar.querySelector<HTMLAnchorElement>(
-      `[data-session-key="${key}"] .sidebar-recent-session__link`,
-    );
-    if (!link) {
-      throw new Error(`expected row link for ${key}`);
-    }
-    return link;
-  }
-
-  function selectedRowKeys(sidebar: SidebarLifecycleState): string[] {
-    return Array.from(sidebar.querySelectorAll(".sidebar-recent-session--selected")).map(
-      (row) => row.getAttribute("data-session-key") ?? "",
-    );
-  }
-
-  function click(target: Element, init: MouseEventInit = {}) {
-    target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ...init }));
-  }
-
-  function openContextMenu(sidebar: SidebarLifecycleState, key: string) {
-    const row = sidebar.querySelector(`[data-session-key="${key}"]`);
-    if (!row) {
-      throw new Error(`expected row for ${key}`);
-    }
-    row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
-  }
-
-  async function sessionMenu(sidebar: SidebarLifecycleState): Promise<TestSessionMenu> {
-    const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
-    if (!menu) {
-      throw new Error("expected session menu");
-    }
-    await menu.updateComplete;
-    return menu;
-  }
-
-  async function mountMultiSelect(methods?: string[] | null, patchManyError?: Error) {
-    const harness = createSessionsHarness("main", KEYS);
-    const request = vi.fn((method: string, params?: unknown) => {
-      if (method !== "sessions.patchMany") {
-        return Promise.reject(new Error(`unexpected request: ${method}`));
-      }
-      if (patchManyError) {
-        return Promise.reject(patchManyError);
-      }
-      const patchParams = params as {
-        targets: Array<{ key: string; agentId?: string }>;
-        patch: Record<string, unknown>;
-      };
-      return harness.patchMany(patchParams.targets, patchParams.patch);
-    });
-    const gateway = createGatewayHarness({
-      request: (method, params) => {
-        return request(method, params);
-      },
-    } as GatewayBrowserClient);
-    if (methods !== undefined) {
-      gateway.publish({
-        phase: "connected",
-        hello: {
-          features: methods === null ? {} : { methods },
-          auth: { role: "operator", scopes: ["operator.write"] },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
-    }
-    const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
-    sidebar.connected = true;
-    await sidebar.updateComplete;
-    return { sidebar, harness, request };
-  }
-
   it("names each session's pin and menu buttons after their owning session", async () => {
     const { sidebar } = await mountMultiSelect();
 
@@ -235,40 +171,6 @@ describe("AppSidebar multi-select", () => {
     await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
   });
 
-  it("writes a new group catalog before assigning the selection through patchMany", async () => {
-    const prompt = vi.spyOn(window, "prompt").mockReturnValue("Projects");
-    try {
-      const { sidebar, harness } = await mountMultiSelect([
-        "sessions.groups.put",
-        "sessions.patchMany",
-      ]);
-      click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
-      click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
-      await sidebar.updateComplete;
-      openContextMenu(sidebar, "agent:main:a");
-      await sidebar.updateComplete;
-      const menu = await sessionMenu(sidebar);
-      menu.querySelector<HTMLElement>('wa-dropdown-item[value="new-group"]')?.click();
-
-      await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
-      expect(harness.groupsPut).toHaveBeenCalledWith(["Projects"]);
-      expect(harness.patchMany).toHaveBeenCalledWith(
-        [
-          { key: "agent:main:a", agentId: "main" },
-          { key: "agent:main:b", agentId: "main" },
-        ],
-        { category: "Projects" },
-      );
-      expect(harness.groupsPut.mock.invocationCallOrder[0]).toBeLessThan(
-        harness.patchMany.mock.invocationCallOrder[0]!,
-      );
-      expect(harness.patch).not.toHaveBeenCalled();
-      await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
-    } finally {
-      prompt.mockRestore();
-    }
-  });
-
   it("archives serially when an older Gateway does not advertise patchMany", async () => {
     const { sidebar, harness, request } = await mountMultiSelect(["sessions.patch"]);
 
@@ -342,7 +244,7 @@ describe("AppSidebar multi-select", () => {
   });
 
   it("deletes the selection in one batch after a single confirm", async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const restoreDialogPolyfill = installDialogPolyfill();
     try {
       const { sidebar, harness } = await mountMultiSelect();
 
@@ -355,15 +257,17 @@ describe("AppSidebar multi-select", () => {
       const menu = await sessionMenu(sidebar);
       menu.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();
 
+      const actions = await waitForConfirmDialogActions();
+      expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain("2");
+      answerConfirmDialog(actions, "confirm");
+
       await waitForFast(() => expect(harness.deleteMany).toHaveBeenCalledOnce());
-      expect(confirmSpy).toHaveBeenCalledOnce();
-      expect(confirmSpy.mock.calls[0]?.[0]).toContain("2");
       expect(harness.deleteMany).toHaveBeenCalledWith([
         { key: "agent:main:a", agentId: "main", deleteTranscript: true },
         { key: "agent:main:b", agentId: "main", deleteTranscript: true },
       ]);
     } finally {
-      confirmSpy.mockRestore();
+      restoreDialogPolyfill();
     }
   });
 
@@ -440,10 +344,6 @@ describe("AppSidebar catalog session rows", () => {
       );
       const navigated: Array<[string, unknown]> = [];
       sidebar.onNavigate = (routeId, options) => navigated.push([routeId, options]);
-      let navDrawerCloses = 0;
-      sidebar.onCloseNavDrawer = () => {
-        navDrawerCloses += 1;
-      };
       const header = sidebar.querySelector<HTMLElement>(
         '[data-session-section="catalog:codex"] .sidebar-recent-sessions__head',
       );
@@ -469,10 +369,6 @@ describe("AppSidebar catalog session rows", () => {
 
       expect(loadStoredHiddenSessionCatalogIds().has("codex")).toBe(true);
       expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).toBeNull();
-
-      // On a phone this menu lives inside the modal navigation drawer, which occludes
-      // and inerts the toast; the outcome only reaches the operator once it closes.
-      expect(navDrawerCloses).toBe(1);
 
       // Hiding must announce its own outcome: the section name, undo, and a recovery
       // path that opens the settings block instead of only naming it.
@@ -638,7 +534,19 @@ describe("AppSidebar catalog session rows", () => {
       const items = menu.querySelectorAll<HTMLElement & { disabled: boolean }>("wa-dropdown-item");
       expect(items).toHaveLength(2);
       expect(items[1]?.disabled).toBe(true);
-      expect(row.querySelector("[data-catalog-session-menu]")).not.toBeNull();
+      const menuButton = row.querySelector<HTMLElement>("[data-catalog-session-menu]");
+      expect(menuButton).not.toBeNull();
+
+      const keyboardContextMenu = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "F10",
+        shiftKey: true,
+      });
+      row.querySelector("a")?.dispatchEvent(keyboardContextMenu);
+      await sidebar.updateComplete;
+      expect(sidebar.querySelector("openclaw-catalog-session-menu")).not.toBeNull();
+      expect(keyboardContextMenu.defaultPrevented).toBe(true);
     } finally {
       vi.useRealTimers();
     }

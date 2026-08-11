@@ -55,7 +55,7 @@ export type SafeGatewayRestartRequestResult = {
   restart: ScheduledRestart;
 };
 
-function createSafeGatewayRestartPreflight(
+export function createSafeGatewayRestartPreflight(
   inspectors: Partial<SafeRestartInspectors> = {},
 ): SafeGatewayRestartPreflight {
   const snapshot = createGatewayActiveWorkSnapshot({

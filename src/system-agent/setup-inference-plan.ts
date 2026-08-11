@@ -242,11 +242,12 @@ export async function buildTestPlan(params: {
         provider: route.provider,
         model: route.model,
         modelRef: route.modelLabel,
-        config: route.runConfig,
+        config: cfg,
+        executionConfig: route.runConfig,
         agentId: "openclaw",
         routeAgentId: route.agentId,
         agentDir: route.agentDir,
-        ...(route.runner === "embedded"
+        ...(route.runner === "embedded" && route.agentHarnessRuntimeOverride
           ? { agentHarnessRuntimeOverride: route.agentHarnessRuntimeOverride }
           : {}),
         ...(route.authProfileId ? { authProfileId: route.authProfileId } : {}),
