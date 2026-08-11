@@ -123,9 +123,7 @@ export function resolveMessageActionDetails(params: {
       ? params.getAssistantMessageExpansion?.(messageId)
       : undefined;
   const visibleMarkdown =
-    expansion?.status === "loaded" && expansion.expanded
-      ? stripThinkingTags(expansion.markdown).trim()
-      : previewMarkdown;
+    expansion?.status === "loaded" ? stripThinkingTags(expansion.markdown).trim() : previewMarkdown;
   const markdown = role === "assistant" ? visibleMarkdown : undefined;
   const replyText = onReply ? truncateUtf16Safe(visibleMarkdown, 500) : "";
   if (!markdown && !replyText && !(role === "assistant" && shouldFetchFullMessage)) {
@@ -245,9 +243,6 @@ export function renderUserMessageMarkdown(
 export type AssistantMessageDisclosure = {
   expanded: boolean;
   markdown?: string;
-  loading: boolean;
-  error: boolean;
-  onToggle: () => void;
 };
 
 export function renderAssistantMessageMarkdown(
@@ -256,35 +251,13 @@ export function renderAssistantMessageMarkdown(
   disclosure: AssistantMessageDisclosure | undefined,
   markdownRenderOptions: MarkdownRenderOptions,
 ) {
-  if (!disclosure) {
-    return renderMarkdownText(previewMarkdown, isStreaming, markdownRenderOptions);
-  }
-  const markdown = disclosure.expanded ? (disclosure.markdown ?? previewMarkdown) : previewMarkdown;
-  return html`
-    <div class="chat-message-disclosure ${disclosure.expanded ? "is-expanded" : ""}">
-      <div class="chat-message-disclosure__content">
-        ${renderMarkdownText(markdown, isStreaming, markdownRenderOptions)}
-      </div>
-      <div class="chat-message-disclosure__footer">
-        <button
-          class="chat-message-disclosure__toggle"
-          type="button"
-          aria-expanded=${String(disclosure.expanded)}
-          ?disabled=${disclosure.loading}
-          @click=${disclosure.onToggle}
-        >
-          ${disclosure.loading
-            ? t("common.loading")
-            : t(disclosure.expanded ? "chat.messages.showLess" : "chat.messages.showMore")}
-        </button>
-        ${disclosure.error
-          ? html`<span class="chat-message-disclosure__error" role="status"
-              >${t("chat.messages.fullContentLoadFailed")}</span
-            >`
-          : nothing}
-      </div>
-    </div>
-  `;
+  const markdown = disclosure?.expanded
+    ? (disclosure.markdown ?? previewMarkdown)
+    : previewMarkdown;
+  const renderOptions = disclosure?.expanded
+    ? { ...markdownRenderOptions, mode: "document" as const }
+    : markdownRenderOptions;
+  return renderMarkdownText(markdown, isStreaming, renderOptions);
 }
 
 export function renderMarkdownText(

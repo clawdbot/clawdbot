@@ -902,6 +902,12 @@ export interface ManagedOutgoingImageRecords {
   updated_at: string | null;
 }
 
+export interface McpOauthPendingAuthorizations {
+  create_time: number;
+  state: string;
+  store_key: string;
+}
+
 export interface McpOauthStores {
   format_version: number;
   store_json: string;
@@ -1797,6 +1803,7 @@ export interface DB {
   installed_plugin_index: InstalledPluginIndex;
   macos_port_guardian_records: MacosPortGuardianRecords;
   managed_outgoing_image_records: ManagedOutgoingImageRecords;
+  mcp_oauth_pending_authorizations: McpOauthPendingAuthorizations;
   mcp_oauth_stores: McpOauthStores;
   media_blobs: MediaBlobs;
   meeting_transcript_sessions: MeetingTranscriptSessions;

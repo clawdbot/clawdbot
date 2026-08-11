@@ -21,6 +21,9 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 const SECRET_STORE_SCHEMA_START = "CREATE TABLE IF NOT EXISTS secret_store_entries (";
 const SECRET_STORE_SCHEMA_END =
   "ON secret_store_entries (scope_kind, scope_id, name) WHERE deleted_at_ms IS NULL;";
+const MCP_OAUTH_PENDING_SCHEMA_START =
+  "CREATE TABLE IF NOT EXISTS mcp_oauth_pending_authorizations (";
+const MCP_OAUTH_PENDING_SCHEMA_END = "\n) STRICT;";
 
 function secretStoreSchemaSql(): string {
   const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(SECRET_STORE_SCHEMA_START);
@@ -35,6 +38,18 @@ function secretStoreSchemaSql(): string {
 /** Lazily install the additive secret store table and index on first write. */
 export function ensureSecretStoreSchema(database: DatabaseSync): void {
   database.exec(secretStoreSchemaSql()); // sqlite-allow-raw -- Canonical additive DDL only.
+}
+
+/** Lazily install durable MCP OAuth callback correlation on first feature use. */
+export function ensureMcpOAuthPendingSchema(database: DatabaseSync): void {
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(MCP_OAUTH_PENDING_SCHEMA_START);
+  const endMarkerStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf(MCP_OAUTH_PENDING_SCHEMA_END, start);
+  if (start < 0 || endMarkerStart < start) {
+    throw new Error("OpenClaw MCP OAuth pending schema marker is missing.");
+  }
+  database.exec(
+    OPENCLAW_STATE_SCHEMA_SQL.slice(start, endMarkerStart + MCP_OAUTH_PENDING_SCHEMA_END.length),
+  ); // sqlite-allow-raw -- Canonical additive DDL only.
 }
 
 export function ensureAgentDeletionJournalSchema(database: DatabaseSync): void {

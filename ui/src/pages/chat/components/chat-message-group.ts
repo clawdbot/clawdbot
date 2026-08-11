@@ -119,11 +119,8 @@ function buildGroupedMessageRenderOptions(
     const messageId = actionDetails.messageId;
     const expansion = opts.getAssistantMessageExpansion?.(messageId);
     assistantMessageDisclosure = {
-      expanded: expansion?.status === "loaded" && expansion.expanded,
+      expanded: expansion?.status === "loaded",
       ...(expansion?.status === "loaded" ? { markdown: actionDetails.markdown } : {}),
-      loading: expansion?.status === "loading",
-      error: expansion?.status === "error",
-      onToggle: () => opts.onToggleAssistantMessageExpanded?.(messageId),
     };
   }
   return {
@@ -393,6 +390,15 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       senderLabel: who,
     }),
   );
+  for (const details of messageActionDetails) {
+    if (
+      details?.shouldFetchFullMessage &&
+      details.messageId &&
+      !opts.getAssistantMessageExpansion?.(details.messageId)
+    ) {
+      opts.onToggleAssistantMessageExpanded?.(details.messageId);
+    }
+  }
   const lastMessageIndex = group.messages.length - 1;
   const footerActionDetails = messageActionDetails[lastMessageIndex] ?? null;
   const hasUserFooterActions =

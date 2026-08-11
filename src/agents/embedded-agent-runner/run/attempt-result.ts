@@ -33,6 +33,22 @@ type EmbeddedAttemptSubscription = ReturnType<typeof subscribeEmbeddedAgentSessi
 type CacheTrace = ReturnType<typeof createCacheTrace>;
 type HookRunner = ReturnType<typeof getGlobalHookRunner>;
 
+/** Keeps presentation state sticky while retry attempts replace their result object. */
+export function createMcpAttemptCarryover() {
+  let latestMcpAppChannelView: EmbeddedRunAttemptResult["latestMcpAppChannelView"];
+  let latestMcpConnectAction: EmbeddedRunAttemptResult["latestMcpConnectAction"];
+  return {
+    apply(
+      attempt: Pick<EmbeddedRunAttemptResult, "latestMcpAppChannelView" | "latestMcpConnectAction">,
+    ): void {
+      latestMcpAppChannelView = attempt.latestMcpAppChannelView ?? latestMcpAppChannelView;
+      attempt.latestMcpAppChannelView = latestMcpAppChannelView;
+      latestMcpConnectAction = attempt.latestMcpConnectAction ?? latestMcpConnectAction;
+      attempt.latestMcpConnectAction = latestMcpConnectAction;
+    },
+  };
+}
+
 export type EmbeddedAttemptClientToolCallSlot = {
   toolCallId: string;
   name: string;
@@ -158,6 +174,7 @@ export function completeEmbeddedAttemptResult(
     getLastCompactionTokensAfter,
     getLastToolError,
     getLatestMcpAppChannelView,
+    getLatestMcpConnectAction,
     getMessagingToolSentMediaUrls,
     getMessagingToolSentTargets,
     getMessagingToolSentTexts,
@@ -383,6 +400,7 @@ export function completeEmbeddedAttemptResult(
     bootstrapPromptWarningSignature: input.bootstrapPromptWarning.signature,
     assistantTexts,
     latestMcpAppChannelView: getLatestMcpAppChannelView(),
+    latestMcpConnectAction: getLatestMcpConnectAction(),
     lastAssistantTextMessageIndex: getLastAssistantTextMessageIndex(),
     toolMetas: toolMetasNormalized,
     acceptedSessionSpawns,

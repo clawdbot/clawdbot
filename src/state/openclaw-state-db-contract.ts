@@ -10,6 +10,7 @@ export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 export const FIRST_USE_STATE_TABLES = [
   "cron_job_runtime_authorities",
   "execution_identity_contexts",
+  "mcp_oauth_pending_authorizations",
   "operator_approval_execution_identities",
   "delegate_artifact_audit",
   "delegate_artifact_bindings",
