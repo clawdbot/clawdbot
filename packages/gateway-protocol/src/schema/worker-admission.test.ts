@@ -459,6 +459,19 @@ describe("worker protocol schemas", () => {
       { ...inferenceStart, options: { ...inferenceStart.options, ...route } },
       { ...inferenceStart, options: { ...inferenceStart.options, arbitrary: true } },
       { ...inferenceStart, options: { maxTokens: WORKER_INFERENCE_MAX_OUTPUT_TOKENS + 1 } },
+      {
+        ...inferenceStart,
+        context: {
+          ...inferenceStart.context,
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "video", data: "raw-video-bytes", mimeType: "video/mp4" }],
+              timestamp: 1,
+            },
+          ],
+        },
+      },
     ]) {
       expect(validateWorkerInferenceStartParams(candidate)).toBe(false);
     }

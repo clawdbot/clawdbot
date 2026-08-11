@@ -272,6 +272,12 @@ export interface ImageContent {
   mimeType: string; // e.g., "image/jpeg", "image/png"
 }
 
+/** Base64 video content block with MIME type metadata. */
+export type VideoContent = Omit<ImageContent, "type"> & { type: "video" };
+
+export type MediaContent = ImageContent | VideoContent;
+export type ModelInputContent = TextContent | MediaContent;
+
 /** Normalized assistant tool call emitted by providers or repaired from text. */
 export interface ToolCall {
   type: "toolCall";
@@ -318,7 +324,7 @@ export const PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE = "PROVIDER_FAILURE_WITH_OU
 /** User turn in a text-model conversation. */
 export interface UserMessage {
   role: "user";
-  content: string | (TextContent | ImageContent)[];
+  content: string | ModelInputContent[];
   timestamp: number; // Unix timestamp in milliseconds
   /**
    * Marks a user message that carries transient current-turn runtime context
@@ -649,7 +655,7 @@ export interface Model<TApi extends Api = Api> {
    * Missing keys use provider defaults. null marks a level as unsupported.
    */
   thinkingLevelMap?: ThinkingLevelMap;
-  input: ("text" | "image")[];
+  input: ModelInputContent["type"][];
   cost: {
     input: number; // $/million tokens
     output: number; // $/million tokens
@@ -691,10 +697,11 @@ export interface Model<TApi extends Api = Api> {
 
 export interface ImagesModel<TApi extends ImagesApi = ImagesApi> extends Omit<
   Model,
-  "api" | "provider" | "reasoning" | "contextWindow" | "maxTokens" | "compat"
+  "api" | "provider" | "reasoning" | "input" | "contextWindow" | "maxTokens" | "compat"
 > {
   api: TApi;
   provider: ImagesProvider;
+  input: ImagesInputContent["type"][];
   output: ("text" | "image")[];
 }
 

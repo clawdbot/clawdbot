@@ -108,7 +108,7 @@ import {
   extractToolResultText,
   isImageWithMediaPayload,
 } from "./tool-result-text.js";
-import { transformMessages } from "./transform-messages.js";
+import { projectUserMediaForTransport, transformMessages } from "./transform-messages.js";
 
 const ANTHROPIC_CACHE_CONTROL_LIMIT = 4;
 const EMPTY_ERROR_TOOL_RESULT_TEXT = "[tool error with no output]";
@@ -1131,7 +1131,10 @@ async function convertMessages(
           });
         }
       } else {
-        const normalizedContent = await normalizeAnthropicInlineContent(msg.content, imageBudget);
+        const normalizedContent = await normalizeAnthropicInlineContent(
+          projectUserMediaForTransport(msg.content, model.input.includes("image")),
+          imageBudget,
+        );
         const blocks: ContentBlockParam[] = normalizedContent.map((item) => {
           if (item.type === "text") {
             return {

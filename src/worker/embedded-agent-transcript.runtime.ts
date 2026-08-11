@@ -47,27 +47,16 @@ export function toAgentMessage(message: WorkerTranscriptMessage): Message {
 function toWorkerInferenceMessage(
   message: Message,
 ): WorkerMessageProjection<WorkerInferenceContext["messages"][number]> {
-  if (message.role === "user") {
-    return {
-      kind: "complete",
-      message: {
-        role: "user",
-        content:
-          typeof message.content === "string"
-            ? message.content
-            : message.content.map((part) =>
-                part.type === "text" ? cloneTextContent(part) : cloneImageContent(part),
-              ),
-        timestamp: message.timestamp,
-        ...(message.runtimeContextCarrier ? { runtimeContextCarrier: true } : {}),
-      },
-    };
-  }
   const projected = toWorkerTranscriptMessage(message, "inference");
   if (!projected) {
     throw new Error(`Unsupported inference message role: ${message.role}`);
   }
-  return projected;
+  return projected.kind === "complete" &&
+    projected.message.role === "user" &&
+    message.role === "user" &&
+    message.runtimeContextCarrier
+    ? { ...projected, message: { ...projected.message, runtimeContextCarrier: true } }
+    : projected;
 }
 
 type WorkerInferenceContextProjection =

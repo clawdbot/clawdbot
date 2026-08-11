@@ -50,4 +50,42 @@ describe("transformMessages", () => {
     expect(transformed).toHaveLength(3);
     expect(transformed.map((message) => message.content)).toEqual([[], [], []]);
   });
+
+  it("replaces unsupported user media in order without exposing video bytes", () => {
+    const sentinel = "video-secret-sentinel";
+    const messages = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "before" },
+          { type: "image", data: "image-one", mimeType: "image/png" },
+          { type: "video", data: sentinel, mimeType: "video/mp4" },
+          { type: "text", text: "after" },
+          { type: "image", data: "image-two", mimeType: "image/jpeg" },
+        ],
+        timestamp: 1,
+      },
+    ] as unknown as Message[];
+
+    const transformed = transformMessages(messages, model);
+
+    expect(transformed[0]?.content).toEqual([
+      { type: "text", text: "before" },
+      { type: "text", text: "(image omitted: model does not support images)" },
+      { type: "text", text: "(video omitted: provider does not support video input)" },
+      { type: "text", text: "after" },
+      { type: "text", text: "(image omitted: model does not support images)" },
+    ]);
+    expect(JSON.stringify(transformed)).not.toContain(sentinel);
+
+    const advertisedVideoModel = { ...model, input: ["text", "image", "video"] } as Model;
+    const advertised = transformMessages(messages, advertisedVideoModel);
+    expect(advertised[0]?.content).toEqual([
+      { type: "text", text: "before" },
+      { type: "image", data: "image-one", mimeType: "image/png" },
+      { type: "text", text: "(video omitted: provider does not support video input)" },
+      { type: "text", text: "after" },
+      { type: "image", data: "image-two", mimeType: "image/jpeg" },
+    ]);
+  });
 });

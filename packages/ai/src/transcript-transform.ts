@@ -1,78 +1,67 @@
 // Package-owned transcript transform used by providers and the inert transport host.
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveModelBoundThinkingReplayMode } from "./providers/anthropic-model-contract.js";
+import { hasMediaPayload } from "./providers/tool-result-text.js";
 import type {
   Api,
   AssistantMessage,
   ImageContent,
   Message,
   Model,
+  ModelInputContent,
   TextContent,
   ToolCall,
   ToolResultMessage,
+  VideoContent,
 } from "./types.js";
 
 const NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)";
 const NON_VISION_TOOL_IMAGE_PLACEHOLDER = "(tool image omitted: model does not support images)";
 
-function isImageWithMediaPayload<T>(block: T): block is T & { type: "image"; data: string } {
-  return (
-    isRecord(block) &&
-    block.type === "image" &&
-    typeof block.data === "string" &&
-    block.data.trim().length > 0
-  );
-}
-
-function replaceImagesWithPlaceholder(
-  content: (TextContent | ImageContent)[],
-  placeholder: string,
-): TextContent[] {
-  const result: TextContent[] = [];
-  let previousWasPlaceholder = false;
-
+export function projectUserMediaForTransport(
+  content: ModelInputContent[],
+  supportsImages: boolean,
+  imagePlaceholder = NON_VISION_USER_IMAGE_PLACEHOLDER,
+): (TextContent | ImageContent)[] {
+  const result: (TextContent | ImageContent)[] = [];
   for (const block of content) {
-    if (block.type === "image") {
-      if (!isImageWithMediaPayload(block)) {
-        continue;
-      }
-      if (!previousWasPlaceholder) {
-        result.push({ type: "text", text: placeholder });
-      }
-      previousWasPlaceholder = true;
+    if (block.type === "text" || (block.type === "image" && supportsImages)) {
+      result.push(block);
       continue;
     }
-
-    result.push(block);
-    previousWasPlaceholder = block.text === placeholder;
+    block satisfies ImageContent | VideoContent;
+    const placeholder =
+      block.type === "video"
+        ? "(video omitted: provider does not support video input)"
+        : imagePlaceholder;
+    const previous = result.at(-1);
+    const repeated = previous?.type === "text" && previous.text === placeholder;
+    if (hasMediaPayload(block) && !repeated) {
+      result.push({ type: "text", text: placeholder });
+    }
   }
-
   return result;
 }
 
-function downgradeUnsupportedImages<TApi extends Api>(
+function downgradeUnsupportedMedia<TApi extends Api>(
   messages: Message[],
   model: Model<TApi>,
 ): Message[] {
-  if (model.input.includes("image")) {
-    return messages;
-  }
+  const supportsImages = model.input.includes("image");
 
   return messages.map((msg) => {
     if (msg.role === "user" && Array.isArray(msg.content)) {
+      return { ...msg, content: projectUserMediaForTransport(msg.content, supportsImages) };
+    }
+    if (msg.role === "toolResult" && !supportsImages) {
       return {
         ...msg,
-        content: replaceImagesWithPlaceholder(msg.content, NON_VISION_USER_IMAGE_PLACEHOLDER),
+        content: projectUserMediaForTransport(
+          msg.content,
+          false,
+          NON_VISION_TOOL_IMAGE_PLACEHOLDER,
+        ),
       };
     }
-
-    if (msg.role === "toolResult") {
-      return {
-        ...msg,
-        content: replaceImagesWithPlaceholder(msg.content, NON_VISION_TOOL_IMAGE_PLACEHOLDER),
-      };
-    }
-
     return msg;
   });
 }
@@ -92,10 +81,10 @@ export function transformMessages<TApi extends Api>(
   const normalizedMessages = messages.map((msg) =>
     msg.content == null ? { ...msg, content: [] } : msg,
   );
-  const imageAwareMessages = downgradeUnsupportedImages(normalizedMessages, model);
+  const mediaAwareMessages = downgradeUnsupportedMedia(normalizedMessages, model);
 
-  // First pass: transform messages (unsupported image downgrade, thinking blocks, tool call ID normalization)
-  const transformed = imageAwareMessages.map((msg) => {
+  // First pass: transform messages (unsupported media downgrade, thinking blocks, tool call ID normalization)
+  const transformed = mediaAwareMessages.map((msg) => {
     // User messages pass through unchanged
     if (msg.role === "user") {
       return msg;

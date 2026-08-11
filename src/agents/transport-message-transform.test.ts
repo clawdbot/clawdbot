@@ -55,6 +55,34 @@ function assistantToolCall(
 }
 
 describe("transformTransportMessages synthetic tool-result policy", () => {
+  it("omits user video bytes while preserving mixed content order and images", () => {
+    const sentinel = "managed-video-secret-sentinel";
+    const messages = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "before" },
+          { type: "image", data: "image-data", mimeType: "image/png" },
+          { type: "video", data: sentinel, mimeType: "video/mp4" },
+          { type: "text", text: "after" },
+        ],
+        timestamp: 1,
+      },
+    ] as unknown as Context["messages"];
+    const model = makeModel("openai-responses", "openai", "gpt-5.4");
+    model.input = ["text", "image", "video"];
+
+    const transformed = transformTransportMessages(messages, model);
+
+    expect(transformed[0]?.content).toEqual([
+      { type: "text", text: "before" },
+      { type: "image", data: "image-data", mimeType: "image/png" },
+      { type: "text", text: "(video omitted: provider does not support video input)" },
+      { type: "text", text: "after" },
+    ]);
+    expect(JSON.stringify(transformed)).not.toContain(sentinel);
+  });
+
   it("preserves unframed tool results only for a selected compaction replay window", () => {
     const model = makeModel("openai-responses", "openai", "gpt-5.4");
     const messages = [

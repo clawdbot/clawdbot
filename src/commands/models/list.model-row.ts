@@ -9,7 +9,7 @@ export type ListRowModel = {
   name: string;
   provider: string;
   api?: string | null;
-  input?: Array<"text" | "image" | "document">;
+  input?: Array<"text" | "image" | "video" | "document">;
   baseUrl?: string;
   contextWindow?: number | null;
   contextTokens?: number | null;

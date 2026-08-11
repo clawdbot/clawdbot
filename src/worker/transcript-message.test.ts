@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { projectProviderError } from "../../packages/ai/src/utils/provider-error.js";
 import {
   validateWorkerTranscriptCommitParams,
+  validateWorkerInferenceStartParams,
   WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
   WorkerTranscriptMessageSchema,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -10,6 +11,7 @@ import type { AssistantMessage } from "../llm/types.js";
 import {
   createWorkerTranscriptRuntime,
   toAgentMessage,
+  toWorkerInferenceContext,
 } from "./embedded-agent-transcript.runtime.js";
 import {
   isWorkerTranscriptMessageFrameSafe,
@@ -54,6 +56,51 @@ function assistantWithReplay(
 }
 
 describe("worker transcript provider replay", () => {
+  it("projects user video to schema-valid worker text without media bytes", () => {
+    const sentinel = "worker-video-secret-sentinel";
+    const projected = toWorkerInferenceContext({
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "before" },
+            { type: "image", data: "image-data", mimeType: "image/png" },
+            { type: "video", data: sentinel, mimeType: "video/mp4" },
+            { type: "text", text: "after" },
+          ],
+          timestamp: 1,
+        },
+      ],
+    } as never);
+
+    expect(projected.kind).toBe("complete");
+    if (projected.kind !== "complete") {
+      throw new Error("expected complete worker inference projection");
+    }
+    expect(projected.context.messages[0]).toEqual({
+      role: "user",
+      content: [
+        { type: "text", text: "before" },
+        { type: "image", data: "image-data", mimeType: "image/png" },
+        { type: "text", text: "(video omitted: cloud worker does not support video input)" },
+        { type: "text", text: "after" },
+      ],
+      timestamp: 1,
+    });
+    expect(JSON.stringify(projected)).not.toContain(sentinel);
+    expect(
+      validateWorkerInferenceStartParams({
+        runEpoch: 1,
+        sessionId: "session-1",
+        runId: "run-1",
+        turnId: "turn-1",
+        modelRef: { provider: "openai", model: "gpt-5.6-luna" },
+        context: projected.context,
+        options: {},
+      }),
+    ).toBe(true);
+  });
+
   it("projects and restores opaque replay state within frame limits", () => {
     const message = assistantWithReplay();
     Object.assign(message.providerReplay!, { providerScratch: "private" });

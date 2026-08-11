@@ -30,6 +30,7 @@ type WorkerMessageProjectionPurpose = "inference" | "transcript";
 export const WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE =
   "Cloud worker could not preserve authoritative provider replay. " +
   "Stop or reclaim the cloud worker, then retry locally.";
+const WORKER_VIDEO_UNAVAILABLE_TEXT = "(video omitted: cloud worker does not support video input)";
 
 export function cloneTextContent(part: { type: "text"; text: string; textSignature?: string }) {
   return {
@@ -215,7 +216,11 @@ export function toWorkerTranscriptMessage(
       typeof message.content === "string"
         ? [{ type: "text" as const, text: message.content }]
         : message.content.map((part) =>
-            part.type === "text" ? cloneTextContent(part) : cloneImageContent(part),
+            part.type === "video"
+              ? { type: "text" as const, text: WORKER_VIDEO_UNAVAILABLE_TEXT }
+              : part.type === "text"
+                ? cloneTextContent(part)
+                : cloneImageContent(part),
           );
     return { kind: "complete", message: { role: "user", content, timestamp: message.timestamp } };
   }

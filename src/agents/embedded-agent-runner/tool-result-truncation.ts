@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { parseDurationMs } from "../../cli/parse-duration.js";
@@ -107,20 +107,20 @@ function cacheTtlMessageChars(message: AgentMessage): number {
   }
   const content = Array.isArray(message.content) ? message.content : [];
   return content.reduce((chars, block) => {
-    if (!isRecord(block)) {
+    const record = asOptionalRecord(block);
+    if (!record) {
       return chars;
     }
-    const text = cacheTtlText(block, message.role !== "assistant");
+    const text = cacheTtlText(record, message.role !== "assistant");
     if (text !== undefined) {
       return chars + estimateStringChars(text);
     }
-    if (block.type === "image") {
+    if (record.type === "image") {
       return chars + CACHE_TTL_IMAGE_CHARS;
     }
     if (message.role !== "assistant") {
       return chars;
     }
-    const record = block as Record<string, unknown>;
     if (record.type === "thinking" || record.type === "redacted_thinking") {
       const values = [
         record.thinking,

@@ -8,3 +8,4 @@ export {
   clampOpenAIPromptCacheKey,
   OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH,
 } from "./providers/openai-prompt-cache.js";
+export { projectUserMediaForTransport } from "./providers/transform-messages.js";

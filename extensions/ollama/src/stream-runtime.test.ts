@@ -623,6 +623,36 @@ describe("convertToOllamaMessages", () => {
     expect(result).toEqual([{ role: "user", content: "describe this", images: ["base64data"] }]);
   });
 
+  it.each([
+    {
+      name: "mixed content",
+      content: [
+        { type: "text", text: "before" },
+        { type: "image", data: "base64data" },
+        { type: "video", data: "video-secret-sentinel" },
+        { type: "text", text: "after" },
+      ],
+      expected: {
+        role: "user",
+        content: "before(video omitted: provider does not support video input)after",
+        images: ["base64data"],
+      },
+    },
+    {
+      name: "video-only content",
+      content: [{ type: "video", data: "video-secret-sentinel" }],
+      expected: {
+        role: "user",
+        content: "(video omitted: provider does not support video input)",
+      },
+    },
+  ])("omits unsupported user video bytes from $name", ({ content, expected }) => {
+    const result = convertToOllamaMessages([{ role: "user", content }]);
+
+    expect(result).toEqual([expected]);
+    expect(JSON.stringify(result)).not.toContain("video-secret-sentinel");
+  });
+
   it("prepends system message when provided", () => {
     const messages = [{ role: "user", content: "hello" }];
     const result = convertToOllamaMessages(messages, "You are helpful.");

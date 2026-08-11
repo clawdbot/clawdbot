@@ -231,6 +231,31 @@ describe("OpenAI provider Codex transport hooks", () => {
     });
   });
 
+  it("keeps missing input metadata on the text and image fallback", () => {
+    const provider = buildOpenAIProvider();
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      providerConfig: { api: "openai-chatgpt-responses" },
+      modelRegistry: {
+        find: () =>
+          ({
+            provider: "openai",
+            id: "gpt-5.5",
+            name: "gpt-5.5",
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            reasoning: true,
+            cost: { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 },
+            contextWindow: 400_000,
+            maxTokens: 128_000,
+          }) as never,
+      },
+    } as never);
+
+    expect(model?.input).toEqual(["text", "image"]);
+  });
+
   it("keeps default Codex-backed OpenAI catalog models on the Codex Responses transport", () => {
     const provider = buildOpenAIProvider();
 

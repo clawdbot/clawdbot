@@ -17,6 +17,10 @@ const COMMAND_TIMEOUT_MS = 180_000;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const compatibility = {
+  "@openclaw/ai": {
+    values: [],
+    types: ["MediaContent", "ModelInputContent", "VideoContent"],
+  },
   "@openclaw/ai/providers": {
     values: [
       "BUILT_IN_API_PROVIDER_SOURCE_ID",
@@ -24,6 +28,7 @@ const compatibility = {
       "resetApiProviders",
       "OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH",
       "clampOpenAIPromptCacheKey",
+      "projectUserMediaForTransport",
     ],
     types: [],
   },

@@ -7,6 +7,7 @@ import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
 import type { PromptMode } from "../../agents/system-prompt.types.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
+import type { ImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
@@ -25,12 +26,7 @@ import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
-/** Image content block for Claude API multimodal messages. */
-export type ImageContent = {
-  type: "image";
-  data: string;
-  mimeType: string;
-};
+export type { ImageContent };
 
 /** ACP turn source markers accepted by trusted command callsites. */
 type AcpTurnSource = "manual_spawn";
