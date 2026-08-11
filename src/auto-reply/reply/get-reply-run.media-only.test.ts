@@ -36,6 +36,7 @@ import { testing as replyRunTesting } from "./reply-run-registry.test-support.js
 import { routeReply } from "./route-reply.runtime.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import {
+  publishPreparedHarnessSourceReplyDeliveryMode,
   readSourceReplyDeliveryModeOrigin,
   type SourceReplyDeliveryRuntimeOptions,
 } from "./source-reply-delivery-runtime.js";
@@ -637,10 +638,11 @@ describe("runPreparedReply media-only handling", () => {
       },
     });
 
-    expect(buildDirectChatContext).toHaveBeenCalledTimes(1);
+    expect(buildDirectChatContext).toHaveBeenCalledTimes(2);
     const directContextParams = requireMockCallArg(
       vi.mocked(buildDirectChatContext),
       "direct chat context",
+      1,
     ) as {
       sessionCtx?: { Provider?: string; ChatType?: string };
       sourceReplyDeliveryMode?: string;
@@ -666,6 +668,34 @@ describe("runPreparedReply media-only handling", () => {
       expect.anything(),
       undefined,
     );
+  });
+
+  it("binds prepared embedded prompt variants without changing CLI session guidance", async () => {
+    vi.mocked(buildDirectChatContext).mockImplementation(
+      ({ sourceReplyDeliveryMode }) => `direct:${sourceReplyDeliveryMode ?? "automatic"}`,
+    );
+    await runPrepared({
+      opts: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        sourceReplyDeliveryModeOrigin: "runtime_default",
+      } as NonNullable<Parameters<typeof runPreparedReply>[0]["opts"]> &
+        SourceReplyDeliveryRuntimeOptions,
+      ctx: { ...createInboundTurn("hello", "discord", "direct") },
+      sessionCtx: { ...createSessionTurn("hello", "discord", "direct") },
+    });
+
+    const run = requireLastRunReplyAgentCall().followupRun.run;
+    expect(run.extraSystemPrompt).toBe("direct:message_tool_only");
+    expect(run.extraSystemPromptStatic).toBe("direct:message_tool_only");
+    publishPreparedHarnessSourceReplyDeliveryMode(run, "automatic");
+    expect(run.extraSystemPrompt).toBe("direct:automatic");
+    expect(run.extraSystemPromptStatic).toBe("direct:message_tool_only");
+    publishPreparedHarnessSourceReplyDeliveryMode(run, "message_tool_only");
+    expect(run.extraSystemPrompt).toBe("direct:message_tool_only");
+    expect(run.cliSessionBindingFacts).toEqual({
+      extraSystemPromptStatic: "direct:message_tool_only",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
   });
 
   it("keeps addressed message-tool delivery hints out of persisted transcript rows", async () => {
@@ -2849,6 +2879,7 @@ describe("runPreparedReply media-only handling", () => {
     const directContextParams = requireMockCallArg(
       vi.mocked(buildDirectChatContext),
       "direct chat context",
+      1,
     ) as { sourceReplyDeliveryMode?: string };
     const call = requireLastRunReplyAgentCall();
     expect(directContextParams?.sourceReplyDeliveryMode).toBe("message_tool_only");
@@ -2953,7 +2984,7 @@ describe("runPreparedReply media-only handling", () => {
     });
 
     const call = requireLastRunReplyAgentCall();
-    expect(buildGroupChatContext).toHaveBeenCalledTimes(1);
+    expect(buildGroupChatContext).toHaveBeenCalledTimes(2);
     const groupContextParams = requireMockCallArg(
       vi.mocked(buildGroupChatContext),
       "group chat context",

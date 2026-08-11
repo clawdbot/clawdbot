@@ -8,8 +8,8 @@ export type SourceReplyDeliveryRuntimeOptions = {
 };
 
 // The shared enumerable binding follows queue/run spreads without widening their public types.
-// Its listener moves prepared ownership before live callbacks; copying only the mode would leave
-// pre-settlement source delivery on the preliminary policy.
+// Its listener and bounded prompt pair move prepared ownership before prompt/live callbacks;
+// plugin handoff strips this symbol so neither mutable authority nor alternate prompt leaks.
 const sourceReplyDeliveryModeOriginKey: unique symbol = Symbol.for(
   "openclaw.source-reply-delivery-runtime",
 );
@@ -17,6 +17,7 @@ type SourceReplyDeliveryRuntimeBinding = {
   origin?: SourceReplyDeliveryModeOrigin;
   preparedHarnessMode?: SourceReplyDeliveryMode;
   preparedHarnessModeListener?: (mode: SourceReplyDeliveryMode) => void;
+  extraSystemPromptByMode?: Record<SourceReplyDeliveryMode, string>;
 };
 type SourceReplyDeliveryModeOwner = {
   [sourceReplyDeliveryModeOriginKey]?: SourceReplyDeliveryRuntimeBinding;
@@ -43,6 +44,15 @@ export function readSourceReplyDeliveryModeOrigin(
   return readSourceReplyDeliveryRuntimeBinding(owner)?.origin;
 }
 
+export function setSourceReplyDeliveryPromptVariants(
+  owner: object,
+  variants: Record<SourceReplyDeliveryMode, string>,
+): void {
+  const binding = readSourceReplyDeliveryRuntimeBinding(owner) ?? {};
+  binding.extraSystemPromptByMode = variants;
+  (owner as SourceReplyDeliveryModeOwner)[sourceReplyDeliveryModeOriginKey] = binding;
+}
+
 export function copySourceReplyDeliveryRuntimeBinding(source: object, target: object): void {
   const binding = readSourceReplyDeliveryRuntimeBinding(source);
   if (binding) {
@@ -57,6 +67,10 @@ export function publishPreparedHarnessSourceReplyDeliveryMode(
   const binding = readSourceReplyDeliveryRuntimeBinding(owner);
   if (binding?.origin === "runtime_default") {
     binding.preparedHarnessMode = mode;
+    const extraSystemPrompt = binding.extraSystemPromptByMode?.[mode];
+    if (extraSystemPrompt !== undefined) {
+      (owner as { extraSystemPrompt?: string }).extraSystemPrompt = extraSystemPrompt;
+    }
     binding.preparedHarnessModeListener?.(mode);
   }
 }

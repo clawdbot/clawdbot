@@ -161,21 +161,30 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const shouldInjectGroupIntro = Boolean(
     isGroupChat && (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
   );
-  const directChatContext = isDirectChat
-    ? buildDirectChatContext({
+  const buildSourceConversationContext = (mode: typeof sourceReplyDeliveryMode) => {
+    if (isDirectChat) {
+      return buildDirectChatContext({
+        sourceReplyDeliveryMode: mode,
         sessionCtx: promptSessionCtx,
-        sourceReplyDeliveryMode: sessionPromptSourceReplyDeliveryMode,
-      })
-    : "";
-  // Always include persistent group chat context (provider + reply guidance).
-  const groupChatContext = isGroupChat
-    ? buildGroupChatContext({
-        sessionCtx: promptSessionCtx,
-        sourceReplyDeliveryMode: sessionPromptSourceReplyDeliveryMode,
-        silentReplyPolicy: silentReplySettings.policy,
-        silentToken: SILENT_REPLY_TOKEN,
-      })
-    : "";
+      });
+    }
+    return isGroupChat
+      ? buildGroupChatContext({
+          sessionCtx: promptSessionCtx,
+          sourceReplyDeliveryMode: mode,
+          silentReplyPolicy: silentReplySettings.policy,
+          silentToken: SILENT_REPLY_TOKEN,
+        })
+      : "";
+  };
+  const sourceConversationContextByMode = {
+    automatic: buildSourceConversationContext("automatic"),
+    message_tool_only: buildSourceConversationContext("message_tool_only"),
+  };
+  // CLI sessions keep their creation-time conversation prompt. Embedded attempts
+  // can instead select the variant owned by their final prepared harness.
+  const sessionStableConversationContext =
+    sourceConversationContextByMode[sessionPromptSourceReplyDeliveryMode ?? "automatic"];
   // Claude CLI fixes the system prompt at session creation; group intro must stay session-stable.
   const groupIntro = isGroupChat ? buildGroupIntro({ sessionEntry, defaultActivation }) : "";
   const isDirectedTurn =
@@ -199,21 +208,34 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   });
   const extraSystemPromptParts = [
     inboundMetaPrompt,
-    directChatContext,
-    groupChatContext,
+    sessionStableConversationContext,
     groupIntro,
     groupSystemPrompt,
     execOverridePromptHint,
   ].filter(Boolean);
   const extraSystemPromptStatic = [
-    directChatContext,
-    groupChatContext,
+    sessionStableConversationContext,
     groupIntro,
     groupSystemPrompt,
     execOverridePromptHint,
   ]
     .filter(Boolean)
     .join("\n\n");
+  const buildExtraSystemPrompt = (mode: keyof typeof sourceConversationContextByMode) =>
+    [
+      inboundMetaPrompt,
+      sourceConversationContextByMode[mode],
+      groupIntro,
+      groupSystemPrompt,
+      execOverridePromptHint,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+  // Prepared harness selects one bounded variant; both are never model-visible together.
+  const extraSystemPromptBySourceReplyDeliveryMode = {
+    automatic: buildExtraSystemPrompt("automatic"),
+    message_tool_only: buildExtraSystemPrompt("message_tool_only"),
+  };
   const cliSessionBindingFacts = {
     extraSystemPromptStatic,
     ...(sessionPromptSourceReplyDeliveryMode
@@ -221,7 +243,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
       : {}),
   };
   const silentReplyPromptMode: SilentReplyPromptMode =
-    directChatContext || groupChatContext || sourceReplyDeliveryMode === "message_tool_only"
+    sessionStableConversationContext || sourceReplyDeliveryMode === "message_tool_only"
       ? "none"
       : "generic";
   const baseBody = sessionCtx.agentText ?? "";
@@ -399,6 +421,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     fullAccessState,
     isFirstTurnInSession,
     extraSystemPromptParts,
+    extraSystemPromptBySourceReplyDeliveryMode,
     extraSystemPromptStatic,
     cliSessionBindingFacts,
     baseBodyTrimmedRaw,

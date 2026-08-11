@@ -7,6 +7,7 @@ import {
   mockedRunEmbeddedAttempt,
   useOpenAIPlatformAuthFixture,
 } from "../../agents/embedded-agent-runner/run.overflow-compaction.harness.js";
+import { buildEmbeddedSystemPrompt } from "../../agents/embedded-agent-runner/system-prompt.js";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
 import { settleReplyDispatcher } from "../dispatch-dispatcher.js";
 import type { MsgContext } from "../templating.js";
@@ -27,8 +28,12 @@ import {
   setNoAbort,
 } from "./dispatch-from-config.test-harness.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { buildDirectChatContext } from "./groups.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
-import { setSourceReplyDeliveryModeOrigin } from "./source-reply-delivery-runtime.js";
+import {
+  setSourceReplyDeliveryModeOrigin,
+  setSourceReplyDeliveryPromptVariants,
+} from "./source-reply-delivery-runtime.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 const runnerState = setupAgentRunnerExecutionTestState();
@@ -102,8 +107,34 @@ describe("prepared harness source delivery", () => {
       modelOverride: "gpt-5.4",
     });
     const emittedStreamingCallbacks: string[] = [];
+    let modelVisiblePrompt = "";
+    const recordModelVisiblePrompt = (attemptParams: {
+      extraSystemPrompt?: string;
+      sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+    }) => {
+      modelVisiblePrompt = buildEmbeddedSystemPrompt({
+        workspaceDir: "/tmp/workspace",
+        reasoningTagHint: false,
+        extraSystemPrompt: attemptParams.extraSystemPrompt,
+        sourceReplyDeliveryMode: attemptParams.sourceReplyDeliveryMode,
+        runtimeInfo: {
+          host: "host",
+          os: "linux",
+          arch: "arm64",
+          node: "24",
+          model: "model",
+          provider: "custom",
+          channel: "discord",
+          chatType: "direct",
+        },
+        tools: [],
+        userTimezone: "UTC",
+        userDate: "2026-08-11",
+      });
+    };
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "Short fallback final" }]);
     mockedRunEmbeddedAttempt.mockImplementation(async (attemptParams) => {
+      recordModelVisiblePrompt(attemptParams);
       emittedStreamingCallbacks.push("partial");
       await attemptParams.onPartialReply?.({ text: "Short fallback final" });
       emittedStreamingCallbacks.push("block");
@@ -164,6 +195,7 @@ describe("prepared harness source delivery", () => {
             ? { supported: true, priority: 200 }
             : { supported: false, reason: "prepared OpenAI route only" },
         runAttempt: vi.fn(async (attemptParams) => {
+          recordModelVisiblePrompt(attemptParams);
           emittedStreamingCallbacks.push("partial");
           await attemptParams.onPartialReply?.({ text: "Short fallback final" });
           emittedStreamingCallbacks.push("block");
@@ -201,6 +233,24 @@ describe("prepared harness source delivery", () => {
       followupRun.run.sessionKey = undefined;
       followupRun.run.sessionFile = followupRun.run.sessionId;
       followupRun.run.sourceReplyDeliveryMode = runtimeOpts.sourceReplyDeliveryMode;
+      const extraSystemPromptBySourceReplyDeliveryMode = {
+        automatic: buildDirectChatContext({
+          sessionCtx: { Provider: "discord", ChatType: "direct" },
+          sourceReplyDeliveryMode: "automatic",
+        }),
+        message_tool_only: buildDirectChatContext({
+          sessionCtx: { Provider: "discord", ChatType: "direct" },
+          sourceReplyDeliveryMode: "message_tool_only",
+        }),
+      };
+      setSourceReplyDeliveryPromptVariants(
+        followupRun.run,
+        extraSystemPromptBySourceReplyDeliveryMode,
+      );
+      followupRun.run.extraSystemPrompt =
+        extraSystemPromptBySourceReplyDeliveryMode[
+          runtimeOpts.sourceReplyDeliveryMode ?? "automatic"
+        ];
       setSourceReplyDeliveryModeOrigin(followupRun.run, runtimeOpts.sourceReplyDeliveryModeOrigin);
       // Dispatch already captured its session snapshot; the embedded fixture uses
       // a SQLite compatibility key and has no durable row for writer admission.
@@ -286,5 +336,20 @@ describe("prepared harness source delivery", () => {
     });
     expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
     expect(modeTransitions).toEqual(testCase.expectedTransitions);
+    if (testCase.preparedVisibleReplies === "automatic") {
+      expect(modelVisiblePrompt).toContain("Current-session final text normally routes to source");
+      expect(modelVisiblePrompt).toContain(
+        "Your replies are automatically sent to this conversation",
+      );
+      expect(modelVisiblePrompt).not.toContain("Normal final replies are private");
+    } else {
+      expect(modelVisiblePrompt).toContain(
+        "Current source visible reply MUST use `message(action=send)`",
+      );
+      expect(modelVisiblePrompt).toContain("Normal final replies are private");
+      expect(modelVisiblePrompt).not.toContain(
+        "Your replies are automatically sent to this conversation",
+      );
+    }
   });
 });
