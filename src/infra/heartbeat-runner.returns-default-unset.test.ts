@@ -38,7 +38,7 @@ import {
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
 import { telegramMessagingForTest } from "./outbound/targets.test-helpers.js";
-import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
+import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
 
 let previousRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
 let testRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
@@ -843,7 +843,7 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
-  it("skips before the agent run and preserves pending events when no route exists", async () => {
+  it("skips a routeless interval poll before the agent run", async () => {
     const tmpDir = await createCaseDir("hb-no-route");
     const storePath = path.join(tmpDir, "sessions.json");
     const cfg: OpenClawConfig = {
@@ -855,10 +855,6 @@ describe("runHeartbeatOnce", () => {
       sessionId: "sid-no-route",
       updatedAt: Date.now(),
     });
-    enqueueSystemEvent("Cron: route this later", {
-      sessionKey,
-      contextKey: "cron:route-later",
-    });
     const replySpy = vi.fn().mockResolvedValue({ text: "should not run" });
 
     const result = await runHeartbeatOnce({
@@ -868,7 +864,33 @@ describe("runHeartbeatOnce", () => {
 
     expect(result).toEqual({ status: "skipped", reason: "no-route" });
     expect(replySpy).not.toHaveBeenCalled();
-    expect(peekSystemEvents(sessionKey)).toEqual(["Cron: route this later"]);
+  });
+
+  it("runs a routeless interval poll that has queued system events", async () => {
+    const tmpDir = await createCaseDir("hb-no-route-events");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace: tmpDir, heartbeat: { every: "5m" } } },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await seedSessionStore(storePath, sessionKey, {
+      sessionId: "sid-no-route-events",
+      updatedAt: Date.now(),
+    });
+    enqueueSystemEvent("Cron: route this later", {
+      sessionKey,
+      contextKey: "cron:route-later",
+    });
+    const replySpy = vi.fn().mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+    const result = await runHeartbeatOnce({
+      cfg,
+      deps: createHeartbeatDeps(vi.fn(), { getReplyFromConfig: replySpy }),
+    });
+
+    expect(result.status).toBe("ran");
+    expect(replySpy).toHaveBeenCalledTimes(1);
   });
 
   it("runs the agent when an explicit heartbeat target is rejected", async () => {
