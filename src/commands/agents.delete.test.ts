@@ -7,7 +7,7 @@ import {
   resolveDefaultAgentId,
   toAgentEntriesRecord,
 } from "../agents/agent-scope-config.js";
-import { resolveStorePath } from "../config/sessions.js";
+import { resolveSessionStorePathCore } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
   listSessionEntriesCore,
@@ -105,10 +105,12 @@ async function arrangeAgentsDeleteTest(params: {
     agents: { ...agents, entries: toAgentEntriesRecord(roster) },
   };
   const storeAgentId = resolveFixtureStoreAgentId(cfg, deletedAgentId);
-  const storePath = resolveStorePath(cfg.session?.store, { agentId: deletedAgentId });
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: deletedAgentId });
   for (const [sessionKey, entry] of Object.entries(params.sessions)) {
     const entryAgentId = parseAgentSessionKey(sessionKey)?.agentId ?? storeAgentId;
-    const entryStorePath = resolveStorePath(cfg.session?.store, { agentId: entryAgentId });
+    const entryStorePath = resolveSessionStorePathCore(cfg.session?.store, {
+      agentId: entryAgentId,
+    });
     await replaceSessionEntry({ agentId: entryAgentId, sessionKey, storePath: entryStorePath }, {
       ...entry,
       delivery: { kind: "none" },
@@ -147,7 +149,7 @@ function expectSessionStore(
       [...agentIds].flatMap((storeAgentId) =>
         listSessionEntriesCore({
           agentId: storeAgentId,
-          storePath: resolveStorePath(cfg.session?.store, { agentId: storeAgentId }),
+          storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: storeAgentId }),
         }).map(({ entry, sessionKey }) => [sessionKey, entry]),
       ),
     ),

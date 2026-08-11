@@ -17,7 +17,7 @@ type ReadSessionMessagesAsync =
   typeof import("./subagent-announce.runtime.js").readSessionMessagesAsync;
 type ResolveAgentIdFromSessionKey =
   typeof import("./subagent-announce.runtime.js").resolveAgentIdFromSessionKey;
-type ResolveStorePath = typeof import("./subagent-announce.runtime.js").resolveStorePath;
+type ResolveStorePath = typeof import("./subagent-announce.runtime.js").resolveSessionStorePathCore;
 
 function installOutputDeps(params: {
   messages: Array<unknown>;
@@ -97,7 +97,7 @@ describe("buildCompactAnnounceStatsLine", () => {
         totalTokens: 999_999,
       })) as ReadSessionEntry,
       resolveAgentIdFromSessionKey: (() => "main") as ResolveAgentIdFromSessionKey,
-      resolveStorePath: (() => "/tmp/openclaw-session-store") as ResolveStorePath,
+      resolveSessionStorePathCore: (() => "/tmp/openclaw-session-store") as ResolveStorePath,
     });
 
     await expect(

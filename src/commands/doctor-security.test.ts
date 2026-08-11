@@ -6,7 +6,7 @@ import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.js";
 import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 
 const note = vi.hoisted(() => vi.fn());
 const pluginRegistry = vi.hoisted(() => ({ list: [] as unknown[] }));
@@ -92,7 +92,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     file: Record<string, unknown>,
     run: () => Promise<void>,
   ): Promise<void> {
-    await withTempDir({ prefix: "openclaw-doctor-security-" }, async (home) => {
+    await withTestDir({ prefix: "openclaw-doctor-security-" }, async (home) => {
       process.env.HOME = home;
       process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
       closeOpenClawStateDatabaseForTest();

@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   parseSkillFrontmatter,
-  resolveOpenClawMetadata,
+  resolveSkillManifestMetadata,
   resolveSkillInvocationPolicy,
 } from "./frontmatter.js";
 
@@ -155,9 +155,9 @@ description: *missing
   });
 });
 
-describe("resolveOpenClawMetadata install validation", () => {
+describe("resolveSkillManifestMetadata install validation", () => {
   function resolveInstall(frontmatter: Record<string, string>) {
-    return resolveOpenClawMetadata(frontmatter)?.install;
+    return resolveSkillManifestMetadata(frontmatter)?.install;
   }
 
   it("accepts safe install specs", () => {
@@ -228,7 +228,7 @@ user-invocable: true
 # Creating Payment Credentials
 `);
 
-    const metadata = resolveOpenClawMetadata(frontmatter);
+    const metadata = resolveSkillManifestMetadata(frontmatter);
 
     expect(frontmatter.name).toBe("create-payment-credential");
     expect(frontmatter.description).toContain("one-time-use payment credentials");

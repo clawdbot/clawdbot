@@ -48,7 +48,7 @@ function parseInstallSpec(input: unknown): HookInstallSpec | undefined {
 }
 
 /** Resolve OpenClaw hook metadata from the manifest block in HOOK.md frontmatter. */
-export function resolveOpenClawMetadata(
+export function resolveHookManifestMetadata(
   frontmatter: ParsedHookFrontmatter,
 ): OpenClawHookMetadata | undefined {
   const metadataObj = resolveOpenClawManifestBlock({ frontmatter });

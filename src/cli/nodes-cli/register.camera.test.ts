@@ -36,7 +36,7 @@ vi.mock("./rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./rpc.js")>("./rpc.js");
   return {
     ...actual,
-    resolveNode: vi.fn(async () => ({
+    resolveCliNode: vi.fn(async () => ({
       nodeId: "node-abc123",
       platform: "ios",
       remoteIp: "198.51.100.42",

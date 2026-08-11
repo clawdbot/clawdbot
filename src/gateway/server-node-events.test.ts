@@ -150,7 +150,10 @@ const runtimeMocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("./server-node-events.runtime.js", () => runtimeMocks);
+vi.mock("./server-node-events.runtime.js", () => ({
+  ...runtimeMocks,
+  sendDurableMessageBatchCore: runtimeMocks.sendDurableMessageBatch,
+}));
 vi.mock("../infra/device-pairing.js", () => ({
   updatePairedDevicePresence: updatePairedDevicePresenceMock,
 }));

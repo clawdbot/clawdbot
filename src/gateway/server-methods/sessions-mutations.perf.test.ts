@@ -5,7 +5,7 @@ import {
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { CronJob } from "../../cron/types.js";
 import {
@@ -57,12 +57,12 @@ function humanClient(): GatewayClient {
 test("single non-label sessions.patch avoids a whole-store projection", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const targetKey = "agent:main:single-patch-target";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey: targetKey },
       { sessionId: "session-single-patch-target", updatedAt: 1 },
     );
     for (let index = 0; index < 20; index += 1) {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: `agent:main:single-patch-unrelated-${index}` },
         { sessionId: `session-single-patch-unrelated-${index}`, updatedAt: index + 2 },
       );
@@ -121,7 +121,7 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
     const transcriptTails = new Map<string, string>();
     for (const [index, target] of targets.entries()) {
       const sessionId = `session-archive-perf-${index}`;
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: target.key },
         { sessionId, updatedAt: index + 1 },
       );

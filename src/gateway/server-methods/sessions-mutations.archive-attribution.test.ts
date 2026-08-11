@@ -4,7 +4,7 @@ import {
   listSessionEntriesCore,
   loadSessionEntry,
   loadTranscriptEvents,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import {
   addSessionMember,
@@ -92,7 +92,7 @@ describe("sessions.patch archive attribution", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:archive-attribution";
       const sessionId = "session-archive-attribution";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         { sessionId, updatedAt: 1, pinnedAt: 2 },
       );
@@ -145,7 +145,7 @@ describe("sessions.patch archive attribution", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:solo-archive";
       const sessionId = "session-solo-archive";
-      await upsertSessionEntry({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1 });
+      await upsertSessionEntryCore({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1 });
 
       await patchSession({ key: sessionKey, archived: true }, client());
 
@@ -160,14 +160,14 @@ describe("sessions.patch archive attribution", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const canonicalKey = "agent:main:alias-happy-archive";
       const aliasKey = "alias-happy-archive";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: canonicalKey },
         {
           sessionId: "session-canonical-happy-archive",
           updatedAt: 1,
         },
       );
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: aliasKey },
         { sessionId: "session-alias-happy-archive", updatedAt: 2 },
       );
@@ -187,7 +187,7 @@ describe("sessions.patch archive attribution", () => {
       const canonicalKey = "agent:main:alias-archive";
       const aliasKey = "alias-archive";
       const memberId = "profile-member";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: canonicalKey },
         {
           sessionId: "session-canonical-before-archive",
@@ -195,7 +195,7 @@ describe("sessions.patch archive attribution", () => {
           label: "canonical",
         },
       );
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: aliasKey },
         {
           sessionId: "session-alias-before-archive",

@@ -36,7 +36,7 @@ import {
 import {
   resolveAgentIdFromSessionKey,
   resolveFreshSessionTotalTokens,
-  resolveStorePath,
+  resolveSessionStorePathCore,
   SESSION_TOTAL_TOKENS_VERSION,
   type SessionEntry,
 } from "../../config/sessions.js";
@@ -727,7 +727,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     sessionKey: compactionSessionKey,
     storePath:
       params.storePath ??
-      resolveStorePath(params.cfg.session?.store, { agentId: compactionAgentId }),
+      resolveSessionStorePathCore(params.cfg.session?.store, { agentId: compactionAgentId }),
   });
 
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({

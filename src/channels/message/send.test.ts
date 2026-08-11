@@ -13,9 +13,9 @@ vi.mock("../../infra/outbound/deliver.js", () => ({
 }));
 
 import {
-  sendDurableMessageBatch,
+  sendDurableMessageBatchCore as sendDurableMessageBatch,
   type DurableMessageBatchSendResult,
-  withDurableMessageSendContext,
+  withDurableMessageSendContextCore as withDurableMessageSendContext,
 } from "./send.js";
 import type { DurableMessageSendIntent } from "./types.js";
 

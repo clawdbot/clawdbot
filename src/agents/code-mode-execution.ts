@@ -48,7 +48,7 @@ import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import { ToolSearchRuntime, type ToolSearchToolContext } from "./tool-search.js";
 import { ToolInputError } from "./tools/common.js";
 
-export async function runExec(params: {
+export async function runCodeModeExec(params: {
   toolCallId: string;
   ctx: ToolSearchToolContext;
   code: string;

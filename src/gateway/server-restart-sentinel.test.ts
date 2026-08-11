@@ -364,7 +364,7 @@ vi.mock("../infra/outbound/deliver-queue-admission.js", () => ({
 }));
 
 vi.mock("../channels/message/runtime.js", () => ({
-  sendDurableMessageBatch: vi.fn(async (params: Record<string, unknown>) => {
+  sendDurableMessageBatchCore: vi.fn(async (params: Record<string, unknown>) => {
     try {
       const results = await mocks.deliverOutboundPayloads(params);
       return { status: "sent", results };

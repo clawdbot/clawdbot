@@ -6,7 +6,7 @@ const providerRuntimeMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../plugins/provider-thinking.js", () => ({
-  resolveProviderThinkingProfile: providerRuntimeMocks.resolveProviderThinkingProfile,
+  resolveEffectiveThinkingProfile: providerRuntimeMocks.resolveProviderThinkingProfile,
 }));
 
 const {

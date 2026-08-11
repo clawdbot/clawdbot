@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   appendTranscriptMessage,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { flushSessionManagerTranscript } from "./attempt-transcript-helpers.js";
@@ -47,7 +47,7 @@ describe("embedded attempt transcript persistence", () => {
       sessionKey: "agent:main:embedded-generation",
       storePath,
     };
-    await upsertSessionEntry(target, {
+    await upsertSessionEntryCore(target, {
       sessionId: target.sessionId,
       updatedAt: 1,
     });

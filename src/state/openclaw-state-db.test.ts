@@ -947,7 +947,7 @@ function runConcurrentSchemaProbe(params: {
       const [
         { resolveGatewayLockDir },
         { resolvePathViaExistingAncestorSync },
-        { sha256HexPrefix },
+        { sha256HexPrefixCore },
         { ensurePrivateSqliteCoordinatorDirectory },
         { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
         { resolveOpenClawStateDirForDatabasePath },
@@ -956,7 +956,7 @@ function runConcurrentSchemaProbe(params: {
       const stateDir = resolveOpenClawStateDirForDatabasePath(canonicalDatabasePath);
       const coordinatorPath = path.join(
         resolveGatewayLockDir(stateDir),
-        \`state-ownership.\${sha256HexPrefix(canonicalDatabasePath, 8)}.lock.sqlite\`,
+        \`state-ownership.\${sha256HexPrefixCore(canonicalDatabasePath, 8)}.lock.sqlite\`,
       );
       ensurePrivateSqliteCoordinatorDirectory(
         path.dirname(coordinatorPath),

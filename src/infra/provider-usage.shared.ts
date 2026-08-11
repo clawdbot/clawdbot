@@ -78,7 +78,11 @@ export const clampPercent = (value: number) =>
   Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
 
 /** Resolves a promise with a fallback when usage collection exceeds the timeout. */
-export const withTimeout = async <T>(work: Promise<T>, ms: number, fallback: T): Promise<T> => {
+export const raceUsageTimeout = async <T>(
+  work: Promise<T>,
+  ms: number,
+  fallback: T,
+): Promise<T> => {
   let timeout: NodeJS.Timeout | undefined;
   const timeoutMs = resolveTimerTimeoutMs(ms, 1);
   try {

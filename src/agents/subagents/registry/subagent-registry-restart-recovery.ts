@@ -1,5 +1,8 @@
 import { getRuntimeConfig } from "../../../config/config.js";
-import { resolveAgentIdFromSessionKey, resolveStorePath } from "../../../config/sessions.js";
+import {
+  resolveAgentIdFromSessionKey,
+  resolveSessionStorePathCore,
+} from "../../../config/sessions.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -299,7 +302,7 @@ export async function recoverInterruptedSubagentRow(
   }
   try {
     const agentId = resolveAgentIdFromSessionKey(childSessionKey);
-    const storePath = resolveStorePath(getRuntimeConfig().session?.store, { agentId });
+    const storePath = resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId });
     const sessionEntry = loadSessionEntry({
       storePath,
       sessionKey: childSessionKey,

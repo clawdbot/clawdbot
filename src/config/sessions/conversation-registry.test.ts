@@ -16,7 +16,7 @@ import {
 } from "./conversation-registry.js";
 import {
   deleteSessionEntryLifecycle,
-  upsertSessionEntry as upsertCanonicalSessionEntry,
+  upsertSessionEntryCore as upsertCanonicalSessionEntry,
 } from "./session-accessor.js";
 import {
   getSessionKysely,

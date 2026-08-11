@@ -11,7 +11,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
   readTranscriptStatsSync,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
@@ -138,7 +138,7 @@ async function writeTestSessionTranscript(params: {
     sessionKey,
     storePath: path.join(params.rootDir, "sessions.json"),
   };
-  await upsertSessionEntry(scope, { sessionId, updatedAt: 10 });
+  await upsertSessionEntryCore(scope, { sessionId, updatedAt: 10 });
   await replaceTranscriptEvents(scope, params.events);
 }
 
@@ -559,7 +559,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const storePath = path.join(rootDir, "tainted-owner-session.json");
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
-    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
     await replaceTranscriptEvents(scope, [
       {
         type: "message",
@@ -2102,7 +2102,7 @@ describe("runMemoryFlushIfNeeded", () => {
       totalTokensVersion: 1,
       compactionCount: 0,
     };
-    await upsertSessionEntry({ agentId: "main", sessionKey, storePath }, sessionEntry);
+    await upsertSessionEntryCore({ agentId: "main", sessionKey, storePath }, sessionEntry);
 
     await runPreflightCompactionIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
@@ -3208,7 +3208,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const storePath = path.join(rootDir, "sqlite-codex-byte-guard.json");
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
-    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
     await replaceTranscriptEvents(scope, [
       { message: { role: "user", content: "x".repeat(256) }, type: "message" },
     ]);
@@ -3268,7 +3268,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const storePath = path.join(rootDir, "sqlite-codex-under-byte-guard.json");
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
-    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
     await replaceTranscriptEvents(scope, [
       { message: { role: "user", content: "small" }, type: "message" },
     ]);
@@ -3329,7 +3329,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const storePath = path.join(rootDir, "sqlite-cli-owned-session.json");
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
-    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
     await replaceTranscriptEvents(scope, [
       { message: { role: "user", content: "x".repeat(256) }, type: "message" },
     ]);
@@ -3401,7 +3401,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const storePath = path.join(rootDir, "sqlite-large-session.json");
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
-    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
     await replaceTranscriptEvents(scope, [
       { message: { role: "user", content: "x".repeat(256) }, type: "message" },
     ]);
@@ -3548,7 +3548,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const storePath = path.join(rootDir, "sqlite-deep-leaf-session.json");
     const sessionKey = "agent:main:deep-leaf";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
-    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
     const activeRoot = {
       type: "message",
       id: "active-root",
@@ -3623,7 +3623,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const storePath = path.join(rootDir, "sqlite-force-flush-session.json");
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
-    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
     await replaceTranscriptEvents(scope, [
       { message: { role: "user", content: "x".repeat(256) }, type: "message" },
     ]);

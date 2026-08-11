@@ -7,7 +7,7 @@ import {
 } from "./runtime-api.js";
 import { persistTtsAudioToMediaStore } from "./tts-audio-store.js";
 import { maybeApplyTtsToPayloadCore } from "./tts-payload.js";
-import { textToSpeech as textToSpeechCore } from "./tts-synthesis.js";
+import { textToSpeechCore } from "./tts-synthesis.js";
 
 setSpeechRuntimeAvailabilityGuard(() => {
   assertSecretOwnerAvailable("capability", "tts");
