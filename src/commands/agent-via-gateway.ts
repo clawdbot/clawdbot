@@ -97,12 +97,12 @@ const GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 
 /**
  * Transport error that occurs after the Gateway has already accepted a run.
  *
- * Carries the accepted run/session identity so callers can surface an
- * in-flight result instead of silently re-running the prompt through the
- * embedded fallback.  Without this, a long-running accepted turn that hits
- * the CLI deadline would launch a fresh {@code gateway-fallback-*} run
- * while the original Gateway-owned run continues — duplicating mutating
- * work and potentially switching provider/model.
+ * Carries the accepted run/session identity so callers can surface the
+ * in-flight Gateway-owned run after post-acceptance transport loss (timeout
+ * or connection close).  Without this, a long-running accepted turn that
+ * hits the CLI deadline would silently discard the run ID, leaving the
+ * operator unable to track or re-attach to the Gateway-owned run that is
+ * still executing.
  */
 class GatewayAcceptedRunTransportError extends Error {
   readonly acceptedRunId: string;
@@ -1357,9 +1357,9 @@ export async function agentCliCommand(
         throw err;
       }
       // Gateway accepted the run before the transport error — the turn is
-      // still executing (default 48-hour Gateway deadline).  The embedded
-      // fallback must not re-run the prompt because that would duplicate
-      // mutating work and may switch provider/model.
+      // still executing (default 48-hour Gateway deadline).  Surface the
+      // accepted run ID so the operator can check status or re-attach
+      // instead of losing track of the in-flight Gateway-owned turn.
       if (err instanceof GatewayAcceptedRunTransportError) {
         const reasonText =
           err.fallbackReason === "gateway_timeout" ? "timed out" : "connection closed";
