@@ -565,6 +565,10 @@ print_log_tail "$LOG_PATH"
     const compiledResult = resolveEntrypoint(compiledRoot);
     expect(compiledResult.status, compiledResult.stderr).toBe(0);
     expect(compiledResult.stdout.trim()).toBe(compiledEntrypoint);
+
+    const helper = readFileSync(DOCKER_E2E_IMAGE_HELPER_PATH, "utf8");
+    expect(helper).toContain('node "$entrypoint" "$@"');
+    expect(helper).not.toContain('node --import tsx "$entrypoint"');
   });
 
   it("rejects malformed Docker E2E resource limits before a suite starts", () => {
@@ -4060,9 +4064,14 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 
   it("keeps the kitchen-sink RPC Docker watchdog above the internal walk budgets", () => {
     const runner = readFileSync(KITCHEN_SINK_RPC_DOCKER_E2E_PATH, "utf8");
+    const walk = readFileSync("scripts/e2e/kitchen-sink-rpc-walk.mts", "utf8");
     expect(runner).toContain(
       'DOCKER_RUN_TIMEOUT="${OPENCLAW_KITCHEN_SINK_RPC_DOCKER_RUN_TIMEOUT:-1500s}"',
     );
+    expect(runner).toContain("tsx scripts/e2e/kitchen-sink-rpc-walk.mts");
+    expect(runner).not.toContain("node --import tsx scripts/e2e/kitchen-sink-rpc-walk.mts");
+    expect(walk).toContain("../../packages/normalization-core/src/record-coerce.ts");
+    expect(walk).not.toContain("@openclaw/normalization-core");
   });
 
   it("bounds kitchen-sink plugin CLI commands inside the Docker sweep", () => {
@@ -4197,6 +4206,8 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     expect(runner).not.toContain(
       'run_logged gateway-network-client timeout "$CLIENT_TIMEOUT" docker run --rm',
     );
+    expect(runner).toContain("tsx scripts/e2e/lib/gateway-network/client.mts");
+    expect(runner).not.toContain("node --import tsx scripts/e2e/lib/gateway-network/client.mts");
   });
 
   it("proves gateway suspension across a same-container process restart", () => {
@@ -4280,6 +4291,7 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
       "--allow-unreleased-changelog",
       'local harness_root="${DOCKER_E2E_HARNESS_ROOT_DIR:-$ROOT_DIR}"',
       '-v "$harness_root/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"',
+      '-v "$harness_root/packages/gateway-client/src:/app/packages/gateway-client/src:ro"',
       '-v "$harness_root/packages/normalization-core/src:/app/packages/normalization-core/src:ro"',
       '-v "$harness_root/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"',
       '-v "$harness_root/test/helpers:/app/test/helpers:ro"',

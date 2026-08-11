@@ -31,9 +31,9 @@ type TestStateOptions = {
 
 function usage() {
   return `Usage:
-  node --import tsx scripts/lib/openclaw-test-state.mts -- create [--label <name>] [--scenario <name>] [--env-file <path>] [--json]
-  node --import tsx scripts/lib/openclaw-test-state.mts shell [--label <name>] [--scenario <name>]
-  node --import tsx scripts/lib/openclaw-test-state.mts shell-function
+  node scripts/lib/openclaw-test-state.mts -- create [--label <name>] [--scenario <name>] [--env-file <path>] [--json]
+  node scripts/lib/openclaw-test-state.mts shell [--label <name>] [--scenario <name>]
+  node scripts/lib/openclaw-test-state.mts shell-function
 
 Scenarios: ${[...SCENARIOS].join(", ")}
 `;
