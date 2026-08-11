@@ -622,8 +622,11 @@ export class SessionOrganizerController implements ReactiveController {
     if (!sessionDragActive(dataTransfer)) {
       return;
     }
-    const sessionKey = readSessionDragData(dataTransfer);
-    const session = sessionKey ? this.host.findSidebarSessionByKey(sessionKey) : undefined;
+    // Browsers protect transferred data during dragover. Use the key recorded
+    // at dragstart for hover eligibility; sectionDrop reads the payload itself.
+    const session = this.draggingSessionKey
+      ? this.host.findSidebarSessionByKey(this.draggingSessionKey)
+      : undefined;
     if (!this.sectionAcceptsSession(sectionId, category, session)) {
       event.stopPropagation();
       return;

@@ -222,7 +222,8 @@ export function categoryClearReturnsToGroups(
  * sticks. `grouping: "none"` only disables categories; the kind-based Groups
  * and Coding zones always split so chat threads stay readable. The coding
  * section is always emitted (even empty) so its ordered position remains a
- * stable sibling of any catalog sections.
+ * stable sibling of any catalog sections. Groups also stays visible while a
+ * categorized group row can deterministically return there.
  */
 export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
   rows: readonly Row[],
@@ -292,7 +293,8 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
     rows: categories.get(category) ?? [],
   }));
   orderedSections.push({ id: "ungrouped", rows: threads });
-  if (groups.length > 0) {
+  const hasGroupsReturnTarget = rows.some((row) => categoryClearReturnsToGroups(row, grouping));
+  if (groups.length > 0 || hasGroupsReturnTarget) {
     orderedSections.push({ id: "groups", groups: true, rows: groups });
   }
   orderedSections.push({ id: "work", work: true, rows: coding });

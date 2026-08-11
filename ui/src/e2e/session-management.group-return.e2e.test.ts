@@ -41,11 +41,7 @@ suite.define(() => {
         "sessions.list": sessionsListResponse([
           sessionRow("agent:main:main", "Main", baseTime),
           {
-            ...sessionRow("agent:main:existing-group", "Existing group", baseTime - 60_000),
-            kind: "group",
-          },
-          {
-            ...sessionRow("agent:main:done-group", "Completed launch", baseTime - 120_000, {
+            ...sessionRow("agent:main:done-group", "Completed launch", baseTime - 60_000, {
               category: "Done",
             }),
             kind: "group",
@@ -88,20 +84,9 @@ suite.define(() => {
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await groups.waitFor({ state: "visible" });
       await expect.poll(() => row.getAttribute("draggable")).toBe("true");
-      await row.evaluate((source) => {
-        const target = document.querySelector('[data-session-section="groups"]');
-        if (!target) {
-          throw new Error("expected Groups drop target");
-        }
-        const dataTransfer = new DataTransfer();
-        source.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer }));
-        target.dispatchEvent(
-          new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer }),
-        );
-        target.dispatchEvent(
-          new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer }),
-        );
-        source.dispatchEvent(new DragEvent("dragend", { bubbles: true, dataTransfer }));
+      await row.dragTo(groups, {
+        sourcePosition: { x: 8, y: 8 },
+        targetPosition: { x: 8, y: 8 },
       });
       const patch = await waitForPatch(
         gateway,
