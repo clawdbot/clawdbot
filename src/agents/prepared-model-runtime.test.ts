@@ -79,6 +79,7 @@ describe("prepared model runtime snapshots", () => {
   it("keeps configured owners outside a scoped refresh untouched while rebuilding the target", async () => {
     mocks.configuredAgentIds = ["pro", "free"];
     const initialConfig = { agents: { defaults: { model: "openai/gpt-5.6" } } };
+    const buildCounts: number[] = [];
     const proInput = {
       config: initialConfig,
       agentId: "pro",
@@ -94,7 +95,10 @@ describe("prepared model runtime snapshots", () => {
       workspaceDir: "/tmp/workspace-free",
     };
 
-    await refreshPreparedModelRuntimeSnapshots(initialConfig, { gatewayLifecycle: true });
+    await refreshPreparedModelRuntimeSnapshots(initialConfig, {
+      gatewayLifecycle: true,
+      onBuildStats: (s) => buildCounts.push(s.agentCount),
+    });
     expect(getPreparedModelRuntimeTestApi().getPreparedModelRuntimeOwnerCountForTest()).toBe(2);
     expect(getPreparedModelRuntimeSnapshot(proInput)?.agentId).toBe("pro");
     expect(getPreparedModelRuntimeSnapshot(freeInput)?.agentId).toBe("free");
@@ -105,6 +109,7 @@ describe("prepared model runtime snapshots", () => {
     await refreshPreparedModelRuntimeSnapshots(scopedConfig, {
       gatewayLifecycle: true,
       agentIds: new Set(["pro"]),
+      onBuildStats: (s) => buildCounts.push(s.agentCount),
     });
 
     expect(getPreparedModelRuntimeTestApi().getPreparedModelRuntimeOwnerCountForTest()).toBe(2);
@@ -113,6 +118,9 @@ describe("prepared model runtime snapshots", () => {
     expect(getPreparedModelRuntimeSnapshot({ ...freeInput, config: scopedConfig })?.config).toBe(
       scopedConfig,
     );
+    // Rebuild count: full refresh rebuilt both owners; the scoped refresh rebuilt only the
+    // in-scope owner, proving the untouched owner avoided catalog/runtime construction.
+    expect(buildCounts).toEqual([2, 1]);
   });
 
   it("reactivates a standalone read-only owner after a publication boundary", async () => {
