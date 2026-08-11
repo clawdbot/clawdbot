@@ -2329,19 +2329,14 @@ async function bootstrapManagedGateway(runCommand, checkout, deployment, options
         timeoutMs: COMMAND_TIMEOUT_MS.gatewayService,
       },
     );
-    await runUpdateCommand(
+    await bootstrapLaunchAgentAndWait(
       runCommand,
-      "launchd.bootstrap",
-      "/bin/launchctl",
-      ["bootstrap", domain, deployment.plistPath],
       checkout,
-      {
-        phase: "Gateway LaunchAgent bootstrap",
-        serviceState: "stopped",
-        timeoutMs: COMMAND_TIMEOUT_MS.gatewayService,
-      },
+      deployment,
+      domain,
+      waitForProcess,
+      options.sleep ?? defaultSleep,
     );
-    await waitForProcess(deployment, options.sleep ?? defaultSleep);
     return { processStartedAt: timestampAt(now) };
   }
 
@@ -2376,19 +2371,14 @@ async function bootstrapManagedGateway(runCommand, checkout, deployment, options
         timeoutMs: COMMAND_TIMEOUT_MS.gatewayService,
       },
     );
-    await runUpdateCommand(
+    await bootstrapLaunchAgentAndWait(
       runCommand,
-      "launchd.bootstrap",
-      "/bin/launchctl",
-      ["bootstrap", domain, deployment.plistPath],
       checkout,
-      {
-        phase: "Gateway LaunchAgent bootstrap",
-        serviceState: "stopped",
-        timeoutMs: COMMAND_TIMEOUT_MS.gatewayService,
-      },
+      deployment,
+      domain,
+      waitForProcess,
+      options.sleep ?? defaultSleep,
     );
-    await waitForProcess(deployment, options.sleep ?? defaultSleep);
     processStartedAt = timestampAt(now);
   } catch (error) {
     restartError = error;
@@ -2428,6 +2418,41 @@ async function bootstrapManagedGateway(runCommand, checkout, deployment, options
     throwPreservingValue(restartError);
   }
   return { processStartedAt };
+}
+
+async function bootstrapLaunchAgentAndWait(
+  runCommand,
+  checkout,
+  deployment,
+  domain,
+  waitForProcess,
+  sleep,
+) {
+  try {
+    await runUpdateCommand(
+      runCommand,
+      "launchd.bootstrap",
+      "/bin/launchctl",
+      ["bootstrap", domain, deployment.plistPath],
+      checkout,
+      {
+        phase: "Gateway LaunchAgent bootstrap",
+        serviceState: "stopped",
+        timeoutMs: COMMAND_TIMEOUT_MS.gatewayService,
+      },
+    );
+  } catch (bootstrapError) {
+    if (findUnsafeCommandCleanupFailure(bootstrapError)) {
+      throwPreservingValue(bootstrapError);
+    }
+    try {
+      await waitForProcess(deployment, sleep);
+      return;
+    } catch {
+      throwPreservingValue(bootstrapError);
+    }
+  }
+  await waitForProcess(deployment, sleep);
 }
 
 function armLaunchdEnvironmentRestore(name, previousValue) {

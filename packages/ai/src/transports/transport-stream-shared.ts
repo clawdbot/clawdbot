@@ -132,12 +132,12 @@ export function transportAbortError(signal?: AbortSignal): Error {
 }
 
 /** Run a provider-response hook before start/body consumption inside the first-event deadline. */
-export function withProviderResponseHook<T>(params: {
-  stream: AsyncIterable<T>;
+export function withProviderResponseHook<T = never>(params: {
+  stream?: AsyncIterable<T>;
   signal: AbortSignal;
   abort: (reason: Error) => void;
   hook?: () => void | Promise<void>;
-  onReady: () => void;
+  onReady?: () => void;
 }): AsyncIterable<T> {
   return {
     async *[Symbol.asyncIterator]() {
@@ -166,8 +166,10 @@ export function withProviderResponseHook<T>(params: {
       if (params.signal.aborted) {
         throw transportAbortError(params.signal);
       }
-      params.onReady();
-      yield* params.stream;
+      params.onReady?.();
+      if (params.stream) {
+        yield* params.stream;
+      }
     },
   };
 }

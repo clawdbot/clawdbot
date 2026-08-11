@@ -265,7 +265,7 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
             <div>
               <span class="workboard-card__priority">${formatPriorityLabel(card.priority)}</span>
               <h2 id=${workboardCardDetailTitleId}>
-                <span class="workboard-sr-only">${t("workboard.detailTitle")}: </span>${card.title}
+                <span class="sr-only">${t("workboard.detailTitle")}: </span>${card.title}
               </h2>
             </div>
             <openclaw-tooltip .content=${t("common.cancel")}>

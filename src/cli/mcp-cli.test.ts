@@ -646,10 +646,12 @@ describe("mcp cli", () => {
       ]);
       await runMcpCommand(["mcp", "configure", "docs", "--clear-auth"]);
 
-      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith({
-        serverName: "docs",
-        serverUrl: "https://mcp.example.com",
-      });
+      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith(
+        expect.objectContaining({
+          serverName: "docs",
+          serverUrl: "https://mcp.example.com",
+        }),
+      );
 
       mockLog.mockClear();
       await runMcpCommand(["mcp", "show", "docs", "--json"]);
@@ -670,10 +672,12 @@ describe("mcp cli", () => {
       ]);
       await runMcpCommand(["mcp", "unset", "docs"]);
 
-      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith({
-        serverName: "docs",
-        serverUrl: "https://mcp.example.com",
-      });
+      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith(
+        expect.objectContaining({
+          serverName: "docs",
+          serverUrl: "https://mcp.example.com",
+        }),
+      );
     });
   });
 
@@ -691,10 +695,12 @@ describe("mcp cli", () => {
       clearMcpOAuthCredentials.mockClear();
       await runMcpCommand(["mcp", "set", "docs", '{"command":"uvx","args":["docs-mcp"]}']);
 
-      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith({
-        serverName: "docs",
-        serverUrl: "https://mcp.example.com",
-      });
+      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith(
+        expect.objectContaining({
+          serverName: "docs",
+          serverUrl: "https://mcp.example.com",
+        }),
+      );
     });
   });
 
@@ -723,10 +729,12 @@ describe("mcp cli", () => {
         "--no-probe",
       ]);
 
-      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith({
-        serverName: "docs",
-        serverUrl: "https://mcp.example.com",
-      });
+      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith(
+        expect.objectContaining({
+          serverName: "docs",
+          serverUrl: "https://mcp.example.com",
+        }),
+      );
     });
   });
 

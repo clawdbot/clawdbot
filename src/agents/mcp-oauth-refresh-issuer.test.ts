@@ -4,8 +4,9 @@ import { withTempHome as withBaseTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
+import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { createMcpOAuthClientProvider } from "./mcp-oauth-provider.js";
-import { readMcpOAuthStore, resolveMcpOAuthStoreKey } from "./mcp-oauth-store.js";
+import { readMcpOAuthStore } from "./mcp-oauth-store.js";
 
 const SERVER_NAME = "Remote Docs";
 const SERVER_URL = "https://mcp.example.com/mcp";
@@ -15,6 +16,7 @@ const ORIGINAL_ISSUER = "https://auth-old.example";
 const REPLACEMENT_ISSUER = "https://auth-new.example";
 const STORED_ACCESS = "stored-access";
 const STORED_REFRESH = "stored-refresh-secret";
+const IDENTITY = operatorMcpOAuthIdentity(SERVER_NAME, SERVER_URL);
 
 async function withTempHome<T>(
   run: () => T | Promise<T>,
@@ -98,8 +100,7 @@ async function seedAuthorizedStore(
   expiresIn = 3600,
 ) {
   const provider = createMcpOAuthClientProvider({
-    serverName: SERVER_NAME,
-    serverUrl: SERVER_URL,
+    identity: IDENTITY,
   });
   const discoveryState = {
     authorizationServerUrl: ORIGINAL_ISSUER,
@@ -125,13 +126,12 @@ function buildOAuthFetch(fetchFn: FetchLike) {
   return withMcpOAuthBearer({
     fetchFn,
     authFetchFn: fetchFn,
-    serverName: SERVER_NAME,
-    resourceUrl: SERVER_URL,
+    identity: IDENTITY,
   });
 }
 
 function readStore() {
-  return readMcpOAuthStore(resolveMcpOAuthStoreKey(SERVER_NAME, SERVER_URL));
+  return readMcpOAuthStore(IDENTITY.storeKey);
 }
 
 const TEMP_HOME_OPTIONS = {
@@ -212,8 +212,7 @@ describe("MCP OAuth refresh issuer binding", () => {
         async () => {
           await seedAuthorizedStore("discovery-then-tokens");
           const provider = createMcpOAuthClientProvider({
-            serverName: SERVER_NAME,
-            serverUrl: SERVER_URL,
+            identity: IDENTITY,
           });
           await provider.saveDiscoveryState?.({
             authorizationServerUrl: issuer,
@@ -315,8 +314,7 @@ describe("MCP OAuth refresh issuer binding", () => {
     await withTempHome(
       async () => {
         const provider = createMcpOAuthClientProvider({
-          serverName: SERVER_NAME,
-          serverUrl: SERVER_URL,
+          identity: IDENTITY,
         });
         await provider.saveClientInformation?.({ client_id: "stored-client-id" });
         await provider.saveTokens({

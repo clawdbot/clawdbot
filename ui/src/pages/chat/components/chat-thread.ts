@@ -1922,7 +1922,7 @@ function renderChatThreadContents(
       @pointerup=${(event: PointerEvent) => handleChatThreadSelectionPointerUp(event, props)}
     >
       <span
-        class="chat-transcript-announcement agent-chat__sr-only"
+        class="chat-transcript-announcement sr-only"
         role="status"
         aria-live=${props.announceTranscript !== false ? "polite" : "off"}
         aria-atomic="true"

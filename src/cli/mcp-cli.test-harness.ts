@@ -23,8 +23,9 @@ const mocks = vi.hoisted(() => {
     runtime,
     serveOpenClawChannelMcp: vi.fn(),
     clearMcpOAuthCredentials: vi.fn(),
+    completeMcpOAuthAuthorization: vi.fn(),
     readMcpOAuthCredentialsStatus: vi.fn(),
-    runMcpOAuthLogin: vi.fn(),
+    startMcpOAuthAuthorization: vi.fn(),
     createSessionMcpRuntimeOverride: undefined as CreateSessionMcpRuntime | undefined,
   };
 });
@@ -33,8 +34,8 @@ export const mockLog = mocks.runtime.log;
 export const mockError = mocks.runtime.error;
 export const serveOpenClawChannelMcp = mocks.serveOpenClawChannelMcp;
 export const clearMcpOAuthCredentials = mocks.clearMcpOAuthCredentials;
+export const completeMcpOAuthAuthorization = mocks.completeMcpOAuthAuthorization;
 export const readMcpOAuthCredentialsStatus = mocks.readMcpOAuthCredentialsStatus;
-export const runMcpOAuthLogin = mocks.runMcpOAuthLogin;
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime: mocks.runtime,
@@ -46,8 +47,9 @@ vi.mock("../mcp/channel-server.js", () => ({
 
 vi.mock("../agents/mcp-oauth.js", () => ({
   clearMcpOAuthCredentials: mocks.clearMcpOAuthCredentials,
+  completeMcpOAuthAuthorization: mocks.completeMcpOAuthAuthorization,
   readMcpOAuthCredentialsStatus: mocks.readMcpOAuthCredentialsStatus,
-  runMcpOAuthLogin: mocks.runMcpOAuthLogin,
+  startMcpOAuthAuthorization: mocks.startMcpOAuthAuthorization,
 }));
 
 vi.mock("../agents/agent-bundle-mcp-runtime.js", async (importOriginal) => {
