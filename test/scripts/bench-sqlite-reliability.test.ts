@@ -188,6 +188,8 @@ describe("scripts/bench-sqlite-reliability", () => {
     expect(result.stdout).toContain("SQLITE_RELIABILITY_TARGET=global");
     expect(result.stdout).not.toContain("=missing");
     const firstReport = JSON.parse(fs.readFileSync(output, "utf8")) as ReliabilityReport;
+    expect(firstReport.concurrentRestoresVerified).toBe(4);
+    expect(firstReport.restoresVerified).toBe(7);
     expect(
       firstReport.crashRecoveryProof.exit.code !== null ||
         firstReport.crashRecoveryProof.exit.signal !== null,
