@@ -124,7 +124,6 @@ function makeDispatchInput(
     bootstrapPromptWarningSignaturesSeen: [],
     suppressNextUserMessagePersistence: false,
     beforeAgentFinalizeRevisionAttempts: 0,
-    maxBeforeAgentFinalizeRevisions: 1,
   } as unknown as Parameters<typeof dispatchEmbeddedRunAttempt>[0];
 }
 

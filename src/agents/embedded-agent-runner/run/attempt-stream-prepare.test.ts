@@ -41,6 +41,7 @@ import {
 } from "./attempt-finalize.js";
 import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
+import { MAX_BEFORE_AGENT_FINALIZE_REVISIONS } from "./terminal-retry-state.js";
 
 function prepareCatalogExecutor(
   projections: ToolSearchTargetTranscriptProjection[],
@@ -58,6 +59,8 @@ function prepareCatalogExecutor(
     onAttemptAbort?: () => void;
     abortRun?: (isTimeout?: boolean, reason?: unknown) => void;
     markExternalAbort?: () => void;
+    attemptOverrides?: Record<string, unknown>;
+    hookRunner?: Parameters<typeof prepareEmbeddedAttemptStream>[0]["hookRunner"];
   },
 ) {
   const runAbortController = options?.runAbortController ?? new AbortController();
@@ -68,9 +71,15 @@ function prepareCatalogExecutor(
       sessionKey: options?.sessionKey ?? "agent:main:main",
       replyOperation: options?.replyOperation,
       onAttemptAbort: options?.onAttemptAbort,
+      ...options?.attemptOverrides,
     } as never,
-    activeSession: { agent: {}, isStreaming: false } as never,
-    hookRunner: undefined as never,
+    activeSession: {
+      agent: { hasQueuedMessages: () => false },
+      isStreaming: false,
+      messages: [],
+      pendingMessageCount: 0,
+    } as never,
+    hookRunner: options?.hookRunner as never,
     hookAgentId: "main",
     diagnosticTrace: {} as never,
     clientToolCallSlots: [],
@@ -121,7 +130,6 @@ describe("prepareEmbeddedAttemptStream", () => {
         runId: "run-finalize-id",
         sessionId: "session-finalize-id",
         sessionKey: "agent:main:main",
-        maxBeforeAgentFinalizeRevisions: 3,
         beforeAgentFinalizeRevisionAttempts: 0,
       } as never,
       activeSession: {
@@ -184,6 +192,38 @@ describe("prepareEmbeddedAttemptStream", () => {
     expect(prepared.queueHandle.isStopped?.()).toBe(true);
   });
 
+  it("skips before-agent finalization after exhausting the revision cap", async () => {
+    prepareCatalogExecutor([], {
+      attemptOverrides: {
+        beforeAgentFinalizeRevisionAttempts: MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
+      },
+      hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never,
+    });
+    const subscriptionInput = mocks.subscribe.mock.calls.at(-1)?.[0] as {
+      onBeforeTerminalDelivery?: (event: unknown) => Promise<unknown>;
+    };
+
+    await expect(
+      subscriptionInput.onBeforeTerminalDelivery?.({
+        messages: [],
+        willRetry: false,
+        assistantEntryId: "canonical-entry-id",
+        lastAssistant: {
+          role: "assistant",
+          content: [{ type: "text", text: "Final answer" }],
+          stopReason: "stop",
+        },
+        assistantTexts: ["Final answer"],
+        hasAssistantVisibleText: true,
+        isError: false,
+        incompleteTerminalAssistant: false,
+        hadDeterministicSideEffect: false,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(mocks.runBeforeFinalizeHook).not.toHaveBeenCalled();
+  });
+
   it("keeps already-started steering authoritative over finalization", async () => {
     let resolveSteer: (() => void) | undefined;
     const activeSession = {
@@ -204,7 +244,6 @@ describe("prepareEmbeddedAttemptStream", () => {
         runId: "run-finalize-steer",
         sessionId: "session-finalize-steer",
         sessionKey: "agent:main:main",
-        maxBeforeAgentFinalizeRevisions: 3,
         beforeAgentFinalizeRevisionAttempts: 0,
       } as never,
       activeSession: activeSession as never,

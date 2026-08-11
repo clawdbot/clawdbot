@@ -114,7 +114,6 @@ export async function dispatchEmbeddedRunAttempt(input: {
   bootstrapPromptWarningSignaturesSeen: string[];
   suppressNextUserMessagePersistence: boolean;
   beforeAgentFinalizeRevisionAttempts: number;
-  maxBeforeAgentFinalizeRevisions: number;
 }): Promise<{
   rawAttempt: Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
   cancellationRequested: boolean;
@@ -439,7 +438,6 @@ export async function dispatchEmbeddedRunAttempt(input: {
       ],
     suppressNextUserMessagePersistence: input.suppressNextUserMessagePersistence,
     beforeAgentFinalizeRevisionAttempts: input.beforeAgentFinalizeRevisionAttempts,
-    maxBeforeAgentFinalizeRevisions: input.maxBeforeAgentFinalizeRevisions,
     suppressTranscriptOnlyAssistantPersistence: params.suppressTranscriptOnlyAssistantPersistence,
     suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
     onUserMessagePersisted: control.onUserMessagePersisted,

@@ -172,7 +172,6 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   /** True when this attempt is running the auto fast-mode policy. */
   fastModeAuto?: boolean;
   beforeAgentFinalizeRevisionAttempts?: number;
-  maxBeforeAgentFinalizeRevisions?: number;
 };
 
 export type EmbeddedRunAttemptResult = {
