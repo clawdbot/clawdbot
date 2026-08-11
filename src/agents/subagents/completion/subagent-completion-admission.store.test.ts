@@ -258,6 +258,7 @@ describe("atomic subagent completion admission store", () => {
       deliveryStatus: "failed" as const,
       terminalOutcome: "blocked" as const,
     });
+    ensureTaskRegistryReady();
     settleSubagentCompletionDelivery({ ...input, databaseOptions: { database } });
     subagentRuns.set(input.subagent.runId, input.subagent);
     publishTaskRecordAfterAtomicStore(input.task);
