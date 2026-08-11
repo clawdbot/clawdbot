@@ -866,6 +866,31 @@ describe("runHeartbeatOnce", () => {
     expect(replySpy).not.toHaveBeenCalled();
   });
 
+  it("runs a routeless interval wake that carries scheduled tasks", async () => {
+    const tmpDir = await createCaseDir("hb-no-route-tasks");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace: tmpDir, heartbeat: { every: "5m" } } },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await seedSessionStore(storePath, sessionKey, {
+      sessionId: "sid-no-route-tasks",
+      updatedAt: Date.now(),
+    });
+    const replySpy = vi.fn().mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+    const result = await runHeartbeatOnce({
+      cfg,
+      source: "interval",
+      tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
+      deps: createHeartbeatDeps(vi.fn(), { getReplyFromConfig: replySpy }),
+    });
+
+    expect(result.status).toBe("ran");
+    expect(replySpy).toHaveBeenCalledTimes(1);
+  });
+
   it("runs a routeless interval poll that has queued system events", async () => {
     const tmpDir = await createCaseDir("hb-no-route-events");
     const storePath = path.join(tmpDir, "sessions.json");

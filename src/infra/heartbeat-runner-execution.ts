@@ -411,14 +411,15 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     turnSource: useIsolatedSession ? undefined : preflight.turnSourceDeliveryContext,
   });
   // Routeless ambient polls are pure model burn, but only they may skip:
-  // triggered wakes (hook/manual/cron/exec) and polls with queued events must
-  // still run to process their payloads even when the reply cannot deliver.
-  // An absent source is the plain scheduled poll; every trigger names its own.
+  // triggered wakes (hook/manual/cron/exec), polls with queued events, and
+  // scheduled-task wakes must still run to process their payloads even when
+  // the reply cannot deliver. An absent source is the plain scheduled poll.
   if (
     delivery.channel === "none" &&
     delivery.reason === "no-route" &&
     (wake.wakeSource === undefined || wake.wakeSource === "interval") &&
-    preflight.pendingEventEntries.length === 0
+    preflight.pendingEventEntries.length === 0 &&
+    scheduledTasks.length === 0
   ) {
     emitHeartbeatEvent({
       status: "skipped",
