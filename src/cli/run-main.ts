@@ -294,8 +294,9 @@ async function closeCliResources(): Promise<void> {
     async () => {
       const { hasMemoryRuntime } = await import("../plugins/memory-state.js");
       if (hasMemoryRuntime()) {
-        const { closeActiveMemorySearchManagers } = await import("../plugins/memory-runtime.js");
-        await closeActiveMemorySearchManagers();
+        const { closeActiveMemorySearchManagersCore } =
+          await import("../plugins/memory-runtime.js");
+        await closeActiveMemorySearchManagersCore();
       }
     },
   ];

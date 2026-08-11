@@ -145,7 +145,7 @@ function markDurableInboundReplyDeliveryErrorVisible(error: unknown): unknown {
 }
 
 /** Delivers final inbound replies through the durable message-send context when supported. */
-export async function deliverInboundReplyWithMessageSendContext(
+export async function deliverInboundReplyWithMessageSendContextCore(
   params: DurableInboundReplyDeliveryParams,
 ): Promise<DurableInboundReplyDeliveryResult> {
   if (params.info.kind !== "final") {

@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { GatewayServiceControlArgs } from "../../daemon/service-types.js";
 import type { GatewayService } from "../../daemon/service.js";
 import {
-  defaultRuntime,
+  lifecycleTestRuntime,
   resetLifecycleRuntimeLogs,
   resetLifecycleServiceMocks,
   lifecycleRuntimeLogs,
@@ -38,7 +38,7 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../runtime.js", () => ({
-  defaultRuntime,
+  defaultRuntime: lifecycleTestRuntime,
 }));
 
 vi.mock("../../infra/restart-intent.js", () => ({

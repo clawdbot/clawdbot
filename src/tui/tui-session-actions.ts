@@ -17,7 +17,7 @@ import {
   formatPrimitiveString,
   extractTextFromMessage,
   formatTuiErrorMessage,
-  isCommandMessage,
+  isCommandMarkedMessage,
 } from "./tui-formatters.js";
 import { readTuiSessionUserMessage } from "./tui-session-events.js";
 import {
@@ -492,7 +492,7 @@ export function createSessionActions(context: SessionActionContext) {
       chatLog.addSystem(`session ${state.currentSessionKey}`);
       for (const entry of projection.entries) {
         const message = entry.message as Record<string, unknown>;
-        if (isCommandMessage(message)) {
+        if (isCommandMarkedMessage(message)) {
           const text = extractTextFromMessage(message);
           if (text) {
             chatLog.addSystem(text);

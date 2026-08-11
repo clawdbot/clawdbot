@@ -29,10 +29,9 @@ import {
   extractMessagingToolSend,
   sanitizeToolArgs,
 } from "./embedded-agent-subscribe.tools.js";
-import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { buildAgentHarnessQuestionPromptPayload } from "./harness/user-input-bridge.js";
 import type { AgentEvent } from "./runtime/index.js";
-import { isCommandBearingToolCall } from "./tool-display.js";
+import { inferToolMetaFromArgsCore, isCommandBearingToolCall } from "./tool-display.js";
 import { resolveFileMutationToolName } from "./tool-mutation-names.js";
 import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
@@ -439,7 +438,7 @@ export function handleToolExecutionStart(
     const meta = extendExecMeta(
       toolName,
       args,
-      inferToolMetaFromArgs(toolName, args, {
+      inferToolMetaFromArgsCore(toolName, args, {
         detailMode: ctx.params.toolProgressDetail ?? "explain",
       }),
     );

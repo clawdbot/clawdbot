@@ -128,7 +128,7 @@ import {
   resolveBundledCliBackendAuthPolicy,
   type BundledCliBackendAuthPolicy,
 } from "./cli-backend-auth-policy.js";
-import { buildCliAgentSystemPrompt, isClaudeCliProvider, normalizeCliModel } from "./helpers.js";
+import { buildCliAgentSystemPrompt, isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 import { buildCliMcpGrantContext, normalizeOptionalMcpContextValue } from "./mcp-grant-context.js";
 import { CLAUDE_CLI_CONTEXT_MODEL_ALIASES, detectNodeClaudePlacement } from "./prepare-claude.js";
@@ -796,7 +796,7 @@ export async function prepareCliRunContext(
   const promptBuildRestrictsTools =
     promptBuildToolsAllow !== undefined &&
     !promptBuildToolsAllow.some((toolName) => normalizeToolName(toolName) === "*");
-  const isClaudeCli = isClaudeCliProvider(params.provider);
+  const isClaudeCli = isClaudeCliBackendId(params.provider);
   const requestedContextModelId = isClaudeCli ? resolveClaudeCliContextModelId(modelId) : modelId;
   const normalizedContextModelId = isClaudeCli
     ? resolveClaudeCliContextModelId(normalizedModel)
@@ -1390,7 +1390,7 @@ export async function prepareCliRunContext(
     const hasClaudeCliCandidate =
       !nodeClaudePlacement &&
       candidateClaudeCliSessionId !== undefined &&
-      isClaudeCliProvider(params.provider);
+      isClaudeCliBackendId(params.provider);
     const claudeCliTranscriptMissing =
       hasClaudeCliCandidate &&
       !(await prepareDeps.claudeCliSessionTranscriptHasContent({

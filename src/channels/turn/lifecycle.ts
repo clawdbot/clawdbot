@@ -31,7 +31,7 @@ import {
   toCoreManagedDeliveryInfo,
 } from "./direct-delivery-custody.js";
 import {
-  deliverInboundReplyWithMessageSendContext,
+  deliverInboundReplyWithMessageSendContextCore,
   isDurableInboundReplyDeliveryHandled,
   throwIfDurableInboundReplyDeliveryFailed,
 } from "./durable-delivery.js";
@@ -546,7 +546,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
                         ? await declaredDurable(preparedPayload, info)
                         : declaredDurable;
                     if (durableOptions) {
-                      const durable = await deliverInboundReplyWithMessageSendContext({
+                      const durable = await deliverInboundReplyWithMessageSendContextCore({
                         cfg: params.cfg,
                         channel: params.channel,
                         accountId: params.accountId,

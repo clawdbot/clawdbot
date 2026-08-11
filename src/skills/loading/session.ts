@@ -9,7 +9,7 @@ import { addIgnoreRules, toPosixPath, type IgnoreMatcher } from "../../shared/ig
 import { expandTildePath } from "../../shared/tilde-path.js";
 import { getArchivedSkillFiles } from "../workshop/curator.js";
 import { parseFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
-import { formatSkillsForPrompt as formatSkillContractForPrompt } from "./skill-contract.js";
+import { formatSkillsForPromptCore } from "./skill-contract.js";
 import { computeSkillPromptVersion } from "./skill-version.js";
 
 /** Max name length per spec */
@@ -270,7 +270,7 @@ function loadSkillFromFile(
  */
 export function formatSkillsForPrompt(skills: Skill[]): string {
   const visibleSkills = skills.filter((s) => !s.disableModelInvocation);
-  return formatSkillContractForPrompt(visibleSkills);
+  return formatSkillsForPromptCore(visibleSkills);
 }
 
 interface LoadSkillsOptions {

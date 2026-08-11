@@ -14,7 +14,7 @@ import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { SkillEntry } from "../types.js";
 import {
   formatSkillsCompactForPrompt as formatSkillsCompact,
-  formatSkillsForPrompt,
+  formatSkillsForPromptCore,
   type Skill,
 } from "./skill-contract.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
@@ -118,7 +118,7 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
 
   it("tier 2: compact when full exceeds budget but compact fits", () => {
     const skills = Array.from({ length: 20 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(800)));
-    const fullLen = formatSkillsForPrompt(skills).length;
+    const fullLen = formatSkillsForPromptCore(skills).length;
     const compactLen = formatSkillsCompact(skills).length;
     const budget = `${COMPACT_SHORTENED_NOTICE}\n${formatSkillsCompact(skills)}`.length;
     expect(fullLen).toBeGreaterThan(budget);
@@ -146,7 +146,7 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     const skills = Array.from({ length: 50 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(800)));
     const identityCatalog = formatSkillsCompact(skills, { descriptionMaxChars: 0 });
     const budget = `${COMPACT_OMITTED_NOTICE}\n${identityCatalog}`.length;
-    expect(formatSkillsForPrompt(skills).length).toBeGreaterThan(budget);
+    expect(formatSkillsForPromptCore(skills).length).toBeGreaterThan(budget);
 
     const prompt = buildPrompt(skills, { maxChars: budget });
 
@@ -176,7 +176,7 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     // 30 skills but maxCount=10, and full format of 10 exceeds budget
     const skills = Array.from({ length: 30 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(800)));
     const tenSkills = skills.slice(0, 10);
-    const fullLen = formatSkillsForPrompt(tenSkills).length;
+    const fullLen = formatSkillsForPromptCore(tenSkills).length;
     const truncatedNotice =
       "⚠️ Skills truncated: included 10 of 30 (compact format, descriptions shortened). Run `openclaw skills check` to audit.";
     const budget = `${truncatedNotice}\n${formatSkillsCompact(tenSkills)}`.length;
@@ -206,7 +206,7 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
 
   it("drops an oversized optional remote note before discarding a complete fitting skill catalog", () => {
     const skill = makeSkill("weather", "Get weather data");
-    const maxChars = formatSkillsForPrompt([skill]).length;
+    const maxChars = formatSkillsForPromptCore([skill]).length;
     const remoteNote = `REMOTE_NOTE_${"x".repeat(maxChars + 512)}`;
     const prompt = buildWorkspaceSkillsPrompt("/fake", {
       entries: [makeEntry(skill)],

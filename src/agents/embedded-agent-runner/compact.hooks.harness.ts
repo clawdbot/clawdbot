@@ -1000,7 +1000,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../../plugins/memory-runtime.js", () => ({
-    getActiveMemorySearchManager: getMemorySearchManagerMock,
+    getActiveMemorySearchManagerCore: getMemorySearchManagerMock,
   }));
 
   vi.doMock("../date-time.js", () => ({

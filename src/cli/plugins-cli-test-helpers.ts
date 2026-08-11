@@ -102,7 +102,7 @@ export const installPluginFromGitSpec: Mock<InstallPluginFromGitSpecFn> = vi.fn(
 const parseGitPluginSpec: Mock<ParseGitPluginSpecFn> = vi.fn();
 const listMarketplacePlugins: Mock<ListMarketplacePluginsFn> = vi.fn();
 export const resolveMarketplaceInstallShortcut: Mock<ResolveMarketplaceInstallShortcutFn> = vi.fn();
-export const enablePluginInConfig: UnknownMock = vi.fn();
+export const enablePluginInConfigMock: UnknownMock = vi.fn();
 export const recordPluginInstall: UnknownMock = vi.fn();
 const loadInstalledPluginIndexInstallRecords: AsyncUnknownMock = vi.fn(async () =>
   clonePluginInstallRecords(mockInstalledPluginIndexInstallRecords),
@@ -326,7 +326,7 @@ vi.mock("../plugins/enable.js", () => ({
       Parameters<(typeof import("../plugins/enable.js"))["enableExplicitlySelectedPluginInConfig"]>,
       unknown
     >(
-      enablePluginInConfig,
+      enablePluginInConfigMock,
       ...args,
     )) as (typeof import("../plugins/enable.js"))["enableExplicitlySelectedPluginInConfig"],
   enablePluginInConfig: ((
@@ -336,7 +336,7 @@ vi.mock("../plugins/enable.js", () => ({
       Parameters<(typeof import("../plugins/enable.js"))["enablePluginInConfig"]>,
       unknown
     >(
-      enablePluginInConfig,
+      enablePluginInConfigMock,
       ...args,
     )) as (typeof import("../plugins/enable.js"))["enablePluginInConfig"],
 }));
@@ -827,7 +827,7 @@ export function resetPluginsCliTestState() {
   installPluginFromMarketplace.mockReset();
   listMarketplacePlugins.mockReset();
   resolveMarketplaceInstallShortcut.mockReset();
-  enablePluginInConfig.mockReset();
+  enablePluginInConfigMock.mockReset();
   recordPluginInstall.mockReset();
   mockInstalledPluginIndexInstallRecords = {};
   mockInstalledPluginIndexRevision = 0;
@@ -909,7 +909,7 @@ export function resetPluginsCliTestState() {
     ok: false,
     error: "marketplace install failed",
   });
-  enablePluginInConfig.mockImplementation(((cfg: OpenClawConfig, pluginId: string) => ({
+  enablePluginInConfigMock.mockImplementation(((cfg: OpenClawConfig, pluginId: string) => ({
     config: cfg,
     enabled: true,
     pluginId,

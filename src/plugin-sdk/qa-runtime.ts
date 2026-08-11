@@ -10,6 +10,7 @@ export { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
 export {
   createLazyCliRuntimeLoader,
   createLiveTransportQaCliRegistration,
+  isQaRuntimeAvailable,
   runLiveTransportQaSuiteCommand,
 } from "./qa-runner-runtime.js";
 export type {
@@ -54,14 +55,6 @@ type QaRuntimeSurface = {
   };
 };
 
-function isMissingQaRuntimeError(error: unknown) {
-  return (
-    error instanceof Error &&
-    (error.message === "Unable to resolve bundled plugin public surface qa-lab/runtime-api.js" ||
-      error.message.startsWith("Unable to open bundled plugin public surface "))
-  );
-}
-
 /** Load the bundled QA lab runtime surface, throwing when the private bundle is absent. */
 export function loadQaRuntimeModule(): QaRuntimeSurface {
   const env = resolvePrivateQaBundledPluginsEnv();
@@ -70,19 +63,6 @@ export function loadQaRuntimeModule(): QaRuntimeSurface {
     artifactBasename: "runtime-api.js",
     ...(env ? { env } : {}),
   });
-}
-
-/** Check whether the bundled QA lab runtime surface is present without hiding other load errors. */
-export function isQaRuntimeAvailable(): boolean {
-  try {
-    loadQaRuntimeModule();
-    return true;
-  } catch (error) {
-    if (isMissingQaRuntimeError(error)) {
-      return false;
-    }
-    throw error;
-  }
 }
 
 /** Docker command runner abstraction used by QA Docker helpers and tests. */

@@ -1,7 +1,6 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ResolvedConfiguredAcpBinding } from "../acp/persistent-bindings.types.js";
-import { buildChatChannelMetaById } from "../channels/chat-meta-shared.js";
+import { findChatChannelMeta, getChatChannelMeta } from "../channels/chat-meta.js";
 import type { ChatChannelId } from "../channels/ids.js";
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
@@ -28,7 +27,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { normalizeOutboundThreadId } from "../infra/outbound/thread-id.js";
-import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
@@ -143,6 +141,7 @@ export type {
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "../plugins/types.js";
+export { getChatChannelMeta };
 export type {
   OpenClawPluginGatewayEventScope,
   OpenClawPluginGatewayEvents,
@@ -292,7 +291,7 @@ export async function ensureConfiguredAcpBindingReady(params: {
   configuredBinding: ResolvedConfiguredAcpBinding | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const runtime = await import("../acp/persistent-bindings.lifecycle.js");
-  return runtime.ensureConfiguredAcpBindingReady(params);
+  return runtime.ensureConfiguredAcpBindingReadyCore(params);
 }
 
 export {
@@ -314,31 +313,6 @@ export { resolveThreadSessionKeys } from "../routing/session-key.js";
 export type ChannelOutboundSessionRouteParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveOutboundSessionRoute"]>
 >[0];
-
-let cachedSdkChatChannelMeta:
-  | {
-      cacheKey: string;
-      metaById: ReturnType<typeof buildChatChannelMetaById>;
-    }
-  | undefined;
-
-function resolveSdkChatChannelMeta(id: string) {
-  const cacheKey = resolveBundledPluginsDir(process.env) ?? "";
-  if (cachedSdkChatChannelMeta?.cacheKey !== cacheKey) {
-    cachedSdkChatChannelMeta = {
-      cacheKey,
-      metaById: buildChatChannelMetaById(),
-    };
-  }
-  // Optional by design: createChannelPluginBase serves external plugin ids that
-  // are never in the bundled catalog; their meta comes entirely from params.meta.
-  return cachedSdkChatChannelMeta.metaById[id];
-}
-
-/** Resolve bundled chat channel metadata while respecting the active bundled-plugin directory. */
-export function getChatChannelMeta(id: ChatChannelId): ChannelMeta {
-  return expectDefined(resolveSdkChatChannelMeta(id), `chat channel metadata: ${id}`);
-}
 
 /** Remove one of the known provider prefixes from a free-form target string. */
 export function stripChannelTargetPrefix(raw: string, ...providers: string[]): string {
@@ -858,7 +832,7 @@ export function createChannelPluginBase<TResolvedAccount>(
   return {
     id: params.id,
     meta: {
-      ...resolveSdkChatChannelMeta(params.id),
+      ...findChatChannelMeta(params.id as ChatChannelId),
       ...params.meta,
       id: params.id,
     },

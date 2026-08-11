@@ -56,7 +56,7 @@ import {
   connectOk,
   createGatewaySuiteHarness,
   dispatchInboundMessageMock,
-  getReplyFromConfig,
+  gatewayReplyMock,
   installGatewayTestHooks,
   mockGetReplyFromConfigOnce,
   onceMessage,
@@ -4794,7 +4794,7 @@ describe("gateway server chat", () => {
 
   test("chat.send does not force-disable block streaming", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const spy = getReplyFromConfig;
+      const spy = gatewayReplyMock;
       await connectOk(ws);
 
       await createSessionDir();
@@ -4837,7 +4837,7 @@ describe("gateway server chat", () => {
     try {
       await withGatewayChatHarness(
         async ({ ws, createSessionDir }) => {
-          const spy = getReplyFromConfig;
+          const spy = gatewayReplyMock;
           await connectOk(ws, makeGatewayWebchatClient());
 
           await createSessionDir();
@@ -4966,7 +4966,7 @@ describe("gateway server chat", () => {
   test("chat.send forwards Control UI reconnect resume internally", async () => {
     await withGatewayChatHarness(
       async ({ ws, createSessionDir }) => {
-        const spy = getReplyFromConfig;
+        const spy = gatewayReplyMock;
         await connectOk(ws, makeGatewayWebchatClient());
 
         await createSessionDir();
@@ -5005,7 +5005,7 @@ describe("gateway server chat", () => {
   test("chat.send forwards one-turn queue mode overrides internally", async () => {
     await withGatewayChatHarness(
       async ({ ws, createSessionDir }) => {
-        const spy = getReplyFromConfig;
+        const spy = gatewayReplyMock;
         await connectOk(ws, makeGatewayWebchatClient());
 
         await createSessionDir();
@@ -6367,7 +6367,7 @@ describe("gateway server chat", () => {
 
   test("smoke: supports abort and idempotent completion", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const spy = getReplyFromConfig;
+      const spy = gatewayReplyMock;
       let aborted = false;
       await connectOk(ws);
 

@@ -18,7 +18,7 @@ import {
   resolveMemoryDreamingWorkspaces,
   resolveMemoryRemDreamingConfig,
 } from "../../memory-host-sdk/dreaming.js";
-import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
+import { getActiveMemorySearchManagerCore } from "../../plugins/memory-runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { formatError } from "../server-utils.js";
 import {
@@ -707,7 +707,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
       return;
     }
     const { cfg, agentId, requestedAgentId } = resolved;
-    const { manager, error } = await getActiveMemorySearchManager({
+    const { manager, error } = await getActiveMemorySearchManagerCore({
       cfg,
       agentId,
       purpose: "status",
