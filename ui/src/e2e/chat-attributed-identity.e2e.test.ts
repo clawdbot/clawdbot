@@ -28,7 +28,7 @@ async function captureProof(page: Page, name: string) {
 }
 
 suite.define(() => {
-  it("uses one avatar placement and keeps shared-thread authors readable", async () => {
+  it("keeps every shared-thread author visible in the document flow", async () => {
     const artifactDir = resolveArtifactDir();
     if (artifactDir) {
       await fs.mkdir(artifactDir, { recursive: true });
@@ -90,55 +90,22 @@ suite.define(() => {
     await expect(userGroups).toHaveCount(2);
     await expect(page.locator(".chat-avatar.user")).toHaveCount(2);
     await expect(page.locator(".chat-avatar.user")).toHaveText(["R", "C"]);
+    await expect(page.locator(".chat-avatar.assistant")).toHaveCount(2);
     await expect(page.locator(".sidebar-identity-card openclaw-viewer-avatar")).toContainText("R");
 
-    await expect(
-      page.locator(".chat-group-footer--persistent-identity .chat-sender-name"),
-    ).toHaveText(["Riley", "Colin"]);
+    await expect(page.locator(".chat-group-footer .chat-sender-name")).toHaveText([
+      "OpenClaw",
+      "Riley",
+      "OpenClaw",
+      "Colin",
+    ]);
     await expect(page.locator(".chat-author-avatar")).toHaveCount(0);
-    const hoverDetails = userGroups.last().locator(".chat-group-timestamp");
-    await expect(hoverDetails).toHaveCSS("opacity", "0");
+    const timestamps = page.locator(".chat-group:is(.user, .assistant) .chat-group-timestamp");
+    await expect(timestamps).toHaveCount(4);
+    for (let index = 0; index < (await timestamps.count()); index += 1) {
+      await expect(timestamps.nth(index)).toHaveCSS("opacity", "1");
+    }
     await captureProof(page, "after-default.png");
-
-    await userGroups.last().hover();
-    await expect(hoverDetails).toHaveCSS("opacity", "1");
-    await expect(page.locator(".chat-author-avatar")).toHaveCount(0);
-    await captureProof(page, "after-hover.png");
-
-    // Own-message footer: the always-visible name must stay put when hover
-    // reveals the timestamp, which slots in to its left (right-aligned row).
-    const ownGroup = userGroups.first();
-    const ownName = ownGroup.locator(".chat-sender-name");
-    await page.mouse.move(0, 0);
-    await expect(ownGroup.locator(".chat-group-timestamp")).toHaveCSS("opacity", "0");
-    const restingNameBox = await ownName.boundingBox();
-    await ownGroup.hover();
-    const ownTimestamp = ownGroup.locator(".chat-group-timestamp");
-    await expect(ownTimestamp).toHaveCSS("opacity", "1");
-    await captureProof(page, "own-group-hover.png");
-    const hoveredNameBox = await ownName.boundingBox();
-    const timestampBox = await ownTimestamp.boundingBox();
-    expect(hoveredNameBox?.x).toBe(restingNameBox?.x);
-    expect((timestampBox?.x ?? 0) + (timestampBox?.width ?? 0)).toBeLessThan(
-      hoveredNameBox?.x ?? 0,
-    );
-
-    const footerOrder = await userGroups
-      .last()
-      .locator(".chat-group-footer")
-      .locator("button, .chat-sender-name, .chat-group-timestamp")
-      .evaluateAll((elements) =>
-        elements.map((element) => {
-          if (element.classList.contains("chat-sender-name")) {
-            return "name";
-          }
-          if (element.classList.contains("chat-group-timestamp")) {
-            return "time";
-          }
-          return element.getAttribute("aria-label");
-        }),
-      );
-    expect(footerOrder).toEqual(["Reply to message", "Rewind", "name", "time"]);
 
     await context.close();
   });
@@ -239,7 +206,10 @@ suite.define(() => {
       await captureProof(page, "missing-local-avatar-after-404.png");
 
       await userGroup.hover();
-      await userGroup.getByRole("button", { name: "Reply to message" }).click();
+      const replyButton = userGroup.locator("button.chat-reply-btn");
+      expect(await replyButton.count()).toBe(1);
+      expect(await replyButton.isVisible()).toBe(true);
+      await replyButton.click();
       const replyPreview = page.locator(".chat-reply-preview");
       await replyPreview.waitFor({ state: "visible" });
       await expect(replyPreview.locator(".chat-reply-preview__text")).toHaveText(

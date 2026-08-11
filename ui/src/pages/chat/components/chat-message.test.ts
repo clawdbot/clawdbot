@@ -755,15 +755,13 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector('[aria-label="Read aloud"]')).toBeNull();
   });
 
-  it("renders assistant messages without an avatar and keeps actions in the footer row", () => {
+  it("renders assistant identity with actions in the header row", () => {
     const container = document.createElement("div");
-    renderAssistantMessage(container, createAssistantMessage("Short reply", { timestamp: 1000 }), {
-      showAssistantAvatar: false,
-    });
+    renderAssistantMessage(container, createAssistantMessage("Short reply", { timestamp: 1000 }));
 
     const assistantGroup = expectElement(container, ".chat-group.assistant", HTMLElement);
     expect(assistantGroup.classList.contains("chat-group--with-footer")).toBe(true);
-    expect(assistantGroup.querySelector(".chat-avatar")).toBeNull();
+    expect(assistantGroup.querySelector(".chat-avatar.assistant")).not.toBeNull();
     expect(assistantGroup.querySelector(".chat-bubble-actions")).toBeNull();
     expect(
       assistantGroup.querySelector(".chat-group-footer-actions .chat-copy-btn"),
@@ -825,7 +823,7 @@ describe("grouped chat rendering", () => {
     });
   });
 
-  it("orders user footer actions before the sender name and timestamp", () => {
+  it("orders the sender header before its message actions", () => {
     const container = document.createElement("div");
     renderGroupedMessage(container, createUserMessage("User footer order."), "user", {
       onReply: vi.fn(),
@@ -846,7 +844,7 @@ describe("grouped chat rendering", () => {
       return element.getAttribute("aria-label");
     });
 
-    expect(order).toEqual(["Reply to message", "Rewind", "name", "time"]);
+    expect(order).toEqual(["name", "time", "Reply to message", "Rewind"]);
   });
 
   it("keeps hidden assistant thinking out of inline reply context", () => {
@@ -1703,30 +1701,27 @@ describe("grouped chat rendering", () => {
     expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(0);
   });
 
-  it("keeps streamed assistant content in the guttered group without an avatar", () => {
+  it("keeps streamed assistant content under one identity header", () => {
     const container = document.createElement("div");
 
     render(
-      renderStreamGroup(
-        [
-          {
-            kind: "stream",
-            key: "stream:s:live",
-            text: "reply",
-            startedAt: 10,
-            isStreaming: true,
-          },
-          { kind: "reading-indicator", key: "reading", startedAt: 10 },
-        ],
-        { showAssistantAvatar: false },
-      ),
+      renderStreamGroup([
+        {
+          kind: "stream",
+          key: "stream:s:live",
+          text: "reply",
+          startedAt: 10,
+          isStreaming: true,
+        },
+        { kind: "reading-indicator", key: "reading", startedAt: 10 },
+      ]),
       container,
     );
 
     const group = container.querySelector(".chat-group.assistant");
     expect(group?.classList.contains("chat-group--working")).toBe(false);
     expect(group?.classList.contains("chat-group--with-footer")).toBe(true);
-    expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(0);
+    expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(1);
     expect(container.querySelectorAll(".chat-group-footer")).toHaveLength(1);
     expect(container.querySelectorAll(".chat-working-indicator")).toHaveLength(1);
     expect(container.querySelectorAll(".chat-reading-indicator")).toHaveLength(1);
@@ -1804,90 +1799,13 @@ describe("grouped chat rendering", () => {
       messages: [createMessageEntry("attributed-user-message", message)],
     });
 
-    render(
-      renderTestMessageGroup(group, { userName: "Local User", showAvatarGutter: true }),
-      container,
-    );
+    render(renderTestMessageGroup(group, { userName: "Local User" }), container);
 
     expect(
       container.querySelector<HTMLElement>(".chat-group.user .chat-sender-name")?.textContent,
     ).toBe("alice");
-    expect(
-      container.querySelector(".chat-group-footer--persistent-identity .chat-sender-name")
-        ?.textContent,
-    ).toBe("alice");
     expect(container.querySelector(".chat-avatar.user")).not.toBeNull();
     expect(container.querySelector(".chat-author-avatar")).toBeNull();
-  });
-
-  it("tints attributed user groups with the sender's stable identity hue", () => {
-    const renderGroupFor = (sender?: { id: string; name: string }) => {
-      const container = document.createElement("div");
-      render(
-        renderMessageGroup(
-          createMessageGroup({ role: "user", content: "hi" }, "user", {
-            key: "tint-group",
-            ...(sender ? { sender, senderLabel: sender.name } : {}),
-            messages: [
-              createMessageEntry("tint-message", {
-                role: "user",
-                content: "hi",
-                timestamp: 1000,
-              }),
-            ],
-            timestamp: 1000,
-          }),
-          { showReasoning: true, showToolCalls: true },
-        ),
-        container,
-      );
-      return container.querySelector<HTMLElement>(".chat-group.user");
-    };
-
-    const attributed = renderGroupFor({ id: "profile-1", name: "Alice Example" });
-    expect(attributed?.classList.contains("chat-group--sender-tint")).toBe(true);
-    const hue = Number(attributed?.style.getPropertyValue("--chat-sender-hue"));
-    expect(Number.isInteger(hue)).toBe(true);
-    expect(hue).toBeGreaterThanOrEqual(0);
-    expect(hue).toBeLessThan(360);
-
-    // Same sender always lands on the same hue; the local unattributed viewer
-    // keeps the accent skin.
-    const again = renderGroupFor({ id: "profile-1", name: "Alice Example" });
-    expect(again?.style.getPropertyValue("--chat-sender-hue")).toBe(String(hue));
-    const local = renderGroupFor();
-    expect(local?.classList.contains("chat-group--sender-tint")).toBe(false);
-    expect(local?.style.getPropertyValue("--chat-sender-hue")).toBe("");
-  });
-
-  it.each([
-    { label: "foreign sender", sender: { id: "other-user" }, userId: "current-user", peer: true },
-    { label: "own sender", sender: { id: "current-user" }, userId: "current-user", peer: false },
-    { label: "unattributed sender", sender: undefined, userId: "current-user", peer: false },
-    {
-      label: "attributed sender without a viewer",
-      sender: { id: "other-user" },
-      userId: null,
-      peer: true,
-    },
-  ])("sets peer alignment for $label", ({ sender, userId, peer }) => {
-    const container = document.createElement("div");
-    render(
-      renderMessageGroup(
-        createMessageGroup({ role: "user", content: "hi" }, "user", {
-          key: "peer-group",
-          ...(sender ? { sender } : {}),
-          messages: [{ key: "peer-message", message: { role: "user", content: "hi" } }],
-          timestamp: 1000,
-        }),
-        { showReasoning: true, showToolCalls: true, userId },
-      ),
-      container,
-    );
-
-    expect(
-      container.querySelector(".chat-group.user")?.classList.contains("chat-group--peer"),
-    ).toBe(peer);
   });
 
   it("renders assistant reply attribution for a multi-sender thread", () => {
@@ -1967,7 +1885,6 @@ describe("grouped chat rendering", () => {
           assistantName: "OpenClaw",
           userId: "profile-1",
           userName: "Fuller Stack",
-          showAvatarGutter: true,
         },
       ),
       container,
@@ -1976,82 +1893,6 @@ describe("grouped chat rendering", () => {
     expect(
       container.querySelector<HTMLElement>(".chat-group.user .chat-sender-name")?.textContent,
     ).toBe("Fuller Stack");
-    expect(
-      container.querySelector(".chat-group-footer--persistent-identity .chat-sender-name")
-        ?.textContent,
-    ).toBe("Fuller Stack");
-  });
-
-  it("renders a compact author avatar when the gutter is hidden", async () => {
-    const container = document.createElement("div");
-    render(
-      renderMessageGroup(
-        createMessageGroup({ role: "user", content: "hello", timestamp: 1000 }, "user", {
-          key: "attributed-user",
-          senderLabel: "Alice Example",
-          sender: { id: "profile_123", name: "Alice Example" },
-          messages: [
-            {
-              key: "attributed-message",
-              message: { role: "user", content: "hello", timestamp: 1000 },
-            },
-          ],
-          timestamp: 1000,
-        }),
-        {
-          showReasoning: true,
-          showToolCalls: true,
-          assistantName: "OpenClaw",
-          showAvatarGutter: false,
-        },
-      ),
-      container,
-    );
-
-    expect(container.querySelector(".chat-avatar.user")).toBeNull();
-    expect(container.querySelector(".chat-group-persistent-author")).toBeNull();
-    await vi.waitFor(() => {
-      expect(container.querySelector(".chat-author-avatar__initials")?.textContent?.trim()).toBe(
-        "AE",
-      );
-    });
-    expect(container.querySelector(".chat-author-avatar")?.getAttribute("title")).toBe(
-      "Alice Example",
-    );
-  });
-
-  it("falls back to initials when a user avatar image fails", async () => {
-    const container = document.createElement("div");
-    const message = { role: "user", content: "hello", timestamp: 1000 };
-    const group = createMessageGroup(message, "user", {
-      key: "gravatar-user",
-      senderLabel: "alice",
-      // profileAvatarUrl exercises the img tier; bare emails render initials
-      // only (no third-party avatar fetch without a gateway proxy base).
-      sender: { id: "alice@example.com", profileAvatarUrl: "/api/users/alice/avatar" },
-      messages: [createMessageEntry("gravatar-message", message)],
-    });
-    render(
-      renderMessageGroup(group, {
-        showReasoning: true,
-        showToolCalls: true,
-        assistantName: "OpenClaw",
-        showAvatarGutter: false,
-      }),
-      container,
-    );
-
-    const image = await vi.waitFor(() => {
-      const result = container.querySelector<HTMLImageElement>(".chat-author-avatar__image");
-      expect(result).not.toBeNull();
-      expect(result?.getAttribute("src")).toBe("/api/users/alice/avatar");
-      return result!;
-    });
-    image.dispatchEvent(new Event("error"));
-    expect(container.querySelector(".chat-author-avatar")?.classList.contains("is-fallback")).toBe(
-      true,
-    );
-    expect(container.querySelector(".chat-author-avatar__fallback")?.textContent?.trim()).toBe("A");
   });
 
   it("does not render an author avatar for a user group without sender identity", () => {

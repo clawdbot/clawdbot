@@ -1098,10 +1098,6 @@
   flex: 0 0 36px;
 }
 
-.chat-thread--direct .chat-work-group__gutter {
-  display: none;
-}
-
 .chat-work-group .chat-activity-group__label {
   color: var(--muted);
 }

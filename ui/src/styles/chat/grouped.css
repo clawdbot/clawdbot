@@ -1,29 +1,15 @@
 /* =============================================
-   GROUPED CHAT LAYOUT (Slack-style)
+   GROUPED CHAT LAYOUT
    ============================================= */
 
-/* Chat Group Layout - default (assistant/other on left). Groups without a
-   footer keep the shared 26px rhythm directly. Footer-bearing groups split
-   message content and footer into separate rows so each row keeps the avatar
-   gutter while only the message row controls avatar alignment. */
 .chat-group {
-  --chat-message-column-max: var(--chat-message-max-width, min(900px, 68%));
+  --chat-message-column-max: var(--chat-message-max-width, min(980px, calc(100% - 42px)));
   display: flex;
   gap: 10px;
   align-items: flex-start;
   padding-bottom: 26px;
   margin-left: 4px;
   margin-right: 16px;
-}
-
-/* User messages on right */
-.chat-group.user {
-  flex-direction: row-reverse;
-  justify-content: flex-start;
-}
-
-.chat-group.user.chat-group--peer {
-  flex-direction: row;
 }
 
 /* Freshly submitted composer text flows up into the transcript. Applied only
@@ -55,18 +41,12 @@
   padding-bottom: 0;
 }
 
-.chat-group.user.chat-group--with-footer {
-  --chat-group-avatar-column: 2;
-  --chat-group-content-column: 1;
-  grid-template-columns: minmax(0, var(--chat-message-column-max)) 36px;
-  justify-content: end;
-}
-
-.chat-group.user.chat-group--with-footer:where(.chat-group--peer) {
-  --chat-group-avatar-column: 1;
-  --chat-group-content-column: 2;
-  grid-template-columns: 36px minmax(0, var(--chat-message-column-max));
+.chat-group:is(.user, .assistant).chat-group--with-footer {
+  grid-template-columns: 30px minmax(0, var(--chat-message-column-max));
+  grid-template-rows: auto auto;
+  gap: 6px 12px;
   justify-content: start;
+  padding-bottom: 28px;
 }
 
 .chat-group.chat-group--with-footer .chat-avatar {
@@ -86,6 +66,14 @@
   max-width: none;
 }
 
+.chat-group:is(.user, .assistant).chat-group--with-footer > .chat-group-footer {
+  grid-row: 1;
+}
+
+.chat-group:is(.user, .assistant).chat-group--with-footer > .chat-group-messages {
+  grid-row: 2;
+}
+
 .chat-group-messages {
   position: relative; /* anchors message-local popovers */
   display: flex;
@@ -98,30 +86,12 @@
   min-width: 0;
 }
 
-/* User messages align content right */
-.chat-group.user .chat-group-messages {
-  align-items: flex-end;
-}
-
-.chat-group.user.chat-group--peer .chat-group-messages {
-  align-items: flex-start;
-}
-
 .chat-group.tool {
   --chat-message-column-max: var(--chat-message-max-width, min(980px, calc(100% - 46px)));
 }
 
-.chat-group.user .chat-group-footer {
-  justify-content: flex-end;
-}
-
-.chat-group.user.chat-group--peer .chat-group-footer {
-  justify-content: flex-start;
-}
-
-/* Footer at bottom of a message group (role + time). It stays in flow while
-   visually hidden so wrapped controls contribute to virtual-row measurement
-   instead of painting over the next message. */
+/* Tool/system footers stay at the bottom and reveal on interaction. Human and
+   agent groups reuse this row as their always-visible identity header. */
 .chat-group-footer {
   display: flex;
   align-self: stretch;
@@ -143,42 +113,9 @@
   pointer-events: auto;
 }
 
-/* Shared threads keep the author name visible beside the gutter avatar. The
-   other footer details stay focusable but leave the row layout until reveal. */
-.chat-group-footer--persistent-identity {
+.chat-group:is(.user, .assistant) .chat-group-footer {
   position: relative;
-  opacity: 1;
-  pointer-events: none;
-}
-
-.chat-group-footer--persistent-identity .chat-confirm-wrap,
-.chat-group-footer--persistent-identity .chat-group-timestamp,
-.chat-group-footer--persistent-identity .msg-meta,
-.chat-group-footer--persistent-identity .chat-group-footer-actions {
-  position: absolute;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.chat-group:hover .chat-group-footer--persistent-identity,
-.chat-group:focus-within .chat-group-footer--persistent-identity,
-.chat-group-footer--persistent-identity:has(details.msg-meta[open]) {
-  pointer-events: auto;
-}
-
-.chat-group:hover .chat-group-footer--persistent-identity .chat-confirm-wrap,
-.chat-group:hover .chat-group-footer--persistent-identity .chat-group-timestamp,
-.chat-group:hover .chat-group-footer--persistent-identity .msg-meta,
-.chat-group:focus-within .chat-group-footer--persistent-identity .chat-confirm-wrap,
-.chat-group:focus-within .chat-group-footer--persistent-identity .chat-group-timestamp,
-.chat-group:focus-within .chat-group-footer--persistent-identity .msg-meta,
-.chat-group-footer--persistent-identity:has(details.msg-meta[open]) .chat-confirm-wrap,
-.chat-group-footer--persistent-identity:has(details.msg-meta[open]) .chat-group-timestamp,
-.chat-group-footer--persistent-identity:has(details.msg-meta[open]) .msg-meta,
-.chat-group:hover .chat-group-footer--persistent-identity .chat-group-footer-actions,
-.chat-group:focus-within .chat-group-footer--persistent-identity .chat-group-footer-actions,
-.chat-group-footer--persistent-identity:has(details.msg-meta[open]) .chat-group-footer-actions {
-  position: static;
+  min-height: 30px;
   opacity: 1;
   pointer-events: auto;
 }
@@ -187,15 +124,8 @@
   display: flex;
   align-items: center;
   flex-wrap: nowrap;
-  gap: 8px;
+  gap: 7px;
   min-width: 0;
-}
-
-/* Own-message footers are right-aligned, so hover-revealed time/actions must
-   slot in to the LEFT of the always-visible name; otherwise the name jumps
-   sideways on hover. Peer footers are left-aligned and already stable. */
-.chat-group.user:not(.chat-group--peer) .chat-group-footer--persistent-identity .chat-sender-name {
-  order: 1;
 }
 
 .chat-group-footer-actions,
@@ -211,8 +141,13 @@
   flex: 0 0 auto;
 }
 
-.chat-group.user .chat-group-footer-actions,
-.chat-group.assistant .chat-group-footer-actions,
+.chat-group:is(.user, .assistant) .chat-group-footer-actions {
+  position: absolute;
+  top: 3px;
+  right: 0;
+  margin-left: 0;
+}
+
 .chat-group.assistant .chat-message-actions-row {
   justify-content: flex-start;
   margin-left: 0;
@@ -226,9 +161,9 @@
 /* Keep long configurable sender names compact while footer actions retain
    their reachable wrapped layout in narrow panes. */
 .chat-sender-name {
-  font-weight: 500;
+  font-weight: 650;
   font-size: 12px;
-  color: var(--muted);
+  color: var(--text-strong);
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
@@ -485,6 +420,15 @@
   border: 1px solid var(--border);
 }
 
+.chat-group:is(.user, .assistant) > .chat-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  font-size: 11px;
+  align-self: flex-start;
+  margin-bottom: 0;
+}
+
 .chat-avatar.user {
   background: var(--accent-subtle);
   color: var(--accent);
@@ -600,15 +544,11 @@ img.chat-avatar.chat-avatar--logo {
   box-shadow: none;
 }
 
-/* Assistant replies render as a flat text stream: only user messages keep the
-   bubble card. Border collapses to 0 so the streaming border pulse and hover
-   outline become no-ops without extra rules. */
-.chat-group.assistant {
-  --chat-message-column-max: var(--chat-message-max-width, min(980px, calc(100% - 46px)));
-}
-
-.chat-group.assistant .chat-bubble {
-  padding: 4px 0;
+/* Human and agent messages share one document flow. Identity lives in the
+   header, so the body needs no bubble skin or role-based alignment. */
+.chat-group:is(.user, .assistant) .chat-bubble {
+  width: 100%;
+  padding: 0;
   border: 0;
   background: transparent;
   box-shadow: none;
@@ -621,36 +561,9 @@ img.chat-avatar.chat-avatar--logo {
 
 /* Working groups skip the avatar (the punching claw is the whole signal);
    the inset keeps the claw on the text column so the reply materializes
-   exactly where it punched. Direct threads have no avatar indent to match. */
+   exactly where it punched. */
 .chat-group--working .chat-group-messages {
-  padding-left: 46px; /* .chat-avatar 36px + .chat-group gap 10px */
-}
-
-.chat-thread--direct .chat-group--working .chat-group-messages {
-  padding-left: 0;
-}
-
-/* Direct (1:1) threads drop avatars entirely: one agent plus one user makes
-   the repeated identity icons pure decoration. Group threads (any labeled
-   foreign sender) keep avatars as the always-visible identity marker. */
-.chat-thread--direct .chat-avatar,
-.chat-thread--direct img.chat-avatar {
-  display: none;
-}
-
-.chat-thread--direct .chat-group {
-  margin-inline: 0;
-}
-
-.chat-thread--direct .chat-group.chat-group--with-footer {
-  --chat-group-avatar-column: 1;
-  --chat-group-content-column: 1;
-  grid-template-columns: minmax(0, var(--chat-message-column-max));
-}
-
-.chat-thread--direct .chat-group.assistant,
-.chat-thread--direct .chat-group.tool {
-  --chat-message-column-max: var(--chat-message-max-width, min(980px, 100%));
+  padding-left: 42px; /* .chat-avatar 30px + .chat-group gap 12px */
 }
 
 .chat-duplicate-count {
@@ -696,15 +609,6 @@ img.chat-avatar.chat-avatar--logo {
   .chat-group {
     padding-bottom: 0;
     margin-bottom: 14px;
-  }
-
-  .chat-group-footer--persistent-identity .chat-confirm-wrap,
-  .chat-group-footer--persistent-identity .chat-group-timestamp,
-  .chat-group-footer--persistent-identity .msg-meta,
-  .chat-group-footer--persistent-identity .chat-group-footer-actions {
-    position: static;
-    opacity: 1;
-    pointer-events: auto;
   }
 
   .chat-group-footer {
@@ -796,19 +700,7 @@ img.chat-avatar.chat-avatar--logo {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
-/* User bubbles have different styling */
-.chat-group.user .chat-bubble {
-  background: var(--accent-subtle);
-  border-color: transparent;
-}
-
-.chat-group.user .chat-bubble:hover {
-  border-color: color-mix(in srgb, var(--accent) 24%, transparent);
-}
-
-/* Light mode: restore borders. Order contract: stays below the role variants
-   above; it ties with .chat-group.user .chat-bubble on specificity and the
-   light skin must win (user bubbles render on var(--bg) in light mode). */
+/* Light mode: restore borders for card-like system surfaces. */
 :root[data-theme-mode="light"] .chat-bubble {
   border-color: var(--border);
   background: var(--bg);
@@ -816,42 +708,10 @@ img.chat-avatar.chat-avatar--logo {
 }
 
 :root[data-theme-mode="light"] .chat-bubble--tool-shell,
-:root[data-theme-mode="light"] .chat-group.assistant .chat-bubble {
+:root[data-theme-mode="light"] .chat-group:is(.user, .assistant) .chat-bubble {
   border-color: transparent;
   background: transparent;
   box-shadow: none;
-}
-
-/* Per-user bubble tint: --chat-sender-hue is the sender's stable identity hue
-   (same seed as their avatar initials). Only hue varies per user; saturation/
-   lightness/alpha are fixed per theme mode so bubble text keeps contrast for
-   every hue. Order contract: stays below the light-mode reset above — the
-   dark rule outranks it by specificity, so light mode needs its own skin. */
-.chat-group.user.chat-group--sender-tint .chat-bubble {
-  background: hsl(var(--chat-sender-hue) 48% 42% / 0.16);
-}
-
-.chat-group.user.chat-group--sender-tint .chat-bubble:hover {
-  border-color: hsl(var(--chat-sender-hue) 48% 55% / 0.4);
-}
-
-.chat-group.user.chat-group--sender-tint .chat-sender-name {
-  color: hsl(var(--chat-sender-hue) 45% 70%);
-}
-
-:root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-bubble {
-  background: hsl(var(--chat-sender-hue) 65% 94%);
-  border-color: hsl(var(--chat-sender-hue) 45% 82%);
-}
-
-/* Outranks the light skin above (it also sets border-color); without this the
-   tinted hover border never applies in light mode. */
-:root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-bubble:hover {
-  border-color: hsl(var(--chat-sender-hue) 48% 62%);
-}
-
-:root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-sender-name {
-  color: hsl(var(--chat-sender-hue) 60% 36%);
 }
 
 /* ── Message metadata (tokens, cost, model, context %) ── */
@@ -925,16 +785,6 @@ details.msg-meta:not([open]) .msg-meta__details {
   border-radius: var(--radius-full);
   background: var(--card);
   box-shadow: 0 8px 24px color-mix(in srgb, #000 30%, transparent);
-}
-
-.chat-group.user .msg-meta__details {
-  right: 0;
-  left: auto;
-}
-
-.chat-group.user.chat-group--peer .msg-meta__details {
-  right: auto;
-  left: 0;
 }
 
 .msg-meta__time,
@@ -1067,42 +917,12 @@ details.msg-meta:not([open]) .msg-meta__details {
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .chat-group {
-    --chat-message-column-max: 82%;
+    --chat-message-column-max: calc(100% - 42px);
     margin-left: 0;
     margin-right: 0;
   }
 
-  .chat-group.tool,
-  .chat-group.assistant {
+  .chat-group.tool {
     --chat-message-column-max: calc(100% - 46px);
-  }
-}
-
-@media (max-width: 400px) {
-  .chat-group {
-    --chat-message-column-max: 88%;
-  }
-
-  .chat-group.chat-group--with-footer,
-  .chat-group.user.chat-group--peer.chat-group--with-footer {
-    --chat-group-avatar-column: 1;
-    --chat-group-content-column: 1;
-    grid-template-columns: minmax(0, var(--chat-message-column-max));
-  }
-
-  .chat-group.tool,
-  .chat-group.assistant {
-    --chat-message-column-max: calc(100% - 46px);
-  }
-
-  .chat-avatar,
-  img.chat-avatar {
-    display: none;
-  }
-
-  /* Avatars are hidden at this width, so the working group's avatar-column
-     inset would strand the claw 46px from where the reply text lands. */
-  .chat-group--working .chat-group-messages {
-    padding-left: 0;
   }
 }

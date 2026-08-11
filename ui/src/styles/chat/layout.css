@@ -1060,15 +1060,6 @@ openclaw-chat-page {
   transform: scale(1.02);
 }
 
-/* User message images align right */
-.chat-group.user .chat-message-images {
-  justify-content: flex-end;
-}
-
-.chat-group.user.chat-group--peer .chat-message-images {
-  justify-content: flex-start;
-}
-
 .chat-assistant-attachments {
   display: flex;
   flex-direction: column;

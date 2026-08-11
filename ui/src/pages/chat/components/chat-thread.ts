@@ -13,7 +13,6 @@ import { guard } from "lit/directives/guard.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { styleMap } from "lit/directives/style-map.js";
-import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
 import type { SessionsListResult } from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
@@ -44,9 +43,6 @@ import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import {
   areUiSessionKeysEquivalent,
-  isUiGlobalScopeConfigured,
-  parseAgentSessionKey,
-  resolveUiGlobalAliasAgentId,
   type UiSessionDefaultsHost,
 } from "../../../lib/sessions/session-key.ts";
 import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
@@ -1439,21 +1435,11 @@ function renderChatThreadContents(
   const state = getChatThreadState(props.paneId);
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const displayStream = props.stream ?? null;
-  const sessionHost = props.sessionHost ?? null;
   // Equivalence, not exact match: the default session travels under alias
   // keys ("main" vs "agent:main:main") depending on the caller.
   const activeSession = props.sessions?.sessions?.find((row) =>
     areUiSessionKeysEquivalent(row.key, props.sessionKey),
   );
-  // Global-alias detection needs no session row: under configured global
-  // scope, agent:<id>:global and configured-main aliases route to the global
-  // stream even when the capped sessions list omits the canonical row (or it
-  // does not exist yet). The scope gate keeps per-sender main threads direct.
-  const isGlobalAliasKey =
-    parseAgentSessionKey(props.sessionKey)?.rest === "global" ||
-    (sessionHost !== null &&
-      isUiGlobalScopeConfigured(sessionHost) &&
-      resolveUiGlobalAliasAgentId(sessionHost, props.sessionKey) !== null);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = props.showThinking && reasoningLevel !== "off";
   const assistantIdentity = {
@@ -1553,27 +1539,6 @@ function renderChatThreadContents(
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
   const isEmpty = chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation;
   transcript.setContentReady(!props.loading);
-  // 1:1 sessions drop the avatar gutter entirely; group threads keep avatars
-  // as the always-visible identity marker. The canonical session kind decides;
-  // the sessions list is capped, so absent/unknown rows classify by key:
-  // global aliases first, then the same core key-shape helper the gateway
-  // uses. Message senderLabels are not a signal here: gateway sanitization
-  // labels 1:1 channel DM rows too.
-  const rowKind = activeSession?.kind;
-  const sessionKind =
-    rowKind && rowKind !== "unknown"
-      ? rowKind
-      : isGlobalAliasKey
-        ? "global"
-        : classifySessionKind(props.sessionKey);
-  // Only agent-solo kinds qualify: "global" aggregates every inbound context
-  // under session.scope="global" (including group/channel senders), so it
-  // keeps avatars like "group" and "unknown" do. An identity-resolving gateway
-  // (multi-user trusted proxy) also keeps them: several people share these
-  // sessions, so the author marker is signal, not decoration.
-  const isDirectThread =
-    (sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child") &&
-    !props.userId;
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
@@ -1600,7 +1565,6 @@ function renderChatThreadContents(
     canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
     embedSandboxMode: props.embedSandboxMode ?? "scripts",
     allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
-    showAssistantAvatar: false,
   } satisfies StreamGroupOptions;
   const streamGroupOptions = {
     ...sharedMessageRenderOptions,
@@ -1641,7 +1605,6 @@ function renderChatThreadContents(
       userId: props.userId ?? null,
       userName: props.userName ?? null,
       userAvatar: props.userAvatar ?? null,
-      showAvatarGutter: !isDirectThread,
       contextWindow: threadContextWindow,
       onReply: props.onSetReply
         ? (target) => state.transcriptRenderContext.onSetReply?.(target)
@@ -1888,7 +1851,7 @@ function renderChatThreadContents(
         );
   return html`
     <div
-      class="chat-thread ${isDirectThread ? "chat-thread--direct" : ""}"
+      class="chat-thread"
       role="log"
       aria-live="off"
       aria-relevant="additions"

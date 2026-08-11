@@ -132,7 +132,6 @@ type ControlRect = {
 type ChatFixtureOptions = {
   composerAttachment?: boolean;
   crowdedComposerFooter?: boolean;
-  direct?: boolean;
   sessionRailBody?: string;
   sessionRailDocked?: boolean;
   singleAgent?: boolean;
@@ -367,10 +366,17 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
         <section class="card chat">
           <div class="chat-split-container">
             <div class="chat-main${opts.sessionRailDocked ? " chat-main--rail-docked" : ""}" style="flex: 1 1 100%">
-              <div class="chat-thread${opts.direct ? " chat-thread--direct" : ""}" role="log">
+              <div class="chat-thread" role="log">
                 <div class="chat-thread-inner">
-                  <div class="chat-group user">
+                  <div class="chat-group user chat-group--with-footer">
                     <div class="chat-avatar user">V</div>
+                    <div class="chat-group-footer">
+                      <div class="chat-group-footer__meta">
+                        <span class="chat-sender-name">Operator</span>
+                        <span class="chat-group-timestamp">9:40 PM</span>
+                      </div>
+                      ${chatFooterActionsHtml()}
+                    </div>
                     <div class="chat-group-messages">
                       <div class="chat-bubble"><div class="chat-text">Keep this visible.</div></div>
                     </div>
@@ -1177,13 +1183,13 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("insets only the bundled logo inside the unchanged avatar box", async () => {
+  it("insets only the bundled logo inside the compact avatar box", async () => {
     const page = await openBrowserPage(430, 720);
     try {
       await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-        <img class="chat-avatar assistant chat-avatar--logo" src="/apple-touch-icon.png" alt="Logo" />
-        <img class="chat-avatar assistant" src="/avatar/main" alt="Custom" />
-        <img class="chat-avatar user" src="/avatar/user" alt="User" />
+        <div class="chat-group assistant"><img class="chat-avatar assistant chat-avatar--logo" src="/apple-touch-icon.png" alt="Logo" /></div>
+        <div class="chat-group assistant"><img class="chat-avatar assistant" src="/avatar/main" alt="Custom" /></div>
+        <div class="chat-group user"><img class="chat-avatar user" src="/avatar/user" alt="User" /></div>
       </body></html>`);
 
       const avatars = await page.evaluate(() =>
@@ -1203,24 +1209,24 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
       expect(avatars).toEqual([
         {
-          width: 36,
-          height: 36,
+          width: 30,
+          height: 30,
           boxSizing: "border-box",
           objectFit: "contain",
           padding: "2px",
           borderWidth: "1px",
         },
         {
-          width: 36,
-          height: 36,
+          width: 30,
+          height: 30,
           boxSizing: "border-box",
           objectFit: "cover",
           padding: "0px",
           borderWidth: "1px",
         },
         {
-          width: 36,
-          height: 36,
+          width: 30,
+          height: 30,
           boxSizing: "border-box",
           objectFit: "cover",
           padding: "0px",
@@ -1240,7 +1246,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         : "";
       await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
         <section class="card chat" ${style}>
-          <div class="chat-thread chat-thread--direct" role="log">
+          <div class="chat-thread" role="log">
             <div class="chat-thread-inner">
               <div class="chat-group tool">
                 <div class="chat-avatar tool">A</div>
@@ -1308,7 +1314,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     const page = await openBrowserPage(1366, 900);
     try {
       await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-        <div class="chat-thread chat-thread--direct" role="log">
+        <div class="chat-thread" role="log">
           <div class="chat-thread-inner">
             <div class="chat-group assistant chat-group--with-footer">
               <div class="chat-group-messages">
@@ -1699,7 +1705,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     [393, 852],
     [1366, 900],
   ] as const)(
-    "anchors received bubbles left and sent bubbles right at %sx%s",
+    "aligns human and agent messages on the same document axis at %sx%s",
     async (width, height) => {
       const page = await openFixture(width, height);
       try {
@@ -1731,12 +1737,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const userBubble = expectControlRect(roles.userBubble, "user bubble");
 
         expect(Math.abs(assistantBubble.x - assistantLane.x)).toBeLessThanOrEqual(1);
-        expect(
-          Math.abs(userBubble.x + userBubble.width - (userLane.x + userLane.width)),
-        ).toBeLessThanOrEqual(1);
-        expect(userLane.x).toBeGreaterThan(assistantLane.x);
-        expect(userBubble.width).toBeLessThan(userLane.width);
-        expect(assistantBubble.width).toBeLessThan(assistantLane.width);
+        expect(Math.abs(userBubble.x - userLane.x)).toBeLessThanOrEqual(1);
+        expect(Math.abs(userLane.x - assistantLane.x)).toBeLessThanOrEqual(1);
+        expect(userBubble.width).toBeCloseTo(userLane.width, 0);
+        expect(assistantBubble.width).toBeCloseTo(assistantLane.width, 0);
       } finally {
         await closeBrowserPage(page);
       }
@@ -1747,9 +1751,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     [1366, 900],
     [1920, 1080],
   ] as const)(
-    "centers overflowing direct messages on the composer axis at %sx%s",
+    "centers overflowing messages on the composer axis at %sx%s",
     async (width, height) => {
-      const page = await openFixture(width, height, { direct: true });
+      const page = await openFixture(width, height);
       try {
         await page.evaluate(() => {
           const thread = document.querySelector<HTMLElement>(".chat-thread");
@@ -1786,8 +1790,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(Math.abs(threadCenter - composerCenter)).toBeLessThanOrEqual(1);
         expect(Math.abs(thread.width - composer.width)).toBeLessThanOrEqual(1);
         expect(thread.width).toBeCloseTo(768, 0);
-        expect(Math.abs(assistantLane.left - thread.left)).toBeLessThanOrEqual(1);
-        expect(Math.abs(userLane.right - thread.right)).toBeLessThanOrEqual(1);
+        expect(Math.abs(assistantLane.left - userLane.left)).toBeLessThanOrEqual(1);
+        expect(Math.abs(assistantLane.right - userLane.right)).toBeLessThanOrEqual(1);
       } finally {
         await closeBrowserPage(page);
       }

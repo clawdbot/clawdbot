@@ -11,7 +11,6 @@ import { summarizeToolGroup } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, isToolCardError } from "../../../lib/chat/tool-cards.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
-import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import {
@@ -20,7 +19,6 @@ import {
   type AssistantMessageExpansionState,
 } from "../chat-thread.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
-import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { renderRewindButton } from "./chat-message-confirmation.ts";
 import {
@@ -83,8 +81,6 @@ type RenderMessageGroupOptions = {
   userId?: string | null;
   userName?: string | null;
   userAvatar?: string | null;
-  showAvatarGutter?: boolean;
-  showAssistantAvatar?: boolean;
   basePath?: string;
   localMediaPreviewRoots?: readonly string[];
   assistantAttachmentAuthToken?: string | null;
@@ -243,7 +239,6 @@ export function renderActivityGroup(
   const activityDisclosureId = `activity:${firstGroup.key}`;
   const activityBodyId = `activity-body-${fnv1aUtf16(firstGroup.key).toString(16)}`;
   const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? hasError;
-  const showAvatarGutter = opts.showAvatarGutter !== false;
   const assistantName = opts.assistantName ?? "Assistant";
 
   return html`
@@ -251,24 +246,20 @@ export function renderActivityGroup(
       class="chat-group tool chat-group--activity chat-group--with-footer"
       data-chat-row-key=${firstGroup.key}
     >
-      ${showAvatarGutter &&
-      (normalizeRoleForGrouping(firstGroup.role) !== "assistant" ||
-        opts.showAssistantAvatar !== false)
-        ? renderChatAvatar(
-            firstGroup.role,
-            {
-              name: assistantName,
-              avatar: opts.assistantAvatar ?? null,
-            },
-            {
-              name: opts.userName ?? null,
-              avatar: opts.userAvatar ?? null,
-            },
-            opts.basePath,
-            opts.assistantAttachmentAuthToken,
-            firstGroup.sender,
-          )
-        : nothing}
+      ${renderChatAvatar(
+        firstGroup.role,
+        {
+          name: assistantName,
+          avatar: opts.assistantAvatar ?? null,
+        },
+        {
+          name: opts.userName ?? null,
+          avatar: opts.userAvatar ?? null,
+        },
+        opts.basePath,
+        opts.assistantAttachmentAuthToken,
+        firstGroup.sender,
+      )}
       <div class="chat-group-messages">
         <div class="chat-activity-group ${activityExpanded ? "is-open" : ""}">
           <button
@@ -351,8 +342,6 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           : isWorkspaceConflict
             ? t("chat.workspaceConflict.eventSender")
             : normalizedRole;
-  const showAvatarGutter = opts.showAvatarGutter !== false;
-  const persistUserIdentity = normalizedRole === "user" && showAvatarGutter;
   const roleClass =
     normalizedRole === "user"
       ? "user"
@@ -405,40 +394,64 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     normalizedRole === "user" &&
     Boolean((footerActionDetails?.replyTarget && opts.onReply) || opts.onRewind);
 
-  // Attributed (logged-in) senders tint their bubbles with the same stable
-  // identity hue as their avatar initials; CSS owns per-theme lightness so
-  // the tint stays readable in both light and dark modes. Unattributed local
-  // messages keep the accent skin.
-  const senderHue =
-    normalizedRole === "user" && group.sender ? resolveIdentityHue(group.sender) : null;
   const replyToLabel =
     normalizedRole === "assistant" ? formatSenderLabel(group.replyToSender) : null;
   const replyToTitle = replyToLabel ? t("chat.messages.replyingTo", { name: replyToLabel }) : null;
+  const isDocumentMessage = normalizedRole === "user" || normalizedRole === "assistant";
+  const footerActions =
+    normalizedRole === "user"
+      ? hasUserFooterActions
+        ? html`
+            <div
+              class="chat-group-footer-actions"
+              data-message-actions-for=${group.messages[lastMessageIndex]?.key ?? nothing}
+            >
+              ${footerActionDetails?.replyTarget && opts.onReply
+                ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
+                : nothing}
+              ${opts.onRewind
+                ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled))
+                : nothing}
+            </div>
+          `
+        : nothing
+      : footerActionDetails
+        ? html`
+            <div
+              class="chat-group-footer-actions"
+              data-message-actions-for=${group.messages[lastMessageIndex]?.key ?? nothing}
+            >
+              ${renderMessageActionButtons(footerActionDetails, opts)}
+            </div>
+          `
+        : nothing;
+  const groupFooter = html`
+    <div class="chat-group-footer">
+      <div class="chat-group-footer__meta">
+        <span class="chat-sender-name">${who}</span>
+        ${renderMessageMeta(group.timestamp, meta)}
+      </div>
+      ${footerActions}
+    </div>
+  `;
 
   return html`
-    <div
-      class="chat-group ${roleClass} chat-group--with-footer${isPeerGroup
-        ? " chat-group--peer"
-        : ""}${senderHue === null ? "" : " chat-group--sender-tint"}"
-      style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
-      data-chat-row-key=${group.key}
-    >
-      ${showAvatarGutter && (normalizedRole !== "assistant" || opts.showAssistantAvatar !== false)
-        ? renderChatAvatar(
-            group.role,
-            {
-              name: assistantName,
-              avatar: opts.assistantAvatar ?? null,
-            },
-            {
-              name: opts.userName ?? null,
-              avatar: opts.userAvatar ?? null,
-            },
-            opts.basePath,
-            opts.assistantAttachmentAuthToken,
-            group.sender,
-          )
-        : nothing}
+    <div class="chat-group ${roleClass} chat-group--with-footer" data-chat-row-key=${group.key}>
+      ${renderChatAvatar(
+        group.role,
+        {
+          name: assistantName,
+          avatar: opts.assistantAvatar ?? null,
+        },
+        {
+          name: opts.userName ?? null,
+          avatar: opts.userAvatar ?? null,
+        },
+        opts.basePath,
+        opts.assistantAttachmentAuthToken,
+        group.sender,
+      )}
+      ${isDocumentMessage ? groupFooter : nothing}
       <div class="chat-group-messages">
         ${replyToLabel
           ? html`
@@ -478,44 +491,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
             ? renderTurnRecapRow(opts.turnRecap, { presentation: "continuation" })
             : nothing}
       </div>
-      <div
-        class="chat-group-footer ${persistUserIdentity
-          ? "chat-group-footer--persistent-identity"
-          : ""}"
-      >
-        <div class="chat-group-footer__meta">
-          ${hasUserFooterActions
-            ? html`
-                <div
-                  class="chat-group-footer-actions"
-                  data-message-actions-for=${group.messages[lastMessageIndex]?.key ?? nothing}
-                >
-                  ${footerActionDetails?.replyTarget && opts.onReply
-                    ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
-                    : nothing}
-                  ${opts.onRewind
-                    ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled))
-                    : nothing}
-                </div>
-              `
-            : nothing}
-          ${normalizedRole === "user" && !showAvatarGutter
-            ? renderChatAuthorAvatar(group.sender)
-            : nothing}
-          <span class="chat-sender-name">${who}</span>
-          ${renderMessageMeta(group.timestamp, meta)}
-        </div>
-        ${normalizedRole !== "user" && footerActionDetails
-          ? html`
-              <div
-                class="chat-group-footer-actions"
-                data-message-actions-for=${group.messages[lastMessageIndex]?.key ?? nothing}
-              >
-                ${renderMessageActionButtons(footerActionDetails, opts)}
-              </div>
-            `
-          : nothing}
-      </div>
+      ${isDocumentMessage ? nothing : groupFooter}
     </div>
   `;
 }
