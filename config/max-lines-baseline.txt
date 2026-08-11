@@ -886,8 +886,6 @@ src/shared/json-schema-defaults.ts
 src/shared/text/assistant-visible-text.ts
 src/skills/lifecycle/clawhub.test.ts
 src/skills/lifecycle/install.ts
-src/skills/loading/workspace-load.test.ts
-src/skills/loading/workspace.ts
 src/skills/security/scanner.ts
 src/skills/workshop/service.test.ts
 src/snapshot/local-repository.test.ts
