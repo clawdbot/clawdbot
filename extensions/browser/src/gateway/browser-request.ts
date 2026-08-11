@@ -52,6 +52,8 @@ type BrowserRequestParams = {
   query?: Record<string, unknown>;
   body?: unknown;
   timeoutMs?: number;
+  target?: "host" | "node";
+  node?: string;
 };
 
 /** Handles one browser.request gateway call and streams a success/error response. */
@@ -66,6 +68,8 @@ export async function handleBrowserGatewayRequest({
   const query = typed.query && typeof typed.query === "object" ? typed.query : undefined;
   const body = typed.body;
   const timeoutMs = clampTimerTimeoutMs(typed.timeoutMs);
+  const target = typed.target;
+  const requestedNode = normalizeOptionalString(typed.node);
 
   if (!methodRaw || !path) {
     respond(
@@ -83,18 +87,34 @@ export async function handleBrowserGatewayRequest({
     );
     return;
   }
+  if (
+    (typed.target !== undefined && target !== "host" && target !== "node") ||
+    (requestedNode && target === "host")
+  ) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "target must be host or node; node cannot target host",
+      ),
+    );
+    return;
+  }
   const cfg = getRuntimeConfig();
   const configuredNode = normalizeOptionalString(cfg.gateway?.nodes?.browser?.node);
   // System-profile listing and import can only run where the local Keychain and
   // Chrome profiles live, so they must never route to a browser node. Force
   // host-local dispatch even when gateway.nodes.browser auto-selects a node.
-  const forceHostLocal = isBrowserHostLocalRoute(methodRaw, path);
+  const forceHostLocal = target === "host" || isBrowserHostLocalRoute(methodRaw, path);
   let nodeTarget: NodeSession | null = null;
   if (!forceHostLocal) {
     try {
       nodeTarget = resolveBrowserNodeTarget({
         nodes: context.nodeRegistry.listConnected(),
         policy: cfg.gateway?.nodes?.browser,
+        requestedNode,
+        explicitTarget: target === "node",
       });
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));

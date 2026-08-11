@@ -16,6 +16,11 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createSubsystemLogger, isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { isBrowserMachineOutput } from "./cli-output-mode.js";
+import { describeBrowserExecTool } from "./src/browser-exec-tool-description.js";
+import {
+  BrowserExecToolOutputSchema,
+  BrowserExecToolSchema,
+} from "./src/browser-exec-tool.schema.js";
 import {
   BROWSER_REQUEST_GATEWAY_METHOD,
   BROWSER_REQUEST_GATEWAY_SCOPE,
@@ -32,6 +37,7 @@ import {
   configureSystemProfileImportStateStore,
   type SystemProfileImportState,
 } from "./src/browser/system-profile-import-state.js";
+import { getRuntimeConfig } from "./src/sdk-config.js";
 
 const EAGER_BROWSER_CONTROL_SERVICE_ENV = "OPENCLAW_EAGER_BROWSER_CONTROL_SERVER";
 const logger = createSubsystemLogger("browser");
@@ -103,6 +109,25 @@ function createLazyBrowserTool(opts?: {
         bindingResult?.ok ? { ...opts, runToolBinding: bindingResult.binding } : opts,
       );
       return await tool.execute(toolCallId, args, signal, onUpdate);
+    },
+  };
+}
+
+function createLazyBrowserExecTool(opts?: {
+  sandboxBridgeUrl?: string;
+  allowHostControl?: boolean;
+  runToolBinding?: unknown;
+}): AnyAgentTool {
+  return {
+    label: "Browser Exec",
+    name: "browser_exec",
+    resultContentSource: "network",
+    description: describeBrowserExecTool(),
+    parameters: BrowserExecToolSchema,
+    outputSchema: BrowserExecToolOutputSchema,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const { createBrowserExecTool } = await loadBrowserRegistrationRuntimeModule();
+      return await createBrowserExecTool(opts).execute(toolCallId, args, signal, onUpdate);
     },
   };
 }
@@ -241,6 +266,22 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
   );
   api.registerTool(((ctx: OpenClawPluginToolContext) =>
     createLazyBrowserTool(createBrowserToolOptions(ctx))) as OpenClawPluginToolFactory);
+  api.registerTool(
+    ((ctx: OpenClawPluginToolContext) => {
+      if (getRuntimeConfig().browser?.evaluateEnabled === false) {
+        return null;
+      }
+      const options = createBrowserToolOptions(ctx);
+      return createLazyBrowserExecTool({
+        ...(options.sandboxBridgeUrl ? { sandboxBridgeUrl: options.sandboxBridgeUrl } : {}),
+        ...(options.allowHostControl !== undefined
+          ? { allowHostControl: options.allowHostControl }
+          : {}),
+        ...(options.runToolBinding !== undefined ? { runToolBinding: options.runToolBinding } : {}),
+      });
+    }) as OpenClawPluginToolFactory,
+    { name: "browser_exec" },
+  );
   api.registerCli(
     async ({ program }) => {
       const { registerBrowserCli } = await import("./src/cli/browser-cli.js");

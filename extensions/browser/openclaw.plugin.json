@@ -6,7 +6,7 @@
     "onConfigPaths": ["browser"]
   },
   "contracts": {
-    "tools": ["browser"]
+    "tools": ["browser", "browser_exec"]
   },
   "commandAliases": [{ "name": "browser" }],
   "skills": ["./skills"],
