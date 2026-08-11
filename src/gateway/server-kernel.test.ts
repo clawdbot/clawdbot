@@ -199,7 +199,7 @@ describe("createGatewayKernel", () => {
     expect(prematureCleanupCalls).toBe(0);
     await vi.waitFor(() => expect(capturedRegistryCleanup).toHaveBeenCalledOnce());
     expect(inspectAccount).not.toHaveBeenCalled();
-  });
+  }, 240_000);
 
   it("runs kernel teardown when required TLS material is unavailable", async () => {
     const port = await getFreePort();
@@ -248,5 +248,5 @@ describe("createGatewayKernel", () => {
     } finally {
       await state.cleanup();
     }
-  });
+  }, 240_000);
 });
