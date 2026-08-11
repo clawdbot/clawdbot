@@ -4427,6 +4427,40 @@ describe("workboard controller", () => {
     }
   });
 
+  it.each(["done", "failed"] as const)(
+    "keeps claim-only %s sessions out of lifecycle reconciliation",
+    async (status) => {
+      const claimSessionKey = `agent:main:claim-only-${status}`;
+      const card = createWorkboardCard({
+        status: "running",
+        metadata: {
+          claim: {
+            ownerId: "agent:main",
+            sessionKey: claimSessionKey,
+            token: "[redacted]",
+            claimedAt: 1,
+            lastHeartbeatAt: 2,
+          },
+        },
+      });
+      const session = createGatewaySession({
+        key: claimSessionKey,
+        status,
+        hasActiveRun: false,
+      });
+
+      expect(getWorkboardLifecycle(card, [session])).toEqual({ session: null, state: "unlinked" });
+
+      state.loaded = true;
+      state.cards = [card];
+      const client = createClient({});
+      await syncLifecycle(client, [session]);
+
+      expect(requestCalls(client, "workboard.cards.update")).toEqual([]);
+      expect(state.cards[0]?.status).toBe("running");
+    },
+  );
+
   it("syncs linked card status from session lifecycle without overriding manual review", async () => {
     state.loaded = true;
     state.cards = [

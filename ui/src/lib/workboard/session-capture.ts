@@ -8,7 +8,7 @@ import {
   normalizeString,
   replaceCard,
   selectedWorkboardBoardParams,
-  workboardCardSessionKey,
+  workboardCardNavigationSessionKey,
 } from "./card-state.ts";
 import { loadWorkboard } from "./loading.ts";
 import { formatError } from "./normalization-utils.ts";
@@ -111,7 +111,7 @@ function findCapturedSessionCard(cards: WorkboardCard[], sessionKey: string): Wo
   let active: WorkboardCard | undefined;
   let archived: WorkboardCard | undefined;
   for (const card of cards) {
-    if (workboardCardSessionKey(card) !== sessionKey) {
+    if (workboardCardNavigationSessionKey(card) !== sessionKey) {
       continue;
     }
     if (isActiveWorkboardCard(card)) {
