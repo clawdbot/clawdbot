@@ -38,7 +38,7 @@ function isLegacyStockLongCatModel(value: unknown): boolean {
     compat.supportsStrictMode === false &&
     compat.maxTokensField === "max_tokens" &&
     compat.requiresReasoningContentOnAssistantMessages === true &&
-    compat.thinkingFormat === "deepseek"
+    compat.thinkingFormat === "deepseek",
   );
 }
 
