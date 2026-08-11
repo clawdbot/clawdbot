@@ -3,6 +3,18 @@ import fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { applyTemplate, runLegacyCliEntry } from "./index.js";
 
+vi.mock("./entry.version-fast-path.js", () => ({
+  tryHandleRootVersionFastPath: vi.fn(() => false),
+}));
+
+vi.mock("./runtime.js", () => ({
+  restoreRuntimeTerminalState: vi.fn(),
+}));
+
+vi.mock("./infra/is-main.js", () => ({
+  isMainModule: vi.fn(() => false),
+}));
+
 describe("legacy root entry", () => {
   it("routes the package root export to the pure library entry", () => {
     const packageJson = JSON.parse(

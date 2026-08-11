@@ -5,6 +5,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { formatCliFailureLines } from "./cli/failure-output.js";
 import { runCliWithExitFinalization } from "./cli/one-shot-exit.js";
+import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { formatUncaughtError } from "./infra/errors.js";
 import { runFatalErrorHooks } from "./infra/fatal-error-hooks.js";
 import { isMainModule } from "./infra/is-main.js";
@@ -97,56 +98,62 @@ if (!isMain) {
 }
 
 if (isMain) {
-  const { restoreRuntimeTerminalState } = await import("./runtime.js");
+  if (tryHandleRootVersionFastPath(process.argv)) {
+    // Match the primary launcher: root --version must exit before startup
+    // progress is created, otherwise the legacy package entry can leak the
+    // active spinner's process-exit cancellation output to TTY stderr.
+  } else {
+    const { restoreRuntimeTerminalState } = await import("./runtime.js");
 
-  // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
-  // These log the error and exit gracefully instead of crashing without trace.
-  installUnhandledRejectionHandler();
+    // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
+    // These log the error and exit gracefully instead of crashing without trace.
+    installUnhandledRejectionHandler();
 
-  process.on("uncaughtException", (error) => {
-    if (isUncaughtExceptionHandled(error)) {
-      return;
-    }
-    if (isBenignUncaughtExceptionError(error)) {
-      console.warn(
-        "[openclaw] Non-fatal uncaught exception (continuing):",
-        formatUncaughtError(error),
-      );
-      return;
-    }
-    for (const line of formatCliFailureLines({
-      title: "OpenClaw hit an unexpected runtime error.",
-      error,
-      argv: process.argv,
-    })) {
-      console.error(line);
-    }
-    for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
-      console.error("[openclaw]", message);
-    }
-    restoreRuntimeTerminalState("uncaught exception", { resumeStdinIfPaused: false });
-    process.exit(1);
-  });
-
-  void runCliWithExitFinalization({
-    run: async () =>
-      await runLegacyCliEntry(process.argv, undefined, {
-        // Finalizers and process-exit hooks can still emit diagnostics after runCli settles.
-        retainConsoleRoutingUntilProcessExit: true,
-      }),
-    onError: (err) => {
+    process.on("uncaughtException", (error) => {
+      if (isUncaughtExceptionHandled(error)) {
+        return;
+      }
+      if (isBenignUncaughtExceptionError(error)) {
+        console.warn(
+          "[openclaw] Non-fatal uncaught exception (continuing):",
+          formatUncaughtError(error),
+        );
+        return;
+      }
       for (const line of formatCliFailureLines({
-        title: "The CLI command failed.",
-        error: err,
+        title: "OpenClaw hit an unexpected runtime error.",
+        error,
         argv: process.argv,
       })) {
         console.error(line);
       }
-      for (const message of runFatalErrorHooks({ reason: "legacy_cli_failure", error: err })) {
+      for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
         console.error("[openclaw]", message);
       }
-      restoreRuntimeTerminalState("legacy cli failure", { resumeStdinIfPaused: false });
-      process.exitCode = 1;
-    },
-  });
+      restoreRuntimeTerminalState("uncaught exception", { resumeStdinIfPaused: false });
+      process.exit(1);
+    });
+
+    void runCliWithExitFinalization({
+      run: async () =>
+        await runLegacyCliEntry(process.argv, undefined, {
+          // Finalizers and process-exit hooks can still emit diagnostics after runCli settles.
+          retainConsoleRoutingUntilProcessExit: true,
+        }),
+      onError: (err) => {
+        for (const line of formatCliFailureLines({
+          title: "The CLI command failed.",
+          error: err,
+          argv: process.argv,
+        })) {
+          console.error(line);
+        }
+        for (const message of runFatalErrorHooks({ reason: "legacy_cli_failure", error: err })) {
+          console.error("[openclaw]", message);
+        }
+        restoreRuntimeTerminalState("legacy cli failure", { resumeStdinIfPaused: false });
+        process.exitCode = 1;
+      },
+    });
+  }
 }
