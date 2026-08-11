@@ -263,13 +263,6 @@
     "sdk": true
   },
   {
-    "name": "ensureRecord",
-    "files": [
-      "src/commands/doctor/shared/legacy-config-record-shared.ts",
-      "src/config/legacy.shared.ts"
-    ]
-  },
-  {
     "name": "extractAssistantVisibleText",
     "files": [
       "src/agents/embedded-agent-utils.ts",
@@ -682,13 +675,6 @@
     ]
   },
   {
-    "name": "normalizeSqliteNumber",
-    "files": [
-      "src/config/sessions/session-accessor.sqlite-normalize.ts",
-      "src/infra/sqlite-number.ts"
-    ]
-  },
-  {
     "name": "normalizeStringRecord",
     "files": [
       "src/agents/bundle-mcp-adapter.ts",
@@ -791,14 +777,6 @@
     "files": [
       "src/agents/agent-bundle-mcp-manager-api.ts",
       "src/gateway/server-methods/__mocks__/tools-effective.runtime.ts"
-    ]
-  },
-  {
-    "name": "persistSessionEntry",
-    "files": [
-      "src/agents/command/attempt-execution.shared.ts",
-      "src/agents/command/session-helpers.ts",
-      "src/auto-reply/reply/commands-session-store.ts"
     ]
   },
   {
