@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { skillExperienceReviewCancellation } from "./experience-review-cancellation.js";
+import { agentEndCancellation } from "../../agents/harness/agent-end-cancellation.js";
 import { scheduleSkillExperienceReview } from "./experience-review-default.js";
 
 const schedulerMocks = vi.hoisted(() => ({
@@ -18,25 +18,42 @@ describe("default skill experience review cancellation", () => {
     vi.clearAllMocks();
   });
 
-  it("suppresses only the stopped run when another terminal arrives first", () => {
+  it("cancels existing work and consumes the stopped run terminal event", async () => {
     const sessionKey = "agent:main:stopped-default-review";
-    skillExperienceReviewCancellation.cancel(sessionKey, "run-stopped");
+    const reservation = agentEndCancellation.reserve(sessionKey, ["stopped-run"]);
+    agentEndCancellation.reconcile(reservation, ["stopped-run"]);
 
     expect(schedulerMocks.cancel).toHaveBeenCalledWith(sessionKey);
 
-    const otherRun = {
+    const params = {
       event: { success: false, messages: [] },
-      ctx: { sessionKey, runId: "run-other" },
+      ctx: { sessionKey, runId: "stopped-run" },
     } as Parameters<typeof scheduleSkillExperienceReview>[0];
-    scheduleSkillExperienceReview(otherRun);
-    expect(schedulerMocks.schedule).toHaveBeenCalledWith(otherRun);
+    await scheduleSkillExperienceReview(params);
+    expect(schedulerMocks.schedule).not.toHaveBeenCalled();
 
-    schedulerMocks.schedule.mockClear();
-    const stoppedRun = {
+    await scheduleSkillExperienceReview(params);
+    expect(schedulerMocks.schedule).toHaveBeenCalledWith(params);
+  });
+
+  it("does not let another failed run consume the stopped run marker", async () => {
+    const sessionKey = "agent:main:reordered-terminals";
+    const reservation = agentEndCancellation.reserve(sessionKey, ["stopped-run"]);
+    agentEndCancellation.reconcile(reservation, ["stopped-run"]);
+    const unrelated = {
       event: { success: false, messages: [] },
-      ctx: { sessionKey, runId: "run-stopped" },
+      ctx: { sessionKey, runId: "unrelated-run" },
     } as Parameters<typeof scheduleSkillExperienceReview>[0];
-    scheduleSkillExperienceReview(stoppedRun);
+    const stopped = {
+      event: { success: false, messages: [] },
+      ctx: { sessionKey, runId: "stopped-run" },
+    } as Parameters<typeof scheduleSkillExperienceReview>[0];
+
+    await scheduleSkillExperienceReview(unrelated);
+    expect(schedulerMocks.schedule).toHaveBeenCalledWith(unrelated);
+    schedulerMocks.schedule.mockClear();
+
+    await scheduleSkillExperienceReview(stopped);
     expect(schedulerMocks.schedule).not.toHaveBeenCalled();
   });
 });

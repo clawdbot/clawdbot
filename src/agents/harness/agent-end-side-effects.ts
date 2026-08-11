@@ -41,7 +41,7 @@ async function runCoreAgentEndSideEffects(params: AgentEndSideEffectsParams): Pr
   try {
     const { scheduleSkillExperienceReview } =
       await import("../../skills/workshop/experience-review-default.js");
-    scheduleSkillExperienceReview({
+    await scheduleSkillExperienceReview({
       event: params.event,
       ctx: params.ctx,
       usedSkills,

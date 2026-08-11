@@ -1,17 +1,16 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { skillProposalApplyAbortSignal } from "./apply-transition.js";
 import { applySkillProposal } from "./service.js";
-import type { SkillProposalApplyResult } from "./types.js";
+import type { SkillProposalActionInput, SkillProposalApplyResult } from "./types.js";
 
 const log = createSubsystemLogger("skills/workshop");
 
 type AutoApplyDeps = {
-  apply: (
-    input: Parameters<typeof applySkillProposal>[0] & { abortSignal?: AbortSignal },
-  ) => ReturnType<typeof applySkillProposal>;
+  apply: typeof applySkillProposal;
 };
 
-const defaultDeps: AutoApplyDeps = { apply: (input) => applySkillProposal(input) };
+const defaultDeps: AutoApplyDeps = { apply: applySkillProposal };
 
 /** Applies one capture through the normal Workshop service without retrying failures. */
 export async function autoApplySkillProposal(
@@ -29,15 +28,18 @@ export async function autoApplySkillProposal(
   try {
     // Reviewers stay proposal-only; the normal apply scanner remains the safety boundary.
     // Approval-free miscaptures stay recoverable through rejection or curator lifecycle controls.
-    const applied = await deps.apply({
+    const input: SkillProposalActionInput & {
+      [skillProposalApplyAbortSignal]?: AbortSignal;
+    } = {
       workspaceDir: params.workspaceDir,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.config ? { config: params.config } : {}),
       ...(params.env ? { env: params.env } : {}),
       proposalId: params.proposalId,
       reason: "Autonomous self-learning capture",
-      ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
-    });
+      ...(params.abortSignal ? { [skillProposalApplyAbortSignal]: params.abortSignal } : {}),
+    };
+    const applied = await deps.apply(input);
     log.info(`auto-applied skill ${params.skillName} from proposal ${params.proposalId}`);
     return applied;
   } catch (error) {

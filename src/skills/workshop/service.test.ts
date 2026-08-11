@@ -3,6 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import {
   closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -15,6 +20,7 @@ import {
   resetSkillsRefreshStateForTest,
 } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
+import { skillProposalApplyAbortSignal } from "./apply-transition.js";
 import { renderProposalMarkdown, stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import {
   applySkillProposal,
@@ -38,6 +44,17 @@ import {
 } from "./store.js";
 import { withSkillCollectionLock } from "./target-lock.js";
 import { SKILL_WORKSHOP_ROLLBACK_SCHEMA, type SkillProposalRollback } from "./types.js";
+
+const snapshotCommittedSkillArtifactBestEffort = vi.hoisted(() => vi.fn());
+vi.mock("../lifecycle/skill-change-hook.js", async () => {
+  const actual = await vi.importActual<typeof import("../lifecycle/skill-change-hook.js")>(
+    "../lifecycle/skill-change-hook.js",
+  );
+  snapshotCommittedSkillArtifactBestEffort.mockImplementation(
+    actual.snapshotCommittedSkillArtifactBestEffort,
+  );
+  return { ...actual, snapshotCommittedSkillArtifactBestEffort };
+});
 
 const tempDirs = createTrackedTempDirs();
 const stateDirs = createTrackedTempDirs();
@@ -70,6 +87,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  resetGlobalHookRunner();
   resetSkillsRefreshStateForTest();
   await tempDirs.cleanup();
 });
@@ -1031,6 +1049,101 @@ describe("skill workshop proposals", () => {
     await expect(
       applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
     ).rejects.toThrow("Only pending proposals can be applied. Current status: applied.");
+  });
+
+  it("does not write a proposal cancelled while waiting for the commit boundary", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Cancelled Apply",
+      description: "Stay pending when autonomous apply is stopped",
+      content: "# Cancelled Apply\n\nThis must not reach the workspace.\n",
+      env: testEnv,
+    });
+    const abortController = new AbortController();
+    let releaseLock: (() => void) | undefined;
+    let markAcquired: (() => void) | undefined;
+    const acquired = new Promise<void>((resolve) => {
+      markAcquired = resolve;
+    });
+    const heldLock = withSkillCollectionLock(
+      workspaceDir,
+      async () => {
+        markAcquired?.();
+        await new Promise<void>((resolve) => {
+          releaseLock = resolve;
+        });
+      },
+      { env: testEnv },
+    );
+    await acquired;
+
+    const applyInput = {
+      workspaceDir,
+      proposalId: proposal.record.id,
+      env: testEnv,
+      [skillProposalApplyAbortSignal]: abortController.signal,
+    };
+    const applying = applySkillProposal(applyInput);
+    abortController.abort(new Error("stopped by user"));
+    releaseLock?.();
+    await heldLock;
+
+    await expect(applying).rejects.toThrow("stopped by user");
+    await expect(
+      fs.access(path.join(workspaceDir, "skills", "cancelled-apply", "SKILL.md")),
+    ).rejects.toThrow();
+    await expect(inspectSkillProposal(proposal.record.id, { workspaceDir })).resolves.toMatchObject(
+      { record: { status: "pending" } },
+    );
+    await expect(readSkillProposalRollback(proposal.record.id)).resolves.toBeNull();
+  });
+
+  it("restores a proposal cancelled after the workspace write but before commit", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Cancelled After Write",
+      description: "Restore the workspace when cancellation wins before commit",
+      content: "# Cancelled After Write\n\nThis must be rolled back.\n",
+      env: testEnv,
+    });
+    const abortController = new AbortController();
+    let releaseSnapshot: (() => void) | undefined;
+    let markSnapshot: (() => void) | undefined;
+    const snapshotStarted = new Promise<void>((resolve) => {
+      markSnapshot = resolve;
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "skill_changed", handler: vi.fn() }]),
+    );
+    snapshotCommittedSkillArtifactBestEffort.mockImplementationOnce(async () => {
+      markSnapshot?.();
+      await new Promise<void>((resolve) => {
+        releaseSnapshot = resolve;
+      });
+      return undefined;
+    });
+
+    const applyInput = {
+      workspaceDir,
+      proposalId: proposal.record.id,
+      env: testEnv,
+      [skillProposalApplyAbortSignal]: abortController.signal,
+    };
+    const applying = applySkillProposal(applyInput);
+    await snapshotStarted;
+    abortController.abort(new Error("stopped after write"));
+    releaseSnapshot?.();
+
+    await expect(applying).rejects.toThrow("stopped after write");
+    await expect(
+      fs.access(path.join(workspaceDir, "skills", "cancelled-after-write", "SKILL.md")),
+    ).rejects.toThrow();
+    await expect(inspectSkillProposal(proposal.record.id, { workspaceDir })).resolves.toMatchObject(
+      { record: { status: "pending" } },
+    );
+    await expect(readSkillProposalRollback(proposal.record.id)).resolves.toBeNull();
   });
 
   it("restores and retries a create apply interrupted after a support write", async () => {

@@ -1,3 +1,4 @@
+import { agentEndCancellation } from "../../agents/harness/agent-end-cancellation.js";
 import {
   killAllControlledSubagentRuns,
   resolveSubagentController,
@@ -338,6 +339,20 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
         ]
       : [];
   });
+  const cancellationSessionKey = params.persistSessionKey ?? params.sessionKey;
+  const reservedRunIds =
+    params.abortOrigin === "stop-command"
+      ? [
+          ...queuedPlan.authorized.map(({ runId }) => runId),
+          ...authorizedRuns.map(({ runId }) => runId),
+          ...authorizedPendingAgentRuns.map(({ runId }) => runId),
+          ...authorizedPendingChatRuns.map(({ runId }) => runId),
+        ]
+      : [];
+  const cancellationReservation =
+    params.abortOrigin === "stop-command"
+      ? agentEndCancellation.reserve(cancellationSessionKey, reservedRunIds)
+      : undefined;
   // Abort queued owners before any active-work signal can promote a successor.
   // Keep them first in the response to preserve the established runIds ordering.
   const runIds: string[] = abortQueuedChatTurns(
@@ -394,6 +409,9 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     }
   }
   const res = { aborted: additionalAborted || runIds.length > 0, runIds, unauthorized: false };
+  if (cancellationReservation) {
+    agentEndCancellation.reconcile(cancellationReservation, runIds);
+  }
   if (res.aborted && snapshots.length > 0) {
     const abortedRunIds = new Set(runIds);
     await persistAbortedPartials({
