@@ -2,16 +2,22 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { runDoctorMemoryIsolation } from "../../commands/doctor-memory-isolation.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resetMemoryIsolationCutoverForTest } from "../../plugins/memory-cutover.js";
 import {
   clearMemoryRunExposureForTest,
   recordMemoryRunExposure,
 } from "../../plugins/memory-run-exposure.js";
+import { createCurrentMemorySessionContext } from "../../state/memory-session-subject.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { readSessionTranscriptMessageEvents } from "./session-accessor.sqlite-active-events.js";
 import { materializeSqliteSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { planSqliteSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-lifecycle-state.js";
 import {
   loadLatestSqliteAssistantText,
@@ -122,13 +128,118 @@ async function appendWithRun(params: { env: NodeJS.ProcessEnv; runId: string; te
 
 afterEach(() => {
   clearMemoryRunExposureForTest();
+  resetMemoryIsolationCutoverForTest();
   closeOpenClawAgentDatabasesForTest();
+  vi.unstubAllEnvs();
   for (const root of roots.splice(0)) {
     fs.rmSync(root, { force: true, recursive: true });
   }
 });
 
 describe("transcript memory policy companions", () => {
+  it("enforces Doctor shadow-read-only companion persistence for only its bound subject", async () => {
+    const env = createEnv();
+    const options = { agentId: AGENT_ID, env };
+    const alice = { sessionId: "shadow-alice", sessionKey: "agent:main:shadow-alice" };
+    const bob = { sessionId: "shadow-bob", sessionKey: "agent:main:shadow-bob" };
+    const writeSession = (session: typeof alice) =>
+      runOpenClawAgentWriteTransaction(
+        (database) => {
+          writeSessionEntry(database, session.sessionKey, {
+            sessionId: session.sessionId,
+            updatedAt: 1,
+            createdVia: "spawn",
+          });
+        },
+        options,
+        { operationLabel: "session-transcript-memory-policy.test.shadow-subject" },
+      );
+
+    writeSession(alice);
+    const aliceContext = createCurrentMemorySessionContext({ ...alice, options });
+    expect(aliceContext.kind).toBe("current");
+    if (aliceContext.kind !== "current") {
+      throw new Error("expected lifecycle-owned Alice subject context");
+    }
+
+    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR ?? "");
+    expect(
+      runDoctorMemoryIsolation({
+        action: "shadow-read-only",
+        cfg: { agents: { list: [{ id: AGENT_ID, default: true }] } } as OpenClawConfig,
+        nowMs: 1,
+      }),
+    ).toMatchObject({ agentId: AGENT_ID, mode: "shadow-read-only", restartRequired: true });
+    // Doctor writes out of process. Refresh the process-owned snapshot to model the required
+    // Gateway restart before proving the protected transcript boundary.
+    resetMemoryIsolationCutoverForTest();
+
+    recordMemoryRunExposure({
+      agentId: AGENT_ID,
+      sessionId: alice.sessionId,
+      sessionKey: alice.sessionKey,
+      runId: "shadow-alice-run",
+      contextFingerprint: "shadow-alice-context",
+      planId: "shadow-alice-plan",
+      memoryPolicyRevision: "memory-policy-revision-1",
+      sourcePolicySetIds: ["plugin-policy-set-1"],
+      exposedResourceRevisions: ["resource-revision-1"],
+      exposureReceiptIds: ["exposure-receipt-1"],
+      egressReceiptIds: ["egress-receipt-1"],
+      deliveryAudiences: [{ kind: "agent", id: aliceContext.context.principalId }],
+      deliveryRevision: "delivery-revision-1",
+      egressRegistryRevision: "egress-registry-revision-1",
+      sessionIdentityRevision: aliceContext.context.sessionIdentityRevision,
+      subjectRevision: aliceContext.context.subjectRevision,
+    });
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionTarget: {
+          agentId: AGENT_ID,
+          expectedWriterRunId: "shadow-alice-run",
+          sessionId: alice.sessionId,
+          sessionKey: alice.sessionKey,
+        },
+        withTranscriptWrite: async (run) => await run(),
+      },
+      async () => {
+        await appendSqliteTranscriptMessage(
+          { ...alice, agentId: AGENT_ID, env },
+          {
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "alice scoped content" }],
+            },
+          },
+        );
+      },
+    );
+    const database = openOpenClawAgentDatabase(options);
+    expect(readAuthorizedTranscriptEventSeqs(database.db, alice.sessionId)?.size).toBeGreaterThan(
+      0,
+    );
+    expect(loadSqliteTranscriptEventsSync({ ...alice, agentId: AGENT_ID, env })).toContainEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          content: [{ type: "text", text: "alice scoped content" }],
+        }),
+      }),
+    );
+
+    writeSession(bob);
+    expect(createCurrentMemorySessionContext({ ...bob, options })).toEqual({
+      kind: "shadow-subject-mismatch",
+    });
+    await appendSqliteTranscriptMessage(
+      { ...bob, agentId: AGENT_ID, env },
+      {
+        message: { role: "assistant", content: [{ type: "text", text: "bob denied content" }] },
+      },
+    );
+    expect(readAuthorizedTranscriptEventSeqs(database.db, bob.sessionId)).toEqual(new Set());
+    expect(loadSqliteTranscriptEventsSync({ ...bob, agentId: AGENT_ID, env })).toEqual([]);
+  });
+
   it("fails closed for missing or stale run exposure while indexing only an authorized event", async () => {
     const env = createEnv();
     // Establish the SQLite session before the cut-over marker is written; its old row has no

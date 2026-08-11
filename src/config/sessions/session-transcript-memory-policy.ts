@@ -5,18 +5,17 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import { isMemoryIsolationTranscriptPolicyEnforcedInDatabase } from "../../plugins/memory-cutover.js";
 import {
   readMemoryRunExposure,
   type MemoryRunExposureSnapshot,
 } from "../../plugins/memory-run-exposure.js";
 import type { DB as OpenClawAgentDatabaseSchema } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { ensureOpenClawAgentScopedMemorySchema } from "../../state/openclaw-agent-scoped-memory-schema.js";
 import { getOwnedSessionTranscriptWriterFence } from "./transcript-write-context.js";
 
 type TranscriptMemoryPolicyDatabase = Pick<
   OpenClawAgentDatabaseSchema,
-  | "memory_migrations"
   | "memory_policy_sets"
   | "memory_run_exposures"
   | "session_memory_subject_snapshots"
@@ -64,7 +63,10 @@ function effectivePolicySetId(
     .digest("base64url")}`;
 }
 
-/** Cut-over is process-stable. A failed authority read remains enforced rather than reopening rows. */
+/**
+ * The process-stable P1C pilot and final Phase 6 cutover share this companion boundary.
+ * A failed authority read remains enforced rather than reopening transcript rows.
+ */
 export function isTranscriptMemoryPolicyEnforcedInDatabase(db: DatabaseSync): boolean {
   const cached = enforcementByDatabase.get(db);
   if (cached !== undefined) {
@@ -72,18 +74,7 @@ export function isTranscriptMemoryPolicyEnforcedInDatabase(db: DatabaseSync): bo
   }
   let enforced: boolean;
   try {
-    ensureOpenClawAgentScopedMemorySchema(db);
-    enforced =
-      executeSqliteQueryTakeFirstSync(
-        db,
-        policyDatabase(db)
-          .selectFrom("memory_migrations")
-          .select("migration_id")
-          .where("phase", "=", "cutover")
-          .where("verified_at", "is not", null)
-          .where("cutover_at", "is not", null)
-          .limit(1),
-      ) !== undefined;
+    enforced = isMemoryIsolationTranscriptPolicyEnforcedInDatabase(db);
   } catch {
     enforced = true;
   }

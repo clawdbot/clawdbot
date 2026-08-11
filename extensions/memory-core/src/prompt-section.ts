@@ -4,7 +4,13 @@ import type { MemoryPromptSectionBuilder } from "openclaw/plugin-sdk/memory-core
 export const buildPromptSection: MemoryPromptSectionBuilder = ({
   availableTools,
   citationsMode,
+  memoryReadEnforced,
 }) => {
+  // Legacy paths and transcript indexes are not part of an enforced view. Until the
+  // authorized prompt projection is installed, omit guidance rather than advertising them.
+  if (memoryReadEnforced) {
+    return [];
+  }
   const hasMemorySearch = availableTools.has("memory_search");
   const hasMemoryGet = availableTools.has("memory_get");
 

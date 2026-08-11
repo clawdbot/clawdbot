@@ -1,10 +1,20 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MigrationPlan, MigrationProviderPlugin } from "../../plugins/types.js";
-import { planProviderMemoryImport } from "./memory-import.js";
+const mocks = vi.hoisted(() => ({
+  isMemoryIsolationCutoverAgent: vi.fn(() => false),
+  runMigrationApply: vi.fn(),
+}));
+
+vi.mock("../../plugins/memory-cutover.js", () => ({
+  isMemoryIsolationCutoverAgent: mocks.isMemoryIsolationCutoverAgent,
+}));
+vi.mock("./apply.js", () => ({ runMigrationApply: mocks.runMigrationApply }));
+
+import { applyProviderMemoryImport, planProviderMemoryImport } from "./memory-import.js";
 
 const tempRoots: string[] = [];
 
@@ -15,6 +25,8 @@ async function makeSourceDir(): Promise<string> {
 }
 
 afterEach(async () => {
+  mocks.isMemoryIsolationCutoverAgent.mockReset().mockReturnValue(false);
+  mocks.runMigrationApply.mockReset();
   await Promise.all(tempRoots.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })));
 });
 
@@ -84,5 +96,25 @@ describe("planProviderMemoryImport memory-only shaping", () => {
       agentId: "main",
     });
     expect(plan.items.map((item) => item.id)).toEqual(["memory-a", "memory-b"]);
+  });
+});
+
+describe("applyProviderMemoryImport", () => {
+  it("does not call a provider after P1C enables read-only isolation", async () => {
+    const dir = await makeSourceDir();
+    const plan = await memoryPlan(dir, ["memory-a"]);
+    mocks.isMemoryIsolationCutoverAgent.mockReturnValue(true);
+
+    await expect(
+      applyProviderMemoryImport({
+        provider: stubProvider(plan),
+        config,
+        agentId: "main",
+        itemIds: ["memory-a"],
+        preflightPlan: plan,
+      }),
+    ).rejects.toThrow("memory import is unavailable while memory isolation is enforced");
+
+    expect(mocks.runMigrationApply).not.toHaveBeenCalled();
   });
 });

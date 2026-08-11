@@ -24,6 +24,7 @@ import {
   configureMemoryWikiImportRunStateStore,
   createMemoryWikiImportRunStateStore,
 } from "./src/import-runs-state.js";
+import { assertLegacyMemoryWikiAccessAvailable } from "./src/legacy-memory-access.js";
 import {
   ensureMemoryWikiVaultGeneration,
   loadMemoryWikiValidatedVaultIdentity,
@@ -113,6 +114,12 @@ export default definePluginEntry({
       id: "memory-wiki-compiled-cache-owner-cleanup",
       async start() {
         const appConfig = getAppConfig();
+        // The service reads vault identity and rebuilds a durable compiled cache. P1C has no
+        // authorized wiki projection yet, so block this legacy I/O for every enforced owner.
+        assertLegacyMemoryWikiAccessAvailable({
+          config: resolveConfig(undefined, appConfig),
+          appConfig,
+        });
         const activeConfigs =
           config.vault.scope === "global"
             ? [resolveConfig(undefined, appConfig)]

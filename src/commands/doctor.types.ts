@@ -9,6 +9,8 @@ export type DoctorOptions = {
   generateGatewayToken?: boolean;
   allowExec?: boolean;
   postUpgrade?: boolean;
+  memoryIsolation?: "status" | "shadow-read-only" | "legacy";
+  memoryIsolationAgent?: string;
   stateSqlite?: "compact";
   sessionSqlite?: "dry-run" | "import" | "validate" | "inspect" | "compact" | "restore" | "recover";
   sessionSqliteStore?: string;
