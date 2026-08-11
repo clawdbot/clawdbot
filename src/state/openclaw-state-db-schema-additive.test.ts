@@ -34,6 +34,8 @@ it("keeps secret-store first use from installing later additive schema", () => {
   } finally {
     database.close();
   }
+});
+
 const ATTACHMENT_ID = "12345678-1234-4123-8123-123456789abc";
 
 describe("ensureAdditiveStateColumns", () => {

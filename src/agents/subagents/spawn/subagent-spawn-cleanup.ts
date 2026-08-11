@@ -1,7 +1,7 @@
 import type { callGateway } from "../../../gateway/call.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
-import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
 import type { SandboxFsBridge } from "../../sandbox/fs-bridge.types.js";
+import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
 import { removeSubagentAttachmentsDir } from "./subagent-attachments.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 

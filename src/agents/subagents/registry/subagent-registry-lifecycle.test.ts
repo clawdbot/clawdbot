@@ -995,7 +995,7 @@ describe("subagent registry lifecycle hardening", () => {
       expect(resumeSubagentRun).toHaveBeenCalledExactlyOnceWith(entry.runId);
       await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
     } finally {
-      helperMocks.safeRemoveAttachmentsDir.mockReset().mockResolvedValue(undefined);
+      helperMocks.safeRemoveAttachmentsDir.mockReset().mockResolvedValue(true);
       controller.clearScheduledResumeTimers();
       vi.useRealTimers();
     }
@@ -1013,8 +1013,8 @@ describe("subagent registry lifecycle hardening", () => {
       .mockRejectedValueOnce(new Error("cleanup failed"))
       .mockImplementationOnce(
         () =>
-          new Promise<void>((resolve) => {
-            releaseNewCleanup = resolve;
+          new Promise<boolean>((resolve) => {
+            releaseNewCleanup = () => resolve(true);
           }),
       );
     const resumeSubagentRun = vi.fn();
@@ -1069,7 +1069,7 @@ describe("subagent registry lifecycle hardening", () => {
       expect(persist).toHaveBeenLastCalledWith(entry.runId);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
-      helperMocks.safeRemoveAttachmentsDir.mockReset().mockResolvedValue(undefined);
+      helperMocks.safeRemoveAttachmentsDir.mockReset().mockResolvedValue(true);
       controller.clearScheduledResumeTimers();
       vi.useRealTimers();
     }

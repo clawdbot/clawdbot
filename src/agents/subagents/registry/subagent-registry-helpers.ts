@@ -13,10 +13,10 @@ import { computeBackoff } from "../../../infra/backoff.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { truncateUtf8Prefix } from "../../../utils/utf8-truncate.js";
 import { resolveSandboxContext } from "../../sandbox/context.js";
+import { removeSubagentAttachmentsDir } from "../spawn/subagent-attachments.js";
 import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { removeSubagentAttachmentsDir } from "../spawn/subagent-attachments.js";
 import {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
