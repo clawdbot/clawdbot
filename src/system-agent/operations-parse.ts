@@ -1,12 +1,12 @@
 // OpenClaw operation grammar, approval descriptions, and public types.
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { DoctorOptions } from "../commands/doctor.types.js";
-import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { TuiResult } from "../tui/tui-types.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { isReservedSystemAgentId } from "./agent-id.js";
+import { isSystemAgentSensitiveConfigValue } from "./config-redaction.js";
 import type { SystemAgentOperation } from "./operation-types.js";
 import type { SystemAgentOverview } from "./overview.js";
 import { validateSystemAgentPluginInstallSpec } from "./plugin-install.js";
@@ -440,7 +440,7 @@ function formatCreateAgentWorkspace(workspace: string | undefined): string {
 }
 
 function formatConfigSetValueForPlan(configPath: string, value: string): string {
-  if (isSensitiveConfigPath(configPath)) {
+  if (isSystemAgentSensitiveConfigValue(configPath, value)) {
     return "<redacted>";
   }
   return value;

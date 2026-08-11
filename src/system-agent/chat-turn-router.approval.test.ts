@@ -651,7 +651,7 @@ describe("SystemAgentChatEngine approval", () => {
     expect(observedInput).toContain("<redacted>");
   });
 
-  it("keeps an exact sensitive config set away from every model path", async () => {
+  it("keeps an exact hint-sensitive config set away from every model path", async () => {
     useTempStateDir();
     const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
     const planner = vi.fn(async () => ({ reply: "should never run" }));
@@ -662,7 +662,9 @@ describe("SystemAgentChatEngine approval", () => {
       deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
     });
 
-    const proposed = await engine.handle("config set channels.telegram.botToken 123:very-secret");
+    const proposed = await engine.handle(
+      "config set channels.synology-chat.webhookUrl https://gateway.example/webhook/synology?access_token=very-secret",
+    );
 
     expect(runAgentTurn).not.toHaveBeenCalled();
     expect(planner).not.toHaveBeenCalled();

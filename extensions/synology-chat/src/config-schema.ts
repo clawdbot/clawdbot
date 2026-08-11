@@ -10,4 +10,10 @@ export const SynologyChatChannelConfigSchema = buildChannelConfigSchema(
       dangerouslyAllowInheritedWebhookPath: z.boolean().optional(),
     })
     .passthrough(),
+  {
+    uiHints: {
+      webhookUrl: { sensitive: true },
+      "accounts.*.webhookUrl": { sensitive: true },
+    },
+  },
 );

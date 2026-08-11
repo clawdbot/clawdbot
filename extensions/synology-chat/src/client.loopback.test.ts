@@ -305,8 +305,8 @@ describe("Synology Chat client loopback", () => {
         mediaUrl: "https://example.com/synology-receipt-proof.png",
         to: "42",
       }),
-    ).rejects.toThrow("acceptance could not be confirmed");
-    expect(rejectedRequests).toBe(4);
+    ).rejects.toThrow("rejected the attachment request");
+    expect(rejectedRequests).toBe(2);
   });
 
   it("aborts a streamed overflow and returns the stale cached identity", async () => {

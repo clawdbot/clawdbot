@@ -6,6 +6,7 @@ import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import { isReservedSystemAgentId } from "./agent-id.js";
 import { SYSTEM_AGENT_AUDIT_STORE_LABEL } from "./audit.js";
+import { redactSystemAgentConfig } from "./config-redaction.js";
 import {
   CONFIG_GET_OUTPUT_MAX_CHARS,
   CONFIG_SCHEMA_CHILDREN_MAX,
@@ -22,7 +23,6 @@ import {
   loadOverviewForOperation,
   readConfigFileSnapshotLazy,
   readConfigValueAtPath,
-  redactConfigValue,
   resolveChannelSetupState,
   resolveTuiAgentId,
   runConfigSetOperation,
@@ -125,15 +125,15 @@ export async function executeSystemAgentOperation(
       const cfg = snapshot.valid
         ? (snapshot.sourceConfig ?? snapshot.config)
         : snapshot.sourceConfig;
-      const lookup = readConfigValueAtPath(cfg ?? {}, operation.path);
+      // Redact before selecting a subtree so wildcard channel/plugin hints retain full paths.
+      const lookup = readConfigValueAtPath(redactSystemAgentConfig(cfg ?? {}), operation.path);
       if (!lookup.found) {
         runtime.log(
           `${operation.path}: not set. Use \`config schema ${operation.path}\` to see what is allowed.`,
         );
         return { applied: false };
       }
-      const redacted = redactConfigValue(lookup.value, operation.path);
-      const rendered = JSON.stringify(redacted, null, 2) ?? "null";
+      const rendered = JSON.stringify(lookup.value, null, 2) ?? "null";
       runtime.log(
         rendered.length > CONFIG_GET_OUTPUT_MAX_CHARS
           ? `${operation.path} = ${truncateUtf16Safe(rendered, CONFIG_GET_OUTPUT_MAX_CHARS)}\n… (truncated)`

@@ -369,6 +369,36 @@ describe("parseSystemAgentOperation", () => {
     ).toBe("set config models.providers.local.localService.env.HF_HOME to <redacted>");
   });
 
+  it("keeps sensitive channel callback URLs out of model-visible config reads", async () => {
+    const callbackUrl = "https://gateway.example/webhook/synology?access_token=callback-secret";
+    mockConfig.setConfig({
+      channels: {
+        "synology-chat": {
+          webhookUrl: callbackUrl,
+          accounts: {
+            work: { webhookUrl: callbackUrl },
+          },
+        },
+      },
+    });
+    const { runtime, lines } = createSystemAgentTestRuntime();
+
+    await executeSystemAgentOperation(
+      { kind: "config-get", path: "channels.synology-chat" },
+      runtime,
+    );
+
+    expect(lines.join("\n")).toContain('"webhookUrl": "<redacted>"');
+    expect(lines.join("\n")).not.toContain("callback-secret");
+    expect(
+      describeSystemAgentPersistentOperation({
+        kind: "config-set",
+        path: "channels.synology-chat.accounts.work.webhookUrl",
+        value: callbackUrl,
+      }),
+    ).toBe("set config channels.synology-chat.accounts.work.webhookUrl to <redacted>");
+  });
+
   it("parses agent creation requests", () => {
     expect(
       parseSystemAgentOperation("create agent Work workspace /tmp/work model openai/gpt-5.2"),

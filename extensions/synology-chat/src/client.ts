@@ -88,7 +88,7 @@ type ChatWebhookPayload = {
   user_ids?: number[];
 };
 
-export type SynologyHostedFileSendResult =
+type SynologyHostedFileSendResult =
   | { status: "accepted" }
   | { status: "not-dispatched" }
   | { status: "rejected" }

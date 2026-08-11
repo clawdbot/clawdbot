@@ -1,4 +1,3 @@
-import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -16,6 +15,7 @@ import type {
   ChatWizardResult,
   SystemAgentChatReply,
 } from "./chat-wizard-host.js";
+import { isSystemAgentSensitiveConfigValue } from "./config-redaction.js";
 import { approvalQuestion } from "./dialogue.js";
 import {
   SystemAgentInferenceUnavailableError,
@@ -75,7 +75,10 @@ function formatOperationError(error: unknown): string {
 
 export function redactSensitiveCommandText(text: string): string {
   const operation = parseSystemAgentOperation(text);
-  if (operation.kind === "config-set" && isSensitiveConfigPath(operation.path)) {
+  if (
+    operation.kind === "config-set" &&
+    isSystemAgentSensitiveConfigValue(operation.path, operation.value)
+  ) {
     return `config set ${operation.path} <redacted secret>`;
   }
   return text;
@@ -218,7 +221,7 @@ export class ChatTurnRouter {
       return { text: "Approval pending. Human must decide in OpenClaw UI.", action: "none" };
     }
     const typed = parseSystemAgentOperation(text);
-    if (typed.kind === "config-set" && isSensitiveConfigPath(typed.path)) {
+    if (typed.kind === "config-set" && isSystemAgentSensitiveConfigValue(typed.path, typed.value)) {
       return await this.runOperation(typed, undefined);
     }
     const typedRefusal = this.refuseDelegatedNavigationDirective(typed.kind);

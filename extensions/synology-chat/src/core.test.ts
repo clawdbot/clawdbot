@@ -115,6 +115,12 @@ describe("synology-chat core", () => {
     expect(
       synologyChatSetupWizard.textInputs?.find((input) => input.inputKey === "webhookUrl"),
     ).toMatchObject({ sensitive: true });
+    expect(SynologyChatChannelConfigSchema.uiHints?.webhookUrl).toMatchObject({
+      sensitive: true,
+    });
+    expect(SynologyChatChannelConfigSchema.uiHints?.["accounts.*.webhookUrl"]).toMatchObject({
+      sensitive: true,
+    });
   });
 
   it("isolates direct-message sessions by account and user", () => {
