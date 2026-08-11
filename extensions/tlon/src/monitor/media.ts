@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import * as path from "node:path";
+import { formatInboundMediaUnavailableText } from "openclaw/plugin-sdk/channel-inbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import {
@@ -23,18 +24,32 @@ type TlonInboundMediaDownload = { attachments: TlonInboundMedia[]; unavailableCo
 export function buildTlonInboundMediaPrompt(
   messageText: string,
   attachments: readonly TlonInboundMedia[],
+  options: { unavailableCount?: number } = {},
 ): { body: string; media: TlonInboundMedia[] } {
   const media = attachments.map((attachment) => ({ ...attachment }));
+  const unavailableCount = options.unavailableCount ?? 0;
+  const body =
+    media.length === 0
+      ? messageText
+      : `${media
+          .map(
+            (attachment) =>
+              `[media attached: ${attachment.path} (${attachment.contentType}) | ${attachment.path}]`,
+          )
+          .join("\n")}\n${messageText}`;
+  if (unavailableCount > 0) {
+    return {
+      body: formatInboundMediaUnavailableText({
+        body,
+        notice: `[tlon ${unavailableCount > 1 ? `${unavailableCount} attachments` : "attachment"} unavailable]`,
+      }),
+      media,
+    };
+  }
   if (media.length === 0) {
     return { body: messageText, media };
   }
-  const mediaLines = media
-    .map(
-      (attachment) =>
-        `[media attached: ${attachment.path} (${attachment.contentType}) | ${attachment.path}]`,
-    )
-    .join("\n");
-  return { body: `${mediaLines}\n${messageText}`, media };
+  return { body, media };
 }
 
 /**

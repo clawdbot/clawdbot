@@ -66,6 +66,29 @@ describe("tlon monitor media", () => {
     });
   });
 
+  it("appends an unavailable image notice beside the shipped media prompt", () => {
+    expect(
+      buildTlonInboundMediaPrompt("caption", [{ path: "/tmp/a.png", contentType: "image/png" }], {
+        unavailableCount: 2,
+      }),
+    ).toEqual({
+      body: [
+        "[media attached: /tmp/a.png (image/png) | /tmp/a.png]",
+        "caption",
+        "",
+        "[tlon 2 attachments unavailable]",
+      ].join("\n"),
+      media: [{ path: "/tmp/a.png", contentType: "image/png" }],
+    });
+  });
+
+  it("uses the unavailable image notice as the body when no image downloads succeeded", () => {
+    expect(buildTlonInboundMediaPrompt("", [], { unavailableCount: 1 })).toEqual({
+      body: "[tlon attachment unavailable]",
+      media: [],
+    });
+  });
+
   it("stores fetched media through the shared inbound media store with the image cap", async () => {
     saveRemoteMediaMock.mockResolvedValue({
       id: "photo---uuid.png",

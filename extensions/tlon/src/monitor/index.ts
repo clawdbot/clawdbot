@@ -342,6 +342,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           runtime.log?.(`[tlon] Downloaded ${attachments.length} image(s) from message`);
         }
       } catch (error: unknown) {
+        unavailableMediaCount = 1;
         runtime.log?.(`[tlon] Failed to download images: ${formatErrorMessage(error)}`);
       }
     }
@@ -500,7 +501,9 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       }
     }
 
-    const promptMedia = buildTlonInboundMediaPrompt(messageText, attachments);
+    const promptMedia = buildTlonInboundMediaPrompt(messageText, attachments, {
+      unavailableCount: unavailableMediaCount,
+    });
 
     const body = createChannelInboundEnvelopeBuilder({ cfg, route })({
       channel: "Tlon",
