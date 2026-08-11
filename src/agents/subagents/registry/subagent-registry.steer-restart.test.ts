@@ -78,7 +78,7 @@ vi.mock("../../../config/sessions.js", () => {
       return match?.[1] ?? "main";
     },
     resolveMainSessionKey: () => "agent:main:main",
-    resolveStorePath: () => "/tmp/test-store",
+    resolveSessionStorePathCore: () => "/tmp/test-store",
     updateSessionStore: vi.fn(),
   };
 });

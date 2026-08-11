@@ -12,9 +12,10 @@ import { CLI_OUTPUT_MAX_BUFFER } from "./defaults.constants.js";
 import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
-type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
+type ResolveApiKeyForProvider =
+  typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
 
-const resolveApiKeyForProviderMock = vi.hoisted(() =>
+const resolveApiKeyForProviderCoreMock = vi.hoisted(() =>
   vi.fn<ResolveApiKeyForProvider>(async () => ({
     apiKey: "test-key", // pragma: allowlist secret
     source: "test",
@@ -23,7 +24,7 @@ const resolveApiKeyForProviderMock = vi.hoisted(() =>
 );
 const hasAvailableAuthForProviderMock = vi.hoisted(() =>
   vi.fn(async (...args: Parameters<ResolveApiKeyForProvider>) => {
-    const resolved = await resolveApiKeyForProviderMock(...args);
+    const resolved = await resolveApiKeyForProviderCoreMock(...args);
     return Boolean(resolved?.apiKey);
   }),
 );
@@ -34,7 +35,7 @@ const runExecMock = vi.hoisted(() => vi.fn());
 
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
 let clearMediaUnderstandingBinaryCacheForTests: typeof import("./runner.test-support.js").clearMediaUnderstandingBinaryCacheForTests;
-const mockedResolveApiKey = resolveApiKeyForProviderMock;
+const mockedResolveApiKey = resolveApiKeyForProviderCoreMock;
 const mockedReadRemoteMediaBuffer = readRemoteMediaBufferMock;
 const mockedRunFfmpeg = runFfmpegMock;
 const mockedConvertHeicToJpeg = convertHeicToJpegMock;
@@ -310,7 +311,7 @@ describe("applyMediaUnderstanding", () => {
   beforeAll(async () => {
     vi.resetModules();
     vi.doMock("../agents/model-auth.js", () => ({
-      resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+      resolveApiKeyForProviderCore: resolveApiKeyForProviderCoreMock,
       hasAvailableAuthForProvider: hasAvailableAuthForProviderMock,
       isProviderAuthError: (err: unknown, code?: string) =>
         err instanceof Error &&

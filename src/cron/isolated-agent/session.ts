@@ -9,7 +9,7 @@ import {
   resolveSessionWorkStartError,
 } from "../../config/sessions/lifecycle.js";
 import { hasSessionAutoModelFallbackProvenance } from "../../config/sessions/model-override-provenance.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   evaluateSessionFreshness,
   resolveSessionResetPolicy,
@@ -149,7 +149,7 @@ export function resolveCronSession(params: {
   store?: Record<string, SessionEntry>;
 }) {
   const sessionCfg = params.cfg.session;
-  const storePath = resolveStorePath(sessionCfg?.store, {
+  const storePath = resolveSessionStorePathCore(sessionCfg?.store, {
     agentId: params.agentId,
   });
   const store =

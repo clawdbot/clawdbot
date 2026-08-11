@@ -12,7 +12,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../../config/agent-limits.js";
-import { resolveStorePath } from "../../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   isAcpSessionKey,
@@ -134,7 +134,9 @@ function resolveSessionCapabilityEntry(params: {
   if (!parsed?.agentId) {
     return undefined;
   }
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed.agentId });
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
+    agentId: parsed.agentId,
+  });
   const store = readSubagentSessionStore<SessionCapabilityEntry>(storePath, parsed.agentId);
   return store[params.sessionKey] ?? findSubagentSessionEntryById(store, params.sessionKey);
 }
@@ -167,7 +169,9 @@ export function resolveSubagentCapabilityStore(
   if (!parsed?.agentId) {
     return undefined;
   }
-  const storePath = resolveStorePath(opts.cfg.session?.store, { agentId: parsed.agentId });
+  const storePath = resolveSessionStorePathCore(opts.cfg.session?.store, {
+    agentId: parsed.agentId,
+  });
   return readSubagentSessionStore<SessionCapabilityEntry>(storePath, parsed.agentId);
 }
 

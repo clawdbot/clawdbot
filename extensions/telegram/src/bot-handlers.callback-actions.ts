@@ -1,6 +1,8 @@
 import type { Message } from "grammy/types";
-import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
+import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import { buildTelegramThreadParams, resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
+import type { TelegramQuestionCallback } from "./question-callback-data.js";
 import { buildInlineKeyboard } from "./send.js";
 
 export type TelegramCallbackButton = {
@@ -25,6 +27,11 @@ export interface TelegramCallbackMessageActions {
   editCallbackButtons: (
     buttons: TelegramCallbackButton[][],
   ) => ReturnType<RegisterTelegramHandlerParams["bot"]["api"]["editMessageReplyMarkup"]>;
+  editCallbackMessageWithButtons: (
+    text: string,
+    buttons: TelegramCallbackButton[][],
+    extra?: { parse_mode?: "HTML" | "Markdown" | "MarkdownV2" },
+  ) => Promise<void>;
   deleteCallbackMessage: () => ReturnType<
     RegisterTelegramHandlerParams["bot"]["api"]["deleteMessage"]
   >;
@@ -92,11 +99,66 @@ export function createTelegramCallbackMessageActions(params: {
     return await bot.api.sendMessage(callbackMessage.chat.id, text, mergedParams);
   };
 
+  const editCallbackMessageWithButtons = async (
+    text: string,
+    buttons: TelegramCallbackButton[][],
+    extra?: { parse_mode?: "HTML" | "Markdown" | "MarkdownV2" },
+  ) => {
+    const keyboard = buildInlineKeyboard(buttons);
+    const editParams = keyboard ? { reply_markup: keyboard, ...extra } : extra;
+    try {
+      await editCallbackMessage(text, editParams);
+    } catch (editErr) {
+      const errStr = String(editErr);
+      if (errStr.includes("no text in the message")) {
+        try {
+          await deleteCallbackMessage();
+        } catch {}
+        await replyToCallbackChat(text, keyboard ? { reply_markup: keyboard, ...extra } : extra);
+      } else if (!errStr.includes("message is not modified")) {
+        throw editErr;
+      }
+    }
+  };
+
   return {
     editCallbackMessage,
     clearCallbackButtons,
     editCallbackButtons,
+    editCallbackMessageWithButtons,
     deleteCallbackMessage,
     replyToCallbackChat,
   };
+}
+type ResolveQuestionParams = Parameters<typeof questionGatewayRuntime.resolveOption>[0];
+type QuestionResolver = (
+  params: ResolveQuestionParams,
+) => ReturnType<typeof questionGatewayRuntime.resolveOption>;
+
+export async function handleTelegramQuestionCallback(params: {
+  callback: TelegramQuestionCallback;
+  cfg: ResolveQuestionParams["cfg"];
+  senderId: string;
+  feedback: (text: string, terminal: boolean) => Promise<unknown>;
+  resolveQuestion?: QuestionResolver;
+}): Promise<void> {
+  let result: Awaited<ReturnType<QuestionResolver>>;
+  try {
+    result = await (params.resolveQuestion ?? questionGatewayRuntime.resolveOption)({
+      cfg: params.cfg,
+      questionId: params.callback.questionId,
+      optionIndex: params.callback.optionIndex,
+      senderId: params.senderId,
+      clientDisplayName: "Telegram question",
+    });
+  } catch (error) {
+    await params.feedback("Could not submit this answer.", false).catch(() => {});
+    throw error;
+  }
+  await params
+    .feedback(
+      result.status === "answered" ? "Answer submitted." : "This question was already answered.",
+      true,
+    )
+    .catch(() => {});
 }

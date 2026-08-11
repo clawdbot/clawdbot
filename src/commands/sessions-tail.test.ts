@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -85,7 +85,7 @@ describe("sessionsTailCommand", () => {
     key = sessionKey,
     entry: Partial<SessionEntry> = {},
   ): Promise<void> {
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey: key, storePath },
       {
         sessionId: "session-one",
@@ -286,7 +286,7 @@ describe("sessionsTailCommand", () => {
     const opsSessionKey = "agent:ops:telegram:direct:owner";
     const opsSessionsDir = path.join(process.env.OPENCLAW_STATE_DIR!, "agents", "ops", "sessions");
     const opsStorePath = path.join(opsSessionsDir, "sessions.json");
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey: opsSessionKey, storePath: opsStorePath },
       { sessionId: "ops-session", updatedAt: 3, status: "done" },
     );

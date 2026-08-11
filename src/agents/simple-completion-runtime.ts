@@ -36,7 +36,7 @@ import {
   applyLocalNoAuthHeaderOverride,
   formatMissingAuthError,
   getApiKeyForModelCore,
-  resolveApiKeyForProvider,
+  resolveApiKeyForProviderCore,
   type ResolvedProviderAuth,
 } from "./model-auth.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
@@ -294,7 +294,7 @@ export async function prepareSimpleCompletionModel(params: {
     : undefined;
   try {
     auth = resolvesAuthBeforePhysicalRoute
-      ? await resolveApiKeyForProvider({
+      ? await resolveApiKeyForProviderCore({
           provider: initialModel.provider,
           cfg: params.cfg,
           agentDir: params.agentDir,

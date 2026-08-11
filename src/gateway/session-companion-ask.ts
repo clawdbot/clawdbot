@@ -13,7 +13,7 @@ import {
   stripToolMessages,
 } from "../agents/tools/chat-history-text.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
-import { resolveStorePath } from "../config/sessions.js";
+import { resolveSessionStorePathCore } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Message, Usage } from "../llm/types.js";
 import { redactToolPayloadText } from "../logging/redact.js";
@@ -252,7 +252,9 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
     throw new Error("Session companion has no current question.");
   }
   const runId = `session-companion-${randomUUID()}`;
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
+    agentId: params.agentId,
+  });
   const { prepareInternalSessionEffectsSession, removeInternalSessionEffectsSession } =
     await import("../agents/internal-session-effects.js");
   const target = await prepareInternalSessionEffectsSession({

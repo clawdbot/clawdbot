@@ -920,7 +920,7 @@ export function resolveProviderCacheTtlEligibility(params: {
   return resolveProviderRuntimePlugin(params)?.isCacheTtlEligible?.(params.context);
 }
 
-export function resolveProviderThinkingProfile(params: {
+export function resolveRuntimeThinkingProfile(params: {
   provider: string;
   config?: OpenClawConfig;
   workspaceDir?: string;

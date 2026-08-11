@@ -7,7 +7,7 @@ import {
   listSessionEntriesCore,
   loadSessionEntry,
   replaceSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { normalizeLegacySessionEntryDelivery } from "../../../infra/state-migrations.legacy-session-store.js";
 import { projectSessionDeliveryFields } from "../../../utils/delivery-context.shared.js";
@@ -45,7 +45,7 @@ export async function writeSessionStore(
     if (typeof patch.sessionId === "string" && patch.sessionId.trim()) {
       await replaceSessionEntry({ storePath, sessionKey }, canonical);
     } else {
-      await upsertSessionEntry({ storePath, sessionKey }, canonical);
+      await upsertSessionEntryCore({ storePath, sessionKey }, canonical);
     }
   }
 }

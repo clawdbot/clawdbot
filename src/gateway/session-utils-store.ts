@@ -253,18 +253,6 @@ export function isGroupOrChannelDisplaySession(
   );
 }
 
-function isStorePathTemplate(store?: string): boolean {
-  return typeof store === "string" && store.includes("{agentId}");
-}
-
-export function resolveConcreteSessionStorePath(storePath: string | undefined): string | undefined {
-  const trimmed = storePath?.trim();
-  if (!trimmed || trimmed === "(multiple)" || isStorePathTemplate(trimmed)) {
-    return undefined;
-  }
-  return trimmed;
-}
-
 function normalizeFallbackList(values: readonly string[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();

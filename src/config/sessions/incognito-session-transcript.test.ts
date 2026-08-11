@@ -7,7 +7,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import { resolveStorePath } from "./paths.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import {
   createSessionEntryWithTranscript,
   listSessionEntriesCore,
@@ -58,7 +58,7 @@ describe("incognito transcript access", () => {
         agentId: "main",
         sessionId: created.entry.sessionId,
         sessionKey,
-        storePath: resolveStorePath(undefined, { agentId: "main" }),
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
       };
       const firstTurn = SessionManager.open(target, cwd);
       firstTurn.appendMessage({ role: "user", content: "first question", timestamp: 1 });

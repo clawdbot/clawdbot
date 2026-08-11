@@ -1,5 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptEvent,
   loadSessionEntryReadOnly,
@@ -20,7 +20,9 @@ export async function recordChannelFeedbackEvent(params: {
   sessionKey: string;
   event: Parameters<typeof appendTranscriptEvent>[1];
 }): Promise<boolean> {
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
+    agentId: params.agentId,
+  });
   const entry = loadSessionEntryReadOnly({
     agentId: params.agentId,
     sessionKey: params.sessionKey,
@@ -185,7 +187,7 @@ export async function runChannelFeedbackReflection(params: {
   return {
     status: "complete",
     learning: parsed.learning,
-    storePath: resolveStorePath(params.cfg.session?.store, { agentId: params.agentId }),
+    storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId: params.agentId }),
     followUp: parsed.followUp,
     userMessage: parsed.userMessage,
     responseLength: response.trim().length,

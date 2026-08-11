@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { sha256Hex, sha256HexPrefix } from "../infra/crypto-digest.js";
+import { sha256Hex, sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { syncDirectoryIfSupported } from "../infra/directory-durability.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { withFileLock } from "../infra/file-lock.js";
@@ -69,8 +69,8 @@ async function resolveMemoryHostEventExportOwner(workspaceDir: string): Promise<
   const requestedStateDir = path.resolve(resolveStateDir());
   await fs.mkdir(requestedStateDir, { recursive: true, mode: 0o700 });
   const stateDir = await fs.realpath(requestedStateDir);
-  const stateHash = sha256HexPrefix(stateDir, 32);
-  const workspaceHash = sha256HexPrefix(path.resolve(workspaceDir), 32);
+  const stateHash = sha256HexPrefixCore(stateDir, 32);
+  const workspaceHash = sha256HexPrefixCore(path.resolve(workspaceDir), 32);
   const exportDirectory = path.posix.join("memory", "events", stateHash);
   return {
     queueKey: `${stateHash}\0${workspaceHash}`,

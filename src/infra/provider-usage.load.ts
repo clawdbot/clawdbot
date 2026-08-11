@@ -12,7 +12,7 @@ import {
   PROVIDER_USAGE_TIMEOUT_MS,
   ignoredErrors,
   providerUsageLabel,
-  withTimeout,
+  raceUsageTimeout,
 } from "./provider-usage.shared.js";
 import type {
   ProviderUsageSnapshot,
@@ -142,7 +142,7 @@ export async function loadProviderUsageSummary(
       windows: [],
       error,
     });
-    return withTimeout(
+    return raceUsageTimeout(
       fetchProviderUsageSnapshot({
         auth,
         config,

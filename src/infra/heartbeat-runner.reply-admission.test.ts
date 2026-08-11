@@ -1,7 +1,7 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { markCompleteReplyConfig } from "../auto-reply/reply/get-reply-fast-path.test-support.js";
-import { resolveStorePath } from "../config/sessions.js";
+import { resolveSessionStorePathCore } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { getReplyFromConfig } from "./heartbeat-runner.runtime.js";
@@ -104,8 +104,16 @@ describe("heartbeat reply admission", () => {
           },
           { runtimeMode: "full" },
         ) as OpenClawConfig;
-        await seedSessionStore(resolveStorePath(storeTemplate, { agentId: "alpha" }), "global", {});
-        await seedSessionStore(resolveStorePath(storeTemplate, { agentId: "beta" }), "global", {});
+        await seedSessionStore(
+          resolveSessionStorePathCore(storeTemplate, { agentId: "alpha" }),
+          "global",
+          {},
+        );
+        await seedSessionStore(
+          resolveSessionStorePathCore(storeTemplate, { agentId: "beta" }),
+          "global",
+          {},
+        );
         enqueueSystemEvent(
           "Alpha hook finished",
           withSystemEventOwner({ sessionKey: "global" }, "alpha"),

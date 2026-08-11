@@ -1,17 +1,38 @@
-// Telegram reply-chain cache and prompt-context projection.
 import type { Message } from "grammy/types";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import { formatMediaPlaceholderText } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
+import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import {
+  getSessionEntry,
+  readAmbientTranscriptWatermark,
+  resolveAmbientTranscriptWatermarkKey,
+  type SessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
+import { resolveDefaultModelForAgent } from "./bot-handlers.agent.runtime.js";
+import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import type {
+  TelegramAmbientTranscriptWatermark,
   TelegramMessageContextOptions,
   TelegramPromptContextEntry,
 } from "./bot-message-context.types.js";
-import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
-import type { TelegramThreadSpec } from "./bot/helpers.js";
+import {
+  buildSenderName,
+  getTelegramTextParts,
+  resolveTelegramPrimaryMedia,
+  resolveTelegramForumThreadId,
+  shouldUseTelegramDmThreadSession,
+  type TelegramThreadSpec,
+} from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
+import {
+  resolveTelegramConversationBaseSessionKey,
+  resolveTelegramConversationRoute,
+} from "./conversation-route.js";
 import { resolveTelegramDmHistoryLimit } from "./dm-history.js";
 import {
   buildTelegramSelfSenderName,
@@ -50,6 +71,229 @@ function legacyAssistantTextKey(node: TelegramCachedMessageNode, botUserId?: num
 }
 
 export type TelegramPromptContextMessageSelection = ReadonlyMap<string, "include" | "exclude">;
+
+export type TelegramSessionState = {
+  agentId: string;
+  sessionEntry: SessionEntry | undefined;
+  sessionKey: string;
+  storePath: string;
+  model: string | undefined;
+};
+
+export type ResolveTelegramSessionStateParams = {
+  chatId: number | string;
+  isGroup: boolean;
+  isForum: boolean;
+  messageThreadId?: number;
+  resolvedThreadId?: number;
+  botHasTopicsEnabled?: boolean;
+  senderId?: string | number;
+  runtimeCfg: OpenClawConfig;
+};
+
+export type ResolvePromptContextAmbientWatermarkParams = {
+  chatId: number | string;
+  isGroup: boolean;
+  resolvedThreadId?: number;
+  sessionKey: string;
+  storePath: string;
+};
+
+export const normalizePromptContextMinTimestampMs = (timestampMs?: number) =>
+  typeof timestampMs === "number" && Number.isFinite(timestampMs) ? timestampMs : undefined;
+
+export function promptContextBoundaryOptions(
+  timestampMs?: number,
+  ambientWatermark?: TelegramAmbientTranscriptWatermark,
+): Pick<
+  TelegramMessageContextOptions,
+  "promptContextMinTimestampMs" | "promptContextAmbientWatermark"
+> {
+  const promptContextMinTimestampMs = normalizePromptContextMinTimestampMs(timestampMs);
+  return {
+    ...(promptContextMinTimestampMs === undefined ? {} : { promptContextMinTimestampMs }),
+    ...(ambientWatermark === undefined ? {} : { promptContextAmbientWatermark: ambientWatermark }),
+  };
+}
+
+export function latestPromptContextMinTimestampMs(
+  ...timestamps: Array<number | undefined>
+): number | undefined {
+  let latest: number | undefined;
+  for (const timestampMs of timestamps) {
+    const normalized = normalizePromptContextMinTimestampMs(timestampMs);
+    if (normalized !== undefined) {
+      latest = latest === undefined ? normalized : Math.max(latest, normalized);
+    }
+  }
+  return latest;
+}
+
+export const latestPromptContextAmbientWatermark = (
+  ...watermarks: Array<TelegramAmbientTranscriptWatermark | undefined>
+): TelegramAmbientTranscriptWatermark | undefined =>
+  watermarks.findLast((watermark) => watermark !== undefined);
+
+export function buildSyntheticTextMessage(params: {
+  base: Message.ServiceMessage;
+  text: string;
+  entities?: Message["entities"];
+  date?: number;
+  from?: Message["from"];
+}): Message {
+  return {
+    ...params.base,
+    ...(params.from ? { from: params.from } : {}),
+    text: params.text,
+    caption: undefined,
+    caption_entities: undefined,
+    entities: params.entities?.length ? params.entities : undefined,
+    ...(params.date != null ? { date: params.date } : {}),
+  };
+}
+
+export const buildSyntheticContext = (
+  ctx: Pick<TelegramContext, "me" | "getFile">,
+  message: Message,
+): TelegramContext => ({ message, me: ctx.me, getFile: ctx.getFile.bind(ctx) });
+
+export function formatTelegramAmbientTranscriptBody(
+  messages: readonly Message[],
+): string | undefined {
+  const lines = messages.map((msg) => {
+    const text = getTelegramTextParts(msg).text.trim();
+    const media = resolveTelegramPrimaryMedia(msg);
+    const body = text || formatMediaPlaceholderText(media ? [{ kind: media.kind }] : [{}]);
+    const messageId = msg.message_id ? `#${msg.message_id}` : undefined;
+    const sender = buildSenderName(msg);
+    const prefix = [messageId, sender].filter(Boolean).join(" ");
+    return prefix ? `${prefix}: ${body}` : body;
+  });
+  return lines.length > 0 ? lines.join("\n") : undefined;
+}
+
+export function createTelegramMessageSessionRuntime({
+  accountId,
+  resolveTelegramGroupConfig,
+  telegramDeps,
+}: Pick<
+  RegisterTelegramHandlerParams,
+  "accountId" | "resolveTelegramGroupConfig" | "telegramDeps"
+>) {
+  const loadSessionEntry = telegramDeps.getSessionEntry ?? getSessionEntry;
+  const resolveTelegramSessionState = (
+    params: ResolveTelegramSessionStateParams,
+  ): TelegramSessionState => {
+    const resolvedThreadId =
+      params.resolvedThreadId ??
+      resolveTelegramForumThreadId({
+        isForum: params.isForum,
+        messageThreadId: params.messageThreadId,
+      });
+    const dmThreadId = !params.isGroup ? params.messageThreadId : undefined;
+    const topicThreadId = resolvedThreadId ?? dmThreadId;
+    const { topicConfig } = resolveTelegramGroupConfig(
+      params.chatId,
+      topicThreadId,
+      params.runtimeCfg,
+    );
+    const { route } = resolveTelegramConversationRoute({
+      cfg: params.runtimeCfg,
+      accountId,
+      chatId: params.chatId,
+      isGroup: params.isGroup,
+      resolvedThreadId,
+      replyThreadId: topicThreadId,
+      senderId: params.senderId,
+      topicAgentId: topicConfig?.agentId,
+    });
+    const baseSessionKey = resolveTelegramConversationBaseSessionKey({
+      cfg: params.runtimeCfg,
+      route,
+      chatId: params.chatId,
+      isGroup: params.isGroup,
+      senderId: params.senderId,
+    });
+    const threadKeys =
+      shouldUseTelegramDmThreadSession({
+        dmThreadId,
+        botHasTopicsEnabled: params.botHasTopicsEnabled,
+      }) && dmThreadId != null
+        ? resolveThreadSessionKeys({
+            baseSessionKey,
+            threadId: `${params.chatId}:${dmThreadId}`,
+          })
+        : null;
+    const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
+    const storePath = telegramDeps.resolveStorePath(params.runtimeCfg.session?.store, {
+      agentId: route.agentId,
+    });
+    const entry = loadSessionEntry({ storePath, sessionKey });
+    const storedOverride = resolveStoredModelOverride({
+      sessionEntry: entry,
+      loadSessionEntry: (parentSessionKey) =>
+        loadSessionEntry({ storePath, sessionKey: parentSessionKey }),
+      sessionKey,
+      defaultProvider: resolveDefaultModelForAgent({
+        cfg: params.runtimeCfg,
+        agentId: route.agentId,
+      }).provider,
+    });
+    if (storedOverride) {
+      return {
+        agentId: route.agentId,
+        sessionEntry: entry,
+        sessionKey,
+        storePath,
+        model: storedOverride.provider
+          ? `${storedOverride.provider}/${storedOverride.model}`
+          : storedOverride.model,
+      };
+    }
+    const provider = entry?.modelProvider?.trim();
+    const model = entry?.model?.trim();
+    if (provider && model) {
+      return {
+        agentId: route.agentId,
+        sessionEntry: entry,
+        sessionKey,
+        storePath,
+        model: `${provider}/${model}`,
+      };
+    }
+    const modelCfg = params.runtimeCfg.agents?.defaults?.model;
+    return {
+      agentId: route.agentId,
+      sessionEntry: entry,
+      sessionKey,
+      storePath,
+      model: typeof modelCfg === "string" ? modelCfg : modelCfg?.primary,
+    };
+  };
+
+  const resolvePromptContextAmbientWatermark = (
+    params: ResolvePromptContextAmbientWatermarkParams,
+  ): TelegramAmbientTranscriptWatermark | undefined => {
+    if (!params.isGroup) {
+      return undefined;
+    }
+    const key = (
+      telegramDeps.resolveAmbientTranscriptWatermarkKey ?? resolveAmbientTranscriptWatermarkKey
+    )({
+      channel: "telegram",
+      accountId,
+      conversationId: String(params.chatId),
+      ...(params.resolvedThreadId !== undefined ? { threadId: params.resolvedThreadId } : {}),
+    });
+    return (telegramDeps.readAmbientTranscriptWatermark ?? readAmbientTranscriptWatermark)({
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
+      key,
+    });
+  };
+
+  return { resolveTelegramSessionState, resolvePromptContextAmbientWatermark };
+}
 
 export function createTelegramMessageContextRuntime({
   cfg,

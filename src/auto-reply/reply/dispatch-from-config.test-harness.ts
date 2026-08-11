@@ -564,8 +564,8 @@ export const describe0BeforeEach0 = () => {
   sessionStoreMocks.loadSessionStore.mockReturnValue({});
   sessionStoreMocks.readSessionEntry.mockReset();
   sessionStoreMocks.readSessionEntry.mockImplementation(() => sessionStoreMocks.currentEntry);
-  sessionStoreMocks.resolveStorePath.mockReset();
-  sessionStoreMocks.resolveStorePath.mockReturnValue("/tmp/mock-sessions.json");
+  sessionStoreMocks.resolveSessionStorePathCore.mockReset();
+  sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue("/tmp/mock-sessions.json");
   sessionStoreMocks.resolveSessionStoreEntry.mockReset();
   sessionStoreMocks.resolveSessionStoreEntry.mockImplementation(
     (params: { store: Record<string, Record<string, unknown>>; sessionKey: string }) => ({

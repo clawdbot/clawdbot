@@ -4,7 +4,7 @@ import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.
 import {
   appendTranscriptMessage,
   readActiveTranscriptEntryAnchor,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
@@ -313,7 +313,7 @@ describe("embedded attempt phase lifecycle state", () => {
       sessionKey: "agent:main:main",
       storePath: path.join(dir, "sessions.json"),
     };
-    await upsertSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const userMessage = { role: "user" as const, content: "hello", timestamp: 1 };
     const persistedUser = await appendTranscriptMessage(target, {
       cwd: dir,

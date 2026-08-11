@@ -183,7 +183,7 @@ function createSessionsModuleMock() {
           }
         : null;
     },
-    resolveStorePath: resolveMockStorePath,
+    resolveSessionStorePathCore: resolveMockStorePath,
   };
 }
 
@@ -339,7 +339,7 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
 vi.mock("../plugins/provider-thinking.js", () => ({
   resolveProviderBinaryThinking: () => undefined,
   resolveProviderDefaultThinkingLevel: () => undefined,
-  resolveProviderThinkingProfile: () => undefined,
+  resolveEffectiveThinkingProfile: () => undefined,
   resolveProviderXHighThinking: () => undefined,
 }));
 // Keep provider-runtime/plugin activation out of this focused tool test. The

@@ -13,7 +13,7 @@ import {
   validateSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
+import { sendDurableMessageBatchCore } from "../../channels/message/runtime.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
@@ -1337,7 +1337,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           if (!authorize()) {
             return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
           }
-          const send = await sendDurableMessageBatch({
+          const send = await sendDurableMessageBatchCore({
             cfg,
             channel,
             to: deliveryTarget,

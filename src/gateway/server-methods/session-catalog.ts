@@ -216,7 +216,7 @@ function resolveProviderCreateTarget(
 }
 
 /** Resolves a catalog-owned create target at the start of sessions.create. */
-export function resolveSessionCatalogCreateTarget(
+export function resolveRegisteredCatalogCreateTarget(
   catalogId: string,
   agentId: string,
   config: OpenClawConfig,
@@ -596,7 +596,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
 
   "sessions.catalog.startTerminal": catalogStartHandler(
     resolveSessionCatalogProvider,
-    resolveSessionCatalogCreateTarget,
+    resolveRegisteredCatalogCreateTarget,
   ),
 
   "sessions.catalog.archive": async ({ params, respond }) => {

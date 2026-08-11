@@ -1,7 +1,7 @@
 /**
  * Normalizes OpenAI Responses reasoning/tool-call history for safe replay.
  */
-import { sha256HexPrefix } from "../../infra/crypto-digest.js";
+import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import type { AgentMessage } from "../runtime/index.js";
 
 type OpenAIThinkingBlock = {
@@ -99,7 +99,7 @@ function isOpenAIToolCallType(type: unknown): boolean {
 }
 
 function shortOpenAIResponsesIdHash(id: string): string {
-  return sha256HexPrefix(id, 10);
+  return sha256HexPrefixCore(id, 10);
 }
 
 function sanitizeOpenAIResponsesIdTail(value: string): string {

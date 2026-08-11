@@ -9,7 +9,7 @@ import {
   loadSessionEntry,
   persistSessionTranscriptTurn,
   replaceSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -108,7 +108,7 @@ async function seedSessions(): Promise<OpenClawConfig> {
   const config: OpenClawConfig = {
     agents: { list: [{ id: "main", default: true }, { id: "work" }] },
   };
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     { agentId: "main", sessionKey: "agent:main:active" },
     {
       sessionId: "main-active",
@@ -117,7 +117,7 @@ async function seedSessions(): Promise<OpenClawConfig> {
       visibility: "shared",
     },
   );
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     { agentId: "main", sessionKey: "agent:main:draft" },
     {
       sessionId: "main-draft",
@@ -126,7 +126,7 @@ async function seedSessions(): Promise<OpenClawConfig> {
       visibility: "draft",
     },
   );
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     { agentId: "main", sessionKey: "agent:main:archived" },
     {
       sessionId: "main-archived",
@@ -136,7 +136,7 @@ async function seedSessions(): Promise<OpenClawConfig> {
       visibility: "shared",
     },
   );
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     { agentId: "work", sessionKey: "agent:work:active" },
     {
       sessionId: "work-active",
@@ -299,7 +299,7 @@ describe("sessions.list single-flight", () => {
       const request = { archived: "all" as const, limit: 100 };
 
       const first = await listSessions({ client, context, request });
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:external" },
         {
           sessionId: "main-external",
@@ -380,7 +380,7 @@ describe("sessions.list single-flight", () => {
       const { clock, config } = await seedSessionsWithActivityTimes();
       const parentSessionKey = "agent:main:active";
       const childSessionKey = "agent:main:zzz-child";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: childSessionKey },
         {
           sessionId: "completed-hidden-child",
@@ -524,7 +524,7 @@ describe("sessions.list single-flight", () => {
       const { clock, config } = await seedSessionsWithActivityTimes();
       const parentSessionKey = "agent:main:active";
       const childSessionKey = "agent:main:child";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: childSessionKey },
         {
           sessionId: "completed-child",
@@ -674,7 +674,7 @@ describe("sessions.list single-flight", () => {
         ["second", 600],
         ["first", 700],
       ] as const) {
-        await upsertSessionEntry(
+        await upsertSessionEntryCore(
           { agentId: "main", sessionKey: `agent:main:page-${name}` },
           {
             sessionId: `page-${name}`,
@@ -697,7 +697,7 @@ describe("sessions.list single-flight", () => {
         request: { agentId: "main", archived: "all", limit: 1 },
       });
       await vi.waitFor(() => expect(loader.rowCalls).toHaveBeenCalledOnce());
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:page-first" },
         { visibility: "draft", updatedAt: 800 },
       );
@@ -755,7 +755,7 @@ describe("sessions.list single-flight", () => {
 
       const beforeMutation = listSessions({ client, context, request });
       await vi.waitFor(() => expect(loader.rowCalls).toHaveBeenCalledTimes(1));
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:created-mid-list" },
         { sessionId: "created-mid-list", updatedAt: 500, visibility: "shared" },
       );

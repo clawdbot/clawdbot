@@ -16,7 +16,7 @@ import {
   parseOptionalNodeFiniteNumber,
   parseOptionalNodeNonNegativeInteger,
   parseOptionalNodePositiveInteger,
-  resolveNodeId,
+  resolveCliNodeId,
 } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
@@ -39,7 +39,7 @@ export function registerNodesScreenCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 120000)", "120000")
       .action(async (opts: NodesRpcOpts & { out?: string }) => {
         await runNodesCommand("screen record", async () => {
-          const nodeId = await resolveNodeId(opts, opts.node ?? "");
+          const nodeId = await resolveCliNodeId(opts, opts.node ?? "");
           const durationMs = parseDurationMs(opts.duration ?? "");
           const screenIndex = parseOptionalNodeNonNegativeInteger(opts.screen ?? "0", "--screen");
           const fps = parseOptionalNodeFiniteNumber(opts.fps ?? "10", "--fps", {
