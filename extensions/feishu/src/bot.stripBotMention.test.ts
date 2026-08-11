@@ -5,7 +5,7 @@ import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
 function makeEvent(
   text: string,
   mentions?: Array<{ key: string; name: string; id: { open_id?: string; user_id?: string } }>,
-  chatType: "p2p" | "group" = "p2p",
+  chatType: "p2p" | "group" | "topic_group" = "p2p",
 ): FeishuMessageEvent {
   return {
     sender: { sender_id: { user_id: "u1", open_id: "ou_sender" } },
@@ -60,7 +60,7 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
     expect(ctx.content).toBe("hello");
   });
 
-  it("strips bot mention in group so slash commands work (#35994)", () => {
+  it("keeps bot mention in group so the model sees it was addressed (#72504)", () => {
     const ctx = parseFeishuMessageEvent(
       makeEvent(
         "@_bot_1 hello",
@@ -69,10 +69,10 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
       ),
       BOT_OPEN_ID,
     );
-    expect(ctx.content).toBe("hello");
+    expect(ctx.content).toBe('<at user_id="ou_bot">Bot</at> hello');
   });
 
-  it("strips bot mention in group preserving slash command prefix (#35994)", () => {
+  it("keeps bot mention in group alongside slash command prefix (#72504)", () => {
     const ctx = parseFeishuMessageEvent(
       makeEvent(
         "@_bot_1 /model",
@@ -81,7 +81,38 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
       ),
       BOT_OPEN_ID,
     );
-    expect(ctx.content).toBe("/model");
+    expect(ctx.content).toBe('<at user_id="ou_bot">Bot</at> /model');
+  });
+
+  it("keeps bot mention when multiple bots are addressed in a group (#72504)", () => {
+    const ctx = parseFeishuMessageEvent(
+      makeEvent(
+        "@_bot_1 @_bot_2 hello",
+        [
+          { key: "@_bot_1", name: "Bot A", id: { open_id: "ou_bot" } },
+          { key: "@_bot_2", name: "Bot B", id: { open_id: "ou_other_bot" } },
+        ],
+        "group",
+      ),
+      BOT_OPEN_ID,
+    );
+    // Both mentions stay visible to the model; this bot sees its own <at>.
+    expect(ctx.content).toBe(
+      '<at user_id="ou_bot">Bot A</at> <at user_id="ou_other_bot">Bot B</at> hello',
+    );
+    expect(ctx.mentionedBot).toBe(true);
+  });
+
+  it("keeps bot mention in topic groups so the model sees it was addressed (#72504)", () => {
+    const ctx = parseFeishuMessageEvent(
+      makeEvent(
+        "@_bot_1 hello",
+        [{ key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } }],
+        "topic_group",
+      ),
+      BOT_OPEN_ID,
+    );
+    expect(ctx.content).toBe('<at user_id="ou_bot">Bot</at> hello');
   });
 
   it("strips bot mention but normalizes other mentions in p2p (mention-forward)", () => {
