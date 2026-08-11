@@ -1,20 +1,20 @@
-# 🦞 OpenClaw — Personal AI Assistant
+# 🦀 OpenCrustacean — Personal AI Assistant
 
 <p align="center">
     <picture>
-        <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-banner-light.png">
-        <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-banner-dark.png" alt="OpenClaw — EXFOLIATE! EXFOLIATE! Your personal AI assistant, running on your own devices.">
+        <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/danfour649/opencrustacean/main/ui/public/favicon.svg">
+        <img src="https://raw.githubusercontent.com/danfour649/opencrustacean/main/ui/public/favicon.svg" alt="OpenCrustacean — EXFOLIATE! EXFOLIATE! Your personal AI assistant, running on your own devices.">
     </picture>
 </p>
 
 <p align="center">
-  <a href="https://github.com/openclaw/openclaw/actions/workflows/ci.yml?branch=main"><img src="https://img.shields.io/github/actions/workflow/status/openclaw/openclaw/ci.yml?branch=main&style=for-the-badge" alt="CI status"></a>
-  <a href="https://github.com/openclaw/openclaw/releases"><img src="https://img.shields.io/github/v/release/openclaw/openclaw?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
+  <a href="https://github.com/danfour649/opencrustacean/actions/workflows/ci.yml?branch=main"><img src="https://img.shields.io/github/actions/workflow/status/openclaw/openclaw/ci.yml?branch=main&style=for-the-badge" alt="CI status"></a>
+  <a href="https://github.com/danfour649/opencrustacean/releases"><img src="https://img.shields.io/github/v/release/openclaw/openclaw?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
   <a href="https://discord.gg/clawd"><img src="https://img.shields.io/discord/1456350064065904867?label=Discord&logo=discord&logoColor=white&color=5865F2&style=for-the-badge" alt="Discord"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
-**OpenClaw** is a _personal AI assistant_ that learns and grows with you, running on your own devices — developed in the open by the [OpenClaw Foundation](https://openclaw.org), a non-profit.
+**OpenCrustacean** is a _personal AI assistant_ that learns and grows with you, running on your own devices — developed in the open by the [OpenCrustacean Foundation](https://openclaw.org), a non-profit.
 It answers you on the channels you already use, can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
 
 If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
@@ -95,7 +95,7 @@ iwr -useb https://openclaw.ai/install.ps1 | iex
 Or install via a package manager (npm, pnpm, or bun all work):
 
 ```bash
-npm install -g openclaw@latest
+npm install -g opencrustacean@latest
 ```
 
 Then run onboarding:
@@ -104,7 +104,7 @@ Then run onboarding:
 openclaw onboard --install-daemon
 ```
 
-OpenClaw Onboard guides you step by step through setting up the gateway, workspace, channels, and skills on **macOS, Linux, and Windows**, and installs the Gateway daemon (launchd/systemd user service/Scheduled Task) so it stays running.
+OpenCrustacean Onboard guides you step by step through setting up the gateway, workspace, channels, and skills on **macOS, Linux, and Windows**, and installs the Gateway daemon (launchd/systemd user service/Scheduled Task) so it stays running.
 Windows desktop users can also start with the native [Windows Hub](https://docs.openclaw.ai/platforms/windows) companion app for setup, tray status, chat, node mode, and local MCP mode.
 
 Full beginner guide (auth, pairing, channels): [Getting started](https://docs.openclaw.ai/start/getting-started).
@@ -122,7 +122,7 @@ Send a test message or talk to the assistant:
 
 ```bash
 # Send a message
-openclaw message send --target +1234567890 --message "Hello from OpenClaw"
+openclaw message send --target +1234567890 --message "Hello from OpenCrustacean"
 
 # Talk to the assistant (optionally deliver the reply to any connected channel)
 openclaw agent --message "Ship checklist" --thinking high
@@ -146,7 +146,7 @@ Upgrading? Run `openclaw update` — see the [Updating guide](https://docs.openc
 
 ## Security defaults (DM access)
 
-OpenClaw connects to real messaging surfaces. Treat inbound DMs as **untrusted input**.
+OpenCrustacean connects to real messaging surfaces. Treat inbound DMs as **untrusted input**.
 
 Full security guide: [Security](https://docs.openclaw.ai/gateway/security).
 Before remote exposure, use the [Gateway exposure runbook](https://docs.openclaw.ai/gateway/security/exposure-runbook).
@@ -201,7 +201,7 @@ The Gateway alone delivers a great experience. All apps are optional and add ext
 
 If you plan to build/run companion apps, follow the platform runbooks below.
 
-### macOS (OpenClaw.app) (optional)
+### macOS (OpenCrustacean.app) (optional)
 
 - Menu bar control for the Gateway and health.
 - Voice Wake + push-to-talk overlay.
@@ -234,12 +234,12 @@ root is not a supported source setup.
 For the dev loop:
 
 ```bash
-git clone https://github.com/openclaw/openclaw.git
+git clone https://github.com/danfour649/opencrustacean.git
 cd openclaw
 
 pnpm install
 
-# First run only (or after resetting local OpenClaw config/workspace)
+# First run only (or after resetting local OpenCrustacean config/workspace)
 pnpm openclaw setup
 
 # Optional: prebuild Control UI before first startup
@@ -294,11 +294,11 @@ Minimal `~/.openclaw/openclaw.json` (model + defaults):
 
 ## Star History
 
-[View OpenClaw's star history](https://www.star-history.com/#openclaw/openclaw&type=date&legend=top-left).
+[View OpenCrustacean's star history](https://www.star-history.com/#openclaw/openclaw&type=date&legend=top-left).
 
 ## Molty
 
-OpenClaw was built for **Molty**, a space crab AI assistant, by Peter Steinberger and the community. 🦀
+OpenCrustacean was built for **Molty**, a space crab AI assistant, by Peter Steinberger and the community. 🦀
 
 - [openclaw.ai](https://openclaw.ai)
 - [soul.md](https://soul.md)
@@ -308,7 +308,7 @@ OpenClaw was built for **Molty**, a space crab AI assistant, by Peter Steinberge
 ## Community
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, maintainers, and how to submit PRs.
-Use the [issue chooser](https://github.com/openclaw/openclaw/issues/new/choose) for bugs, docs bugs, and feature requests;
+Use the [issue chooser](https://github.com/danfour649/opencrustacean/issues/new/choose) for bugs, docs bugs, and feature requests;
 ask setup/support questions in [Discord](https://discord.gg/clawd); and report vulnerabilities through [SECURITY.md](SECURITY.md).
 Most new features fit best as plugins built on the [plugin SDK](https://docs.openclaw.ai/plugins/building-plugins) and shared via [ClawHub](https://clawhub.ai), keeping core lean.
 PRs should link the relevant issue when possible and follow the [PR template](.github/pull_request_template.md) with problem, impact, and evidence.
@@ -377,7 +377,7 @@ Thanks to all clawtributors:
 <a href="https://github.com/scald"><img src="https://avatars.githubusercontent.com/u/1215913?v=4&s=48" width="48" height="48" alt="scald"></a> <a href="https://github.com/kashevk0"><img src="https://avatars.githubusercontent.com/u/151471784?v=4&s=48" width="48" height="48" alt="Serhii"></a> <a href="https://github.com/Yuandiaodiaodiao"><img src="https://avatars.githubusercontent.com/u/33371662?v=4&s=48" width="48" height="48" alt="a"></a> <a href="https://github.com/doguabaris"><img src="https://avatars.githubusercontent.com/u/135986694?v=4&s=48" width="48" height="48" alt="Doğu Abaris"></a> <a href="https://github.com/ysqander"><img src="https://avatars.githubusercontent.com/u/80843820?v=4&s=48" width="48" height="48" alt="ysqander"></a> <a href="https://github.com/andranik-sahakyan"><img src="https://avatars.githubusercontent.com/u/8908029?v=4&s=48" width="48" height="48" alt="andranik-sahakyan"></a> <a href="https://github.com/Wangnov"><img src="https://avatars.githubusercontent.com/u/48670012?v=4&s=48" width="48" height="48" alt="Wangnov"></a> <a href="https://github.com/rixau"><img src="https://avatars.githubusercontent.com/u/112558420?v=4&s=48" width="48" height="48" alt="Austin"></a> <a href="https://github.com/lisitan"><img src="https://avatars.githubusercontent.com/u/50470712?v=4&s=48" width="48" height="48" alt="lisitan"></a> <a href="https://github.com/kaizen403"><img src="https://avatars.githubusercontent.com/u/134706404?v=4&s=48" width="48" height="48" alt="Rishi Vhavle"></a>
 <a href="https://github.com/hirefrank"><img src="https://avatars.githubusercontent.com/u/183158?v=4&s=48" width="48" height="48" alt="Frank Harris"></a> <a href="https://github.com/kennyklee"><img src="https://avatars.githubusercontent.com/u/1432489?v=4&s=48" width="48" height="48" alt="Kenny Lee"></a> <a href="https://github.com/dddabtc"><img src="https://avatars.githubusercontent.com/u/104875499?v=4&s=48" width="48" height="48" alt="Alice Losasso"></a> <a href="https://github.com/edincampara"><img src="https://avatars.githubusercontent.com/u/142477787?v=4&s=48" width="48" height="48" alt="edincampara"></a> <a href="https://github.com/fellanH"><img src="https://avatars.githubusercontent.com/u/30758862?v=4&s=48" width="48" height="48" alt="Felix Hellström"></a> <a href="https://github.com/VarunChopra11"><img src="https://avatars.githubusercontent.com/u/113368492?v=4&s=48" width="48" height="48" alt="Varun Chopra"></a> <a href="https://github.com/wangai-studio"><img src="https://avatars.githubusercontent.com/u/256938352?v=4&s=48" width="48" height="48" alt="wangai-studio"></a> <a href="https://github.com/sleontenko"><img src="https://avatars.githubusercontent.com/u/7135949?v=4&s=48" width="48" height="48" alt="sleontenko"></a> <a href="https://github.com/yassine20011"><img src="https://avatars.githubusercontent.com/u/59234686?v=4&s=48" width="48" height="48" alt="Yassine Amjad"></a> <a href="https://github.com/ant1eicher"><img src="https://avatars.githubusercontent.com/u/54324760?v=4&s=48" width="48" height="48" alt="Anton Eicher"></a>
 <a href="https://github.com/ThomsenDrake"><img src="https://avatars.githubusercontent.com/u/120344051?v=4&s=48" width="48" height="48" alt="Drake Thomsen"></a> <a href="https://github.com/kakuteki"><img src="https://avatars.githubusercontent.com/u/61647657?v=4&s=48" width="48" height="48" alt="Hinata Kaga (samon)"></a> <a href="https://github.com/andreabadesso"><img src="https://avatars.githubusercontent.com/u/3586068?v=4&s=48" width="48" height="48" alt="andreabadesso"></a> <a href="https://github.com/chenxin-yan"><img src="https://avatars.githubusercontent.com/u/71162231?v=4&s=48" width="48" height="48" alt="chenxin-yan"></a> <a href="https://github.com/cordx56"><img src="https://avatars.githubusercontent.com/u/23298744?v=4&s=48" width="48" height="48" alt="cordx56"></a> <a href="https://github.com/dvrshil"><img src="https://avatars.githubusercontent.com/u/81693876?v=4&s=48" width="48" height="48" alt="dvrshil"></a> <a href="https://github.com/MarvinCui"><img src="https://avatars.githubusercontent.com/u/130876763?v=4&s=48" width="48" height="48" alt="MarvinCui"></a> <a href="https://github.com/Yeom-JinHo"><img src="https://avatars.githubusercontent.com/u/81306489?v=4&s=48" width="48" height="48" alt="Yeom-JinHo"></a> <a href="https://github.com/17jmumford"><img src="https://avatars.githubusercontent.com/u/36290330?v=4&s=48" width="48" height="48" alt="Jeremy Mumford"></a> <a href="https://github.com/KnHack"><img src="https://avatars.githubusercontent.com/u/2346724?v=4&s=48" width="48" height="48" alt="Charlie Niño"></a>
-<a href="https://github.com/SharoonSharif"><img src="https://avatars.githubusercontent.com/u/150296639?v=4&s=48" width="48" height="48" alt="Sharoon Sharif"></a> <a href="https://github.com/orenyomtov"><img src="https://avatars.githubusercontent.com/u/168856?v=4&s=48" width="48" height="48" alt="Oren"></a> <a href="https://github.com/mattqdev"><img src="https://avatars.githubusercontent.com/u/115874885?v=4&s=48" width="48" height="48" alt="MattQ"></a> <a href="https://github.com/parkertoddbrooks"><img src="https://avatars.githubusercontent.com/u/585456?v=4&s=48" width="48" height="48" alt="Parker Todd Brooks"></a> <a href="https://github.com/he-yufeng"><img src="https://avatars.githubusercontent.com/u/40085740?v=4&s=48" width="48" height="48" alt="Yufeng He"></a> <a href="https://github.com/Milofax"><img src="https://avatars.githubusercontent.com/u/2537423?v=4&s=48" width="48" height="48" alt="Milofax"></a> <a href="https://github.com/stevebot-alive"><img src="https://avatars.githubusercontent.com/u/261149299?v=4&s=48" width="48" height="48" alt="Steve (OpenClaw)"></a> <a href="https://github.com/zhoulf1006"><img src="https://avatars.githubusercontent.com/u/35586967?v=4&s=48" width="48" height="48" alt="zhoulf1006"></a> <a href="https://github.com/jrrcdev"><img src="https://avatars.githubusercontent.com/u/19454127?v=4&s=48" width="48" height="48" alt="Jonatan"></a> <a href="https://github.com/feniix"><img src="https://avatars.githubusercontent.com/u/91633?v=4&s=48" width="48" height="48" alt="Sebastian B Otaegui"></a>
+<a href="https://github.com/SharoonSharif"><img src="https://avatars.githubusercontent.com/u/150296639?v=4&s=48" width="48" height="48" alt="Sharoon Sharif"></a> <a href="https://github.com/orenyomtov"><img src="https://avatars.githubusercontent.com/u/168856?v=4&s=48" width="48" height="48" alt="Oren"></a> <a href="https://github.com/mattqdev"><img src="https://avatars.githubusercontent.com/u/115874885?v=4&s=48" width="48" height="48" alt="MattQ"></a> <a href="https://github.com/parkertoddbrooks"><img src="https://avatars.githubusercontent.com/u/585456?v=4&s=48" width="48" height="48" alt="Parker Todd Brooks"></a> <a href="https://github.com/he-yufeng"><img src="https://avatars.githubusercontent.com/u/40085740?v=4&s=48" width="48" height="48" alt="Yufeng He"></a> <a href="https://github.com/Milofax"><img src="https://avatars.githubusercontent.com/u/2537423?v=4&s=48" width="48" height="48" alt="Milofax"></a> <a href="https://github.com/stevebot-alive"><img src="https://avatars.githubusercontent.com/u/261149299?v=4&s=48" width="48" height="48" alt="Steve (OpenCrustacean)"></a> <a href="https://github.com/zhoulf1006"><img src="https://avatars.githubusercontent.com/u/35586967?v=4&s=48" width="48" height="48" alt="zhoulf1006"></a> <a href="https://github.com/jrrcdev"><img src="https://avatars.githubusercontent.com/u/19454127?v=4&s=48" width="48" height="48" alt="Jonatan"></a> <a href="https://github.com/feniix"><img src="https://avatars.githubusercontent.com/u/91633?v=4&s=48" width="48" height="48" alt="Sebastian B Otaegui"></a>
 <a href="https://github.com/ZetiMente"><img src="https://avatars.githubusercontent.com/u/76985631?v=4&s=48" width="48" height="48" alt="Matthew"></a> <a href="https://github.com/robertoeisenlohr"><img src="https://avatars.githubusercontent.com/u/82096803?v=4&s=48" width="48" height="48" alt="ABFS Tech"></a> <a href="https://github.com/alexstyl"><img src="https://avatars.githubusercontent.com/u/1665273?v=4&s=48" width="48" height="48" alt="alexstyl"></a> <a href="https://github.com/ethanpalm"><img src="https://avatars.githubusercontent.com/u/56270045?v=4&s=48" width="48" height="48" alt="Ethan Palm"></a> <a href="https://github.com/qkal"><img src="https://avatars.githubusercontent.com/u/77361240?v=4&s=48" width="48" height="48" alt="Qkal"></a> <a href="https://github.com/cygaar"><img src="https://avatars.githubusercontent.com/u/97691933?v=4&s=48" width="48" height="48" alt="cygaar"></a> <a href="https://github.com/U-C4N"><img src="https://avatars.githubusercontent.com/u/78921017?v=4&s=48" width="48" height="48" alt="Umut CAN"></a> <a href="https://github.com/jakobdylanc"><img src="https://avatars.githubusercontent.com/u/38699060?v=4&s=48" width="48" height="48" alt="Jakob"></a> <a href="https://github.com/antons"><img src="https://avatars.githubusercontent.com/u/129705?v=4&s=48" width="48" height="48" alt="antons"></a> <a href="https://github.com/austinm911"><img src="https://avatars.githubusercontent.com/u/31991302?v=4&s=48" width="48" height="48" alt="austinm911"></a>
 <a href="https://github.com/mahmoudashraf93"><img src="https://avatars.githubusercontent.com/u/9130129?v=4&s=48" width="48" height="48" alt="mahmoudashraf93"></a> <a href="https://github.com/philipp-spiess"><img src="https://avatars.githubusercontent.com/u/458591?v=4&s=48" width="48" height="48" alt="philipp-spiess"></a> <a href="https://github.com/pkrmf"><img src="https://avatars.githubusercontent.com/u/1714267?v=4&s=48" width="48" height="48" alt="pkrmf"></a> <a href="https://github.com/joshrad-dev"><img src="https://avatars.githubusercontent.com/u/62785552?v=4&s=48" width="48" height="48" alt="joshrad-dev"></a> <a href="https://github.com/factnest365-ops"><img src="https://avatars.githubusercontent.com/u/236534360?v=4&s=48" width="48" height="48" alt="factnest365-ops"></a> <a href="https://github.com/yingchunbai"><img src="https://avatars.githubusercontent.com/u/33477283?v=4&s=48" width="48" height="48" alt="yingchunbai"></a> <a href="https://github.com/aj47"><img src="https://avatars.githubusercontent.com/u/8023513?v=4&s=48" width="48" height="48" alt="AJ (@techfren)"></a> <a href="https://github.com/Alg0rix"><img src="https://avatars.githubusercontent.com/u/53804949?v=4&s=48" width="48" height="48" alt="Marchel Fahrezi"></a> <a href="https://github.com/futhgar"><img src="https://avatars.githubusercontent.com/u/51002668?v=4&s=48" width="48" height="48" alt="futhgar"></a> <a href="https://github.com/YonganZhang"><img src="https://avatars.githubusercontent.com/u/56248212?v=4&s=48" width="48" height="48" alt="Zhang"></a>
 <a href="https://github.com/remusao"><img src="https://avatars.githubusercontent.com/u/1299873?v=4&s=48" width="48" height="48" alt="Rémi"></a> <a href="https://github.com/danballance"><img src="https://avatars.githubusercontent.com/u/13839912?v=4&s=48" width="48" height="48" alt="Dan Ballance"></a> <a href="https://github.com/GHesericsu"><img src="https://avatars.githubusercontent.com/u/60202455?v=4&s=48" width="48" height="48" alt="Eric Su"></a> <a href="https://github.com/kimitaka"><img src="https://avatars.githubusercontent.com/u/167225?v=4&s=48" width="48" height="48" alt="Kimitaka Watanabe"></a> <a href="https://github.com/itsjling"><img src="https://avatars.githubusercontent.com/u/2521993?v=4&s=48" width="48" height="48" alt="Justin Ling"></a> <a href="https://github.com/RayBB"><img src="https://avatars.githubusercontent.com/u/921217?v=4&s=48" width="48" height="48" alt="Raymond Berger"></a> <a href="https://github.com/lutr0"><img src="https://avatars.githubusercontent.com/u/76906369?v=4&s=48" width="48" height="48" alt="lutr0"></a> <a href="https://github.com/claude"><img src="https://avatars.githubusercontent.com/u/81847?v=4&s=48" width="48" height="48" alt="claude"></a> <a href="https://github.com/angrybirddd"><img src="https://avatars.githubusercontent.com/u/48046333?v=4&s=48" width="48" height="48" alt="AngryBird"></a> <a href="https://github.com/fabianwilliams"><img src="https://avatars.githubusercontent.com/u/92543063?v=4&s=48" width="48" height="48" alt="Fabian Williams"></a>

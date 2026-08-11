@@ -15,8 +15,8 @@
     },
     {
       "id": "native.android.85cc8de945e3929c",
-      "source": "OpenClaw translations · $languageTag",
-      "translated": "OpenClawの翻訳 · $languageTag"
+      "source": "OpenCrustacean translations · $languageTag",
+      "translated": "OpenCrustaceanの翻訳 · $languageTag"
     },
     {
       "id": "native.android.914725056e04bd7a",
@@ -385,13 +385,13 @@
     },
     {
       "id": "native.android.25ce6f89dd2fda90",
-      "source": "OpenClaw Node · Talk",
-      "translated": "OpenClaw Node · トーク"
+      "source": "OpenCrustacean Node · Talk",
+      "translated": "OpenCrustacean Node · トーク"
     },
     {
       "id": "native.android.b48f7aeb7a884942",
-      "source": "OpenClaw Node · Connected",
-      "translated": "OpenClaw Node · 接続済み"
+      "source": "OpenCrustacean Node · Connected",
+      "translated": "OpenCrustacean Node · 接続済み"
     },
     {
       "id": "native.android.b781a577d8da896d",
@@ -400,8 +400,8 @@
     },
     {
       "id": "native.android.97365bea9725ae80",
-      "source": "OpenClaw Node",
-      "translated": "OpenClawノード"
+      "source": "OpenCrustacean Node",
+      "translated": "OpenCrustaceanノード"
     },
     {
       "id": "native.android.3e0889d921c92cab",
@@ -420,8 +420,8 @@
     },
     {
       "id": "native.android.f4886ad80e8149cf",
-      "source": "OpenClaw node connection status",
-      "translated": "OpenClaw node の接続ステータス"
+      "source": "OpenCrustacean node connection status",
+      "translated": "OpenCrustacean node の接続ステータス"
     },
     {
       "id": "native.android.20fb810920ccb98c",
@@ -950,8 +950,8 @@
     },
     {
       "id": "native.android.3b076d12026fd953",
-      "source": "OpenClaw is syncing back up",
-      "translated": "OpenClawを再同期しています"
+      "source": "OpenCrustacean is syncing back up",
+      "translated": "OpenCrustaceanを再同期しています"
     },
     {
       "id": "native.android.8dd8abf489f1fe50",
@@ -970,8 +970,8 @@
     },
     {
       "id": "native.android.8e22550e0205b237",
-      "source": "Welcome to OpenClaw",
-      "translated": "OpenClawへようこそ"
+      "source": "Welcome to OpenCrustacean",
+      "translated": "OpenCrustaceanへようこそ"
     },
     {
       "id": "native.android.fee881b8134958ab",
@@ -1050,8 +1050,8 @@
     },
     {
       "id": "native.android.237761be968be3f4",
-      "source": "OpenClaw needs ${labels.joinToString(\", \")} permissions to continue.",
-      "translated": "続行するには、OpenClaw に ${labels.joinToString(\", \")} の権限が必要です。"
+      "source": "OpenCrustacean needs ${labels.joinToString(\", \")} permissions to continue.",
+      "translated": "続行するには、OpenCrustacean に ${labels.joinToString(\", \")} の権限が必要です。"
     },
     {
       "id": "native.android.f9b9d558dc078d96",
@@ -1225,18 +1225,18 @@
     },
     {
       "id": "native.android.c9b3801fdf5499a9",
-      "source": "OpenClaw Passive",
-      "translated": "OpenClaw パッシブ"
+      "source": "OpenCrustacean Passive",
+      "translated": "OpenCrustacean パッシブ"
     },
     {
       "id": "native.android.e2a79a2c3ddba922",
-      "source": "OpenClaw Time Sensitive",
-      "translated": "OpenClaw 緊急"
+      "source": "OpenCrustacean Time Sensitive",
+      "translated": "OpenCrustacean 緊急"
     },
     {
       "id": "native.android.a79d6ccab877c9ca",
-      "source": "OpenClaw Active",
-      "translated": "OpenClaw アクティブ"
+      "source": "OpenCrustacean Active",
+      "translated": "OpenCrustacean アクティブ"
     },
     {
       "id": "native.android.2aa3ad1a12683954",
@@ -1250,13 +1250,13 @@
     },
     {
       "id": "native.android.e1a8681198e91766",
-      "source": "OpenClaw request failed.",
-      "translated": "OpenClaw のリクエストに失敗しました。"
+      "source": "OpenCrustacean request failed.",
+      "translated": "OpenCrustacean のリクエストに失敗しました。"
     },
     {
       "id": "native.android.a71a93ec69cee4d9",
-      "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
-      "translated": "Gateway 接続が変更されました。再接続するには OpenClaw を再起動してください。"
+      "source": "The Gateway connection changed. Restart OpenCrustacean to reconnect.",
+      "translated": "Gateway 接続が変更されました。再接続するには OpenCrustacean を再起動してください。"
     },
     {
       "id": "native.android.356609f717b92350",
@@ -1475,8 +1475,8 @@
     },
     {
       "id": "native.android.5ce94621017855b6",
-      "source": "Talk or dictate with OpenClaw",
-      "translated": "OpenClawで会話または音声入力"
+      "source": "Talk or dictate with OpenCrustacean",
+      "translated": "OpenCrustaceanで会話または音声入力"
     },
     {
       "id": "native.android.e2cf5a38587382cb",
@@ -1520,8 +1520,8 @@
     },
     {
       "id": "native.android.9f877120690b0c59",
-      "source": "Search OpenClaw",
-      "translated": "OpenClaw を検索"
+      "source": "Search OpenCrustacean",
+      "translated": "OpenCrustacean を検索"
     },
     {
       "id": "native.android.c142846e7b88306c",
@@ -1560,8 +1560,8 @@
     },
     {
       "id": "native.android.9a839f6e3e05a744",
-      "source": "OpenClaw thread",
-      "translated": "OpenClawスレッド"
+      "source": "OpenCrustacean thread",
+      "translated": "OpenCrustaceanスレッド"
     },
     {
       "id": "native.android.d83f82a1e4a5ed99",
@@ -2765,8 +2765,8 @@
     },
     {
       "id": "native.android.3c50060d3efc154d",
-      "source": "That QR code is not an OpenClaw setup QR. Generate a fresh code with openclaw qr, then try again.",
-      "translated": "このQRコードはOpenClawのセットアップQRではありません。openclaw qr で新しいコードを生成してから、もう一度お試しください。"
+      "source": "That QR code is not an OpenCrustacean setup QR. Generate a fresh code with openclaw qr, then try again.",
+      "translated": "このQRコードはOpenCrustaceanのセットアップQRではありません。openclaw qr で新しいコードを生成してから、もう一度お試しください。"
     },
     {
       "id": "native.android.f8cd1cbe29c4c582",
@@ -2825,18 +2825,18 @@
     },
     {
       "id": "native.android.64c8db13ef91513c",
-      "source": "Welcome to OpenClaw",
-      "translated": "OpenClaw へようこそ"
+      "source": "Welcome to OpenCrustacean",
+      "translated": "OpenCrustacean へようこそ"
     },
     {
       "id": "native.android.c38e106cc8f1e9ff",
-      "source": "Turn this device into a secure OpenClaw node for chat, voice, camera, and device tools.",
-      "translated": "このデバイスを、チャット、音声、カメラ、デバイスツール用の安全な OpenClaw ノードにします。"
+      "source": "Turn this device into a secure OpenCrustacean node for chat, voice, camera, and device tools.",
+      "translated": "このデバイスを、チャット、音声、カメラ、デバイスツール用の安全な OpenCrustacean ノードにします。"
     },
     {
       "id": "native.android.f941909a3fa51055",
-      "source": "OpenClaw logo",
-      "translated": "OpenClaw ロゴ"
+      "source": "OpenCrustacean logo",
+      "translated": "OpenCrustacean ロゴ"
     },
     {
       "id": "native.android.cc878f72a6b70b23",
@@ -2850,8 +2850,8 @@
     },
     {
       "id": "native.android.3bfe29d4d13d3c3e",
-      "source": "Use OpenClaw from your phone",
-      "translated": "スマートフォンから OpenClaw を使用"
+      "source": "Use OpenCrustacean from your phone",
+      "translated": "スマートフォンから OpenCrustacean を使用"
     },
     {
       "id": "native.android.c0b539eeb4612f5d",
@@ -2860,8 +2860,8 @@
     },
     {
       "id": "native.android.5aed4b5c8d6b246d",
-      "source": "The connected OpenClaw agent can use device capabilities you enable. Continue only if you trust the Gateway and agent you connect to.",
-      "translated": "接続された OpenClaw エージェントは、有効にしたデバイス機能を使用できます。接続先の Gateway とエージェントを信頼できる場合にのみ続行してください。"
+      "source": "The connected OpenCrustacean agent can use device capabilities you enable. Continue only if you trust the Gateway and agent you connect to.",
+      "translated": "接続された OpenCrustacean エージェントは、有効にしたデバイス機能を使用できます。接続先の Gateway とエージェントを信頼できる場合にのみ続行してください。"
     },
     {
       "id": "native.android.63c31ee564d63347",
@@ -2870,8 +2870,8 @@
     },
     {
       "id": "native.android.f50a9c1ee6d47055",
-      "source": "Scan a QR code or use the setup code from your OpenClaw Gateway.",
-      "translated": "QR コードをスキャンするか、OpenClaw Gateway からのセットアップコードを使用します。"
+      "source": "Scan a QR code or use the setup code from your OpenCrustacean Gateway.",
+      "translated": "QR コードをスキャンするか、OpenCrustacean Gateway からのセットアップコードを使用します。"
     },
     {
       "id": "native.android.58d80589d9d4b7ff",
@@ -2900,8 +2900,8 @@
     },
     {
       "id": "native.android.c8a43dbba02941f0",
-      "source": "Have a terminal open on the device running OpenClaw.",
-      "translated": "OpenClaw を実行しているデバイスでターミナルを開いておいてください。"
+      "source": "Have a terminal open on the device running OpenCrustacean.",
+      "translated": "OpenCrustacean を実行しているデバイスでターミナルを開いておいてください。"
     },
     {
       "id": "native.android.71ce00f359981a0b",
@@ -3145,8 +3145,8 @@
     },
     {
       "id": "native.android.f43cb6ed03dc6766",
-      "source": "Gateway pairing is complete. Approve this phone as a node so OpenClaw can use the device capabilities you enable.",
-      "translated": "Gateway のペアリングが完了しました。このスマートフォンをノードとして承認すると、有効にしたデバイス機能を OpenClaw が使用できるようになります。"
+      "source": "Gateway pairing is complete. Approve this phone as a node so OpenCrustacean can use the device capabilities you enable.",
+      "translated": "Gateway のペアリングが完了しました。このスマートフォンをノードとして承認すると、有効にしたデバイス機能を OpenCrustacean が使用できるようになります。"
     },
     {
       "id": "native.android.8e49feba12c350ac",
@@ -3190,8 +3190,8 @@
     },
     {
       "id": "native.android.d4c3bcf880727fb3",
-      "source": "Only enable access you are comfortable letting OpenClaw use while this phone is connected. You can change these later in Android Settings.",
-      "translated": "このスマートフォンが接続されている間に OpenClaw に使用を許可してもよいアクセス権のみを有効にしてください。これらは後で Android 設定で変更できます。"
+      "source": "Only enable access you are comfortable letting OpenCrustacean use while this phone is connected. You can change these later in Android Settings.",
+      "translated": "このスマートフォンが接続されている間に OpenCrustacean に使用を許可してもよいアクセス権のみを有効にしてください。これらは後で Android 設定で変更できます。"
     },
     {
       "id": "native.android.44549cfd7e6a1ab8",
@@ -3235,8 +3235,8 @@
     },
     {
       "id": "native.android.176b4f5d1c9f8ce2",
-      "source": "Approval is in progress.\nOpenClaw will reconnect automatically.",
-      "translated": "承認処理中です。\nOpenClawは自動的に再接続します。"
+      "source": "Approval is in progress.\nOpenCrustacean will reconnect automatically.",
+      "translated": "承認処理中です。\nOpenCrustaceanは自動的に再接続します。"
     },
     {
       "id": "native.android.466e3fb210732587",
@@ -3245,8 +3245,8 @@
     },
     {
       "id": "native.android.7b95b9e103bbbb92",
-      "source": "OpenClaw is checking gateway and node access.",
-      "translated": "OpenClawがGatewayとノードへのアクセスを確認しています。"
+      "source": "OpenCrustacean is checking gateway and node access.",
+      "translated": "OpenCrustaceanがGatewayとノードへのアクセスを確認しています。"
     },
     {
       "id": "native.android.a75fc5ca269cbb15",
@@ -3355,8 +3355,8 @@
     },
     {
       "id": "native.android.bdd063b9f766050b",
-      "source": "Gateway approval is in progress. OpenClaw will retry automatically.",
-      "translated": "Gatewayの承認処理中です。OpenClawが自動的に再試行します。"
+      "source": "Gateway approval is in progress. OpenCrustacean will retry automatically.",
+      "translated": "Gatewayの承認処理中です。OpenCrustaceanが自動的に再試行します。"
     },
     {
       "id": "native.android.45cfb86623fa2251",
@@ -3410,18 +3410,18 @@
     },
     {
       "id": "native.android.c94c164d474cb0db",
-      "source": "This app is older than the Gateway. Update OpenClaw on this device, then retry.",
-      "translated": "このアプリはGatewayより古いバージョンです。このデバイスのOpenClawを更新してから、再試行してください。"
+      "source": "This app is older than the Gateway. Update OpenCrustacean on this device, then retry.",
+      "translated": "このアプリはGatewayより古いバージョンです。このデバイスのOpenCrustaceanを更新してから、再試行してください。"
     },
     {
       "id": "native.android.48ba24436b643607",
-      "source": "The Gateway is older than this app. Update OpenClaw on the Gateway host, then retry.",
-      "translated": "Gatewayはこのアプリより古いバージョンです。GatewayホストのOpenClawを更新してから、再試行してください。"
+      "source": "The Gateway is older than this app. Update OpenCrustacean on the Gateway host, then retry.",
+      "translated": "Gatewayはこのアプリより古いバージョンです。GatewayホストのOpenCrustaceanを更新してから、再試行してください。"
     },
     {
       "id": "native.android.1473077d05ac1739",
-      "source": "The app and Gateway use incompatible protocol versions. Update OpenClaw on both, then retry.",
-      "translated": "アプリとGatewayのプロトコルバージョンに互換性がありません。両方のOpenClawを更新してから、再試行してください。"
+      "source": "The app and Gateway use incompatible protocol versions. Update OpenCrustacean on both, then retry.",
+      "translated": "アプリとGatewayのプロトコルバージョンに互換性がありません。両方のOpenCrustaceanを更新してから、再試行してください。"
     },
     {
       "id": "native.android.6379bfb6b09ef8cd",
@@ -3550,8 +3550,8 @@
     },
     {
       "id": "native.android.d096df67bff5e611",
-      "source": "Show OpenClaw alerts",
-      "translated": "OpenClawのアラートを表示"
+      "source": "Show OpenCrustacean alerts",
+      "translated": "OpenCrustaceanのアラートを表示"
     },
     {
       "id": "native.android.93cbec65dbc5de69",
@@ -3860,8 +3860,8 @@
     },
     {
       "id": "native.android.fc145645b9620e57",
-      "source": "OpenClaw thread",
-      "translated": "OpenClawスレッド"
+      "source": "OpenCrustacean thread",
+      "translated": "OpenCrustaceanスレッド"
     },
     {
       "id": "native.android.71cbb8dde8bf138b",
@@ -3925,8 +3925,8 @@
     },
     {
       "id": "native.android.b5e4ae7f8c9eca2d",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.android.f46b06f8550516e4",
@@ -4115,8 +4115,8 @@
     },
     {
       "id": "native.android.5e3e4cd42004cb28",
-      "source": "Scheduled OpenClaw work from your gateway.",
-      "translated": "Gateway からスケジュールされた OpenClaw の作業。"
+      "source": "Scheduled OpenCrustacean work from your gateway.",
+      "translated": "Gateway からスケジュールされた OpenCrustacean の作業。"
     },
     {
       "id": "native.android.31a5440e22667f02",
@@ -4275,8 +4275,8 @@
     },
     {
       "id": "native.android.fea93eda5bf97d9e",
-      "source": "How this phone appears to OpenClaw.",
-      "translated": "この電話が OpenClaw にどのように表示されるか。"
+      "source": "How this phone appears to OpenCrustacean.",
+      "translated": "この電話が OpenCrustacean にどのように表示されるか。"
     },
     {
       "id": "native.android.695229fd01afbc2d",
@@ -4315,8 +4315,8 @@
     },
     {
       "id": "native.android.6e58157abced395f",
-      "source": "Runs on-device while OpenClaw is visible.",
-      "translated": "OpenClaw の表示中にデバイス上で動作します。"
+      "source": "Runs on-device while OpenCrustacean is visible.",
+      "translated": "OpenCrustacean の表示中にデバイス上で動作します。"
     },
     {
       "id": "native.android.6464166ab71fde3f",
@@ -4395,8 +4395,8 @@
     },
     {
       "id": "native.android.5ff888931aae2738",
-      "source": "Check that OpenClaw can speak clearly on this phone.",
-      "translated": "OpenClaw がこのスマートフォンで明瞭に話せることを確認します。"
+      "source": "Check that OpenCrustacean can speak clearly on this phone.",
+      "translated": "OpenCrustacean がこのスマートフォンで明瞭に話せることを確認します。"
     },
     {
       "id": "native.android.f82d5d81f5dc9b43",
@@ -4505,8 +4505,8 @@
     },
     {
       "id": "native.android.9feed8722db5d2cc",
-      "source": "Choose what reaches OpenClaw.",
-      "translated": "OpenClaw に届く内容を選択します。"
+      "source": "Choose what reaches OpenCrustacean.",
+      "translated": "OpenCrustacean に届く内容を選択します。"
     },
     {
       "id": "native.android.d32071018de11907",
@@ -4525,8 +4525,8 @@
     },
     {
       "id": "native.android.5a077bf9cf4f47c8",
-      "source": "OpenClaw can receive selected alerts.",
-      "translated": "OpenClaw は選択したアラートを受信できます。"
+      "source": "OpenCrustacean can receive selected alerts.",
+      "translated": "OpenCrustacean は選択したアラートを受信できます。"
     },
     {
       "id": "native.android.a04ee29c0a3b68f5",
@@ -4685,8 +4685,8 @@
     },
     {
       "id": "native.android.bdafaceb7af93f5a",
-      "source": "OpenClaw can list launcher-visible apps.",
-      "translated": "OpenClaw はランチャーに表示されるアプリを一覧表示できます。"
+      "source": "OpenCrustacean can list launcher-visible apps.",
+      "translated": "OpenCrustacean はランチャーに表示されるアプリを一覧表示できます。"
     },
     {
       "id": "native.android.be89d5601904322a",
@@ -4715,8 +4715,8 @@
     },
     {
       "id": "native.android.58549715b04997cc",
-      "source": "Always allows requested location checks while OpenClaw is in the background; Android shows this in the persistent node notification.",
-      "translated": "OpenClaw がバックグラウンドにある間、要求された位置情報の確認を常に許可します。Android では、これが常駐ノード通知に表示されます。"
+      "source": "Always allows requested location checks while OpenCrustacean is in the background; Android shows this in the persistent node notification.",
+      "translated": "OpenCrustacean がバックグラウンドにある間、要求された位置情報の確認を常に許可します。Android では、これが常駐ノード通知に表示されます。"
     },
     {
       "id": "native.android.d5a8d7f97a7971b1",
@@ -4725,8 +4725,8 @@
     },
     {
       "id": "native.android.031d3ed6fb8a6559",
-      "source": "OpenClaw only checks location when your paired Gateway requests it. On the next Android screen, choose $backgroundPermissionLabel to allow checks while the app is in the background.",
-      "translated": "OpenClawは、ペアリング済みのGatewayから要求された場合にのみ位置情報を確認します。アプリがバックグラウンドにある間も確認できるようにするには、次のAndroid画面で$backgroundPermissionLabelを選択してください。"
+      "source": "OpenCrustacean only checks location when your paired Gateway requests it. On the next Android screen, choose $backgroundPermissionLabel to allow checks while the app is in the background.",
+      "translated": "OpenCrustaceanは、ペアリング済みのGatewayから要求された場合にのみ位置情報を確認します。アプリがバックグラウンドにある間も確認できるようにするには、次のAndroid画面で$backgroundPermissionLabelを選択してください。"
     },
     {
       "id": "native.android.c48805f3de1d72ca",
@@ -4740,13 +4740,13 @@
     },
     {
       "id": "native.android.c3a001bb0191892d",
-      "source": "OpenClaw collects and sends the names, package IDs, and status of apps visible on this phone when your paired OpenClaw Gateway asks for them. This lets your assistant answer questions and take actions using installed apps.",
-      "translated": "OpenClaw は、ペアリングされた OpenClaw Gateway が要求したときに、この端末に表示されているアプリの名前、パッケージ ID、ステータスを収集して送信します。これにより、アシスタントがインストール済みアプリを使って質問に答えたり操作を実行したりできます。"
+      "source": "OpenCrustacean collects and sends the names, package IDs, and status of apps visible on this phone when your paired OpenCrustacean Gateway asks for them. This lets your assistant answer questions and take actions using installed apps.",
+      "translated": "OpenCrustacean は、ペアリングされた OpenCrustacean Gateway が要求したときに、この端末に表示されているアプリの名前、パッケージ ID、ステータスを収集して送信します。これにより、アシスタントがインストール済みアプリを使って質問に答えたり操作を実行したりできます。"
     },
     {
       "id": "native.android.b05f8909de072d71",
-      "source": "Your phone sends this information to your Gateway, not to a server run by OpenClaw. Your Gateway may include it in requests to the AI provider you chose.",
-      "translated": "この情報は、OpenClaw が運営するサーバーではなく、お使いの Gateway に送信されます。Gateway は、選択した AI プロバイダーへのリクエストにこの情報を含める場合があります。"
+      "source": "Your phone sends this information to your Gateway, not to a server run by OpenCrustacean. Your Gateway may include it in requests to the AI provider you chose.",
+      "translated": "この情報は、OpenCrustacean が運営するサーバーではなく、お使いの Gateway に送信されます。Gateway は、選択した AI プロバイダーへのリクエストにこの情報を含める場合があります。"
     },
     {
       "id": "native.android.95a3cc1b163c1edf",
@@ -4790,8 +4790,8 @@
     },
     {
       "id": "native.android.9d658ff26e59274b",
-      "source": "Connection between this phone and OpenClaw.",
-      "translated": "この電話と OpenClaw の接続。"
+      "source": "Connection between this phone and OpenCrustacean.",
+      "translated": "この電話と OpenCrustacean の接続。"
     },
     {
       "id": "native.android.718cb50d1bff3e32",
@@ -5110,8 +5110,8 @@
     },
     {
       "id": "native.android.c2d37ac2ad4c9e3c",
-      "source": "OpenClaw for Android.",
-      "translated": "Android 版 OpenClaw。"
+      "source": "OpenCrustacean for Android.",
+      "translated": "Android 版 OpenCrustacean。"
     },
     {
       "id": "native.android.38889ec3f682dcf8",
@@ -5155,18 +5155,18 @@
     },
     {
       "id": "native.android.aac3310699b496c8",
-      "source": "© 2026 OpenClaw Foundation — MIT License.",
-      "translated": "© 2026 OpenClaw Foundation — MITライセンス。"
+      "source": "© 2026 OpenCrustacean Foundation — MIT License.",
+      "translated": "© 2026 OpenCrustacean Foundation — MITライセンス。"
     },
     {
       "id": "native.android.a157bbb606e9b398",
-      "source": "OpenClaw logo",
-      "translated": "OpenClaw ロゴ"
+      "source": "OpenCrustacean logo",
+      "translated": "OpenCrustacean ロゴ"
     },
     {
       "id": "native.android.7b78b4869baf2160",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.android.ad4c14835d1b71ca",
@@ -5180,8 +5180,8 @@
     },
     {
       "id": "native.android.996367534eb94cc2",
-      "source": "OpenClaw appreciates its partners in the open-source community.",
-      "translated": "OpenClaw はオープンソースコミュニティのパートナーに感謝しています。"
+      "source": "OpenCrustacean appreciates its partners in the open-source community.",
+      "translated": "OpenCrustacean はオープンソースコミュニティのパートナーに感謝しています。"
     },
     {
       "id": "native.android.24da1d2eb750ba07",
@@ -5230,8 +5230,8 @@
     },
     {
       "id": "native.android.c971506716c96e91",
-      "source": "OpenClaw turns this phone into a clean mobile command surface for threads, voice, providers, and Gateway.",
-      "translated": "OpenClawは、このスマートフォンをスレッド、音声、プロバイダー、Gatewayのためのシンプルなモバイルコマンド画面に変えます。"
+      "source": "OpenCrustacean turns this phone into a clean mobile command surface for threads, voice, providers, and Gateway.",
+      "translated": "OpenCrustaceanは、このスマートフォンをスレッド、音声、プロバイダー、Gatewayのためのシンプルなモバイルコマンド画面に変えます。"
     },
     {
       "id": "native.android.3a3bea53e6a6ada7",
@@ -5705,8 +5705,8 @@
     },
     {
       "id": "native.android.2e33a4fd5f60b550",
-      "source": "Start a chat and your active OpenClaw conversations will appear here.",
-      "translated": "チャットを開始すると、アクティブな OpenClaw の会話がここに表示されます。"
+      "source": "Start a chat and your active OpenCrustacean conversations will appear here.",
+      "translated": "チャットを開始すると、アクティブな OpenCrustacean の会話がここに表示されます。"
     },
     {
       "id": "native.android.85726cfd4207d48a",
@@ -5980,8 +5980,8 @@
     },
     {
       "id": "native.android.4f369a09c8731092",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.android.4878165188c0310c",
@@ -6140,8 +6140,8 @@
     },
     {
       "id": "native.android.ca1451df912ed5cf",
-      "source": "OpenClaw ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
-      "translated": "OpenClaw ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
+      "source": "OpenCrustacean ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+      "translated": "OpenCrustacean ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
     },
     {
       "id": "native.android.b7d8c506999a68f7",
@@ -6330,8 +6330,8 @@
     },
     {
       "id": "native.android.e197964b10ba02ce",
-      "source": "OpenClaw mobile",
-      "translated": "OpenClaw モバイル"
+      "source": "OpenCrustacean mobile",
+      "translated": "OpenCrustacean モバイル"
     },
     {
       "id": "native.android.45005deba537cc59",
@@ -6950,8 +6950,8 @@
     },
     {
       "id": "native.android.4b2c29c94377f235",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.android.7a7da7d8f8613d33",
@@ -6975,8 +6975,8 @@
     },
     {
       "id": "native.android.06e5bfbad4b42e3b",
-      "source": "Connect this phone to a Gateway before opening OpenClaw.",
-      "translated": "OpenClaw を開く前に、この電話を Gateway に接続してください。"
+      "source": "Connect this phone to a Gateway before opening OpenCrustacean.",
+      "translated": "OpenCrustacean を開く前に、この電話を Gateway に接続してください。"
     },
     {
       "id": "native.android.44cca3625b125c19",
@@ -6985,18 +6985,18 @@
     },
     {
       "id": "native.android.6089cc78ebd95573",
-      "source": "Checking whether this Gateway supports the OpenClaw settings assistant.",
-      "translated": "この Gateway が OpenClaw 設定アシスタントに対応しているかを確認中です。"
+      "source": "Checking whether this Gateway supports the OpenCrustacean settings assistant.",
+      "translated": "この Gateway が OpenCrustacean 設定アシスタントに対応しているかを確認中です。"
     },
     {
       "id": "native.android.3c3a35369bc2f1f9",
-      "source": "Update this Gateway to use the OpenClaw settings assistant.",
-      "translated": "OpenClaw 設定アシスタントを使用するには、この Gateway を更新してください。"
+      "source": "Update this Gateway to use the OpenCrustacean settings assistant.",
+      "translated": "OpenCrustacean 設定アシスタントを使用するには、この Gateway を更新してください。"
     },
     {
       "id": "native.android.41b7b9cd883e3e81",
-      "source": "OpenClaw is working…",
-      "translated": "OpenClaw が処理中です…"
+      "source": "OpenCrustacean is working…",
+      "translated": "OpenCrustacean が処理中です…"
     },
     {
       "id": "native.android.072481856dd25c89",
@@ -7005,8 +7005,8 @@
     },
     {
       "id": "native.android.25fcaa5f2ef2546e",
-      "source": "OpenClaw is ready to continue in your ordinary chat.",
-      "translated": "OpenClaw は通常のチャットで続行する準備ができています。"
+      "source": "OpenCrustacean is ready to continue in your ordinary chat.",
+      "translated": "OpenCrustacean は通常のチャットで続行する準備ができています。"
     },
     {
       "id": "native.android.88377fbc76395226",
@@ -7035,8 +7035,8 @@
     },
     {
       "id": "native.android.4753194a1f8c6c6b",
-      "source": "Reply to OpenClaw…",
-      "translated": "OpenClawに返信…"
+      "source": "Reply to OpenCrustacean…",
+      "translated": "OpenCrustaceanに返信…"
     },
     {
       "id": "native.android.07d2609a561a43b0",
@@ -7115,8 +7115,8 @@
     },
     {
       "id": "native.android.9d977253fdcda216",
-      "source": "OpenClaw speaking",
-      "translated": "OpenClawが話しています"
+      "source": "OpenCrustacean speaking",
+      "translated": "OpenCrustaceanが話しています"
     },
     {
       "id": "native.android.1babfd757bbcfeb4",
@@ -7195,8 +7195,8 @@
     },
     {
       "id": "native.android.2e2b5efe4ca2380a",
-      "source": "OpenClaw is replying",
-      "translated": "OpenClawが応答中"
+      "source": "OpenCrustacean is replying",
+      "translated": "OpenCrustaceanが応答中"
     },
     {
       "id": "native.android.64731fc46a862f86",
@@ -7295,8 +7295,8 @@
     },
     {
       "id": "native.android.253debc9d0714dda",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.android.24057bba4bbfa27a",
@@ -7315,8 +7315,8 @@
     },
     {
       "id": "native.android.5b8bd9f2b69b91ea",
-      "source": "OpenClaw is preparing a response.",
-      "translated": "OpenClawが応答を準備しています。"
+      "source": "OpenCrustacean is preparing a response.",
+      "translated": "OpenCrustaceanが応答を準備しています。"
     },
     {
       "id": "native.android.420cccbd48298a8d",
@@ -7330,8 +7330,8 @@
     },
     {
       "id": "native.android.285eeed928be0fc1",
-      "source": "OpenClaw only listens when you start Talk or Dictation.",
-      "translated": "OpenClawは、あなたが会話またはディクテーションを開始したときのみ聞き取ります。"
+      "source": "OpenCrustacean only listens when you start Talk or Dictation.",
+      "translated": "OpenCrustaceanは、あなたが会話またはディクテーションを開始したときのみ聞き取ります。"
     },
     {
       "id": "native.android.b10a51fe9d4b8d2d",
@@ -7340,8 +7340,8 @@
     },
     {
       "id": "native.android.c8bff891c9a442d9",
-      "source": "OpenClaw is speaking",
-      "translated": "OpenClawが話しています"
+      "source": "OpenCrustacean is speaking",
+      "translated": "OpenCrustaceanが話しています"
     },
     {
       "id": "native.android.248e1292eff12b84",
@@ -7885,8 +7885,8 @@
     },
     {
       "id": "native.android.dfbd755eb43b4d26",
-      "source": "OpenClaw · Live",
-      "translated": "OpenClaw · ライブ"
+      "source": "OpenCrustacean · Live",
+      "translated": "OpenCrustacean · ライブ"
     },
     {
       "id": "native.android.b3ff30d4e0b3ce58",
@@ -7900,8 +7900,8 @@
     },
     {
       "id": "native.android.82e9fe45e93909b6",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.android.02b4598277aca860",
@@ -8105,8 +8105,8 @@
     },
     {
       "id": "native.android.ebe49a8b8df80bd3",
-      "source": "Catch me up on my recent OpenClaw threads and suggest next steps.",
-      "translated": "最近のOpenClawスレッドの内容をまとめ、次のステップを提案してください。"
+      "source": "Catch me up on my recent OpenCrustacean threads and suggest next steps.",
+      "translated": "最近のOpenCrustaceanスレッドの内容をまとめ、次のステップを提案してください。"
     },
     {
       "id": "native.android.79f64f0b5ecaa07c",
@@ -8130,8 +8130,8 @@
     },
     {
       "id": "native.android.1656b8b922a5e3f2",
-      "source": "Ask OpenClaw to use Android capabilities.",
-      "translated": "Androidの機能を使用するようOpenClawに依頼します。"
+      "source": "Ask OpenCrustacean to use Android capabilities.",
+      "translated": "Androidの機能を使用するようOpenCrustaceanに依頼します。"
     },
     {
       "id": "native.android.04c826e3507eb47e",
@@ -8140,8 +8140,8 @@
     },
     {
       "id": "native.android.67075c8d2ccc0bb5",
-      "source": "OpenClaw · Live",
-      "translated": "OpenClaw · ライブ"
+      "source": "OpenCrustacean · Live",
+      "translated": "OpenCrustacean · ライブ"
     },
     {
       "id": "native.android.869f1130ca16bab5",
@@ -8155,8 +8155,8 @@
     },
     {
       "id": "native.android.25d8575c0063aee5",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.android.b18964167dbb3c02",
@@ -8195,8 +8195,8 @@
     },
     {
       "id": "native.android.d851a32f367f8b31",
-      "source": "OpenClaw is working",
-      "translated": "OpenClaw が作業中です"
+      "source": "OpenCrustacean is working",
+      "translated": "OpenCrustacean が作業中です"
     },
     {
       "id": "native.android.0fd6b75cadc0ce75",
@@ -8310,8 +8310,8 @@
     },
     {
       "id": "native.android.f1d69eb66c5dfa39",
-      "source": "Message OpenClaw",
-      "translated": "OpenClaw にメッセージ"
+      "source": "Message OpenCrustacean",
+      "translated": "OpenCrustacean にメッセージ"
     },
     {
       "id": "native.android.9b42791ed9da90d3",
@@ -8635,8 +8635,8 @@
     },
     {
       "id": "native.android.79d7a1026ef43e80",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.android.e8318a46a213cb91",
@@ -8670,13 +8670,13 @@
     },
     {
       "id": "native.android.794873efdfcdff4f",
-      "source": "OpenClaw gateway",
-      "translated": "OpenClaw Gateway"
+      "source": "OpenCrustacean gateway",
+      "translated": "OpenCrustacean Gateway"
     },
     {
       "id": "native.android.2d3b6dd9a8f186fe",
-      "source": "Ask OpenClaw anything",
-      "translated": "OpenClaw に何でも質問"
+      "source": "Ask OpenCrustacean anything",
+      "translated": "OpenCrustacean に何でも質問"
     },
     {
       "id": "native.android.608ccdaeababf056",
@@ -8710,8 +8710,8 @@
     },
     {
       "id": "native.android.3457b4ee28d964ee",
-      "source": "OpenClaw will surface approvals, failed jobs, and channel issues here.",
-      "translated": "OpenClaw は承認、失敗したジョブ、チャネルの問題をここに表示します。"
+      "source": "OpenCrustacean will surface approvals, failed jobs, and channel issues here.",
+      "translated": "OpenCrustacean は承認、失敗したジョブ、チャネルの問題をここに表示します。"
     },
     {
       "id": "native.android.7a6a37643fcfb2d9",
@@ -8995,23 +8995,23 @@
     },
     {
       "id": "native.android.f392ee2d50d6b7ce",
-      "source": "ask OpenClaw $prompt",
-      "translated": "OpenClaw に $prompt を尋ねる"
+      "source": "ask OpenCrustacean $prompt",
+      "translated": "OpenCrustacean に $prompt を尋ねる"
     },
     {
       "id": "native.android.ea9d1a78cfa13033",
-      "source": "tell OpenClaw to $prompt",
-      "translated": "OpenClaw に $prompt するよう伝える"
+      "source": "tell OpenCrustacean to $prompt",
+      "translated": "OpenCrustacean に $prompt するよう伝える"
     },
     {
       "id": "native.android.7f96ac9b9e10abd0",
-      "source": "open OpenClaw and ask $prompt",
-      "translated": "OpenClaw を開いて $prompt を尋ねる"
+      "source": "open OpenCrustacean and ask $prompt",
+      "translated": "OpenCrustacean を開いて $prompt を尋ねる"
     },
     {
       "id": "native.android.a3c395b04ae7a621",
-      "source": "OpenClaw Node",
-      "translated": "OpenClaw Node"
+      "source": "OpenCrustacean Node",
+      "translated": "OpenCrustacean Node"
     },
     {
       "id": "native.android.cd32b06480d9bb69",
@@ -9095,13 +9095,13 @@
     },
     {
       "id": "native.android.e3661fcea979a74c",
-      "source": "OpenClaw Git commit",
-      "translated": "OpenClaw Git コミット"
+      "source": "OpenCrustacean Git commit",
+      "translated": "OpenCrustacean Git コミット"
     },
     {
       "id": "native.android.a610564c863cdef7",
-      "source": "OpenClaw build timestamp",
-      "translated": "OpenClaw ビルドタイムスタンプ"
+      "source": "OpenCrustacean build timestamp",
+      "translated": "OpenCrustacean ビルドタイムスタンプ"
     },
     {
       "id": "native.android.9b9a42b4f56bea2a",
@@ -9280,8 +9280,8 @@
     },
     {
       "id": "native.android.16d2abc828935351",
-      "source": "Enabling lets OpenClaw observe and control other apps' screens when armed. Android accessibility access is required.",
-      "translated": "有効にすると、アーム中に OpenClaw が他のアプリの画面を観察および操作できるようになります。Android のユーザー補助アクセスが必要です。"
+      "source": "Enabling lets OpenCrustacean observe and control other apps' screens when armed. Android accessibility access is required.",
+      "translated": "有効にすると、アーム中に OpenCrustacean が他のアプリの画面を観察および操作できるようになります。Android のユーザー補助アクセスが必要です。"
     },
     {
       "id": "native.android.2762510a90e577a3",
@@ -9295,8 +9295,8 @@
     },
     {
       "id": "native.android.b3cae8c7b0ac2222",
-      "source": "OpenClaw UI control",
-      "translated": "OpenClaw UI 操作"
+      "source": "OpenCrustacean UI control",
+      "translated": "OpenCrustacean UI 操作"
     },
     {
       "id": "native.android.d980d910a3466dc2",
@@ -9305,13 +9305,13 @@
     },
     {
       "id": "native.android.7f56eb025a774101",
-      "source": "Allows the third-party OpenClaw build to inspect and control the active app during local development.",
-      "translated": "ローカル開発中に、サードパーティの OpenClaw ビルドがアクティブなアプリを検査および操作できるようにします。"
+      "source": "Allows the third-party OpenCrustacean build to inspect and control the active app during local development.",
+      "translated": "ローカル開発中に、サードパーティの OpenCrustacean ビルドがアクティブなアプリを検査および操作できるようにします。"
     },
     {
       "id": "native.android.e1c713595c555f5f",
-      "source": "OpenClaw Accessibility Developer",
-      "translated": "OpenClaw アクセシビリティ開発者"
+      "source": "OpenCrustacean Accessibility Developer",
+      "translated": "OpenCrustacean アクセシビリティ開発者"
     },
     {
       "id": "native.android.342644995c7fa39d",
@@ -9510,8 +9510,8 @@
     },
     {
       "id": "native.android.b8de3221042b2fd3",
-      "source": "Talk or type on your watch. The paired phone sends the message through its authenticated OpenClaw session.",
-      "translated": "ウォッチで話すか入力してください。ペアリング済みのスマートフォンが、認証済みのOpenClawセッションを通じてメッセージを送信します。"
+      "source": "Talk or type on your watch. The paired phone sends the message through its authenticated OpenCrustacean session.",
+      "translated": "ウォッチで話すか入力してください。ペアリング済みのスマートフォンが、認証済みのOpenCrustaceanセッションを通じてメッセージを送信します。"
     },
     {
       "id": "native.android.44c6bb3c4c7b61ae",
@@ -9620,13 +9620,13 @@
     },
     {
       "id": "native.android.5d98a2a8a4f1f793",
-      "source": "Reconnect the Gateway in OpenClaw on the paired phone.",
-      "translated": "ペアリングしたスマートフォンのOpenClawでGatewayに再接続してください。"
+      "source": "Reconnect the Gateway in OpenCrustacean on the paired phone.",
+      "translated": "ペアリングしたスマートフォンのOpenCrustaceanでGatewayに再接続してください。"
     },
     {
       "id": "native.android.867011d568b0b0db",
-      "source": "Open OpenClaw on phone",
-      "translated": "スマートフォンでOpenClawを開く"
+      "source": "Open OpenCrustacean on phone",
+      "translated": "スマートフォンでOpenCrustaceanを開く"
     },
     {
       "id": "native.android.e70d812f3bc1bb40",
@@ -9640,8 +9640,8 @@
     },
     {
       "id": "native.android.d6c4dc6d15a4eaac",
-      "source": "Keep the paired phone nearby and install the matching OpenClaw app.",
-      "translated": "ペアリングしたスマートフォンを近くに置き、対応するOpenClawアプリをインストールしてください。"
+      "source": "Keep the paired phone nearby and install the matching OpenCrustacean app.",
+      "translated": "ペアリングしたスマートフォンを近くに置き、対応するOpenCrustaceanアプリをインストールしてください。"
     },
     {
       "id": "native.android.bfebf63a2c96e9cd",
@@ -9675,8 +9675,8 @@
     },
     {
       "id": "native.android.ce39278848b1615d",
-      "source": "Update OpenClaw on both phone and watch.",
-      "translated": "スマートフォンとウォッチの両方でOpenClawをアップデートしてください。"
+      "source": "Update OpenCrustacean on both phone and watch.",
+      "translated": "スマートフォンとウォッチの両方でOpenCrustaceanをアップデートしてください。"
     },
     {
       "id": "native.android.b5d6a37fb96f38f1",
@@ -9690,8 +9690,8 @@
     },
     {
       "id": "native.android.6b973e2d4540f1dc",
-      "source": "OpenClaw replies",
-      "translated": "OpenClawからの返信"
+      "source": "OpenCrustacean replies",
+      "translated": "OpenCrustaceanからの返信"
     },
     {
       "id": "native.android.daf75f1939c5048f",
@@ -9700,8 +9700,8 @@
     },
     {
       "id": "native.android.2ab12cfd9399407c",
-      "source": "OpenClaw reply",
-      "translated": "OpenClawの返信"
+      "source": "OpenCrustacean reply",
+      "translated": "OpenCrustaceanの返信"
     },
     {
       "id": "native.android.289456e2626dd0f4",
@@ -9715,8 +9715,8 @@
     },
     {
       "id": "native.android.3ec65645eda5ded7",
-      "source": "Open OpenClaw to reply",
-      "translated": "OpenClawを開いて返信"
+      "source": "Open OpenCrustacean to reply",
+      "translated": "OpenCrustaceanを開いて返信"
     },
     {
       "id": "native.android.7658464805a4b605",
@@ -9725,8 +9725,8 @@
     },
     {
       "id": "native.android.6b2e913641d45f02",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.android.7c74dd9a2bf91d3a",
@@ -9750,8 +9750,8 @@
     },
     {
       "id": "native.apple.86d546e1f1247028",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.9fd01bdb5a753f3e",
@@ -12000,8 +12000,8 @@
     },
     {
       "id": "native.apple.3548c8d1ab43e85e",
-      "source": "OpenClaw could not prepare the Markdown file.",
-      "translated": "OpenClaw は Markdown ファイルを準備できませんでした。"
+      "source": "OpenCrustacean could not prepare the Markdown file.",
+      "translated": "OpenCrustacean は Markdown ファイルを準備できませんでした。"
     },
     {
       "id": "native.apple.202b97e93b938049",
@@ -12120,13 +12120,13 @@
     },
     {
       "id": "native.apple.14492e334b87e4f2",
-      "source": "Check OpenClaw status",
-      "translated": "OpenClaw のステータスを確認"
+      "source": "Check OpenCrustacean status",
+      "translated": "OpenCrustacean のステータスを確認"
     },
     {
       "id": "native.apple.bbf7bd23da1e7865",
-      "source": "Summarize the current OpenClaw status and tell me what needs attention.",
-      "translated": "現在の OpenClaw のステータスを要約し、注意が必要な項目を教えてください。"
+      "source": "Summarize the current OpenCrustacean status and tell me what needs attention.",
+      "translated": "現在の OpenCrustacean のステータスを要約し、注意が必要な項目を教えてください。"
     },
     {
       "id": "native.apple.ea8cbb1b4230c652",
@@ -13235,8 +13235,8 @@
     },
     {
       "id": "native.apple.56935c5384889b8e",
-      "source": "Browse the current OpenClaw reference.",
-      "translated": "現在のOpenClawリファレンスを参照します。"
+      "source": "Browse the current OpenCrustacean reference.",
+      "translated": "現在のOpenCrustaceanリファレンスを参照します。"
     },
     {
       "id": "native.apple.2ee2f8c71fa2d2cc",
@@ -13265,8 +13265,8 @@
     },
     {
       "id": "native.apple.cf9bb65f8e405cc8",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.20d011936ab5cd30",
@@ -13570,8 +13570,8 @@
     },
     {
       "id": "native.apple.9bb1dae351d0e3a4",
-      "source": "Enable OpenClaw Hosted Push Relay?",
-      "translated": "OpenClaw Hosted Push Relay を有効にしますか？"
+      "source": "Enable OpenCrustacean Hosted Push Relay?",
+      "translated": "OpenCrustacean Hosted Push Relay を有効にしますか？"
     },
     {
       "id": "native.apple.f8c042a923222472",
@@ -13750,8 +13750,8 @@
     },
     {
       "id": "native.apple.2d878afa870cd7cc",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.b99af99847ac7823",
@@ -13810,13 +13810,13 @@
     },
     {
       "id": "native.apple.3503aca018f04865",
-      "source": "Setup sent. Open OpenClaw on the watch to connect.",
-      "translated": "セットアップを送信しました。ウォッチで OpenClaw を開いて接続してください。"
+      "source": "Setup sent. Open OpenCrustacean on the watch to connect.",
+      "translated": "セットアップを送信しました。ウォッチで OpenCrustacean を開いて接続してください。"
     },
     {
       "id": "native.apple.a9a778465dfe1198",
-      "source": "Setup queued for the watch. Open OpenClaw before the code expires.",
-      "translated": "ウォッチのセットアップがキューに入りました。コードの有効期限が切れる前に OpenClaw を開いてください。"
+      "source": "Setup queued for the watch. Open OpenCrustacean before the code expires.",
+      "translated": "ウォッチのセットアップがキューに入りました。コードの有効期限が切れる前に OpenCrustacean を開いてください。"
     },
     {
       "id": "native.apple.ba8d38a642bee7f3",
@@ -13825,8 +13825,8 @@
     },
     {
       "id": "native.apple.07668650c75a20f1",
-      "source": "Pairing required. Run /pair approve in your OpenClaw chat, then connect again.",
-      "translated": "ペアリングが必要です。OpenClawチャットで/pair approveを実行してから、もう一度接続してください。"
+      "source": "Pairing required. Run /pair approve in your OpenCrustacean chat, then connect again.",
+      "translated": "ペアリングが必要です。OpenCrustaceanチャットで/pair approveを実行してから、もう一度接続してください。"
     },
     {
       "id": "native.apple.101b491eed1648ce",
@@ -13905,8 +13905,8 @@
     },
     {
       "id": "native.apple.3d805ac21285b092",
-      "source": "Foreground approvals still appear while OpenClaw is connected.",
-      "translated": "OpenClawの接続中は、フォアグラウンドでの承認が引き続き表示されます。"
+      "source": "Foreground approvals still appear while OpenCrustacean is connected.",
+      "translated": "OpenCrustaceanの接続中は、フォアグラウンドでの承認が引き続き表示されます。"
     },
     {
       "id": "native.apple.0b7a54926d06b7d8",
@@ -14045,18 +14045,18 @@
     },
     {
       "id": "native.apple.817057c658a751c7",
-      "source": "This build uses OpenClaw's hosted push relay at %@ for notification delivery data.",
-      "translated": "このビルドでは、通知配信データに%@のOpenClawホステッドプッシュリレーを使用します。"
+      "source": "This build uses OpenCrustacean's hosted push relay at %@ for notification delivery data.",
+      "translated": "このビルドでは、通知配信データに%@のOpenCrustaceanホステッドプッシュリレーを使用します。"
     },
     {
       "id": "native.apple.d70d23305da2016a",
-      "source": "This build is not configured to use OpenClaw's hosted push relay.",
-      "translated": "このビルドは、OpenClawのホステッドプッシュリレーを使用するように構成されていません。"
+      "source": "This build is not configured to use OpenCrustacean's hosted push relay.",
+      "translated": "このビルドは、OpenCrustaceanのホステッドプッシュリレーを使用するように構成されていません。"
     },
     {
       "id": "native.apple.6c81c3d48548ca05",
-      "source": "Enabling this sends delivery data through OpenClaw's hosted push relay.",
-      "translated": "これを有効にすると、配信データがOpenClawのホステッドプッシュリレー経由で送信されます。"
+      "source": "Enabling this sends delivery data through OpenCrustacean's hosted push relay.",
+      "translated": "これを有効にすると、配信データがOpenCrustaceanのホステッドプッシュリレー経由で送信されます。"
     },
     {
       "id": "native.apple.80fade864c8ad242",
@@ -14095,8 +14095,8 @@
     },
     {
       "id": "native.apple.fc49f9b63e160581",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.2c2cdafd79f8ba5b",
@@ -14245,8 +14245,8 @@
     },
     {
       "id": "native.apple.1bd0f0b41f4d4750",
-      "source": "Install the OpenClaw watch app before enabling direct mode.",
-      "translated": "ダイレクトモードを有効にする前に OpenClaw ウォッチアプリをインストールしてください。"
+      "source": "Install the OpenCrustacean watch app before enabling direct mode.",
+      "translated": "ダイレクトモードを有効にする前に OpenCrustacean ウォッチアプリをインストールしてください。"
     },
     {
       "id": "native.apple.3710cda9cb13870f",
@@ -14285,8 +14285,8 @@
     },
     {
       "id": "native.apple.2e042499c42824f5",
-      "source": "Enable Notifications to receive approval alerts while OpenClaw is not open.",
-      "translated": "OpenClaw が開いていないときに承認アラートを受け取るには、通知を有効にしてください。"
+      "source": "Enable Notifications to receive approval alerts while OpenCrustacean is not open.",
+      "translated": "OpenCrustacean が開いていないときに承認アラートを受け取るには、通知を有効にしてください。"
     },
     {
       "id": "native.apple.fc1f2fdbe437cb9d",
@@ -14395,8 +14395,8 @@
     },
     {
       "id": "native.apple.d1ee91d07764faf0",
-      "source": "Turns OpenClaw notification delivery on or off",
-      "translated": "OpenClawの通知配信をオン/オフします"
+      "source": "Turns OpenCrustacean notification delivery on or off",
+      "translated": "OpenCrustaceanの通知配信をオン/オフします"
     },
     {
       "id": "native.apple.31f9c5fa6c3ca5dd",
@@ -14415,8 +14415,8 @@
     },
     {
       "id": "native.apple.a82dc4a746268028",
-      "source": "OpenClaw appreciates its partners in the open-source community.",
-      "translated": "OpenClaw は、オープンソースコミュニティのパートナーに感謝します。"
+      "source": "OpenCrustacean appreciates its partners in the open-source community.",
+      "translated": "OpenCrustacean は、オープンソースコミュニティのパートナーに感謝します。"
     },
     {
       "id": "native.apple.eaa4fe72f3730f3f",
@@ -14450,8 +14450,8 @@
     },
     {
       "id": "native.apple.b962116ff5bf1905",
-      "source": "© 2026 OpenClaw Foundation — MIT License.",
-      "translated": "© 2026 OpenClaw Foundation — MIT License."
+      "source": "© 2026 OpenCrustacean Foundation — MIT License.",
+      "translated": "© 2026 OpenCrustacean Foundation — MIT License."
     },
     {
       "id": "native.apple.106434d1305d153b",
@@ -14850,13 +14850,13 @@
     },
     {
       "id": "native.apple.675219772ee5adf0",
-      "source": "OpenClaw can show approval prompts and event alerts when the app is not active.",
-      "translated": "OpenClawはアプリが非アクティブなときに承認プロンプトやイベントアラートを表示できます。"
+      "source": "OpenCrustacean can show approval prompts and event alerts when the app is not active.",
+      "translated": "OpenCrustaceanはアプリが非アクティブなときに承認プロンプトやイベントアラートを表示できます。"
     },
     {
       "id": "native.apple.44133229b2b05062",
-      "source": "OpenClaw notifications are off.",
-      "translated": "OpenClawの通知はオフです。"
+      "source": "OpenCrustacean notifications are off.",
+      "translated": "OpenCrustaceanの通知はオフです。"
     },
     {
       "id": "native.apple.9794732a37cb580f",
@@ -14875,8 +14875,8 @@
     },
     {
       "id": "native.apple.bfe6a918d23fa20e",
-      "source": "OpenClaw cannot determine the current notification permission state.",
-      "translated": "OpenClawは現在の通知権限の状態を判定できません。"
+      "source": "OpenCrustacean cannot determine the current notification permission state.",
+      "translated": "OpenCrustaceanは現在の通知権限の状態を判定できません。"
     },
     {
       "id": "native.apple.fc7d007916016c0d",
@@ -15370,18 +15370,18 @@
     },
     {
       "id": "native.apple.8aee90eb1e1061b9",
-      "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
-      "translated": "Gateway 接続が変更されました。OpenClaw を再起動して再接続してください。"
+      "source": "The Gateway connection changed. Restart OpenCrustacean to reconnect.",
+      "translated": "Gateway 接続が変更されました。OpenCrustacean を再起動して再接続してください。"
     },
     {
       "id": "native.apple.47bc765cd8464c1e",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.a791a671fb60b5f7",
-      "source": "OpenClaw is working…",
-      "translated": "OpenClaw が処理中です…"
+      "source": "OpenCrustacean is working…",
+      "translated": "OpenCrustacean が処理中です…"
     },
     {
       "id": "native.apple.bd0e286399723c42",
@@ -15405,8 +15405,8 @@
     },
     {
       "id": "native.apple.441f1770a487a055",
-      "source": "Connect this iPhone to a Gateway before opening the OpenClaw settings assistant.",
-      "translated": "OpenClaw 設定アシスタントを開く前に、この iPhone を Gateway に接続してください。"
+      "source": "Connect this iPhone to a Gateway before opening the OpenCrustacean settings assistant.",
+      "translated": "OpenCrustacean 設定アシスタントを開く前に、この iPhone を Gateway に接続してください。"
     },
     {
       "id": "native.apple.8e0a20f39742ff98",
@@ -15415,13 +15415,13 @@
     },
     {
       "id": "native.apple.9115f5d67e36fd08",
-      "source": "Checking whether this Gateway supports the OpenClaw settings assistant.",
-      "translated": "この Gateway が OpenClaw 設定アシスタントに対応しているか確認しています。"
+      "source": "Checking whether this Gateway supports the OpenCrustacean settings assistant.",
+      "translated": "この Gateway が OpenCrustacean 設定アシスタントに対応しているか確認しています。"
     },
     {
       "id": "native.apple.3a7955c72e7ab728",
-      "source": "Update this Gateway to use the OpenClaw settings assistant.",
-      "translated": "OpenClaw 設定アシスタントを使用するには、この Gateway を更新してください。"
+      "source": "Update this Gateway to use the OpenCrustacean settings assistant.",
+      "translated": "OpenCrustacean 設定アシスタントを使用するには、この Gateway を更新してください。"
     },
     {
       "id": "native.apple.fd24248c00007ba3",
@@ -15430,8 +15430,8 @@
     },
     {
       "id": "native.apple.7ec6b261897ee62c",
-      "source": "OpenClaw is ready to continue in your ordinary chat.",
-      "translated": "OpenClaw は通常のチャットで続行する準備ができました。"
+      "source": "OpenCrustacean is ready to continue in your ordinary chat.",
+      "translated": "OpenCrustacean は通常のチャットで続行する準備ができました。"
     },
     {
       "id": "native.apple.ad820dd76c74e3f8",
@@ -15450,8 +15450,8 @@
     },
     {
       "id": "native.apple.e40e721e131e606e",
-      "source": "Reply to OpenClaw…",
-      "translated": "OpenClaw に返信…"
+      "source": "Reply to OpenCrustacean…",
+      "translated": "OpenCrustacean に返信…"
     },
     {
       "id": "native.apple.5b0adbb8a28011ab",
@@ -15500,8 +15500,8 @@
     },
     {
       "id": "native.apple.c218ef5194d0ee56",
-      "source": "Run OpenClaw agent?",
-      "translated": "OpenClaw エージェントを実行しますか？"
+      "source": "Run OpenCrustacean agent?",
+      "translated": "OpenCrustacean エージェントを実行しますか？"
     },
     {
       "id": "native.apple.5d2fb30a9c85ad10",
@@ -15900,8 +15900,8 @@
     },
     {
       "id": "native.apple.8f6f60c9a5196918",
-      "source": "Exec approvals can only be reviewed while OpenClaw is open and connected.\n\nEnable Notifications to receive approval notifications while OpenClaw is not open.",
-      "translated": "実行承認は、OpenClawが開いていて接続されている間のみ確認できます。\n\nOpenClawが開いていない間に承認通知を受け取るには、通知を有効にしてください。"
+      "source": "Exec approvals can only be reviewed while OpenCrustacean is open and connected.\n\nEnable Notifications to receive approval notifications while OpenCrustacean is not open.",
+      "translated": "実行承認は、OpenCrustaceanが開いていて接続されている間のみ確認できます。\n\nOpenCrustaceanが開いていない間に承認通知を受け取るには、通知を有効にしてください。"
     },
     {
       "id": "native.apple.a2378696390cca1e",
@@ -15950,73 +15950,73 @@
     },
     {
       "id": "native.apple.cf820096080f7031",
-      "source": "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.",
-      "translated": "OpenClawは、カレンダーへのアクセスを有効にしたときに、イベントとスケジュールのコンテキストを表示するためにカレンダーを使用します。"
+      "source": "OpenCrustacean uses your calendars to show events and scheduling context when you enable calendar access.",
+      "translated": "OpenCrustaceanは、カレンダーへのアクセスを有効にしたときに、イベントとスケジュールのコンテキストを表示するためにカレンダーを使用します。"
     },
     {
       "id": "native.apple.fe85b609e9a9a144",
-      "source": "OpenClaw uses your calendars to add events when you enable calendar access.",
-      "translated": "OpenClawは、カレンダーへのアクセスを有効にしたときに、イベントを追加するためにカレンダーを使用します。"
+      "source": "OpenCrustacean uses your calendars to add events when you enable calendar access.",
+      "translated": "OpenCrustaceanは、カレンダーへのアクセスを有効にしたときに、イベントを追加するためにカレンダーを使用します。"
     },
     {
       "id": "native.apple.ff5729a17d66ad91",
-      "source": "OpenClaw uses the camera when you scan a Gateway setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace.",
-      "translated": "OpenClawは、Gateway設定用QRコードをスキャンするとき、またはペアリング済みのGatewayやアシスタントにこのiPhoneから写真や短い動画の撮影を依頼するときにカメラを使用します。たとえば、Gatewayに接続したり、アシスタントにドキュメント、デバイス画面、ワークスペースを見せたりする場合です。"
+      "source": "OpenCrustacean uses the camera when you scan a Gateway setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace.",
+      "translated": "OpenCrustaceanは、Gateway設定用QRコードをスキャンするとき、またはペアリング済みのGatewayやアシスタントにこのiPhoneから写真や短い動画の撮影を依頼するときにカメラを使用します。たとえば、Gatewayに接続したり、アシスタントにドキュメント、デバイス画面、ワークスペースを見せたりする場合です。"
     },
     {
       "id": "native.apple.2f21aa6f5cd72915",
-      "source": "OpenClaw uses your contacts so you can search and reference people while using the assistant.",
-      "translated": "OpenClawは、アシスタントの使用中に人物を検索して参照できるように、連絡先を使用します。"
+      "source": "OpenCrustacean uses your contacts so you can search and reference people while using the assistant.",
+      "translated": "OpenCrustaceanは、アシスタントの使用中に人物を検索して参照できるように、連絡先を使用します。"
     },
     {
       "id": "native.apple.9d550c77a37bb165",
-      "source": "OpenClaw discovers and connects to your OpenClaw gateway on the local network.",
-      "translated": "OpenClawは、ローカルネットワーク上のOpenClaw Gatewayを検出して接続します。"
+      "source": "OpenCrustacean discovers and connects to your OpenCrustacean gateway on the local network.",
+      "translated": "OpenCrustaceanは、ローカルネットワーク上のOpenCrustacean Gatewayを検出して接続します。"
     },
     {
       "id": "native.apple.d822c41a0b7e9739",
-      "source": "OpenClaw can share your location in the background when you enable Always.",
-      "translated": "OpenClawは、「常に」を有効にした場合、バックグラウンドで位置情報を共有できます。"
+      "source": "OpenCrustacean can share your location in the background when you enable Always.",
+      "translated": "OpenCrustaceanは、「常に」を有効にした場合、バックグラウンドで位置情報を共有できます。"
     },
     {
       "id": "native.apple.441062ce99375692",
-      "source": "OpenClaw uses your location when you allow location sharing.",
-      "translated": "OpenClawは、位置情報の共有を許可したときに位置情報を使用します。"
+      "source": "OpenCrustacean uses your location when you allow location sharing.",
+      "translated": "OpenCrustaceanは、位置情報の共有を許可したときに位置情報を使用します。"
     },
     {
       "id": "native.apple.7c2cbe7077e4eff1",
-      "source": "OpenClaw uses the microphone for realtime chat, voice wake, push-to-talk, and voice notes.",
-      "translated": "OpenClaw はリアルタイムチャット、音声ウェイク、プッシュトゥトーク、ボイスメモにマイクを使用します。"
+      "source": "OpenCrustacean uses the microphone for realtime chat, voice wake, push-to-talk, and voice notes.",
+      "translated": "OpenCrustacean はリアルタイムチャット、音声ウェイク、プッシュトゥトーク、ボイスメモにマイクを使用します。"
     },
     {
       "id": "native.apple.85345f18204d67ec",
-      "source": "OpenClaw may use motion data to support device-aware interactions and automations.",
-      "translated": "OpenClawは、デバイス対応のインタラクションと自動化をサポートするためにモーションデータを使用する場合があります。"
+      "source": "OpenCrustacean may use motion data to support device-aware interactions and automations.",
+      "translated": "OpenCrustaceanは、デバイス対応のインタラクションと自動化をサポートするためにモーションデータを使用する場合があります。"
     },
     {
       "id": "native.apple.1d3a6099d7e11895",
-      "source": "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider.",
-      "translated": "OpenClawはAppleヘルスケアアプリから歩数、睡眠、安静時心拍数、ワークアウトを読み取り、リクエストされたサマリーを作成して、Gatewayを経由して設定済みのAIプロバイダーに送信します。"
+      "source": "OpenCrustacean reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenCrustaceanはAppleヘルスケアアプリから歩数、睡眠、安静時心拍数、ワークアウトを読み取り、リクエストされたサマリーを作成して、Gatewayを経由して設定済みのAIプロバイダーに送信します。"
     },
     {
       "id": "native.apple.c90a204b3232c401",
-      "source": "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider.",
-      "translated": "OpenClawはAppleヘルスケアアプリにデータを書き込みません。読み取り専用データを使用してリクエストされたサマリーを作成し、Gatewayを経由して設定済みのAIプロバイダーに送信します。"
+      "source": "OpenCrustacean does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenCrustaceanはAppleヘルスケアアプリにデータを書き込みません。読み取り専用データを使用してリクエストされたサマリーを作成し、Gatewayを経由して設定済みのAIプロバイダーに送信します。"
     },
     {
       "id": "native.apple.40ed4259ec869f1b",
-      "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
-      "translated": "OpenClaw は、許可した写真をアシスタントが読み取れるようにし、共有する写真を選択できるようにします。"
+      "source": "OpenCrustacean lets your assistant read photos you allow and lets you choose photos to share.",
+      "translated": "OpenCrustacean は、許可した写真をアシスタントが読み取れるようにし、共有する写真を選択できるようにします。"
     },
     {
       "id": "native.apple.81b673f0c6fc4371",
-      "source": "OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access.",
-      "translated": "リマインダーへのアクセスを有効にすると、OpenClaw はリマインダーを使用してタスクの一覧表示、追加、完了を行います。"
+      "source": "OpenCrustacean uses your reminders to list, add, and complete tasks when you enable reminders access.",
+      "translated": "リマインダーへのアクセスを有効にすると、OpenCrustacean はリマインダーを使用してタスクの一覧表示、追加、完了を行います。"
     },
     {
       "id": "native.apple.2275552c26460945",
-      "source": "OpenClaw uses on-device speech recognition for talk mode and voice wake.",
-      "translated": "OpenClaw はトークモードと音声ウェイクにオンデバイス音声認識を使用します。"
+      "source": "OpenCrustacean uses on-device speech recognition for talk mode and voice wake.",
+      "translated": "OpenCrustacean はトークモードと音声ウェイクにオンデバイス音声認識を使用します。"
     },
     {
       "id": "native.apple.46111fe0569488ab",
@@ -16090,18 +16090,18 @@
     },
     {
       "id": "native.apple.2dc593065171c201",
-      "source": "Location sharing is disabled in OpenClaw. Location Services are off in iOS Settings.",
-      "translated": "OpenClaw で位置情報の共有が無効になっています。iOS の設定で位置情報サービスがオフになっています。"
+      "source": "Location sharing is disabled in OpenCrustacean. Location Services are off in iOS Settings.",
+      "translated": "OpenCrustacean で位置情報の共有が無効になっています。iOS の設定で位置情報サービスがオフになっています。"
     },
     {
       "id": "native.apple.1dc990a9cc0500c5",
-      "source": "Location sharing is disabled in OpenClaw. iOS currently allows Always.",
-      "translated": "OpenClaw で位置情報の共有が無効になっています。iOS では現在、常に許可されています。"
+      "source": "Location sharing is disabled in OpenCrustacean. iOS currently allows Always.",
+      "translated": "OpenCrustacean で位置情報の共有が無効になっています。iOS では現在、常に許可されています。"
     },
     {
       "id": "native.apple.9a4e858d2b218d41",
-      "source": "Location sharing is disabled in OpenClaw. iOS currently allows While Using.",
-      "translated": "OpenClaw で位置情報の共有が無効になっています。iOS では現在、使用中のみ許可されています。"
+      "source": "Location sharing is disabled in OpenCrustacean. iOS currently allows While Using.",
+      "translated": "OpenCrustacean で位置情報の共有が無効になっています。iOS では現在、使用中のみ許可されています。"
     },
     {
       "id": "native.apple.ab481eb11214797f",
@@ -16175,8 +16175,8 @@
     },
     {
       "id": "native.apple.633f011b81108a8c",
-      "source": "OpenClaw cannot determine the current iOS location permission.",
-      "translated": "OpenClaw は現在の iOS 位置情報の権限を確認できません。"
+      "source": "OpenCrustacean cannot determine the current iOS location permission.",
+      "translated": "OpenCrustacean は現在の iOS 位置情報の権限を確認できません。"
     },
     {
       "id": "native.apple.e5673992d3aeac64",
@@ -16205,8 +16205,8 @@
     },
     {
       "id": "native.apple.f6b19113d5d8e7db",
-      "source": "OpenClaw cannot determine the current iOS location permission.",
-      "translated": "OpenClaw は現在の iOS 位置情報許可を判別できません。"
+      "source": "OpenCrustacean cannot determine the current iOS location permission.",
+      "translated": "OpenCrustacean は現在の iOS 位置情報許可を判別できません。"
     },
     {
       "id": "native.apple.2892e5b02c6789f0",
@@ -16480,8 +16480,8 @@
     },
     {
       "id": "native.apple.d4d9568dca8ceaa9",
-      "source": "The connected OpenClaw agent can use device capabilities you enable.",
-      "translated": "接続されたOpenClawエージェントは、有効にしたデバイス機能を使用できます。"
+      "source": "The connected OpenCrustacean agent can use device capabilities you enable.",
+      "translated": "接続されたOpenCrustaceanエージェントは、有効にしたデバイス機能を使用できます。"
     },
     {
       "id": "native.apple.fdd93eb6b6eef525",
@@ -16505,8 +16505,8 @@
     },
     {
       "id": "native.apple.e8b4dc00cd23ae73",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.9b414850baa618da",
@@ -16680,8 +16680,8 @@
     },
     {
       "id": "native.apple.559dccb9f9dfbbad",
-      "source": "OpenClaw is checking gateway and node access.",
-      "translated": "OpenClaw が Gateway とノードへのアクセスを確認しています。"
+      "source": "OpenCrustacean is checking gateway and node access.",
+      "translated": "OpenCrustacean が Gateway とノードへのアクセスを確認しています。"
     },
     {
       "id": "native.apple.4404f435fb496b62",
@@ -16705,8 +16705,8 @@
     },
     {
       "id": "native.apple.d5a5f13a1dd28c9d",
-      "source": "Approve this device on the gateway.\n1) `%1$@`\n2) `/pair approve` in your OpenClaw chat\n%2$@\nOpenClaw will also retry automatically when you return to this app.",
-      "translated": "Gatewayでこのデバイスを承認してください。\n1) `%1$@`\n2) OpenClawチャットで`/pair approve`\n%2$@\nこのアプリに戻ると、OpenClawが自動的に再試行します。"
+      "source": "Approve this device on the gateway.\n1) `%1$@`\n2) `/pair approve` in your OpenCrustacean chat\n%2$@\nOpenCrustacean will also retry automatically when you return to this app.",
+      "translated": "Gatewayでこのデバイスを承認してください。\n1) `%1$@`\n2) OpenCrustaceanチャットで`/pair approve`\n%2$@\nこのアプリに戻ると、OpenCrustaceanが自動的に再試行します。"
     },
     {
       "id": "native.apple.af3890b1e07c3084",
@@ -16790,8 +16790,8 @@
     },
     {
       "id": "native.apple.5b46de1ccb06852b",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.0e07e7044608f954",
@@ -16895,8 +16895,8 @@
     },
     {
       "id": "native.apple.8855710a55de2ed5",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.7029e1235380a92c",
@@ -17080,8 +17080,8 @@
     },
     {
       "id": "native.apple.a55a43940452b04b",
-      "source": "OpenClaw iOS",
-      "translated": "OpenClaw iOS"
+      "source": "OpenCrustacean iOS",
+      "translated": "OpenCrustacean iOS"
     },
     {
       "id": "native.apple.35b6f99d627028f6",
@@ -17300,8 +17300,8 @@
     },
     {
       "id": "native.apple.4ebb39f445d7dbff",
-      "source": "OpenClaw reacts when any trigger appears in a transcription. Keep them short to avoid false positives.",
-      "translated": "OpenClaw は、文字起こしにいずれかのトリガーが現れると反応します。誤検出を避けるため、短くしてください。"
+      "source": "OpenCrustacean reacts when any trigger appears in a transcription. Keep them short to avoid false positives.",
+      "translated": "OpenCrustacean は、文字起こしにいずれかのトリガーが現れると反応します。誤検出を避けるため、短くしてください。"
     },
     {
       "id": "native.apple.994760420a194561",
@@ -17570,18 +17570,18 @@
     },
     {
       "id": "native.apple.5b40cb9cf4ee4d4f",
-      "source": "Asking OpenClaw",
-      "translated": "OpenClawに問い合わせ中"
+      "source": "Asking OpenCrustacean",
+      "translated": "OpenCrustaceanに問い合わせ中"
     },
     {
       "id": "native.apple.34531893ae6091b1",
-      "source": "Still asking OpenClaw",
-      "translated": "引き続きOpenClawに問い合わせ中"
+      "source": "Still asking OpenCrustacean",
+      "translated": "引き続きOpenCrustaceanに問い合わせ中"
     },
     {
       "id": "native.apple.027ab0bbb4553124",
-      "source": "Updating OpenClaw",
-      "translated": "OpenClawを更新中"
+      "source": "Updating OpenCrustacean",
+      "translated": "OpenCrustaceanを更新中"
     },
     {
       "id": "native.apple.471dc394d6b9e443",
@@ -17635,8 +17635,8 @@
     },
     {
       "id": "native.apple.deb282fd61fd2de3",
-      "source": "OpenClaw unavailable",
-      "translated": "OpenClawは利用できません"
+      "source": "OpenCrustacean unavailable",
+      "translated": "OpenCrustaceanは利用できません"
     },
     {
       "id": "native.apple.f4adf2762402e92a",
@@ -17700,13 +17700,13 @@
     },
     {
       "id": "native.apple.1065cfe92d7c1eb6",
-      "source": "Asking OpenClaw",
-      "translated": "OpenClaw に問い合わせ中"
+      "source": "Asking OpenCrustacean",
+      "translated": "OpenCrustacean に問い合わせ中"
     },
     {
       "id": "native.apple.d2db26b3bb266491",
-      "source": "Updating OpenClaw",
-      "translated": "OpenClaw を更新中"
+      "source": "Updating OpenCrustacean",
+      "translated": "OpenCrustacean を更新中"
     },
     {
       "id": "native.apple.4b89dccea20c58fa",
@@ -17715,8 +17715,8 @@
     },
     {
       "id": "native.apple.8a62f0e9416188e3",
-      "source": "OpenClaw unavailable",
-      "translated": "OpenClawは利用できません"
+      "source": "OpenCrustacean unavailable",
+      "translated": "OpenCrustaceanは利用できません"
     },
     {
       "id": "native.apple.8a944b06087fe8ef",
@@ -17800,8 +17800,8 @@
     },
     {
       "id": "native.apple.12a4a51d251f65c0",
-      "source": "OpenClaw connects this Apple Watch directly to your Gateway on trusted local networks.",
-      "translated": "OpenClaw は信頼できるローカルネットワーク上で、この Apple Watch を Gateway に直接接続します。"
+      "source": "OpenCrustacean connects this Apple Watch directly to your Gateway on trusted local networks.",
+      "translated": "OpenCrustacean は信頼できるローカルネットワーク上で、この Apple Watch を Gateway に直接接続します。"
     },
     {
       "id": "native.apple.130180e0065c80fc",
@@ -17850,8 +17850,8 @@
     },
     {
       "id": "native.apple.32473b10033ac0f4",
-      "source": "Reconnects when OpenClaw is active",
-      "translated": "OpenClawがアクティブなときに再接続します"
+      "source": "Reconnects when OpenCrustacean is active",
+      "translated": "OpenCrustaceanがアクティブなときに再接続します"
     },
     {
       "id": "native.apple.760267006777c454",
@@ -18140,8 +18140,8 @@
     },
     {
       "id": "native.apple.ca02fd2965efe74e",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.1ba2f03dc98103c0",
@@ -18290,8 +18290,8 @@
     },
     {
       "id": "native.apple.c7d87356e6cdb374",
-      "source": "Uses Wi-Fi or cellular while OpenClaw is active",
-      "translated": "OpenClaw が有効な間は Wi-Fi またはセルラーを使用します"
+      "source": "Uses Wi-Fi or cellular while OpenCrustacean is active",
+      "translated": "OpenCrustacean が有効な間は Wi-Fi またはセルラーを使用します"
     },
     {
       "id": "native.apple.08583448d9b2455e",
@@ -18480,8 +18480,8 @@
     },
     {
       "id": "native.apple.3fdc651e507de84b",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.c1de056da9ee1b27",
@@ -18520,8 +18520,8 @@
     },
     {
       "id": "native.apple.b816e4b9e492ae6c",
-      "source": "Message OpenClaw",
-      "translated": "OpenClaw にメッセージ"
+      "source": "Message OpenCrustacean",
+      "translated": "OpenCrustacean にメッセージ"
     },
     {
       "id": "native.apple.502a884cec1f0d5d",
@@ -18645,8 +18645,8 @@
     },
     {
       "id": "native.apple.5ac0c79487a492b4",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.95b5730738a28d71",
@@ -18690,8 +18690,8 @@
     },
     {
       "id": "native.apple.4ec07761308f7f50",
-      "source": "© 2026 OpenClaw Foundation — MIT License.",
-      "translated": "© 2026 OpenClaw Foundation — MIT License."
+      "source": "© 2026 OpenCrustacean Foundation — MIT License.",
+      "translated": "© 2026 OpenCrustacean Foundation — MIT License."
     },
     {
       "id": "native.apple.37661ff1af405580",
@@ -18760,28 +18760,28 @@
     },
     {
       "id": "native.apple.edfef1f4b5cb081f",
-      "source": "OpenClaw couldn’t be installed in Applications. Move it there manually, then open that copy.",
-      "translated": "OpenClaw を Applications にインストールできませんでした。手動で移動してから、そのコピーを開いてください。"
+      "source": "OpenCrustacean couldn’t be installed in Applications. Move it there manually, then open that copy.",
+      "translated": "OpenCrustacean を Applications にインストールできませんでした。手動で移動してから、そのコピーを開いてください。"
     },
     {
       "id": "native.apple.7f86f5acf3d32ec2",
-      "source": "Replace the older OpenClaw in Applications?",
-      "translated": "Applications にある古い OpenClaw を置き換えますか？"
+      "source": "Replace the older OpenCrustacean in Applications?",
+      "translated": "Applications にある古い OpenCrustacean を置き換えますか？"
     },
     {
       "id": "native.apple.088b39cc34b44e54",
-      "source": "Install OpenClaw in Applications?",
-      "translated": "OpenClaw を Applications にインストールしますか？"
+      "source": "Install OpenCrustacean in Applications?",
+      "translated": "OpenCrustacean を Applications にインストールしますか？"
     },
     {
       "id": "native.apple.c8898d685457401f",
-      "source": "This copy is newer than the installed app. OpenClaw will replace it and reopen from Applications.",
-      "translated": "このコピーはインストール済みのアプリより新しいバージョンです。OpenClaw は置き換えて、Applications から再起動します。"
+      "source": "This copy is newer than the installed app. OpenCrustacean will replace it and reopen from Applications.",
+      "translated": "このコピーはインストール済みのアプリより新しいバージョンです。OpenCrustacean は置き換えて、Applications から再起動します。"
     },
     {
       "id": "native.apple.a77a46d0ca32551f",
-      "source": "OpenClaw will copy itself to Applications and reopen there so updates and launch at login stay reliable.",
-      "translated": "OpenClaw は自身を Applications にコピーし、そこで再起動します。これにより更新とログイン時の起動が確実に機能します。"
+      "source": "OpenCrustacean will copy itself to Applications and reopen there so updates and launch at login stay reliable.",
+      "translated": "OpenCrustacean は自身を Applications にコピーし、そこで再起動します。これにより更新とログイン時の起動が確実に機能します。"
     },
     {
       "id": "native.apple.22ebb7b228c8275a",
@@ -18795,8 +18795,8 @@
     },
     {
       "id": "native.apple.9ac444c15bd52f0e",
-      "source": "OpenClaw is installed in Applications, but couldn’t reopen automatically. Open it there manually.",
-      "translated": "OpenClaw は Applications にインストールされましたが、自動的に再起動できませんでした。手動でそこから開いてください。"
+      "source": "OpenCrustacean is installed in Applications, but couldn’t reopen automatically. Open it there manually.",
+      "translated": "OpenCrustacean は Applications にインストールされましたが、自動的に再起動できませんでした。手動でそこから開いてください。"
     },
     {
       "id": "native.apple.d1faee12838b677f",
@@ -18915,18 +18915,18 @@
     },
     {
       "id": "native.apple.cfc2509b8bbcf1d7",
-      "source": "OpenClaw Gateway \\(version) is ready.",
-      "translated": "OpenClaw Gateway \\(version) の準備ができました。"
+      "source": "OpenCrustacean Gateway \\(version) is ready.",
+      "translated": "OpenCrustacean Gateway \\(version) の準備ができました。"
     },
     {
       "id": "native.apple.9b767e46895714f9",
-      "source": "OpenClaw Gateway is not installed yet.",
-      "translated": "OpenClaw Gateway はまだインストールされていません。"
+      "source": "OpenCrustacean Gateway is not installed yet.",
+      "translated": "OpenCrustacean Gateway はまだインストールされていません。"
     },
     {
       "id": "native.apple.b4dc58a1b294e140",
-      "source": "The OpenClaw Gateway could not be verified. Setup will repair it.",
-      "translated": "OpenClaw Gateway を検証できませんでした。セットアップで修復します。"
+      "source": "The OpenCrustacean Gateway could not be verified. Setup will repair it.",
+      "translated": "OpenCrustacean Gateway を検証できませんでした。セットアップで修復します。"
     },
     {
       "id": "native.apple.4088056ae7b0f3b4",
@@ -18935,13 +18935,13 @@
     },
     {
       "id": "native.apple.86e7c86924ad0c70",
-      "source": "Repairing the OpenClaw Gateway update…",
-      "translated": "OpenClaw Gatewayのアップデートを修復中…"
+      "source": "Repairing the OpenCrustacean Gateway update…",
+      "translated": "OpenCrustacean Gatewayのアップデートを修復中…"
     },
     {
       "id": "native.apple.b59713e1e3e7ee65",
-      "source": "Updating the OpenClaw Gateway to \\(targetVersion)…",
-      "translated": "OpenClaw Gatewayを\\(targetVersion)にアップデート中…"
+      "source": "Updating the OpenCrustacean Gateway to \\(targetVersion)…",
+      "translated": "OpenCrustacean Gatewayを\\(targetVersion)にアップデート中…"
     },
     {
       "id": "native.apple.7772913c171b78ac",
@@ -18960,8 +18960,8 @@
     },
     {
       "id": "native.apple.66f44c526206f5de",
-      "source": "OpenClaw Gateway \\(installedVersion) is installed.",
-      "translated": "OpenClaw Gateway \\(installedVersion) がインストールされています。"
+      "source": "OpenCrustacean Gateway \\(installedVersion) is installed.",
+      "translated": "OpenCrustacean Gateway \\(installedVersion) がインストールされています。"
     },
     {
       "id": "native.apple.6f14c557e2573526",
@@ -19045,8 +19045,8 @@
     },
     {
       "id": "native.apple.81435e60c0b78093",
-      "source": "OpenClaw could not load editable settings for this channel.",
-      "translated": "OpenClaw はこのチャンネルの編集可能な設定を読み込めませんでした。"
+      "source": "OpenCrustacean could not load editable settings for this channel.",
+      "translated": "OpenCrustacean はこのチャンネルの編集可能な設定を読み込めませんでした。"
     },
     {
       "id": "native.apple.f74dfc887ee4f936",
@@ -19265,8 +19265,8 @@
     },
     {
       "id": "native.apple.055a88d0f9d3d2fe",
-      "source": "Missing: \\(buckets.map(\\.displayName).joined(separator: \", \")). Grant access in System Settings → Privacy & Security, then reopen OpenClaw.",
-      "translated": "不足: \\(buckets.map(\\.displayName).joined(separator: \", \"))。システム設定 → プライバシーとセキュリティでアクセスを許可してから、OpenClawを再度開いてください。"
+      "source": "Missing: \\(buckets.map(\\.displayName).joined(separator: \", \")). Grant access in System Settings → Privacy & Security, then reopen OpenCrustacean.",
+      "translated": "不足: \\(buckets.map(\\.displayName).joined(separator: \", \"))。システム設定 → プライバシーとセキュリティでアクセスを許可してから、OpenCrustaceanを再度開いてください。"
     },
     {
       "id": "native.apple.0a65101d40a6704c",
@@ -19545,8 +19545,8 @@
     },
     {
       "id": "native.apple.df6243155293f80b",
-      "source": "What should OpenClaw do?",
-      "translated": "OpenClaw に何をさせますか？"
+      "source": "What should OpenCrustacean do?",
+      "translated": "OpenCrustacean に何をさせますか？"
     },
     {
       "id": "native.apple.81b5ba441a230f07",
@@ -19870,33 +19870,33 @@
     },
     {
       "id": "native.apple.905508b749e99f2a",
-      "source": "OpenClaw Not Configured",
-      "translated": "OpenClaw が未設定です"
+      "source": "OpenCrustacean Not Configured",
+      "translated": "OpenCrustacean が未設定です"
     },
     {
       "id": "native.apple.293bf9a6e721036d",
-      "source": "Remote OpenClaw Active",
-      "translated": "リモート OpenClaw が有効です"
+      "source": "Remote OpenCrustacean Active",
+      "translated": "リモート OpenCrustacean が有効です"
     },
     {
       "id": "native.apple.a7b0d4e6bf5796c0",
-      "source": "OpenClaw Active",
-      "translated": "OpenClaw が有効です"
+      "source": "OpenCrustacean Active",
+      "translated": "OpenCrustacean が有効です"
     },
     {
       "id": "native.apple.b36a54d8fef80333",
-      "source": "OpenClaw Not Configured — \\(primaryName)",
-      "translated": "OpenClaw が未設定です — \\(primaryName)"
+      "source": "OpenCrustacean Not Configured — \\(primaryName)",
+      "translated": "OpenCrustacean が未設定です — \\(primaryName)"
     },
     {
       "id": "native.apple.adee4bfd71731d2d",
-      "source": "Remote OpenClaw Active — \\(primaryName)",
-      "translated": "リモート OpenClaw が有効です — \\(primaryName)"
+      "source": "Remote OpenCrustacean Active — \\(primaryName)",
+      "translated": "リモート OpenCrustacean が有効です — \\(primaryName)"
     },
     {
       "id": "native.apple.2be6d3dd1a0d2699",
-      "source": "OpenClaw Active — \\(primaryName)",
-      "translated": "OpenClaw が有効です — \\(primaryName)"
+      "source": "OpenCrustacean Active — \\(primaryName)",
+      "translated": "OpenCrustacean が有効です — \\(primaryName)"
     },
     {
       "id": "native.apple.179c8c2ce733969f",
@@ -19980,8 +19980,8 @@
     },
     {
       "id": "native.apple.d8b3e55c41a77627",
-      "source": "When enabled, OpenClaw won't install or manage \\(gatewayLaunchdLabel). It will only attach to an existing Gateway.",
-      "translated": "有効にすると、OpenClaw は \\(gatewayLaunchdLabel) をインストールまたは管理しません。既存の Gateway にのみアタッチします。"
+      "source": "When enabled, OpenCrustacean won't install or manage \\(gatewayLaunchdLabel). It will only attach to an existing Gateway.",
+      "translated": "有効にすると、OpenCrustacean は \\(gatewayLaunchdLabel) をインストールまたは管理しません。既存の Gateway にのみアタッチします。"
     },
     {
       "id": "native.apple.15e528c55a96394f",
@@ -20130,8 +20130,8 @@
     },
     {
       "id": "native.apple.5437c7d545b749ca",
-      "source": "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. Enable only while actively debugging.",
-      "translated": "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. Enable only while actively debugging."
+      "source": "Writes a rotating, local-only log under ~/Library/Logs/OpenCrustacean/. Enable only while actively debugging.",
+      "translated": "Writes a rotating, local-only log under ~/Library/Logs/OpenCrustacean/. Enable only while actively debugging."
     },
     {
       "id": "native.apple.5b35a89bea603457",
@@ -20180,8 +20180,8 @@
     },
     {
       "id": "native.apple.5e9e8bf8e35c48ef",
-      "source": "OpenClaw project root",
-      "translated": "OpenClaw プロジェクトルート"
+      "source": "OpenCrustacean project root",
+      "translated": "OpenCrustacean プロジェクトルート"
     },
     {
       "id": "native.apple.8b01a6daf7a7b94e",
@@ -20245,13 +20245,13 @@
     },
     {
       "id": "native.apple.3307505d507faf31",
-      "source": "Note: macOS may require restarting OpenClaw after enabling Accessibility or Screen Recording.",
-      "translated": "注: macOS では、Accessibility または Screen Recording を有効にした後、OpenClaw の再起動が必要になる場合があります。"
+      "source": "Note: macOS may require restarting OpenCrustacean after enabling Accessibility or Screen Recording.",
+      "translated": "注: macOS では、Accessibility または Screen Recording を有効にした後、OpenCrustacean の再起動が必要になる場合があります。"
     },
     {
       "id": "native.apple.e52d463773aef1e1",
-      "source": "Restart OpenClaw",
-      "translated": "OpenClaw を再起動"
+      "source": "Restart OpenCrustacean",
+      "translated": "OpenCrustacean を再起動"
     },
     {
       "id": "native.apple.e299e77f3ad75a75",
@@ -20370,13 +20370,13 @@
     },
     {
       "id": "native.apple.a8af393b84d63ab8",
-      "source": "OpenClaw is paused",
-      "translated": "OpenClaw は一時停止中です"
+      "source": "OpenCrustacean is paused",
+      "translated": "OpenCrustacean は一時停止中です"
     },
     {
       "id": "native.apple.7ba1542539c0d40b",
-      "source": "Unpause OpenClaw to run agent actions.",
-      "translated": "エージェントアクションを実行するには OpenClaw の一時停止を解除してください。"
+      "source": "Unpause OpenCrustacean to run agent actions.",
+      "translated": "エージェントアクションを実行するには OpenCrustacean の一時停止を解除してください。"
     },
     {
       "id": "native.apple.7c1e1dbfde976ab9",
@@ -20400,8 +20400,8 @@
     },
     {
       "id": "native.apple.50f1211af2a1945e",
-      "source": "Run OpenClaw agent?",
-      "translated": "OpenClaw エージェントを実行しますか？"
+      "source": "Run OpenCrustacean agent?",
+      "translated": "OpenCrustacean エージェントを実行しますか？"
     },
     {
       "id": "native.apple.4f3841d5de0135c4",
@@ -20495,8 +20495,8 @@
     },
     {
       "id": "native.apple.66ad783199ef9729",
-      "source": "Discover OpenClaw gateways on your LAN",
-      "translated": "LAN 上の OpenClaw Gateway を検出"
+      "source": "Discover OpenCrustacean gateways on your LAN",
+      "translated": "LAN 上の OpenCrustacean Gateway を検出"
     },
     {
       "id": "native.apple.110f6e64e25dcd2e",
@@ -20655,8 +20655,8 @@
     },
     {
       "id": "native.apple.1c4fca89983d7487",
-      "source": "Everyday OpenClaw app behavior.",
-      "translated": "OpenClaw アプリの日常的な動作。"
+      "source": "Everyday OpenCrustacean app behavior.",
+      "translated": "OpenCrustacean アプリの日常的な動作。"
     },
     {
       "id": "native.apple.7d03158a40ddb60a",
@@ -20670,13 +20670,13 @@
     },
     {
       "id": "native.apple.405e74c96498b7c0",
-      "source": "Automatically start OpenClaw after you sign in.",
-      "translated": "サインイン後に OpenClaw を自動的に起動します。"
+      "source": "Automatically start OpenCrustacean after you sign in.",
+      "translated": "サインイン後に OpenCrustacean を自動的に起動します。"
     },
     {
       "id": "native.apple.8b74758a60f78642",
-      "source": "Move OpenClaw to Applications before enabling launch at login.",
-      "translated": "ログイン時の起動を有効にする前に、OpenClawをアプリケーションに移動してください。"
+      "source": "Move OpenCrustacean to Applications before enabling launch at login.",
+      "translated": "ログイン時の起動を有効にする前に、OpenCrustaceanをアプリケーションに移動してください。"
     },
     {
       "id": "native.apple.927819c087ca3520",
@@ -20685,8 +20685,8 @@
     },
     {
       "id": "native.apple.e7a0819bd2f4e1dc",
-      "source": "Keep OpenClaw visible in the Dock. When off, windows still show the Dock icon while open.",
-      "translated": "OpenClaw を Dock に表示したままにします。オフの場合でも、ウィンドウが開いている間は Dock アイコンが表示されます。"
+      "source": "Keep OpenCrustacean visible in the Dock. When off, windows still show the Dock icon while open.",
+      "translated": "OpenCrustacean を Dock に表示したままにします。オフの場合でも、ウィンドウが開いている間は Dock アイコンが表示されます。"
     },
     {
       "id": "native.apple.af23f7b5fb03a877",
@@ -20820,13 +20820,13 @@
     },
     {
       "id": "native.apple.64e197a4a8b384ef",
-      "source": "OpenClaw paused",
-      "translated": "OpenClaw は一時停止中"
+      "source": "OpenCrustacean paused",
+      "translated": "OpenCrustacean は一時停止中"
     },
     {
       "id": "native.apple.7fe6df69d8050832",
-      "source": "OpenClaw active",
-      "translated": "OpenClaw がアクティブです"
+      "source": "OpenCrustacean active",
+      "translated": "OpenCrustacean がアクティブです"
     },
     {
       "id": "native.apple.2f4258fa73e04344",
@@ -20880,8 +20880,8 @@
     },
     {
       "id": "native.apple.8021dcd7963a4cc2",
-      "source": "OpenClaw starts and monitors the Gateway on this Mac.",
-      "translated": "OpenClaw がこの Mac 上で Gateway を起動し、監視します。"
+      "source": "OpenCrustacean starts and monitors the Gateway on this Mac.",
+      "translated": "OpenCrustacean がこの Mac 上で Gateway を起動し、監視します。"
     },
     {
       "id": "native.apple.fe2a790f28ffd1ae",
@@ -20895,8 +20895,8 @@
     },
     {
       "id": "native.apple.d261da13966fa812",
-      "source": "OpenClaw runs",
-      "translated": "OpenClaw の実行場所"
+      "source": "OpenCrustacean runs",
+      "translated": "OpenCrustacean の実行場所"
     },
     {
       "id": "native.apple.397850fa5e803f53",
@@ -21005,8 +21005,8 @@
     },
     {
       "id": "native.apple.09f99e863e081f9f",
-      "source": "/Applications/OpenClaw.app/.../openclaw",
-      "translated": "/Applications/OpenClaw.app/.../openclaw"
+      "source": "/Applications/OpenCrustacean.app/.../openclaw",
+      "translated": "/Applications/OpenCrustacean.app/.../openclaw"
     },
     {
       "id": "native.apple.f588f7dad51aae2e",
@@ -21080,8 +21080,8 @@
     },
     {
       "id": "native.apple.24aa092829f9a3b1",
-      "source": "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.",
-      "translated": "現在の gateway.remote.token の値はプレーンテキストではありません。OpenClaw for macOS では直接使用できません。置き換えるには、ここにプレーンテキストのトークンを入力してください。"
+      "source": "The current gateway.remote.token value is not plain text. OpenCrustacean for macOS cannot use it directly; enter a plaintext token here to replace it.",
+      "translated": "現在の gateway.remote.token の値はプレーンテキストではありません。OpenCrustacean for macOS では直接使用できません。置き換えるには、ここにプレーンテキストのトークンを入力してください。"
     },
     {
       "id": "native.apple.d0b21bc12ab63cad",
@@ -21220,8 +21220,8 @@
     },
     {
       "id": "native.apple.876c066efa88aee3",
-      "source": "Latest presence beacons from OpenClaw nodes. Updated periodically.",
-      "translated": "OpenClaw ノードからの最新のプレゼンスビーコン。定期的に更新されます。"
+      "source": "Latest presence beacons from OpenCrustacean nodes. Updated periodically.",
+      "translated": "OpenCrustacean ノードからの最新のプレゼンスビーコン。定期的に更新されます。"
     },
     {
       "id": "native.apple.8a6bcd51fd9f1f62",
@@ -21330,13 +21330,13 @@
     },
     {
       "id": "native.apple.13a7356f48278757",
-      "source": "OpenClaw - Voice Wake live meter active",
-      "translated": "OpenClaw - Voice Wake ライブメーターがアクティブ"
+      "source": "OpenCrustacean - Voice Wake live meter active",
+      "translated": "OpenCrustacean - Voice Wake ライブメーターがアクティブ"
     },
     {
       "id": "native.apple.fae2cf18519da0d5",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.ef59188264be95d4",
@@ -21445,8 +21445,8 @@
     },
     {
       "id": "native.apple.fbab65790d6eca89",
-      "source": "About OpenClaw",
-      "translated": "OpenClaw について"
+      "source": "About OpenCrustacean",
+      "translated": "OpenCrustacean について"
     },
     {
       "id": "native.apple.14c8f4b1a57569f3",
@@ -21730,13 +21730,13 @@
     },
     {
       "id": "native.apple.3db546546fbaf38e",
-      "source": "OpenClaw is preparing a local model.",
-      "translated": "OpenClaw はローカルモデルを準備しています。"
+      "source": "OpenCrustacean is preparing a local model.",
+      "translated": "OpenCrustacean はローカルモデルを準備しています。"
     },
     {
       "id": "native.apple.c5992a23c991f948",
-      "source": "OpenClaw is completing provider sign-in.",
-      "translated": "OpenClaw はプロバイダーのサインインを完了しています。"
+      "source": "OpenCrustacean is completing provider sign-in.",
+      "translated": "OpenCrustacean はプロバイダーのサインインを完了しています。"
     },
     {
       "id": "native.apple.0f3c1c6f0672bed7",
@@ -21770,8 +21770,8 @@
     },
     {
       "id": "native.apple.e3e27d22fd2312a2",
-      "source": "OpenClaw will check again before changing any inference settings.",
-      "translated": "OpenClawは推論設定を変更する前に再度確認します。"
+      "source": "OpenCrustacean will check again before changing any inference settings.",
+      "translated": "OpenCrustaceanは推論設定を変更する前に再度確認します。"
     },
     {
       "id": "native.apple.a0a8f45082d0ba99",
@@ -21810,8 +21810,8 @@
     },
     {
       "id": "native.apple.a0431b20c0650139",
-      "source": "Need help? Chat with OpenClaw",
-      "translated": "お困りですか？OpenClawとチャット"
+      "source": "Need help? Chat with OpenCrustacean",
+      "translated": "お困りですか？OpenCrustaceanとチャット"
     },
     {
       "id": "native.apple.6526ced182e1fe50",
@@ -21895,8 +21895,8 @@
     },
     {
       "id": "native.apple.4a1e5a5600b907f4",
-      "source": "Use an existing subscription or provider account. OpenClaw opens the provider’s own sign-in flow, then verifies it with a real reply.",
-      "translated": "既存のサブスクリプションまたはプロバイダーアカウントを使用します。OpenClaw はプロバイダー独自のサインインフローを開き、実際の応答で検証します。"
+      "source": "Use an existing subscription or provider account. OpenCrustacean opens the provider’s own sign-in flow, then verifies it with a real reply.",
+      "translated": "既存のサブスクリプションまたはプロバイダーアカウントを使用します。OpenCrustacean はプロバイダー独自のサインインフローを開き、実際の応答で検証します。"
     },
     {
       "id": "native.apple.14b23c357d7a9eff",
@@ -22030,8 +22030,8 @@
     },
     {
       "id": "native.apple.e874bd0fad63f012",
-      "source": "OpenClaw — setup helper",
-      "translated": "OpenClaw — セットアップヘルパー"
+      "source": "OpenCrustacean — setup helper",
+      "translated": "OpenCrustacean — セットアップヘルパー"
     },
     {
       "id": "native.apple.bea852c8622c8214",
@@ -22090,18 +22090,18 @@
     },
     {
       "id": "native.apple.b92f94ddc6bbc8e5",
-      "source": "OpenClaw was interrupted. Restart to try again.",
-      "translated": "OpenClawが中断されました。再起動してもう一度お試しください。"
+      "source": "OpenCrustacean was interrupted. Restart to try again.",
+      "translated": "OpenCrustaceanが中断されました。再起動してもう一度お試しください。"
     },
     {
       "id": "native.apple.829845818e97978a",
-      "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
-      "translated": "Gateway接続が変更されました。再接続するにはOpenClawを再起動してください。"
+      "source": "The Gateway connection changed. Restart OpenCrustacean to reconnect.",
+      "translated": "Gateway接続が変更されました。再接続するにはOpenCrustaceanを再起動してください。"
     },
     {
       "id": "native.apple.012861f82eff0ca9",
-      "source": "OpenClaw is working…",
-      "translated": "OpenClawが処理中です…"
+      "source": "OpenCrustacean is working…",
+      "translated": "OpenCrustaceanが処理中です…"
     },
     {
       "id": "native.apple.2f7ad21b747fbc15",
@@ -22115,8 +22115,8 @@
     },
     {
       "id": "native.apple.35a542956f4f5497",
-      "source": "Reply to OpenClaw… (yes sets everything up)",
-      "translated": "OpenClawに返信…（yesですべてセットアップされます）"
+      "source": "Reply to OpenCrustacean… (yes sets everything up)",
+      "translated": "OpenCrustaceanに返信…（yesですべてセットアップされます）"
     },
     {
       "id": "native.apple.134b9ae1d8a543df",
@@ -22145,8 +22145,8 @@
     },
     {
       "id": "native.apple.b57ee4f83cff23f3",
-      "source": "OpenClaw can bring useful context from AI tools you already use into your new assistant.",
-      "translated": "OpenClaw では、すでに使用している AI ツールから役立つコンテキストを新しいアシスタントに引き継ぐことができます。"
+      "source": "OpenCrustacean can bring useful context from AI tools you already use into your new assistant.",
+      "translated": "OpenCrustacean では、すでに使用している AI ツールから役立つコンテキストを新しいアシスタントに引き継ぐことができます。"
     },
     {
       "id": "native.apple.46cab71d748860b8",
@@ -22225,8 +22225,8 @@
     },
     {
       "id": "native.apple.6dbe5b174271b62a",
-      "source": "Imported \\(imported) \\(self.memoryLabel(imported)) into OpenClaw.",
-      "translated": "\\(imported)件の\\(self.memoryLabel(imported))をOpenClawにインポートしました。"
+      "source": "Imported \\(imported) \\(self.memoryLabel(imported)) into OpenCrustacean.",
+      "translated": "\\(imported)件の\\(self.memoryLabel(imported))をOpenCrustaceanにインポートしました。"
     },
     {
       "id": "native.apple.d47b887f98e13e24",
@@ -22240,8 +22240,8 @@
     },
     {
       "id": "native.apple.ea8beaeecef15e54",
-      "source": "Welcome to OpenClaw",
-      "translated": "OpenClaw へようこそ"
+      "source": "Welcome to OpenCrustacean",
+      "translated": "OpenCrustacean へようこそ"
     },
     {
       "id": "native.apple.0629bbbd6db95199",
@@ -22285,8 +22285,8 @@
     },
     {
       "id": "native.apple.fb64a5b187cfdc15",
-      "source": "OpenClaw can take actions using the permissions and services you enable. Review prompts and only connect tools you trust.",
-      "translated": "OpenClaw は、有効にした権限とサービスを使用して操作を実行できます。プロンプトを確認し、信頼できるツールのみ接続してください。"
+      "source": "OpenCrustacean can take actions using the permissions and services you enable. Review prompts and only connect tools you trust.",
+      "translated": "OpenCrustacean は、有効にした権限とサービスを使用して操作を実行できます。プロンプトを確認し、信頼できるツールのみ接続してください。"
     },
     {
       "id": "native.apple.a5d02aaf6208e924",
@@ -22295,8 +22295,8 @@
     },
     {
       "id": "native.apple.e6acb60b10ef1206",
-      "source": "Most people pick this Mac — OpenClaw installs everything and keeps it running in the background. You can change this anytime in Settings.",
-      "translated": "ほとんどの人はこの Mac を選びます — OpenClaw がすべてをインストールし、バックグラウンドで実行し続けます。これはいつでも設定で変更できます。"
+      "source": "Most people pick this Mac — OpenCrustacean installs everything and keeps it running in the background. You can change this anytime in Settings.",
+      "translated": "ほとんどの人はこの Mac を選びます — OpenCrustacean がすべてをインストールし、バックグラウンドで実行し続けます。これはいつでも設定で変更できます。"
     },
     {
       "id": "native.apple.21f1053c1054db24",
@@ -22320,8 +22320,8 @@
     },
     {
       "id": "native.apple.d54084b48f40aa0a",
-      "source": "OK — OpenClaw won’t start anything yet. Pick Local or Remote later in Settings → General.",
-      "translated": "OK — OpenClaw はまだ何も開始しません。後で Settings → General で Local または Remote を選択してください。"
+      "source": "OK — OpenCrustacean won’t start anything yet. Pick Local or Remote later in Settings → General.",
+      "translated": "OK — OpenCrustacean はまだ何も開始しません。後で Settings → General で Local または Remote を選択してください。"
     },
     {
       "id": "native.apple.8d9eb247d41a0ca7",
@@ -22375,8 +22375,8 @@
     },
     {
       "id": "native.apple.f6332654911cb2e2",
-      "source": "Verify OpenClaw can reach this gateway.",
-      "translated": "OpenClaw がこの Gateway に到達できることを確認します。"
+      "source": "Verify OpenCrustacean can reach this gateway.",
+      "translated": "OpenCrustacean がこの Gateway に到達できることを確認します。"
     },
     {
       "id": "native.apple.6e5d3a3c3022e8c8",
@@ -22410,8 +22410,8 @@
     },
     {
       "id": "native.apple.2a50c3ee94dde35d",
-      "source": "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.",
-      "translated": "現在の gateway.remote.token 値はプレーンテキストではありません。OpenClaw for macOS はこれを直接使用できません。置き換えるプレーンテキストのトークンをここに入力してください。"
+      "source": "The current gateway.remote.token value is not plain text. OpenCrustacean for macOS cannot use it directly; enter a plaintext token here to replace it.",
+      "translated": "現在の gateway.remote.token 値はプレーンテキストではありません。OpenCrustacean for macOS はこれを直接使用できません。置き換えるプレーンテキストのトークンをここに入力してください。"
     },
     {
       "id": "native.apple.7881cec64b177026",
@@ -22470,8 +22470,8 @@
     },
     {
       "id": "native.apple.5a3f4f943c8ee86a",
-      "source": "/Applications/OpenClaw.app/.../openclaw",
-      "translated": "/Applications/OpenClaw.app/.../openclaw"
+      "source": "/Applications/OpenCrustacean.app/.../openclaw",
+      "translated": "/Applications/OpenCrustacean.app/.../openclaw"
     },
     {
       "id": "native.apple.56e9b0831ec1eded",
@@ -22500,8 +22500,8 @@
     },
     {
       "id": "native.apple.ce0d1241d7417406",
-      "source": "These macOS permissions let OpenClaw automate apps and capture context on this Mac. Status updates automatically.",
-      "translated": "これらの macOS 権限により、OpenClaw はこの Mac 上のアプリを自動操作し、コンテキストを取得できます。ステータスは自動的に更新されます。"
+      "source": "These macOS permissions let OpenCrustacean automate apps and capture context on this Mac. Status updates automatically.",
+      "translated": "これらの macOS 権限により、OpenCrustacean はこの Mac 上のアプリを自動操作し、コンテキストを取得できます。ステータスは自動的に更新されます。"
     },
     {
       "id": "native.apple.42af85cdf91d0264",
@@ -22510,8 +22510,8 @@
     },
     {
       "id": "native.apple.d0b8cf59f852b3d0",
-      "source": "Install OpenClaw",
-      "translated": "OpenClaw をインストール"
+      "source": "Install OpenCrustacean",
+      "translated": "OpenCrustacean をインストール"
     },
     {
       "id": "native.apple.0b0fc42b8827e01f",
@@ -22595,8 +22595,8 @@
     },
     {
       "id": "native.apple.409bfb3a6e0f9f7c",
-      "source": "Click the OpenClaw menu bar icon for the compact chat panel and status.",
-      "translated": "コンパクトなチャットパネルとステータスを表示するには、メニューバーのOpenClawアイコンをクリックします。"
+      "source": "Click the OpenCrustacean menu bar icon for the compact chat panel and status.",
+      "translated": "コンパクトなチャットパネルとステータスを表示するには、メニューバーのOpenCrustaceanアイコンをクリックします。"
     },
     {
       "id": "native.apple.1b6cfcf3be8765c2",
@@ -22730,13 +22730,13 @@
     },
     {
       "id": "native.apple.11b1b5e9dd510766",
-      "source": "A node wants to connect to OpenClaw.",
-      "translated": "ノードが OpenClaw への接続を要求しています。"
+      "source": "A node wants to connect to OpenCrustacean.",
+      "translated": "ノードが OpenCrustacean への接続を要求しています。"
     },
     {
       "id": "native.apple.2e9d9d1f5d4346d4",
-      "source": "A device wants to connect to OpenClaw.",
-      "translated": "デバイスが OpenClaw への接続を要求しています。"
+      "source": "A device wants to connect to OpenCrustacean.",
+      "translated": "デバイスが OpenCrustacean への接続を要求しています。"
     },
     {
       "id": "native.apple.2412e85f7d11395e",
@@ -22745,8 +22745,8 @@
     },
     {
       "id": "native.apple.a09a61f4efe1e63e",
-      "source": "OpenClaw Mac app",
-      "translated": "OpenClaw Mac アプリ"
+      "source": "OpenCrustacean Mac app",
+      "translated": "OpenCrustacean Mac アプリ"
     },
     {
       "id": "native.apple.6b29ec65de666dab",
@@ -22800,8 +22800,8 @@
     },
     {
       "id": "native.apple.870e09824984a9b2",
-      "source": "Share this Mac's idle duration so OpenClaw can identify the Mac you used most recently and route node alerts. Never sends keys, pointer positions, app names, or window titles. Requires Accessibility.",
-      "translated": "このMacのアイドル時間を共有すると、OpenClawが最近使用したMacを識別し、ノードアラートをルーティングできます。キー入力、ポインター位置、アプリ名、ウィンドウタイトルは送信されません。アクセシビリティが必要です。"
+      "source": "Share this Mac's idle duration so OpenCrustacean can identify the Mac you used most recently and route node alerts. Never sends keys, pointer positions, app names, or window titles. Requires Accessibility.",
+      "translated": "このMacのアイドル時間を共有すると、OpenCrustaceanが最近使用したMacを識別し、ノードアラートをルーティングできます。キー入力、ポインター位置、アプリ名、ウィンドウタイトルは送信されません。アクセシビリティが必要です。"
     },
     {
       "id": "native.apple.89a4f5934df8268a",
@@ -22835,8 +22835,8 @@
     },
     {
       "id": "native.apple.4344ff6c0e9d7187",
-      "source": "OpenClaw only asks for macOS capabilities when a feature needs them.",
-      "translated": "OpenClawは、機能で必要な場合にのみmacOSの機能へのアクセスを求めます。"
+      "source": "OpenCrustacean only asks for macOS capabilities when a feature needs them.",
+      "translated": "OpenCrustaceanは、機能で必要な場合にのみmacOSの機能へのアクセスを求めます。"
     },
     {
       "id": "native.apple.4fecdab98e2f6a11",
@@ -22970,13 +22970,13 @@
     },
     {
       "id": "native.apple.65c21de72f06fd33",
-      "source": "OpenClaw updated",
-      "translated": "OpenClawがアップデートされました"
+      "source": "OpenCrustacean updated",
+      "translated": "OpenCrustaceanがアップデートされました"
     },
     {
       "id": "native.apple.6197fc2d1ebd6b2e",
-      "source": "Finishing your OpenClaw update",
-      "translated": "OpenClawのアップデートを完了しています"
+      "source": "Finishing your OpenCrustacean update",
+      "translated": "OpenCrustaceanのアップデートを完了しています"
     },
     {
       "id": "native.apple.226b698fbbfc3cc4",
@@ -22990,8 +22990,8 @@
     },
     {
       "id": "native.apple.91debe404bb7affc",
-      "source": "The managed OpenClaw runtime could not be reinstalled.",
-      "translated": "管理対象のOpenClawランタイムを再インストールできませんでした。"
+      "source": "The managed OpenCrustacean runtime could not be reinstalled.",
+      "translated": "管理対象のOpenCrustaceanランタイムを再インストールできませんでした。"
     },
     {
       "id": "native.apple.1cc391ec928070c4",
@@ -23015,43 +23015,43 @@
     },
     {
       "id": "native.apple.69b54e24b90414dd",
-      "source": "OpenClaw \\(receipt.toVersion) and its Gateway are ready.",
-      "translated": "OpenClaw \\(receipt.toVersion)とそのGatewayの準備ができました。"
+      "source": "OpenCrustacean \\(receipt.toVersion) and its Gateway are ready.",
+      "translated": "OpenCrustacean \\(receipt.toVersion)とそのGatewayの準備ができました。"
     },
     {
       "id": "native.apple.f9d6fa6d7aaf23b6",
-      "source": "OpenClaw \\(receipt.toVersion) and its Mac node runtime are ready.",
-      "translated": "OpenClaw \\(receipt.toVersion)とそのMacノードランタイムの準備ができました。"
+      "source": "OpenCrustacean \\(receipt.toVersion) and its Mac node runtime are ready.",
+      "translated": "OpenCrustacean \\(receipt.toVersion)とそのMacノードランタイムの準備ができました。"
     },
     {
       "id": "native.apple.a3fa88f5fd3c2732",
-      "source": "Your agent could not be notified yet. OpenClaw will retry after the next app launch.",
-      "translated": "エージェントにはまだ通知できませんでした。OpenClawは次回のアプリ起動後に再試行します。"
+      "source": "Your agent could not be notified yet. OpenCrustacean will retry after the next app launch.",
+      "translated": "エージェントにはまだ通知できませんでした。OpenCrustaceanは次回のアプリ起動後に再試行します。"
     },
     {
       "id": "native.apple.e9020028ddab1ba6",
-      "source": "OpenClaw could not notify your agent automatically. The app and Gateway update are complete.",
-      "translated": "OpenClawはエージェントに自動で通知できませんでした。アプリとGatewayのアップデートは完了しています。"
+      "source": "OpenCrustacean could not notify your agent automatically. The app and Gateway update are complete.",
+      "translated": "OpenCrustaceanはエージェントに自動で通知できませんでした。アプリとGatewayのアップデートは完了しています。"
     },
     {
       "id": "native.apple.afc120cf0a96ea30",
-      "source": "OpenClaw could not notify your agent automatically. The app and Mac node update are complete.",
-      "translated": "OpenClawはエージェントに自動で通知できませんでした。アプリとMacノードのアップデートは完了しています。"
+      "source": "OpenCrustacean could not notify your agent automatically. The app and Mac node update are complete.",
+      "translated": "OpenCrustaceanはエージェントに自動で通知できませんでした。アプリとMacノードのアップデートは完了しています。"
     },
     {
       "id": "native.apple.71ad85442725f45c",
-      "source": "OpenClaw could not confirm the agent notification. It will not retry, to avoid a duplicate welcome.",
-      "translated": "OpenClawはエージェントへの通知を確認できませんでした。ウェルカムメッセージの重複を避けるため、再試行は行いません。"
+      "source": "OpenCrustacean could not confirm the agent notification. It will not retry, to avoid a duplicate welcome.",
+      "translated": "OpenCrustaceanはエージェントへの通知を確認できませんでした。ウェルカムメッセージの重複を避けるため、再試行は行いません。"
     },
     {
       "id": "native.apple.a3deea03e4870dd0",
-      "source": "The remote Gateway is older than this Mac app, so OpenClaw skipped the agent notification.",
-      "translated": "リモートの Gateway がこの Mac アプリより古いため、OpenClaw はエージェントへの通知をスキップしました。"
+      "source": "The remote Gateway is older than this Mac app, so OpenCrustacean skipped the agent notification.",
+      "translated": "リモートの Gateway がこの Mac アプリより古いため、OpenCrustacean はエージェントへの通知をスキップしました。"
     },
     {
       "id": "native.apple.3636a8b503ff00d2",
-      "source": "The Gateway remains paused, so OpenClaw did not wake your agent.",
-      "translated": "Gateway は一時停止したままのため、OpenClaw はエージェントを起動しませんでした。"
+      "source": "The Gateway remains paused, so OpenCrustacean did not wake your agent.",
+      "translated": "Gateway は一時停止したままのため、OpenCrustacean はエージェントを起動しませんでした。"
     },
     {
       "id": "native.apple.0f533623878f3d67",
@@ -23095,8 +23095,8 @@
     },
     {
       "id": "native.apple.9ac2dfa295929a92",
-      "source": "OpenClaw installed the update but could not verify the Gateway connection.",
-      "translated": "OpenClaw はアップデートをインストールしましたが、Gateway への接続を確認できませんでした。"
+      "source": "OpenCrustacean installed the update but could not verify the Gateway connection.",
+      "translated": "OpenCrustacean はアップデートをインストールしましたが、Gateway への接続を確認できませんでした。"
     },
     {
       "id": "native.apple.3abafcfb64b362fb",
@@ -23105,8 +23105,8 @@
     },
     {
       "id": "native.apple.00e3d2037782506c",
-      "source": "OpenClaw could not read the Gateway service ownership record. Retry after checking the Gateway LaunchAgent.",
-      "translated": "OpenClawはGatewayサービスの所有権レコードを読み取れませんでした。GatewayのLaunchAgentを確認してから再試行してください。"
+      "source": "OpenCrustacean could not read the Gateway service ownership record. Retry after checking the Gateway LaunchAgent.",
+      "translated": "OpenCrustaceanはGatewayサービスの所有権レコードを読み取れませんでした。GatewayのLaunchAgentを確認してから再試行してください。"
     },
     {
       "id": "native.apple.c4b8806a570dad31",
@@ -23115,8 +23115,8 @@
     },
     {
       "id": "native.apple.0483bf19d612560b",
-      "source": "OpenClaw could not read the node service ownership record. Retry after checking the node LaunchAgent.",
-      "translated": "OpenClawはノードサービスの所有権レコードを読み取れませんでした。ノードのLaunchAgentを確認してから再試行してください。"
+      "source": "OpenCrustacean could not read the node service ownership record. Retry after checking the node LaunchAgent.",
+      "translated": "OpenCrustaceanはノードサービスの所有権レコードを読み取れませんでした。ノードのLaunchAgentを確認してから再試行してください。"
     },
     {
       "id": "native.apple.d0f712a2ed470a3e",
@@ -23235,8 +23235,8 @@
     },
     {
       "id": "native.apple.507c2d9c7e94716f",
-      "source": "Allow OpenClaw to read text from \\(appName)",
-      "translated": "OpenClawに\\(appName)からのテキストの読み取りを許可"
+      "source": "Allow OpenCrustacean to read text from \\(appName)",
+      "translated": "OpenCrustaceanに\\(appName)からのテキストの読み取りを許可"
     },
     {
       "id": "native.apple.c5313d544a833af0",
@@ -23405,13 +23405,13 @@
     },
     {
       "id": "native.apple.88d0123c86b06144",
-      "source": "Allow OpenClaw to capture windows",
-      "translated": "OpenClawによるウインドウのキャプチャを許可"
+      "source": "Allow OpenCrustacean to capture windows",
+      "translated": "OpenCrustaceanによるウインドウのキャプチャを許可"
     },
     {
       "id": "native.apple.677c5733cd132aed",
-      "source": "Allow OpenClaw to capture a screen area",
-      "translated": "OpenClawによる画面領域のキャプチャを許可"
+      "source": "Allow OpenCrustacean to capture a screen area",
+      "translated": "OpenCrustaceanによる画面領域のキャプチャを許可"
     },
     {
       "id": "native.apple.529a6fc5aeba03b0",
@@ -23480,8 +23480,8 @@
     },
     {
       "id": "native.apple.83145f8f53d7be34",
-      "source": "Scan or paste a fresh setup code from an already-paired OpenClaw client, then try again.",
-      "translated": "すでにペアリング済みの OpenClaw クライアントから新しいセットアップコードをスキャンまたは貼り付けてから、もう一度お試しください。"
+      "source": "Scan or paste a fresh setup code from an already-paired OpenCrustacean client, then try again.",
+      "translated": "すでにペアリング済みの OpenCrustacean クライアントから新しいセットアップコードをスキャンまたは貼り付けてから、もう一度お試しください。"
     },
     {
       "id": "native.apple.a8bf4f7ab4a35dc0",
@@ -23490,8 +23490,8 @@
     },
     {
       "id": "native.apple.52c0f97f0b3bb792",
-      "source": "Approve this device from an already-paired OpenClaw client. In your OpenClaw chat, run `/pair approve`, then click **Check connection** again.",
-      "translated": "Approve this device from an already-paired OpenClaw client. In your OpenClaw chat, run `/pair approve`, then click **Check connection** again."
+      "source": "Approve this device from an already-paired OpenCrustacean client. In your OpenCrustacean chat, run `/pair approve`, then click **Check connection** again.",
+      "translated": "Approve this device from an already-paired OpenCrustacean client. In your OpenCrustacean chat, run `/pair approve`, then click **Check connection** again."
     },
     {
       "id": "native.apple.e73170e4ab1dbe8f",
@@ -23520,8 +23520,8 @@
     },
     {
       "id": "native.apple.3e5a2b2a24f73418",
-      "source": "Pairing required. In an already-paired OpenClaw client, run /pair approve, then check the connection again.",
-      "translated": "Pairing required. In an already-paired OpenClaw client, run /pair approve, then check the connection again."
+      "source": "Pairing required. In an already-paired OpenCrustacean client, run /pair approve, then check the connection again.",
+      "translated": "Pairing required. In an already-paired OpenCrustacean client, run /pair approve, then check the connection again."
     },
     {
       "id": "native.apple.58e76e9c8b04290a",
@@ -23565,48 +23565,48 @@
     },
     {
       "id": "native.apple.2d7556d00f123112",
-      "source": "OpenClaw needs notification permission to show alerts for agent actions.",
-      "translated": "OpenClawがエージェントのアクションに関するアラートを表示するには、通知の許可が必要です。"
+      "source": "OpenCrustacean needs notification permission to show alerts for agent actions.",
+      "translated": "OpenCrustaceanがエージェントのアクションに関するアラートを表示するには、通知の許可が必要です。"
     },
     {
       "id": "native.apple.d9e7be03543b508f",
-      "source": "OpenClaw captures the screen when the agent needs screenshots for context.",
-      "translated": "OpenClawは、エージェントがコンテキスト用のスクリーンショットを必要とする場合に画面をキャプチャします。"
+      "source": "OpenCrustacean captures the screen when the agent needs screenshots for context.",
+      "translated": "OpenCrustaceanは、エージェントがコンテキスト用のスクリーンショットを必要とする場合に画面をキャプチャします。"
     },
     {
       "id": "native.apple.eca927767423799c",
-      "source": "OpenClaw can capture photos or short video clips when requested by the agent.",
-      "translated": "OpenClawは、エージェントから要求された場合に写真または短いビデオクリップをキャプチャできます。"
+      "source": "OpenCrustacean can capture photos or short video clips when requested by the agent.",
+      "translated": "OpenCrustaceanは、エージェントから要求された場合に写真または短いビデオクリップをキャプチャできます。"
     },
     {
       "id": "native.apple.9389d1100944a1fd",
-      "source": "OpenClaw can share your location when requested by the agent.",
-      "translated": "OpenClawは、エージェントから要求された場合に位置情報を共有できます。"
+      "source": "OpenCrustacean can share your location when requested by the agent.",
+      "translated": "OpenCrustaceanは、エージェントから要求された場合に位置情報を共有できます。"
     },
     {
       "id": "native.apple.59da76aed1cb07ee",
-      "source": "OpenClaw uses the local network to connect to your remote OpenClaw gateway over LAN, Tailnet, or SSH.",
-      "translated": "OpenClawは、LAN、Tailnet、またはSSH経由でリモートOpenClaw Gatewayに接続するためにローカルネットワークを使用します。"
+      "source": "OpenCrustacean uses the local network to connect to your remote OpenCrustacean gateway over LAN, Tailnet, or SSH.",
+      "translated": "OpenCrustaceanは、LAN、Tailnet、またはSSH経由でリモートOpenCrustacean Gatewayに接続するためにローカルネットワークを使用します。"
     },
     {
       "id": "native.apple.0fdd4a93f90c6f95",
-      "source": "OpenClaw uses the microphone for Voice Wake, push-to-talk, Talk Mode, Quick Chat dictation, and agent audio capture.",
-      "translated": "OpenClawはVoice Wake、プッシュトゥトーク、Talk Mode、Quick Chatのディクテーション、エージェントの音声キャプチャにマイクを使用します。"
+      "source": "OpenCrustacean uses the microphone for Voice Wake, push-to-talk, Talk Mode, Quick Chat dictation, and agent audio capture.",
+      "translated": "OpenCrustaceanはVoice Wake、プッシュトゥトーク、Talk Mode、Quick Chatのディクテーション、エージェントの音声キャプチャにマイクを使用します。"
     },
     {
       "id": "native.apple.44701896858c9029",
-      "source": "OpenClaw uses Apple Speech for Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation. Voice Wake stays on-device.",
-      "translated": "OpenClawはVoice Wake、プッシュトゥトーク、Talk Mode、Quick ChatのディクテーションにApple Speechを使用します。Voice Wakeはデバイス上で処理されます。"
+      "source": "OpenCrustacean uses Apple Speech for Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation. Voice Wake stays on-device.",
+      "translated": "OpenCrustaceanはVoice Wake、プッシュトゥトーク、Talk Mode、Quick ChatのディクテーションにApple Speechを使用します。Voice Wakeはデバイス上で処理されます。"
     },
     {
       "id": "native.apple.2d5411b5cc54a93e",
-      "source": "OpenClaw needs Automation (AppleScript) permission to drive Terminal and other apps for agent actions.",
-      "translated": "OpenClawがエージェントのアクションのためにTerminalやその他のアプリを操作するには、Automation（AppleScript）の許可が必要です。"
+      "source": "OpenCrustacean needs Automation (AppleScript) permission to drive Terminal and other apps for agent actions.",
+      "translated": "OpenCrustaceanがエージェントのアクションのためにTerminalやその他のアプリを操作するには、Automation（AppleScript）の許可が必要です。"
     },
     {
       "id": "native.apple.e16fc45de0f2bb86",
-      "source": "OpenClaw can access Reminders when requested by the agent for the apple-reminders skill.",
-      "translated": "OpenClawは、apple-reminders skillのためにエージェントから要求された場合にRemindersへアクセスできます。"
+      "source": "OpenCrustacean can access Reminders when requested by the agent for the apple-reminders skill.",
+      "translated": "OpenCrustaceanは、apple-reminders skillのためにエージェントから要求された場合にRemindersへアクセスできます。"
     },
     {
       "id": "native.apple.6f7c6ef00a40a571",
@@ -23760,8 +23760,8 @@
     },
     {
       "id": "native.apple.59bed721dff1a25f",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.04b9c8402f19b8ce",
@@ -24050,8 +24050,8 @@
     },
     {
       "id": "native.apple.4b27b3be5f3f1f66",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.9427da914cdbfbf3",
@@ -24695,8 +24695,8 @@
     },
     {
       "id": "native.apple.237e9371a693b0ff",
-      "source": "OpenClaw reacts when any trigger appears in a transcription. Keep phrases short to avoid false positives.",
-      "translated": "OpenClaw は、文字起こしにいずれかのトリガーが現れると反応します。誤検出を避けるため、フレーズは短くしてください。"
+      "source": "OpenCrustacean reacts when any trigger appears in a transcription. Keep phrases short to avoid false positives.",
+      "translated": "OpenCrustacean は、文字起こしにいずれかのトリガーが現れると反応します。誤検出を避けるため、フレーズは短くしてください。"
     },
     {
       "id": "native.apple.2bcc6f4eca98f7f2",
@@ -24790,13 +24790,13 @@
     },
     {
       "id": "native.apple.448dfe21a7f3a883",
-      "source": "Check OpenClaw status",
-      "translated": "OpenClawのステータスを確認"
+      "source": "Check OpenCrustacean status",
+      "translated": "OpenCrustaceanのステータスを確認"
     },
     {
       "id": "native.apple.00f4977e0123ce7a",
-      "source": "Summarize the current OpenClaw status and tell me what needs attention.",
-      "translated": "現在のOpenClawのステータスを要約し、注意が必要な点を教えてください。"
+      "source": "Summarize the current OpenCrustacean status and tell me what needs attention.",
+      "translated": "現在のOpenCrustaceanのステータスを要約し、注意が必要な点を教えてください。"
     },
     {
       "id": "native.apple.9c1a9be47ac92727",
@@ -26825,8 +26825,8 @@
     },
     {
       "id": "native.apple.1823d7bddaa73a1a",
-      "source": "OpenClaw could not read the gateway certificate for %@.",
-      "translated": "OpenClawは%@のGateway証明書を読み取れませんでした。"
+      "source": "OpenCrustacean could not read the gateway certificate for %@.",
+      "translated": "OpenCrustaceanは%@のGateway証明書を読み取れませんでした。"
     },
     {
       "id": "native.apple.b737f84578f558eb",
@@ -26840,8 +26840,8 @@
     },
     {
       "id": "native.apple.7493b8bf5dcaa05f",
-      "source": "OpenClaw could not securely save the TLS certificate pin for %@.",
-      "translated": "OpenClaw は %@ の TLS 証明書ピンを安全に保存できませんでした。"
+      "source": "OpenCrustacean could not securely save the TLS certificate pin for %@.",
+      "translated": "OpenCrustacean は %@ の TLS 証明書ピンを安全に保存できませんでした。"
     },
     {
       "id": "native.apple.9a4c4bd6b41420ae",

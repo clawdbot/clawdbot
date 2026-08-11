@@ -15,8 +15,8 @@
     },
     {
       "id": "native.android.85cc8de945e3929c",
-      "source": "OpenClaw translations · $languageTag",
-      "translated": "ترجمات OpenClaw · $languageTag"
+      "source": "OpenCrustacean translations · $languageTag",
+      "translated": "ترجمات OpenCrustacean · $languageTag"
     },
     {
       "id": "native.android.914725056e04bd7a",
@@ -385,13 +385,13 @@
     },
     {
       "id": "native.android.25ce6f89dd2fda90",
-      "source": "OpenClaw Node · Talk",
-      "translated": "عقدة OpenClaw · المحادثة"
+      "source": "OpenCrustacean Node · Talk",
+      "translated": "عقدة OpenCrustacean · المحادثة"
     },
     {
       "id": "native.android.b48f7aeb7a884942",
-      "source": "OpenClaw Node · Connected",
-      "translated": "عقدة OpenClaw · متصلة"
+      "source": "OpenCrustacean Node · Connected",
+      "translated": "عقدة OpenCrustacean · متصلة"
     },
     {
       "id": "native.android.b781a577d8da896d",
@@ -400,8 +400,8 @@
     },
     {
       "id": "native.android.97365bea9725ae80",
-      "source": "OpenClaw Node",
-      "translated": "عقدة OpenClaw"
+      "source": "OpenCrustacean Node",
+      "translated": "عقدة OpenCrustacean"
     },
     {
       "id": "native.android.3e0889d921c92cab",
@@ -420,8 +420,8 @@
     },
     {
       "id": "native.android.f4886ad80e8149cf",
-      "source": "OpenClaw node connection status",
-      "translated": "حالة اتصال عقدة OpenClaw"
+      "source": "OpenCrustacean node connection status",
+      "translated": "حالة اتصال عقدة OpenCrustacean"
     },
     {
       "id": "native.android.20fb810920ccb98c",
@@ -950,8 +950,8 @@
     },
     {
       "id": "native.android.3b076d12026fd953",
-      "source": "OpenClaw is syncing back up",
-      "translated": "يقوم OpenClaw بإعادة المزامنة"
+      "source": "OpenCrustacean is syncing back up",
+      "translated": "يقوم OpenCrustacean بإعادة المزامنة"
     },
     {
       "id": "native.android.8dd8abf489f1fe50",
@@ -970,8 +970,8 @@
     },
     {
       "id": "native.android.8e22550e0205b237",
-      "source": "Welcome to OpenClaw",
-      "translated": "مرحبًا بك في OpenClaw"
+      "source": "Welcome to OpenCrustacean",
+      "translated": "مرحبًا بك في OpenCrustacean"
     },
     {
       "id": "native.android.fee881b8134958ab",
@@ -1050,8 +1050,8 @@
     },
     {
       "id": "native.android.237761be968be3f4",
-      "source": "OpenClaw needs ${labels.joinToString(\", \")} permissions to continue.",
-      "translated": "يحتاج OpenClaw إلى أذونات ${labels.joinToString(\", \")} للمتابعة."
+      "source": "OpenCrustacean needs ${labels.joinToString(\", \")} permissions to continue.",
+      "translated": "يحتاج OpenCrustacean إلى أذونات ${labels.joinToString(\", \")} للمتابعة."
     },
     {
       "id": "native.android.f9b9d558dc078d96",
@@ -1225,18 +1225,18 @@
     },
     {
       "id": "native.android.c9b3801fdf5499a9",
-      "source": "OpenClaw Passive",
-      "translated": "OpenClaw سلبي"
+      "source": "OpenCrustacean Passive",
+      "translated": "OpenCrustacean سلبي"
     },
     {
       "id": "native.android.e2a79a2c3ddba922",
-      "source": "OpenClaw Time Sensitive",
-      "translated": "OpenClaw حساس للوقت"
+      "source": "OpenCrustacean Time Sensitive",
+      "translated": "OpenCrustacean حساس للوقت"
     },
     {
       "id": "native.android.a79d6ccab877c9ca",
-      "source": "OpenClaw Active",
-      "translated": "OpenClaw نشط"
+      "source": "OpenCrustacean Active",
+      "translated": "OpenCrustacean نشط"
     },
     {
       "id": "native.android.2aa3ad1a12683954",
@@ -1250,13 +1250,13 @@
     },
     {
       "id": "native.android.e1a8681198e91766",
-      "source": "OpenClaw request failed.",
-      "translated": "فشل طلب OpenClaw."
+      "source": "OpenCrustacean request failed.",
+      "translated": "فشل طلب OpenCrustacean."
     },
     {
       "id": "native.android.a71a93ec69cee4d9",
-      "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
-      "translated": "تغيّر اتصال Gateway. أعد تشغيل OpenClaw لإعادة الاتصال."
+      "source": "The Gateway connection changed. Restart OpenCrustacean to reconnect.",
+      "translated": "تغيّر اتصال Gateway. أعد تشغيل OpenCrustacean لإعادة الاتصال."
     },
     {
       "id": "native.android.356609f717b92350",
@@ -1475,8 +1475,8 @@
     },
     {
       "id": "native.android.5ce94621017855b6",
-      "source": "Talk or dictate with OpenClaw",
-      "translated": "تحدّث أو أملِ باستخدام OpenClaw"
+      "source": "Talk or dictate with OpenCrustacean",
+      "translated": "تحدّث أو أملِ باستخدام OpenCrustacean"
     },
     {
       "id": "native.android.e2cf5a38587382cb",
@@ -1520,8 +1520,8 @@
     },
     {
       "id": "native.android.9f877120690b0c59",
-      "source": "Search OpenClaw",
-      "translated": "البحث في OpenClaw"
+      "source": "Search OpenCrustacean",
+      "translated": "البحث في OpenCrustacean"
     },
     {
       "id": "native.android.c142846e7b88306c",
@@ -1560,8 +1560,8 @@
     },
     {
       "id": "native.android.9a839f6e3e05a744",
-      "source": "OpenClaw thread",
-      "translated": "محادثة OpenClaw"
+      "source": "OpenCrustacean thread",
+      "translated": "محادثة OpenCrustacean"
     },
     {
       "id": "native.android.d83f82a1e4a5ed99",
@@ -2765,8 +2765,8 @@
     },
     {
       "id": "native.android.3c50060d3efc154d",
-      "source": "That QR code is not an OpenClaw setup QR. Generate a fresh code with openclaw qr, then try again.",
-      "translated": "رمز QR هذا ليس رمز إعداد QR خاصًا بـ OpenClaw. أنشئ رمزًا جديدًا باستخدام openclaw qr، ثم حاول مرة أخرى."
+      "source": "That QR code is not an OpenCrustacean setup QR. Generate a fresh code with openclaw qr, then try again.",
+      "translated": "رمز QR هذا ليس رمز إعداد QR خاصًا بـ OpenCrustacean. أنشئ رمزًا جديدًا باستخدام openclaw qr، ثم حاول مرة أخرى."
     },
     {
       "id": "native.android.f8cd1cbe29c4c582",
@@ -2825,18 +2825,18 @@
     },
     {
       "id": "native.android.64c8db13ef91513c",
-      "source": "Welcome to OpenClaw",
-      "translated": "مرحبًا بك في OpenClaw"
+      "source": "Welcome to OpenCrustacean",
+      "translated": "مرحبًا بك في OpenCrustacean"
     },
     {
       "id": "native.android.c38e106cc8f1e9ff",
-      "source": "Turn this device into a secure OpenClaw node for chat, voice, camera, and device tools.",
-      "translated": "حوّل هذا الجهاز إلى عقدة OpenClaw آمنة للدردشة والصوت والكاميرا وأدوات الجهاز."
+      "source": "Turn this device into a secure OpenCrustacean node for chat, voice, camera, and device tools.",
+      "translated": "حوّل هذا الجهاز إلى عقدة OpenCrustacean آمنة للدردشة والصوت والكاميرا وأدوات الجهاز."
     },
     {
       "id": "native.android.f941909a3fa51055",
-      "source": "OpenClaw logo",
-      "translated": "شعار OpenClaw"
+      "source": "OpenCrustacean logo",
+      "translated": "شعار OpenCrustacean"
     },
     {
       "id": "native.android.cc878f72a6b70b23",
@@ -2850,8 +2850,8 @@
     },
     {
       "id": "native.android.3bfe29d4d13d3c3e",
-      "source": "Use OpenClaw from your phone",
-      "translated": "استخدم OpenClaw من هاتفك"
+      "source": "Use OpenCrustacean from your phone",
+      "translated": "استخدم OpenCrustacean من هاتفك"
     },
     {
       "id": "native.android.c0b539eeb4612f5d",
@@ -2860,8 +2860,8 @@
     },
     {
       "id": "native.android.5aed4b5c8d6b246d",
-      "source": "The connected OpenClaw agent can use device capabilities you enable. Continue only if you trust the Gateway and agent you connect to.",
-      "translated": "يمكن لوكيل OpenClaw المتصل استخدام إمكانات الجهاز التي تفعّلها. تابع فقط إذا كنت تثق بـ Gateway والوكيل الذي تتصل به."
+      "source": "The connected OpenCrustacean agent can use device capabilities you enable. Continue only if you trust the Gateway and agent you connect to.",
+      "translated": "يمكن لوكيل OpenCrustacean المتصل استخدام إمكانات الجهاز التي تفعّلها. تابع فقط إذا كنت تثق بـ Gateway والوكيل الذي تتصل به."
     },
     {
       "id": "native.android.63c31ee564d63347",
@@ -2870,8 +2870,8 @@
     },
     {
       "id": "native.android.f50a9c1ee6d47055",
-      "source": "Scan a QR code or use the setup code from your OpenClaw Gateway.",
-      "translated": "امسح رمز QR ضوئيًا أو استخدم رمز الإعداد من OpenClaw Gateway لديك."
+      "source": "Scan a QR code or use the setup code from your OpenCrustacean Gateway.",
+      "translated": "امسح رمز QR ضوئيًا أو استخدم رمز الإعداد من OpenCrustacean Gateway لديك."
     },
     {
       "id": "native.android.58d80589d9d4b7ff",
@@ -2900,8 +2900,8 @@
     },
     {
       "id": "native.android.c8a43dbba02941f0",
-      "source": "Have a terminal open on the device running OpenClaw.",
-      "translated": "اجعل نافذة طرفية مفتوحة على الجهاز الذي يشغّل OpenClaw."
+      "source": "Have a terminal open on the device running OpenCrustacean.",
+      "translated": "اجعل نافذة طرفية مفتوحة على الجهاز الذي يشغّل OpenCrustacean."
     },
     {
       "id": "native.android.71ce00f359981a0b",
@@ -2951,7 +2951,7 @@
     {
       "id": "native.android.db24e4be7a1b5547",
       "source": "openclaw qr",
-      "translated": "رمز QR لـ OpenClaw"
+      "translated": "رمز QR لـ OpenCrustacean"
     },
     {
       "id": "native.android.96d40475de2885d6",
@@ -3145,8 +3145,8 @@
     },
     {
       "id": "native.android.f43cb6ed03dc6766",
-      "source": "Gateway pairing is complete. Approve this phone as a node so OpenClaw can use the device capabilities you enable.",
-      "translated": "اكتمل إقران Gateway. وافق على هذا الهاتف كعقدة حتى يتمكن OpenClaw من استخدام إمكانات الجهاز التي تفعّلها."
+      "source": "Gateway pairing is complete. Approve this phone as a node so OpenCrustacean can use the device capabilities you enable.",
+      "translated": "اكتمل إقران Gateway. وافق على هذا الهاتف كعقدة حتى يتمكن OpenCrustacean من استخدام إمكانات الجهاز التي تفعّلها."
     },
     {
       "id": "native.android.8e49feba12c350ac",
@@ -3190,8 +3190,8 @@
     },
     {
       "id": "native.android.d4c3bcf880727fb3",
-      "source": "Only enable access you are comfortable letting OpenClaw use while this phone is connected. You can change these later in Android Settings.",
-      "translated": "فعّل فقط الوصول الذي ترتاح إلى السماح لـ OpenClaw باستخدامه أثناء اتصال هذا الهاتف. يمكنك تغيير ذلك لاحقًا في إعدادات Android."
+      "source": "Only enable access you are comfortable letting OpenCrustacean use while this phone is connected. You can change these later in Android Settings.",
+      "translated": "فعّل فقط الوصول الذي ترتاح إلى السماح لـ OpenCrustacean باستخدامه أثناء اتصال هذا الهاتف. يمكنك تغيير ذلك لاحقًا في إعدادات Android."
     },
     {
       "id": "native.android.44549cfd7e6a1ab8",
@@ -3235,8 +3235,8 @@
     },
     {
       "id": "native.android.176b4f5d1c9f8ce2",
-      "source": "Approval is in progress.\nOpenClaw will reconnect automatically.",
-      "translated": "الموافقة قيد التنفيذ.\nسيعيد OpenClaw الاتصال تلقائيًا."
+      "source": "Approval is in progress.\nOpenCrustacean will reconnect automatically.",
+      "translated": "الموافقة قيد التنفيذ.\nسيعيد OpenCrustacean الاتصال تلقائيًا."
     },
     {
       "id": "native.android.466e3fb210732587",
@@ -3245,8 +3245,8 @@
     },
     {
       "id": "native.android.7b95b9e103bbbb92",
-      "source": "OpenClaw is checking gateway and node access.",
-      "translated": "يتحقق OpenClaw من الوصول إلى Gateway والعقدة."
+      "source": "OpenCrustacean is checking gateway and node access.",
+      "translated": "يتحقق OpenCrustacean من الوصول إلى Gateway والعقدة."
     },
     {
       "id": "native.android.a75fc5ca269cbb15",
@@ -3355,8 +3355,8 @@
     },
     {
       "id": "native.android.bdd063b9f766050b",
-      "source": "Gateway approval is in progress. OpenClaw will retry automatically.",
-      "translated": "موافقة Gateway قيد التنفيذ. سيعيد OpenClaw المحاولة تلقائيًا."
+      "source": "Gateway approval is in progress. OpenCrustacean will retry automatically.",
+      "translated": "موافقة Gateway قيد التنفيذ. سيعيد OpenCrustacean المحاولة تلقائيًا."
     },
     {
       "id": "native.android.45cfb86623fa2251",
@@ -3410,18 +3410,18 @@
     },
     {
       "id": "native.android.c94c164d474cb0db",
-      "source": "This app is older than the Gateway. Update OpenClaw on this device, then retry.",
-      "translated": "هذا التطبيق أقدم من Gateway. حدّث OpenClaw على هذا الجهاز، ثم أعد المحاولة."
+      "source": "This app is older than the Gateway. Update OpenCrustacean on this device, then retry.",
+      "translated": "هذا التطبيق أقدم من Gateway. حدّث OpenCrustacean على هذا الجهاز، ثم أعد المحاولة."
     },
     {
       "id": "native.android.48ba24436b643607",
-      "source": "The Gateway is older than this app. Update OpenClaw on the Gateway host, then retry.",
-      "translated": "إصدار Gateway أقدم من هذا التطبيق. حدّث OpenClaw على مضيف Gateway، ثم أعد المحاولة."
+      "source": "The Gateway is older than this app. Update OpenCrustacean on the Gateway host, then retry.",
+      "translated": "إصدار Gateway أقدم من هذا التطبيق. حدّث OpenCrustacean على مضيف Gateway، ثم أعد المحاولة."
     },
     {
       "id": "native.android.1473077d05ac1739",
-      "source": "The app and Gateway use incompatible protocol versions. Update OpenClaw on both, then retry.",
-      "translated": "يستخدم التطبيق وGateway إصدارات بروتوكول غير متوافقة. حدّث OpenClaw على كليهما، ثم أعد المحاولة."
+      "source": "The app and Gateway use incompatible protocol versions. Update OpenCrustacean on both, then retry.",
+      "translated": "يستخدم التطبيق وGateway إصدارات بروتوكول غير متوافقة. حدّث OpenCrustacean على كليهما، ثم أعد المحاولة."
     },
     {
       "id": "native.android.6379bfb6b09ef8cd",
@@ -3550,8 +3550,8 @@
     },
     {
       "id": "native.android.d096df67bff5e611",
-      "source": "Show OpenClaw alerts",
-      "translated": "عرض تنبيهات OpenClaw"
+      "source": "Show OpenCrustacean alerts",
+      "translated": "عرض تنبيهات OpenCrustacean"
     },
     {
       "id": "native.android.93cbec65dbc5de69",
@@ -3860,8 +3860,8 @@
     },
     {
       "id": "native.android.fc145645b9620e57",
-      "source": "OpenClaw thread",
-      "translated": "محادثة OpenClaw"
+      "source": "OpenCrustacean thread",
+      "translated": "محادثة OpenCrustacean"
     },
     {
       "id": "native.android.71cbb8dde8bf138b",
@@ -3925,8 +3925,8 @@
     },
     {
       "id": "native.android.b5e4ae7f8c9eca2d",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.android.f46b06f8550516e4",
@@ -4115,8 +4115,8 @@
     },
     {
       "id": "native.android.5e3e4cd42004cb28",
-      "source": "Scheduled OpenClaw work from your gateway.",
-      "translated": "أعمال OpenClaw المجدولة من Gateway لديك."
+      "source": "Scheduled OpenCrustacean work from your gateway.",
+      "translated": "أعمال OpenCrustacean المجدولة من Gateway لديك."
     },
     {
       "id": "native.android.31a5440e22667f02",
@@ -4275,8 +4275,8 @@
     },
     {
       "id": "native.android.fea93eda5bf97d9e",
-      "source": "How this phone appears to OpenClaw.",
-      "translated": "كيف يظهر هذا الهاتف في OpenClaw."
+      "source": "How this phone appears to OpenCrustacean.",
+      "translated": "كيف يظهر هذا الهاتف في OpenCrustacean."
     },
     {
       "id": "native.android.695229fd01afbc2d",
@@ -4315,8 +4315,8 @@
     },
     {
       "id": "native.android.6e58157abced395f",
-      "source": "Runs on-device while OpenClaw is visible.",
-      "translated": "يعمل على الجهاز أثناء ظهور OpenClaw."
+      "source": "Runs on-device while OpenCrustacean is visible.",
+      "translated": "يعمل على الجهاز أثناء ظهور OpenCrustacean."
     },
     {
       "id": "native.android.6464166ab71fde3f",
@@ -4395,8 +4395,8 @@
     },
     {
       "id": "native.android.5ff888931aae2738",
-      "source": "Check that OpenClaw can speak clearly on this phone.",
-      "translated": "تحقّق من أن OpenClaw يمكنه التحدث بوضوح على هذا الهاتف."
+      "source": "Check that OpenCrustacean can speak clearly on this phone.",
+      "translated": "تحقّق من أن OpenCrustacean يمكنه التحدث بوضوح على هذا الهاتف."
     },
     {
       "id": "native.android.f82d5d81f5dc9b43",
@@ -4505,8 +4505,8 @@
     },
     {
       "id": "native.android.9feed8722db5d2cc",
-      "source": "Choose what reaches OpenClaw.",
-      "translated": "اختر ما يصل إلى OpenClaw."
+      "source": "Choose what reaches OpenCrustacean.",
+      "translated": "اختر ما يصل إلى OpenCrustacean."
     },
     {
       "id": "native.android.d32071018de11907",
@@ -4525,8 +4525,8 @@
     },
     {
       "id": "native.android.5a077bf9cf4f47c8",
-      "source": "OpenClaw can receive selected alerts.",
-      "translated": "يمكن لـ OpenClaw تلقي التنبيهات المحددة."
+      "source": "OpenCrustacean can receive selected alerts.",
+      "translated": "يمكن لـ OpenCrustacean تلقي التنبيهات المحددة."
     },
     {
       "id": "native.android.a04ee29c0a3b68f5",
@@ -4685,8 +4685,8 @@
     },
     {
       "id": "native.android.bdafaceb7af93f5a",
-      "source": "OpenClaw can list launcher-visible apps.",
-      "translated": "يمكن لـ OpenClaw عرض قائمة التطبيقات الظاهرة في المشغّل."
+      "source": "OpenCrustacean can list launcher-visible apps.",
+      "translated": "يمكن لـ OpenCrustacean عرض قائمة التطبيقات الظاهرة في المشغّل."
     },
     {
       "id": "native.android.be89d5601904322a",
@@ -4715,8 +4715,8 @@
     },
     {
       "id": "native.android.58549715b04997cc",
-      "source": "Always allows requested location checks while OpenClaw is in the background; Android shows this in the persistent node notification.",
-      "translated": "يسمح دائمًا بفحوصات الموقع المطلوبة أثناء وجود OpenClaw في الخلفية؛ يعرض Android ذلك في إشعار العقدة المستمر."
+      "source": "Always allows requested location checks while OpenCrustacean is in the background; Android shows this in the persistent node notification.",
+      "translated": "يسمح دائمًا بفحوصات الموقع المطلوبة أثناء وجود OpenCrustacean في الخلفية؛ يعرض Android ذلك في إشعار العقدة المستمر."
     },
     {
       "id": "native.android.d5a8d7f97a7971b1",
@@ -4725,8 +4725,8 @@
     },
     {
       "id": "native.android.031d3ed6fb8a6559",
-      "source": "OpenClaw only checks location when your paired Gateway requests it. On the next Android screen, choose $backgroundPermissionLabel to allow checks while the app is in the background.",
-      "translated": "لا يتحقق OpenClaw من الموقع إلا عندما يطلب Gateway المقترن ذلك. في شاشة Android التالية، اختر $backgroundPermissionLabel للسماح بعمليات التحقق أثناء عمل التطبيق في الخلفية."
+      "source": "OpenCrustacean only checks location when your paired Gateway requests it. On the next Android screen, choose $backgroundPermissionLabel to allow checks while the app is in the background.",
+      "translated": "لا يتحقق OpenCrustacean من الموقع إلا عندما يطلب Gateway المقترن ذلك. في شاشة Android التالية، اختر $backgroundPermissionLabel للسماح بعمليات التحقق أثناء عمل التطبيق في الخلفية."
     },
     {
       "id": "native.android.c48805f3de1d72ca",
@@ -4740,13 +4740,13 @@
     },
     {
       "id": "native.android.c3a001bb0191892d",
-      "source": "OpenClaw collects and sends the names, package IDs, and status of apps visible on this phone when your paired OpenClaw Gateway asks for them. This lets your assistant answer questions and take actions using installed apps.",
-      "translated": "يجمع OpenClaw ويرسل أسماء التطبيقات ومعرّفات الحزم وحالتها الظاهرة على هذا الهاتف عندما يطلبها Gateway المقترن بـ OpenClaw. يتيح ذلك لمساعدك الإجابة عن الأسئلة واتخاذ الإجراءات باستخدام التطبيقات المثبَّتة."
+      "source": "OpenCrustacean collects and sends the names, package IDs, and status of apps visible on this phone when your paired OpenCrustacean Gateway asks for them. This lets your assistant answer questions and take actions using installed apps.",
+      "translated": "يجمع OpenCrustacean ويرسل أسماء التطبيقات ومعرّفات الحزم وحالتها الظاهرة على هذا الهاتف عندما يطلبها Gateway المقترن بـ OpenCrustacean. يتيح ذلك لمساعدك الإجابة عن الأسئلة واتخاذ الإجراءات باستخدام التطبيقات المثبَّتة."
     },
     {
       "id": "native.android.b05f8909de072d71",
-      "source": "Your phone sends this information to your Gateway, not to a server run by OpenClaw. Your Gateway may include it in requests to the AI provider you chose.",
-      "translated": "يرسل هاتفك هذه المعلومات إلى Gateway الخاص بك، وليس إلى خادم تديره OpenClaw. قد يُضمّنها Gateway في الطلبات المُرسَلة إلى موفر الذكاء الاصطناعي الذي اخترته."
+      "source": "Your phone sends this information to your Gateway, not to a server run by OpenCrustacean. Your Gateway may include it in requests to the AI provider you chose.",
+      "translated": "يرسل هاتفك هذه المعلومات إلى Gateway الخاص بك، وليس إلى خادم تديره OpenCrustacean. قد يُضمّنها Gateway في الطلبات المُرسَلة إلى موفر الذكاء الاصطناعي الذي اخترته."
     },
     {
       "id": "native.android.95a3cc1b163c1edf",
@@ -4790,8 +4790,8 @@
     },
     {
       "id": "native.android.9d658ff26e59274b",
-      "source": "Connection between this phone and OpenClaw.",
-      "translated": "الاتصال بين هذا الهاتف وOpenClaw."
+      "source": "Connection between this phone and OpenCrustacean.",
+      "translated": "الاتصال بين هذا الهاتف وOpenCrustacean."
     },
     {
       "id": "native.android.718cb50d1bff3e32",
@@ -5110,8 +5110,8 @@
     },
     {
       "id": "native.android.c2d37ac2ad4c9e3c",
-      "source": "OpenClaw for Android.",
-      "translated": "OpenClaw لنظام Android."
+      "source": "OpenCrustacean for Android.",
+      "translated": "OpenCrustacean لنظام Android."
     },
     {
       "id": "native.android.38889ec3f682dcf8",
@@ -5155,18 +5155,18 @@
     },
     {
       "id": "native.android.aac3310699b496c8",
-      "source": "© 2026 OpenClaw Foundation — MIT License.",
-      "translated": "© 2026 OpenClaw Foundation — ترخيص MIT."
+      "source": "© 2026 OpenCrustacean Foundation — MIT License.",
+      "translated": "© 2026 OpenCrustacean Foundation — ترخيص MIT."
     },
     {
       "id": "native.android.a157bbb606e9b398",
-      "source": "OpenClaw logo",
-      "translated": "شعار OpenClaw"
+      "source": "OpenCrustacean logo",
+      "translated": "شعار OpenCrustacean"
     },
     {
       "id": "native.android.7b78b4869baf2160",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.android.ad4c14835d1b71ca",
@@ -5180,8 +5180,8 @@
     },
     {
       "id": "native.android.996367534eb94cc2",
-      "source": "OpenClaw appreciates its partners in the open-source community.",
-      "translated": "تقدّر OpenClaw شركاءها في مجتمع المصدر المفتوح."
+      "source": "OpenCrustacean appreciates its partners in the open-source community.",
+      "translated": "تقدّر OpenCrustacean شركاءها في مجتمع المصدر المفتوح."
     },
     {
       "id": "native.android.24da1d2eb750ba07",
@@ -5230,8 +5230,8 @@
     },
     {
       "id": "native.android.c971506716c96e91",
-      "source": "OpenClaw turns this phone into a clean mobile command surface for threads, voice, providers, and Gateway.",
-      "translated": "يحوّل OpenClaw هذا الهاتف إلى واجهة أوامر محمولة ومنظّمة لسلاسل المحادثات والصوت ومزوّدي الخدمة وGateway."
+      "source": "OpenCrustacean turns this phone into a clean mobile command surface for threads, voice, providers, and Gateway.",
+      "translated": "يحوّل OpenCrustacean هذا الهاتف إلى واجهة أوامر محمولة ومنظّمة لسلاسل المحادثات والصوت ومزوّدي الخدمة وGateway."
     },
     {
       "id": "native.android.3a3bea53e6a6ada7",
@@ -5705,8 +5705,8 @@
     },
     {
       "id": "native.android.2e33a4fd5f60b550",
-      "source": "Start a chat and your active OpenClaw conversations will appear here.",
-      "translated": "ابدأ محادثة وستظهر محادثات OpenClaw النشطة هنا."
+      "source": "Start a chat and your active OpenCrustacean conversations will appear here.",
+      "translated": "ابدأ محادثة وستظهر محادثات OpenCrustacean النشطة هنا."
     },
     {
       "id": "native.android.85726cfd4207d48a",
@@ -5980,8 +5980,8 @@
     },
     {
       "id": "native.android.4f369a09c8731092",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.android.4878165188c0310c",
@@ -6140,8 +6140,8 @@
     },
     {
       "id": "native.android.ca1451df912ed5cf",
-      "source": "OpenClaw ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
-      "translated": "OpenClaw ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
+      "source": "OpenCrustacean ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+      "translated": "OpenCrustacean ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
     },
     {
       "id": "native.android.b7d8c506999a68f7",
@@ -6330,8 +6330,8 @@
     },
     {
       "id": "native.android.e197964b10ba02ce",
-      "source": "OpenClaw mobile",
-      "translated": "OpenClaw للجوال"
+      "source": "OpenCrustacean mobile",
+      "translated": "OpenCrustacean للجوال"
     },
     {
       "id": "native.android.45005deba537cc59",
@@ -6950,8 +6950,8 @@
     },
     {
       "id": "native.android.4b2c29c94377f235",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.android.7a7da7d8f8613d33",
@@ -6975,8 +6975,8 @@
     },
     {
       "id": "native.android.06e5bfbad4b42e3b",
-      "source": "Connect this phone to a Gateway before opening OpenClaw.",
-      "translated": "اربط هذا الهاتف بـ Gateway قبل فتح OpenClaw."
+      "source": "Connect this phone to a Gateway before opening OpenCrustacean.",
+      "translated": "اربط هذا الهاتف بـ Gateway قبل فتح OpenCrustacean."
     },
     {
       "id": "native.android.44cca3625b125c19",
@@ -6985,18 +6985,18 @@
     },
     {
       "id": "native.android.6089cc78ebd95573",
-      "source": "Checking whether this Gateway supports the OpenClaw settings assistant.",
-      "translated": "جارٍ التحقق مما إذا كان هذا الـ Gateway يدعم مساعد إعدادات OpenClaw."
+      "source": "Checking whether this Gateway supports the OpenCrustacean settings assistant.",
+      "translated": "جارٍ التحقق مما إذا كان هذا الـ Gateway يدعم مساعد إعدادات OpenCrustacean."
     },
     {
       "id": "native.android.3c3a35369bc2f1f9",
-      "source": "Update this Gateway to use the OpenClaw settings assistant.",
-      "translated": "حدّث هذا الـ Gateway لاستخدام مساعد إعدادات OpenClaw."
+      "source": "Update this Gateway to use the OpenCrustacean settings assistant.",
+      "translated": "حدّث هذا الـ Gateway لاستخدام مساعد إعدادات OpenCrustacean."
     },
     {
       "id": "native.android.41b7b9cd883e3e81",
-      "source": "OpenClaw is working…",
-      "translated": "OpenClaw يعمل…"
+      "source": "OpenCrustacean is working…",
+      "translated": "OpenCrustacean يعمل…"
     },
     {
       "id": "native.android.072481856dd25c89",
@@ -7005,8 +7005,8 @@
     },
     {
       "id": "native.android.25fcaa5f2ef2546e",
-      "source": "OpenClaw is ready to continue in your ordinary chat.",
-      "translated": "‏OpenClaw جاهز للمتابعة في دردشتك العادية."
+      "source": "OpenCrustacean is ready to continue in your ordinary chat.",
+      "translated": "‏OpenCrustacean جاهز للمتابعة في دردشتك العادية."
     },
     {
       "id": "native.android.88377fbc76395226",
@@ -7035,8 +7035,8 @@
     },
     {
       "id": "native.android.4753194a1f8c6c6b",
-      "source": "Reply to OpenClaw…",
-      "translated": "الرد على OpenClaw…"
+      "source": "Reply to OpenCrustacean…",
+      "translated": "الرد على OpenCrustacean…"
     },
     {
       "id": "native.android.07d2609a561a43b0",
@@ -7115,8 +7115,8 @@
     },
     {
       "id": "native.android.9d977253fdcda216",
-      "source": "OpenClaw speaking",
-      "translated": "OpenClaw يتحدث"
+      "source": "OpenCrustacean speaking",
+      "translated": "OpenCrustacean يتحدث"
     },
     {
       "id": "native.android.1babfd757bbcfeb4",
@@ -7195,8 +7195,8 @@
     },
     {
       "id": "native.android.2e2b5efe4ca2380a",
-      "source": "OpenClaw is replying",
-      "translated": "OpenClaw يرد"
+      "source": "OpenCrustacean is replying",
+      "translated": "OpenCrustacean يرد"
     },
     {
       "id": "native.android.64731fc46a862f86",
@@ -7295,8 +7295,8 @@
     },
     {
       "id": "native.android.253debc9d0714dda",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.android.24057bba4bbfa27a",
@@ -7315,8 +7315,8 @@
     },
     {
       "id": "native.android.5b8bd9f2b69b91ea",
-      "source": "OpenClaw is preparing a response.",
-      "translated": "يقوم OpenClaw بتحضير رد."
+      "source": "OpenCrustacean is preparing a response.",
+      "translated": "يقوم OpenCrustacean بتحضير رد."
     },
     {
       "id": "native.android.420cccbd48298a8d",
@@ -7330,8 +7330,8 @@
     },
     {
       "id": "native.android.285eeed928be0fc1",
-      "source": "OpenClaw only listens when you start Talk or Dictation.",
-      "translated": "لا يستمع OpenClaw إلا عندما تبدأ المحادثة أو الإملاء."
+      "source": "OpenCrustacean only listens when you start Talk or Dictation.",
+      "translated": "لا يستمع OpenCrustacean إلا عندما تبدأ المحادثة أو الإملاء."
     },
     {
       "id": "native.android.b10a51fe9d4b8d2d",
@@ -7340,8 +7340,8 @@
     },
     {
       "id": "native.android.c8bff891c9a442d9",
-      "source": "OpenClaw is speaking",
-      "translated": "OpenClaw يتحدث"
+      "source": "OpenCrustacean is speaking",
+      "translated": "OpenCrustacean يتحدث"
     },
     {
       "id": "native.android.248e1292eff12b84",
@@ -7885,8 +7885,8 @@
     },
     {
       "id": "native.android.dfbd755eb43b4d26",
-      "source": "OpenClaw · Live",
-      "translated": "OpenClaw · مباشر"
+      "source": "OpenCrustacean · Live",
+      "translated": "OpenCrustacean · مباشر"
     },
     {
       "id": "native.android.b3ff30d4e0b3ce58",
@@ -7900,8 +7900,8 @@
     },
     {
       "id": "native.android.82e9fe45e93909b6",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.android.02b4598277aca860",
@@ -8105,8 +8105,8 @@
     },
     {
       "id": "native.android.ebe49a8b8df80bd3",
-      "source": "Catch me up on my recent OpenClaw threads and suggest next steps.",
-      "translated": "أطلعني على آخر مستجدات سلاسل محادثاتي الأخيرة في OpenClaw واقترح الخطوات التالية."
+      "source": "Catch me up on my recent OpenCrustacean threads and suggest next steps.",
+      "translated": "أطلعني على آخر مستجدات سلاسل محادثاتي الأخيرة في OpenCrustacean واقترح الخطوات التالية."
     },
     {
       "id": "native.android.79f64f0b5ecaa07c",
@@ -8130,8 +8130,8 @@
     },
     {
       "id": "native.android.1656b8b922a5e3f2",
-      "source": "Ask OpenClaw to use Android capabilities.",
-      "translated": "اطلب من OpenClaw استخدام إمكانات Android."
+      "source": "Ask OpenCrustacean to use Android capabilities.",
+      "translated": "اطلب من OpenCrustacean استخدام إمكانات Android."
     },
     {
       "id": "native.android.04c826e3507eb47e",
@@ -8140,8 +8140,8 @@
     },
     {
       "id": "native.android.67075c8d2ccc0bb5",
-      "source": "OpenClaw · Live",
-      "translated": "OpenClaw · مباشر"
+      "source": "OpenCrustacean · Live",
+      "translated": "OpenCrustacean · مباشر"
     },
     {
       "id": "native.android.869f1130ca16bab5",
@@ -8155,8 +8155,8 @@
     },
     {
       "id": "native.android.25d8575c0063aee5",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.android.b18964167dbb3c02",
@@ -8195,8 +8195,8 @@
     },
     {
       "id": "native.android.d851a32f367f8b31",
-      "source": "OpenClaw is working",
-      "translated": "OpenClaw يعمل"
+      "source": "OpenCrustacean is working",
+      "translated": "OpenCrustacean يعمل"
     },
     {
       "id": "native.android.0fd6b75cadc0ce75",
@@ -8310,8 +8310,8 @@
     },
     {
       "id": "native.android.f1d69eb66c5dfa39",
-      "source": "Message OpenClaw",
-      "translated": "مراسلة OpenClaw"
+      "source": "Message OpenCrustacean",
+      "translated": "مراسلة OpenCrustacean"
     },
     {
       "id": "native.android.9b42791ed9da90d3",
@@ -8635,8 +8635,8 @@
     },
     {
       "id": "native.android.79d7a1026ef43e80",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.android.e8318a46a213cb91",
@@ -8670,13 +8670,13 @@
     },
     {
       "id": "native.android.794873efdfcdff4f",
-      "source": "OpenClaw gateway",
-      "translated": "بوابة OpenClaw"
+      "source": "OpenCrustacean gateway",
+      "translated": "بوابة OpenCrustacean"
     },
     {
       "id": "native.android.2d3b6dd9a8f186fe",
-      "source": "Ask OpenClaw anything",
-      "translated": "اسأل OpenClaw أي شيء"
+      "source": "Ask OpenCrustacean anything",
+      "translated": "اسأل OpenCrustacean أي شيء"
     },
     {
       "id": "native.android.608ccdaeababf056",
@@ -8710,8 +8710,8 @@
     },
     {
       "id": "native.android.3457b4ee28d964ee",
-      "source": "OpenClaw will surface approvals, failed jobs, and channel issues here.",
-      "translated": "سيعرض OpenClaw الموافقات والمهام الفاشلة ومشكلات القنوات هنا."
+      "source": "OpenCrustacean will surface approvals, failed jobs, and channel issues here.",
+      "translated": "سيعرض OpenCrustacean الموافقات والمهام الفاشلة ومشكلات القنوات هنا."
     },
     {
       "id": "native.android.7a6a37643fcfb2d9",
@@ -8995,23 +8995,23 @@
     },
     {
       "id": "native.android.f392ee2d50d6b7ce",
-      "source": "ask OpenClaw $prompt",
-      "translated": "اسأل OpenClaw $prompt"
+      "source": "ask OpenCrustacean $prompt",
+      "translated": "اسأل OpenCrustacean $prompt"
     },
     {
       "id": "native.android.ea9d1a78cfa13033",
-      "source": "tell OpenClaw to $prompt",
-      "translated": "أخبر OpenClaw أن $prompt"
+      "source": "tell OpenCrustacean to $prompt",
+      "translated": "أخبر OpenCrustacean أن $prompt"
     },
     {
       "id": "native.android.7f96ac9b9e10abd0",
-      "source": "open OpenClaw and ask $prompt",
-      "translated": "افتح OpenClaw واسأل $prompt"
+      "source": "open OpenCrustacean and ask $prompt",
+      "translated": "افتح OpenCrustacean واسأل $prompt"
     },
     {
       "id": "native.android.a3c395b04ae7a621",
-      "source": "OpenClaw Node",
-      "translated": "عقدة OpenClaw"
+      "source": "OpenCrustacean Node",
+      "translated": "عقدة OpenCrustacean"
     },
     {
       "id": "native.android.cd32b06480d9bb69",
@@ -9095,13 +9095,13 @@
     },
     {
       "id": "native.android.e3661fcea979a74c",
-      "source": "OpenClaw Git commit",
-      "translated": "التزام Git لـ OpenClaw"
+      "source": "OpenCrustacean Git commit",
+      "translated": "التزام Git لـ OpenCrustacean"
     },
     {
       "id": "native.android.a610564c863cdef7",
-      "source": "OpenClaw build timestamp",
-      "translated": "الطابع الزمني لبناء OpenClaw"
+      "source": "OpenCrustacean build timestamp",
+      "translated": "الطابع الزمني لبناء OpenCrustacean"
     },
     {
       "id": "native.android.9b9a42b4f56bea2a",
@@ -9280,8 +9280,8 @@
     },
     {
       "id": "native.android.16d2abc828935351",
-      "source": "Enabling lets OpenClaw observe and control other apps' screens when armed. Android accessibility access is required.",
-      "translated": "يتيح التمكين لـ OpenClaw مراقبة شاشات التطبيقات الأخرى والتحكم بها عند التفعيل. يلزم منح إذن إمكانية الوصول في Android."
+      "source": "Enabling lets OpenCrustacean observe and control other apps' screens when armed. Android accessibility access is required.",
+      "translated": "يتيح التمكين لـ OpenCrustacean مراقبة شاشات التطبيقات الأخرى والتحكم بها عند التفعيل. يلزم منح إذن إمكانية الوصول في Android."
     },
     {
       "id": "native.android.2762510a90e577a3",
@@ -9295,8 +9295,8 @@
     },
     {
       "id": "native.android.b3cae8c7b0ac2222",
-      "source": "OpenClaw UI control",
-      "translated": "التحكم في واجهة OpenClaw"
+      "source": "OpenCrustacean UI control",
+      "translated": "التحكم في واجهة OpenCrustacean"
     },
     {
       "id": "native.android.d980d910a3466dc2",
@@ -9305,13 +9305,13 @@
     },
     {
       "id": "native.android.7f56eb025a774101",
-      "source": "Allows the third-party OpenClaw build to inspect and control the active app during local development.",
-      "translated": "يتيح لبنية OpenClaw من جهة خارجية فحص التطبيق النشط والتحكم به أثناء التطوير المحلي."
+      "source": "Allows the third-party OpenCrustacean build to inspect and control the active app during local development.",
+      "translated": "يتيح لبنية OpenCrustacean من جهة خارجية فحص التطبيق النشط والتحكم به أثناء التطوير المحلي."
     },
     {
       "id": "native.android.e1c713595c555f5f",
-      "source": "OpenClaw Accessibility Developer",
-      "translated": "مطوّر إمكانية الوصول في OpenClaw"
+      "source": "OpenCrustacean Accessibility Developer",
+      "translated": "مطوّر إمكانية الوصول في OpenCrustacean"
     },
     {
       "id": "native.android.342644995c7fa39d",
@@ -9510,8 +9510,8 @@
     },
     {
       "id": "native.android.b8de3221042b2fd3",
-      "source": "Talk or type on your watch. The paired phone sends the message through its authenticated OpenClaw session.",
-      "translated": "تحدّث أو اكتب على ساعتك. يرسل الهاتف المقترن الرسالة عبر جلسة OpenClaw المصادق عليها."
+      "source": "Talk or type on your watch. The paired phone sends the message through its authenticated OpenCrustacean session.",
+      "translated": "تحدّث أو اكتب على ساعتك. يرسل الهاتف المقترن الرسالة عبر جلسة OpenCrustacean المصادق عليها."
     },
     {
       "id": "native.android.44c6bb3c4c7b61ae",
@@ -9620,13 +9620,13 @@
     },
     {
       "id": "native.android.5d98a2a8a4f1f793",
-      "source": "Reconnect the Gateway in OpenClaw on the paired phone.",
-      "translated": "أعِد توصيل Gateway في OpenClaw على الهاتف المقترن."
+      "source": "Reconnect the Gateway in OpenCrustacean on the paired phone.",
+      "translated": "أعِد توصيل Gateway في OpenCrustacean على الهاتف المقترن."
     },
     {
       "id": "native.android.867011d568b0b0db",
-      "source": "Open OpenClaw on phone",
-      "translated": "افتح OpenClaw على الهاتف"
+      "source": "Open OpenCrustacean on phone",
+      "translated": "افتح OpenCrustacean على الهاتف"
     },
     {
       "id": "native.android.e70d812f3bc1bb40",
@@ -9640,8 +9640,8 @@
     },
     {
       "id": "native.android.d6c4dc6d15a4eaac",
-      "source": "Keep the paired phone nearby and install the matching OpenClaw app.",
-      "translated": "أبقِ الهاتف المقترن قريبًا وثبّت تطبيق OpenClaw المطابق."
+      "source": "Keep the paired phone nearby and install the matching OpenCrustacean app.",
+      "translated": "أبقِ الهاتف المقترن قريبًا وثبّت تطبيق OpenCrustacean المطابق."
     },
     {
       "id": "native.android.bfebf63a2c96e9cd",
@@ -9675,8 +9675,8 @@
     },
     {
       "id": "native.android.ce39278848b1615d",
-      "source": "Update OpenClaw on both phone and watch.",
-      "translated": "حدّث OpenClaw على كلٍ من الهاتف والساعة."
+      "source": "Update OpenCrustacean on both phone and watch.",
+      "translated": "حدّث OpenCrustacean على كلٍ من الهاتف والساعة."
     },
     {
       "id": "native.android.b5d6a37fb96f38f1",
@@ -9690,8 +9690,8 @@
     },
     {
       "id": "native.android.6b973e2d4540f1dc",
-      "source": "OpenClaw replies",
-      "translated": "ردود OpenClaw"
+      "source": "OpenCrustacean replies",
+      "translated": "ردود OpenCrustacean"
     },
     {
       "id": "native.android.daf75f1939c5048f",
@@ -9700,8 +9700,8 @@
     },
     {
       "id": "native.android.2ab12cfd9399407c",
-      "source": "OpenClaw reply",
-      "translated": "رد OpenClaw"
+      "source": "OpenCrustacean reply",
+      "translated": "رد OpenCrustacean"
     },
     {
       "id": "native.android.289456e2626dd0f4",
@@ -9715,8 +9715,8 @@
     },
     {
       "id": "native.android.3ec65645eda5ded7",
-      "source": "Open OpenClaw to reply",
-      "translated": "افتح OpenClaw للرد"
+      "source": "Open OpenCrustacean to reply",
+      "translated": "افتح OpenCrustacean للرد"
     },
     {
       "id": "native.android.7658464805a4b605",
@@ -9725,8 +9725,8 @@
     },
     {
       "id": "native.android.6b2e913641d45f02",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.android.7c74dd9a2bf91d3a",
@@ -9750,8 +9750,8 @@
     },
     {
       "id": "native.apple.86d546e1f1247028",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.9fd01bdb5a753f3e",
@@ -12000,8 +12000,8 @@
     },
     {
       "id": "native.apple.3548c8d1ab43e85e",
-      "source": "OpenClaw could not prepare the Markdown file.",
-      "translated": "تعذّر على OpenClaw إعداد ملف Markdown."
+      "source": "OpenCrustacean could not prepare the Markdown file.",
+      "translated": "تعذّر على OpenCrustacean إعداد ملف Markdown."
     },
     {
       "id": "native.apple.202b97e93b938049",
@@ -12120,13 +12120,13 @@
     },
     {
       "id": "native.apple.14492e334b87e4f2",
-      "source": "Check OpenClaw status",
-      "translated": "تحقق من حالة OpenClaw"
+      "source": "Check OpenCrustacean status",
+      "translated": "تحقق من حالة OpenCrustacean"
     },
     {
       "id": "native.apple.bbf7bd23da1e7865",
-      "source": "Summarize the current OpenClaw status and tell me what needs attention.",
-      "translated": "لخّص حالة OpenClaw الحالية وأخبرني بما يحتاج إلى اهتمام."
+      "source": "Summarize the current OpenCrustacean status and tell me what needs attention.",
+      "translated": "لخّص حالة OpenCrustacean الحالية وأخبرني بما يحتاج إلى اهتمام."
     },
     {
       "id": "native.apple.ea8cbb1b4230c652",
@@ -13235,8 +13235,8 @@
     },
     {
       "id": "native.apple.56935c5384889b8e",
-      "source": "Browse the current OpenClaw reference.",
-      "translated": "تصفّح مرجع OpenClaw الحالي."
+      "source": "Browse the current OpenCrustacean reference.",
+      "translated": "تصفّح مرجع OpenCrustacean الحالي."
     },
     {
       "id": "native.apple.2ee2f8c71fa2d2cc",
@@ -13265,8 +13265,8 @@
     },
     {
       "id": "native.apple.cf9bb65f8e405cc8",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.20d011936ab5cd30",
@@ -13570,8 +13570,8 @@
     },
     {
       "id": "native.apple.9bb1dae351d0e3a4",
-      "source": "Enable OpenClaw Hosted Push Relay?",
-      "translated": "هل تريد تفعيل OpenClaw Hosted Push Relay؟"
+      "source": "Enable OpenCrustacean Hosted Push Relay?",
+      "translated": "هل تريد تفعيل OpenCrustacean Hosted Push Relay؟"
     },
     {
       "id": "native.apple.f8c042a923222472",
@@ -13750,8 +13750,8 @@
     },
     {
       "id": "native.apple.2d878afa870cd7cc",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.b99af99847ac7823",
@@ -13810,13 +13810,13 @@
     },
     {
       "id": "native.apple.3503aca018f04865",
-      "source": "Setup sent. Open OpenClaw on the watch to connect.",
-      "translated": "تم إرسال الإعداد. افتح OpenClaw على الساعة للاتصال."
+      "source": "Setup sent. Open OpenCrustacean on the watch to connect.",
+      "translated": "تم إرسال الإعداد. افتح OpenCrustacean على الساعة للاتصال."
     },
     {
       "id": "native.apple.a9a778465dfe1198",
-      "source": "Setup queued for the watch. Open OpenClaw before the code expires.",
-      "translated": "تم وضع الإعداد في قائمة الانتظار للساعة. افتح OpenClaw قبل انتهاء صلاحية الرمز."
+      "source": "Setup queued for the watch. Open OpenCrustacean before the code expires.",
+      "translated": "تم وضع الإعداد في قائمة الانتظار للساعة. افتح OpenCrustacean قبل انتهاء صلاحية الرمز."
     },
     {
       "id": "native.apple.ba8d38a642bee7f3",
@@ -13825,8 +13825,8 @@
     },
     {
       "id": "native.apple.07668650c75a20f1",
-      "source": "Pairing required. Run /pair approve in your OpenClaw chat, then connect again.",
-      "translated": "الإقران مطلوب. شغّل /pair approve في دردشة OpenClaw، ثم اتصل مجددًا."
+      "source": "Pairing required. Run /pair approve in your OpenCrustacean chat, then connect again.",
+      "translated": "الإقران مطلوب. شغّل /pair approve في دردشة OpenCrustacean، ثم اتصل مجددًا."
     },
     {
       "id": "native.apple.101b491eed1648ce",
@@ -13905,8 +13905,8 @@
     },
     {
       "id": "native.apple.3d805ac21285b092",
-      "source": "Foreground approvals still appear while OpenClaw is connected.",
-      "translated": "تظل طلبات الموافقة في الواجهة ظاهرة أثناء اتصال OpenClaw."
+      "source": "Foreground approvals still appear while OpenCrustacean is connected.",
+      "translated": "تظل طلبات الموافقة في الواجهة ظاهرة أثناء اتصال OpenCrustacean."
     },
     {
       "id": "native.apple.0b7a54926d06b7d8",
@@ -14045,18 +14045,18 @@
     },
     {
       "id": "native.apple.817057c658a751c7",
-      "source": "This build uses OpenClaw's hosted push relay at %@ for notification delivery data.",
-      "translated": "يستخدم هذا الإصدار وسيط الإشعارات الفورية المستضاف من OpenClaw على %@ لبيانات تسليم الإشعارات."
+      "source": "This build uses OpenCrustacean's hosted push relay at %@ for notification delivery data.",
+      "translated": "يستخدم هذا الإصدار وسيط الإشعارات الفورية المستضاف من OpenCrustacean على %@ لبيانات تسليم الإشعارات."
     },
     {
       "id": "native.apple.d70d23305da2016a",
-      "source": "This build is not configured to use OpenClaw's hosted push relay.",
-      "translated": "هذا الإصدار غير مهيأ لاستخدام وسيط الإشعارات الفورية المستضاف من OpenClaw."
+      "source": "This build is not configured to use OpenCrustacean's hosted push relay.",
+      "translated": "هذا الإصدار غير مهيأ لاستخدام وسيط الإشعارات الفورية المستضاف من OpenCrustacean."
     },
     {
       "id": "native.apple.6c81c3d48548ca05",
-      "source": "Enabling this sends delivery data through OpenClaw's hosted push relay.",
-      "translated": "يؤدي تمكين هذا الخيار إلى إرسال بيانات التسليم عبر وسيط الإشعارات الفورية المستضاف من OpenClaw."
+      "source": "Enabling this sends delivery data through OpenCrustacean's hosted push relay.",
+      "translated": "يؤدي تمكين هذا الخيار إلى إرسال بيانات التسليم عبر وسيط الإشعارات الفورية المستضاف من OpenCrustacean."
     },
     {
       "id": "native.apple.80fade864c8ad242",
@@ -14095,8 +14095,8 @@
     },
     {
       "id": "native.apple.fc49f9b63e160581",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.2c2cdafd79f8ba5b",
@@ -14245,8 +14245,8 @@
     },
     {
       "id": "native.apple.1bd0f0b41f4d4750",
-      "source": "Install the OpenClaw watch app before enabling direct mode.",
-      "translated": "ثبّت تطبيق OpenClaw للساعة قبل تمكين الوضع المباشر."
+      "source": "Install the OpenCrustacean watch app before enabling direct mode.",
+      "translated": "ثبّت تطبيق OpenCrustacean للساعة قبل تمكين الوضع المباشر."
     },
     {
       "id": "native.apple.3710cda9cb13870f",
@@ -14285,8 +14285,8 @@
     },
     {
       "id": "native.apple.2e042499c42824f5",
-      "source": "Enable Notifications to receive approval alerts while OpenClaw is not open.",
-      "translated": "فعّل الإشعارات لتلقي تنبيهات الموافقة عندما لا يكون OpenClaw مفتوحًا."
+      "source": "Enable Notifications to receive approval alerts while OpenCrustacean is not open.",
+      "translated": "فعّل الإشعارات لتلقي تنبيهات الموافقة عندما لا يكون OpenCrustacean مفتوحًا."
     },
     {
       "id": "native.apple.fc1f2fdbe437cb9d",
@@ -14395,8 +14395,8 @@
     },
     {
       "id": "native.apple.d1ee91d07764faf0",
-      "source": "Turns OpenClaw notification delivery on or off",
-      "translated": "تشغيل أو إيقاف تسليم إشعارات OpenClaw"
+      "source": "Turns OpenCrustacean notification delivery on or off",
+      "translated": "تشغيل أو إيقاف تسليم إشعارات OpenCrustacean"
     },
     {
       "id": "native.apple.31f9c5fa6c3ca5dd",
@@ -14415,8 +14415,8 @@
     },
     {
       "id": "native.apple.a82dc4a746268028",
-      "source": "OpenClaw appreciates its partners in the open-source community.",
-      "translated": "تقدّر OpenClaw شركاءها في مجتمع المصادر المفتوحة."
+      "source": "OpenCrustacean appreciates its partners in the open-source community.",
+      "translated": "تقدّر OpenCrustacean شركاءها في مجتمع المصادر المفتوحة."
     },
     {
       "id": "native.apple.eaa4fe72f3730f3f",
@@ -14450,8 +14450,8 @@
     },
     {
       "id": "native.apple.b962116ff5bf1905",
-      "source": "© 2026 OpenClaw Foundation — MIT License.",
-      "translated": "© 2026 OpenClaw Foundation — ترخيص MIT."
+      "source": "© 2026 OpenCrustacean Foundation — MIT License.",
+      "translated": "© 2026 OpenCrustacean Foundation — ترخيص MIT."
     },
     {
       "id": "native.apple.106434d1305d153b",
@@ -14850,13 +14850,13 @@
     },
     {
       "id": "native.apple.675219772ee5adf0",
-      "source": "OpenClaw can show approval prompts and event alerts when the app is not active.",
-      "translated": "يمكن لـ OpenClaw عرض مطالبات الموافقة وتنبيهات الأحداث عندما لا يكون التطبيق نشطًا."
+      "source": "OpenCrustacean can show approval prompts and event alerts when the app is not active.",
+      "translated": "يمكن لـ OpenCrustacean عرض مطالبات الموافقة وتنبيهات الأحداث عندما لا يكون التطبيق نشطًا."
     },
     {
       "id": "native.apple.44133229b2b05062",
-      "source": "OpenClaw notifications are off.",
-      "translated": "إشعارات OpenClaw متوقفة."
+      "source": "OpenCrustacean notifications are off.",
+      "translated": "إشعارات OpenCrustacean متوقفة."
     },
     {
       "id": "native.apple.9794732a37cb580f",
@@ -14875,8 +14875,8 @@
     },
     {
       "id": "native.apple.bfe6a918d23fa20e",
-      "source": "OpenClaw cannot determine the current notification permission state.",
-      "translated": "لا يستطيع OpenClaw تحديد الحالة الحالية لإذن الإشعارات."
+      "source": "OpenCrustacean cannot determine the current notification permission state.",
+      "translated": "لا يستطيع OpenCrustacean تحديد الحالة الحالية لإذن الإشعارات."
     },
     {
       "id": "native.apple.fc7d007916016c0d",
@@ -15370,18 +15370,18 @@
     },
     {
       "id": "native.apple.8aee90eb1e1061b9",
-      "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
-      "translated": "تغيّر اتصال Gateway. أعد تشغيل OpenClaw لإعادة الاتصال."
+      "source": "The Gateway connection changed. Restart OpenCrustacean to reconnect.",
+      "translated": "تغيّر اتصال Gateway. أعد تشغيل OpenCrustacean لإعادة الاتصال."
     },
     {
       "id": "native.apple.47bc765cd8464c1e",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.a791a671fb60b5f7",
-      "source": "OpenClaw is working…",
-      "translated": "OpenClaw يعمل…"
+      "source": "OpenCrustacean is working…",
+      "translated": "OpenCrustacean يعمل…"
     },
     {
       "id": "native.apple.bd0e286399723c42",
@@ -15405,8 +15405,8 @@
     },
     {
       "id": "native.apple.441f1770a487a055",
-      "source": "Connect this iPhone to a Gateway before opening the OpenClaw settings assistant.",
-      "translated": "اربط هذا الـ iPhone بـ Gateway قبل فتح مساعد إعدادات OpenClaw."
+      "source": "Connect this iPhone to a Gateway before opening the OpenCrustacean settings assistant.",
+      "translated": "اربط هذا الـ iPhone بـ Gateway قبل فتح مساعد إعدادات OpenCrustacean."
     },
     {
       "id": "native.apple.8e0a20f39742ff98",
@@ -15415,13 +15415,13 @@
     },
     {
       "id": "native.apple.9115f5d67e36fd08",
-      "source": "Checking whether this Gateway supports the OpenClaw settings assistant.",
-      "translated": "جارٍ التحقق مما إذا كان هذا Gateway يدعم مساعد إعدادات OpenClaw."
+      "source": "Checking whether this Gateway supports the OpenCrustacean settings assistant.",
+      "translated": "جارٍ التحقق مما إذا كان هذا Gateway يدعم مساعد إعدادات OpenCrustacean."
     },
     {
       "id": "native.apple.3a7955c72e7ab728",
-      "source": "Update this Gateway to use the OpenClaw settings assistant.",
-      "translated": "حدّث هذا Gateway لاستخدام مساعد إعدادات OpenClaw."
+      "source": "Update this Gateway to use the OpenCrustacean settings assistant.",
+      "translated": "حدّث هذا Gateway لاستخدام مساعد إعدادات OpenCrustacean."
     },
     {
       "id": "native.apple.fd24248c00007ba3",
@@ -15430,8 +15430,8 @@
     },
     {
       "id": "native.apple.7ec6b261897ee62c",
-      "source": "OpenClaw is ready to continue in your ordinary chat.",
-      "translated": "OpenClaw جاهز للمتابعة في دردشتك العادية."
+      "source": "OpenCrustacean is ready to continue in your ordinary chat.",
+      "translated": "OpenCrustacean جاهز للمتابعة في دردشتك العادية."
     },
     {
       "id": "native.apple.ad820dd76c74e3f8",
@@ -15450,8 +15450,8 @@
     },
     {
       "id": "native.apple.e40e721e131e606e",
-      "source": "Reply to OpenClaw…",
-      "translated": "الرد على OpenClaw…"
+      "source": "Reply to OpenCrustacean…",
+      "translated": "الرد على OpenCrustacean…"
     },
     {
       "id": "native.apple.5b0adbb8a28011ab",
@@ -15500,8 +15500,8 @@
     },
     {
       "id": "native.apple.c218ef5194d0ee56",
-      "source": "Run OpenClaw agent?",
-      "translated": "تشغيل وكيل OpenClaw؟"
+      "source": "Run OpenCrustacean agent?",
+      "translated": "تشغيل وكيل OpenCrustacean؟"
     },
     {
       "id": "native.apple.5d2fb30a9c85ad10",
@@ -15900,8 +15900,8 @@
     },
     {
       "id": "native.apple.8f6f60c9a5196918",
-      "source": "Exec approvals can only be reviewed while OpenClaw is open and connected.\n\nEnable Notifications to receive approval notifications while OpenClaw is not open.",
-      "translated": "لا يمكن مراجعة موافقات التنفيذ إلا أثناء فتح OpenClaw واتصاله.\n\nفعّل الإشعارات لتلقي إشعارات الموافقة عندما لا يكون OpenClaw مفتوحًا."
+      "source": "Exec approvals can only be reviewed while OpenCrustacean is open and connected.\n\nEnable Notifications to receive approval notifications while OpenCrustacean is not open.",
+      "translated": "لا يمكن مراجعة موافقات التنفيذ إلا أثناء فتح OpenCrustacean واتصاله.\n\nفعّل الإشعارات لتلقي إشعارات الموافقة عندما لا يكون OpenCrustacean مفتوحًا."
     },
     {
       "id": "native.apple.a2378696390cca1e",
@@ -15950,73 +15950,73 @@
     },
     {
       "id": "native.apple.cf820096080f7031",
-      "source": "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.",
-      "translated": "يستخدم OpenClaw تقويماتك لعرض الأحداث وسياق الجدولة عند تفعيل الوصول إلى التقويم."
+      "source": "OpenCrustacean uses your calendars to show events and scheduling context when you enable calendar access.",
+      "translated": "يستخدم OpenCrustacean تقويماتك لعرض الأحداث وسياق الجدولة عند تفعيل الوصول إلى التقويم."
     },
     {
       "id": "native.apple.fe85b609e9a9a144",
-      "source": "OpenClaw uses your calendars to add events when you enable calendar access.",
-      "translated": "يستخدم OpenClaw تقويماتك لإضافة أحداث عند تفعيل الوصول إلى التقويم."
+      "source": "OpenCrustacean uses your calendars to add events when you enable calendar access.",
+      "translated": "يستخدم OpenCrustacean تقويماتك لإضافة أحداث عند تفعيل الوصول إلى التقويم."
     },
     {
       "id": "native.apple.ff5729a17d66ad91",
-      "source": "OpenClaw uses the camera when you scan a Gateway setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace.",
-      "translated": "يستخدم OpenClaw الكاميرا عند مسح رمز QR لإعداد Gateway أو عندما تطلب من Gateway المقترن أو المساعد التقاط صورة أو فيديو قصير من هذا iPhone، مثلًا للاتصال بـ Gateway أو لعرض مستند أو شاشة جهاز أو مساحة عمل على مساعدك."
+      "source": "OpenCrustacean uses the camera when you scan a Gateway setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace.",
+      "translated": "يستخدم OpenCrustacean الكاميرا عند مسح رمز QR لإعداد Gateway أو عندما تطلب من Gateway المقترن أو المساعد التقاط صورة أو فيديو قصير من هذا iPhone، مثلًا للاتصال بـ Gateway أو لعرض مستند أو شاشة جهاز أو مساحة عمل على مساعدك."
     },
     {
       "id": "native.apple.2f21aa6f5cd72915",
-      "source": "OpenClaw uses your contacts so you can search and reference people while using the assistant.",
-      "translated": "يستخدم OpenClaw جهات اتصالك حتى تتمكن من البحث عن الأشخاص والإشارة إليهم أثناء استخدام المساعد."
+      "source": "OpenCrustacean uses your contacts so you can search and reference people while using the assistant.",
+      "translated": "يستخدم OpenCrustacean جهات اتصالك حتى تتمكن من البحث عن الأشخاص والإشارة إليهم أثناء استخدام المساعد."
     },
     {
       "id": "native.apple.9d550c77a37bb165",
-      "source": "OpenClaw discovers and connects to your OpenClaw gateway on the local network.",
-      "translated": "يكتشف OpenClaw ويتصل ببوابة OpenClaw الخاصة بك على الشبكة المحلية."
+      "source": "OpenCrustacean discovers and connects to your OpenCrustacean gateway on the local network.",
+      "translated": "يكتشف OpenCrustacean ويتصل ببوابة OpenCrustacean الخاصة بك على الشبكة المحلية."
     },
     {
       "id": "native.apple.d822c41a0b7e9739",
-      "source": "OpenClaw can share your location in the background when you enable Always.",
-      "translated": "يمكن لـ OpenClaw مشاركة موقعك في الخلفية عند تفعيل دائمًا."
+      "source": "OpenCrustacean can share your location in the background when you enable Always.",
+      "translated": "يمكن لـ OpenCrustacean مشاركة موقعك في الخلفية عند تفعيل دائمًا."
     },
     {
       "id": "native.apple.441062ce99375692",
-      "source": "OpenClaw uses your location when you allow location sharing.",
-      "translated": "يستخدم OpenClaw موقعك عندما تسمح بمشاركة الموقع."
+      "source": "OpenCrustacean uses your location when you allow location sharing.",
+      "translated": "يستخدم OpenCrustacean موقعك عندما تسمح بمشاركة الموقع."
     },
     {
       "id": "native.apple.7c2cbe7077e4eff1",
-      "source": "OpenClaw uses the microphone for realtime chat, voice wake, push-to-talk, and voice notes.",
-      "translated": "يستخدم OpenClaw الميكروفون للدردشة الفورية، والتنبيه الصوتي، والضغط للتحدث، والملاحظات الصوتية."
+      "source": "OpenCrustacean uses the microphone for realtime chat, voice wake, push-to-talk, and voice notes.",
+      "translated": "يستخدم OpenCrustacean الميكروفون للدردشة الفورية، والتنبيه الصوتي، والضغط للتحدث، والملاحظات الصوتية."
     },
     {
       "id": "native.apple.85345f18204d67ec",
-      "source": "OpenClaw may use motion data to support device-aware interactions and automations.",
-      "translated": "قد يستخدم OpenClaw بيانات الحركة لدعم التفاعلات والأتمتة الواعية بالجهاز."
+      "source": "OpenCrustacean may use motion data to support device-aware interactions and automations.",
+      "translated": "قد يستخدم OpenCrustacean بيانات الحركة لدعم التفاعلات والأتمتة الواعية بالجهاز."
     },
     {
       "id": "native.apple.1d3a6099d7e11895",
-      "source": "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider.",
-      "translated": "يقرأ OpenClaw بيانات خطواتك ونومك ومعدل نبض قلبك أثناء الراحة وتمارينك من تطبيق صحّة Apple لإنشاء الملخصات التي تطلبها وإرسالها عبر Gateway إلى مزوّد الذكاء الاصطناعي الذي أعددته."
+      "source": "OpenCrustacean reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "يقرأ OpenCrustacean بيانات خطواتك ونومك ومعدل نبض قلبك أثناء الراحة وتمارينك من تطبيق صحّة Apple لإنشاء الملخصات التي تطلبها وإرسالها عبر Gateway إلى مزوّد الذكاء الاصطناعي الذي أعددته."
     },
     {
       "id": "native.apple.c90a204b3232c401",
-      "source": "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider.",
-      "translated": "لا يكتب OpenClaw أي بيانات إلى تطبيق صحّة Apple. بل يستخدم البيانات المتاحة للقراءة فقط لإنشاء الملخصات التي تطلبها وإرسالها عبر Gateway إلى مزوّد الذكاء الاصطناعي الذي أعددته."
+      "source": "OpenCrustacean does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "لا يكتب OpenCrustacean أي بيانات إلى تطبيق صحّة Apple. بل يستخدم البيانات المتاحة للقراءة فقط لإنشاء الملخصات التي تطلبها وإرسالها عبر Gateway إلى مزوّد الذكاء الاصطناعي الذي أعددته."
     },
     {
       "id": "native.apple.40ed4259ec869f1b",
-      "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
-      "translated": "يتيح OpenClaw لمساعدك قراءة الصور التي تسمح بها، ويتيح لك اختيار الصور لمشاركتها."
+      "source": "OpenCrustacean lets your assistant read photos you allow and lets you choose photos to share.",
+      "translated": "يتيح OpenCrustacean لمساعدك قراءة الصور التي تسمح بها، ويتيح لك اختيار الصور لمشاركتها."
     },
     {
       "id": "native.apple.81b673f0c6fc4371",
-      "source": "OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access.",
-      "translated": "يستخدم OpenClaw تذكيراتك لعرض المهام وإضافتها وإكمالها عند تفعيل الوصول إلى التذكيرات."
+      "source": "OpenCrustacean uses your reminders to list, add, and complete tasks when you enable reminders access.",
+      "translated": "يستخدم OpenCrustacean تذكيراتك لعرض المهام وإضافتها وإكمالها عند تفعيل الوصول إلى التذكيرات."
     },
     {
       "id": "native.apple.2275552c26460945",
-      "source": "OpenClaw uses on-device speech recognition for talk mode and voice wake.",
-      "translated": "يستخدم OpenClaw التعرف على الكلام على الجهاز لوضع التحدث والتنبيه الصوتي."
+      "source": "OpenCrustacean uses on-device speech recognition for talk mode and voice wake.",
+      "translated": "يستخدم OpenCrustacean التعرف على الكلام على الجهاز لوضع التحدث والتنبيه الصوتي."
     },
     {
       "id": "native.apple.46111fe0569488ab",
@@ -16090,18 +16090,18 @@
     },
     {
       "id": "native.apple.2dc593065171c201",
-      "source": "Location sharing is disabled in OpenClaw. Location Services are off in iOS Settings.",
-      "translated": "مشاركة الموقع معطّلة في OpenClaw. خدمات الموقع متوقفة في إعدادات iOS."
+      "source": "Location sharing is disabled in OpenCrustacean. Location Services are off in iOS Settings.",
+      "translated": "مشاركة الموقع معطّلة في OpenCrustacean. خدمات الموقع متوقفة في إعدادات iOS."
     },
     {
       "id": "native.apple.1dc990a9cc0500c5",
-      "source": "Location sharing is disabled in OpenClaw. iOS currently allows Always.",
-      "translated": "مشاركة الموقع معطّلة في OpenClaw. يسمح iOS حاليًا بالخيار دائمًا."
+      "source": "Location sharing is disabled in OpenCrustacean. iOS currently allows Always.",
+      "translated": "مشاركة الموقع معطّلة في OpenCrustacean. يسمح iOS حاليًا بالخيار دائمًا."
     },
     {
       "id": "native.apple.9a4e858d2b218d41",
-      "source": "Location sharing is disabled in OpenClaw. iOS currently allows While Using.",
-      "translated": "مشاركة الموقع معطّلة في OpenClaw. يسمح iOS حاليًا بالخيار أثناء الاستخدام."
+      "source": "Location sharing is disabled in OpenCrustacean. iOS currently allows While Using.",
+      "translated": "مشاركة الموقع معطّلة في OpenCrustacean. يسمح iOS حاليًا بالخيار أثناء الاستخدام."
     },
     {
       "id": "native.apple.ab481eb11214797f",
@@ -16175,8 +16175,8 @@
     },
     {
       "id": "native.apple.633f011b81108a8c",
-      "source": "OpenClaw cannot determine the current iOS location permission.",
-      "translated": "يتعذّر على OpenClaw تحديد إذن الموقع الحالي في iOS."
+      "source": "OpenCrustacean cannot determine the current iOS location permission.",
+      "translated": "يتعذّر على OpenCrustacean تحديد إذن الموقع الحالي في iOS."
     },
     {
       "id": "native.apple.e5673992d3aeac64",
@@ -16205,8 +16205,8 @@
     },
     {
       "id": "native.apple.f6b19113d5d8e7db",
-      "source": "OpenClaw cannot determine the current iOS location permission.",
-      "translated": "لا يستطيع OpenClaw تحديد إذن الموقع الحالي في iOS."
+      "source": "OpenCrustacean cannot determine the current iOS location permission.",
+      "translated": "لا يستطيع OpenCrustacean تحديد إذن الموقع الحالي في iOS."
     },
     {
       "id": "native.apple.2892e5b02c6789f0",
@@ -16480,8 +16480,8 @@
     },
     {
       "id": "native.apple.d4d9568dca8ceaa9",
-      "source": "The connected OpenClaw agent can use device capabilities you enable.",
-      "translated": "يمكن لوكيل OpenClaw المتصل استخدام إمكانات الجهاز التي تمكّنها."
+      "source": "The connected OpenCrustacean agent can use device capabilities you enable.",
+      "translated": "يمكن لوكيل OpenCrustacean المتصل استخدام إمكانات الجهاز التي تمكّنها."
     },
     {
       "id": "native.apple.fdd93eb6b6eef525",
@@ -16505,8 +16505,8 @@
     },
     {
       "id": "native.apple.e8b4dc00cd23ae73",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.9b414850baa618da",
@@ -16680,8 +16680,8 @@
     },
     {
       "id": "native.apple.559dccb9f9dfbbad",
-      "source": "OpenClaw is checking gateway and node access.",
-      "translated": "يتحقق OpenClaw من الوصول إلى Gateway والعقدة."
+      "source": "OpenCrustacean is checking gateway and node access.",
+      "translated": "يتحقق OpenCrustacean من الوصول إلى Gateway والعقدة."
     },
     {
       "id": "native.apple.4404f435fb496b62",
@@ -16705,8 +16705,8 @@
     },
     {
       "id": "native.apple.d5a5f13a1dd28c9d",
-      "source": "Approve this device on the gateway.\n1) `%1$@`\n2) `/pair approve` in your OpenClaw chat\n%2$@\nOpenClaw will also retry automatically when you return to this app.",
-      "translated": "وافق على هذا الجهاز في Gateway.\n1) `%1$@`\n2) `/pair approve` في دردشة OpenClaw\n%2$@\nسيعيد OpenClaw المحاولة تلقائيًا أيضًا عند عودتك إلى هذا التطبيق."
+      "source": "Approve this device on the gateway.\n1) `%1$@`\n2) `/pair approve` in your OpenCrustacean chat\n%2$@\nOpenCrustacean will also retry automatically when you return to this app.",
+      "translated": "وافق على هذا الجهاز في Gateway.\n1) `%1$@`\n2) `/pair approve` في دردشة OpenCrustacean\n%2$@\nسيعيد OpenCrustacean المحاولة تلقائيًا أيضًا عند عودتك إلى هذا التطبيق."
     },
     {
       "id": "native.apple.af3890b1e07c3084",
@@ -16790,8 +16790,8 @@
     },
     {
       "id": "native.apple.5b46de1ccb06852b",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.0e07e7044608f954",
@@ -16895,8 +16895,8 @@
     },
     {
       "id": "native.apple.8855710a55de2ed5",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.7029e1235380a92c",
@@ -17080,8 +17080,8 @@
     },
     {
       "id": "native.apple.a55a43940452b04b",
-      "source": "OpenClaw iOS",
-      "translated": "OpenClaw iOS"
+      "source": "OpenCrustacean iOS",
+      "translated": "OpenCrustacean iOS"
     },
     {
       "id": "native.apple.35b6f99d627028f6",
@@ -17300,8 +17300,8 @@
     },
     {
       "id": "native.apple.4ebb39f445d7dbff",
-      "source": "OpenClaw reacts when any trigger appears in a transcription. Keep them short to avoid false positives.",
-      "translated": "يستجيب OpenClaw عند ظهور أي مشغّل في النسخ الصوتي. اجعلها قصيرة لتجنب النتائج الإيجابية الخاطئة."
+      "source": "OpenCrustacean reacts when any trigger appears in a transcription. Keep them short to avoid false positives.",
+      "translated": "يستجيب OpenCrustacean عند ظهور أي مشغّل في النسخ الصوتي. اجعلها قصيرة لتجنب النتائج الإيجابية الخاطئة."
     },
     {
       "id": "native.apple.994760420a194561",
@@ -17570,18 +17570,18 @@
     },
     {
       "id": "native.apple.5b40cb9cf4ee4d4f",
-      "source": "Asking OpenClaw",
-      "translated": "جارٍ سؤال OpenClaw"
+      "source": "Asking OpenCrustacean",
+      "translated": "جارٍ سؤال OpenCrustacean"
     },
     {
       "id": "native.apple.34531893ae6091b1",
-      "source": "Still asking OpenClaw",
-      "translated": "لا يزال السؤال موجّهًا إلى OpenClaw"
+      "source": "Still asking OpenCrustacean",
+      "translated": "لا يزال السؤال موجّهًا إلى OpenCrustacean"
     },
     {
       "id": "native.apple.027ab0bbb4553124",
-      "source": "Updating OpenClaw",
-      "translated": "جارٍ تحديث OpenClaw"
+      "source": "Updating OpenCrustacean",
+      "translated": "جارٍ تحديث OpenCrustacean"
     },
     {
       "id": "native.apple.471dc394d6b9e443",
@@ -17635,8 +17635,8 @@
     },
     {
       "id": "native.apple.deb282fd61fd2de3",
-      "source": "OpenClaw unavailable",
-      "translated": "OpenClaw غير متاح"
+      "source": "OpenCrustacean unavailable",
+      "translated": "OpenCrustacean غير متاح"
     },
     {
       "id": "native.apple.f4adf2762402e92a",
@@ -17700,13 +17700,13 @@
     },
     {
       "id": "native.apple.1065cfe92d7c1eb6",
-      "source": "Asking OpenClaw",
-      "translated": "جارٍ سؤال OpenClaw"
+      "source": "Asking OpenCrustacean",
+      "translated": "جارٍ سؤال OpenCrustacean"
     },
     {
       "id": "native.apple.d2db26b3bb266491",
-      "source": "Updating OpenClaw",
-      "translated": "جارٍ تحديث OpenClaw"
+      "source": "Updating OpenCrustacean",
+      "translated": "جارٍ تحديث OpenCrustacean"
     },
     {
       "id": "native.apple.4b89dccea20c58fa",
@@ -17715,8 +17715,8 @@
     },
     {
       "id": "native.apple.8a62f0e9416188e3",
-      "source": "OpenClaw unavailable",
-      "translated": "OpenClaw غير متاح"
+      "source": "OpenCrustacean unavailable",
+      "translated": "OpenCrustacean غير متاح"
     },
     {
       "id": "native.apple.8a944b06087fe8ef",
@@ -17800,8 +17800,8 @@
     },
     {
       "id": "native.apple.12a4a51d251f65c0",
-      "source": "OpenClaw connects this Apple Watch directly to your Gateway on trusted local networks.",
-      "translated": "يربط OpenClaw ساعة Apple Watch هذه مباشرةً بـ Gateway الخاص بك على الشبكات المحلية الموثوقة."
+      "source": "OpenCrustacean connects this Apple Watch directly to your Gateway on trusted local networks.",
+      "translated": "يربط OpenCrustacean ساعة Apple Watch هذه مباشرةً بـ Gateway الخاص بك على الشبكات المحلية الموثوقة."
     },
     {
       "id": "native.apple.130180e0065c80fc",
@@ -17850,8 +17850,8 @@
     },
     {
       "id": "native.apple.32473b10033ac0f4",
-      "source": "Reconnects when OpenClaw is active",
-      "translated": "يعيد الاتصال عندما يكون OpenClaw نشطًا"
+      "source": "Reconnects when OpenCrustacean is active",
+      "translated": "يعيد الاتصال عندما يكون OpenCrustacean نشطًا"
     },
     {
       "id": "native.apple.760267006777c454",
@@ -18140,8 +18140,8 @@
     },
     {
       "id": "native.apple.ca02fd2965efe74e",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.1ba2f03dc98103c0",
@@ -18290,8 +18290,8 @@
     },
     {
       "id": "native.apple.c7d87356e6cdb374",
-      "source": "Uses Wi-Fi or cellular while OpenClaw is active",
-      "translated": "يستخدم Wi-Fi أو الشبكة الخلوية أثناء نشاط OpenClaw"
+      "source": "Uses Wi-Fi or cellular while OpenCrustacean is active",
+      "translated": "يستخدم Wi-Fi أو الشبكة الخلوية أثناء نشاط OpenCrustacean"
     },
     {
       "id": "native.apple.08583448d9b2455e",
@@ -18480,8 +18480,8 @@
     },
     {
       "id": "native.apple.3fdc651e507de84b",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.c1de056da9ee1b27",
@@ -18520,8 +18520,8 @@
     },
     {
       "id": "native.apple.b816e4b9e492ae6c",
-      "source": "Message OpenClaw",
-      "translated": "مراسلة OpenClaw"
+      "source": "Message OpenCrustacean",
+      "translated": "مراسلة OpenCrustacean"
     },
     {
       "id": "native.apple.502a884cec1f0d5d",
@@ -18645,8 +18645,8 @@
     },
     {
       "id": "native.apple.5ac0c79487a492b4",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.95b5730738a28d71",
@@ -18690,8 +18690,8 @@
     },
     {
       "id": "native.apple.4ec07761308f7f50",
-      "source": "© 2026 OpenClaw Foundation — MIT License.",
-      "translated": "© 2026 OpenClaw Foundation — MIT License."
+      "source": "© 2026 OpenCrustacean Foundation — MIT License.",
+      "translated": "© 2026 OpenCrustacean Foundation — MIT License."
     },
     {
       "id": "native.apple.37661ff1af405580",
@@ -18760,28 +18760,28 @@
     },
     {
       "id": "native.apple.edfef1f4b5cb081f",
-      "source": "OpenClaw couldn’t be installed in Applications. Move it there manually, then open that copy.",
-      "translated": "تعذّر تثبيت OpenClaw في التطبيقات. انقله إلى هناك يدويًا، ثم افتح تلك النسخة."
+      "source": "OpenCrustacean couldn’t be installed in Applications. Move it there manually, then open that copy.",
+      "translated": "تعذّر تثبيت OpenCrustacean في التطبيقات. انقله إلى هناك يدويًا، ثم افتح تلك النسخة."
     },
     {
       "id": "native.apple.7f86f5acf3d32ec2",
-      "source": "Replace the older OpenClaw in Applications?",
-      "translated": "استبدال النسخة الأقدم من OpenClaw في التطبيقات؟"
+      "source": "Replace the older OpenCrustacean in Applications?",
+      "translated": "استبدال النسخة الأقدم من OpenCrustacean في التطبيقات؟"
     },
     {
       "id": "native.apple.088b39cc34b44e54",
-      "source": "Install OpenClaw in Applications?",
-      "translated": "تثبيت OpenClaw في التطبيقات؟"
+      "source": "Install OpenCrustacean in Applications?",
+      "translated": "تثبيت OpenCrustacean في التطبيقات؟"
     },
     {
       "id": "native.apple.c8898d685457401f",
-      "source": "This copy is newer than the installed app. OpenClaw will replace it and reopen from Applications.",
-      "translated": "هذه النسخة أحدث من التطبيق المثبَّت. سيستبدلها OpenClaw ويعيد الفتح من التطبيقات."
+      "source": "This copy is newer than the installed app. OpenCrustacean will replace it and reopen from Applications.",
+      "translated": "هذه النسخة أحدث من التطبيق المثبَّت. سيستبدلها OpenCrustacean ويعيد الفتح من التطبيقات."
     },
     {
       "id": "native.apple.a77a46d0ca32551f",
-      "source": "OpenClaw will copy itself to Applications and reopen there so updates and launch at login stay reliable.",
-      "translated": "سيقوم OpenClaw بنسخ نفسه إلى التطبيقات وإعادة الفتح هناك للحفاظ على موثوقية التحديثات والتشغيل عند تسجيل الدخول."
+      "source": "OpenCrustacean will copy itself to Applications and reopen there so updates and launch at login stay reliable.",
+      "translated": "سيقوم OpenCrustacean بنسخ نفسه إلى التطبيقات وإعادة الفتح هناك للحفاظ على موثوقية التحديثات والتشغيل عند تسجيل الدخول."
     },
     {
       "id": "native.apple.22ebb7b228c8275a",
@@ -18795,8 +18795,8 @@
     },
     {
       "id": "native.apple.9ac444c15bd52f0e",
-      "source": "OpenClaw is installed in Applications, but couldn’t reopen automatically. Open it there manually.",
-      "translated": "تم تثبيت OpenClaw في التطبيقات، لكن تعذّرت إعادة فتحه تلقائيًا. افتحه هناك يدويًا."
+      "source": "OpenCrustacean is installed in Applications, but couldn’t reopen automatically. Open it there manually.",
+      "translated": "تم تثبيت OpenCrustacean في التطبيقات، لكن تعذّرت إعادة فتحه تلقائيًا. افتحه هناك يدويًا."
     },
     {
       "id": "native.apple.d1faee12838b677f",
@@ -18915,18 +18915,18 @@
     },
     {
       "id": "native.apple.cfc2509b8bbcf1d7",
-      "source": "OpenClaw Gateway \\(version) is ready.",
-      "translated": "OpenClaw Gateway \\(version) جاهز."
+      "source": "OpenCrustacean Gateway \\(version) is ready.",
+      "translated": "OpenCrustacean Gateway \\(version) جاهز."
     },
     {
       "id": "native.apple.9b767e46895714f9",
-      "source": "OpenClaw Gateway is not installed yet.",
-      "translated": "لم يتم تثبيت OpenClaw Gateway بعد."
+      "source": "OpenCrustacean Gateway is not installed yet.",
+      "translated": "لم يتم تثبيت OpenCrustacean Gateway بعد."
     },
     {
       "id": "native.apple.b4dc58a1b294e140",
-      "source": "The OpenClaw Gateway could not be verified. Setup will repair it.",
-      "translated": "تعذّر التحقق من OpenClaw Gateway. سيقوم الإعداد بإصلاحه."
+      "source": "The OpenCrustacean Gateway could not be verified. Setup will repair it.",
+      "translated": "تعذّر التحقق من OpenCrustacean Gateway. سيقوم الإعداد بإصلاحه."
     },
     {
       "id": "native.apple.4088056ae7b0f3b4",
@@ -18935,13 +18935,13 @@
     },
     {
       "id": "native.apple.86e7c86924ad0c70",
-      "source": "Repairing the OpenClaw Gateway update…",
-      "translated": "جارٍ إصلاح تحديث OpenClaw Gateway…"
+      "source": "Repairing the OpenCrustacean Gateway update…",
+      "translated": "جارٍ إصلاح تحديث OpenCrustacean Gateway…"
     },
     {
       "id": "native.apple.b59713e1e3e7ee65",
-      "source": "Updating the OpenClaw Gateway to \\(targetVersion)…",
-      "translated": "جارٍ تحديث OpenClaw Gateway إلى \\(targetVersion)…"
+      "source": "Updating the OpenCrustacean Gateway to \\(targetVersion)…",
+      "translated": "جارٍ تحديث OpenCrustacean Gateway إلى \\(targetVersion)…"
     },
     {
       "id": "native.apple.7772913c171b78ac",
@@ -18960,8 +18960,8 @@
     },
     {
       "id": "native.apple.66f44c526206f5de",
-      "source": "OpenClaw Gateway \\(installedVersion) is installed.",
-      "translated": "تم تثبيت OpenClaw Gateway \\(installedVersion)."
+      "source": "OpenCrustacean Gateway \\(installedVersion) is installed.",
+      "translated": "تم تثبيت OpenCrustacean Gateway \\(installedVersion)."
     },
     {
       "id": "native.apple.6f14c557e2573526",
@@ -19045,8 +19045,8 @@
     },
     {
       "id": "native.apple.81435e60c0b78093",
-      "source": "OpenClaw could not load editable settings for this channel.",
-      "translated": "تعذر على OpenClaw تحميل الإعدادات القابلة للتعديل لهذه القناة."
+      "source": "OpenCrustacean could not load editable settings for this channel.",
+      "translated": "تعذر على OpenCrustacean تحميل الإعدادات القابلة للتعديل لهذه القناة."
     },
     {
       "id": "native.apple.f74dfc887ee4f936",
@@ -19265,8 +19265,8 @@
     },
     {
       "id": "native.apple.055a88d0f9d3d2fe",
-      "source": "Missing: \\(buckets.map(\\.displayName).joined(separator: \", \")). Grant access in System Settings → Privacy & Security, then reopen OpenClaw.",
-      "translated": "مفقود: \\(buckets.map(\\.displayName).joined(separator: \", \")). امنح الوصول من إعدادات النظام → الخصوصية والأمان، ثم أعد فتح OpenClaw."
+      "source": "Missing: \\(buckets.map(\\.displayName).joined(separator: \", \")). Grant access in System Settings → Privacy & Security, then reopen OpenCrustacean.",
+      "translated": "مفقود: \\(buckets.map(\\.displayName).joined(separator: \", \")). امنح الوصول من إعدادات النظام → الخصوصية والأمان، ثم أعد فتح OpenCrustacean."
     },
     {
       "id": "native.apple.0a65101d40a6704c",
@@ -19545,8 +19545,8 @@
     },
     {
       "id": "native.apple.df6243155293f80b",
-      "source": "What should OpenClaw do?",
-      "translated": "ماذا ينبغي أن يفعل OpenClaw؟"
+      "source": "What should OpenCrustacean do?",
+      "translated": "ماذا ينبغي أن يفعل OpenCrustacean؟"
     },
     {
       "id": "native.apple.81b5ba441a230f07",
@@ -19870,33 +19870,33 @@
     },
     {
       "id": "native.apple.905508b749e99f2a",
-      "source": "OpenClaw Not Configured",
-      "translated": "لم يتم تكوين OpenClaw"
+      "source": "OpenCrustacean Not Configured",
+      "translated": "لم يتم تكوين OpenCrustacean"
     },
     {
       "id": "native.apple.293bf9a6e721036d",
-      "source": "Remote OpenClaw Active",
-      "translated": "OpenClaw البعيد نشط"
+      "source": "Remote OpenCrustacean Active",
+      "translated": "OpenCrustacean البعيد نشط"
     },
     {
       "id": "native.apple.a7b0d4e6bf5796c0",
-      "source": "OpenClaw Active",
-      "translated": "OpenClaw نشط"
+      "source": "OpenCrustacean Active",
+      "translated": "OpenCrustacean نشط"
     },
     {
       "id": "native.apple.b36a54d8fef80333",
-      "source": "OpenClaw Not Configured — \\(primaryName)",
-      "translated": "لم يتم تكوين OpenClaw — \\(primaryName)"
+      "source": "OpenCrustacean Not Configured — \\(primaryName)",
+      "translated": "لم يتم تكوين OpenCrustacean — \\(primaryName)"
     },
     {
       "id": "native.apple.adee4bfd71731d2d",
-      "source": "Remote OpenClaw Active — \\(primaryName)",
-      "translated": "OpenClaw البعيد نشط — \\(primaryName)"
+      "source": "Remote OpenCrustacean Active — \\(primaryName)",
+      "translated": "OpenCrustacean البعيد نشط — \\(primaryName)"
     },
     {
       "id": "native.apple.2be6d3dd1a0d2699",
-      "source": "OpenClaw Active — \\(primaryName)",
-      "translated": "OpenClaw نشط — \\(primaryName)"
+      "source": "OpenCrustacean Active — \\(primaryName)",
+      "translated": "OpenCrustacean نشط — \\(primaryName)"
     },
     {
       "id": "native.apple.179c8c2ce733969f",
@@ -19980,8 +19980,8 @@
     },
     {
       "id": "native.apple.d8b3e55c41a77627",
-      "source": "When enabled, OpenClaw won't install or manage \\(gatewayLaunchdLabel). It will only attach to an existing Gateway.",
-      "translated": "عند التمكين، لن يقوم OpenClaw بتثبيت \\(gatewayLaunchdLabel) أو إدارته. سيقوم فقط بالإرفاق بـ Gateway موجود."
+      "source": "When enabled, OpenCrustacean won't install or manage \\(gatewayLaunchdLabel). It will only attach to an existing Gateway.",
+      "translated": "عند التمكين، لن يقوم OpenCrustacean بتثبيت \\(gatewayLaunchdLabel) أو إدارته. سيقوم فقط بالإرفاق بـ Gateway موجود."
     },
     {
       "id": "native.apple.15e528c55a96394f",
@@ -20130,8 +20130,8 @@
     },
     {
       "id": "native.apple.5437c7d545b749ca",
-      "source": "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. Enable only while actively debugging.",
-      "translated": "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. Enable only while actively debugging."
+      "source": "Writes a rotating, local-only log under ~/Library/Logs/OpenCrustacean/. Enable only while actively debugging.",
+      "translated": "Writes a rotating, local-only log under ~/Library/Logs/OpenCrustacean/. Enable only while actively debugging."
     },
     {
       "id": "native.apple.5b35a89bea603457",
@@ -20180,8 +20180,8 @@
     },
     {
       "id": "native.apple.5e9e8bf8e35c48ef",
-      "source": "OpenClaw project root",
-      "translated": "جذر مشروع OpenClaw"
+      "source": "OpenCrustacean project root",
+      "translated": "جذر مشروع OpenCrustacean"
     },
     {
       "id": "native.apple.8b01a6daf7a7b94e",
@@ -20245,13 +20245,13 @@
     },
     {
       "id": "native.apple.3307505d507faf31",
-      "source": "Note: macOS may require restarting OpenClaw after enabling Accessibility or Screen Recording.",
-      "translated": "ملاحظة: قد يتطلب macOS إعادة تشغيل OpenClaw بعد تمكين إمكانية الوصول أو تسجيل الشاشة."
+      "source": "Note: macOS may require restarting OpenCrustacean after enabling Accessibility or Screen Recording.",
+      "translated": "ملاحظة: قد يتطلب macOS إعادة تشغيل OpenCrustacean بعد تمكين إمكانية الوصول أو تسجيل الشاشة."
     },
     {
       "id": "native.apple.e52d463773aef1e1",
-      "source": "Restart OpenClaw",
-      "translated": "إعادة تشغيل OpenClaw"
+      "source": "Restart OpenCrustacean",
+      "translated": "إعادة تشغيل OpenCrustacean"
     },
     {
       "id": "native.apple.e299e77f3ad75a75",
@@ -20370,13 +20370,13 @@
     },
     {
       "id": "native.apple.a8af393b84d63ab8",
-      "source": "OpenClaw is paused",
-      "translated": "OpenClaw متوقف مؤقتًا"
+      "source": "OpenCrustacean is paused",
+      "translated": "OpenCrustacean متوقف مؤقتًا"
     },
     {
       "id": "native.apple.7ba1542539c0d40b",
-      "source": "Unpause OpenClaw to run agent actions.",
-      "translated": "ألغِ إيقاف OpenClaw المؤقت لتشغيل إجراءات الوكيل."
+      "source": "Unpause OpenCrustacean to run agent actions.",
+      "translated": "ألغِ إيقاف OpenCrustacean المؤقت لتشغيل إجراءات الوكيل."
     },
     {
       "id": "native.apple.7c1e1dbfde976ab9",
@@ -20400,8 +20400,8 @@
     },
     {
       "id": "native.apple.50f1211af2a1945e",
-      "source": "Run OpenClaw agent?",
-      "translated": "تشغيل وكيل OpenClaw؟"
+      "source": "Run OpenCrustacean agent?",
+      "translated": "تشغيل وكيل OpenCrustacean؟"
     },
     {
       "id": "native.apple.4f3841d5de0135c4",
@@ -20495,8 +20495,8 @@
     },
     {
       "id": "native.apple.66ad783199ef9729",
-      "source": "Discover OpenClaw gateways on your LAN",
-      "translated": "اكتشف gateways الخاصة بـ OpenClaw على شبكة LAN لديك"
+      "source": "Discover OpenCrustacean gateways on your LAN",
+      "translated": "اكتشف gateways الخاصة بـ OpenCrustacean على شبكة LAN لديك"
     },
     {
       "id": "native.apple.110f6e64e25dcd2e",
@@ -20655,8 +20655,8 @@
     },
     {
       "id": "native.apple.1c4fca89983d7487",
-      "source": "Everyday OpenClaw app behavior.",
-      "translated": "سلوك تطبيق OpenClaw اليومي."
+      "source": "Everyday OpenCrustacean app behavior.",
+      "translated": "سلوك تطبيق OpenCrustacean اليومي."
     },
     {
       "id": "native.apple.7d03158a40ddb60a",
@@ -20670,13 +20670,13 @@
     },
     {
       "id": "native.apple.405e74c96498b7c0",
-      "source": "Automatically start OpenClaw after you sign in.",
-      "translated": "ابدأ OpenClaw تلقائيًا بعد تسجيل دخولك."
+      "source": "Automatically start OpenCrustacean after you sign in.",
+      "translated": "ابدأ OpenCrustacean تلقائيًا بعد تسجيل دخولك."
     },
     {
       "id": "native.apple.8b74758a60f78642",
-      "source": "Move OpenClaw to Applications before enabling launch at login.",
-      "translated": "انقل OpenClaw إلى Applications قبل تمكين التشغيل عند تسجيل الدخول."
+      "source": "Move OpenCrustacean to Applications before enabling launch at login.",
+      "translated": "انقل OpenCrustacean إلى Applications قبل تمكين التشغيل عند تسجيل الدخول."
     },
     {
       "id": "native.apple.927819c087ca3520",
@@ -20685,8 +20685,8 @@
     },
     {
       "id": "native.apple.e7a0819bd2f4e1dc",
-      "source": "Keep OpenClaw visible in the Dock. When off, windows still show the Dock icon while open.",
-      "translated": "إبقاء OpenClaw ظاهرًا في Dock. عند إيقاف ذلك، ستظل النوافذ تُظهر أيقونة Dock أثناء فتحها."
+      "source": "Keep OpenCrustacean visible in the Dock. When off, windows still show the Dock icon while open.",
+      "translated": "إبقاء OpenCrustacean ظاهرًا في Dock. عند إيقاف ذلك، ستظل النوافذ تُظهر أيقونة Dock أثناء فتحها."
     },
     {
       "id": "native.apple.af23f7b5fb03a877",
@@ -20820,13 +20820,13 @@
     },
     {
       "id": "native.apple.64e197a4a8b384ef",
-      "source": "OpenClaw paused",
-      "translated": "OpenClaw متوقف مؤقتًا"
+      "source": "OpenCrustacean paused",
+      "translated": "OpenCrustacean متوقف مؤقتًا"
     },
     {
       "id": "native.apple.7fe6df69d8050832",
-      "source": "OpenClaw active",
-      "translated": "OpenClaw نشط"
+      "source": "OpenCrustacean active",
+      "translated": "OpenCrustacean نشط"
     },
     {
       "id": "native.apple.2f4258fa73e04344",
@@ -20880,8 +20880,8 @@
     },
     {
       "id": "native.apple.8021dcd7963a4cc2",
-      "source": "OpenClaw starts and monitors the Gateway on this Mac.",
-      "translated": "يقوم OpenClaw بتشغيل Gateway ومراقبته على هذا الـ Mac."
+      "source": "OpenCrustacean starts and monitors the Gateway on this Mac.",
+      "translated": "يقوم OpenCrustacean بتشغيل Gateway ومراقبته على هذا الـ Mac."
     },
     {
       "id": "native.apple.fe2a790f28ffd1ae",
@@ -20895,8 +20895,8 @@
     },
     {
       "id": "native.apple.d261da13966fa812",
-      "source": "OpenClaw runs",
-      "translated": "يعمل OpenClaw"
+      "source": "OpenCrustacean runs",
+      "translated": "يعمل OpenCrustacean"
     },
     {
       "id": "native.apple.397850fa5e803f53",
@@ -21005,8 +21005,8 @@
     },
     {
       "id": "native.apple.09f99e863e081f9f",
-      "source": "/Applications/OpenClaw.app/.../openclaw",
-      "translated": "/Applications/OpenClaw.app/.../openclaw"
+      "source": "/Applications/OpenCrustacean.app/.../openclaw",
+      "translated": "/Applications/OpenCrustacean.app/.../openclaw"
     },
     {
       "id": "native.apple.f588f7dad51aae2e",
@@ -21080,8 +21080,8 @@
     },
     {
       "id": "native.apple.24aa092829f9a3b1",
-      "source": "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.",
-      "translated": "قيمة gateway.remote.token الحالية ليست نصًا عاديًا. لا يمكن لـ OpenClaw لـ macOS استخدامها مباشرةً؛ أدخل رمزًا بنص عادي هنا لاستبدالها."
+      "source": "The current gateway.remote.token value is not plain text. OpenCrustacean for macOS cannot use it directly; enter a plaintext token here to replace it.",
+      "translated": "قيمة gateway.remote.token الحالية ليست نصًا عاديًا. لا يمكن لـ OpenCrustacean لـ macOS استخدامها مباشرةً؛ أدخل رمزًا بنص عادي هنا لاستبدالها."
     },
     {
       "id": "native.apple.d0b21bc12ab63cad",
@@ -21220,8 +21220,8 @@
     },
     {
       "id": "native.apple.876c066efa88aee3",
-      "source": "Latest presence beacons from OpenClaw nodes. Updated periodically.",
-      "translated": "أحدث إشارات الحضور من عُقد OpenClaw. يتم التحديث دوريًا."
+      "source": "Latest presence beacons from OpenCrustacean nodes. Updated periodically.",
+      "translated": "أحدث إشارات الحضور من عُقد OpenCrustacean. يتم التحديث دوريًا."
     },
     {
       "id": "native.apple.8a6bcd51fd9f1f62",
@@ -21330,13 +21330,13 @@
     },
     {
       "id": "native.apple.13a7356f48278757",
-      "source": "OpenClaw - Voice Wake live meter active",
-      "translated": "OpenClaw - عدّاد التنبيه الصوتي المباشر نشط"
+      "source": "OpenCrustacean - Voice Wake live meter active",
+      "translated": "OpenCrustacean - عدّاد التنبيه الصوتي المباشر نشط"
     },
     {
       "id": "native.apple.fae2cf18519da0d5",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.ef59188264be95d4",
@@ -21445,8 +21445,8 @@
     },
     {
       "id": "native.apple.fbab65790d6eca89",
-      "source": "About OpenClaw",
-      "translated": "حول OpenClaw"
+      "source": "About OpenCrustacean",
+      "translated": "حول OpenCrustacean"
     },
     {
       "id": "native.apple.14c8f4b1a57569f3",
@@ -21730,13 +21730,13 @@
     },
     {
       "id": "native.apple.3db546546fbaf38e",
-      "source": "OpenClaw is preparing a local model.",
-      "translated": "يقوم OpenClaw بإعداد نموذج محلي."
+      "source": "OpenCrustacean is preparing a local model.",
+      "translated": "يقوم OpenCrustacean بإعداد نموذج محلي."
     },
     {
       "id": "native.apple.c5992a23c991f948",
-      "source": "OpenClaw is completing provider sign-in.",
-      "translated": "يكمل OpenClaw تسجيل الدخول إلى المزوّد."
+      "source": "OpenCrustacean is completing provider sign-in.",
+      "translated": "يكمل OpenCrustacean تسجيل الدخول إلى المزوّد."
     },
     {
       "id": "native.apple.0f3c1c6f0672bed7",
@@ -21770,8 +21770,8 @@
     },
     {
       "id": "native.apple.e3e27d22fd2312a2",
-      "source": "OpenClaw will check again before changing any inference settings.",
-      "translated": "سيتحقق OpenClaw مرة أخرى قبل تغيير أي من إعدادات الاستدلال."
+      "source": "OpenCrustacean will check again before changing any inference settings.",
+      "translated": "سيتحقق OpenCrustacean مرة أخرى قبل تغيير أي من إعدادات الاستدلال."
     },
     {
       "id": "native.apple.a0a8f45082d0ba99",
@@ -21810,8 +21810,8 @@
     },
     {
       "id": "native.apple.a0431b20c0650139",
-      "source": "Need help? Chat with OpenClaw",
-      "translated": "هل تحتاج إلى مساعدة؟ دردش مع OpenClaw"
+      "source": "Need help? Chat with OpenCrustacean",
+      "translated": "هل تحتاج إلى مساعدة؟ دردش مع OpenCrustacean"
     },
     {
       "id": "native.apple.6526ced182e1fe50",
@@ -21895,8 +21895,8 @@
     },
     {
       "id": "native.apple.4a1e5a5600b907f4",
-      "source": "Use an existing subscription or provider account. OpenClaw opens the provider’s own sign-in flow, then verifies it with a real reply.",
-      "translated": "استخدم اشتراكًا أو حساب مزوّد موجودًا. يفتح OpenClaw مسار تسجيل الدخول الخاص بالمزوّد، ثم يتحقق منه بردّ حقيقي."
+      "source": "Use an existing subscription or provider account. OpenCrustacean opens the provider’s own sign-in flow, then verifies it with a real reply.",
+      "translated": "استخدم اشتراكًا أو حساب مزوّد موجودًا. يفتح OpenCrustacean مسار تسجيل الدخول الخاص بالمزوّد، ثم يتحقق منه بردّ حقيقي."
     },
     {
       "id": "native.apple.14b23c357d7a9eff",
@@ -22030,8 +22030,8 @@
     },
     {
       "id": "native.apple.e874bd0fad63f012",
-      "source": "OpenClaw — setup helper",
-      "translated": "OpenClaw — مساعد الإعداد"
+      "source": "OpenCrustacean — setup helper",
+      "translated": "OpenCrustacean — مساعد الإعداد"
     },
     {
       "id": "native.apple.bea852c8622c8214",
@@ -22090,18 +22090,18 @@
     },
     {
       "id": "native.apple.b92f94ddc6bbc8e5",
-      "source": "OpenClaw was interrupted. Restart to try again.",
-      "translated": "توقف OpenClaw. أعد التشغيل للمحاولة مرة أخرى."
+      "source": "OpenCrustacean was interrupted. Restart to try again.",
+      "translated": "توقف OpenCrustacean. أعد التشغيل للمحاولة مرة أخرى."
     },
     {
       "id": "native.apple.829845818e97978a",
-      "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
-      "translated": "تغير اتصال Gateway. أعد تشغيل OpenClaw لإعادة الاتصال."
+      "source": "The Gateway connection changed. Restart OpenCrustacean to reconnect.",
+      "translated": "تغير اتصال Gateway. أعد تشغيل OpenCrustacean لإعادة الاتصال."
     },
     {
       "id": "native.apple.012861f82eff0ca9",
-      "source": "OpenClaw is working…",
-      "translated": "OpenClaw قيد العمل…"
+      "source": "OpenCrustacean is working…",
+      "translated": "OpenCrustacean قيد العمل…"
     },
     {
       "id": "native.apple.2f7ad21b747fbc15",
@@ -22115,8 +22115,8 @@
     },
     {
       "id": "native.apple.35a542956f4f5497",
-      "source": "Reply to OpenClaw… (yes sets everything up)",
-      "translated": "رد على OpenClaw… (تؤدي الإجابة بنعم إلى إعداد كل شيء)"
+      "source": "Reply to OpenCrustacean… (yes sets everything up)",
+      "translated": "رد على OpenCrustacean… (تؤدي الإجابة بنعم إلى إعداد كل شيء)"
     },
     {
       "id": "native.apple.134b9ae1d8a543df",
@@ -22145,8 +22145,8 @@
     },
     {
       "id": "native.apple.b57ee4f83cff23f3",
-      "source": "OpenClaw can bring useful context from AI tools you already use into your new assistant.",
-      "translated": "يمكن لـ OpenClaw نقل سياق مفيد من أدوات الذكاء الاصطناعي التي تستخدمها بالفعل إلى مساعدك الجديد."
+      "source": "OpenCrustacean can bring useful context from AI tools you already use into your new assistant.",
+      "translated": "يمكن لـ OpenCrustacean نقل سياق مفيد من أدوات الذكاء الاصطناعي التي تستخدمها بالفعل إلى مساعدك الجديد."
     },
     {
       "id": "native.apple.46cab71d748860b8",
@@ -22225,8 +22225,8 @@
     },
     {
       "id": "native.apple.6dbe5b174271b62a",
-      "source": "Imported \\(imported) \\(self.memoryLabel(imported)) into OpenClaw.",
-      "translated": "تم استيراد \\(imported) \\(self.memoryLabel(imported)) إلى OpenClaw."
+      "source": "Imported \\(imported) \\(self.memoryLabel(imported)) into OpenCrustacean.",
+      "translated": "تم استيراد \\(imported) \\(self.memoryLabel(imported)) إلى OpenCrustacean."
     },
     {
       "id": "native.apple.d47b887f98e13e24",
@@ -22240,8 +22240,8 @@
     },
     {
       "id": "native.apple.ea8beaeecef15e54",
-      "source": "Welcome to OpenClaw",
-      "translated": "مرحبًا بك في OpenClaw"
+      "source": "Welcome to OpenCrustacean",
+      "translated": "مرحبًا بك في OpenCrustacean"
     },
     {
       "id": "native.apple.0629bbbd6db95199",
@@ -22285,8 +22285,8 @@
     },
     {
       "id": "native.apple.fb64a5b187cfdc15",
-      "source": "OpenClaw can take actions using the permissions and services you enable. Review prompts and only connect tools you trust.",
-      "translated": "يمكن لـ OpenClaw تنفيذ إجراءات باستخدام الأذونات والخدمات التي تفعّلها. راجع المطالبات ولا تربط إلا الأدوات التي تثق بها."
+      "source": "OpenCrustacean can take actions using the permissions and services you enable. Review prompts and only connect tools you trust.",
+      "translated": "يمكن لـ OpenCrustacean تنفيذ إجراءات باستخدام الأذونات والخدمات التي تفعّلها. راجع المطالبات ولا تربط إلا الأدوات التي تثق بها."
     },
     {
       "id": "native.apple.a5d02aaf6208e924",
@@ -22295,8 +22295,8 @@
     },
     {
       "id": "native.apple.e6acb60b10ef1206",
-      "source": "Most people pick this Mac — OpenClaw installs everything and keeps it running in the background. You can change this anytime in Settings.",
-      "translated": "يختار معظم الأشخاص جهاز Mac هذا — يثبّت OpenClaw كل شيء ويبقيه قيد التشغيل في الخلفية. يمكنك تغيير ذلك في أي وقت من الإعدادات."
+      "source": "Most people pick this Mac — OpenCrustacean installs everything and keeps it running in the background. You can change this anytime in Settings.",
+      "translated": "يختار معظم الأشخاص جهاز Mac هذا — يثبّت OpenCrustacean كل شيء ويبقيه قيد التشغيل في الخلفية. يمكنك تغيير ذلك في أي وقت من الإعدادات."
     },
     {
       "id": "native.apple.21f1053c1054db24",
@@ -22320,8 +22320,8 @@
     },
     {
       "id": "native.apple.d54084b48f40aa0a",
-      "source": "OK — OpenClaw won’t start anything yet. Pick Local or Remote later in Settings → General.",
-      "translated": "حسنًا — لن يبدأ OpenClaw أي شيء بعد. اختر محليًا أو عن بُعد لاحقًا من الإعدادات → عام."
+      "source": "OK — OpenCrustacean won’t start anything yet. Pick Local or Remote later in Settings → General.",
+      "translated": "حسنًا — لن يبدأ OpenCrustacean أي شيء بعد. اختر محليًا أو عن بُعد لاحقًا من الإعدادات → عام."
     },
     {
       "id": "native.apple.8d9eb247d41a0ca7",
@@ -22375,8 +22375,8 @@
     },
     {
       "id": "native.apple.f6332654911cb2e2",
-      "source": "Verify OpenClaw can reach this gateway.",
-      "translated": "تحقق من قدرة OpenClaw على الوصول إلى هذا الـ gateway."
+      "source": "Verify OpenCrustacean can reach this gateway.",
+      "translated": "تحقق من قدرة OpenCrustacean على الوصول إلى هذا الـ gateway."
     },
     {
       "id": "native.apple.6e5d3a3c3022e8c8",
@@ -22410,8 +22410,8 @@
     },
     {
       "id": "native.apple.2a50c3ee94dde35d",
-      "source": "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.",
-      "translated": "قيمة gateway.remote.token الحالية ليست نصًا عاديًا. لا يمكن لـ OpenClaw for macOS استخدامها مباشرةً؛ أدخل رمزًا بنص عادي هنا لاستبدالها."
+      "source": "The current gateway.remote.token value is not plain text. OpenCrustacean for macOS cannot use it directly; enter a plaintext token here to replace it.",
+      "translated": "قيمة gateway.remote.token الحالية ليست نصًا عاديًا. لا يمكن لـ OpenCrustacean for macOS استخدامها مباشرةً؛ أدخل رمزًا بنص عادي هنا لاستبدالها."
     },
     {
       "id": "native.apple.7881cec64b177026",
@@ -22470,8 +22470,8 @@
     },
     {
       "id": "native.apple.5a3f4f943c8ee86a",
-      "source": "/Applications/OpenClaw.app/.../openclaw",
-      "translated": "/Applications/OpenClaw.app/.../openclaw"
+      "source": "/Applications/OpenCrustacean.app/.../openclaw",
+      "translated": "/Applications/OpenCrustacean.app/.../openclaw"
     },
     {
       "id": "native.apple.56e9b0831ec1eded",
@@ -22500,8 +22500,8 @@
     },
     {
       "id": "native.apple.ce0d1241d7417406",
-      "source": "These macOS permissions let OpenClaw automate apps and capture context on this Mac. Status updates automatically.",
-      "translated": "تتيح أذونات macOS هذه لـ OpenClaw أتمتة التطبيقات والتقاط السياق على هذا الـ Mac. يتم تحديث الحالة تلقائيًا."
+      "source": "These macOS permissions let OpenCrustacean automate apps and capture context on this Mac. Status updates automatically.",
+      "translated": "تتيح أذونات macOS هذه لـ OpenCrustacean أتمتة التطبيقات والتقاط السياق على هذا الـ Mac. يتم تحديث الحالة تلقائيًا."
     },
     {
       "id": "native.apple.42af85cdf91d0264",
@@ -22510,8 +22510,8 @@
     },
     {
       "id": "native.apple.d0b8cf59f852b3d0",
-      "source": "Install OpenClaw",
-      "translated": "ثبّت OpenClaw"
+      "source": "Install OpenCrustacean",
+      "translated": "ثبّت OpenCrustacean"
     },
     {
       "id": "native.apple.0b0fc42b8827e01f",
@@ -22595,8 +22595,8 @@
     },
     {
       "id": "native.apple.409bfb3a6e0f9f7c",
-      "source": "Click the OpenClaw menu bar icon for the compact chat panel and status.",
-      "translated": "انقر على أيقونة OpenClaw في شريط القوائم لعرض لوحة الدردشة المصغّرة والحالة."
+      "source": "Click the OpenCrustacean menu bar icon for the compact chat panel and status.",
+      "translated": "انقر على أيقونة OpenCrustacean في شريط القوائم لعرض لوحة الدردشة المصغّرة والحالة."
     },
     {
       "id": "native.apple.1b6cfcf3be8765c2",
@@ -22730,13 +22730,13 @@
     },
     {
       "id": "native.apple.11b1b5e9dd510766",
-      "source": "A node wants to connect to OpenClaw.",
-      "translated": "عقدة تريد الاتصال بـ OpenClaw."
+      "source": "A node wants to connect to OpenCrustacean.",
+      "translated": "عقدة تريد الاتصال بـ OpenCrustacean."
     },
     {
       "id": "native.apple.2e9d9d1f5d4346d4",
-      "source": "A device wants to connect to OpenClaw.",
-      "translated": "جهاز يريد الاتصال بـ OpenClaw."
+      "source": "A device wants to connect to OpenCrustacean.",
+      "translated": "جهاز يريد الاتصال بـ OpenCrustacean."
     },
     {
       "id": "native.apple.2412e85f7d11395e",
@@ -22745,8 +22745,8 @@
     },
     {
       "id": "native.apple.a09a61f4efe1e63e",
-      "source": "OpenClaw Mac app",
-      "translated": "تطبيق OpenClaw لنظام Mac"
+      "source": "OpenCrustacean Mac app",
+      "translated": "تطبيق OpenCrustacean لنظام Mac"
     },
     {
       "id": "native.apple.6b29ec65de666dab",
@@ -22800,8 +22800,8 @@
     },
     {
       "id": "native.apple.870e09824984a9b2",
-      "source": "Share this Mac's idle duration so OpenClaw can identify the Mac you used most recently and route node alerts. Never sends keys, pointer positions, app names, or window titles. Requires Accessibility.",
-      "translated": "شارك مدة خمول هذا الـ Mac حتى يتمكن OpenClaw من تحديد الـ Mac الذي استخدمته مؤخرًا وتوجيه تنبيهات العُقد. لا يرسل أبدًا المفاتيح أو مواضع المؤشر أو أسماء التطبيقات أو عناوين النوافذ. يتطلب إمكانية الوصول."
+      "source": "Share this Mac's idle duration so OpenCrustacean can identify the Mac you used most recently and route node alerts. Never sends keys, pointer positions, app names, or window titles. Requires Accessibility.",
+      "translated": "شارك مدة خمول هذا الـ Mac حتى يتمكن OpenCrustacean من تحديد الـ Mac الذي استخدمته مؤخرًا وتوجيه تنبيهات العُقد. لا يرسل أبدًا المفاتيح أو مواضع المؤشر أو أسماء التطبيقات أو عناوين النوافذ. يتطلب إمكانية الوصول."
     },
     {
       "id": "native.apple.89a4f5934df8268a",
@@ -22835,8 +22835,8 @@
     },
     {
       "id": "native.apple.4344ff6c0e9d7187",
-      "source": "OpenClaw only asks for macOS capabilities when a feature needs them.",
-      "translated": "لا يطلب OpenClaw إمكانات macOS إلا عندما تحتاج إليها ميزة ما."
+      "source": "OpenCrustacean only asks for macOS capabilities when a feature needs them.",
+      "translated": "لا يطلب OpenCrustacean إمكانات macOS إلا عندما تحتاج إليها ميزة ما."
     },
     {
       "id": "native.apple.4fecdab98e2f6a11",
@@ -22970,13 +22970,13 @@
     },
     {
       "id": "native.apple.65c21de72f06fd33",
-      "source": "OpenClaw updated",
-      "translated": "تم تحديث OpenClaw"
+      "source": "OpenCrustacean updated",
+      "translated": "تم تحديث OpenCrustacean"
     },
     {
       "id": "native.apple.6197fc2d1ebd6b2e",
-      "source": "Finishing your OpenClaw update",
-      "translated": "جارٍ إنهاء تحديث OpenClaw"
+      "source": "Finishing your OpenCrustacean update",
+      "translated": "جارٍ إنهاء تحديث OpenCrustacean"
     },
     {
       "id": "native.apple.226b698fbbfc3cc4",
@@ -22990,8 +22990,8 @@
     },
     {
       "id": "native.apple.91debe404bb7affc",
-      "source": "The managed OpenClaw runtime could not be reinstalled.",
-      "translated": "تعذرت إعادة تثبيت بيئة تشغيل OpenClaw المُدارة."
+      "source": "The managed OpenCrustacean runtime could not be reinstalled.",
+      "translated": "تعذرت إعادة تثبيت بيئة تشغيل OpenCrustacean المُدارة."
     },
     {
       "id": "native.apple.1cc391ec928070c4",
@@ -23015,43 +23015,43 @@
     },
     {
       "id": "native.apple.69b54e24b90414dd",
-      "source": "OpenClaw \\(receipt.toVersion) and its Gateway are ready.",
-      "translated": "أصبح OpenClaw \\(receipt.toVersion) وGateway الخاص به جاهزين."
+      "source": "OpenCrustacean \\(receipt.toVersion) and its Gateway are ready.",
+      "translated": "أصبح OpenCrustacean \\(receipt.toVersion) وGateway الخاص به جاهزين."
     },
     {
       "id": "native.apple.f9d6fa6d7aaf23b6",
-      "source": "OpenClaw \\(receipt.toVersion) and its Mac node runtime are ready.",
-      "translated": "أصبح OpenClaw \\(receipt.toVersion) وبيئة تشغيل عقدة Mac الخاصة به جاهزين."
+      "source": "OpenCrustacean \\(receipt.toVersion) and its Mac node runtime are ready.",
+      "translated": "أصبح OpenCrustacean \\(receipt.toVersion) وبيئة تشغيل عقدة Mac الخاصة به جاهزين."
     },
     {
       "id": "native.apple.a3fa88f5fd3c2732",
-      "source": "Your agent could not be notified yet. OpenClaw will retry after the next app launch.",
-      "translated": "تعذر إبلاغ وكيلك حتى الآن. سيعيد OpenClaw المحاولة بعد تشغيل التطبيق في المرة القادمة."
+      "source": "Your agent could not be notified yet. OpenCrustacean will retry after the next app launch.",
+      "translated": "تعذر إبلاغ وكيلك حتى الآن. سيعيد OpenCrustacean المحاولة بعد تشغيل التطبيق في المرة القادمة."
     },
     {
       "id": "native.apple.e9020028ddab1ba6",
-      "source": "OpenClaw could not notify your agent automatically. The app and Gateway update are complete.",
-      "translated": "تعذّر على OpenClaw إشعار وكيلك تلقائيًا. اكتمل تحديث التطبيق وGateway."
+      "source": "OpenCrustacean could not notify your agent automatically. The app and Gateway update are complete.",
+      "translated": "تعذّر على OpenCrustacean إشعار وكيلك تلقائيًا. اكتمل تحديث التطبيق وGateway."
     },
     {
       "id": "native.apple.afc120cf0a96ea30",
-      "source": "OpenClaw could not notify your agent automatically. The app and Mac node update are complete.",
-      "translated": "تعذّر على OpenClaw إشعار وكيلك تلقائيًا. اكتمل تحديث التطبيق وعقدة Mac."
+      "source": "OpenCrustacean could not notify your agent automatically. The app and Mac node update are complete.",
+      "translated": "تعذّر على OpenCrustacean إشعار وكيلك تلقائيًا. اكتمل تحديث التطبيق وعقدة Mac."
     },
     {
       "id": "native.apple.71ad85442725f45c",
-      "source": "OpenClaw could not confirm the agent notification. It will not retry, to avoid a duplicate welcome.",
-      "translated": "تعذّر على OpenClaw تأكيد إشعار الوكيل. لن يعيد المحاولة لتجنب تكرار رسالة الترحيب."
+      "source": "OpenCrustacean could not confirm the agent notification. It will not retry, to avoid a duplicate welcome.",
+      "translated": "تعذّر على OpenCrustacean تأكيد إشعار الوكيل. لن يعيد المحاولة لتجنب تكرار رسالة الترحيب."
     },
     {
       "id": "native.apple.a3deea03e4870dd0",
-      "source": "The remote Gateway is older than this Mac app, so OpenClaw skipped the agent notification.",
-      "translated": "إصدار Gateway البعيد أقدم من تطبيق Mac هذا، لذا تخطّى OpenClaw إشعار الوكيل."
+      "source": "The remote Gateway is older than this Mac app, so OpenCrustacean skipped the agent notification.",
+      "translated": "إصدار Gateway البعيد أقدم من تطبيق Mac هذا، لذا تخطّى OpenCrustacean إشعار الوكيل."
     },
     {
       "id": "native.apple.3636a8b503ff00d2",
-      "source": "The Gateway remains paused, so OpenClaw did not wake your agent.",
-      "translated": "لا يزال Gateway متوقفًا مؤقتًا، لذا لم يوقظ OpenClaw وكيلك."
+      "source": "The Gateway remains paused, so OpenCrustacean did not wake your agent.",
+      "translated": "لا يزال Gateway متوقفًا مؤقتًا، لذا لم يوقظ OpenCrustacean وكيلك."
     },
     {
       "id": "native.apple.0f533623878f3d67",
@@ -23095,8 +23095,8 @@
     },
     {
       "id": "native.apple.9ac2dfa295929a92",
-      "source": "OpenClaw installed the update but could not verify the Gateway connection.",
-      "translated": "ثبّت OpenClaw التحديث، لكنه تعذّر عليه التحقق من اتصال Gateway."
+      "source": "OpenCrustacean installed the update but could not verify the Gateway connection.",
+      "translated": "ثبّت OpenCrustacean التحديث، لكنه تعذّر عليه التحقق من اتصال Gateway."
     },
     {
       "id": "native.apple.3abafcfb64b362fb",
@@ -23105,8 +23105,8 @@
     },
     {
       "id": "native.apple.00e3d2037782506c",
-      "source": "OpenClaw could not read the Gateway service ownership record. Retry after checking the Gateway LaunchAgent.",
-      "translated": "تعذر على OpenClaw قراءة سجل ملكية خدمة Gateway. أعد المحاولة بعد التحقق من Gateway LaunchAgent."
+      "source": "OpenCrustacean could not read the Gateway service ownership record. Retry after checking the Gateway LaunchAgent.",
+      "translated": "تعذر على OpenCrustacean قراءة سجل ملكية خدمة Gateway. أعد المحاولة بعد التحقق من Gateway LaunchAgent."
     },
     {
       "id": "native.apple.c4b8806a570dad31",
@@ -23115,8 +23115,8 @@
     },
     {
       "id": "native.apple.0483bf19d612560b",
-      "source": "OpenClaw could not read the node service ownership record. Retry after checking the node LaunchAgent.",
-      "translated": "تعذر على OpenClaw قراءة سجل ملكية خدمة العقدة. أعد المحاولة بعد التحقق من node LaunchAgent."
+      "source": "OpenCrustacean could not read the node service ownership record. Retry after checking the node LaunchAgent.",
+      "translated": "تعذر على OpenCrustacean قراءة سجل ملكية خدمة العقدة. أعد المحاولة بعد التحقق من node LaunchAgent."
     },
     {
       "id": "native.apple.d0f712a2ed470a3e",
@@ -23235,8 +23235,8 @@
     },
     {
       "id": "native.apple.507c2d9c7e94716f",
-      "source": "Allow OpenClaw to read text from \\(appName)",
-      "translated": "السماح لـ OpenClaw بقراءة النص من \\(appName)"
+      "source": "Allow OpenCrustacean to read text from \\(appName)",
+      "translated": "السماح لـ OpenCrustacean بقراءة النص من \\(appName)"
     },
     {
       "id": "native.apple.c5313d544a833af0",
@@ -23405,13 +23405,13 @@
     },
     {
       "id": "native.apple.88d0123c86b06144",
-      "source": "Allow OpenClaw to capture windows",
-      "translated": "السماح لـ OpenClaw بالتقاط النوافذ"
+      "source": "Allow OpenCrustacean to capture windows",
+      "translated": "السماح لـ OpenCrustacean بالتقاط النوافذ"
     },
     {
       "id": "native.apple.677c5733cd132aed",
-      "source": "Allow OpenClaw to capture a screen area",
-      "translated": "السماح لـ OpenClaw بالتقاط منطقة من الشاشة"
+      "source": "Allow OpenCrustacean to capture a screen area",
+      "translated": "السماح لـ OpenCrustacean بالتقاط منطقة من الشاشة"
     },
     {
       "id": "native.apple.529a6fc5aeba03b0",
@@ -23480,8 +23480,8 @@
     },
     {
       "id": "native.apple.83145f8f53d7be34",
-      "source": "Scan or paste a fresh setup code from an already-paired OpenClaw client, then try again.",
-      "translated": "امسح ضوئيًا أو الصق رمز إعداد جديدًا من عميل OpenClaw مقترن بالفعل، ثم حاول مرة أخرى."
+      "source": "Scan or paste a fresh setup code from an already-paired OpenCrustacean client, then try again.",
+      "translated": "امسح ضوئيًا أو الصق رمز إعداد جديدًا من عميل OpenCrustacean مقترن بالفعل، ثم حاول مرة أخرى."
     },
     {
       "id": "native.apple.a8bf4f7ab4a35dc0",
@@ -23490,8 +23490,8 @@
     },
     {
       "id": "native.apple.52c0f97f0b3bb792",
-      "source": "Approve this device from an already-paired OpenClaw client. In your OpenClaw chat, run `/pair approve`, then click **Check connection** again.",
-      "translated": "Approve this device from an already-paired OpenClaw client. In your OpenClaw chat, run `/pair approve`, then click **Check connection** again."
+      "source": "Approve this device from an already-paired OpenCrustacean client. In your OpenCrustacean chat, run `/pair approve`, then click **Check connection** again.",
+      "translated": "Approve this device from an already-paired OpenCrustacean client. In your OpenCrustacean chat, run `/pair approve`, then click **Check connection** again."
     },
     {
       "id": "native.apple.e73170e4ab1dbe8f",
@@ -23520,8 +23520,8 @@
     },
     {
       "id": "native.apple.3e5a2b2a24f73418",
-      "source": "Pairing required. In an already-paired OpenClaw client, run /pair approve, then check the connection again.",
-      "translated": "Pairing required. In an already-paired OpenClaw client, run /pair approve, then check the connection again."
+      "source": "Pairing required. In an already-paired OpenCrustacean client, run /pair approve, then check the connection again.",
+      "translated": "Pairing required. In an already-paired OpenCrustacean client, run /pair approve, then check the connection again."
     },
     {
       "id": "native.apple.58e76e9c8b04290a",
@@ -23565,48 +23565,48 @@
     },
     {
       "id": "native.apple.2d7556d00f123112",
-      "source": "OpenClaw needs notification permission to show alerts for agent actions.",
-      "translated": "يحتاج OpenClaw إلى إذن الإشعارات لعرض تنبيهات لإجراءات الوكيل."
+      "source": "OpenCrustacean needs notification permission to show alerts for agent actions.",
+      "translated": "يحتاج OpenCrustacean إلى إذن الإشعارات لعرض تنبيهات لإجراءات الوكيل."
     },
     {
       "id": "native.apple.d9e7be03543b508f",
-      "source": "OpenClaw captures the screen when the agent needs screenshots for context.",
-      "translated": "يلتقط OpenClaw الشاشة عندما يحتاج الوكيل إلى لقطات شاشة للسياق."
+      "source": "OpenCrustacean captures the screen when the agent needs screenshots for context.",
+      "translated": "يلتقط OpenCrustacean الشاشة عندما يحتاج الوكيل إلى لقطات شاشة للسياق."
     },
     {
       "id": "native.apple.eca927767423799c",
-      "source": "OpenClaw can capture photos or short video clips when requested by the agent.",
-      "translated": "يمكن لـ OpenClaw التقاط صور أو مقاطع فيديو قصيرة عندما يطلب الوكيل ذلك."
+      "source": "OpenCrustacean can capture photos or short video clips when requested by the agent.",
+      "translated": "يمكن لـ OpenCrustacean التقاط صور أو مقاطع فيديو قصيرة عندما يطلب الوكيل ذلك."
     },
     {
       "id": "native.apple.9389d1100944a1fd",
-      "source": "OpenClaw can share your location when requested by the agent.",
-      "translated": "يمكن لـ OpenClaw مشاركة موقعك عندما يطلب الوكيل ذلك."
+      "source": "OpenCrustacean can share your location when requested by the agent.",
+      "translated": "يمكن لـ OpenCrustacean مشاركة موقعك عندما يطلب الوكيل ذلك."
     },
     {
       "id": "native.apple.59da76aed1cb07ee",
-      "source": "OpenClaw uses the local network to connect to your remote OpenClaw gateway over LAN, Tailnet, or SSH.",
-      "translated": "يستخدم OpenClaw الشبكة المحلية للاتصال بـ Gateway OpenClaw البعيدة لديك عبر LAN أو Tailnet أو SSH."
+      "source": "OpenCrustacean uses the local network to connect to your remote OpenCrustacean gateway over LAN, Tailnet, or SSH.",
+      "translated": "يستخدم OpenCrustacean الشبكة المحلية للاتصال بـ Gateway OpenCrustacean البعيدة لديك عبر LAN أو Tailnet أو SSH."
     },
     {
       "id": "native.apple.0fdd4a93f90c6f95",
-      "source": "OpenClaw uses the microphone for Voice Wake, push-to-talk, Talk Mode, Quick Chat dictation, and agent audio capture.",
-      "translated": "يستخدم OpenClaw الميكروفون للتنبيه الصوتي والضغط للتحدث ووضع التحدث والإملاء في Quick Chat والتقاط الصوت للوكيل."
+      "source": "OpenCrustacean uses the microphone for Voice Wake, push-to-talk, Talk Mode, Quick Chat dictation, and agent audio capture.",
+      "translated": "يستخدم OpenCrustacean الميكروفون للتنبيه الصوتي والضغط للتحدث ووضع التحدث والإملاء في Quick Chat والتقاط الصوت للوكيل."
     },
     {
       "id": "native.apple.44701896858c9029",
-      "source": "OpenClaw uses Apple Speech for Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation. Voice Wake stays on-device.",
-      "translated": "يستخدم OpenClaw خدمة Apple Speech للتنبيه الصوتي والضغط للتحدث ووضع التحدث والإملاء في Quick Chat. يبقى التنبيه الصوتي على الجهاز."
+      "source": "OpenCrustacean uses Apple Speech for Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation. Voice Wake stays on-device.",
+      "translated": "يستخدم OpenCrustacean خدمة Apple Speech للتنبيه الصوتي والضغط للتحدث ووضع التحدث والإملاء في Quick Chat. يبقى التنبيه الصوتي على الجهاز."
     },
     {
       "id": "native.apple.2d5411b5cc54a93e",
-      "source": "OpenClaw needs Automation (AppleScript) permission to drive Terminal and other apps for agent actions.",
-      "translated": "يحتاج OpenClaw إلى إذن Automation (AppleScript) للتحكم في Terminal وتطبيقات أخرى لإجراءات الوكيل."
+      "source": "OpenCrustacean needs Automation (AppleScript) permission to drive Terminal and other apps for agent actions.",
+      "translated": "يحتاج OpenCrustacean إلى إذن Automation (AppleScript) للتحكم في Terminal وتطبيقات أخرى لإجراءات الوكيل."
     },
     {
       "id": "native.apple.e16fc45de0f2bb86",
-      "source": "OpenClaw can access Reminders when requested by the agent for the apple-reminders skill.",
-      "translated": "يمكن لـ OpenClaw الوصول إلى Reminders عندما يطلب الوكيل ذلك لمهارة apple-reminders."
+      "source": "OpenCrustacean can access Reminders when requested by the agent for the apple-reminders skill.",
+      "translated": "يمكن لـ OpenCrustacean الوصول إلى Reminders عندما يطلب الوكيل ذلك لمهارة apple-reminders."
     },
     {
       "id": "native.apple.6f7c6ef00a40a571",
@@ -23760,8 +23760,8 @@
     },
     {
       "id": "native.apple.59bed721dff1a25f",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.04b9c8402f19b8ce",
@@ -24050,8 +24050,8 @@
     },
     {
       "id": "native.apple.4b27b3be5f3f1f66",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "source": "OpenCrustacean",
+      "translated": "OpenCrustacean"
     },
     {
       "id": "native.apple.9427da914cdbfbf3",
@@ -24695,8 +24695,8 @@
     },
     {
       "id": "native.apple.237e9371a693b0ff",
-      "source": "OpenClaw reacts when any trigger appears in a transcription. Keep phrases short to avoid false positives.",
-      "translated": "يتفاعل OpenClaw عند ظهور أي كلمة تشغيل في النسخ. اجعل العبارات قصيرة لتجنب النتائج الإيجابية الخاطئة."
+      "source": "OpenCrustacean reacts when any trigger appears in a transcription. Keep phrases short to avoid false positives.",
+      "translated": "يتفاعل OpenCrustacean عند ظهور أي كلمة تشغيل في النسخ. اجعل العبارات قصيرة لتجنب النتائج الإيجابية الخاطئة."
     },
     {
       "id": "native.apple.2bcc6f4eca98f7f2",
@@ -24790,13 +24790,13 @@
     },
     {
       "id": "native.apple.448dfe21a7f3a883",
-      "source": "Check OpenClaw status",
-      "translated": "تحقق من حالة OpenClaw"
+      "source": "Check OpenCrustacean status",
+      "translated": "تحقق من حالة OpenCrustacean"
     },
     {
       "id": "native.apple.00f4977e0123ce7a",
-      "source": "Summarize the current OpenClaw status and tell me what needs attention.",
-      "translated": "لخّص حالة OpenClaw الحالية وأخبرني بما يحتاج إلى اهتمام."
+      "source": "Summarize the current OpenCrustacean status and tell me what needs attention.",
+      "translated": "لخّص حالة OpenCrustacean الحالية وأخبرني بما يحتاج إلى اهتمام."
     },
     {
       "id": "native.apple.9c1a9be47ac92727",
@@ -26825,8 +26825,8 @@
     },
     {
       "id": "native.apple.1823d7bddaa73a1a",
-      "source": "OpenClaw could not read the gateway certificate for %@.",
-      "translated": "تعذّر على OpenClaw قراءة شهادة Gateway لـ %@."
+      "source": "OpenCrustacean could not read the gateway certificate for %@.",
+      "translated": "تعذّر على OpenCrustacean قراءة شهادة Gateway لـ %@."
     },
     {
       "id": "native.apple.b737f84578f558eb",
@@ -26840,8 +26840,8 @@
     },
     {
       "id": "native.apple.7493b8bf5dcaa05f",
-      "source": "OpenClaw could not securely save the TLS certificate pin for %@.",
-      "translated": "تعذّر على OpenClaw حفظ تثبيت شهادة TLS بأمان لـ %@."
+      "source": "OpenCrustacean could not securely save the TLS certificate pin for %@.",
+      "translated": "تعذّر على OpenCrustacean حفظ تثبيت شهادة TLS بأمان لـ %@."
     },
     {
       "id": "native.apple.9a4c4bd6b41420ae",
