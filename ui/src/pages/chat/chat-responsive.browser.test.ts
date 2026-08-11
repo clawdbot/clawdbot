@@ -893,11 +893,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       });
 
       expect(styles).toEqual({
-        menu: { borderRadius: "8px", padding: "6px" },
+        menu: { borderRadius: "10px", padding: "4px" },
         item: {
-          borderRadius: "8px",
+          borderRadius: "6px",
           fontSize: "13px",
-          minHeight: "30px",
+          minHeight: "28px",
           padding: "0px 8px",
         },
       });
