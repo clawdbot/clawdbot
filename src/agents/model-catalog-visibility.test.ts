@@ -387,6 +387,60 @@ describe("resolveLogicalVisibleModelCatalog", () => {
     ]);
   });
 
+  it("does not let a runtime-bound alias bypass a canonical default-runtime override", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          modelPolicy: {},
+          models: {
+            "openai/gpt-5.4-codex": { agentRuntime: { id: "codex" } },
+          },
+        },
+        list: [
+          {
+            id: "main",
+            models: {
+              "openai/gpt-5.4": { agentRuntime: { id: "auto" } },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const policy = createModelVisibilityPolicy({
+      cfg,
+      catalog: [],
+      defaultProvider: "openai",
+      defaultModel: "openai/gpt-5.4",
+      agentId: "main",
+      allowManifestNormalization: false,
+      allowPluginNormalization: false,
+    });
+
+    const result = await resolveLogicalVisibleModelCatalog({
+      cfg,
+      catalog: [],
+      defaultProvider: "openai",
+      defaultModel: "openai/gpt-5.4",
+      agentId: "main",
+      view: "configured",
+      policy,
+      routePolicy: openAIModelCatalogRoutePolicy,
+      evaluateEntry: async (entry) =>
+        resolveLogicalModelCatalogEntryState({
+          entry,
+          evaluation: {
+            availability: true,
+            routeResolution: { kind: "routes", routes: [selectedRoute] },
+            selectedRoute,
+          },
+          routePolicy: openAIModelCatalogRoutePolicy,
+        }),
+    });
+
+    expect(result).toEqual([]);
+  });
+
   it("does not synthesize a primary without a model-specific runtime binding", async () => {
     const cfg = {
       agents: {

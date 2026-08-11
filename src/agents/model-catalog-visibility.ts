@@ -296,30 +296,32 @@ export async function resolveLogicalVisibleModelCatalog(params: {
   const catalog = [...params.catalog];
   const catalogKeys = new Set(catalog.map((entry) => resolveLogicalKey(entry, params.routePolicy)));
   if (policy.allowAny) {
-    const checkedRuntimePolicyRefs = new Set<string>();
-    const acceptedRuntimePolicyKeys = new Set<string>();
+    const checkedRuntimePolicyKeys = new Set<string>();
     for (const ref of listModelRuntimePolicyRefs(params)) {
       const separator = ref.indexOf("/");
       if (separator <= 0 || separator >= ref.length - 1) {
         continue;
       }
-      const entry = {
+      const configuredEntry = {
         provider: ref.slice(0, separator),
         id: ref.slice(separator + 1),
         name: ref.slice(separator + 1),
       };
-      const identity = params.routePolicy.resolveIdentity(entry);
-      const exactRef = `${entry.provider}/${entry.id}`;
+      const identity = params.routePolicy.resolveIdentity(configuredEntry);
       if (
         !identity ||
         !configuredKeys.has(identity.key) ||
         catalogKeys.has(identity.key) ||
-        acceptedRuntimePolicyKeys.has(identity.key) ||
-        checkedRuntimePolicyRefs.has(exactRef)
+        checkedRuntimePolicyKeys.has(identity.key)
       ) {
         continue;
       }
-      checkedRuntimePolicyRefs.add(exactRef);
+      checkedRuntimePolicyKeys.add(identity.key);
+      const entry = {
+        provider: configuredEntry.provider,
+        id: identity.id,
+        name: identity.id,
+      };
       const runtimeId = normalizeOptionalAgentRuntimeId(
         resolveModelRuntimePolicy({
           config: params.cfg,
@@ -340,7 +342,6 @@ export async function resolveLogicalVisibleModelCatalog(params: {
         continue;
       }
       // Provider-managed runtime bindings remain projectable when prepared inventory has no row.
-      acceptedRuntimePolicyKeys.add(identity.key);
       catalogKeys.add(identity.key);
       catalog.push(entry);
     }
