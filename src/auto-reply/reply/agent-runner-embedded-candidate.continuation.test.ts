@@ -161,7 +161,10 @@ function runCandidate(
     signalExecutionPhaseForTyping: vi.fn(),
     notifyAgentRunStart: vi.fn(),
     notifyUserAboutCompaction: false,
-    sourceRepliesAreToolOnly: false,
+    // sourceRepliesAreToolOnly is no longer a turn param: upstream derives it
+    // from the source-reply delivery runtime / followupRun.run.sourceReplyDeliveryMode.
+    // This fixture leaves that mode unset, so the derived value is false —
+    // identical to the explicit `false` this object used to carry.
     messageToolDeliveryState: { toolCallIds: new Set(), completed: false },
     preserveProgressCallbackStartOrder: false,
     presentation: {
