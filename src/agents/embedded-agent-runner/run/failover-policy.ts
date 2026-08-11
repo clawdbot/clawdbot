@@ -151,7 +151,7 @@ export function mergeRetryFailoverReason(params: {
   failoverReason: FailoverReason | null;
   timedOut?: boolean;
 }): FailoverReason | null {
-  return params.failoverReason ?? (params.timedOut ? "timeout" : null) ?? params.previous;
+  return params.failoverReason ?? params.previous ?? (params.timedOut ? "timeout" : null);
 }
 
 export function resolveRunFailoverDecision(

@@ -53,6 +53,8 @@ const MAX_LIVE_SWITCH_RETRIES = 2;
 const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
 // Overload recovery stays inside one turn: bounded backoff absorbs short provider incidents,
 // while the delayed notice prevents a long silent wait without becoming assistant content.
+// This whole-turn bound multiplies the 32..160 per-run budget in
+// agents/embedded-agent-runner/run/helpers.ts; keep their product test aligned.
 const MAX_OVERLOAD_RETRIES = 10;
 const OVERLOAD_RETRY_BASE_DELAY_MS = 2_500;
 const OVERLOAD_RETRY_MAX_DELAY_MS = 30_000;
