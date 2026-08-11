@@ -11,7 +11,12 @@ vi.mock("node:child_process", async (importOriginal) => ({
 
 import { createMeetingConfiguredNodeHost } from "./configured-node-host.js";
 
-function createHost() {
+function createHost(
+  commands: {
+    input?: string[];
+    output?: string[];
+  } = {},
+) {
   return createMeetingConfiguredNodeHost({
     agentMode: "agent",
     bridgeIdPrefix: "test-node-",
@@ -28,8 +33,8 @@ function createHost() {
       bufferBytes: 4_096,
       format: "pcm16-24khz",
     },
-    defaultAudioInputCommand: ["legacy-capture"],
-    defaultAudioOutputCommand: ["legacy-playback"],
+    defaultAudioInputCommand: commands.input ?? ["legacy-capture"],
+    defaultAudioOutputCommand: commands.output ?? ["legacy-playback"],
     displayName: "Test meeting",
     meetingLabel: "Test meeting",
     normalizeMeetingKey: (url) => url,
@@ -146,5 +151,23 @@ describe("configured meeting node host", () => {
         expect.objectContaining({ encoding: "utf8" }),
       );
     }
+  });
+
+  it("probes one executable once when every configured audio command shares it", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    childProcessMocks.spawnSync.mockImplementation((command: string) => ({
+      status: 0,
+      stdout: command.endsWith("system_profiler") ? "BlackHole 2ch" : "",
+      stderr: "",
+    }));
+
+    await createHost({ input: ["sox", "capture"], output: ["sox", "play"] })(
+      JSON.stringify({ action: "setup", bargeInInputCommand: ["sox", "barge"] }),
+    );
+
+    const soxProbes = childProcessMocks.spawnSync.mock.calls.filter(
+      (call) => Array.isArray(call[1]) && call[1].at(-1) === "sox",
+    );
+    expect(soxProbes).toHaveLength(1);
   });
 });
