@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { waitForAgentJob } from "./agent-job.js";
+import { waitForAgentJob, waitForAgentJobExecution } from "./agent-job.js";
 
 const HARD_TIMEOUT_PHASES = ["preflight", "provider", "post_turn"] as const;
 const NON_HARD_TIMEOUTS = [
@@ -74,6 +74,73 @@ describe("waitForAgentJob timeout fallback", () => {
       await expect(resolveOuterTimeoutRace(scenario.data)).resolves.toBeNull();
     });
   }
+
+  it("does not spend execution timeout while a run is queued", async () => {
+    const runId = `run-execution-wait-queued-${runSequence++}`;
+    const waitPromise = waitForAgentJobExecution({ runId, timeoutMs: 60_000 });
+    let settled = false;
+    void waitPromise.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(60_001);
+    expect(settled).toBe(false);
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: Date.now() },
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    await expect(waitPromise).resolves.toBeNull();
+  });
+
+  it("starts the execution timeout from lifecycle startedAt", async () => {
+    const runId = `run-execution-wait-started-${runSequence++}`;
+    vi.setSystemTime(10_000);
+    const waitPromise = waitForAgentJobExecution({ runId, timeoutMs: 60_000 });
+    let settled = false;
+    void waitPromise.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(75_000);
+    const startedAt = Date.now();
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt },
+    });
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(waitPromise).resolves.toBeNull();
+  });
+
+  it("resolves a queued restart cancellation from the terminal registry", async () => {
+    const runId = `run-execution-wait-cancelled-${runSequence++}`;
+    const waitPromise = waitForAgentJobExecution({ runId, timeoutMs: 60_000 });
+
+    await vi.advanceTimersByTimeAsync(60_001);
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        endedAt: Date.now(),
+        aborted: true,
+        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+        error: "Restart interrupted the queued run",
+      },
+    });
+
+    await expect(waitPromise).resolves.toMatchObject({
+      status: "error",
+      stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+      error: "Restart interrupted the queued run",
+    });
+  });
 
   it("keeps restart cancellation as an error instead of a hard timeout", async () => {
     await expect(

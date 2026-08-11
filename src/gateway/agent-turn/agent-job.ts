@@ -246,6 +246,9 @@ function beginAgentJob(runId: string, startedAt?: number) {
   agentJobs.delete(runId);
   if (startedAt !== undefined) {
     agentRunStarts.set(runId, startedAt);
+    // Execution-scoped waiters stay dormant while queued. Lifecycle start owns
+    // their budget, so wake them here to arm against the authoritative timestamp.
+    notifyAgentRunWaiters(runId);
   }
 }
 
@@ -586,12 +589,17 @@ function publicSnapshot(snapshot: AgentRunObservation): AgentJobTerminalSnapshot
   };
 }
 
-export async function waitForAgentJob(params: {
+type AgentJobWaitParams = {
   runId: string;
   timeoutMs: number;
   ignoreCachedSnapshot?: boolean;
   source?: "chat";
-}): Promise<AgentJobTerminalSnapshot | null> {
+};
+
+async function waitForAgentJobState(
+  params: AgentJobWaitParams,
+  timeoutScope: "caller" | "execution",
+): Promise<AgentJobTerminalSnapshot | null> {
   ensureAgentRunListener();
   const afterVersion = params.ignoreCachedSnapshot ? agentJobState.version : -1;
   const cached = getAgentRunSnapshot({
@@ -602,38 +610,26 @@ export async function waitForAgentJob(params: {
   if (cached) {
     return publicSnapshot(cached);
   }
-  if (params.timeoutMs <= 0) {
+  if (timeoutScope === "caller" && params.timeoutMs <= 0) {
     return null;
   }
 
   return await new Promise((resolve) => {
     let settled = false;
+    let timeoutHandle: NodeJS.Timeout | undefined;
     let removeWaiter = () => {};
     const finish = (snapshot: AgentJobTerminalSnapshot | null) => {
       if (settled) {
         return;
       }
       settled = true;
-      clearTimeout(timeoutHandle);
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
       removeWaiter();
       resolve(snapshot);
     };
-    const onWake = (lifecycleReset = false) => {
-      if (lifecycleReset) {
-        finish(null);
-        return;
-      }
-      const snapshot = getAgentRunSnapshot({
-        runId: params.runId,
-        source: params.source,
-        afterVersion,
-      });
-      if (snapshot) {
-        finish(publicSnapshot(snapshot));
-      }
-    };
-    removeWaiter = addAgentRunWaiter(params.runId, onWake);
-    const timeoutHandle = setSafeTimeout(() => {
+    const onTimeout = () => {
       if (!params.source) {
         const pendingError = pendingAgentRunErrors.get(params.runId)?.snapshot;
         if (pendingError && pendingError.version > afterVersion) {
@@ -655,10 +651,55 @@ export async function waitForAgentJob(params: {
         }
       }
       finish(null);
-    }, params.timeoutMs);
-    timeoutHandle.unref?.();
+    };
+    const armTimeout = () => {
+      if (timeoutHandle || settled) {
+        return;
+      }
+      const startedAt =
+        timeoutScope === "execution" ? agentRunStarts.get(params.runId) : Date.now();
+      if (startedAt === undefined) {
+        return;
+      }
+      const delayMs =
+        timeoutScope === "execution"
+          ? Math.max(0, startedAt + params.timeoutMs - Date.now())
+          : params.timeoutMs;
+      timeoutHandle = setSafeTimeout(onTimeout, delayMs);
+      timeoutHandle.unref?.();
+    };
+    const onWake = (lifecycleReset = false) => {
+      if (lifecycleReset) {
+        finish(null);
+        return;
+      }
+      const snapshot = getAgentRunSnapshot({
+        runId: params.runId,
+        source: params.source,
+        afterVersion,
+      });
+      if (snapshot) {
+        finish(publicSnapshot(snapshot));
+        return;
+      }
+      armTimeout();
+    };
+    removeWaiter = addAgentRunWaiter(params.runId, onWake);
     onWake();
   });
+}
+
+export async function waitForAgentJob(
+  params: AgentJobWaitParams,
+): Promise<AgentJobTerminalSnapshot | null> {
+  return await waitForAgentJobState(params, "caller");
+}
+
+export async function waitForAgentJobExecution(params: {
+  runId: string;
+  timeoutMs: number;
+}): Promise<AgentJobTerminalSnapshot | null> {
+  return await waitForAgentJobState(params, "execution");
 }
 
 ensureAgentRunListener();

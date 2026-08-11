@@ -20,6 +20,7 @@ const internalAgentTurnFacade = vi.hoisted(() => ({
   dispatch: vi.fn(),
   wait: vi.fn(),
 }));
+const waitForAgentJobExecution = vi.hoisted(() => vi.fn());
 
 vi.mock("./server-methods.js", () => ({
   handleGatewayRequest,
@@ -32,6 +33,9 @@ vi.mock("./agent-turn/internal-facade.runtime.js", () => ({
       wait: internalAgentTurnFacade.wait,
     };
   },
+}));
+vi.mock("./agent-turn/agent-job.js", () => ({
+  waitForAgentJobExecution,
 }));
 
 type ServerPluginsModule = typeof import("./server-plugins.js");
@@ -84,6 +88,7 @@ beforeEach(() => {
   internalAgentTurnFacade.create.mockReset();
   internalAgentTurnFacade.dispatch.mockReset().mockResolvedValue({ runId: "plugin-run-1" });
   internalAgentTurnFacade.wait.mockReset().mockResolvedValue({ status: "ok" });
+  waitForAgentJobExecution.mockReset().mockResolvedValue({ status: "ok" });
   handleGatewayRequest.mockReset();
   handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
     opts.respond(true, {});
@@ -325,29 +330,32 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
     ).rejects.toThrow(/not found/);
   });
 
-  test("normalizes completed agent.wait envelopes for plugin subagents", async () => {
+  test("waits on the execution-scoped agent registry with the default timeout", async () => {
     const serverPlugins = await loadServerPlugins();
     const runtime = serverPlugins.createGatewaySubagentRuntime();
-    serverPlugins.setFallbackGatewayContext(createTestContext("plugin-wait", createTestCfg()));
 
-    internalAgentTurnFacade.wait.mockResolvedValue({ status: "completed" });
-
-    await expect(runtime.waitForRun({ runId: "plugin-run-completed" })).resolves.toEqual({
+    await expect(runtime.waitForRun({ runId: "plugin-run-default" })).resolves.toEqual({
       status: "ok",
+    });
+    expect(waitForAgentJobExecution).toHaveBeenCalledWith({
+      runId: "plugin-run-default",
+      timeoutMs: 30_000,
     });
   });
 
-  test("normalizes malformed completed wait errors for plugin subagents", async () => {
+  test("projects an elapsed execution wait as a plugin timeout", async () => {
     const serverPlugins = await loadServerPlugins();
     const runtime = serverPlugins.createGatewaySubagentRuntime();
-    serverPlugins.setFallbackGatewayContext(
-      createTestContext("plugin-wait-error", createTestCfg()),
-    );
+    waitForAgentJobExecution.mockResolvedValue(null);
 
-    internalAgentTurnFacade.wait.mockResolvedValue({ status: "error", error: "completed" });
-
-    await expect(runtime.waitForRun({ runId: "plugin-run-error-completed" })).resolves.toEqual({
-      status: "ok",
+    await expect(
+      runtime.waitForRun({ runId: "plugin-run-timeout", timeoutMs: 60_000.9 }),
+    ).resolves.toEqual({
+      status: "timeout",
+    });
+    expect(waitForAgentJobExecution).toHaveBeenCalledWith({
+      runId: "plugin-run-timeout",
+      timeoutMs: 60_000,
     });
   });
 });

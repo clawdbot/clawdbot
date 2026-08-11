@@ -22,6 +22,7 @@ import { resolvePluginSubagentCompletionRequester } from "../plugins/runtime/sub
 import type { PluginRuntime, RuntimeGatewayRequestOptions } from "../plugins/runtime/types.js";
 import type { PluginLogger, PluginOrigin } from "../plugins/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { waitForAgentJobExecution } from "./agent-turn/agent-job.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import { normalizeOperatorScopeList, type OperatorScope } from "./operator-scopes.js";
 import type { GatewayRequestHandler, GatewayRequestOptions } from "./server-methods/types.js";
@@ -306,22 +307,12 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       return { runId, ...(runtime ? { runtime } : {}) };
     },
     async waitForRun(params) {
-      const payload = await dispatchGatewayMethodInProcess<{ status?: string; error?: string }>(
-        "agent.wait",
-        {
-          runId: params.runId,
-          ...(params.timeoutMs != null && { timeoutMs: params.timeoutMs }),
-        },
-      );
-      let status = payload?.status;
-      if (status === "completed" || status === "succeeded") {
-        status = "ok";
-      } else if (status === "error" && payload?.error?.trim().toLowerCase() === "completed") {
-        status = "ok";
-      }
-      if (status !== "ok" && status !== "error" && status !== "timeout") {
-        throw new Error(`Gateway agent.wait returned unexpected status: ${payload?.status}`);
-      }
+      const timeoutMs =
+        typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
+          ? Math.max(0, Math.floor(params.timeoutMs))
+          : 30_000;
+      const payload = await waitForAgentJobExecution({ runId: params.runId, timeoutMs });
+      const status = payload?.status ?? "timeout";
       return {
         status,
         ...(status !== "ok" &&
