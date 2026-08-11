@@ -975,7 +975,7 @@ describe("dispatchReplyFromConfig", () => {
       [sourceStorePath]: { [sourceSessionKey]: sourceEntry },
       [targetStorePath]: { [boundSessionKey]: targetEntry },
     };
-    sessionStoreMocks.resolveStorePath.mockImplementation(
+    sessionStoreMocks.resolveSessionStorePathCore.mockImplementation(
       (_configuredPath?: unknown, options?: { agentId?: string }) =>
         options?.agentId === "opencode" ? targetStorePath : sourceStorePath,
     );

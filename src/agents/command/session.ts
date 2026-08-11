@@ -19,7 +19,7 @@ import {
   resolveAgentIdFromSessionKey,
   resolveExplicitAgentSessionKey,
 } from "../../config/sessions/main-session.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   evaluateSessionFreshness,
   resolveSessionResetPolicy,
@@ -171,7 +171,7 @@ function collectSessionIdMatchesForRequest(opts: {
     if (agentId === opts.storeAgentId) {
       continue;
     }
-    const candidateStorePath = resolveStorePath(opts.cfg.session?.store, { agentId });
+    const candidateStorePath = resolveSessionStorePathCore(opts.cfg.session?.store, { agentId });
     addMatches(
       loadCommandSessionStore({
         agentId,
@@ -199,7 +199,7 @@ export function resolveStoredSessionKeyForSessionId(opts: {
   const storeAgentId = opts.agentId?.trim()
     ? normalizeAgentId(opts.agentId)
     : resolveDefaultAgentId(opts.cfg);
-  const storePath = resolveStorePath(opts.cfg.session?.store, {
+  const storePath = resolveSessionStorePathCore(opts.cfg.session?.store, {
     agentId: storeAgentId,
   });
   const sessionStore = loadCommandSessionStore({
@@ -255,7 +255,7 @@ export function resolveSessionKeyForRequest(opts: {
       ? (requestedAgentId ?? defaultAgentId)
       : resolveAgentIdFromSessionKey(explicitSessionKey, defaultAgentId)
     : (requestedAgentId ?? defaultAgentId);
-  const storePath = resolveStorePath(sessionCfg?.store, {
+  const storePath = resolveSessionStorePathCore(sessionCfg?.store, {
     agentId: storeAgentId,
   });
   const loadOptions = opts.clone === false ? { clone: false as const } : undefined;

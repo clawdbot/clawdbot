@@ -69,7 +69,7 @@ export {
   resolveConfigDir,
   resolveHomeDir,
   resolveUserPath,
-  safeParseJson,
+  tryParseJson as safeParseJson,
   shortenHomeInString,
   shortenHomePath,
   sleep,

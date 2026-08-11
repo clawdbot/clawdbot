@@ -76,7 +76,7 @@ let resolveProviderStreamFn: typeof import("./provider-runtime.js").resolveProvi
 let resolveProviderTransportTurnStateWithPlugin: typeof import("./provider-runtime.js").resolveProviderTransportTurnStateWithPlugin;
 let resolveProviderCacheTtlEligibility: typeof import("./provider-runtime.js").resolveProviderCacheTtlEligibility;
 let createProviderEmbeddingProvider: typeof import("./provider-runtime.js").createProviderEmbeddingProvider;
-let resolveProviderThinkingProfile: typeof import("./provider-runtime.js").resolveProviderThinkingProfile;
+let resolveRuntimeThinkingProfile: typeof import("./provider-runtime.js").resolveRuntimeThinkingProfile;
 let resolveProviderModernModelRef: typeof import("./provider-runtime.js").resolveProviderModernModelRef;
 let resolveProviderReasoningOutputModeWithPlugin: typeof import("./provider-runtime.js").resolveProviderReasoningOutputModeWithPlugin;
 let resolveProviderReplayPolicyWithPlugin: typeof import("./provider-runtime.js").resolveProviderReplayPolicyWithPlugin;
@@ -327,7 +327,7 @@ describe("provider-runtime", () => {
       resolveProviderTransportTurnStateWithPlugin,
       resolveProviderCacheTtlEligibility,
       createProviderEmbeddingProvider,
-      resolveProviderThinkingProfile,
+      resolveRuntimeThinkingProfile,
       resolveProviderModernModelRef,
       resolveProviderReasoningOutputModeWithPlugin,
       resolveProviderReplayPolicyWithPlugin,
@@ -1709,7 +1709,7 @@ describe("provider-runtime", () => {
     });
 
     expect(
-      resolveProviderThinkingProfile({
+      resolveRuntimeThinkingProfile({
         provider: "xai",
         context: {
           provider: "xai",

@@ -1,4 +1,3 @@
-// Telegram media-group buffering and mention-aware album dispatch.
 import type { Message } from "grammy/types";
 import {
   buildMentionRegexes,
@@ -21,10 +20,10 @@ import {
   isDurablyRetryableInboundMediaError,
   isRecoverableMediaGroupError,
 } from "./bot-handlers.media.js";
-import type { TelegramHandlerMessageRuntime } from "./bot-handlers.message.runtime.js";
+import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
+import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import type { TelegramAmbientTranscriptWatermark } from "./bot-message-context.types.js";
-import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import type { TelegramSpooledReplayDeferredParticipant } from "./bot-processing-outcome.js";
 import { MEDIA_GROUP_TIMEOUT_MS, type MediaGroupEntry } from "./bot-updates.js";
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
@@ -72,7 +71,17 @@ type BufferedMediaGroupEntry = MediaGroupEntry &
 
 type TelegramGroupMediaDisposition = "process" | "skip" | "silent-ingest";
 
-export function createTelegramInboundMediaGroupRuntime(
+interface TelegramInboundMedia {
+  handleMediaGroup: (input: TelegramMediaGroupInput) => boolean;
+  resolveUnaddressedGroupMediaDisposition: (
+    authorization: MediaAuthorization & { ctx: TelegramContext; msg: Message },
+  ) => Promise<TelegramGroupMediaDisposition>;
+}
+
+export function createTelegramInboundMedia({
+  params,
+  message,
+}: {
   params: Pick<
     RegisterTelegramHandlerParams,
     | "accountId"
@@ -83,9 +92,9 @@ export function createTelegramInboundMediaGroupRuntime(
     | "logger"
     | "resolveGroupActivation"
     | "resolveGroupRequireMention"
-  >,
-  messageRuntime: TelegramHandlerMessageRuntime,
-) {
+  >;
+  message: TelegramMessagePipeline;
+}): TelegramInboundMedia {
   const {
     accountId,
     bot,
@@ -110,7 +119,7 @@ export function createTelegramInboundMediaGroupRuntime(
     spooledReplayOptions,
     resolveTelegramSessionState,
     processMessageWithReplyChain,
-  } = messageRuntime;
+  } = message;
   const timeoutMs =
     typeof opts.testTimings?.mediaGroupFlushMs === "number" &&
     Number.isFinite(opts.testTimings.mediaGroupFlushMs)

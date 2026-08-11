@@ -8,7 +8,9 @@ const loadSessionEntry = vi.hoisted(() => vi.fn());
 const readSessionUpdatedAtCore = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/state/main/sessions.json"));
 
-vi.mock("../config/sessions/paths.js", () => ({ resolveStorePath }));
+vi.mock("../config/sessions/paths.js", () => ({
+  resolveSessionStorePathCore: resolveStorePath,
+}));
 vi.mock("../config/sessions/session-accessor.js", () => ({
   appendTranscriptEvent,
   loadSessionEntry,

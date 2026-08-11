@@ -7,7 +7,7 @@ import {
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
 import {
   loadSessionEntry,
@@ -190,7 +190,7 @@ export function initFastReplySessionState(params: {
     mainKey: cfg.session?.mainKey,
     agentId,
   });
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const sessionStore: Record<string, SessionEntry> = Object.fromEntries(
     listSessionEntriesCore({ storePath }).map(({ sessionKey: entryKey, entry }) => [
       entryKey,

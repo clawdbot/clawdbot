@@ -30,17 +30,6 @@
     "wrapper": "src/agents/model-selection.ts"
   },
   {
-    "name": "resolveApiKeyForProvider",
-    "wrapped": "src/agents/model-auth-provider.ts",
-    "wrapper": "src/plugins/runtime/runtime-model-auth.runtime.ts",
-    "via": "src/agents/model-auth.ts"
-  },
-  {
-    "name": "resolveHeartbeatPrompt",
-    "wrapped": "src/auto-reply/heartbeat.ts",
-    "wrapper": "src/infra/heartbeat-runner-config.ts"
-  },
-  {
     "name": "resolvePluginProviders",
     "wrapped": "src/plugins/providers.runtime.ts",
     "wrapper": "src/plugins/provider-auth-choice.runtime.ts"
@@ -56,16 +45,6 @@
     "wrapper": "src/plugins/provider-auth-choice.runtime.ts"
   },
   {
-    "name": "resolveSecretPlanTargetByPath",
-    "wrapped": "src/secrets/target-registry-query.ts",
-    "wrapper": "src/plugin-sdk/secret-ref-runtime.ts"
-  },
-  {
-    "name": "resolveSessionFilePath",
-    "wrapped": "src/config/sessions/paths.ts",
-    "wrapper": "src/plugin-sdk/session-store-runtime.ts"
-  },
-  {
     "name": "resolveSessionKeyForRequest",
     "wrapped": "src/agents/command/session.ts",
     "wrapper": "src/commands/agent/session.runtime.ts"
@@ -73,11 +52,6 @@
   {
     "name": "resolveSessionStoreEntry",
     "wrapped": "src/config/sessions/store-entry.ts",
-    "wrapper": "src/plugin-sdk/session-store-runtime.ts"
-  },
-  {
-    "name": "resolveStorePath",
-    "wrapped": "src/config/sessions/paths.ts",
     "wrapper": "src/plugin-sdk/session-store-runtime.ts"
   },
   {
@@ -91,18 +65,8 @@
     "wrapper": "src/security/audit.runtime.ts"
   },
   {
-    "name": "sha256HexPrefix",
-    "wrapped": "src/infra/crypto-digest.ts",
-    "wrapper": "src/logging/redact-identifier.ts"
-  },
-  {
     "name": "shouldSuppressBuiltInModel",
     "wrapped": "src/agents/model-suppression.ts",
     "wrapper": "src/agents/model-suppression.runtime.ts"
-  },
-  {
-    "name": "textToSpeech",
-    "wrapped": "src/tts/tts-synthesis.ts",
-    "wrapper": "src/tts/tts.ts"
   }
 ]

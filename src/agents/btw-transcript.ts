@@ -2,7 +2,7 @@
  * Reads prior session transcript context for `/btw` side-question handoffs.
  */
 import {
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
   type SessionEntry as StoredSessionEntry,
 } from "../config/sessions.js";
@@ -38,7 +38,7 @@ export function resolveBtwSessionTranscriptPath(params: {
       agentId,
       storePath: params.storePath,
     });
-    return resolveSessionFilePath(params.sessionId, params.sessionEntry, pathOpts);
+    return resolveSessionFilePathCore(params.sessionId, params.sessionEntry, pathOpts);
   } catch (error) {
     diag.debug(
       `resolveSessionTranscriptPath failed: sessionId=${params.sessionId} err=${String(error)}`,

@@ -41,7 +41,7 @@ import { getSlashCommands, shouldSubmitExactArgumentCompletion } from "./command
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
 import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
-import { editorTheme, theme } from "./theme/theme.js";
+import { editorTheme, tuiTheme as theme } from "./theme/theme.js";
 import { sanitizeAutocompleteProvider } from "./tui-autocomplete.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";

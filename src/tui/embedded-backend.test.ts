@@ -125,7 +125,7 @@ vi.mock("../config/sessions.js", () => ({
     goal ? `Goal: ${goal.objective ?? ""}` : "No goal for this session.",
   getSessionGoal: (...args: unknown[]) => getSessionGoalMock(...args),
   resolveAgentMainSessionKey: () => "agent:main:main",
-  resolveStorePath: () => "/tmp/openclaw-sessions.json",
+  resolveSessionStorePathCore: () => "/tmp/openclaw-sessions.json",
   updateSessionGoalObjective: (...args: unknown[]) => updateSessionGoalObjectiveMock(...args),
   updateSessionGoalStatus: (...args: unknown[]) => updateSessionGoalStatusMock(...args),
   updateSessionStore: (...args: unknown[]) => updateSessionStoreMock(...args),

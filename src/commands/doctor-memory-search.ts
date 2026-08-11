@@ -19,7 +19,7 @@ import {
 } from "../agents/auth-profiles.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import {
-  resolveApiKeyForProvider,
+  resolveApiKeyForProviderCore,
   resolveEnvApiKey,
   resolveUsableCustomProviderApiKey,
 } from "../agents/model-auth.js";
@@ -840,7 +840,7 @@ async function hasApiKeyForProvider(
     return false;
   }
   try {
-    await resolveApiKeyForProvider({
+    await resolveApiKeyForProviderCore({
       provider: authProviderId,
       cfg,
       agentDir,

@@ -103,11 +103,10 @@ registerHooks({
     `import { registerHooks } from "node:module";
 registerHooks({
   resolve(specifier, context, nextResolve) {
-    const resolved = nextResolve(specifier, context);
-    if (/\\/cli\\/run-main\\.(?:js|ts)$/.test(resolved.url)) {
+    if (/\\/cli\\/run-main\\.(?:js|ts)(?:[?#].*)?$/.test(specifier)) {
       throw new Error("forced run-main import failure");
     }
-    return resolved;
+    return nextResolve(specifier, context);
   },
 });
 `,
@@ -152,6 +151,10 @@ async function runCliProcess(params: {
   const child = spawn(
     process.execPath,
     [
+      "--import",
+      "tsx",
+      // Node runs later sync customization hooks first. Install test guards after
+      // TSX so they own the requested specifier instead of TSX's resolved result.
       ...(params.forbidTlsImport
         ? ["--import", pathToFileURL(fixture.tlsImportGuardPath).href]
         : []),
@@ -162,8 +165,6 @@ async function runCliProcess(params: {
       ...(params.unsupportedRuntime
         ? ["--import", pathToFileURL(fixture.unsupportedRuntimePath).href]
         : []),
-      "--import",
-      "tsx",
       "src/entry.ts",
       ...params.args,
     ],

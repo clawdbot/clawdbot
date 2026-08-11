@@ -34,7 +34,7 @@ import {
 } from "../auto-reply/reply/session-fork.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   createSessionEntryWithTranscript,
   listSessionEntriesReadOnly,
@@ -376,7 +376,7 @@ export async function createGatewaySession(params: {
         error: errorShape(ErrorCodes.INVALID_REQUEST, "incognito sessions are web-only"),
       };
     }
-    const durableStorePath = resolveStorePath(params.cfg.session?.store, { agentId });
+    const durableStorePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
     const durableEntryExists = listSessionEntriesReadOnly({
       agentId,
       storePath: durableStorePath,

@@ -1,7 +1,7 @@
 /** Sends cron announce payloads and best-effort failure notifications. */
 
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
-import { sendDurableMessageBatch } from "../channels/message/runtime.js";
+import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -101,7 +101,7 @@ async function deliverCronAnnouncePayload(params: {
 }): Promise<void> {
   // Cron delivery is durable and non-best-effort for primary announces; partial
   // channel failure must surface as a cron run failure.
-  const send = await sendDurableMessageBatch({
+  const send = await sendDurableMessageBatchCore({
     cfg: params.cfg,
     channel: params.delivery.resolvedTarget.channel,
     to: params.delivery.resolvedTarget.to,

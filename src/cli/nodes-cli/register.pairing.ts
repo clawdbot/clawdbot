@@ -13,7 +13,7 @@ import {
   callNodesGatewayCli,
   callNodePairApprovalGatewayCli,
   nodesCallOpts,
-  resolveNodeId,
+  resolveCliNodeId,
 } from "./rpc.js";
 import type { NodesRpcOpts, PendingRequest } from "./types.js";
 
@@ -210,7 +210,7 @@ export function registerNodesPairingCommands(nodes: Command) {
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("remove", async () => {
-          const nodeId = await resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
+          const nodeId = await resolveCliNodeId(opts, normalizeOptionalString(opts.node) ?? "");
           if (!nodeId) {
             defaultRuntime.error(
               `--node is required. Run ${formatCliCommand("openclaw nodes pending")} to choose a node request.`,
@@ -237,7 +237,7 @@ export function registerNodesPairingCommands(nodes: Command) {
       .requiredOption("--name <displayName>", "New display name")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("rename", async () => {
-          const nodeId = await resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
+          const nodeId = await resolveCliNodeId(opts, normalizeOptionalString(opts.node) ?? "");
           const name = normalizeOptionalString(opts.name) ?? "";
           if (!nodeId || !name) {
             defaultRuntime.error(

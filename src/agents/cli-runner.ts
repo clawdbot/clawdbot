@@ -3,7 +3,7 @@
  */
 import { setReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import { buildGenericCliContextEngineHostSupport } from "../context-engine/host-compat.js";
@@ -1089,7 +1089,7 @@ export async function runPreparedCliAgent(
           sessionKey,
           storePath:
             params.storePath ??
-            resolveStorePath(params.config?.session?.store, {
+            resolveSessionStorePathCore(params.config?.session?.store, {
               agentId,
             }),
         };

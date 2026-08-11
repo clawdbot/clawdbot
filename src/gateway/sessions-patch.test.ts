@@ -38,7 +38,7 @@ const acpSessionMetaMocks = vi.hoisted(() => ({
 }));
 const providerThinkingMocks = vi.hoisted(() => ({
   resolveProviderThinkingProfile:
-    vi.fn<typeof import("../plugins/provider-thinking.js").resolveProviderThinkingProfile>(),
+    vi.fn<typeof import("../plugins/provider-thinking.js").resolveEffectiveThinkingProfile>(),
 }));
 
 vi.mock("../acp/runtime/session-meta.js", () => ({
@@ -47,7 +47,7 @@ vi.mock("../acp/runtime/session-meta.js", () => ({
 
 // This suite owns patch projection; provider policy artifacts have dedicated contract coverage.
 vi.mock("../plugins/provider-thinking.js", () => ({
-  resolveProviderThinkingProfile: providerThinkingMocks.resolveProviderThinkingProfile,
+  resolveEffectiveThinkingProfile: providerThinkingMocks.resolveProviderThinkingProfile,
 }));
 
 const SUBAGENT_MODEL = "synthetic/hf:moonshotai/Kimi-K2.7-Code";

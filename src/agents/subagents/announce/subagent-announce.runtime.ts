@@ -5,7 +5,10 @@
  * IO without changing the announce logic itself.
  */
 export { getRuntimeConfig } from "../../../config/config.js";
-export { resolveAgentIdFromSessionKey, resolveStorePath } from "../../../config/sessions.js";
+export {
+  resolveAgentIdFromSessionKey,
+  resolveSessionStorePathCore,
+} from "../../../config/sessions.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 
 export function readSubagentSessionEntry(storePath: string, sessionKey: string) {

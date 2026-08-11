@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
-import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -533,7 +533,7 @@ describe("task suggestion gateway methods", () => {
 
   it("sends an idle session acceptance as a new turn and replays its source key", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: SOURCE_SESSION_KEY },
         { sessionId: "source-session", updatedAt: 1 },
       );
@@ -566,7 +566,7 @@ describe("task suggestion gateway methods", () => {
 
   it("steers a session acceptance into its one exact active run", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: SOURCE_SESSION_KEY },
         { sessionId: "source-session", updatedAt: 1 },
       );
@@ -598,7 +598,7 @@ describe("task suggestion gateway methods", () => {
     { label: "no exact run ID", runIds: [], projected: true },
   ])("rejects an active session with $label and restores the suggestion", async (testCase) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: SOURCE_SESSION_KEY },
         { sessionId: "source-session", updatedAt: 1 },
       );
@@ -678,7 +678,7 @@ describe("task suggestion gateway methods", () => {
 
   it("restores a session-mode suggestion after delivery failure without deleting its source", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: SOURCE_SESSION_KEY },
         { sessionId: "source-session", updatedAt: 1 },
       );

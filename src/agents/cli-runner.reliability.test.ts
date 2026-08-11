@@ -14,7 +14,7 @@ import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -389,7 +389,7 @@ async function seedSqliteSessionEntry(params: {
   sessionFile: string;
   storePath: string;
 }): Promise<void> {
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     {
       agentId: "main",
       sessionKey: "agent:main:main",
@@ -4024,7 +4024,7 @@ describe("runCliAgent reliability", () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "before_agent_run"),
       runBeforeAgentRun: vi.fn(async () => {
-        await upsertSessionEntry(
+        await upsertSessionEntryCore(
           { agentId: "main", sessionKey, storePath },
           { sessionId: "replacement-session", updatedAt: 2 },
         );

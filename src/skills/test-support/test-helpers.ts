@@ -1,30 +1,6 @@
 // Skill test helpers build canonical skill fixtures for unit tests.
-import fs from "node:fs/promises";
-import path from "node:path";
 import { createSyntheticSourceInfo, type Skill } from "../loading/skill-contract.js";
 import type { SkillEntry } from "../types.js";
-
-/** Writes a SKILL.md fixture with frontmatter and optional body. */
-export async function writeSkill(params: {
-  dir: string;
-  name: string;
-  description: string;
-  body?: string;
-}) {
-  const { dir, name, description, body } = params;
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(
-    path.join(dir, "SKILL.md"),
-    `---
-name: ${name}
-description: ${description}
----
-
-${body ?? `# ${name}\n`}
-`,
-    "utf-8",
-  );
-}
 
 export function createCanonicalFixtureSkill(params: {
   name: string;
