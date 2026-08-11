@@ -1333,6 +1333,10 @@ export function registerMcpCli(program: Command) {
       const manualCommand = formatCliCommand(`openclaw mcp login ${name} --code <code>`);
       try {
         const session = await startMcpOAuthAuthorization(identity, resolved, {});
+        if (session.status === "authorized") {
+          defaultRuntime.log(`MCP OAuth credentials saved for "${name}".`);
+          return;
+        }
         if (session.state.length >= 16) {
           try {
             callbackServer = await startOAuthLoopbackCallbackServer({
