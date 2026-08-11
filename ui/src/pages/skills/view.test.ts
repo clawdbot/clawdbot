@@ -914,6 +914,28 @@ describe("renderSkills", () => {
     ).toEqual(["Not scanned by ClawHub", undefined]);
   });
 
+  it("sizes the ClawHub detail dialog to a refusal message instead of a reader", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+
+    render(
+      renderSkills(
+        createProps({
+          clawhubDetailRef: "skills-sh:acme/tools/imap-smtp-email",
+          clawhubDetailError:
+            "ClawHub cannot return details for skills-sh:acme/tools/imap-smtp-email; external skill sources are install-only.",
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    // Without this the panel keeps the tall reader height meant for skill documents, so a
+    // two-line refusal renders in a mostly empty dialog and reads as broken.
+    expect(container.querySelectorAll(".md-preview-dialog__panel--message-only")).toHaveLength(1);
+  });
+
   it("renders ClawHub acknowledgement retry actions", async () => {
     const container = document.createElement("div");
     document.body.append(container);
