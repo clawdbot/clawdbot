@@ -203,15 +203,20 @@ export function assertSupportedAgentSchemaVersion(db: DatabaseSync, pathname: st
   }
 }
 
+/** Whether a database contains any non-SQLite-owned schema object. */
+export function hasOpenClawAgentApplicationSchema(db: DatabaseSync): boolean {
+  return Boolean(
+    db.prepare("SELECT 1 FROM sqlite_master WHERE substr(name, 1, 7) <> 'sqlite_' LIMIT 1").get(),
+  );
+}
+
 /** Refuse steady-state reads until Doctor has completed the v16 media cutover. */
 export function assertCanonicalAgentMediaPersistenceVersion(
   db: DatabaseSync,
   pathname: string,
 ): void {
   const userVersion = readSqliteUserVersion(db);
-  const hasApplicationSchema = db
-    .prepare("SELECT 1 FROM sqlite_master WHERE substr(name, 1, 7) <> 'sqlite_' LIMIT 1")
-    .get();
+  const hasApplicationSchema = hasOpenClawAgentApplicationSchema(db);
   const isNewUnownedDatabase =
     userVersion === 0 && readExistingAgentSchemaMeta(db) === null && !hasApplicationSchema;
   if (userVersion < OPENCLAW_AGENT_SCHEMA_VERSION && !isNewUnownedDatabase) {

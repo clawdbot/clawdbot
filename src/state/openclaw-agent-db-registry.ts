@@ -4,6 +4,7 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import {
   assertAgentDeletionPathFence,
   prepareAgentDeletionPathFence,
@@ -638,6 +639,62 @@ export function registerOpenClawAgentDatabase(params: {
       );
     },
     { env: params.env },
+  );
+  invalidateRegisteredAgentDatabasesMemo({ env: params.env });
+}
+
+/** Atomically replace one state root's registry with an exact reviewed set. */
+export function replaceOpenClawAgentDatabaseRegistryForRehearsal(params: {
+  entries: readonly {
+    agentId: string;
+    path: string;
+    schemaVersion: number;
+  }[];
+  env?: NodeJS.ProcessEnv;
+}): void {
+  const prepared = params.entries.map((entry) => {
+    const agentId = normalizeAgentId(entry.agentId);
+    const pathname = path.resolve(entry.path);
+    const deletionFence = prepareAgentDeletionPathFence(
+      { agentId, path: pathname },
+      { env: params.env },
+    );
+    const sizeBytes = (() => {
+      try {
+        return statSync(pathname).size;
+      } catch {
+        return null;
+      }
+    })();
+    return {
+      agentId,
+      deletionFence,
+      path: pathname,
+      schemaVersion: entry.schemaVersion,
+      sizeBytes,
+    };
+  });
+  const lastSeenAt = Date.now();
+  runOpenClawStateWriteTransaction(
+    (database) => {
+      const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database.db);
+      executeSqliteQuerySync(database.db, db.deleteFrom("agent_databases"));
+      for (const entry of prepared) {
+        assertAgentDeletionPathFence(database.db, entry.deletionFence);
+        executeSqliteQuerySync(
+          database.db,
+          db.insertInto("agent_databases").values({
+            agent_id: entry.agentId,
+            path: entry.path,
+            schema_version: entry.schemaVersion,
+            last_seen_at: lastSeenAt,
+            size_bytes: entry.sizeBytes,
+          }),
+        );
+      }
+    },
+    { env: params.env },
+    { operationLabel: "agent.registry.replace" },
   );
   invalidateRegisteredAgentDatabasesMemo({ env: params.env });
 }

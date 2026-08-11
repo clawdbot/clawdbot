@@ -70,6 +70,7 @@ export function assertOpenClawAgentDatabaseForMaintenance(
 /** Upgrade or repair a supported owned schema before strict offline maintenance. */
 export function migrateOpenClawAgentDatabaseForMaintenance(options: {
   agentId: string;
+  env?: NodeJS.ProcessEnv;
   pathname: string;
 }): void {
   const agentId = normalizeAgentId(options.agentId);
@@ -99,6 +100,7 @@ export function migrateOpenClawAgentDatabaseForMaintenance(options: {
     }
     ensureOpenClawAgentDatabaseSchema(database, {
       agentId,
+      ...(options.env ? { env: options.env } : {}),
       path: options.pathname,
     });
     assertOpenClawAgentDatabaseForMaintenance(database, {

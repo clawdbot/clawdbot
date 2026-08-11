@@ -6,10 +6,12 @@ import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { hasExplicitOptions } from "../command-options.js";
 import { formatHelpExamples } from "../help-format.js";
 import { collectOption } from "./helpers.js";
+import { setCommandJsonMode } from "./json-mode.js";
 
 type AgentsAddModule = typeof import("../../commands/agents.commands.add.js");
 type AgentsBindModule = typeof import("../../commands/agents.commands.bind.js");
 type AgentsDeleteModule = typeof import("../../commands/agents.commands.delete.js");
+type AgentsDatabaseRehearsalModule = typeof import("../../commands/agents.db-rehearsal-cli.js");
 type AgentsIdentityModule = typeof import("../../commands/agents.commands.identity.js");
 type AgentsListModule = typeof import("../../commands/agents.commands.list.js");
 type CliUtilsModule = typeof import("../cli-utils.js");
@@ -37,6 +39,12 @@ async function loadAgentsUnbindCommand(): Promise<AgentsBindModule["agentsUnbind
 
 async function loadAgentsDeleteCommand(): Promise<AgentsDeleteModule["agentsDeleteCommand"]> {
   return (await import("../../commands/agents.commands.delete.js")).agentsDeleteCommand;
+}
+
+async function loadAgentsDatabaseRehearsalCommand(): Promise<
+  AgentsDatabaseRehearsalModule["agentsDatabaseRehearsalCommand"]
+> {
+  return (await import("../../commands/agents.db-rehearsal-cli.js")).agentsDatabaseRehearsalCommand;
 }
 
 async function loadAgentsSetIdentityCommand(): Promise<
@@ -264,6 +272,15 @@ ${formatHelpExamples([
           runtime,
         );
       });
+    });
+
+  const dbRehearsal = agents.command("db-rehearsal", { hidden: true });
+  setCommandJsonMode(dbRehearsal, "output", () => true)
+    .requiredOption("--request <file|->", "Read the bounded rehearsal JSON request")
+    .action(async (opts): Promise<void> => {
+      const { defaultRuntime } = await loadAgentsActionRuntime();
+      const agentsDatabaseRehearsalCommand = await loadAgentsDatabaseRehearsalCommand();
+      await agentsDatabaseRehearsalCommand({ request: String(opts.request) }, defaultRuntime);
     });
 
   agents.action(async (): Promise<void> => {

@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   agentsBindingsCommandMock: vi.fn(),
   agentsBindCommandMock: vi.fn(),
   agentsDeleteCommandMock: vi.fn(),
+  agentsDatabaseRehearsalCommandMock: vi.fn(),
   agentsListCommandMock: vi.fn(),
   agentsSetIdentityCommandMock: vi.fn(),
   agentsUnbindCommandMock: vi.fn(),
@@ -28,6 +29,7 @@ const agentsAddCommandMock = mocks.agentsAddCommandMock;
 const agentsBindingsCommandMock = mocks.agentsBindingsCommandMock;
 const agentsBindCommandMock = mocks.agentsBindCommandMock;
 const agentsDeleteCommandMock = mocks.agentsDeleteCommandMock;
+const agentsDatabaseRehearsalCommandMock = mocks.agentsDatabaseRehearsalCommandMock;
 const agentsListCommandMock = mocks.agentsListCommandMock;
 const agentsSetIdentityCommandMock = mocks.agentsSetIdentityCommandMock;
 const agentsUnbindCommandMock = mocks.agentsUnbindCommandMock;
@@ -54,6 +56,10 @@ vi.mock("../../commands/agents.commands.bind.js", () => ({
 
 vi.mock("../../commands/agents.commands.delete.js", () => ({
   agentsDeleteCommand: mocks.agentsDeleteCommandMock,
+}));
+
+vi.mock("../../commands/agents.db-rehearsal-cli.js", () => ({
+  agentsDatabaseRehearsalCommand: mocks.agentsDatabaseRehearsalCommandMock,
 }));
 
 vi.mock("../../commands/agents.commands.identity.js", () => ({
@@ -89,6 +95,7 @@ describe("agent command registration", () => {
     agentsBindingsCommandMock.mockResolvedValue(undefined);
     agentsBindCommandMock.mockResolvedValue(undefined);
     agentsDeleteCommandMock.mockResolvedValue(undefined);
+    agentsDatabaseRehearsalCommandMock.mockResolvedValue(undefined);
     agentsListCommandMock.mockResolvedValue(undefined);
     agentsSetIdentityCommandMock.mockResolvedValue(undefined);
     agentsUnbindCommandMock.mockResolvedValue(undefined);
@@ -376,6 +383,22 @@ describe("agent command registration", () => {
     expect((options as { force?: boolean }).force).toBe(true);
     expect((options as { json?: boolean }).json).toBe(true);
     expect(callRuntime).toBe(runtime);
+  });
+
+  it("keeps the operator database rehearsal hidden and forwards its request source", async () => {
+    const program = new Command();
+    registerAgentsCommands(program);
+    const agents = program.commands.find((command) => command.name() === "agents");
+    const rehearsal = agents?.commands.find((command) => command.name() === "db-rehearsal");
+    expect(rehearsal).toBeDefined();
+    expect(agents?.helpInformation()).not.toContain("db-rehearsal");
+
+    await runCli(["agents", "db-rehearsal", "--request", "rehearsal.json"]);
+
+    expect(agentsDatabaseRehearsalCommandMock).toHaveBeenCalledWith(
+      { request: "rehearsal.json" },
+      runtime,
+    );
   });
 
   it("forwards set-identity options", async () => {

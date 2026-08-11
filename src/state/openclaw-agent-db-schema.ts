@@ -35,6 +35,7 @@ import {
   assertOpenClawAgentCurrentRuntimeSchema,
   assertSupportedAgentSchemaVersion,
   ensureSessionKeyContractSchemaInTransaction,
+  hasOpenClawAgentApplicationSchema,
   readExistingAgentSchemaMeta,
   repairAndAssertOpenClawAgentV14SchemaForMigration,
 } from "./openclaw-agent-db-schema-helpers.js";
@@ -553,9 +554,7 @@ export function assertAgentDatabaseIntegrityBeforeMutation(
 ): void {
   database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
   const userVersion = readSqliteUserVersion(database);
-  const hasApplicationSchema = database
-    .prepare("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1")
-    .get();
+  const hasApplicationSchema = hasOpenClawAgentApplicationSchema(database);
   const migrationPending =
     (userVersion === 0 && hasApplicationSchema) ||
     (userVersion > 0 && userVersion < OPENCLAW_AGENT_SCHEMA_VERSION);

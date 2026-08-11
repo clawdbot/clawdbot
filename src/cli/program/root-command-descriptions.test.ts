@@ -223,7 +223,7 @@ const JSON_OUTPUT_INHERITED_FROM_PARENT = new Set([
 ]);
 
 // Route-first parsing accepts JSON before Commander registration is reached.
-const JSON_OUTPUT_ROUTE_FIRST = new Set(["agents"]);
+const JSON_OUTPUT_ROUTE_FIRST = new Set(["agents", "agents db-rehearsal"]);
 
 async function registerAllBuiltInCommands(): Promise<Command> {
   const program = new Command().name("openclaw");

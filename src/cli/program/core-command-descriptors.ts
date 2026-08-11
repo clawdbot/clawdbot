@@ -1,5 +1,6 @@
 // Core root-command descriptor catalog used for help placeholders and lazy registration.
 import { isExperimentalClawsEnabled } from "../../claws/experimental.js";
+import { isAgentsMachineOutput } from "../agents-output-mode.js";
 import { isConfigMachineOutput } from "../config-output-mode.js";
 import { isDoctorMachineOutput } from "../doctor-output-mode.js";
 import { defineCommandDescriptorCatalog } from "./command-descriptor-utils.js";
@@ -105,6 +106,7 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     name: "agents",
     description: "Manage isolated agents (workspaces + auth + routing)",
     hasSubcommands: true,
+    machineOutput: ({ argv }) => isAgentsMachineOutput(argv),
   },
   {
     name: "status",
