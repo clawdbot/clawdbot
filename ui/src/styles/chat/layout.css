@@ -3600,6 +3600,7 @@ openclaw-chat-video-player {
   .agent-chat__composer-controls {
     order: 0;
     display: flex;
+    justify-content: flex-end;
     flex: 1 1 0;
     width: auto;
     min-width: 187px;
@@ -3650,9 +3651,11 @@ openclaw-chat-video-player {
   }
 
   /* Reserve the readable model trigger, 44px effort target, and their gap;
-     transient status text yields before either picker does. */
+     keep the picker cluster right-aligned like desktop while transient status
+     text yields before either picker does. */
   .agent-chat__composer-controls .chat-composer-model-control {
-    flex: 1 0 138px;
+    flex: 0 1 auto;
+    min-width: 138px;
   }
 
   .agent-chat__composer-controls .chat-controls__model-picker {

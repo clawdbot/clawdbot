@@ -2438,6 +2438,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(send.x).toBeGreaterThanOrEqual(textarea.x + textarea.width - 1);
         expect(send.x + send.width).toBeLessThanOrEqual(input.x + input.width + 1);
         expect(rectsOverlap(model, send)).toBe(false);
+        const effortContextGap = context.x - (effortTrigger.x + effortTrigger.width);
+        expect(effortContextGap).toBeGreaterThanOrEqual(-1);
+        expect(effortContextGap).toBeLessThanOrEqual(9);
         const composerFontSize = await page
           .locator(".agent-chat__composer-combobox > textarea")
           .evaluate((textareaNode) => Number.parseFloat(getComputedStyle(textareaNode).fontSize));
