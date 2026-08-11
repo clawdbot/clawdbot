@@ -167,19 +167,65 @@ describe("waitForAgentJob timeout fallback", () => {
     await expect(waitForAgentJobExecution({ runId, timeoutMs: 5 })).resolves.toBeNull();
   });
 
-  it("does not treat provisional reservations as queued execution", async () => {
+  it("bounds provisional reservations by their admission expiry", async () => {
     const runId = `run-execution-wait-reserved-${runSequence++}`;
+    vi.setSystemTime(10_000);
     setGatewayDedupeEntry({
       dedupe: new Map<string, DedupeEntry>(),
       key: `agent:${runId}`,
       entry: {
         ts: Date.now(),
         ok: true,
-        payload: { runId, status: "accepted", reservationId: "reservation-1" },
+        payload: {
+          runId,
+          status: "accepted",
+          reservationId: "reservation-1",
+          expiresAtMs: 40_000,
+        },
       },
     });
+    const waitPromise = waitForAgentJobExecution({ runId, timeoutMs: 60_000 });
+    let settled = false;
+    void waitPromise.then(() => {
+      settled = true;
+    });
 
-    await expect(waitForAgentJobExecution({ runId, timeoutMs: 60_000 })).resolves.toBeNull();
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(waitPromise).resolves.toBeNull();
+  });
+
+  it("lets late execution waiters observe retryable terminal errors", async () => {
+    const runId = `run-execution-wait-pending-error-${runSequence++}`;
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: Date.now() },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        startedAt: Date.now(),
+        endedAt: Date.now(),
+        error: "Retryable provider failure",
+      },
+    });
+    const waitPromise = waitForAgentJobExecution({ runId, timeoutMs: 60_000 });
+    let settled = false;
+    void waitPromise.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(waitPromise).resolves.toMatchObject({
+      status: "error",
+      error: "Retryable provider failure",
+    });
   });
 
   it("keeps restart cancellation as an error instead of a hard timeout", async () => {

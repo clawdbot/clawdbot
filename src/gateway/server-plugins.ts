@@ -313,9 +313,7 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       const status = payload?.status ?? "timeout";
       return {
         status,
-        ...(status !== "ok" &&
-          typeof payload?.error === "string" &&
-          payload.error && { error: payload.error }),
+        ...(status !== "ok" && payload?.error ? { error: payload.error } : {}),
       };
     },
     getSessionMessages,

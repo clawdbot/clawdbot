@@ -246,7 +246,6 @@ async function startNarrativeRunOrFallback(params: {
       message: params.message,
       ...(params.model ? { model: params.model } : {}),
       extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
-      // Apply configured subagent concurrency across all dreaming sessions.
       lane: "subagent",
       lightContext: true,
       deliver: false,

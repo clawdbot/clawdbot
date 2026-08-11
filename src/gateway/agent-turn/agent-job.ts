@@ -247,8 +247,7 @@ function beginAgentJob(runId: string, startedAt?: number) {
   agentJobs.delete(runId);
   if (startedAt !== undefined) {
     agentRunStarts.set(runId, startedAt);
-    // Lifecycle start owns execution-scoped budgets, so wake dormant waiters
-    // here to arm against the authoritative timestamp.
+    // Lifecycle start owns execution-scoped budgets; wake dormant waiters here.
     notifyAgentRunWaiters(runId);
   }
 }
@@ -307,12 +306,8 @@ function createSnapshotFromLifecycleEvent(params: {
 }): AgentRunObservation {
   const { runId, phase, data } = params;
   const recordedStart = agentRunStarts.get(runId);
-  const startedAt =
-    typeof data?.startedAt === "number"
-      ? data.startedAt
-      : Number.isFinite(recordedStart)
-        ? recordedStart
-        : undefined;
+  const finiteRecordedStart = Number.isFinite(recordedStart) ? recordedStart : undefined;
+  const startedAt = typeof data?.startedAt === "number" ? data.startedAt : finiteRecordedStart;
   const endedAt = typeof data?.endedAt === "number" ? data.endedAt : undefined;
   const terminalOutcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
     phase,
@@ -511,18 +506,19 @@ export function setGatewayDedupeEntry(params: {
   }
   if (incomingObservation.state === "active") {
     beginAgentJob(key.runId);
-    if (
-      key.source === "agent" &&
-      typeof asOptionalRecord(params.entry.payload)?.reservationId !== "string"
-    ) {
-      agentRunStarts.set(key.runId, AGENT_RUN_QUEUED_AT);
+    if (key.source === "agent") {
+      const payload = asOptionalRecord(params.entry.payload);
+      const expiresAt = asFiniteNumber(payload?.expiresAtMs) ?? Date.now();
+      agentRunStarts.set(
+        key.runId,
+        typeof payload?.reservationId === "string" ? -expiresAt : AGENT_RUN_QUEUED_AT,
+      );
+      notifyAgentRunWaiters(key.runId);
     }
     return;
   }
   if (incomingObservation.state === "terminal") {
-    if (key.source === "agent") {
-      agentRunStarts.delete(key.runId);
-    }
+    if (key.source === "agent") agentRunStarts.delete(key.runId);
     recordAgentRunSnapshot({
       ...incomingObservation.snapshot,
       runId: key.runId,
@@ -629,14 +625,16 @@ export async function waitForAgentJob(params: {
     let settled = false;
     let timeoutHandle: NodeJS.Timeout | undefined;
     let removeWaiter = () => {};
+    const clearWaitTimeout = () => {
+      clearTimeout(timeoutHandle);
+      timeoutHandle = undefined;
+    };
     const finish = (snapshot: AgentJobTerminalSnapshot | null) => {
       if (settled) {
         return;
       }
       settled = true;
-      if (timeoutHandle) {
-        clearTimeout(timeoutHandle);
-      }
+      clearWaitTimeout();
       removeWaiter();
       resolve(snapshot);
     };
@@ -669,19 +667,24 @@ export async function waitForAgentJob(params: {
       }
       const observedStart = params.executionScoped ? agentRunStarts.get(params.runId) : Date.now();
       if (params.executionScoped && observedStart === AGENT_RUN_QUEUED_AT) {
+        clearWaitTimeout();
         return;
       }
       if (params.executionScoped && observedStart === undefined) {
+        if (pendingAgentRunErrors.has(params.runId) || pendingAgentRunTimeouts.has(params.runId)) {
+          return;
+        }
         finish(null);
         return;
       }
-      if (timeoutHandle) {
+      if (timeoutHandle && !params.executionScoped) {
         return;
       }
+      clearWaitTimeout();
       const startedAt = observedStart ?? Date.now();
-      const delayMs = params.executionScoped
-        ? Math.max(0, startedAt + params.timeoutMs - Date.now())
-        : params.timeoutMs;
+      const deadline =
+        params.executionScoped && startedAt < 0 ? -startedAt : startedAt + params.timeoutMs;
+      const delayMs = Math.max(0, deadline - Date.now());
       timeoutHandle = setSafeTimeout(onTimeout, delayMs);
       timeoutHandle.unref?.();
     };
@@ -706,9 +709,7 @@ export async function waitForAgentJob(params: {
   });
 }
 
-export function waitForAgentJobExecution(
-  params: Pick<Parameters<typeof waitForAgentJob>[0], "runId" | "timeoutMs">,
-) {
+export function waitForAgentJobExecution(params: { runId: string; timeoutMs: number }) {
   return waitForAgentJob({ ...params, executionScoped: true });
 }
 
