@@ -572,21 +572,12 @@ export function assertAgentDatabaseIntegrityBeforeMutation(
       toVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
   }
-  const hasPendingMemoryMigration =
-    userVersion === OPENCLAW_AGENT_SCHEMA_VERSION &&
-    hasPendingMemoryChunkMetadataMigration(database);
-  const hasPendingSessionContractMigration =
-    userVersion === OPENCLAW_AGENT_SCHEMA_VERSION &&
-    hasPendingSessionKeyContractSchemaMigration(database);
-  const hasPendingRetiredLeaseMigration =
-    userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && hasRetiredAgentStateLeaseSchema(database);
-  const hasPendingProjectColumn =
-    userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && hasPendingSessionProjectColumn(database);
   const hasPendingCurrentVersionMigration =
-    hasPendingMemoryMigration ||
-    hasPendingSessionContractMigration ||
-    hasPendingRetiredLeaseMigration ||
-    hasPendingProjectColumn;
+    userVersion === OPENCLAW_AGENT_SCHEMA_VERSION &&
+    (hasPendingMemoryChunkMetadataMigration(database) ||
+      hasPendingSessionKeyContractSchemaMigration(database) ||
+      hasRetiredAgentStateLeaseSchema(database) ||
+      hasPendingSessionProjectColumn(database));
   if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
     verifyAndRepairCanonicalSqliteIndexes(database, pathname, OPENCLAW_AGENT_SCHEMA_SQL, {
       allowMissingColumns: true,
