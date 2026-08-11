@@ -4,7 +4,7 @@ import {
   releaseLeasedAgentSteeringItemsFromSubagentRuns,
 } from "../../agent-steering-queue.js";
 import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
-import type { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
+import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
 import {
   countActiveRunsForSessionFromRuns,
@@ -20,9 +20,7 @@ export function createSubagentRegistryPublicApi(config: {
   persistOrThrow: (...runIds: string[]) => void;
   restoreOnce: () => void;
   startAnnounceCleanup: (runId: string, entry: SubagentRunRecord) => boolean;
-  settleRequesterTurn: ReturnType<
-    typeof createSubagentRegistryLifecycleController
-  >["settleRequesterTurnAfterSessionSpawns"];
+  settleRequesterTurn: SubagentLifecycleController["settleRequesterTurnAfterSessionSpawns"];
 }) {
   const {
     runs,

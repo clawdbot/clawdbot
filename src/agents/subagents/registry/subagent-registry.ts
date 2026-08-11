@@ -21,7 +21,7 @@ import {
   type SubagentRegistryDeps,
 } from "./subagent-registry-deps.js";
 import { ANNOUNCE_EXPIRY_MS, reconcileOrphanedRun } from "./subagent-registry-helpers.js";
-import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
+import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { createSubagentRegistryListener } from "./subagent-registry-listener.js";
 import {
   getSubagentRunsForChildSession,
@@ -132,7 +132,7 @@ const contextCleanup = createSubagentRegistryContextCleanup({
   warn: (message, meta) => log.warn(message, meta),
 });
 
-const subagentLifecycleController = createSubagentRegistryLifecycleController({
+const subagentLifecycleController = new SubagentLifecycleController({
   runs: subagentRuns,
   resumedRuns,
   subagentAnnounceTimeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS,

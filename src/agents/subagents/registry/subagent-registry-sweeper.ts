@@ -9,7 +9,10 @@ import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { reconcileOrphanedRun, safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
-import type { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
+import type {
+  SubagentLifecycleController,
+  SubagentLifecycleOptions,
+} from "./subagent-registry-lifecycle.js";
 import { createInterruptedRecoveryCoordinator } from "./subagent-registry-restart-recovery-coordinator.js";
 import { isRestoredQueuedFailureSettlementClaimed } from "./subagent-registry-restore.js";
 import type { createSubagentRunManager } from "./subagent-registry-run-manager.js";
@@ -46,8 +49,8 @@ const restartRecoveryLoader = createLazyImportLoader(
 );
 const killRuntimeLoader = createLazyImportLoader(() => import("./subagent-control.runtime.js"));
 
-type LifecycleController = ReturnType<typeof createSubagentRegistryLifecycleController>;
-type LifecycleOptions = Parameters<typeof createSubagentRegistryLifecycleController>[0];
+type LifecycleController = SubagentLifecycleController;
+type LifecycleOptions = SubagentLifecycleOptions;
 
 export function createSubagentRegistrySweeper(params: {
   runs: Map<string, SubagentRunRecord>;
