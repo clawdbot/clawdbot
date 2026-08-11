@@ -1,6 +1,5 @@
 /** Control-plane provider discovery helpers that keep runtime imports lazy until catalog hooks run. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import type { ProviderCatalogOutcome } from "./provider-catalog.types.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -9,6 +8,7 @@ import {
   copyProviderCatalogOutcomes,
   copyProviderCatalogResultProjection,
 } from "./provider-catalog-result.js";
+import type { ProviderCatalogOutcome } from "./provider-catalog.types.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "./types.js";
 
 const DISCOVERY_ORDER: readonly ProviderCatalogOrder[] = ["simple", "profile", "paired", "late"];

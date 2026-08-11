@@ -5,9 +5,9 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import { isRecord } from "../utils.js";
-import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import {
   mergeProviders,
   mergeWithExistingProviderSecrets,

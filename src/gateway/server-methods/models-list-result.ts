@@ -35,7 +35,6 @@ import {
 } from "../../agents/model-catalog-visibility.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog.types.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import {
   createModelVisibilityPolicy,
@@ -53,6 +52,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveManifestProviderAuthChoices } from "../../plugins/provider-auth-choices.js";
+import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog.types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayAgentRuntime } from "../../shared/session-types.js";
 import { createModelsListAuthResolver } from "./models-list-auth-resolver.js";

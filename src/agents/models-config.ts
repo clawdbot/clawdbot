@@ -22,6 +22,7 @@ import {
   resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
+import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import {
   resolveAgentWorkspaceDir,
@@ -29,7 +30,6 @@ import {
   resolveDefaultAgentId,
 } from "./agent-scope.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
-import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import {
   MODELS_JSON_STATE,
   type ModelsJsonReadyResult,

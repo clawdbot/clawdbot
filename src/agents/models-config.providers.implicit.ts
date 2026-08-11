@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
@@ -28,7 +29,6 @@ import {
   isNonSecretApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
 } from "./model-auth-markers.js";
-import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import { parseConfiguredModelVisibilityEntries } from "./model-selection-shared.js";
 import { mergeProviderModels } from "./models-config.merge.js";
 import type {

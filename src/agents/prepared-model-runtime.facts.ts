@@ -13,6 +13,7 @@ import {
   getPreparedMessageToolCatalog,
   getPreparedMessageToolCatalogForRegistry,
 } from "../plugins/prepared-message-tool-catalog.js";
+import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import { resolveLoadedProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -33,7 +34,6 @@ import {
   loadBundledProviderStaticCatalogContextModels,
 } from "./embedded-agent-runner/model.static-catalog.js";
 import { createStaticModelIdMatcher } from "./embedded-agent-runner/model.static-id.js";
-import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
