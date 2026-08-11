@@ -259,9 +259,7 @@ describe("listGatewayMethods", () => {
     expect(methods.indexOf("projects.list")).toBe(methods.indexOf("worker.desktop.observe") + 1);
     expect(methods.indexOf("projects.register")).toBe(methods.indexOf("projects.list") + 1);
     expect(methods.indexOf("projects.remove")).toBe(methods.indexOf("projects.register") + 1);
-    expect(methods.indexOf("worker.desktop.launch")).toBe(
-      methods.indexOf("projects.remove") + 1,
-    );
+    expect(methods.indexOf("worker.desktop.launch")).toBe(methods.indexOf("projects.remove") + 1);
   });
 
   it("advertises the versioned Talk session RPCs", () => {
