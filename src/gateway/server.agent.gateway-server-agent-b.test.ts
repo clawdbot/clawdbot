@@ -375,6 +375,41 @@ describe("gateway server agent", () => {
     expect(loadStored()?.mainRestartRecovery).toBeUndefined();
   });
 
+  test("agent clears restart recovery ownership when rotating the session generation", async () => {
+    await useTempSessionStorePath();
+    const sessionStorePath = testState.sessionStorePath;
+    if (!sessionStorePath) {
+      throw new Error("expected session store path");
+    }
+    const externalEntry: InternalSessionEntry = {
+      sessionId: "sess-external-owner-old-generation",
+      updatedAt: 0,
+      restartRecoveryOwner: "external",
+    };
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:main", storePath: sessionStorePath },
+      externalEntry,
+    );
+
+    const runId = "idem-agent-recovery-owner-rotation";
+    const res = await rpcReq(ws, "agent", {
+      message: "start a fresh OpenClaw-owned generation",
+      sessionKey: "main",
+      idempotencyKey: runId,
+    });
+    expect(res.ok).toBe(true);
+    const call = await readAgentCommandCall({ runId });
+    expect(call.sessionId).toEqual(expect.any(String));
+    expect(call.sessionId).not.toBe("sess-external-owner-old-generation");
+
+    const stored = loadSessionEntry({
+      sessionKey: "agent:main:main",
+      storePath: sessionStorePath,
+    }) as InternalSessionEntry | undefined;
+    expect(stored?.sessionId).toBe(call.sessionId);
+    expect(stored?.restartRecoveryOwner).toBeUndefined();
+  });
+
   test.each([
     {
       name: "tombstoned",

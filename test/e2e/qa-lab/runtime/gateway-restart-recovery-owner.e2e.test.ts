@@ -98,6 +98,18 @@ async function readMockRequestCount(baseUrl: string): Promise<number> {
   return requests.length;
 }
 
+async function waitForMockRequestCount(baseUrl: string, expected: number): Promise<number> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < LOG_WAIT_TIMEOUT_MS) {
+    const count = await readMockRequestCount(baseUrl);
+    if (count >= expected) {
+      return count;
+    }
+    await sleep(100);
+  }
+  throw new Error(`mock provider request count did not reach ${expected}`);
+}
+
 function resolveGatewayFileLogPath(logs: string): string | undefined {
   return [...logs.matchAll(/\[gateway\] log file: (.+)$/gmu)].at(-1)?.[1]?.trim();
 }
@@ -156,7 +168,7 @@ async function writeVerdict(verdict: Record<string, unknown>): Promise<void> {
 
 describe("Gateway external restart recovery owner", () => {
   it(
-    "skips externally owned restart work and transfers a quarantined session",
+    "skips external recovery, resets ownership on rotation, and transfers quarantine",
     { timeout: 180_000 },
     async () => {
       harness = await startQaLiveLaneGateway({
@@ -226,6 +238,47 @@ describe("Gateway external restart recovery owner", () => {
         status: "running",
       });
 
+      const externalSessionId = loadInternalEntry(gateway, sessionKey).sessionId;
+      if (!externalSessionId) {
+        throw new Error("expected the externally owned session generation");
+      }
+      await gateway.restartAfterStateMutation(async () => {
+        await replaceInternalEntry(gateway, sessionKey, {
+          abortedLastRun: false,
+          mainRestartRecovery: undefined,
+          restartRecoveryRuns: undefined,
+          status: undefined,
+          updatedAt: 0,
+        });
+      });
+      await runAgent({
+        gateway,
+        sessionKey,
+        message: "Gateway generation rotation QA. Reply exactly `ROTATED_TO_OPENCLAW`.",
+      });
+      const rotated = loadInternalEntry(gateway, sessionKey);
+      expect(rotated.sessionId).toEqual(expect.any(String));
+      expect(rotated.sessionId).not.toBe(externalSessionId);
+      expect(rotated.restartRecoveryOwner).toBeUndefined();
+      const requestsAfterRotation = await readMockRequestCount(mock.baseUrl);
+      expect(requestsAfterRotation).toBe(requestsAfterExternalRestarts + 1);
+
+      await gateway.restartAfterStateMutation(async () => {
+        await replaceInternalEntry(gateway, sessionKey, {
+          abortedLastRun: false,
+          mainRestartRecovery: undefined,
+          restartRecoveryRuns: undefined,
+          status: "running",
+        });
+      });
+      const requestsAfterRotatedRecovery = await waitForMockRequestCount(
+        mock.baseUrl,
+        requestsAfterRotation + 1,
+      );
+      expect(requestsAfterRotatedRecovery).toBe(requestsAfterRotation + 1);
+      expect(loadInternalEntry(gateway, sessionKey).restartRecoveryOwner).toBeUndefined();
+      await sleep(500);
+
       await gateway.restartAfterStateMutation(async () => {
         await replaceInternalEntry(gateway, sessionKey, {
           abortedLastRun: false,
@@ -253,7 +306,7 @@ describe("Gateway external restart recovery owner", () => {
       expect(transferred.restartRecoveryRuns).toBeUndefined();
 
       const requestsAfterTransfer = await readMockRequestCount(mock.baseUrl);
-      expect(requestsAfterTransfer).toBe(requestsBeforeExternalRestarts + 1);
+      expect(requestsAfterTransfer).toBe(requestsAfterRotatedRecovery + 1);
       await writeVerdict({
         schemaVersion: 1,
         scenario: "gateway-external-restart-recovery-owner",
@@ -264,11 +317,13 @@ describe("Gateway external restart recovery owner", () => {
           restartSkipPhases: ["mark", "dispatch"],
           providerCallsDuringExternalRestarts:
             requestsAfterExternalRestarts - requestsBeforeExternalRestarts,
+          rotatedGenerationOwnerCleared: rotated.restartRecoveryOwner === undefined,
+          providerCallsForRotatedRecovery: requestsAfterRotatedRecovery - requestsAfterRotation,
           quarantinedTransferClearedRecovery:
             transferred.abortedLastRun === false &&
             transferred.mainRestartRecovery === undefined &&
             transferred.restartRecoveryRuns === undefined,
-          providerCallsForTransfer: requestsAfterTransfer - requestsAfterExternalRestarts,
+          providerCallsForTransfer: requestsAfterTransfer - requestsAfterRotatedRecovery,
         },
         pass: true,
       });
