@@ -2056,6 +2056,47 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   );
 
   it.each(["dark", "light"] as const)(
+    "fits short table cards to their columns in %s mode",
+    async (themeMode) => {
+      const page = await openBrowserPage(800, 400);
+      try {
+        await page.setContent(
+          `<!doctype html><html data-theme-mode="${themeMode}"><head><style>${readUiCss()}</style></head><body>
+            <div class="chat-text">
+              <div data-table-lane style="width: 680px">
+                <table data-short-table><thead><tr><th>Name</th><th>Status</th></tr></thead><tbody><tr><td>Gateway</td><td>Ready</td></tr></tbody></table>
+              </div>
+              <div data-narrow-table-lane style="width: 160px">
+                <table data-narrow-table><thead><tr><th>Name</th><th>Status</th></tr></thead><tbody><tr><td>Gateway</td><td>Ready</td></tr></tbody></table>
+              </div>
+            </div>
+          </body></html>`,
+        );
+
+        const geometry = await page.evaluate(() => {
+          const rectFor = (selector: string) =>
+            document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+          const shortTable = rectFor("[data-short-table]");
+          const lastCell = rectFor("[data-short-table] tbody td:last-child");
+          return {
+            laneWidth: rectFor("[data-table-lane]").width,
+            narrowLaneWidth: rectFor("[data-narrow-table-lane]").width,
+            narrowTableWidth: rectFor("[data-narrow-table]").width,
+            shortTableWidth: shortTable.width,
+            trailingGap: shortTable.right - lastCell.right,
+          };
+        });
+
+        expect(geometry.shortTableWidth).toBeLessThan(geometry.laneWidth);
+        expect(geometry.trailingGap).toBeLessThanOrEqual(1);
+        expect(geometry.narrowTableWidth).toBeCloseTo(geometry.narrowLaneWidth, 0);
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
+
+  it.each(["dark", "light"] as const)(
     "keeps mobile controls inside the viewport with touch targets in %s mode",
     async (themeMode) => {
       const page = await openFixture(320, 568);
