@@ -8,6 +8,8 @@
 export const DEFAULT_OPENCLAW_BROWSER_ENABLED = true;
 /** Default JavaScript evaluation permission for managed browser actions. */
 export const DEFAULT_BROWSER_EVALUATE_ENABLED = true;
+/** Default agent-side Browser script execution permission. */
+export const DEFAULT_BROWSER_EXEC_ENABLED = false;
 /** Default color for the managed OpenClaw browser profile. */
 export const DEFAULT_OPENCLAW_BROWSER_COLOR = "#FF4500";
 /** Default managed profile name shown to users. */

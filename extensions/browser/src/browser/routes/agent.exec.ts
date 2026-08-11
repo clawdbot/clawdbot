@@ -49,7 +49,7 @@ export function registerBrowserAgentExecRoutes(
   ctx: BrowserRouteContext,
 ) {
   app.post("/exec", async (req, res) => {
-    if (!ctx.state().resolved.evaluateEnabled) {
+    if (!ctx.state().resolved.execEnabled) {
       return jsonError(res, 404, "Not Found");
     }
     let body: Record<string, unknown>;

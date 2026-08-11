@@ -27,6 +27,7 @@ import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
   DEFAULT_BROWSER_EVALUATE_ENABLED,
+  DEFAULT_BROWSER_EXEC_ENABLED,
   DEFAULT_BROWSER_LOCAL_CDP_READY_TIMEOUT_MS,
   DEFAULT_BROWSER_LOCAL_LAUNCH_TIMEOUT_MS,
   DEFAULT_BROWSER_TAB_CLEANUP_IDLE_MINUTES,
@@ -65,6 +66,7 @@ type BrowserSsrFPolicyCompat = NonNullable<BrowserConfig["ssrfPolicy"]> & {
 export type ResolvedBrowserConfig = {
   enabled: boolean;
   evaluateEnabled: boolean;
+  execEnabled: boolean;
   controlPort: number;
   cdpPortRangeStart: number;
   cdpPortRangeEnd: number;
@@ -378,6 +380,7 @@ export function resolveBrowserConfig(
 ): ResolvedBrowserConfig {
   const enabled = cfg?.enabled ?? DEFAULT_OPENCLAW_BROWSER_ENABLED;
   const evaluateEnabled = cfg?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
+  const execEnabled = cfg?.execEnabled ?? DEFAULT_BROWSER_EXEC_ENABLED;
   const gatewayPort = resolveGatewayPort(rootConfig);
   const controlPort = deriveDefaultBrowserControlPort(gatewayPort ?? DEFAULT_BROWSER_CONTROL_PORT);
   const remoteCdpTimeoutMs = DEFAULT_BROWSER_REMOTE_CDP_TIMEOUT_MS;
@@ -457,6 +460,7 @@ export function resolveBrowserConfig(
   return {
     enabled,
     evaluateEnabled,
+    execEnabled,
     controlPort,
     cdpPortRangeStart,
     cdpPortRangeEnd,

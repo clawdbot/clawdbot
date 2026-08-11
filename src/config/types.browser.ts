@@ -46,6 +46,8 @@ export type BrowserConfig = {
   allowSystemProfileImport?: boolean;
   /** If false, disable browser act:evaluate (arbitrary JS). Default: true */
   evaluateEnabled?: boolean;
+  /** Enable browser_exec agent scripts with Gateway-host Node privileges. Default: false */
+  execEnabled?: boolean;
   /** Base URL of the CDP endpoint (for remote browsers). Default: loopback CDP on the derived port. */
   cdpUrl?: string;
   /** Override the browser executable path (all platforms). */

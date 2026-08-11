@@ -316,6 +316,7 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         }
 
         const resolved = resolveBrowserConfig({
+          execEnabled: true,
           defaultProfile: "e2e",
           profiles: {
             e2e: {

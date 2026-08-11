@@ -118,11 +118,11 @@ one JSON value plus capped logs. Use the `browser` tool for one-shot actions.
 
 Scripts run agent-side in a disposable worker, not inside the page. Only an
 `act({ kind: "evaluate", ... })` helper call runs JavaScript in page context.
-The worker provides timeout and failure isolation, not a Node.js privilege
-sandbox: scripts run with the Gateway process's host access. Keep
-`browser.evaluateEnabled` disabled for agents you do not trust with that access.
-`browser_exec` is listed only when `browser.evaluateEnabled` is enabled. It
-uses the same profile, target, and tab routing as `browser`, defaults to 60
+Scripts run with Gateway-host Node privileges. The worker provides timeout and
+failure isolation, not a privilege boundary. For that reason,
+`browser.execEnabled` defaults to `false`; enable it only for trusted agents.
+The tool is listed and its route is available only when that flag is `true`.
+It uses the same profile, target, and tab routing as `browser`, defaults to 60
 seconds, and accepts `timeoutMs` from 5 to 300 seconds. A stale ref requires a
 fresh `snapshot()` before retrying `act()`.
 
@@ -175,7 +175,8 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 {
   browser: {
     enabled: true, // default: true
-    evaluateEnabled: true, // default: true; false hides browser_exec and disables act:evaluate
+    evaluateEnabled: true, // default: true; false disables act:evaluate and wait --fn
+    execEnabled: false, // opt in only for trusted agents; grants Gateway-host Node privileges
     ssrfPolicy: {
       // dangerouslyAllowPrivateNetwork: true, // opt in only for trusted private-network access
       // allowedHostnames: ["localhost"],

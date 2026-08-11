@@ -12,6 +12,7 @@ import {
 import type { OpenClawPluginApi } from "./runtime-api.js";
 import setupPlugin from "./setup-api.js";
 import { BrowserToolOutputSchema } from "./src/browser-tool.schema.js";
+import type { OpenClawConfig } from "./src/sdk-config.js";
 
 type BrowserAutoEnableProbe = Parameters<OpenClawPluginApi["registerAutoEnableProbe"]>[0];
 
@@ -37,7 +38,7 @@ const runtimeApiMocks = vi.hoisted(() => ({
 }));
 
 const runtimeConfigMocks = vi.hoisted(() => ({
-  getRuntimeConfig: vi.fn(() => ({ browser: { evaluateEnabled: true } })),
+  getRuntimeConfig: vi.fn<() => OpenClawConfig>(() => ({})),
 }));
 
 vi.mock("./register.runtime.js", async () => {
@@ -73,9 +74,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  runtimeConfigMocks.getRuntimeConfig.mockReturnValue({
-    browser: { evaluateEnabled: true },
-  });
+  runtimeConfigMocks.getRuntimeConfig.mockReturnValue({});
 });
 
 afterEach(() => {
@@ -255,7 +254,10 @@ describe("browser plugin", () => {
     });
   });
 
-  it("registers browser_exec lazily when browser evaluation is enabled", async () => {
+  it("registers browser_exec when exec is enabled and evaluation is disabled", async () => {
+    runtimeConfigMocks.getRuntimeConfig.mockReturnValue({
+      browser: { execEnabled: true, evaluateEnabled: false },
+    });
     const { api, registerTool } = createApi();
     registerBrowserPlugin(api);
 
@@ -281,9 +283,20 @@ describe("browser plugin", () => {
     });
   });
 
-  it("hides browser_exec when browser evaluation is disabled", () => {
+  it("hides browser_exec by default", () => {
+    const { api, registerTool } = createApi();
+    registerBrowserPlugin(api);
+
+    const factory = mockCallArg(registerTool, 1);
+    if (typeof factory !== "function") {
+      throw new Error("expected browser plugin to register browser_exec factory");
+    }
+    expect(factory({})).toBeNull();
+  });
+
+  it("does not expose browser_exec when only evaluation is enabled", () => {
     runtimeConfigMocks.getRuntimeConfig.mockReturnValue({
-      browser: { evaluateEnabled: false },
+      browser: { evaluateEnabled: true },
     });
     const { api, registerTool } = createApi();
     registerBrowserPlugin(api);

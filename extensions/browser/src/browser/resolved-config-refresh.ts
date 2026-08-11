@@ -94,10 +94,10 @@ function applyResolvedConfig(
 ) {
   current.resolved = {
     ...freshResolved,
-    // Keep the runtime evaluate gate stable across request-time profile refreshes.
-    // Security-sensitive behavior should only change via full runtime config reload,
-    // not as a side effect of resolving profiles/tabs during a request.
+    // Keep runtime script gates stable across request-time profile refreshes.
+    // Security-sensitive behavior changes only through a full runtime config reload.
     evaluateEnabled: current.resolved.evaluateEnabled,
+    execEnabled: current.resolved.execEnabled,
   };
   for (const [name, runtime] of current.profiles) {
     const actor = getProfileLifecycle(runtime);

@@ -278,6 +278,7 @@ async function resolveProvisionedSandboxContext(
     : undefined;
   const evaluateEnabled =
     resolvedBrowserConfig?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
+  const execEnabled = resolvedBrowserConfig?.execEnabled ?? false;
 
   const bridgeAuth = cfg.browser.enabled
     ? await (async () => {
@@ -308,6 +309,7 @@ async function resolveProvisionedSandboxContext(
           skillsWorkspaceDir,
           cfg: resolvedCfg,
           evaluateEnabled,
+          execEnabled,
           bridgeAuth,
           ssrfPolicy: resolvedBrowserConfig?.ssrfPolicy,
         })

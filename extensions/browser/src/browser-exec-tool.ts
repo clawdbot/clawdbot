@@ -20,6 +20,7 @@ import {
   type AnyAgentTool,
 } from "./browser-tool.runtime.js";
 import {
+  BROWSER_EXEC_RECOVERY_GUIDANCE,
   resolveBrowserExecTimeoutMs,
   type BrowserExecResult,
 } from "./browser/browser-exec-engine.js";
@@ -33,9 +34,9 @@ type BrowserExecToolOptions = {
 };
 
 function appendExecNextStep(message: string): string {
-  const nextStep =
-    "Retry browser_exec after checking the script. If a ref may be stale, call snapshot() again before act().";
-  return message.includes(nextStep) ? message : `${message} ${nextStep}`;
+  return message.includes(BROWSER_EXEC_RECOVERY_GUIDANCE)
+    ? message
+    : `${message} ${BROWSER_EXEC_RECOVERY_GUIDANCE}`;
 }
 
 function execFailure(error: unknown): BrowserExecResult {

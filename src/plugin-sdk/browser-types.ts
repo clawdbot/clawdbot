@@ -29,6 +29,7 @@ export type ResolvedBrowserTabCleanupConfig = {
 export type ResolvedBrowserConfig = {
   enabled: boolean;
   evaluateEnabled: boolean;
+  execEnabled: boolean;
   controlPort: number;
   cdpPortRangeStart: number;
   cdpPortRangeEnd: number;

@@ -416,6 +416,7 @@ See [Plugins](/tools/plugin).
   browser: {
     enabled: true,
     evaluateEnabled: true,
+    execEnabled: false,
     defaultProfile: "user",
     ssrfPolicy: {
       // dangerouslyAllowPrivateNetwork: true, // opt in only for trusted private-network access
@@ -453,6 +454,9 @@ See [Plugins](/tools/plugin).
 ```
 
 - `evaluateEnabled: false` disables `act:evaluate` and `wait --fn`.
+- `execEnabled: true` opts trusted agents into `browser_exec`; scripts have
+  Gateway-host Node privileges, and worker threads isolate failures rather than
+  privileges.
 - `extensionRelay.allowLegacyAuth` defaults to `true` for one Browser Relay
   Authentication migration window. It permits old extension and external CDP
   Bearer, Basic, and token-subprotocol clients. Set it to `false`

@@ -38,6 +38,7 @@ export function makeState(
       localCdpReadyTimeoutMs: 8_000,
       actionTimeoutMs: 60_000,
       evaluateEnabled: false,
+      execEnabled: false,
       extraArgs: [],
       color: "#FF4500",
       headless: true,

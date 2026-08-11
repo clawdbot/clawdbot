@@ -455,6 +455,7 @@ export const CHANNELS_AGENTS_TARGET_KEYS = [
 
 export const FINAL_BACKLOG_TARGET_KEYS = [
   "browser.evaluateEnabled",
+  "browser.execEnabled",
   "browser.snapshotDefaults",
   "browser.snapshotDefaults.mode",
   "browser.ssrfPolicy",

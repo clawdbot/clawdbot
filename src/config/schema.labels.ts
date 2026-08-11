@@ -688,6 +688,7 @@ export const FIELD_LABELS: Record<string, string> = {
   tui: "Terminal UI",
   "tui.footer": "Terminal UI Footer",
   "browser.evaluateEnabled": "Browser Evaluate Enabled",
+  "browser.execEnabled": "Browser Exec Enabled",
   "browser.snapshotDefaults": "Browser Snapshot Defaults",
   "browser.snapshotDefaults.mode": "Browser Snapshot Mode",
   "browser.tabCleanup": "Browser Tab Cleanup",

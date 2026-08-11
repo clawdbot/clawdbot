@@ -131,6 +131,7 @@ function buildSandboxBrowserResolvedConfig(params: {
   cdpAuthToken: string;
   headless: boolean;
   evaluateEnabled: boolean;
+  execEnabled: boolean;
   ssrfPolicy?: SsrFPolicy;
 }): ResolvedBrowserConfig {
   const cdpHost = "127.0.0.1";
@@ -138,6 +139,7 @@ function buildSandboxBrowserResolvedConfig(params: {
   return {
     enabled: true,
     evaluateEnabled: params.evaluateEnabled,
+    execEnabled: params.execEnabled,
     controlPort: params.controlPort,
     cdpProtocol: "http",
     cdpHost,
@@ -233,6 +235,7 @@ type EnsureSandboxBrowserParams = {
   skillsWorkspaceDir?: string;
   cfg: SandboxConfig;
   evaluateEnabled?: boolean;
+  execEnabled: boolean;
   bridgeAuth?: { token?: string; password?: string };
   ssrfPolicy?: SsrFPolicy;
 };
@@ -475,6 +478,7 @@ async function ensureSandboxBrowserContainer(
     ? resolveProfile(existing.bridge.state.resolved, DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME)
     : null;
   const desiredEvaluateEnabled = params.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
+  const desiredExecEnabled = params.execEnabled;
 
   let desiredAuthToken = normalizeOptionalString(params.bridgeAuth?.token);
   let desiredAuthPassword = normalizeOptionalString(params.bridgeAuth?.password);
@@ -493,6 +497,8 @@ async function ensureSandboxBrowserContainer(
     (existing.authToken === desiredAuthToken && existing.authPassword === desiredAuthPassword);
   const evaluateMatches =
     !existing || existing.bridge.state.resolved.evaluateEnabled === desiredEvaluateEnabled;
+  const execMatches =
+    !existing || existing.bridge.state.resolved.execEnabled === desiredExecEnabled;
   const canReuse = Boolean(
     existing &&
     existing.bridge.server.listening &&
@@ -501,7 +507,8 @@ async function ensureSandboxBrowserContainer(
     existingProfile?.cdpUrl === cdpUrl &&
     policyMatches &&
     authMatches &&
-    evaluateMatches,
+    evaluateMatches &&
+    execMatches,
   );
   if (existing && !canReuse) {
     await stopCachedBrowserBridge(params.scopeKey, existing);
@@ -541,6 +548,7 @@ async function ensureSandboxBrowserContainer(
         cdpAuthToken,
         headless: params.cfg.browser.headless,
         evaluateEnabled: desiredEvaluateEnabled,
+        execEnabled: desiredExecEnabled,
         ssrfPolicy: params.ssrfPolicy,
       }),
       authToken: desiredAuthToken,

@@ -6,6 +6,8 @@ export const DEFAULT_BROWSER_EXEC_TIMEOUT_MS = 60_000;
 export const BROWSER_EXEC_MIN_TIMEOUT_MS = 5_000;
 export const BROWSER_EXEC_MAX_TIMEOUT_MS = 300_000;
 export const BROWSER_EXEC_OUTPUT_MAX_CHARS = 64 * 1024;
+export const BROWSER_EXEC_RECOVERY_GUIDANCE =
+  "Retry browser_exec after checking the script. If a ref may be stale, call snapshot() again before act().";
 
 const BROWSER_EXEC_TRAFFIC_MAX_CHARS = 1024 * 1024;
 const TRUNCATION_MARKER = "\u2026[truncated]";
@@ -242,9 +244,9 @@ function capSuccess(value: unknown, logs: string[]): { value: unknown; logs: str
 }
 
 function errorWithNextStep(error: BrowserExecError): BrowserExecError {
-  const nextStep =
-    "Review the script and retry browser_exec. If a ref may be stale, call snapshot() again before the next act().";
-  const message = error.message.includes(nextStep) ? error.message : `${error.message} ${nextStep}`;
+  const message = error.message.includes(BROWSER_EXEC_RECOVERY_GUIDANCE)
+    ? error.message
+    : `${error.message} ${BROWSER_EXEC_RECOVERY_GUIDANCE}`;
   return { ...error, message };
 }
 

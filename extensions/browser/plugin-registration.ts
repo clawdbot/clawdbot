@@ -268,7 +268,7 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
     createLazyBrowserTool(createBrowserToolOptions(ctx))) as OpenClawPluginToolFactory);
   api.registerTool(
     ((ctx: OpenClawPluginToolContext) => {
-      if (getRuntimeConfig().browser?.evaluateEnabled === false) {
+      if (getRuntimeConfig().browser?.execEnabled !== true) {
         return null;
       }
       const options = createBrowserToolOptions(ctx);

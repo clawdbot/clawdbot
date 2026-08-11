@@ -43,6 +43,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Per-profile attach-only override that skips local browser launch and only attaches to an existing CDP endpoint. Useful when one profile is externally managed but others are locally launched.",
   "browser.evaluateEnabled":
     "Enables browser-side evaluate helpers for runtime script evaluation capabilities where supported. Keep disabled unless your workflows require evaluate semantics beyond snapshots/navigation.",
+  "browser.execEnabled":
+    "Enables browser_exec scripts with Gateway-host Node privileges. This is off by default because worker threads isolate failures, not privileges; enable it only for trusted agents.",
   "browser.snapshotDefaults":
     "Default snapshot capture configuration used when callers do not provide explicit snapshot options. Tune this for consistent capture behavior across channels and automation paths.",
   "browser.snapshotDefaults.mode":

@@ -44,6 +44,7 @@ export function makeBrowserServerState(params?: {
     extensionRelay: { allowLegacyAuth: true },
     extensionRelayInternalTokens: {},
     evaluateEnabled: false,
+    execEnabled: false,
     remoteCdpTimeoutMs: 1500,
     remoteCdpHandshakeTimeoutMs: 3000,
     localLaunchTimeoutMs: 15_000,

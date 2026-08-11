@@ -85,6 +85,7 @@ describe("browser config", () => {
   it("defaults to enabled with loopback defaults and lobster-orange color", () => {
     const resolved = resolveBrowserConfig(undefined);
     expect(resolved.enabled).toBe(true);
+    expect(resolved.execEnabled).toBe(false);
     expect(resolved.controlPort).toBe(18791);
     expect(resolved.color).toBe("#FF4500");
     expect(resolved.cdpHost).toBe("127.0.0.1");
@@ -115,6 +116,12 @@ describe("browser config", () => {
       maxTabsPerSession: 8,
       sweepMinutes: 5,
     });
+  });
+
+  it("enables browser exec independently from browser evaluation", () => {
+    const resolved = resolveBrowserConfig({ execEnabled: true, evaluateEnabled: false });
+    expect(resolved.execEnabled).toBe(true);
+    expect(resolved.evaluateEnabled).toBe(false);
   });
 
   it("provides a built-in chrome extension-relay profile with a derived loopback port", () => {
