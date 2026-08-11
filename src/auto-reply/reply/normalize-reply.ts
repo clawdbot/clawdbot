@@ -120,8 +120,7 @@ export function normalizeReplyPayloadOutcome(
   // narration emitted by heartbeat / continuation pathways.)
   if (text && hasCotFramePrefix(text)) {
     if (!hasContent("")) {
-      opts.onSkip?.("silent");
-      return null;
+      return suppress("silent");
     }
     // Media-only fallback: drop the leaked text but let media still send.
     text = "";

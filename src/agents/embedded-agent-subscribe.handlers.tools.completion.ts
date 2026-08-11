@@ -103,7 +103,14 @@ import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 export async function handleToolExecutionEnd(
   ctx: ToolHandlerContext,
   evt: Extract<AgentEvent, { type: "tool_execution_end" }>,
+  options?: { deliveryGeneration?: number },
 ) {
+  const isCurrentDeliveryGeneration = () =>
+    options?.deliveryGeneration === undefined ||
+    options.deliveryGeneration === ctx.getBlockReplyDeliveryGeneration();
+  if (!isCurrentDeliveryGeneration()) {
+    return;
+  }
   const rawToolName = evt.toolName;
   const toolName = normalizeToolName(rawToolName);
   const hideFromChannelProgress = evt.hideFromChannelProgress === true;
@@ -615,13 +622,23 @@ export async function handleToolExecutionEnd(
     isToolError,
     result,
     sanitizedResult,
+    deliveryGeneration: options?.deliveryGeneration,
   });
+  if (!isCurrentDeliveryGeneration()) {
+    return;
+  }
   await Promise.resolve(ctx.params.onToolStreamBoundary?.()).catch((error: unknown) => {
     ctx.log.debug(`embedded run tool stream boundary callback failed: ${String(error)}`);
   });
+  if (!isCurrentDeliveryGeneration()) {
+    return;
+  }
 
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();
+  if (!isCurrentDeliveryGeneration()) {
+    return;
+  }
   if (hookRunnerAfter?.hasHooks("after_tool_call")) {
     const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
     const hookEvent: PluginHookAfterToolCallEvent = {

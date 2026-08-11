@@ -570,11 +570,34 @@ export async function emitToolResultOutput(params: {
   isToolError: boolean;
   result: unknown;
   sanitizedResult: unknown;
+  deliveryGeneration?: number;
 }) {
-  const { ctx, toolName, rawToolName, meta, isToolError, result, sanitizedResult } = params;
+  const {
+    ctx,
+    toolName,
+    rawToolName,
+    meta,
+    isToolError,
+    result,
+    sanitizedResult,
+    deliveryGeneration,
+  } = params;
+  const isCurrentDeliveryGeneration = () =>
+    deliveryGeneration === undefined ||
+    deliveryGeneration === ctx.getBlockReplyDeliveryGeneration();
+  if (!isCurrentDeliveryGeneration()) {
+    return;
+  }
   const recordApprovalPromptDeliveryFailure = (error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     ctx.log.warn(`failed to deliver exec approval prompt: ${message}`);
+    // The generation can advance while the prompt delivery awaits. Keep the warn
+    // unconditional so the failure is never silent, but let a superseded
+    // generation stop here: writing lastToolError/approval state back would
+    // clobber the live generation's terminal outcome.
+    if (!isCurrentDeliveryGeneration()) {
+      return;
+    }
     const approvalMeta = meta ? `${meta} · approval prompt delivery` : "approval prompt delivery";
     ctx.state.lastToolError = (
       ctx.params.observeToolTerminal ?? resolveFallbackToolTerminalObserver(ctx)
@@ -605,6 +628,9 @@ export async function emitToolResultOutput(params: {
     ctx.state.deterministicApprovalPromptPending = true;
     try {
       const { buildTypedExecApprovalPendingReplyPayload } = await loadExecApprovalReply();
+      if (!isCurrentDeliveryGeneration()) {
+        return;
+      }
       await ctx.params.onToolResult(
         buildTypedExecApprovalPendingReplyPayload({
           approvalId: approvalPending.approvalId,
@@ -618,11 +644,15 @@ export async function emitToolResultOutput(params: {
           warningText: approvalPending.warningText,
         }),
       );
-      ctx.state.deterministicApprovalPromptSent = true;
+      if (isCurrentDeliveryGeneration()) {
+        ctx.state.deterministicApprovalPromptSent = true;
+      }
     } catch (error) {
       recordApprovalPromptDeliveryFailure(error);
     } finally {
-      ctx.state.deterministicApprovalPromptPending = false;
+      if (isCurrentDeliveryGeneration()) {
+        ctx.state.deterministicApprovalPromptPending = false;
+      }
     }
     return;
   }
@@ -635,6 +665,9 @@ export async function emitToolResultOutput(params: {
     ctx.state.deterministicApprovalPromptPending = true;
     try {
       const { buildExecApprovalUnavailableReplyPayload } = await loadExecApprovalReply();
+      if (!isCurrentDeliveryGeneration()) {
+        return;
+      }
       await ctx.params.onToolResult?.(
         buildExecApprovalUnavailableReplyPayload({
           reason: approvalUnavailable.reason,
@@ -647,11 +680,15 @@ export async function emitToolResultOutput(params: {
           nodeId: approvalUnavailable.nodeId,
         }),
       );
-      ctx.state.deterministicApprovalPromptSent = true;
+      if (isCurrentDeliveryGeneration()) {
+        ctx.state.deterministicApprovalPromptSent = true;
+      }
     } catch (error) {
       recordApprovalPromptDeliveryFailure(error);
     } finally {
-      ctx.state.deterministicApprovalPromptPending = false;
+      if (isCurrentDeliveryGeneration()) {
+        ctx.state.deterministicApprovalPromptPending = false;
+      }
     }
     return;
   }

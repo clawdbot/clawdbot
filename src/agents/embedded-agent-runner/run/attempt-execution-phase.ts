@@ -30,16 +30,15 @@ export async function runEmbeddedAttemptExecutionPhase(
     agentSession: {
       activeSession,
       allCustomTools,
-      builtinToolNames,
       clientToolCallSlots,
       clientToolLoopDetection,
       hasDeliveredSourceReply,
       hookRunner,
       markSourceReplyDelivered,
-      replaySafeToolNames,
       replaySafeTools,
       setActiveSessionSystemPrompt,
       settingsManager,
+      subscriptionToolTrust,
     },
     anthropicPayloadLogger,
     cacheTrace,
@@ -191,8 +190,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     hasDeliveredSourceReply,
     markSourceReplyDelivered,
     sandboxSessionKey: input.setup.sandboxSessionKey,
-    builtinToolNames,
-    replaySafeToolNames,
+    subscriptionToolTrust,
   });
   input.lifecycle.setToolSearchCatalogExecutor(preparedStream.toolSearchCatalogExecutor);
   input.externalAbortController.setCompactionState({
