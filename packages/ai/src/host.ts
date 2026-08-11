@@ -36,6 +36,8 @@ export interface AiProviderStreamHookContext {
   provider: string;
   modelId: string;
   model: Model;
+  /** Wire-format API before simple completion projects an internal transport alias. */
+  sourceApi?: Api;
 }
 
 /** Narrow plugin-runtime port used by package-owned transports. */
