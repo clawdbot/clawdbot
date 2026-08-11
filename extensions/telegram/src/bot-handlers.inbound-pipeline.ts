@@ -1,12 +1,17 @@
-// Telegram message-like update registration and cache/dispatch ordering.
+import type { Context } from "grammy";
 import type { Message } from "grammy/types";
 import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import type { TelegramHandlerAuthorizationRuntime } from "./bot-handlers.authorization.runtime.js";
-import type { TelegramHandlerInboundRuntime } from "./bot-handlers.inbound.runtime.js";
-import type { TelegramHandlerMessageRuntime } from "./bot-handlers.message.runtime.js";
-import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
+import type { TelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
+import { createTelegramInboundProcessing } from "./bot-handlers.inbound-processing.js";
+import type { TelegramInboundProcessing } from "./bot-handlers.inbound-processing.js";
+import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
+import type {
+  RegisterTelegramHandlerParams,
+  TelegramInboundDisposition,
+  TelegramInboundPipeline,
+} from "./bot-handlers.types.js";
 import {
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
@@ -30,7 +35,7 @@ type TelegramMessageHandlerParams = Pick<
 };
 
 type TelegramMessageHandlerRuntime = Pick<
-  TelegramHandlerMessageRuntime,
+  TelegramMessagePipeline,
   | "normalizePromptContextMinTimestampMs"
   | "promptContextBoundaryOptions"
   | "releaseDispatchDedupeClaims"
@@ -40,16 +45,23 @@ type TelegramMessageHandlerRuntime = Pick<
   | "resolvePromptContextAmbientWatermark"
 > & {
   recordMessageForReplyChain: (
-    ...args: Parameters<TelegramHandlerMessageRuntime["recordMessageForReplyChain"]>
+    ...args: Parameters<TelegramMessagePipeline["recordMessageForReplyChain"]>
   ) => Promise<unknown>;
 };
 
-export function registerTelegramMessageHandlers(
+interface TelegramInboundHandlers {
+  handleMessage: (ctx: Context) => Promise<TelegramInboundDisposition>;
+  handleEditedMessage: (ctx: Context) => Promise<TelegramInboundDisposition>;
+  handleChannelPost: (ctx: Context) => Promise<TelegramInboundDisposition>;
+  handleEditedChannelPost: (ctx: Context) => Promise<TelegramInboundDisposition>;
+}
+
+function createTelegramInboundHandlers(
   { bot, opts, runtime, shouldSkipUpdate }: TelegramMessageHandlerParams,
   messageRuntime: TelegramMessageHandlerRuntime,
-  authorizationRuntime: Pick<TelegramHandlerAuthorizationRuntime, "authorizeInboundMessage">,
-  inboundRuntime: Pick<TelegramHandlerInboundRuntime, "processInboundMessage">,
-) {
+  authorizationRuntime: Pick<TelegramHandlerAuthorization, "authorizeInboundMessage">,
+  inboundRuntime: Pick<TelegramInboundProcessing, "processInboundMessage">,
+): TelegramInboundHandlers {
   const {
     normalizePromptContextMinTimestampMs,
     promptContextBoundaryOptions,
@@ -147,11 +159,13 @@ export function registerTelegramMessageHandlers(
     await recordMessageForReplyChain(normalizedMsg, gate.context.threadSpec, params.botUserId);
   };
 
-  const handleInboundMessageLike = async (event: InboundTelegramEvent) => {
+  const handleInboundMessageLike = async (
+    event: InboundTelegramEvent,
+  ): Promise<TelegramInboundDisposition> => {
     let dispatchDedupeClaims: TelegramMessageDispatchReplayClaim[] = [];
     try {
       if (shouldSkipUpdate(event.ctxForDedupe)) {
-        return;
+        return { kind: "ignored" };
       }
       const gate = await authorizeInboundMessage({
         msg: event.msg,
@@ -164,7 +178,7 @@ export function registerTelegramMessageHandlers(
         dmAccess: "challenge",
       });
       if (!gate.allowed) {
-        return;
+        return { kind: "ignored" };
       }
       const { effectiveDmAllow } = gate;
       const {
@@ -200,11 +214,11 @@ export function registerTelegramMessageHandlers(
 
       const dispatchDedupe = await claimMessageDispatchDedupe(event.msg, event.botUserId);
       if (!dispatchDedupe.process) {
-        return;
+        return { kind: "ignored" };
       }
       dispatchDedupeClaims = dispatchDedupe.claims;
       await recordMessageForReplyChain(event.msg, gate.context.threadSpec, event.botUserId);
-      await processInboundMessage({
+      return await processInboundMessage({
         authorizationCfg: gate.context.cfg,
         ctx: event.ctx,
         msg: event.msg,
@@ -234,7 +248,7 @@ export function registerTelegramMessageHandlers(
         // Spooled replays are durably retried; live updates get one apology
         // because they are acked without replay.
         if (spooledReplay) {
-          return;
+          return { kind: "ignored" };
         }
         await withTelegramApiErrorLogging({
           operation: "sendMessage",
@@ -252,13 +266,14 @@ export function registerTelegramMessageHandlers(
             ),
         }).catch(() => {});
       }
+      return { kind: "ignored" };
     }
   };
 
-  bot.on("message", async (ctx) => {
+  const handleMessage = async (ctx: Context): Promise<TelegramInboundDisposition> => {
     const msg = ctx.message;
     if (!msg) {
-      return;
+      return { kind: "ignored" };
     }
     const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
     const isForum = await resolveTelegramForumFlag({
@@ -274,9 +289,9 @@ export function registerTelegramMessageHandlers(
     // Bot-authored message updates can be echoed back by Telegram. Skip them here
     // and rely on the dedicated channel_post handler for channel-originated posts.
     if (normalizedMsg.from?.id != null && normalizedMsg.from.id === botUserId) {
-      return;
+      return { kind: "ignored" };
     }
-    await handleInboundMessageLike({
+    return await handleInboundMessageLike({
       ctxForDedupe: ctx,
       ctx: buildSyntheticContext(ctx, normalizedMsg),
       botUserId,
@@ -292,12 +307,12 @@ export function registerTelegramMessageHandlers(
       oversizeLogMessage: "media exceeds size limit",
       errorMessage: "handler failed",
     });
-  });
+  };
 
-  bot.on("edited_message", async (ctx) => {
+  const handleEditedMessage = async (ctx: Context): Promise<TelegramInboundDisposition> => {
     const msg = ctx.editedMessage;
     if (!msg) {
-      return;
+      return { kind: "ignored" };
     }
     await recordEditedMessageForReplyChain({
       ctxForDedupe: ctx,
@@ -305,21 +320,19 @@ export function registerTelegramMessageHandlers(
       requireConfiguredGroup: false,
       botUserId: resolveBotUserId(ctx),
     });
-  });
+    return { kind: "recorded" };
+  };
 
-  // Handle channel posts — enables bot-to-bot communication via Telegram channels.
-  // Telegram bots cannot see other bot messages in groups, but CAN in channels.
-  // This handler normalizes channel_post updates into the standard message pipeline.
-  bot.on("channel_post", async (ctx) => {
+  const handleChannelPost = async (ctx: Context): Promise<TelegramInboundDisposition> => {
     const post = ctx.channelPost;
     if (!post) {
-      return;
+      return { kind: "ignored" };
     }
 
     const chatId = post.chat.id;
     const syntheticMsg = normalizeChannelPostMessage(post);
 
-    await handleInboundMessageLike({
+    return await handleInboundMessageLike({
       ctxForDedupe: ctx,
       ctx: buildSyntheticContext(ctx, syntheticMsg),
       botUserId: resolveBotUserId(ctx),
@@ -339,12 +352,12 @@ export function registerTelegramMessageHandlers(
       oversizeLogMessage: "channel post media exceeds size limit",
       errorMessage: "channel_post handler failed",
     });
-  });
+  };
 
-  bot.on("edited_channel_post", async (ctx) => {
+  const handleEditedChannelPost = async (ctx: Context): Promise<TelegramInboundDisposition> => {
     const post = ctx.editedChannelPost;
     if (!post) {
-      return;
+      return { kind: "ignored" };
     }
     await recordEditedMessageForReplyChain({
       ctxForDedupe: ctx,
@@ -352,5 +365,55 @@ export function registerTelegramMessageHandlers(
       requireConfiguredGroup: true,
       botUserId: resolveBotUserId(ctx),
     });
-  });
+    return { kind: "recorded" };
+  };
+
+  return { handleMessage, handleEditedMessage, handleChannelPost, handleEditedChannelPost };
+}
+
+export function createTelegramInboundPipeline({
+  params,
+  message,
+  authorization,
+}: {
+  params: RegisterTelegramHandlerParams;
+  message: TelegramMessagePipeline;
+  authorization: TelegramHandlerAuthorization;
+}): TelegramInboundPipeline {
+  const handlers = createTelegramInboundHandlers(
+    params,
+    message,
+    authorization,
+    createTelegramInboundProcessing({ params, message }),
+  );
+  return {
+    handle: async (ctx) => {
+      if (ctx.message) {
+        return await handlers.handleMessage(ctx);
+      }
+      if (ctx.editedMessage) {
+        return await handlers.handleEditedMessage(ctx);
+      }
+      if (ctx.channelPost) {
+        return await handlers.handleChannelPost(ctx);
+      }
+      if (ctx.editedChannelPost) {
+        return await handlers.handleEditedChannelPost(ctx);
+      }
+      return { kind: "ignored" };
+    },
+  };
+}
+
+export function registerTelegramInboundHandlers({
+  bot,
+  pipeline,
+}: {
+  bot: RegisterTelegramHandlerParams["bot"];
+  pipeline: TelegramInboundPipeline;
+}): void {
+  bot.on("message", pipeline.handle);
+  bot.on("edited_message", pipeline.handle);
+  bot.on("channel_post", pipeline.handle);
+  bot.on("edited_channel_post", pipeline.handle);
 }
