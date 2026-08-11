@@ -1,7 +1,11 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { prepareClaimedSessionDelivery } from "../../../infra/session-delivery-queue-storage.js";
+import {
+  prepareClaimedSessionDelivery,
+  SessionDeliveryDeadLetteredError,
+  SessionDeliveryDeferredError,
+} from "../../../infra/session-delivery-queue-storage.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -208,6 +212,28 @@ describe("atomic subagent completion admission store", () => {
     expect(rowCount("delivery_queue_entries")).toBe(0);
     expect(rowCount("subagent_runs")).toBe(0);
     expect(rowCount("task_runs")).toBe(0);
+  });
+
+  it("dead-letters expired orphan generations before resolving their logical owner", () => {
+    const { queueEntry } = records();
+    if (queueEntry.kind !== "agentTurn" || queueEntry.owner?.kind !== "subagent_completion") {
+      throw new Error("expected correlated subagent completion queue entry");
+    }
+    queueEntry.owner.deadlineAt = Date.now() - 1;
+
+    expect(() => resolveCorrelatedSubagentDelivery(queueEntry)).toThrow(
+      SessionDeliveryDeadLetteredError,
+    );
+  });
+
+  it("defers an unexpired generation whose logical owner has moved on", () => {
+    const { queueEntry, subagent } = records();
+    subagent.delivery!.generation = 2;
+    subagentRuns.set(subagent.runId, subagent);
+
+    expect(() => resolveCorrelatedSubagentDelivery(queueEntry)).toThrow(
+      SessionDeliveryDeferredError,
+    );
   });
 
   it("reloads a blocked text completion from SQLite before canonical owner redrive", async () => {
