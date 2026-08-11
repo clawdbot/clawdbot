@@ -152,6 +152,10 @@ describe("subagent registry persistence timing", () => {
       task: "persist timing",
       cleanup: "keep",
     });
+    // registerSubagentRun stamps startedAt from the real clock, so bound the
+    // upper edge by an observed timestamp rather than the mocked endedAt --
+    // a loaded runner can take longer than the synthetic 500ms window.
+    const registeredBy = Date.now();
     await waitForRegistryWork(async () => {
       const store = await readSubagentSessionStore(storePath);
       return store["agent:main:subagent:timing"]?.endedAt === endedAt;
@@ -162,7 +166,7 @@ describe("subagent registry persistence timing", () => {
     expect(persisted?.runtimeMs).toBe(500);
     expect(persisted?.status).toBe("done");
     expect(persisted?.startedAt).toBeGreaterThanOrEqual(startedAt);
-    expect(persisted?.startedAt).toBeLessThanOrEqual(endedAt);
+    expect(persisted?.startedAt).toBeLessThanOrEqual(registeredBy);
   });
 
   it("rejects a stale timing write after session ownership changes", async () => {
