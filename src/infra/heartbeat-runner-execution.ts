@@ -6,6 +6,7 @@ import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lane
 import { listActiveEmbeddedRunSessionKeys } from "../agents/embedded-agent-runner/run-state.js";
 import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import {
+  type HeartbeatTerminalToolFailure,
   resolveHeartbeatReplyPayload,
   resolveHeartbeatTerminalToolFailure,
 } from "../auto-reply/heartbeat-reply-payload.js";
@@ -676,7 +677,8 @@ export async function invokeHeartbeatAgentRun(
   );
   const heartbeatToolResponse = resolveHeartbeatToolResponseFromReplyResult(replyResult);
   const heartbeatScratchProposal = resolveHeartbeatScratchProposalFromReplyResult(replyResult);
-  const heartbeatTerminalToolFailure = resolveHeartbeatTerminalToolFailure(replyResult);
+  const heartbeatTerminalToolFailure: HeartbeatTerminalToolFailure | undefined =
+    resolveHeartbeatTerminalToolFailure(replyResult);
   const selectedReplyPayload = resolveHeartbeatReplyPayload(replyResult);
   const replyPayload = selectedReplyPayload;
   const agentRunFailed = replyOperationRunState.agentTurn?.status === "failed";
