@@ -23,7 +23,11 @@ const mocks = vi.hoisted(() => ({
 
 type OpenAITestCatalogResult = {
   provider: ModelProviderConfig;
-  outcomes: readonly { provider: string; status: "ready" | "auth-rejected" | "unavailable" }[];
+  outcomes: readonly {
+    provider: string;
+    profileId?: string;
+    status: "ready" | "auth-rejected" | "unavailable";
+  }[];
 };
 
 async function runCatalogWithFetchGuard(params: {
@@ -1181,7 +1185,9 @@ describe("buildOpenAIProvider", () => {
     });
 
     expect(result.provider.models).toEqual([]);
-    expect(result.outcomes).toEqual([{ provider: "openai", status: "auth-rejected" }]);
+    expect(result.outcomes).toEqual([
+      { provider: "openai", profileId: "openai:chatgpt", status: "auth-rejected" },
+    ]);
   });
 
   it.each(["gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])(

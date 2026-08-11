@@ -235,10 +235,9 @@ async function defaultBuildProjection(params: {
 }): Promise<{ modelCatalog: ModelCatalogEntry[]; models?: unknown[] }> {
   const { buildModelsListResult, createGatewayAgentModelCatalogProjector } =
     await import("./models-list-result.js");
-  const loadFullModelCatalog = params.facts.owner.loadFullModelCatalog;
-  const snapshot = loadFullModelCatalog
-    ? await loadFullModelCatalog()
-    : params.facts.owner.modelCatalog;
+  // Chat metadata must stay on process-published facts. Live discovery belongs to explicit
+  // models.list control-plane reads so a slow provider cannot delay chat startup.
+  const snapshot = params.facts.owner.modelCatalog;
   const projector = createGatewayAgentModelCatalogProjector({
     cfg: params.facts.owner.config,
     agentId: params.facts.agentId,
@@ -263,7 +262,6 @@ async function defaultBuildProjection(params: {
         agentId: params.facts.agentId,
         config: params.facts.owner.config,
         snapshot,
-        ...(loadFullModelCatalog ? { fullyDiscovered: true } : {}),
       },
       preloadedOnly: true,
       catalogProjector: projector,

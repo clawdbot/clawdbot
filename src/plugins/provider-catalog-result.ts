@@ -84,16 +84,25 @@ export function copyProviderCatalogOutcomes(
       return [];
     }
     const provider = readRecordValue(entry, "provider");
+    const profileId = readRecordValue(entry, "profileId");
     const status = readRecordValue(entry, "status");
     if (
       typeof provider !== "string" ||
       provider.trim().length === 0 ||
+      (profileId !== undefined &&
+        (typeof profileId !== "string" || profileId.trim().length === 0)) ||
       typeof status !== "string" ||
       !PROVIDER_CATALOG_OUTCOME_STATUSES.has(status as ProviderCatalogOutcome["status"])
     ) {
       return [];
     }
-    return [{ provider: provider.trim(), status: status as ProviderCatalogOutcome["status"] }];
+    return [
+      {
+        provider: provider.trim(),
+        ...(typeof profileId === "string" ? { profileId: profileId.trim() } : {}),
+        status: status as ProviderCatalogOutcome["status"],
+      },
+    ];
   });
 }
 

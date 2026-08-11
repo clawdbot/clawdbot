@@ -652,12 +652,14 @@ export async function prepareAgentCatalogSource(
   const recordProviderOutcome = (outcome: ProviderCatalogOutcome) => {
     const provider = normalizeProviderId(outcome.provider);
     if (provider) {
-      providerOutcomes.set(provider, { ...outcome, provider });
+      providerOutcomes.set(`${provider}\0${outcome.profileId ?? ""}`, { ...outcome, provider });
     }
   };
   const resultOutcomes = () =>
-    [...providerOutcomes.values()].toSorted((left, right) =>
-      left.provider.localeCompare(right.provider),
+    [...providerOutcomes.values()].toSorted(
+      (left, right) =>
+        left.provider.localeCompare(right.provider) ||
+        (left.profileId ?? "").localeCompare(right.profileId ?? ""),
     );
   const options = {
     pluginMetadataSnapshot: pluginGeneration.pluginMetadataSnapshot,

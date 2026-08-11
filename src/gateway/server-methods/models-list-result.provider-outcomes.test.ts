@@ -15,7 +15,13 @@ describe("models.list provider catalog outcomes", () => {
       config,
       entries: [],
       routeVariants: [],
-      providerOutcomes: [{ provider: "openai", status: "auth-rejected" as const }],
+      providerOutcomes: [
+        {
+          provider: "openai",
+          profileId: "openai:chatgpt",
+          status: "auth-rejected" as const,
+        },
+      ],
     };
     const context = {
       getRuntimeConfig: () => config,
@@ -25,7 +31,9 @@ describe("models.list provider catalog outcomes", () => {
 
     await expect(buildModelsListResult({ context, params: { view: "all" } })).resolves.toEqual({
       models: [],
-      providerOutcomes: [{ provider: "openai", status: "auth-rejected" }],
+      providerOutcomes: [
+        { provider: "openai", profileId: "openai:chatgpt", status: "auth-rejected" },
+      ],
     });
   });
 
@@ -48,7 +56,13 @@ describe("models.list provider catalog outcomes", () => {
     const snapshot = {
       entries: [model],
       routeVariants: [model],
-      providerOutcomes: [{ provider: "openai", status: "auth-rejected" as const }],
+      providerOutcomes: [
+        {
+          provider: "openai",
+          profileId: "openai:chatgpt",
+          status: "auth-rejected" as const,
+        },
+      ],
     };
     const projector = createGatewayAgentModelCatalogProjector({
       cfg: config,
@@ -64,8 +78,16 @@ describe("models.list provider catalog outcomes", () => {
             refresh: "rejected-refresh-token",
             expires: Date.now() + 30 * 60_000,
           },
+          "openai:other": {
+            type: "oauth",
+            provider: "openai",
+            access: "accepted-access-token",
+            refresh: "accepted-refresh-token",
+            expires: Date.now() + 30 * 60_000,
+          },
         },
       },
+      preferredProfileId: "openai:chatgpt",
     });
     const context = {
       getRuntimeConfig: () => config,
@@ -84,7 +106,68 @@ describe("models.list provider catalog outcomes", () => {
       }),
     ).resolves.toEqual({
       models: [expect.objectContaining({ id: "gpt-5.6-sol", available: false })],
-      providerOutcomes: [{ provider: "openai", status: "auth-rejected" }],
+      providerOutcomes: [
+        { provider: "openai", profileId: "openai:chatgpt", status: "auth-rejected" },
+      ],
+    });
+  });
+
+  it("does not apply one profile rejection to a different selected profile", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: { "openai/*": {}, "openai/gpt-5.6-sol": {} },
+        },
+      },
+    } as OpenClawConfig;
+    const model = {
+      id: "gpt-5.6-sol",
+      name: "GPT-5.6 Sol",
+      provider: "openai",
+      api: "openai-chatgpt-responses" as const,
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    };
+    const snapshot = {
+      entries: [model],
+      routeVariants: [model],
+      providerOutcomes: [
+        {
+          provider: "openai",
+          profileId: "openai:rejected",
+          status: "auth-rejected" as const,
+        },
+      ],
+    };
+    const projector = createGatewayAgentModelCatalogProjector({
+      cfg: config,
+      agentId: "main",
+      snapshot,
+      preferredProfileId: "openai:accepted",
+      preparedAuthStore: {
+        version: 1,
+        profiles: {
+          "openai:rejected": {
+            type: "oauth",
+            provider: "openai",
+            access: "rejected-access-token",
+            refresh: "rejected-refresh-token",
+            expires: Date.now() + 30 * 60_000,
+          },
+          "openai:accepted": {
+            type: "oauth",
+            provider: "openai",
+            access: "accepted-access-token",
+            refresh: "accepted-refresh-token",
+            expires: Date.now() + 30 * 60_000,
+          },
+        },
+      },
+    });
+
+    await expect(projector.evaluateEntry(model, [model])).resolves.toMatchObject({
+      availability: true,
+      selectedProfileId: "openai:accepted",
     });
   });
 });

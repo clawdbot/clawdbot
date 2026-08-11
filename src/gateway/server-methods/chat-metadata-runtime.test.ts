@@ -452,7 +452,7 @@ describe("gateway chat metadata runtime", () => {
     },
   );
 
-  test("uses the live provider rejection for configured chat models", async () => {
+  test("keeps live provider discovery off chat metadata projection", async () => {
     const config = {
       agents: {
         defaults: {
@@ -478,12 +478,13 @@ describe("gateway chat metadata runtime", () => {
       "openai",
       "openai-chatgpt-responses",
     );
+    const loadFullModelCatalog = vi.fn(async () => ({
+      ...owner.modelCatalog,
+      providerOutcomes: [{ provider: "openai", status: "auth-rejected" as const }],
+    }));
     harness.setOwner({
       ...owner,
-      loadFullModelCatalog: async () => ({
-        ...owner.modelCatalog,
-        providerOutcomes: [{ provider: "openai", status: "auth-rejected" }],
-      }),
+      loadFullModelCatalog,
     });
     harness.setAuthStore({
       version: 1,
@@ -501,8 +502,9 @@ describe("gateway chat metadata runtime", () => {
     await harness.runtime.refresh();
 
     await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
-      models: [expect.objectContaining({ id: "gpt-5.6-sol", available: false })],
+      models: [expect.objectContaining({ id: "gpt-5.6-sol", available: true })],
     });
+    expect(loadFullModelCatalog).not.toHaveBeenCalled();
   });
 
   test("retains a generation while auth store revisions are unchanged", async () => {

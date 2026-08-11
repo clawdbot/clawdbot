@@ -201,11 +201,13 @@ function createModelsListEntryEvaluator(params: {
             }
           : evaluation;
       const provider = normalizeProviderId(entry.provider);
-      // Stored credentials prove presence, not acceptance. The live catalog owns that fact;
-      // carrying its rejection here keeps configured rows out of every model picker projection.
+      // Stored credentials prove presence, not acceptance. Apply the live rejection only to the
+      // profile discovery tested; widening it would hide routes backed by another valid profile.
       return params.providerOutcomes?.some(
         (outcome) =>
-          outcome.status === "auth-rejected" && normalizeProviderId(outcome.provider) === provider,
+          outcome.status === "auth-rejected" &&
+          normalizeProviderId(outcome.provider) === provider &&
+          (outcome.profileId === undefined || outcome.profileId === resolved.selectedProfileId),
       )
         ? { ...resolved, availability: false }
         : resolved;

@@ -221,6 +221,7 @@ export const AgentsFilesSetResultSchema = closedObject({
 
 /** Model catalog request with optional visibility scope. */
 export const ModelsListParamsSchema = closedObject({
+  agentId: Type.Optional(Type.String()),
   includeProviderCapabilities: Type.Optional(Type.Boolean()),
   view: Type.Optional(
     Type.Union([
@@ -248,6 +249,7 @@ export const ModelsAuthLogoutParamsSchema = closedObject({
 /** Model catalog result. */
 export const ModelCatalogProviderOutcomeSchema = closedObject({
   provider: NonEmptyString,
+  profileId: Type.Optional(NonEmptyString),
   status: Type.Union([
     Type.Literal("ready"),
     Type.Literal("auth-rejected"),

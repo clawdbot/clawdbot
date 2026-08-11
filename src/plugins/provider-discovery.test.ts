@@ -138,6 +138,7 @@ describe("runProviderCatalog", () => {
   it("carries explicit provider-owned catalog outcomes across an async hook", async () => {
     const outcomes: Array<{
       provider: string;
+      profileId?: string;
       status: "ready" | "auth-rejected" | "unavailable";
     }> = [];
     const provider: ProviderPlugin = {
@@ -149,7 +150,13 @@ describe("runProviderCatalog", () => {
           await Promise.resolve();
           return {
             providers: {},
-            outcomes: [{ provider: "openai", status: "auth-rejected" }],
+            outcomes: [
+              {
+                provider: "openai",
+                profileId: "openai:chatgpt",
+                status: "auth-rejected",
+              },
+            ],
           };
         },
       },
@@ -166,7 +173,9 @@ describe("runProviderCatalog", () => {
       reportCatalogOutcome: (outcome) => outcomes.push(outcome),
     });
 
-    expect(outcomes).toEqual([{ provider: "openai", status: "auth-rejected" }]);
+    expect(outcomes).toEqual([
+      { provider: "openai", profileId: "openai:chatgpt", status: "auth-rejected" },
+    ]);
   });
 });
 

@@ -262,6 +262,17 @@ type OpenAILiveProviderCatalog = {
   outcome?: ProviderCatalogOutcome;
 };
 
+function scopeOpenAICatalogOutcome(
+  catalog: OpenAILiveProviderCatalog,
+  profileId: string | undefined,
+): OpenAILiveProviderCatalog {
+  const scopedProfileId = profileId?.trim();
+  if (!catalog.outcome || !scopedProfileId) {
+    return catalog;
+  }
+  return { ...catalog, outcome: { ...catalog.outcome, profileId: scopedProfileId } };
+}
+
 async function buildOpenAILiveProviderConfig(
   params: BuildOpenAILiveProviderConfigParams,
 ): Promise<OpenAILiveProviderCatalog> {
@@ -966,10 +977,13 @@ export function buildOpenAIProvider(): ProviderPlugin {
                 ? { profileId: runtimeAuth.profileId ?? auth.profileId }
                 : {}),
             });
-            const catalog = await buildOpenAICodexLiveProviderConfig({
-              discoveryApiKey: runtimeAuth.apiKey,
-              accountId: metadata.accountId,
-            });
+            const catalog = scopeOpenAICatalogOutcome(
+              await buildOpenAICodexLiveProviderConfig({
+                discoveryApiKey: runtimeAuth.apiKey,
+                accountId: metadata.accountId,
+              }),
+              runtimeAuth.profileId ?? auth.profileId,
+            );
             return {
               providers: { [PROVIDER_ID]: catalog.provider },
               ...(catalog.outcome ? { outcomes: [catalog.outcome] } : {}),
@@ -980,11 +994,14 @@ export function buildOpenAIProvider(): ProviderPlugin {
           // auth can still publish the standard OpenAI catalog.
         }
         if (auth.mode === "api_key" && auth.apiKey) {
-          const catalog = await buildOpenAILiveProviderConfig({
-            apiKey: auth.apiKey,
-            baseUrl: resolveOpenAICatalogBaseUrl(ctx),
-            discoveryApiKey: auth.discoveryApiKey,
-          });
+          const catalog = scopeOpenAICatalogOutcome(
+            await buildOpenAILiveProviderConfig({
+              apiKey: auth.apiKey,
+              baseUrl: resolveOpenAICatalogBaseUrl(ctx),
+              discoveryApiKey: auth.discoveryApiKey,
+            }),
+            auth.profileId,
+          );
           return {
             providers: { [PROVIDER_ID]: catalog.provider },
             ...(catalog.outcome ? { outcomes: [catalog.outcome] } : {}),

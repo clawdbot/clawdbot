@@ -181,6 +181,7 @@ describe("ModelsListParamsSchema", () => {
       ModelsListParamsSchema,
       { view: "provider-config" },
       {
+        agentId: "writer",
         view: "all",
         includeProviderCapabilities: true,
       },
@@ -226,7 +227,13 @@ describe("ModelsListResultSchema", () => {
       { models: [model] },
       {
         models: [],
-        providerOutcomes: [{ provider: "openai", status: "auth-rejected" }],
+        providerOutcomes: [
+          {
+            provider: "openai",
+            profileId: "openai:chatgpt",
+            status: "auth-rejected",
+          },
+        ],
       },
     );
     expectRejected(
@@ -236,6 +243,10 @@ describe("ModelsListResultSchema", () => {
       },
       { models: [{ ...model, input: ["text", "binary"] }] },
       { models: [], providerOutcomes: [{ provider: "openai", status: "unknown" }] },
+      {
+        models: [],
+        providerOutcomes: [{ provider: "openai", profileId: "", status: "auth-rejected" }],
+      },
     );
   });
 });
