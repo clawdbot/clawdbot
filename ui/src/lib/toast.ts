@@ -38,13 +38,9 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
   /** Preserve the visible outcome when a modal host leaves the top layer. */
   handoff() {
     const toast = this.toast;
-    if (!toast) {
-      return;
-    }
-    this.clearDismissTimer();
-    this.toast = null;
-    if (!showToast(toast)) {
-      this.show(toast);
+    if (toast && showToast(toast)) {
+      this.clearDismissTimer();
+      this.toast = null;
     }
   }
 
@@ -98,17 +94,11 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
 }
 
 export function showToast(options: ToastOptions): boolean {
-  const modalHost = [...document.querySelectorAll("openclaw-modal-dialog")]
-    .toReversed()
-    .filter((modal) => modal.open)
-    .map((modal) => modal.querySelector<OpenClawToastHost>("openclaw-toast-host"))
-    .find(Boolean);
-  const appHost = [...document.querySelectorAll("openclaw-toast-host")].find(
-    (host) => !host.closest("openclaw-modal-dialog"),
-  );
   // Native modal dialogs own the browser top layer, so their in-dialog host
   // wins over the app host while an overlay is open.
-  const host = modalHost ?? appHost;
+  const host = [...document.querySelectorAll<OpenClawToastHost>("openclaw-toast-host")].findLast(
+    (candidate) => (candidate.parentElement as HTMLElement & { open?: boolean }).open !== false,
+  );
   if (!host) {
     return false;
   }
