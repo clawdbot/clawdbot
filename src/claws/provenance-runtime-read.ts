@@ -10,6 +10,7 @@ type ClawInstallSchemaVersionRead =
   | {
       kind: "ok";
       schemaVersion: ReturnType<typeof parseClawInstallRecordSchemaVersion>;
+      agentConfigDigest: string;
     }
   | { kind: "error"; error: unknown };
 
@@ -37,14 +38,19 @@ function readSchemaVersions(db: DatabaseSync): ClawInstallSchemaVersionSnapshot 
       return { kind: "ready", schemaVersions: new Map() };
     }
     const rows = db /* sqlite-allow-raw: lifecycle-owned state cache initialization. */
-      .prepare("SELECT agent_id, schema_version FROM claw_installs")
-      .all() as Array<{ agent_id: string; schema_version: string }>;
+      .prepare("SELECT agent_id, schema_version, agent_config_digest FROM claw_installs")
+      .all() as Array<{
+      agent_id: string;
+      schema_version: string;
+      agent_config_digest: string;
+    }>;
     const schemaVersions = new Map<string, ClawInstallSchemaVersionRead>();
     for (const row of rows) {
       try {
         schemaVersions.set(row.agent_id, {
           kind: "ok",
           schemaVersion: parseClawInstallRecordSchemaVersion(row.schema_version),
+          agentConfigDigest: row.agent_config_digest,
         });
       } catch (error) {
         schemaVersions.set(row.agent_id, { kind: "error", error });
@@ -91,13 +97,14 @@ export function registerClawInstallSchemaVersionSnapshotListener(listener: () =>
 export function cacheClawInstallSchemaVersion(
   agentId: string,
   schemaVersion: ReturnType<typeof parseClawInstallRecordSchemaVersion>,
+  agentConfigDigest: string,
   options: OpenClawStateDatabaseOptions = {},
 ): void {
   const snapshot = snapshotsByPath.get(resolveSnapshotPath(options));
   if (snapshot?.kind !== "ready") {
     return;
   }
-  snapshot.schemaVersions.set(agentId, { kind: "ok", schemaVersion });
+  snapshot.schemaVersions.set(agentId, { kind: "ok", schemaVersion, agentConfigDigest });
   notifySnapshotListeners();
 }
 

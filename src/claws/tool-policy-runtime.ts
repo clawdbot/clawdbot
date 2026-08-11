@@ -2,6 +2,7 @@ import { listAgentEntries } from "../agents/agent-scope.js";
 import { registerRuntimeConfigSnapshotPreparer } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { digestClawAgentConfig } from "./agent-config-digest.js";
 import {
   readCachedClawInstallSchemaVersions,
   registerClawInstallSchemaVersionSnapshotListener,
@@ -14,7 +15,7 @@ type PreparedClawToolPolicy =
   | { kind: "legacy" }
   | { kind: "state-error"; error: unknown };
 const preparedClawToolPolicies = new WeakMap<object, PreparedClawToolPolicy>();
-type ClawToolPolicyCandidate = { agentId: string; tools: object };
+type ClawToolPolicyCandidate = { agentId: string; agentConfigDigest: string; tools: object };
 let preparedCandidates: ClawToolPolicyCandidate[] = [];
 let preparedStateOptions: OpenClawStateDatabaseOptions = {};
 let readPreparedSchemaVersions = readCachedClawInstallSchemaVersions;
@@ -61,6 +62,16 @@ function applyPreparedClawToolPolicyConsent(): void {
       });
       continue;
     }
+    if (
+      schemaVersionRead.schemaVersion === CLAW_INSTALL_RECORD_SCHEMA_VERSION &&
+      schemaVersionRead.agentConfigDigest !== candidate.agentConfigDigest
+    ) {
+      preparedClawToolPolicies.set(candidate.tools, {
+        kind: "state-error",
+        error: new Error("Claw agent configuration does not match its consent provenance."),
+      });
+      continue;
+    }
     preparedClawToolPolicies.set(candidate.tools, {
       kind:
         schemaVersionRead.schemaVersion === CLAW_INSTALL_RECORD_SCHEMA_VERSION
@@ -81,7 +92,9 @@ function prepareClawToolPolicyConsent(
   }
   preparedCandidates = listAgentEntries(config).flatMap((agent) => {
     const tools = agent.tools;
-    return tools && (tools.profile || tools.allow?.length) ? [{ agentId: agent.id, tools }] : [];
+    return tools && (tools.profile || tools.allow?.length)
+      ? [{ agentId: agent.id, agentConfigDigest: digestClawAgentConfig(agent), tools }]
+      : [];
   });
   const { readSchemaVersions, ...stateOptions } = options;
   preparedStateOptions = stateOptions;

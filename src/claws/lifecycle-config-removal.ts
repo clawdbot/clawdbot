@@ -9,6 +9,7 @@ import {
   deleteAgentConfigEntry,
 } from "../gateway/server-methods/agents-config-mutations.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { digestClawAgentConfig } from "./agent-config-digest.js";
 import {
   deletionEffects,
   type ClawCleanupTargets,
@@ -17,9 +18,7 @@ import {
 
 export type ConfigCommit = (transform: (config: OpenClawConfig) => OpenClawConfig) => Promise<void>;
 
-export function digestClawAgentConfig(agent: AgentConfig): string {
-  return `sha256:${createHash("sha256").update(stableStringify(agent)).digest("hex")}`;
-}
+export { digestClawAgentConfig } from "./agent-config-digest.js";
 
 export function digestClawAgentRemovalSurface(config: OpenClawConfig, agentId: string): string {
   const normalizedId = normalizeAgentId(agentId);

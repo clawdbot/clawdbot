@@ -1,6 +1,5 @@
 // Persists the root ownership record for one Claw-created agent and workspace.
 
-import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { stableStringify } from "@openclaw/normalization-core";
 import {
@@ -8,6 +7,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { digestClawAgentConfig } from "./agent-config-digest.js";
 import {
   CLAW_PACKAGE_REF_SCHEMA_VERSION,
   rowToPackageRef,
@@ -106,10 +106,6 @@ function rowToRecord(row: ClawInstallRow): PersistedClawInstall {
   };
 }
 
-function digestAgentConfig(plan: ClawAddPlan): string {
-  return `sha256:${createHash("sha256").update(stableStringify(plan.agent.config)).digest("hex")}`;
-}
-
 function agentOwnedPaths(plan: ClawAddPlan): string[] {
   return plan.actions.filter((action) => action.kind === "agent").map((action) => action.target);
 }
@@ -139,7 +135,7 @@ export function clawInstallRecordMatchesPlan(
     record.manifestSchemaVersion === plan.manifestSchemaVersion &&
     record.planIntegrity === plan.planIntegrity &&
     record.workspace === plan.agent.workspace &&
-    record.agentConfigDigest === digestAgentConfig(plan) &&
+    record.agentConfigDigest === digestClawAgentConfig(plan.agent.config) &&
     stableStringify(record.agentOwnedPaths) === stableStringify(agentOwnedPaths(plan)) &&
     record.bootstrap?.sourcePath === bootstrap?.sourcePath &&
     record.bootstrap?.contentDigest === bootstrap?.contentDigest
@@ -189,7 +185,7 @@ export function persistClawInstallRecord(
 ): PersistedClawInstall {
   const nowMs = options.nowMs ?? Date.now();
   const status = options.status ?? "complete";
-  const agentConfigDigest = digestAgentConfig(plan);
+  const agentConfigDigest = digestClawAgentConfig(plan.agent.config);
   const ownedPaths = agentOwnedPaths(plan);
   const bootstrap = bootstrapProvenance(plan);
   const persistedRecord = runOpenClawStateWriteTransaction(({ db }) => {
@@ -273,7 +269,12 @@ export function persistClawInstallRecord(
       updatedAtMs: nowMs,
     };
   }, options);
-  cacheClawInstallSchemaVersion(plan.agent.finalId, persistedRecord.schemaVersion, options);
+  cacheClawInstallSchemaVersion(
+    plan.agent.finalId,
+    persistedRecord.schemaVersion,
+    persistedRecord.agentConfigDigest,
+    options,
+  );
   return persistedRecord;
 }
 
@@ -367,7 +368,7 @@ export function updateClawInstallRecord(
   }
   const updatedAtMs = options.nowMs ?? Date.now();
   const status = options.status ?? "complete";
-  const agentConfigDigest = digestAgentConfig(plan);
+  const agentConfigDigest = digestClawAgentConfig(plan.agent.config);
   const ownedAgentPaths = plan.actions
     .filter((action) => action.kind === "agent")
     .map((action) => action.target);
@@ -441,7 +442,12 @@ export function updateClawInstallRecord(
     addedAtMs: current.addedAtMs,
     updatedAtMs,
   };
-  cacheClawInstallSchemaVersion(plan.agent.finalId, record.schemaVersion, options);
+  cacheClawInstallSchemaVersion(
+    plan.agent.finalId,
+    record.schemaVersion,
+    record.agentConfigDigest,
+    options,
+  );
   return record;
 }
 
