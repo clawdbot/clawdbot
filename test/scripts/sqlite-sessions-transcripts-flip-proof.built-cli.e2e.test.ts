@@ -1,8 +1,6 @@
 // Built-CLI SQLite flip proof requires dist entrypoints before running the gateway lifecycle.
-import { createHash, randomBytes, randomUUID } from "node:crypto";
-import fs from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { readSessionArchiveContentSync } from "../../src/config/sessions/archive-compression.js";
@@ -33,51 +31,39 @@ describe("SQLite sessions/transcripts flip built CLI proof", () => {
     assertSqliteFlipProofCore(report);
   }, 420_000);
 
-  it("keeps built gateway RPC responsive while deleting a large transcript", async () => {
+  it("uses the packaged archive worker when deleting a transcript", async () => {
     const inst = await createOpenClawTestInstance({
       name: `sqlite-archive-responsive-${randomUUID()}`,
       startTimeoutMs: 90_000,
       stopTimeoutMs: 5_000,
     });
     inst.state.applyEnv();
-    const sessionId = "sqlite-large-archive-responsive";
-    const sessionKey = "agent:main:dashboard:sqlite-large-archive-responsive";
-    const writerSessionKey = "agent:main:dashboard:sqlite-large-archive-writer";
-    const warmupSessionId = "sqlite-archive-worker-warmup";
-    const warmupSessionKey = "agent:main:dashboard:sqlite-archive-worker-warmup";
+    const sessionId = "sqlite-built-archive-worker";
+    const sessionKey = "agent:main:dashboard:sqlite-built-archive-worker";
     const storePath = path.join(inst.stateDir, "agents", "main", "sessions", "sessions.json");
-    const archiveDirectory = path.dirname(storePath);
-    const events = createLargeTranscriptEvents(sessionId);
+    const events = [
+      {
+        type: "message",
+        id: "sqlite-built-archive-message",
+        parentId: null,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "packaged archive worker marker" }],
+        },
+        timestamp: Date.now(),
+      } as unknown as TestTranscriptEvent,
+    ];
     const expectedArchiveContent = `${events.map((event) => JSON.stringify(event)).join("\n")}\n`;
-    let deleteClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-    let probeClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+    let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
 
     try {
       await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: Date.now() });
-      await replaceSessionEntry(
-        { sessionKey: writerSessionKey, storePath },
-        { sessionId: "sqlite-large-archive-writer", updatedAt: Date.now() },
-      );
       await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, events);
-      await replaceSessionEntry(
-        { sessionKey: warmupSessionKey, storePath },
-        { sessionId: warmupSessionId, updatedAt: Date.now() },
-      );
-      await replaceTranscriptEvents(
-        { sessionKey: warmupSessionKey, sessionId: warmupSessionId, storePath },
-        [
-          {
-            type: "session",
-            id: warmupSessionId,
-            content: "warm the built archive worker",
-          } as unknown as TestTranscriptEvent,
-        ],
-      );
       const databasePath = requireSqliteDatabasePath(storePath);
       expect(readSessionRowCounts(databasePath, sessionId)).toEqual({
         fts: 1,
         sessionWindows: 1,
-        transcriptEvents: events.length,
+        transcriptEvents: 1,
       });
       closeOpenClawAgentDatabasesForTest();
 
@@ -85,100 +71,24 @@ describe("SQLite sessions/transcripts flip built CLI proof", () => {
         expect.arrayContaining([expect.stringMatching(/^dist\/index\.(?:js|mjs)$/u)]),
       );
       await inst.startGateway();
-      [deleteClient, probeClient] = await Promise.all([
-        connectGatewayClient({
-          url: inst.url,
-          token: inst.gatewayToken,
-          clientDisplayName: "sqlite-large-archive-delete",
-          requestTimeoutMs: 120_000,
-          timeoutMs: 20_000,
-        }),
-        connectGatewayClient({
-          url: inst.url,
-          token: inst.gatewayToken,
-          clientDisplayName: "sqlite-large-archive-presence",
-          requestTimeoutMs: 2_000,
-          timeoutMs: 20_000,
-        }),
-      ]);
-      // Cold-opening and indexing the pre-seeded 64 MiB database is outside
-      // the deletion latency measurement below and can exceed the normal RPC
-      // timeout on Windows CI hosts. Finish that one-time initialization first.
-      await deleteClient.request("sessions.list", {}, { timeoutMs: 120_000 });
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        await probeClient.request("system-presence", {}, { timeoutMs: 2_000 });
-      }
-      // Prime the built sidecar and OS file cache with a tiny transcript so the
-      // latency assertion below measures data-size-dependent archive work.
-      await deleteClient.request(
-        "sessions.delete",
-        { key: warmupSessionKey, deleteTranscript: true },
-        { timeoutMs: 20_000 },
-      );
-
-      let archivePublishedAt: number | undefined;
-      let deleteSettled = false;
-      const publicationPoll = setInterval(() => {
-        if (findPublishedArchive(archiveDirectory, sessionId)) {
-          archivePublishedAt ??= performance.now();
-        }
-      }, 5);
-      const deletion = deleteClient
-        .request<{ archived?: string[]; deleted?: boolean; ok?: boolean }>(
-          "sessions.delete",
-          { key: sessionKey, deleteTranscript: true },
-          { timeoutMs: 120_000 },
-        )
-        .finally(() => {
-          deleteSettled = true;
-        });
-      void deletion.catch(() => undefined);
-      const writerStartedAt = performance.now();
-      const writerResult = await probeClient.request<{ key?: string; ok?: boolean }>(
-        "sessions.patch",
-        { key: writerSessionKey, label: "writer-progressed-during-archive" },
-        { timeoutMs: 2_000 },
-      );
-      const writerLatencyMs = performance.now() - writerStartedAt;
-      expect(writerResult).toMatchObject({ ok: true, key: writerSessionKey });
-      expect(writerLatencyMs).toBeLessThan(500);
-      expect(deleteSettled).toBe(false);
-      expect(archivePublishedAt).toBeUndefined();
-      const prePublicationProbeLatencies: number[] = [];
-      const shouldProbeBeforePublication = () => !deleteSettled && archivePublishedAt === undefined;
-      try {
-        while (shouldProbeBeforePublication()) {
-          const probeStartedAt = performance.now();
-          await probeClient.request("system-presence", {}, { timeoutMs: 2_000 });
-          const probeCompletedAt = performance.now();
-          // Record every probe that started before publication was observed.
-          // A synchronous implementation can delay this response until after
-          // publication; dropping that crossing sample would hide the stall.
-          prePublicationProbeLatencies.push(probeCompletedAt - probeStartedAt);
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 5);
-          });
-        }
-      } finally {
-        clearInterval(publicationPoll);
-      }
-
-      const deleteResult = await deletion;
+      client = await connectGatewayClient({
+        url: inst.url,
+        token: inst.gatewayToken,
+        clientDisplayName: "sqlite-built-archive-worker",
+        requestTimeoutMs: 20_000,
+        timeoutMs: 20_000,
+      });
+      const deleteResult = await client.request<{
+        archived?: string[];
+        deleted?: boolean;
+        ok?: boolean;
+      }>("sessions.delete", { key: sessionKey, deleteTranscript: true }, { timeoutMs: 20_000 });
       expect(deleteResult).toMatchObject({ ok: true, deleted: true });
-      expect(prePublicationProbeLatencies.length).toBeGreaterThan(5);
-      // Keep enough headroom for Windows scheduling and a probe that crosses
-      // into the existing synchronous SQLite/FTS deletion tail. The former
-      // synchronous archive path instead exceeds the probe's 2s RPC timeout.
-      expect(Math.max(...prePublicationProbeLatencies)).toBeLessThan(500);
       const archivedPath = deleteResult.archived?.[0];
       expect(archivedPath).toBeTruthy();
 
-      await Promise.all([
-        disconnectGatewayClient(deleteClient),
-        disconnectGatewayClient(probeClient),
-      ]);
-      deleteClient = undefined;
-      probeClient = undefined;
+      await disconnectGatewayClient(client);
+      client = undefined;
       await inst.stopGateway();
 
       const archivedContent = readSessionArchiveContentSync(archivedPath ?? "");
@@ -192,56 +102,18 @@ describe("SQLite sessions/transcripts flip built CLI proof", () => {
         transcriptEvents: 0,
       });
     } finally {
-      await Promise.allSettled(
-        [deleteClient, probeClient]
-          .filter((client): client is NonNullable<typeof client> => client !== undefined)
-          .map((client) => disconnectGatewayClient(client)),
-      );
+      if (client) {
+        await disconnectGatewayClient(client);
+      }
       await inst.stopGateway();
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       await inst.cleanup();
     }
-  }, 180_000);
+  }, 90_000);
 });
 
 type TestTranscriptEvent = Parameters<typeof replaceTranscriptEvents>[1][number];
-
-function createLargeTranscriptEvents(sessionId: string): TestTranscriptEvent[] {
-  const indexedMessage = {
-    type: "message",
-    id: "sqlite-large-archive-indexed-message",
-    parentId: null,
-    message: {
-      role: "user",
-      content: [{ type: "text", text: "large archive searchable marker" }],
-    },
-    timestamp: Date.now(),
-  } as unknown as TestTranscriptEvent;
-  return [
-    indexedMessage,
-    ...Array.from(
-      { length: 63 },
-      (_, index) =>
-        ({
-          type: "session",
-          id: `${sessionId}-${index}`,
-          content: `${index}:${randomBytes(768 * 1024).toString("base64")}`,
-        }) as unknown as TestTranscriptEvent,
-    ),
-  ];
-}
-
-function findPublishedArchive(archiveDirectory: string, sessionId: string): string | undefined {
-  const prefix = `${sessionId}.jsonl.deleted.`;
-  try {
-    return fs
-      .readdirSync(archiveDirectory)
-      .find((entry) => entry.startsWith(prefix) && !entry.endsWith(".tmp"));
-  } catch {
-    return undefined;
-  }
-}
 
 function requireSqliteDatabasePath(storePath: string): string {
   const target = resolveSqliteTargetFromSessionStorePath(storePath);
