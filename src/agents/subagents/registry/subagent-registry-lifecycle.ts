@@ -22,7 +22,12 @@ export function createSubagentRegistryLifecycleController(params: SubagentRegist
   const state = createSubagentRegistryLifecycleState();
   const common = createSubagentRegistryLifecycleCommon(params, state);
   const delivery = createSubagentRegistryLifecycleDelivery(params, state, common);
-  const requesterWake = createSubagentRegistryLifecycleRequesterWake(params, state, common);
+  const requesterWake = createSubagentRegistryLifecycleRequesterWake(
+    params,
+    state,
+    common,
+    delivery,
+  );
   const cleanupBase = createSubagentRegistryLifecycleCleanupBase(
     params,
     state,

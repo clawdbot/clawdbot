@@ -17,6 +17,7 @@ import {
   setCommandLaneConcurrency,
 } from "../../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../../process/command-queue.test-support.js";
+import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { installSessionPlacementAdmissionProvider } from "../../session-placement-admission.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
@@ -28,10 +29,12 @@ const GLOBAL_LANE = "queued-run-context-global";
 
 function createRunController(overrides: Partial<RunEmbeddedAgentParams> = {}) {
   let lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const runId = overrides.runId ?? "healthy-queued-run";
   let params: RunEmbeddedAgentParams & { sessionFile: string } = {
+    admittedRunContext: createTestAdmittedRunContext(runId),
     lifecycleGeneration,
     prompt: "queued run",
-    runId: "healthy-queued-run",
+    runId,
     sessionFile: "/tmp/queued-run.jsonl",
     sessionId: "queued-session",
     timeoutMs: 60_000,

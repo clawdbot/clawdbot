@@ -1053,6 +1053,12 @@ export interface OnboardingRecommendations {
   updated_at_ms: number;
 }
 
+export interface OperatorApprovalExecutionIdentities {
+  approval_id: string;
+  source_context_id: string;
+  source_execution_id: string;
+}
+
 export interface OperatorApprovals {
   approval_id: string;
   audience_session_keys_json: string;
@@ -1118,6 +1124,16 @@ export interface PluginStateEntries {
   namespace: string;
   plugin_id: string;
   value_json: string;
+}
+
+export interface Projects {
+  created_at_ms: number;
+  display_name: string;
+  id: string;
+  origin_url: string | null;
+  repo_root: string;
+  source: string;
+  updated_at_ms: number;
 }
 
 export interface SandboxRegistryEntries {
@@ -1759,11 +1775,13 @@ export interface DB {
   node_host_config: NodeHostConfig;
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
   onboarding_recommendations: OnboardingRecommendations;
+  operator_approval_execution_identities: OperatorApprovalExecutionIdentities;
   operator_approvals: OperatorApprovals;
   outbound_media_provenance: OutboundMediaProvenance;
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;
+  projects: Projects;
   sandbox_registry_entries: SandboxRegistryEntries;
   schema_meta: SchemaMeta;
   secret_store_entries: SecretStoreEntries;

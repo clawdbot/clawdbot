@@ -4,8 +4,8 @@ import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import {
-  createRunningTaskRun as createRunningTaskRunOrNull,
-  finalizeTaskRunByRunId,
+  createRunningTaskRunCore as createRunningTaskRunOrNull,
+  finalizeTaskRunByRunIdCore as finalizeTaskRunByRunId,
 } from "./task-executor.js";
 import {
   listTaskFlowAuditFindings,

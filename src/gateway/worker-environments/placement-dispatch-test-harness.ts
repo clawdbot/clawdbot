@@ -294,7 +294,7 @@ export function createHarness(
   const environments: WorkerDispatchEnvironmentService = {
     create: vi.fn(async () => {
       fail("create");
-      return ready;
+      return currentEnvironment ?? ready;
     }),
     get: vi.fn(() => currentEnvironment),
     attachSession: vi.fn(async () => {

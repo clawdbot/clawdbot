@@ -1,4 +1,4 @@
-import { WORKER_LAUNCH_V2_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { supportsWorkerExecutionContextLaunch } from "./admission.js";
 import {
   isUnavailableEnvironment,
   type WorkerActiveDispatchPlacement,
@@ -13,13 +13,12 @@ import {
 } from "./placement-dispatch-pending-results.js";
 import type { WorkerEnvironmentService } from "./service.js";
 
-function supportsWorkerLaunchV2(environment: ReturnType<WorkerEnvironmentService["get"]>): boolean {
-  // A persisted bundle hash can still match a pre-v2 worker when current bundle preparation fails.
-  // Require the admitted receipt so restart recovery never revives an incompatible launch contract.
-  return (
-    environment?.bootstrapReceipt?.protocolFeatures.includes(WORKER_LAUNCH_V2_PROTOCOL_FEATURE) ===
-    true
-  );
+function supportsCurrentWorkerLaunch(
+  environment: ReturnType<WorkerEnvironmentService["get"]>,
+): boolean {
+  // A persisted bundle hash can still match a worker with an older launch shape.
+  // Require the admitted receipt so restart recovery never revives that contract.
+  return supportsWorkerExecutionContextLaunch(environment?.bootstrapReceipt);
 }
 
 function sameActiveEnvironment(
@@ -35,7 +34,7 @@ function sameActiveEnvironment(
     environment.ownerEpoch === placement.activeOwnerEpoch &&
     placement.workerBundleHash &&
     environment.bootstrapReceipt?.bundleHash === placement.workerBundleHash &&
-    supportsWorkerLaunchV2(environment) &&
+    supportsCurrentWorkerLaunch(environment) &&
     environment.attachedSessionIds.length === 1 &&
     environment.attachedSessionIds[0] === placement.sessionId,
   );
@@ -150,7 +149,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       environment &&
       expectedBundle &&
       environment.bootstrapReceipt?.bundleHash === expectedBundle &&
-      supportsWorkerLaunchV2(environment) &&
+      supportsCurrentWorkerLaunch(environment) &&
       hasSyncedWorkspace;
     if (!canResume) {
       const error = new Error("Interrupted worker dispatch cannot safely resume");

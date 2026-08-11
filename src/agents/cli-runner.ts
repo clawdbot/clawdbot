@@ -42,7 +42,7 @@ import {
 import { resolveCliBackendConfig } from "./cli-backends.js";
 import type { CliOutput } from "./cli-output-contracts.js";
 import { CliAuthProfilePreparationError } from "./cli-runner/auth-profile-preparation-error.js";
-import { shouldUseClaudeLiveSession } from "./cli-runner/claude-live-session.js";
+import { acceptsClaudeLive } from "./cli-runner/claude-live-session-policy.js";
 import {
   attachCliMessagingDeliveryEvidence,
   getCliMessagingDeliveryEvidence,
@@ -730,9 +730,8 @@ async function runCliAgentInternal(
   };
   if (params.cleanupCliLiveSessionOnRunEnd === true) {
     try {
-      const { closeClaudeLiveSessionForContext } =
-        await import("./cli-runner/claude-live-session.js");
-      await closeClaudeLiveSessionForContext(context);
+      const { closeClaudeSession } = await import("./cli-runner/claude-live-registry.js");
+      await closeClaudeSession(context, "restart");
     } catch (error) {
       recordCleanupError(error);
     }
@@ -1546,7 +1545,7 @@ export async function runPreparedCliAgent(
               effectiveCliSessionId,
               params.provider,
               context.cwd ?? context.workspaceDir,
-              { skipTranscriptProbe: shouldUseClaudeLiveSession(context) },
+              { skipTranscriptProbe: acceptsClaudeLive(context) },
             );
         await runCliAgentEndHook(params, {
           event: {

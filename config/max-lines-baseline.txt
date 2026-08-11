@@ -319,8 +319,6 @@ packages/tool-call-repair/src/stream-normalizer.test.ts
 packages/tool-call-repair/src/stream-normalizer.ts
 src/acp/control-plane/manager.test.ts
 src/acp/control-plane/manager.turn-results.test.ts
-src/agents/subagents/spawn/acp-spawn-parent-stream.test.ts
-src/agents/subagents/spawn/acp-spawn.test.ts
 src/agents/agent-bundle-mcp-runtime.test.ts
 src/agents/agent-bundle-mcp-runtime.ts
 src/agents/agent-command.live-model-switch.test.ts
@@ -352,7 +350,6 @@ src/agents/cli-auth-epoch.test.ts
 src/agents/cli-runner.reliability.test.ts
 src/agents/cli-runner.spawn.test.ts
 src/agents/cli-runner.ts
-src/agents/cli-runner/claude-live-session.ts
 src/agents/cli-runner/execute.supervisor-capture.test.ts
 src/agents/cli-runner/prepare.test.ts
 src/agents/cli-runner/prepare.ts
@@ -379,10 +376,10 @@ src/agents/embedded-agent-runner/model.test.ts
 src/agents/embedded-agent-runner/replay-history.ts
 src/agents/embedded-agent-runner/run.incomplete-turn.test.ts
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts
+src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts
 src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.test.ts
 src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.ts
 src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts
-src/agents/embedded-agent-runner/run/attempt.spawn-workspace.test-support.ts
 src/agents/embedded-agent-runner/run/attempt.test.ts
 src/agents/embedded-agent-runner/run/attempt.tool-call-argument-repair.ts
 src/agents/embedded-agent-runner/run/attempt.tool-call-normalization.test.ts
@@ -450,6 +447,8 @@ src/agents/subagents/registry/subagent-registry-lifecycle.test.ts
 src/agents/subagents/registry/subagent-registry-run-manager.ts
 src/agents/subagents/registry/subagent-registry.steer-restart.test.ts
 src/agents/subagents/registry/subagent-registry.test.ts
+src/agents/subagents/spawn/acp-spawn-parent-stream.test.ts
+src/agents/subagents/spawn/acp-spawn.test.ts
 src/agents/subagents/spawn/subagent-spawn.test.ts
 src/agents/system-prompt.test.ts
 src/agents/system-prompt.ts
@@ -464,7 +463,6 @@ src/agents/tools/image-tool.test.ts
 src/agents/tools/image-tool.ts
 src/agents/tools/media-generate-background-shared.test.ts
 src/agents/tools/message-tool.test.ts
-src/agents/tools/message-tool.ts
 src/agents/tools/music-generate-tool.test.ts
 src/agents/tools/music-generate-tool.ts
 src/agents/tools/session-status-tool.ts
@@ -897,8 +895,6 @@ src/snapshot/local-repository.ts
 src/state/openclaw-agent-db.test.ts
 src/state/openclaw-state-db.test.ts
 src/status/status-message.ts
-src/system-agent/chat-engine.test.ts
-src/system-agent/chat-engine.ts
 src/system-agent/setup-inference.test.ts
 src/system-agent/verified-inference.ts
 src/tasks/task-executor.test.ts

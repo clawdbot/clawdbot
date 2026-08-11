@@ -16,6 +16,7 @@ import {
   pollLocatorText,
   replaceGatewayClient,
   waitForCommittedChatRoute,
+  waitForConfirmModal,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -381,8 +382,8 @@ suite.define(() => {
       expect(await localSessionRow.locator(".session-row-badge--cloud").count()).toBe(0);
       expect(await cloudPlacementBadge.locator("circle").count()).toBe(1);
       expect(await cloudPlacementBadge.locator("rect").count()).toBe(0);
-      page.once("dialog", (dialog) => void dialog.accept());
       await stopWorker.click();
+      await (await waitForConfirmModal(page)).getByRole("button", { name: "Stop worker" }).click();
       const reclaim = await gateway.waitForRequest("sessions.reclaim");
       expect(reclaim.params).toEqual({ key: managedSessionKey, agentId: "cloud" });
     } finally {
@@ -658,24 +659,29 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      const recoveryIdentity = await page.evaluate(() => {
+      const recoveryIdentity = await page.evaluate(async () => {
         const app = document.querySelector("openclaw-app") as HTMLElement & {
           runtime?: {
             context: {
               gateway: {
                 connection: { gatewayUrl: string };
-                snapshot: { client?: { recoveryScope?: string } | null };
               };
             };
           };
         };
         const gatewaySnapshot = app.runtime?.context.gateway;
         const gatewayUrl = gatewaySnapshot?.connection.gatewayUrl ?? "";
-        const recoveryScope = gatewaySnapshot?.snapshot.client?.recoveryScope ?? "";
-        if (!gatewayUrl || !recoveryScope) {
+        if (!gatewayUrl) {
           throw new Error("Gateway recovery identity is unavailable");
         }
-        return { gatewayUrl, recoveryScope };
+        const digest = await crypto.subtle.digest(
+          "SHA-256",
+          new TextEncoder().encode("e2e-device-token"),
+        );
+        const legacyScope = Array.from(new Uint8Array(digest), (byte) =>
+          byte.toString(16).padStart(2, "0"),
+        ).join("");
+        return { gatewayUrl, legacyScope };
       });
 
       await gateway.setOnline(false);
@@ -689,9 +695,9 @@ suite.define(() => {
           }),
         )
         .toBe(false);
-      await page.evaluate(({ gatewayUrl, recoveryScope }) => {
+      await page.evaluate(({ gatewayUrl, legacyScope }) => {
         sessionStorage.setItem(
-          `openclaw.new-session.cloud-recovery.v1:${gatewayUrl}:${recoveryScope}`,
+          `openclaw.new-session.cloud-recovery.v1:${gatewayUrl}:${legacyScope}`,
           JSON.stringify({
             sessionKey: "agent:cloud:offline-recovery",
             messageId: "message-offline-recovery",
@@ -699,7 +705,7 @@ suite.define(() => {
             profileId: "aws",
             agentId: "cloud",
             gatewayUrl,
-            recoveryScope,
+            recoveryScope: legacyScope,
             phase: "sending",
           }),
         );
@@ -712,6 +718,15 @@ suite.define(() => {
         key: "agent:cloud:offline-recovery",
         message: "restore after reconnect",
       });
+      expect(
+        await page.evaluate(
+          ({ gatewayUrl, legacyScope }) =>
+            sessionStorage.getItem(
+              `openclaw.new-session.cloud-recovery.v1:${gatewayUrl}:${legacyScope}`,
+            ),
+          recoveryIdentity,
+        ),
+      ).toBeNull();
       await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("");
       await page.locator("#new-session-place-trigger").click();
       await page
@@ -722,29 +737,7 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
         .toBe(false);
-      await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: {
-            context: {
-              gateway: {
-                snapshot: {
-                  client?: { recoveryScopeTracker?: { ready: boolean } } | null;
-                };
-              };
-            };
-          };
-        };
-        const client = app.runtime?.context.gateway.snapshot.client;
-        if (!client?.recoveryScopeTracker) {
-          throw new Error("Gateway recovery tracker is unavailable");
-        }
-        client.recoveryScopeTracker.ready = false;
-        (
-          document.querySelector("openclaw-new-session-page") as
-            | (HTMLElement & { requestUpdate: () => void })
-            | null
-        )?.requestUpdate();
-      });
+      await gateway.setOnline(false);
       await expect
         .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
         .toBe(true);

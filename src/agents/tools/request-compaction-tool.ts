@@ -12,7 +12,7 @@ import {
   isCompactionSkipCode,
 } from "../embedded-agent-runner/compact-reasons.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringParam, ToolInputError } from "./common.js";
+import { jsonResult, readToolStringParam, ToolInputError } from "./common.js";
 
 const log = createSubsystemLogger("continuation/request-compaction");
 
@@ -180,8 +180,8 @@ export function createRequestCompactionTool(opts: RequestCompactionToolOpts): An
         );
       }
 
-      const reasonText = readStringParam(params, "reason", { required: true }).slice(0, 1024);
-      const focusText = readStringParam(params, "focus")?.slice(0, 4096);
+      const reasonText = readToolStringParam(params, "reason", { required: true }).slice(0, 1024);
+      const focusText = readToolStringParam(params, "focus")?.slice(0, 4096);
       const traceparent = formatActiveContinuationTraceparent();
       const traceContextFields = traceparent ? { traceparent } : {};
 

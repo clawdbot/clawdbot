@@ -43,7 +43,7 @@ Related: [Secrets Management](/gateway/secrets) · [1Password plugin](/plugins/o
 
 ## Shared secret store
 
-`openclaw secrets store` writes directly to the local shared state database. The store is Gateway-wide and team-scoped; this release accepts only `--scope team`. `--scope me` is rejected because identity scope arrives with the settings UI.
+`openclaw secrets store` writes directly to the local shared state database. The store is Gateway-wide and team-scoped; this release accepts only `--scope team`. `--scope me` is rejected because identity scope is not supported yet.
 
 ```bash
 openclaw secrets store list
@@ -92,6 +92,8 @@ openclaw secrets store get LOG_LEVEL
 
 Secret values never appear in human, `--json`, or `--plain` output. `store get` refuses a `secret` entry as write-only by design and exits `2`; it exits `3` when the name does not exist. Environment-kind values are readable.
 
+Team-scoped `env` entries also reach agent exec environments. Explicit per-call env wins over store values, and host/sandbox security filters can reject protected or credential-shaped names with a warning. `secret` entries are never exposed as subprocess env; use them through `store` SecretRefs instead.
+
 ### Remove values
 
 ```bash
@@ -115,7 +117,7 @@ op read 'op://Engineering/service-account/dotenv' | openclaw secrets store impor
 
 The importer supports quoted values and multiline quoted values such as PEM keys. Use `--yes` to skip confirmation and `--dry-run` to inspect the import without writing. Kind detection follows the same name-based rule as `store set`.
 
-The store commands do not accept `--url` or `--token`; Gateway RPC methods are not part of this storage layer.
+The store CLI commands do not accept `--url` or `--token` and do not route through the Gateway. The Control UI uses the admin-scoped `secrets.store.*` RPC methods instead; those methods refresh the runtime automatically when a changed name is referenced by active config.
 
 ## Reload runtime snapshot
 

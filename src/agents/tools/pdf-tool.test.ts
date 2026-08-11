@@ -11,6 +11,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import * as modelAuth from "../model-auth.js";
 import * as preparedModelRuntime from "../prepared-model-runtime.js";
+import { createContainerWorkspaceSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
 import * as pdfModelConfigModule from "./pdf-tool.model-config.js";
 import {
@@ -407,6 +408,41 @@ describe("createPdfTool", () => {
       });
     });
   });
+
+  it.each(["file:///workspace/doc.pdf", "FILE:/workspace/doc.pdf"])(
+    "reads a mounted PDF from %s",
+    async (pdf) => {
+      await withTempPdfAgentDir(async (agentDir) => {
+        const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-sandbox-"));
+        try {
+          await fs.writeFile(path.join(workspaceDir, "doc.pdf"), FAKE_PDF_MEDIA.buffer);
+          await stubPdfToolInfra(agentDir, {
+            mockLoad: false,
+            provider: "anthropic",
+            input: ["text", "document"],
+          });
+          vi.spyOn(pdfNativeProviders, "anthropicAnalyzePdf").mockResolvedValue("native summary");
+          const tool = requirePdfTool(
+            (await loadCreatePdfTool())({
+              config: withPdfModel(ANTHROPIC_PDF_MODEL),
+              agentDir,
+              workspaceDir,
+              sandbox: {
+                root: workspaceDir,
+                bridge: createContainerWorkspaceSandboxFsBridge(workspaceDir),
+              },
+              fsPolicy: { workspaceOnly: true },
+            }),
+          );
+
+          const result = await tool.execute("t1", { prompt: "summarize", pdf });
+          expect(result.content).toEqual([{ type: "text", text: "native summary" }]);
+        } finally {
+          await fs.rm(workspaceDir, { recursive: true, force: true });
+        }
+      });
+    },
+  );
 
   it("passes web_fetch SSRF policy when loading remote PDFs", async () => {
     await withTempPdfAgentDir(async (agentDir) => {

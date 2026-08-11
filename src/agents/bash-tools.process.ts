@@ -6,8 +6,8 @@
 import { createAbortError as createNamedAbortError } from "../infra/abort-signal.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
-import { killProcessTree } from "../process/kill-tree.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { cancelBackgroundExecSession } from "./bash-process-control.js";
 import {
   acknowledgeNotifyOnExit,
   type ProcessSession,
@@ -20,7 +20,6 @@ import {
   listFinishedSessions,
   listRunningSessions,
   markTerminalPollObserved,
-  markExited,
   setJobTtlMs,
 } from "./bash-process-registry.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
@@ -92,7 +91,7 @@ type RunningSessionRuntime = {
 };
 
 function resolveSessionStdin(session: ProcessSession): WritableStdin | undefined {
-  return (session.stdin ?? session.child?.stdin) as WritableStdin | undefined;
+  return session.stdin as WritableStdin | undefined;
 }
 
 function isWritableStdin(stdin: WritableStdin | undefined): stdin is WritableStdin {
@@ -280,24 +279,6 @@ export function createProcessTool(
     }
     const idle = formatDurationCompact(runtime.idleMs) ?? `${runtime.idleMs}ms`;
     return `\n\nNo new output for ${idle}; this session may be waiting for input. Use process write, send-keys, submit, or paste to provide input.`;
-  };
-
-  const cancelManagedSession = (sessionId: string) => {
-    const record = supervisor.getRecord(sessionId);
-    if (!record || record.state === "exited") {
-      return false;
-    }
-    supervisor.cancel(sessionId, "manual-cancel");
-    return true;
-  };
-
-  const terminateSessionFallback = (session: ProcessSession) => {
-    const pid = session.pid ?? session.child?.pid;
-    if (typeof pid !== "number" || !Number.isFinite(pid) || pid <= 0) {
-      return false;
-    }
-    killProcessTree(pid);
-    return true;
   };
 
   return {
@@ -676,24 +657,17 @@ export function createProcessTool(
           if (scopedSession.finalizing) {
             return failText(`Session ${params.sessionId} is finalizing.`);
           }
-          const canceled = cancelManagedSession(scopedSession.id);
-          if (!canceled) {
-            const terminated = terminateSessionFallback(scopedSession);
-            if (!terminated) {
-              return failText(
-                `Unable to terminate session ${params.sessionId}: no active supervisor run or process id.`,
-              );
-            }
-            markExited(scopedSession, null, "SIGKILL", "failed");
+          if (!cancelBackgroundExecSession(scopedSession.id)) {
+            return failText(
+              `Unable to terminate session ${params.sessionId}: no active supervisor cancellation handle. Use process poll to check whether it is already exiting.`,
+            );
           }
           resetPollRetrySuggestion(params.sessionId);
           return {
             content: [
               {
                 type: "text",
-                text: canceled
-                  ? `Termination requested for session ${params.sessionId}.`
-                  : `Killed session ${params.sessionId}.`,
+                text: `Termination requested for session ${params.sessionId}.`,
               },
             ],
             details: {
@@ -725,32 +699,26 @@ export function createProcessTool(
 
         case "remove": {
           if (scopedSession) {
+            if (!scopedSession.backgrounded) {
+              return failText(`Session ${params.sessionId} is not backgrounded.`);
+            }
             if (scopedSession.finalizing) {
               return failText(`Session ${params.sessionId} is finalizing.`);
             }
-            const canceled = cancelManagedSession(scopedSession.id);
-            if (canceled) {
-              // Keep remove semantics deterministic: drop from process registry now.
-              scopedSession.backgrounded = false;
-              deleteSession(params.sessionId);
-            } else {
-              const terminated = terminateSessionFallback(scopedSession);
-              if (!terminated) {
-                return failText(
-                  `Unable to remove session ${params.sessionId}: no active supervisor run or process id.`,
-                );
-              }
-              markExited(scopedSession, null, "SIGKILL", "failed");
-              deleteSession(params.sessionId);
+            if (!cancelBackgroundExecSession(scopedSession.id)) {
+              return failText(
+                `Unable to remove session ${params.sessionId}: no active supervisor cancellation handle. Use process poll to check whether it is already exiting.`,
+              );
             }
+            // Keep remove semantics deterministic: drop from process registry now.
+            scopedSession.backgrounded = false;
+            deleteSession(params.sessionId);
             resetPollRetrySuggestion(params.sessionId);
             return {
               content: [
                 {
                   type: "text",
-                  text: canceled
-                    ? `Removed session ${params.sessionId} (termination requested).`
-                    : `Removed session ${params.sessionId}.`,
+                  text: `Removed session ${params.sessionId} (termination requested).`,
                 },
               ],
               details: {

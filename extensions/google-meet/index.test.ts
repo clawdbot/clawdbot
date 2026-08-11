@@ -21,6 +21,7 @@ import type {
   RealtimeVoiceBridge,
   RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Google Meet tests cover index plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -571,10 +572,6 @@ function requireConfigProperty(
     throw new Error(`Expected Google Meet config schema property ${key}`);
   }
   return value as Record<string, unknown>;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 type MockSessionEntry = {

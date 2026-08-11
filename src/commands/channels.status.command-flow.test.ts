@@ -152,7 +152,7 @@ vi.mock("../channels/plugins/status.js", () => ({
     accountId,
     ...plugin.config.inspectAccount(cfg),
   }),
-  buildChannelAccountSnapshot: async ({
+  resolveChannelAccountSnapshot: async ({
     plugin,
     cfg,
     accountId,

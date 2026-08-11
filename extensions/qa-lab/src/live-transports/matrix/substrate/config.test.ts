@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { buildMatrixQaConfig } from "./config.js";
 import type { MatrixQaProvisionedTopology } from "./topology.js";
 
-function asRecord(value: unknown): Record<string, unknown> {
+function castRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
@@ -385,19 +385,19 @@ describe("matrix qa config", () => {
       },
     } as unknown as OpenClawConfig;
     const current = structuredClone(baseline) as OpenClawConfig & Record<string, unknown>;
-    const currentRoot = asRecord(current);
+    const currentRoot = castRecord(current);
     currentRoot.unrelated = { currentOnly: true };
-    asRecord(currentRoot.approvals).exec = {
+    castRecord(currentRoot.approvals).exec = {
       enabled: true,
       mode: "session",
       reviewer: "current",
     };
-    asRecord(currentRoot.agents).defaults = {
+    castRecord(currentRoot.agents).defaults = {
       blockStreamingChunk: { maxChars: 8 },
       adjacentDefault: "current",
     };
-    const currentTools = asRecord(currentRoot.tools);
-    const currentMedia = asRecord(currentTools.media);
+    const currentTools = castRecord(currentRoot.tools);
+    const currentMedia = castRecord(currentTools.media);
     currentTools.profile = "coding";
     currentMedia.models = [{ provider: "openai", model: "previous" }];
     currentMedia.audio = {
@@ -409,16 +409,16 @@ describe("matrix qa config", () => {
         rules: [{ action: "deny", match: { chatType: "group" } }],
       },
     };
-    asRecord(currentRoot.messages).groupChat = {
+    castRecord(currentRoot.messages).groupChat = {
       mentionPatterns: ["previous"],
       adjacentMessage: "current",
     };
-    const currentMatrix = asRecord(asRecord(currentRoot.channels).matrix);
+    const currentMatrix = castRecord(castRecord(currentRoot.channels).matrix);
     currentMatrix.unknownRoot = "current";
-    const currentAccounts = asRecord(currentMatrix.accounts);
+    const currentAccounts = castRecord(currentMatrix.accounts);
     currentAccounts.sibling = { enabled: false, homeserver: "https://sibling.invalid" };
     currentAccounts["qa-driver-bot-source"] = { enabled: false, userId: "@stale:test" };
-    const currentSut = asRecord(currentAccounts.sut);
+    const currentSut = castRecord(currentAccounts.sut);
     currentAccounts.sut = {
       ...currentSut,
       allowBots: "mentions",
@@ -426,7 +426,7 @@ describe("matrix qa config", () => {
       deviceId: "CURRENT-DEVICE",
       lifecycleState: "current",
       dm: {
-        ...asRecord(currentSut.dm),
+        ...castRecord(currentSut.dm),
         allowFrom: ["@previous:test"],
         adjacentDm: "current",
         sessionScope: "per-user",
@@ -440,7 +440,7 @@ describe("matrix qa config", () => {
         target: "both",
       },
       groups: {
-        ...asRecord(currentSut.groups),
+        ...castRecord(currentSut.groups),
         "!main:matrix-qa.test": {
           allowBots: "mentions",
           adjacentGroup: "current",
@@ -482,7 +482,7 @@ describe("matrix qa config", () => {
       topology,
     });
 
-    expect(asRecord(next).unrelated).toEqual({ currentOnly: true });
+    expect(castRecord(next).unrelated).toEqual({ currentOnly: true });
     expect(next.approvals?.exec).toEqual({
       enabled: false,
       mode: "session",
@@ -513,7 +513,7 @@ describe("matrix qa config", () => {
     expect(next.channels?.matrix).toMatchObject({ unknownRoot: "current" });
     expect(next.channels?.matrix?.accounts?.sibling).toEqual(currentAccounts.sibling);
     expect(next.channels?.matrix?.accounts?.["qa-driver-bot-source"]).toBeUndefined();
-    const sut = asRecord(next.channels?.matrix?.accounts?.sut);
+    const sut = castRecord(next.channels?.matrix?.accounts?.sut);
     expect(sut).toMatchObject({
       allowBots: false,
       autoJoin: "allowlist",
@@ -548,7 +548,7 @@ describe("matrix qa config", () => {
         idleHours: 12,
       },
     });
-    const sutGroups = asRecord(sut.groups);
+    const sutGroups = castRecord(sut.groups);
     expect(sutGroups["!main:matrix-qa.test"]).toEqual({
       adjacentGroup: "current",
       allowBots: false,

@@ -62,7 +62,7 @@ export type MemoryChunk = {
 };
 
 // Persisted with index metadata so boundary changes rebuild unchanged files.
-export const MEMORY_CHUNKING_VERSION = 2;
+export const MEMORY_CHUNKING_VERSION = 3;
 
 type MultimodalMemoryChunk = {
   chunk: MemoryChunk;
@@ -230,7 +230,8 @@ export async function listMemoryFiles(
   try {
     const dirStat = await fs.lstat(memoryDir);
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
-      await collectMemoryFilesFromDir(memoryDir, result, multimodal, shouldSkipWorkspaceMemoryPath);
+      // Default memory roots stay Markdown-only; multimodal discovery is an extraPaths opt-in.
+      await collectMemoryFilesFromDir(memoryDir, result, undefined, shouldSkipWorkspaceMemoryPath);
     }
   } catch {}
 

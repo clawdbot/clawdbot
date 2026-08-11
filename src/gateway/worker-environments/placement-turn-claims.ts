@@ -46,6 +46,12 @@ const turnClaimReleaseWaiters = resolveGlobalMap<string, Map<string, Set<TurnCla
     waitersByPath.clear();
   },
 );
+const workerTurnClaimClosedHandlers = resolveGlobalMap<
+  string,
+  Set<(claim: WorkerSessionTurnClaim) => void>
+>(Symbol.for("openclaw.workerTurnClaimClosedHandlers"), (handlersByPath) => {
+  handlersByPath.clear();
+});
 const workspaceJournalQuery = (db: DatabaseSync) =>
   getNodeSqliteKysely<Pick<StateDatabase, "worker_workspace_reconciliations">>(db);
 
@@ -70,7 +76,7 @@ function waitersFor(path: string, sessionId: string): Set<TurnClaimReleaseWaiter
   return waiters;
 }
 
-export function signalTurnClaimRelease(path: string, sessionId: string): void {
+function signalTurnClaimRelease(path: string, sessionId: string): void {
   const bySession = turnClaimReleaseWaiters.get(path);
   const waiters = bySession?.get(sessionId);
   if (!waiters) {
@@ -82,6 +88,32 @@ export function signalTurnClaimRelease(path: string, sessionId: string): void {
   }
   for (const resolve of waiters) {
     resolve();
+  }
+}
+
+export function registerWorkerTurnClaimClosedHandler(
+  path: string,
+  handler: (claim: WorkerSessionTurnClaim) => void,
+): () => void {
+  const handlers = workerTurnClaimClosedHandlers.get(path) ?? new Set();
+  handlers.add(handler);
+  workerTurnClaimClosedHandlers.set(path, handlers);
+  return () => {
+    handlers.delete(handler);
+    if (handlers.size === 0) {
+      workerTurnClaimClosedHandlers.delete(path);
+    }
+  };
+}
+
+export function signalWorkerTurnClaimClosed(path: string, claim: WorkerSessionTurnClaim): void {
+  signalTurnClaimRelease(path, claim.sessionId);
+  for (const handler of workerTurnClaimClosedHandlers.get(path) ?? []) {
+    try {
+      handler(claim);
+    } catch {
+      // Settlement observation cannot roll back the authoritative store transition.
+    }
   }
 }
 
@@ -215,7 +247,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         }
         return getRequired(db, sessionId);
       });
-      signalTurnClaimRelease(path, sessionId);
+      signalWorkerTurnClaimClosed(path, claim);
       return released;
     },
 
@@ -276,7 +308,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         }
         return getRequired(db, sessionId);
       });
-      signalTurnClaimRelease(path, sessionId);
+      signalWorkerTurnClaimClosed(path, claim);
       return released;
     },
 
@@ -348,7 +380,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         }
         return getRequired(db, sessionId);
       });
-      signalTurnClaimRelease(path, sessionId);
+      signalWorkerTurnClaimClosed(path, claim);
       return released;
     },
 

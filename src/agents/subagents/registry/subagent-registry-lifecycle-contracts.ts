@@ -57,7 +57,14 @@ export type SubagentRegistryLifecycleState = {
   scheduledResumeTimers: Set<ReturnType<typeof setTimeout>>;
   pendingRequesterSettleWakeRearms: Set<string>;
   scheduledRequesterSettleWakeRuns: Set<string>;
-  scheduledRequesterSettleWakeTimers: Map<string, ReturnType<typeof setTimeout>>;
+  scheduledRequesterSettleWakeTimers: Map<
+    string,
+    {
+      timer: ReturnType<typeof setTimeout>;
+      deadline: number;
+      rearmGeneration?: number;
+    }
+  >;
   terminalCompletionLocks: Map<string, Promise<void>>;
   terminalGenerations: WeakMap<SubagentRunRecord, number>;
   cleanupGenerations: WeakMap<SubagentRunRecord, number>;

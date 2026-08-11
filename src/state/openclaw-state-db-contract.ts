@@ -5,10 +5,11 @@ import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 // v5 records durable cloud-worker result refs on pending workspace fences.
 export const OPENCLAW_STATE_SCHEMA_VERSION = 6;
 export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
-// Feature-local tables remain absent even in fresh databases until their first
-// write. The canonical SQL still owns their shape.
+// Privacy-sensitive feature tables remain absent even in fresh databases until
+// their feature-local first write. The canonical SQL still owns their shape.
 export const FIRST_USE_STATE_TABLES = [
   "execution_identity_contexts",
+  "operator_approval_execution_identities",
   "delegate_artifact_audit",
   "delegate_artifact_bindings",
   "delegate_artifact_claims",
@@ -29,6 +30,7 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   ...FIRST_USE_STATE_TABLES,
   "model_catalog_remote",
   "secret_store_entries",
+  "projects",
   "gateway_origin_device_tokens",
   "sidebar_sections",
   "skill_workshop_proposal_events",

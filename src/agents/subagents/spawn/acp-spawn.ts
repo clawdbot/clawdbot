@@ -14,7 +14,6 @@ import {
 import { buildSessionCreationStamp } from "../../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { callGateway } from "../../../gateway/call.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveEventSessionRoutingPolicy } from "../../../infra/event-session-routing.js";
 import {
@@ -92,6 +91,7 @@ import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "./subagent-capabilities.js";
+import { callSubagentGateway, readGatewayRunId } from "./subagent-spawn-gateway.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-plan.js";
 
@@ -594,7 +594,7 @@ export async function spawnAcpDirect(
           cfg,
         });
       }
-      const response = await callGateway({
+      const response = await callSubagentGateway({
         method: "agent",
         params: {
           message: params.task,
@@ -613,7 +613,7 @@ export async function spawnAcpDirect(
         },
         timeoutMs: 10_000,
       });
-      const runId = normalizeOptionalString(response?.runId) ?? childIdem;
+      const runId = readGatewayRunId(response) ?? childIdem;
       if (state.parentRelay && runId !== childIdem && parentSessionKey) {
         state.parentRelay.dispose();
         state.parentRelay = startAcpSpawnParentStreamRelay({

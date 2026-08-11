@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createExecutionIdentityRecoveryAdmission } from "../../agents/admitted-run-context.js";
 import { parseExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
 import { resolveRestartRecoveryChannelAuthority } from "../../config/sessions/restart-recovery-state.js";
@@ -30,13 +31,13 @@ export function resolveAgentRestartRecoveryExecutionIdentityAdmission(params: {
   const stored = (params.sessionEntry as InternalSessionEntry | undefined)?.mainRestartRecovery
     ?.executionIdentity;
   if (!stored) {
-    throw new Error("restart recovery execution identity token is unavailable");
+    return createExecutionIdentityRecoveryAdmission({ retryOnly: params.retryOnly });
   }
   const token = parseExecutionIdentityAdmissionToken(stored);
-  if (!params.retryOnly && token.runId !== params.runId) {
+  if (token.runId !== params.runId) {
     throw new Error("restart recovery execution identity token disagrees with the admitted run");
   }
-  return { token, retryOnly: params.retryOnly };
+  return createExecutionIdentityRecoveryAdmission({ token, retryOnly: params.retryOnly });
 }
 
 /** Rehydrates durable channel authority only for the exact host-owned recovery run. */

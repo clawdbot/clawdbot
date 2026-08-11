@@ -36,7 +36,7 @@ import {
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 
 const { announceSpy } = vi.hoisted(() => ({
-  announceSpy: vi.fn(async () => true),
+  announceSpy: vi.fn(async () => "delivered" as const),
 }));
 vi.mock("./subagents/announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
@@ -184,7 +184,7 @@ describe("subagent registry persistence", () => {
 
   beforeEach(() => {
     announceSpy.mockReset();
-    announceSpy.mockResolvedValue(true);
+    announceSpy.mockResolvedValue("delivered");
     testing.setDepsForTest({
       ...createSubagentRegistryTestDeps(),
       persistSubagentRunsToDisk: fastPersistSubagentRunsToDisk,

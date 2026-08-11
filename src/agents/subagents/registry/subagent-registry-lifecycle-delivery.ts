@@ -14,6 +14,7 @@ import {
   setDetachedTaskDeliveryStatusByRunId,
 } from "../../../tasks/detached-task-runtime.js";
 import { resolveRequiredCompletionDeliveryFailureTerminalResult } from "../../../tasks/task-completion-contract.js";
+import type { TaskDeliveryStatus } from "../../../tasks/task-registry.types.js";
 import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
@@ -36,6 +37,8 @@ import type {
   SubagentRegistryLifecycleState,
 } from "./subagent-registry-lifecycle-contracts.js";
 import type { PendingFinalDeliveryPayload, SubagentRunRecord } from "./subagent-registry.types.js";
+import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
+
 const DELIVERY_MIRROR_HISTORY_MAX_CHARS = 128 * 1024;
 
 export function createSubagentRegistryLifecycleDelivery(
@@ -49,6 +52,7 @@ export function createSubagentRegistryLifecycleDelivery(
   const formatAnnounceDeliveryError = (delivery: SubagentAnnounceDeliveryResult): string => {
     const errors = [
       delivery.error,
+      delivery.reason,
       ...(delivery.phases ?? []).map((phase) =>
         phase.error ? `${phase.phase}: ${phase.error}` : undefined,
       ),
@@ -162,7 +166,7 @@ export function createSubagentRegistryLifecycleDelivery(
 
   const safeSetSubagentTaskDeliveryStatus = (args: {
     entry: SubagentRunRecord;
-    deliveryStatus: "delivered" | "failed";
+    deliveryStatus: Extract<TaskDeliveryStatus, "pending" | "delivered" | "failed">;
     deliveryError?: string;
   }) => {
     const target = resolveSubagentTaskTarget(args.entry);
@@ -360,9 +364,11 @@ export function createSubagentRegistryLifecycleDelivery(
     const candidates = listPendingCompletionRunsForSession(sessionKey).filter(
       (entry) => entry.execution.outcome?.status !== "error",
     );
-    if (candidates.length === 0) {
+    const entry = candidates.toSorted(compareSubagentRunGeneration).at(-1);
+    if (!entry || newerGenerationOwnsSession(entry)) {
       return false;
     }
+    const generation = entry.generation;
 
     let captured: string | undefined;
     try {
@@ -374,23 +380,25 @@ export function createSubagentRegistryLifecycleDelivery(
     if (!trimmed || isSilentAgentReplyText(trimmed)) {
       return false;
     }
+    // Reply capture yields while registration can transfer session ownership.
+    // Only the exact row and generation that started capture may commit its text.
+    if (
+      params.runs.get(entry.runId) !== entry ||
+      entry.generation !== generation ||
+      newerGenerationOwnsSession(entry)
+    ) {
+      return false;
+    }
 
     const nextFrozen = capFrozenResultText(trimmed);
-    const capturedAt = Date.now();
-    let changed = false;
-    for (const entry of candidates) {
-      const completion = ensureCompletionState(entry);
-      if (completion.resultText === nextFrozen) {
-        continue;
-      }
-      completion.resultText = nextFrozen;
-      completion.capturedAt = capturedAt;
-      changed = true;
+    const completion = ensureCompletionState(entry);
+    if (completion.resultText === nextFrozen) {
+      return false;
     }
-    if (changed) {
-      params.persist(...candidates.map((entry) => entry.runId));
-    }
-    return changed;
+    completion.resultText = nextFrozen;
+    completion.capturedAt = Date.now();
+    params.persist(entry.runId);
+    return true;
   };
 
   const emitCompletionEndedHookIfNeeded = async (

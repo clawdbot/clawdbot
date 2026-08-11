@@ -33,6 +33,7 @@ import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { listTaskFlowsForOwnerKey } from "../../tasks/task-flow-registry.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { runAgentAttempt } from "./attempt-execution.js";
+import { createTestPreparedRunAdmission } from "../admitted-run-context.test-support.js";
 
 const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
 const runCliAgentMock = vi.hoisted(() => vi.fn());
@@ -146,6 +147,7 @@ describe("subagent CONTINUE_WORK token self-continuation (token-form parity)", (
     clearSessionStoreCacheForTest();
     runEmbeddedAgentMock.mockResolvedValueOnce(tokenRunResult(token));
     return runAgentAttempt({
+      preparedRunAdmission: createTestPreparedRunAdmission("run-test"),
       providerOverride: "anthropic",
       originalProvider: "anthropic",
       modelOverride: "claude-sonnet-4.7",

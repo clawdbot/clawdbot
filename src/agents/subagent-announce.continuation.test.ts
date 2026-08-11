@@ -57,6 +57,16 @@ vi.mock("./embedded-agent.js", () => ({
   waitForEmbeddedAgentRunEnd: async () => true,
 }));
 
+vi.mock("./subagents/registry/subagent-registry-read.js", () => ({
+  countActiveDescendantRuns: (key: string) => mocked.countActiveDescendantRunsMock(key),
+  countPendingDescendantRuns: (key: string) => mocked.countPendingDescendantRunsMock(key),
+  countPendingDescendantRunsExcludingRun: () => 0,
+  isSubagentSessionRunActive: (key: string) => mocked.isSubagentSessionRunActiveMock(key),
+  listSubagentRunsForRequester: () => [],
+  replaceSubagentRunAfterSteer: () => true,
+  resolveRequesterForChildSession: (key: string) => mocked.resolveRequesterForChildSessionMock(key),
+  shouldIgnorePostCompletionAnnounceForSession: () => false,
+}));
 vi.mock("./subagents/registry/subagent-registry-runtime.js", () => ({
   countActiveDescendantRuns: (key: string) => mocked.countActiveDescendantRunsMock(key),
   countPendingDescendantRuns: (key: string) => mocked.countPendingDescendantRunsMock(key),

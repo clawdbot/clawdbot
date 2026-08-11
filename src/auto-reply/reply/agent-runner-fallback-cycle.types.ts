@@ -1,3 +1,4 @@
+import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { ContinueWorkRequest } from "../../agents/tools/continue-work-tool.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -49,6 +50,7 @@ type AgentFallbackModelPatch = {
 };
 
 export type AgentFallbackCycleParams = {
+  preparedRunAdmission: PreparedAgentRunAdmission;
   turn: AgentTurnParams;
   effectiveRun: FollowupRun["run"];
   runtimeConfig: OpenClawConfig;

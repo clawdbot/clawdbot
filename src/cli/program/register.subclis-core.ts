@@ -332,7 +332,7 @@ export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
   return getSubCliEntryDescriptors();
 }
 
-export async function registerSubCliByName(
+export async function registerSubCliByNameCore(
   program: Command,
   name: string,
   argv: string[] = process.argv,
@@ -345,7 +345,7 @@ export async function registerSubCliByName(
   return registerCommandGroupByName(program, resolveSubCliCommandGroups(argv, context), name);
 }
 
-export function registerSubCliCommands(program: Command, argv: string[] = process.argv) {
+export function registerSubCliCommandsCore(program: Command, argv: string[] = process.argv) {
   const { primary } = resolveCliArgvInvocation(argv);
   registerCommandGroups(program, resolveSubCliCommandGroups(argv), {
     eager: shouldEagerRegisterSubcommands(),

@@ -369,6 +369,7 @@ type ToolHandlerState = Pick<
   | "acceptedSessionSpawns"
   | "toolSummaryById"
   | "execLiveUpdateStateById"
+  | "liveEditDiffStateById"
   | "itemActiveIds"
   | "itemStartedCount"
   | "itemCompletedCount"
@@ -395,9 +396,7 @@ type ToolHandlerState = Pick<
   | "deterministicApprovalPromptSent"
   | "toolExecutionSinceLastBlockReply"
   | "assistantMessageIndex"
-> & {
-  liveEditDiffStateById?: EmbeddedAgentSubscribeState["liveEditDiffStateById"];
-};
+>;
 
 export type ToolHandlerContext = {
   params: ToolHandlerParams;

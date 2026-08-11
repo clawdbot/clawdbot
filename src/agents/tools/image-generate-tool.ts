@@ -56,7 +56,7 @@ import {
   ToolInputError,
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
-  readStringParam,
+  readToolStringParam,
 } from "./common.js";
 import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
 import {
@@ -398,15 +398,15 @@ function readRecordParam(params: Record<string, unknown>, key: string): Record<s
 
 function normalizeOpenAIOptions(args: Record<string, unknown>): ImageGenerationOpenAIOptions {
   const raw = readRecordParam(args, "openai");
-  const background = normalizeOpenAIBackground(readStringParam(raw, "background"));
-  const moderation = normalizeOpenAIModeration(readStringParam(raw, "moderation"));
+  const background = normalizeOpenAIBackground(readToolStringParam(raw, "background"));
+  const moderation = normalizeOpenAIModeration(readToolStringParam(raw, "moderation"));
   if (readSnakeCaseParamRaw(raw, "outputCompression") === null) {
     throw new ToolInputError("openai.outputCompression must be between 0 and 100");
   }
   const outputCompression = readNonNegativeIntegerParam(raw, "outputCompression", {
     message: "openai.outputCompression must be between 0 and 100",
   });
-  const user = readStringParam(raw, "user");
+  const user = readToolStringParam(raw, "user");
   if (outputCompression !== undefined && (outputCompression < 0 || outputCompression > 100)) {
     throw new ToolInputError("openai.outputCompression must be between 0 and 100");
   }
@@ -422,7 +422,7 @@ function normalizeProviderOptions(
   args: Record<string, unknown>,
 ): ImageGenerationProviderOptions | undefined {
   const falRaw = readRecordParam(args, "fal");
-  const falCreativity = normalizeFalCreativity(readStringParam(falRaw, "creativity"));
+  const falCreativity = normalizeFalCreativity(readToolStringParam(falRaw, "creativity"));
   const openai = normalizeOpenAIOptions(args);
   const fal = falCreativity ? { creativity: falCreativity } : undefined;
   return fal || Object.keys(openai).length > 0
@@ -927,7 +927,7 @@ export function createImageGenerateTool(options?: {
         return createImageGenerateStatusActionResult(options?.agentSessionKey);
       }
 
-      const model = readStringParam(params, "model");
+      const model = readToolStringParam(params, "model");
       const configuredImageGenerationModelConfig = coerceToolModelConfig(
         cfg.agents?.defaults?.mediaModels?.image,
       );
@@ -945,7 +945,7 @@ export function createImageGenerateTool(options?: {
       const effectiveCfg =
         applyImageGenerationModelConfigDefaults(cfg, imageGenerationModelConfig) ?? cfg;
       const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
-      const prompt = readStringParam(params, "prompt", { required: true });
+      const prompt = readToolStringParam(params, "prompt", { required: true });
 
       const activeDuplicateGuardResult = createImageGenerateDuplicateGuardResult(
         options?.agentSessionKey,
@@ -956,14 +956,14 @@ export function createImageGenerateTool(options?: {
       }
 
       const imageInputs = normalizeReferenceImages(params);
-      const filename = readStringParam(params, "filename");
-      const size = readStringParam(params, "size");
-      const aspectRatio = normalizeAspectRatio(readStringParam(params, "aspectRatio"));
-      const explicitResolution = normalizeResolution(readStringParam(params, "resolution"));
+      const filename = readToolStringParam(params, "filename");
+      const size = readToolStringParam(params, "size");
+      const aspectRatio = normalizeAspectRatio(readToolStringParam(params, "aspectRatio"));
+      const explicitResolution = normalizeResolution(readToolStringParam(params, "resolution"));
       const timeoutMs = readGenerationTimeoutMs(params) ?? imageGenerationModelConfig.timeoutMs;
-      const quality = normalizeQuality(readStringParam(params, "quality"));
-      const outputFormat = normalizeOutputFormat(readStringParam(params, "outputFormat"));
-      const background = normalizeBackground(readStringParam(params, "background"));
+      const quality = normalizeQuality(readToolStringParam(params, "quality"));
+      const outputFormat = normalizeOutputFormat(readToolStringParam(params, "outputFormat"));
+      const background = normalizeBackground(readToolStringParam(params, "background"));
       const providerOptions = normalizeProviderOptions(params);
       const imageGenerationProviders =
         preparedProviders ?? listRuntimeImageGenerationProviders({ config: effectiveCfg });

@@ -1258,7 +1258,7 @@ function extractAggregateUsageFromTranscriptLines(
   return snapshot;
 }
 
-export async function readLatestSessionUsageFromTranscriptAsync(
+export async function readLatestSessionUsageFromTranscriptFileAsync(
   sessionId: string,
   storePath: string | undefined,
   sessionFile?: string,

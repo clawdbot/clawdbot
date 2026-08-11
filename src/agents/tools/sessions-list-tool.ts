@@ -34,7 +34,7 @@ import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
   readStringArrayParam,
-  readStringParam,
+  readToolStringParam,
 } from "./common.js";
 import {
   callAgentToolGatewayRequest,
@@ -180,9 +180,9 @@ export function createSessionsListTool(opts?: {
       const activeMinutes = readPositiveIntegerParam(params, "activeMinutes");
       const messageLimitRaw = readNonNegativeIntegerParam(params, "messageLimit") ?? 0;
       const messageLimit = Math.min(messageLimitRaw, 20);
-      const label = readStringParam(params, "label");
-      const agentId = readStringParam(params, "agentId");
-      const search = readStringParam(params, "search");
+      const label = readToolStringParam(params, "label");
+      const agentId = readToolStringParam(params, "agentId");
+      const search = readToolStringParam(params, "search");
       const archived = params.archived === true;
       const includeDerivedTitles = params.includeDerivedTitles === true;
       const includeLastMessage = params.includeLastMessage === true;

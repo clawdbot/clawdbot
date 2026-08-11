@@ -31,7 +31,7 @@ import type {
   SqliteProjectedLifecycleMutation,
   SqliteSessionEntryRemovalPlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
-import { normalizeSqliteNumber } from "./session-accessor.sqlite-normalize.js";
+import { coerceSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import { loadSqliteTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import { collectSqliteSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import { cloneSessionEntry, getSessionKysely } from "./session-accessor.sqlite-scope.js";
@@ -103,7 +103,7 @@ function readSessionTranscriptUpdatedAt(
   if (row?.updated_at === null || row?.updated_at === undefined) {
     return undefined;
   }
-  return normalizeSqliteNumber(row.updated_at);
+  return coerceSqliteNumber(row.updated_at);
 }
 
 function sqliteTranscriptStateIsReclaimable(params: {
@@ -611,7 +611,7 @@ export function planSqliteSessionLifecycleArtifactCleanup(
       !sqliteTranscriptStateIsReclaimable({
         database,
         // Admission updates the node even when a run has no event yet or reuses old events.
-        sessionUpdatedAt: normalizeSqliteNumber(row.updated_at),
+        sessionUpdatedAt: coerceSqliteNumber(row.updated_at),
         sessionId: row.current_session_id,
         nowMs: params.nowMs,
         orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,

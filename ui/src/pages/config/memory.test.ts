@@ -74,6 +74,22 @@ function renderInto(props: MemoryViewProps): HTMLElement {
 }
 
 describe("renderMemory", () => {
+  it("renders the agent scope only for multiple configured agents", () => {
+    const emptyRoster = renderInto(createProps({ activeTab: "overview", agents: [] }));
+    expect(emptyRoster.querySelector(".agent-scope-control")).toBeNull();
+
+    const singleAgent = renderInto(
+      createProps({
+        activeTab: "overview",
+        agents: [{ value: "main", label: "Main" }],
+      }),
+    );
+    expect(singleAgent.querySelector(".agent-scope-control")).toBeNull();
+
+    const multipleAgents = renderInto(createProps({ activeTab: "overview" }));
+    expect(multipleAgents.querySelector(".agent-scope-control")).not.toBeNull();
+  });
+
   it.each(["overview", "memories", "dreams"] as const)(
     "renders the shared header and agent scope on %s",
     (activeTab) => {

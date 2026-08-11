@@ -941,10 +941,17 @@ function redactSensitiveFieldValueWithOptions(
   if (resolved.mode === "off") {
     return exactRedacted;
   }
-  const redacted = redactText(exactRedacted, resolved.patterns, {
-    redactFormBodies: resolved.redactFormBodies,
-    redactStructuredAuthHeaders: resolved.redactStructuredAuthHeaders,
-  });
+  // Structured payloads can contain thousands of short, benign strings. Avoid
+  // walking the full default pattern table for each one; the prefilter is kept
+  // in sync with every built-in pattern and sensitive form/URL key. Explicit
+  // user patterns still require the full scan because they have no prefilter.
+  const redacted =
+    options.patterns?.length || couldMatchDefaultRedactPatterns(exactRedacted)
+      ? redactText(exactRedacted, resolved.patterns, {
+          redactFormBodies: resolved.redactFormBodies,
+          redactStructuredAuthHeaders: resolved.redactStructuredAuthHeaders,
+        })
+      : exactRedacted;
   const shouldRedactAppPassword = redacted !== value || STRUCTURED_APP_PASSWORD_FIELD_RE.test(key);
   if (shouldRedactAppPassword) {
     const appRedacted = redactAppSpecificPasswords(redacted);

@@ -26,7 +26,7 @@ import {
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
-import { asRecord } from "./dreaming-shared.js";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
 import {
   DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
@@ -161,7 +161,7 @@ const PAUSED_MEMORY_INDEX_ACTION =
   "Tell the user to run: openclaw memory status --index or openclaw memory index --force.";
 
 function resolvePausedMemoryIndexIdentityReason(status: { custom?: unknown }): string | undefined {
-  const indexIdentity = asRecord(asRecord(status.custom)?.indexIdentity);
+  const indexIdentity = asNullableRecord(asNullableRecord(status.custom)?.indexIdentity);
   if (indexIdentity?.status !== "mismatched" && indexIdentity?.status !== "missing") {
     return undefined;
   }
@@ -630,25 +630,6 @@ export function createMemorySearchTool(options: {
                   resolvePausedMemoryIndexIdentityReason(statusBeforeRetry);
                 if (pausedIndexIdentityReason) {
                   return;
-                }
-                // Retry once after an empty result so the builtin index can finish bootstrap.
-                if (
-                  rawResults.length === 0 &&
-                  !runtimeDebug.some((entry) => entry.embeddingBootstrap) &&
-                  activeMemory.manager.sync
-                ) {
-                  await runWithDefaultDeadline(async () => {
-                    // Sync may join shared/background manager maintenance and has
-                    // no request-cancellation contract. Bound only this tool's wait.
-                    await activeMemory.manager.sync?.({ reason: "search", force: true });
-                  });
-                  rawResults = await searchActiveMemory();
-                  pausedIndexIdentityReason = resolvePausedMemoryIndexIdentityReason(
-                    activeMemory.manager.status(),
-                  );
-                  if (pausedIndexIdentityReason) {
-                    return;
-                  }
                 }
                 rawResults = await runWithDefaultDeadline(
                   async () =>

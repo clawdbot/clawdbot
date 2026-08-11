@@ -20,7 +20,7 @@ import {
   embeddedAgentLog,
   getChannelAgentToolMeta,
   getPluginToolMeta,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
   isReplaySafeToolCall,

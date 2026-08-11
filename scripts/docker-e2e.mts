@@ -1,15 +1,15 @@
 // Docker E2E CI helper.
 // Converts scheduler JSON into GitHub Actions outputs and compact markdown
 // summaries so the workflow does not duplicate Docker E2E planning logic.
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readDockerE2eJsonArtifact } from "./lib/docker-e2e-json-artifacts.mts";
 
-function asRecord(value: unknown) {
-  return isRecord(value) ? value : {};
+function recordOrEmpty(value: unknown) {
+  return asOptionalRecord(value) ?? {};
 }
 
 function recordArray(value: unknown) {
-  return Array.isArray(value) ? value.map(asRecord) : [];
+  return Array.isArray(value) ? value.map(recordOrEmpty) : [];
 }
 
 function usage() {
@@ -26,8 +26,8 @@ function boolOutput(value: unknown) {
 }
 
 function githubOutputs(value: unknown) {
-  const plan = asRecord(value);
-  const needs = asRecord(plan.needs);
+  const plan = recordOrEmpty(value);
+  const needs = recordOrEmpty(plan.needs);
   const credentials = Array.isArray(plan.credentials)
     ? plan.credentials.filter(
         (credential: unknown): credential is string => typeof credential === "string",
@@ -76,7 +76,7 @@ function formatSeconds(value: unknown) {
 }
 
 function summaryMarkdown(value: unknown, title: string) {
-  const summary = asRecord(value);
+  const summary = recordOrEmpty(value);
   const lanes = recordArray(summary.lanes);
   const slowest = lanes
     .filter((lane) => Number.isFinite(Number(lane.elapsedSeconds)))
@@ -127,7 +127,7 @@ function summaryMarkdown(value: unknown, title: string) {
 }
 
 function failedRerunCommands(value: unknown) {
-  const summary = asRecord(value);
+  const summary = recordOrEmpty(value);
   const lanes = recordArray(summary.lanes);
   return lanes.flatMap((lane) =>
     lane.status !== 0 && lane.rerunCommand ? [String(lane.rerunCommand)] : [],

@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import {
   createCronCreatorAuthorityRunScope,
   mintCronCreatorAuthorityGrant,
@@ -20,13 +21,6 @@ type CronCreatorAuthorityResolverScope = {
 const activeCronCreatorAuthority = new AsyncLocalStorage<CronCreatorAuthorityRunScope>();
 const activeCronCreatorAuthorityResolver =
   new AsyncLocalStorage<CronCreatorAuthorityResolverScope>();
-
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  if ((typeof value !== "object" || value === null) && typeof value !== "function") {
-    return false;
-  }
-  return "then" in value && typeof value.then === "function";
-}
 
 /** Keeps fresh cron reauthorization within one admitted Gateway agent run. */
 export function runWithCronCreatorAuthority<T>(

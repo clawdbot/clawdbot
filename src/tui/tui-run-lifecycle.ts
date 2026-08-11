@@ -1,7 +1,7 @@
 // Coordinates active TUI runs, watchdogs, terminal errors, and history refresh.
 import { classifyFailoverReason, isAuthErrorMessage } from "../agents/embedded-agent-helpers.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
-import { asString } from "./tui-formatters.js";
+import { formatPrimitiveString } from "./tui-formatters.js";
 import type { TuiSessionRunCoordinator } from "./tui-session-run-coordinator.js";
 import {
   clearPendingSubmit,
@@ -179,7 +179,7 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
 
   const applyFallbackStepModelUpdate = (event: AgentEvent): boolean => {
     const data = event.data ?? {};
-    if (event.stream !== "lifecycle" || asString(data.phase, "") !== "fallback_step") {
+    if (event.stream !== "lifecycle" || formatPrimitiveString(data.phase, "") !== "fallback_step") {
       return false;
     }
     if (typeof data.fallbackStepToModel !== "string") {

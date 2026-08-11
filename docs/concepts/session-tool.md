@@ -26,7 +26,7 @@ OpenClaw gives agents tools to work across sessions, inspect status, and orchest
 | `subagents`          | List or cancel background work in this session tree                         |
 | `session_status`     | Show a `/status`-style card and optionally set a per-session model override |
 
-These tools are still subject to the active tool profile and allow/deny policy. `tools.profile: "coding"` includes the full session orchestration set. `tools.profile: "messaging"` includes session self-service, discovery, recall, cross-session messaging, external-conversation tools, and the complete spawn lifecycle (`sessions_spawn`, `sessions_yield`, and `subagents`). The UI-only task-suggestion tools `spawn_task` and `dismiss_task` remain coding-profile tools.
+These tools are still subject to the active tool profile and allow/deny policy. `tools.profile: "coding"` includes the full session orchestration set. `tools.profile: "messaging"` includes session self-service, discovery, recall, cross-session messaging, external-conversation tools, and the complete spawn lifecycle (`sessions_spawn`, `sessions_yield`, and `subagents`). The UI-only task-suggestion tools `suggest_task` and `dismiss_task` remain coding-profile tools.
 
 Group, provider, sandbox, and per-agent policies can still remove those tools after the profile stage. Use `/tools` from the affected session to inspect the effective tool list.
 

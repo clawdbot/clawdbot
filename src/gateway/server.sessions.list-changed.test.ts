@@ -41,13 +41,13 @@ type MockCalls = {
 type SessionStoreEntryOptions = Parameters<typeof sessionStoreEntry>[1];
 type MutationMethod = "sessions.patch" | "sessions.compact";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(isRecord(value), `${label} should be an object`).toBe(true);
-  if (!isRecord(value)) {
+  expect(isObjectRecord(value), `${label} should be an object`).toBe(true);
+  if (!isObjectRecord(value)) {
     throw new Error(`${label} should be an object`);
   }
   return value;
@@ -70,7 +70,7 @@ function expectFields(record: Record<string, unknown>, expected: Record<string, 
 function transcriptMessageContents(events: readonly unknown[]): unknown[] {
   return events
     .map((event) =>
-      isRecord(event) && isRecord(event.message) ? event.message.content : undefined,
+      isObjectRecord(event) && isObjectRecord(event.message) ? event.message.content : undefined,
     )
     .filter((content) => content !== undefined);
 }
@@ -90,7 +90,7 @@ function findSession(
   const sessions = requireArray(payload.sessions, "response sessions");
   const session = sessions.find(
     (candidate): candidate is Record<string, unknown> =>
-      isRecord(candidate) && candidate.key === sessionKey,
+      isObjectRecord(candidate) && candidate.key === sessionKey,
   );
   if (!session) {
     throw new Error(`Missing session ${sessionKey}`);

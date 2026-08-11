@@ -86,7 +86,7 @@ export async function deleteSubagentSessionForCleanup(
     import("../../../auto-reply/continuation/work-store.js"),
     import("../../../auto-reply/continuation/delegate-store.js"),
     import("../../../auto-reply/continuation/delegate-store-post-compaction.js"),
-    import("./subagent-registry-runtime.js"),
+    import("./subagent-registry-read.js"),
   ]);
   // A continuation_work TaskFlow, an in-flight regular continuation delegate, or
   // an accepted child run that still uses this session as requester owns

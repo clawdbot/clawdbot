@@ -1,3 +1,4 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 /**
  * Handles embedded-agent assistant message events, block replies, reasoning
  * streams, reply directives, and pending tool media attachment handoff.
@@ -35,11 +36,10 @@ import type {
   EmbeddedAgentSubscribeContext,
   EmbeddedAgentSubscribeState,
 } from "./embedded-agent-subscribe.handlers.types.js";
-import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import { appendRawStream } from "./embedded-agent-subscribe.raw-stream.js";
 import { warnIfAssistantEmittedSuspiciousText } from "./embedded-agent-subscribe.tool-text-diagnostics.js";
 import {
-  extractAssistantText,
+  extractEmbeddedAssistantText,
   extractAssistantThinking,
   extractAssistantCommentaryText,
   extractAssistantVisibleText,
@@ -186,7 +186,7 @@ function shouldSuppressValidationLoopAssistantOutput(params: {
   const candidateText = [
     typeof params.assistantRecord?.delta === "string" ? params.assistantRecord.delta : "",
     typeof params.assistantRecord?.content === "string" ? params.assistantRecord.content : "",
-    params.text ?? coerceChatContentText(extractAssistantText(params.message)),
+    params.text ?? coerceChatContentText(extractEmbeddedAssistantText(params.message)),
   ]
     .filter(Boolean)
     .join("\n");
@@ -1277,7 +1277,7 @@ export function handleMessageUpdate(
       }
       finishStreamItemBoundary();
       if (evtType === "text_end" && isAnthropicAssistantMessage(partialAssistant)) {
-        chunk = coerceChatContentText(extractAssistantText(streamAssistant));
+        chunk = coerceChatContentText(extractEmbeddedAssistantText(streamAssistant));
       }
     } else if (
       previousStreamContentIndex !== undefined &&
@@ -1646,7 +1646,7 @@ export function handleMessageEnd(
       event: "assistant_message_end",
       runId: ctx.params.runId,
       sessionId: (ctx.params.session as { id?: string }).id,
-      rawText: coerceChatContentText(extractAssistantText(assistantMessage)),
+      rawText: coerceChatContentText(extractEmbeddedAssistantText(assistantMessage)),
       rawThinking: extractAssistantThinking(assistantMessage),
     });
     emitResolvedCommentaryDisplay(ctx, rawCommentaryText, {
@@ -1674,7 +1674,7 @@ export function handleMessageEnd(
   }
   promoteThinkingTagsToBlocks(assistantMessage);
 
-  const rawText = coerceChatContentText(extractAssistantText(assistantMessage));
+  const rawText = coerceChatContentText(extractEmbeddedAssistantText(assistantMessage));
   const rawVisibleText = coerceChatContentText(extractAssistantVisibleText(assistantMessage));
   const validationErrorSummary = ctx.state.lastToolError
     ? summarizeToolValidationError(ctx.state.lastToolError)

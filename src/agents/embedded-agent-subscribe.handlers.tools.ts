@@ -1,3 +1,4 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 /**
  * Handles embedded-agent tool execution events and turns them into channel UI,
  * replay state, hook calls, approval prompts, media queues, and agent-event
@@ -52,7 +53,6 @@ import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
-import { resolveLiveEditToolKind } from "./embedded-agent-live-edit-diff.js";
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
@@ -70,7 +70,6 @@ import type {
   ToolCallSummary,
   ToolHandlerContext,
 } from "./embedded-agent-subscribe.handlers.types.js";
-import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import {
   collectMessagingMediaUrlsFromRecord,
   collectMessagingMediaUrlsFromToolResult,
@@ -100,6 +99,7 @@ import {
   summarizeToolValidationError,
   type ProcessTerminalDiagnostic,
 } from "./tool-error-summary.js";
+import { resolveFileMutationToolName } from "./tool-mutation-names.js";
 import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { readToolResultDetails } from "./tool-result-error.js";
@@ -1131,7 +1131,7 @@ export function handleToolExecutionStart(
     return;
   }
   const startToolName = normalizeToolName(evt.toolName);
-  ctx.state.liveEditDiffStateById?.delete(evt.toolCallId);
+  ctx.state.liveEditDiffStateById.delete(evt.toolCallId);
   const askUserPromptReservation =
     startToolName === "ask_user" && ctx.params.onToolResult
       ? buildAskUserPromptPayload(evt.toolCallId, ctx.params.sessionKey, ctx.params.runId, evt.args)
@@ -1317,7 +1317,7 @@ export function handleToolExecutionStart(
         toolCallId,
         startedAt,
       });
-    } else if (resolveLiveEditToolKind(toolName) === "patch") {
+    } else if (resolveFileMutationToolName(toolName) === "apply_patch") {
       emitTrackedItemEvent(ctx, {
         itemId: buildPatchItemId(toolCallId),
         phase: "start",
@@ -1553,7 +1553,7 @@ export async function handleToolExecutionEnd(
   const toolName = normalizeToolName(rawToolName);
   const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const toolCallId = evt.toolCallId;
-  ctx.state.liveEditDiffStateById?.delete(toolCallId);
+  ctx.state.liveEditDiffStateById.delete(toolCallId);
   if (toolName === "ask_user") {
     cancelAskUserPromptDelivery(toolCallId, ctx.params.sessionKey, ctx.params.runId);
   }
@@ -2004,7 +2004,7 @@ export async function handleToolExecutionEnd(
     }
   }
 
-  if (resolveLiveEditToolKind(toolName) === "patch") {
+  if (resolveFileMutationToolName(toolName) === "apply_patch") {
     const patchSummary = readApplyPatchSummary(sanitizedResult);
     const patchItemId = buildPatchItemId(toolCallId);
     const summaryText = patchSummary ? buildPatchSummaryText(patchSummary) : undefined;

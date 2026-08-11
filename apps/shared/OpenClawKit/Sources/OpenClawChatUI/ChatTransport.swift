@@ -9,10 +9,42 @@ public enum OpenClawChatTransportEvent: Sendable {
     case chat(OpenClawChatEventPayload)
     case sessionMessage(OpenClawSessionMessageEventPayload)
     case agent(OpenClawAgentEventPayload)
+    case task(OpenClawChatTaskEvent)
     case questionRequested(QuestionRecord)
     case questionResolved(OpenClawQuestionResolvedEvent)
     case routeChanged
     case seqGap
+}
+
+public enum OpenClawChatTaskEvent: Sendable, Decodable {
+    case upserted(TaskSummary)
+    case deleted(taskID: String)
+    case restored
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let action = try container.decode(Action.self, forKey: .action)
+        switch action {
+        case .upserted:
+            self = try .upserted(container.decode(TaskSummary.self, forKey: .task))
+        case .deleted:
+            self = try .deleted(taskID: container.decode(String.self, forKey: .taskID))
+        case .restored:
+            self = .restored
+        }
+    }
+
+    private enum Action: String, Decodable {
+        case upserted
+        case deleted
+        case restored
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case action
+        case task
+        case taskID = "taskId"
+    }
 }
 
 public struct OpenClawQuestionResolvedEvent: Codable, Sendable {
@@ -727,6 +759,7 @@ public protocol OpenClawChatTransport: Sendable {
 
     func requestHealth(timeoutMs: Int) async throws -> Bool
     func listQuestions() async throws -> [QuestionRecord]
+    func listTasks(sessionKey: String, agentID: String?) async throws -> [TaskSummary]
     func getQuestion(id: String) async throws -> QuestionRecord
     func resolveQuestion(id: String, answers: [String: [String]]) async throws
     func cancelQuestion(id: String) async throws
@@ -769,6 +802,10 @@ extension OpenClawChatTransport {
     }
 
     public func listQuestions() async throws -> [QuestionRecord] {
+        []
+    }
+
+    public func listTasks(sessionKey _: String, agentID _: String?) async throws -> [TaskSummary] {
         []
     }
 

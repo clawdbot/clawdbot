@@ -410,11 +410,3 @@ export async function recoverStuckDiagnosticSession(
     recoveriesInFlight.delete(key);
   }
 }
-
-/** Test hooks for clearing in-flight recovery guards. */
-export const testing = {
-  resetRecoveriesInFlight(): void {
-    recoveriesInFlight.clear();
-  },
-};
-export { testing as __testing };

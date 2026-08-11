@@ -620,6 +620,7 @@ export function createChangedCheckPlan(
   add("guarded extension wildcard re-exports", ["lint:extensions:no-guarded-wildcard-reexports"]);
   add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);
   add("duplicate scan target coverage", ["dup:check:coverage"]);
+  add("coercion helper declaration guard", ["check:coercion-helpers"]);
   add("dependency pin guard", ["deps:pins:check"]);
   if (result.paths.length > 0) {
     add("format changed files", [
@@ -738,7 +739,6 @@ export function createChangedCheckPlan(
         : ["--base", options.base ?? "origin/main", "--head", options.head ?? "HEAD"]),
     ]);
     add("Android version sync", ["android:version:check"]);
-    add("iOS version sync", ["ios:version:check"]);
     add("config schema baseline", ["config:schema:check"]);
     add("config docs baseline", ["config:docs:check"]);
     add("root dependency ownership", ["deps:root-ownership:check"]);

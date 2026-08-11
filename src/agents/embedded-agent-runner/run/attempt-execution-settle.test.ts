@@ -27,8 +27,8 @@ vi.mock("./attempt-stream-finalize.js", () => ({
   finalizeEmbeddedAttemptStreamPhase: mocks.finalizeStream,
 }));
 
+import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
 import { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
-import { SESSIONS_YIELD_ABORT_REASON } from "./attempt.sessions-yield.js";
 
 type SettledInput = Parameters<typeof runEmbeddedAttemptSettledPhase>[0];
 
@@ -58,7 +58,6 @@ function createFixture() {
     systemPromptText: "system prompt",
   };
   const state: SettledInput["state"] = {
-    beforeAgentRunBlocked: false,
     beforeAgentRunBlockedBy: undefined,
     terminal: { kind: "ok" },
     trajectoryEndRecorded: false,
@@ -258,7 +257,6 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     ]);
     expect(fixture.state).toEqual(
       expect.objectContaining({
-        beforeAgentRunBlocked: true,
         beforeAgentRunBlockedBy: "before_agent",
         terminal: { kind: "ok" },
         trajectoryEndRecorded: true,

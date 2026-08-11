@@ -25,10 +25,10 @@ import {
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { ProviderThinkingProfile } from "../../plugins/provider-thinking.types.js";
 import {
-  completeTaskRunByRunId,
-  createQueuedTaskRun,
-  createRunningTaskRun,
-  failTaskRunByRunId,
+  completeTaskRunByRunIdCore,
+  createQueuedTaskRunCore,
+  createRunningTaskRunCore,
+  failTaskRunByRunIdCore,
 } from "../../tasks/task-executor.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -453,7 +453,7 @@ describe("buildStatusReply subagent summary", () => {
   });
 
   it("includes active and total task counts for the current session", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "subagent",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:subagent:status-task-running",
@@ -461,7 +461,7 @@ describe("buildStatusReply subagent summary", () => {
       task: "active background task",
       progressSummary: "still working",
     });
-    createQueuedTaskRun({
+    createQueuedTaskRunCore({
       runtime: "cron",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:subagent:status-task-queued",
@@ -476,7 +476,7 @@ describe("buildStatusReply subagent summary", () => {
   });
 
   it("hides stale completed task rows from the session task line", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "subagent",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:subagent:status-task-live",
@@ -484,14 +484,14 @@ describe("buildStatusReply subagent summary", () => {
       task: "live background task",
       progressSummary: "still working",
     });
-    createQueuedTaskRun({
+    createQueuedTaskRunCore({
       runtime: "cron",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:subagent:status-task-stale-done",
       runId: "run-status-task-stale-done",
       task: "stale completed task",
     });
-    completeTaskRunByRunId({
+    completeTaskRunByRunIdCore({
       runId: "run-status-task-stale-done",
       endedAt: Date.now() - 10 * 60_000,
       terminalSummary: "done a while ago",
@@ -506,14 +506,14 @@ describe("buildStatusReply subagent summary", () => {
   });
 
   it("shows a recent failure when no active tasks remain", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "acp",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:acp:status-task-failed",
       runId: "run-status-task-failed",
       task: "failed background task",
     });
-    failTaskRunByRunId({
+    failTaskRunByRunIdCore({
       runId: "run-status-task-failed",
       endedAt: Date.now(),
       error: "approval denied",
@@ -527,14 +527,14 @@ describe("buildStatusReply subagent summary", () => {
   });
 
   it("does not leak internal runtime context through the task status line", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "subagent",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:subagent:status-task-leak",
       runId: "run-status-task-leak",
       task: "leaked context task",
     });
-    failTaskRunByRunId({
+    failTaskRunByRunIdCore({
       runId: "run-status-task-leak",
       endedAt: Date.now(),
       error: [
@@ -555,7 +555,7 @@ describe("buildStatusReply subagent summary", () => {
   });
 
   it("truncates long task titles and details in the session task line", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "subagent",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:subagent:status-task-truncated",
@@ -578,26 +578,26 @@ describe("buildStatusReply subagent summary", () => {
   });
 
   it("prefers failure context over newer success context when showing recent failures", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "acp",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:acp:status-task-failed-priority",
       runId: "run-status-task-failed-priority",
       task: "failed background task",
     });
-    failTaskRunByRunId({
+    failTaskRunByRunIdCore({
       runId: "run-status-task-failed-priority",
       endedAt: Date.now() - 30_000,
       error: "approval denied",
     });
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "subagent",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:subagent:status-task-succeeded-later",
       runId: "run-status-task-succeeded-later",
       task: "later successful task",
     });
-    completeTaskRunByRunId({
+    completeTaskRunByRunIdCore({
       runId: "run-status-task-succeeded-later",
       endedAt: Date.now(),
       terminalSummary: "all done",
@@ -613,7 +613,7 @@ describe("buildStatusReply subagent summary", () => {
   });
 
   it("falls back to same-agent task counts without details when the current session has none", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "subagent",
       requesterSessionKey: "agent:main:other",
       childSessionKey: "agent:main:subagent:status-agent-fallback-running",
@@ -622,7 +622,7 @@ describe("buildStatusReply subagent summary", () => {
       task: "hidden task title",
       progressSummary: "hidden progress detail",
     });
-    createQueuedTaskRun({
+    createQueuedTaskRunCore({
       runtime: "cron",
       requesterSessionKey: "agent:main:another",
       childSessionKey: "agent:main:subagent:status-agent-fallback-queued",

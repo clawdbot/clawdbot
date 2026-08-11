@@ -20,6 +20,8 @@ import {
   type SubsystemLogger,
   runtimeForLogger,
 } from "../logging/subsystem.js";
+import { registerPluginCommandInRegistry } from "../plugins/command-registration.js";
+import { createPluginCommandRuntime } from "../plugins/plugin-command-runtime.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
@@ -1350,6 +1352,9 @@ describe("server-channels auto restart", () => {
     let startCount = 0;
     const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
       startCount += 1;
+      const commandRuntime = createPluginCommandRuntime();
+      expect(commandRuntime.listNativeCandidates("discord")).toHaveLength(1);
+      commandRuntime.retainNativeCatalog("discord");
       abortSignal.addEventListener("abort", () => {}, { once: true });
       if (startCount === 1) {
         await releaseFirstTask.promise;
@@ -1362,6 +1367,14 @@ describe("server-channels auto restart", () => {
         startAccount,
       }),
     );
+    expect(
+      registerPluginCommandInRegistry(getActivePluginRegistry()!, "catalog-owner", {
+        name: "catalog",
+        description: "Catalog command",
+        channels: ["discord"],
+        handler: async () => ({ text: "ok" }),
+      }),
+    ).toEqual({ ok: true });
     const manager = createManager();
 
     await manager.startChannels();
@@ -1374,6 +1387,9 @@ describe("server-channels auto restart", () => {
     await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
     await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
     expect(startAccount).toHaveBeenCalledTimes(2);
+    expect(manager.getPluginCommandCatalogAccounts().get("discord")).toEqual(
+      new Set([DEFAULT_ACCOUNT_ID]),
+    );
 
     releaseFirstTask.resolve();
     await flushMicrotasks();
@@ -1383,6 +1399,9 @@ describe("server-channels auto restart", () => {
     expect(account?.running).toBe(true);
     expect(account?.restartPending).toBe(false);
     expect(account?.lastError).toBeNull();
+    expect(manager.getPluginCommandCatalogAccounts().get("discord")).toEqual(
+      new Set([DEFAULT_ACCOUNT_ID]),
+    );
     expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
   });
 
@@ -2056,6 +2075,56 @@ describe("server-channels auto restart", () => {
     await Promise.all([firstStart, secondStart]);
 
     expect(startAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports only running accounts that retained a real plugin command catalog", async () => {
+    const startAccount = vi.fn(
+      async ({ accountId, abortSignal }: { accountId: string; abortSignal: AbortSignal }) => {
+        if (accountId === "catalog") {
+          const commandRuntime = createPluginCommandRuntime();
+          expect(commandRuntime.listNativeCandidates("discord")).toHaveLength(1);
+          commandRuntime.retainNativeCatalog("discord");
+        }
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => ["catalog", "plain"],
+      }),
+    );
+    expect(
+      registerPluginCommandInRegistry(getActivePluginRegistry()!, "catalog-owner", {
+        name: "catalog",
+        description: "Catalog command",
+        channels: ["discord"],
+        handler: async () => ({ text: "ok" }),
+      }),
+    ).toEqual({ ok: true });
+    const manager = createManager();
+
+    await manager.startChannels();
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 2,
+      "expected both account tasks to start",
+    );
+
+    const reported = manager.getPluginCommandCatalogAccounts();
+    expect(reported).toEqual(new Map([["discord", new Set(["catalog"])]]));
+    (reported.get("discord") as Set<string>).clear();
+    expect(manager.getPluginCommandCatalogAccounts()).toEqual(
+      new Map([["discord", new Set(["catalog"])]]),
+    );
+
+    await manager.stopChannel("discord", "plain");
+    expect(manager.getPluginCommandCatalogAccounts()).toEqual(
+      new Map([["discord", new Set(["catalog"])]]),
+    );
+    await manager.stopChannel("discord", "catalog");
+    expect(manager.getPluginCommandCatalogAccounts()).toEqual(new Map());
   });
 
   it("cancels a pending startup when the account is stopped mid-boot", async () => {

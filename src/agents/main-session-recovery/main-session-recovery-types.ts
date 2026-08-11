@@ -95,10 +95,14 @@ export type MainSessionRecoveryCommand =
       now: number;
       observation: MainSessionRecoveryObservation;
       runId: string;
-      executionIdentity:
-        | { state: "disabled" }
-        | { state: "enabled"; token: MainSessionRecoveryExecutionIdentity };
+      executionIdentity: { state: "disabled" } | { state: "enabled" };
     }
+  | ({
+      kind: "bind_admitted_execution_identity";
+      attempt: number;
+      cycleId: string;
+      token: MainSessionRecoveryExecutionIdentity;
+    } & RecoveryRunOwner)
   | {
       kind: "cancel_reservation" | "abandon_reservation";
       reservation: MainSessionRecoveryReservation;

@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { evaluateChannelHealth } from "../gateway/channel-health-policy.js";
 import {
+  asString,
   createAsyncComputedAccountStatusAdapter,
   buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
@@ -19,6 +20,12 @@ import {
 } from "./status-helpers.js";
 
 describe("status issue composition", () => {
+  it("preserves the shipped asString compatibility semantics", () => {
+    expect(asString("  work  ")).toBe("work");
+    expect(asString("   ")).toBeUndefined();
+    expect(asString(42)).toBeUndefined();
+  });
+
   it("coerces only standard and requested account fields", () => {
     expect(
       readAccountStatusSnapshot(

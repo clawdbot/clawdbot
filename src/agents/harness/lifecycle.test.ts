@@ -24,11 +24,12 @@ import {
 } from "./lifecycle.js";
 import type {
   AgentHarness,
-  AgentHarnessAttemptParams,
+  AgentHarnessAttemptParamsV2,
   AgentHarnessAttemptResult,
+  AgentHarnessSettledTurnFinalizationAttemptParams,
 } from "./types.js";
 
-function createAttemptParams(): AgentHarnessAttemptParams {
+function createAttemptParams(): AgentHarnessAttemptParamsV2 {
   return {
     prompt: "hello",
     sessionId: "session-1",
@@ -46,7 +47,12 @@ function createAttemptParams(): AgentHarnessAttemptParams {
     thinkLevel: "low",
     messageChannel: "qa",
     trigger: "manual",
-  } as AgentHarnessAttemptParams;
+  } as unknown as AgentHarnessAttemptParamsV2;
+}
+
+function createFinalizationParams(): AgentHarnessSettledTurnFinalizationAttemptParams<AgentHarnessAttemptParamsV2> {
+  const { hostCapabilities: _hostCapabilities, ...params } = createAttemptParams();
+  return params;
 }
 
 function createDiagnosticTrace() {
@@ -244,7 +250,7 @@ describe("AgentHarness lifecycle runner", () => {
   });
 
   it("runs isolated finalization through the narrow lifecycle contract", async () => {
-    const params = createAttemptParams();
+    const params = createFinalizationParams();
     const harness: AgentHarness = {
       id: "codex",
       label: "Codex",
@@ -270,7 +276,7 @@ describe("AgentHarness lifecycle runner", () => {
   });
 
   it("records a normally completed empty finalization without emitting an error", async () => {
-    const params = createAttemptParams();
+    const params = createFinalizationParams();
     const harness: AgentHarness = {
       id: "codex",
       label: "Codex",
@@ -299,7 +305,7 @@ describe("AgentHarness lifecycle runner", () => {
   });
 
   it("reports narrow finalization validation failures in the resolve phase", async () => {
-    const params = createAttemptParams();
+    const params = createFinalizationParams();
     const harness: AgentHarness = {
       id: "codex",
       label: "Codex",

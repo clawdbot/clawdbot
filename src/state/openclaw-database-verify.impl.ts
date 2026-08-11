@@ -28,7 +28,7 @@ const DATABASE_VERIFY_CHILD_ARG = "--openclaw-database-verify-child";
 const ERROR_OWNED_FIELDS = new Set(["cause", "message", "name", "stack"]);
 const PROTOTYPE_MUTATING_FIELDS = new Set(["__proto__", "constructor", "prototype"]);
 
-function toError(error: unknown): Error {
+function toDatabaseVerifyError(error: unknown): Error {
   if (error instanceof Error) {
     return error;
   }
@@ -104,7 +104,7 @@ export function runDatabaseVerifyWorker(
       stdio: ["ignore", "ignore", "ignore", "ipc"],
     });
   } catch (error) {
-    return Promise.reject(toError(error));
+    return Promise.reject(toDatabaseVerifyError(error));
   }
   options.onWorker?.(worker);
 
@@ -156,7 +156,7 @@ export function runDatabaseVerifyWorker(
       }
       result = message;
     });
-    worker.once("error", (error) => settle(() => reject(toError(error))));
+    worker.once("error", (error) => settle(() => reject(toDatabaseVerifyError(error))));
     worker.once("disconnect", () => {
       disconnected = true;
       settleAfterExitAndDisconnect();
@@ -171,7 +171,7 @@ export function runDatabaseVerifyWorker(
         return;
       }
       worker.kill();
-      settle(() => reject(toError(error)));
+      settle(() => reject(toDatabaseVerifyError(error)));
     });
   });
 }

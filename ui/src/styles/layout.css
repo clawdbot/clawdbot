@@ -897,6 +897,9 @@ openclaw-settings-save-indicator {
   /* Sticky headers inside the sidebar reuse --sidebar-bg so scrolled rows
      never shine through with a mismatched tone. */
   --sidebar-bg: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated) 4%);
+  /* One rhythm for every group boundary in the sidebar (Pages, Pinned, and each
+     session section) so the column reads as separate shelves, not one list. */
+  --sidebar-group-gap: var(--space-4);
   --scrollbar-size: 6px;
   position: relative;
   display: flex;
@@ -1333,7 +1336,7 @@ html.openclaw-native-macos
   flex-direction: column;
   gap: 8px;
   padding: 0 8px;
-  margin-top: 10px;
+  margin-top: var(--sidebar-group-gap);
   border-radius: var(--radius-md);
   transition:
     background var(--duration-fast) ease,
@@ -1368,7 +1371,7 @@ html.openclaw-native-macos
 
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--sidebar-group-gap);
   margin: 0 -8px;
   /* Sessions are app chrome, not hyperlinks: the whole region follows the
      base.css cursor policy so it tracks the window it is running in. */
@@ -2448,7 +2451,7 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
 }
 
 .sidebar-customize-menu__title {
-  padding: 6px 10px 8px;
+  padding: 6px 8px 8px;
   font-size: var(--control-ui-text-xs);
   font-weight: 650;
   letter-spacing: 0.07em;
@@ -2457,7 +2460,7 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
 }
 
 .sidebar-customize-menu__provenance {
-  margin: 0 10px 6px;
+  margin: 0 8px 6px;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
   line-height: 1.35;
@@ -2497,6 +2500,21 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
 
+/* Web Awesome's shadow row adds `margin-inline-end: 0.75em !important` to the
+   slotted icon, which the light DOM cannot outrank. Dropping the gap leaves
+   that margin as the icon column instead of stacking into a ~17px gutter, and
+   keeps icon-less rows from inheriting a phantom leading indent. */
+wa-dropdown-item.sidebar-customize-menu__item {
+  gap: 0;
+}
+
+/* One leading column for the whole menu family: command glyphs centre inside
+   the agent avatar's box (.agent-select__option .agent-select__avatar) so
+   avatar rows and icon rows share a gutter and their labels start on one x. */
+.sidebar-customize-menu .nav-item__icon {
+  width: 24px;
+}
+
 .sidebar-customize-menu__item > a {
   display: flex;
   align-items: center;
@@ -2511,13 +2529,20 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
    a -1.5em margin. Our compact `padding: 0 8px` above removes that inset, so
    rebuild the check column here or the checkmark lands outside the row edge. */
 .sidebar-pin-editor-menu .sidebar-customize-menu__item[checkbox-adjacent] {
-  padding-inline-start: 30px; /* 8px edge + 14px check column + 8px flex gap */
+  padding-inline-start: 30px; /* 8px edge + 14px check column + 8px gutter */
 }
 
 .sidebar-pin-editor-menu .sidebar-customize-menu__item::part(checkmark) {
   width: 14px;
   min-width: 14px;
-  margin-inline: -22px 0; /* pull back into the padding; the 8px flex gap spaces the icon */
+  margin-inline: -22px 8px; /* pull back into the padding; the end margin spaces the icon */
+}
+
+/* The agent switcher marks its selection in the trailing details rail
+   (.session-menu__check), so the native leading checkmark is layout-only: it
+   reserved a column that pushed avatar rows out of the command rows' gutter. */
+.sidebar-agent-menu .sidebar-customize-menu__item::part(checkmark) {
+  display: none;
 }
 
 .sidebar-customize-menu__text {
@@ -2899,34 +2924,6 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   border-color: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
-.sidebar-pinned-session__icon {
-  width: 16px;
-  height: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  overflow: hidden;
-  opacity: 0.72;
-  transition:
-    opacity var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.sidebar-pinned-session__icon svg {
-  width: 16px;
-  height: 16px;
-}
-
-.sidebar-zone-entry .sidebar-recent-session:hover .sidebar-pinned-session__icon,
-.sidebar-zone-entry .sidebar-recent-session--active .sidebar-pinned-session__icon {
-  opacity: 1;
-}
-
-.sidebar-zone-entry .sidebar-recent-session--active .sidebar-pinned-session__icon {
-  color: var(--accent);
-}
-
 .sidebar-zone-entry .sidebar-recent-session__aside {
   padding-right: 0;
 }
@@ -3069,6 +3066,12 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 
 .sidebar-nav__head .sidebar-recent-sessions__label-text {
   flex: 1 1 auto;
+}
+
+/* Pinned sessions are their own group, so they take the sidebar's inter-group
+   rhythm instead of butting against the Pages list. */
+.sidebar-nav__head--pinned {
+  margin-top: var(--sidebar-group-gap);
 }
 
 .sidebar-nav__head-action {
@@ -3475,7 +3478,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 }
 
 .sidebar-agent-menu__empty {
-  padding: 6px 10px;
+  padding: 6px 8px;
   font-size: var(--control-ui-text-sm);
   color: var(--muted);
 }

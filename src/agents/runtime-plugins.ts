@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { promoteMatchingRuntimeContextEngineRegistrations } from "../context-engine/registry.js";
+import { listRuntimePluginIdsFromRegistry } from "../plugins/active-runtime-registry.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { loadPluginRegistryHandle } from "../plugins/loader.js";
@@ -70,14 +71,17 @@ function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistr
       },
     };
   }
+  const requestPluginRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
   const startupPluginIds =
     params.basePluginIds !== undefined
       ? [...params.basePluginIds]
-      : resolveStartupPluginIdsFromCurrentSnapshot({
-          config: params.config,
-          env: params.env,
-          workspaceDir,
-        });
+      : requestPluginRegistry
+        ? listRuntimePluginIdsFromRegistry(requestPluginRegistry)
+        : resolveStartupPluginIdsFromCurrentSnapshot({
+            config: params.config,
+            env: params.env,
+            workspaceDir,
+          });
   const plan = resolveAgentRuntimePluginLoadPlan({
     config: params.config,
     workspaceDir: workspaceDir ?? process.cwd(),

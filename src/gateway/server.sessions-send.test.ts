@@ -19,7 +19,7 @@ import {
   agentCommand,
   getFreePort,
   installGatewayTestHooks,
-  startGatewayServer,
+  startTestGatewayServer,
   setTestPluginRegistry,
   testState,
   writeSessionStore,
@@ -29,7 +29,7 @@ const { createOpenClawTools } = await import("../agents/openclaw-tools.js");
 
 installGatewayTestHooks({ scope: "suite" });
 
-let server: Awaited<ReturnType<typeof startGatewayServer>>;
+let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
 let gatewayPort: number;
 const gatewayToken = "test-gateway-token-1234567890";
 let envSnapshot: ReturnType<typeof captureEnv>;
@@ -138,7 +138,7 @@ beforeAll(async () => {
   testState.gatewayAuth = { mode: "token", token: gatewayToken };
   process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
   process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
-  server = await startGatewayServer(gatewayPort);
+  server = await startTestGatewayServer(gatewayPort);
 });
 
 beforeEach(() => {

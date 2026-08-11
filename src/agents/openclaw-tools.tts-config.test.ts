@@ -66,7 +66,7 @@ vi.mock("./tools/image-tool.js", () => ({
   createImageTool: () => mocks.stubTool("image"),
 }));
 
-vi.mock("./tools/message-tool.js", () => ({
+vi.mock("./tools/message-tool-execution.js", () => ({
   createMessageTool: () => mocks.stubTool("message"),
 }));
 

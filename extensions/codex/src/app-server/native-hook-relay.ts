@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import {
   registerNativeHookRelay,
   type BeforeToolCallFailureDisposition,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -150,6 +150,7 @@ export function createCodexNativeHookRelay(params: {
   turnStartTimeoutMs: number;
   loopDetectionPreToolUseRelay: boolean;
   signal: AbortSignal;
+  hostCapabilities: EmbeddedRunAttemptParams["hostCapabilities"];
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void | Promise<void>;
 }): NativeHookRelayRegistrationHandle | undefined {
   if (params.options?.enabled === false) {
@@ -183,6 +184,8 @@ export function createCodexNativeHookRelay(params: {
       turnStartTimeoutMs: params.turnStartTimeoutMs,
     }),
     signal: params.signal,
+    runBeforeToolCall: params.hostCapabilities.runBeforeToolCall,
+    assertActive: params.hostCapabilities.assertActive,
     onPreToolUseFailure: params.onPreToolUseFailure,
     command: {
       // Hook relay subprocesses are observational for most tool events; keep

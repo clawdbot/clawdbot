@@ -182,7 +182,7 @@ const { subagentRegistryMock } = vi.hoisted(() => ({
     shouldIgnorePostCompletionAnnounceForSession: vi.fn((_sessionKey: string) => false),
     countActiveDescendantRuns: vi.fn((_sessionKey: string) => 0),
     countPendingDescendantRuns: vi.fn((_sessionKey: string) => 0),
-    countPendingDescendantRunsExcludingRun: vi.fn((_sessionKey: string, _runId: string) => 0),
+    hasDescendantRunAwaitingSettle: vi.fn((_sessionKey: string, _excludeRunId?: string) => false),
     getLatestSubagentRunByChildSessionKey: vi.fn(
       (_childSessionKey: string): MockSubagentRun | undefined => undefined,
     ),
@@ -359,6 +359,8 @@ function loadSessionStoreFixture(): Record<string, SessionEntry> {
   }) as unknown as Record<string, SessionEntry>;
 }
 
+vi.mock("../registry/subagent-registry.js", () => subagentRegistryMock);
+vi.mock("../registry/subagent-registry-read.js", () => subagentRegistryMock);
 vi.mock("../registry/subagent-registry-runtime.js", () => subagentRegistryMock);
 
 describe("subagent announce formatting", () => {
@@ -502,10 +504,11 @@ describe("subagent announce formatting", () => {
       .mockImplementation((sessionKey: string) =>
         subagentRegistryMock.countActiveDescendantRuns(sessionKey),
       );
-    subagentRegistryMock.countPendingDescendantRunsExcludingRun
+    subagentRegistryMock.hasDescendantRunAwaitingSettle
       .mockClear()
-      .mockImplementation((sessionKey: string, _runId: string) =>
-        subagentRegistryMock.countPendingDescendantRuns(sessionKey),
+      .mockImplementation(
+        (sessionKey: string, _excludeRunId?: string) =>
+          subagentRegistryMock.countPendingDescendantRuns(sessionKey) > 0,
       );
     subagentRegistryMock.getLatestSubagentRunByChildSessionKey
       .mockClear()
@@ -859,7 +862,7 @@ describe("subagent announce formatting", () => {
       expectsCompletionMessage: true,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall() as { params?: Record<string, unknown> };
@@ -884,7 +887,7 @@ describe("subagent announce formatting", () => {
       expectsCompletionMessage: true,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall() as { params?: Record<string, unknown> };
@@ -910,10 +913,6 @@ describe("subagent announce formatting", () => {
     subagentRegistryMock.countPendingDescendantRuns.mockImplementation((sessionKey: string) =>
       sessionKey === "agent:main:main" ? 2 : 0,
     );
-    subagentRegistryMock.countPendingDescendantRunsExcludingRun.mockImplementation(
-      (sessionKey: string, runId: string) =>
-        sessionKey === "agent:main:main" && runId === "run-direct-self-pending" ? 1 : 2,
-    );
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
@@ -925,7 +924,7 @@ describe("subagent announce formatting", () => {
       expectsCompletionMessage: true,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall() as { params?: Record<string, unknown> };
@@ -947,7 +946,7 @@ describe("subagent announce formatting", () => {
       roundOneReply: "ANNOUNCE_SKIP",
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).not.toHaveBeenCalled();
   });
@@ -970,7 +969,7 @@ describe("subagent announce formatting", () => {
       roundOneReply: "  ANNOUNCE_SKIP  ",
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).not.toHaveBeenCalled();
     expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
@@ -988,7 +987,7 @@ describe("subagent announce formatting", () => {
       roundOneReply: " NO_REPLY ",
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
     expect(getAgentCall()?.params?.message).toContain("(no output)");
@@ -1006,7 +1005,7 @@ describe("subagent announce formatting", () => {
       roundOneReply: " NO_REPLY ",
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).not.toHaveBeenCalled();
   });
@@ -1044,7 +1043,7 @@ describe("subagent announce formatting", () => {
         terminalReply,
       });
 
-      expect(didAnnounce).toBe(true);
+      expect(didAnnounce).toBe("delivered");
       expect(chatHistoryMock).not.toHaveBeenCalled();
       expect(readLatestAssistantReplyMock).not.toHaveBeenCalled();
       expect(agentSpy).toHaveBeenCalledTimes(expectedAgentCalls);
@@ -1067,7 +1066,7 @@ describe("subagent announce formatting", () => {
       fallbackReply: "final summary from prior completion",
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall() as { params?: { message?: string } };
@@ -1091,7 +1090,7 @@ describe("subagent announce formatting", () => {
       roundOneReply: "final answer",
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(agentSpy).toHaveBeenCalledTimes(3);
     expect(sendSpy).not.toHaveBeenCalled();
   });
@@ -1110,7 +1109,7 @@ describe("subagent announce formatting", () => {
       roundOneReply: "final answer",
     });
 
-    expect(didAnnounce).toBe(false);
+    expect(didAnnounce).toBe("permanent_failure");
     expect(agentSpy).toHaveBeenCalledTimes(1);
     expect(sendSpy).not.toHaveBeenCalled();
   });
@@ -1131,7 +1130,7 @@ describe("subagent announce formatting", () => {
       roundOneReply: "worker result",
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(agentSpy).toHaveBeenCalledTimes(3);
     expect(sendSpy).not.toHaveBeenCalled();
   });
@@ -1168,7 +1167,7 @@ describe("subagent announce formatting", () => {
       roundOneReply: "worker result",
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(agentSpy).toHaveBeenCalledTimes(2);
     expect(sendSpy).not.toHaveBeenCalled();
   });
@@ -1200,7 +1199,7 @@ describe("subagent announce formatting", () => {
       expectsCompletionMessage: true,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall() as { params?: Record<string, unknown> };
@@ -1264,7 +1263,7 @@ describe("subagent announce formatting", () => {
       spawnMode: "session",
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall() as { params?: Record<string, unknown> };
@@ -1319,7 +1318,7 @@ describe("subagent announce formatting", () => {
       spawnMode: "session",
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall() as { params?: Record<string, unknown> };
@@ -1480,7 +1479,7 @@ describe("subagent announce formatting", () => {
       spawnMode: "session",
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall() as { params?: Record<string, unknown> };
@@ -1538,7 +1537,7 @@ describe("subagent announce formatting", () => {
         ...(testCase.spawnMode ? { spawnMode: testCase.spawnMode } : {}),
       });
 
-      expect(didAnnounce).toBe(true);
+      expect(didAnnounce).toBe("delivered");
       expect(sendSpy).not.toHaveBeenCalled();
       expect(agentSpy).toHaveBeenCalledTimes(1);
       const call = getAgentCall() as { params?: Record<string, unknown> };
@@ -1605,7 +1604,7 @@ describe("subagent announce formatting", () => {
         expectsCompletionMessage: true,
       });
 
-      expect(didAnnounce).toBe(true);
+      expect(didAnnounce).toBe("delivered");
       expect(sendSpy).not.toHaveBeenCalled();
       expect(agentSpy).toHaveBeenCalledTimes(1);
       const call = getAgentCall() as { params?: Record<string, unknown> };
@@ -1667,7 +1666,7 @@ describe("subagent announce formatting", () => {
       spawnMode: "session",
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall() as { params?: Record<string, unknown> };
@@ -1730,7 +1729,7 @@ describe("subagent announce formatting", () => {
       spawnMode: "session",
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall() as { params?: Record<string, unknown> };
@@ -1771,7 +1770,7 @@ describe("subagent announce formatting", () => {
       expectsCompletionMessage: true,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall() as { params?: Record<string, unknown> };
@@ -1834,7 +1833,7 @@ describe("subagent announce formatting", () => {
         spawnMode: "session",
       });
 
-      expect(didAnnounce).toBe(true);
+      expect(didAnnounce).toBe("delivered");
       expect(subagentDeliveryTargetHookMock).toHaveBeenCalledWith(
         {
           childSessionKey: "agent:main:subagent:test",
@@ -1889,7 +1888,7 @@ describe("subagent announce formatting", () => {
       spawnMode: "session",
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall() as { params?: Record<string, unknown> };
@@ -1934,7 +1933,7 @@ describe("subagent announce formatting", () => {
       spawnMode: "session",
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall() as { params?: Record<string, unknown> };
@@ -2131,7 +2130,7 @@ describe("subagent announce formatting", () => {
       ...defaultOutcomeAnnounce,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sendSpy).toHaveBeenCalledTimes(0);
     expect(agentSpy).toHaveBeenCalledTimes(1);
     expect(agentSpy.mock.calls[0]?.[0]).toMatchObject({
@@ -2162,7 +2161,7 @@ describe("subagent announce formatting", () => {
       ...defaultOutcomeAnnounce,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
     expectAgentCallFields(getAgentCall(), {
@@ -2195,7 +2194,7 @@ describe("subagent announce formatting", () => {
       ...defaultOutcomeAnnounce,
     });
 
-    expect(didAnnounce).toBe(false);
+    expect(didAnnounce).toBe("retryable");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
   });
@@ -2225,7 +2224,7 @@ describe("subagent announce formatting", () => {
       ...defaultOutcomeAnnounce,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall() as { params?: { message?: string } };
@@ -2259,7 +2258,7 @@ describe("subagent announce formatting", () => {
       ...defaultOutcomeAnnounce,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall() as { params?: { message?: string } };
@@ -2289,7 +2288,7 @@ describe("subagent announce formatting", () => {
       ...defaultOutcomeAnnounce,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall() as { params?: { message?: string } };
@@ -2319,7 +2318,7 @@ describe("subagent announce formatting", () => {
       ...defaultOutcomeAnnounce,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(agentSpy).toHaveBeenCalledTimes(1);
 
     const call = getAgentCall() as { params?: Record<string, unknown> };
@@ -2423,7 +2422,7 @@ describe("subagent announce formatting", () => {
       ...defaultOutcomeAnnounce,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     const call = getAgentCall() as {
       params?: Record<string, unknown>;
       expectFinal?: boolean;
@@ -2446,7 +2445,7 @@ describe("subagent announce formatting", () => {
       ...defaultOutcomeAnnounce,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall() as {
@@ -2473,7 +2472,7 @@ describe("subagent announce formatting", () => {
       ...defaultOutcomeAnnounce,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     const call = getAgentCall() as { params?: Record<string, unknown> };
     expect(call?.params?.sessionKey).toBe("agent:main:subagent:orchestrator");
     expect(call?.params?.deliver).toBe(false);
@@ -2497,7 +2496,7 @@ describe("subagent announce formatting", () => {
       ...defaultOutcomeAnnounce,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     const call = getAgentCall() as { params?: Record<string, unknown> };
     expect(call?.params?.sessionKey).toBe("agent:main:subagent:orchestrator");
@@ -2618,7 +2617,7 @@ describe("subagent announce formatting", () => {
         ...(testCase.roundOneReply ? { roundOneReply: testCase.roundOneReply } : {}),
       });
 
-      expect(didAnnounce).toBe(false);
+      expect(didAnnounce).toBe("retryable");
       expect(agentSpy).not.toHaveBeenCalled();
       expect(sendSpy).not.toHaveBeenCalled();
     }
@@ -2653,7 +2652,7 @@ describe("subagent announce formatting", () => {
       roundOneReply: "single leaf result",
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(agentSpy).toHaveBeenCalledTimes(1);
     expect(sendSpy).not.toHaveBeenCalled();
     const call = getAgentCall() as { params?: { message?: string } };
@@ -2726,7 +2725,7 @@ describe("subagent announce formatting", () => {
       roundOneReply: "placeholder waiting text that should be ignored",
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(subagentRegistryMock.listSubagentRunsForRequester).toHaveBeenCalledWith(
       "agent:main:subagent:parent",
       { requesterRunId: "run-parent-settled" },
@@ -2808,7 +2807,7 @@ describe("subagent announce formatting", () => {
       roundOneReply: "placeholder waiting text that should be ignored",
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     const call = getAgentCall() as { params?: { message?: string } };
     const msg = call?.params?.message ?? "";
     expect(msg).toContain("current result from child a");
@@ -2875,7 +2874,7 @@ describe("subagent announce formatting", () => {
       roundOneReply: "old parent fallback reply",
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall() as { params?: { message?: string } };
     const msg = call?.params?.message ?? "";
@@ -2951,7 +2950,7 @@ describe("subagent announce formatting", () => {
       roundOneReply: "waiting for children",
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall() as {
       params?: { sessionKey?: string; message?: string; idempotencyKey?: string };
@@ -3088,7 +3087,7 @@ describe("subagent announce formatting", () => {
       roundOneReply: "waiting for children",
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(subagentRegistryMock.replaceSubagentRunAfterSteer).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall() as {
@@ -3158,7 +3157,7 @@ describe("subagent announce formatting", () => {
       ...defaultOutcomeAnnounce,
       expectsCompletionMessage: true,
     });
-    expect(parentDeferred).toBe(false);
+    expect(parentDeferred).toBe("retryable");
     expect(agentSpy).not.toHaveBeenCalled();
 
     const childAnnounced = await runSubagentAnnounceFlow({
@@ -3169,7 +3168,7 @@ describe("subagent announce formatting", () => {
       ...defaultOutcomeAnnounce,
       expectsCompletionMessage: true,
     });
-    expect(childAnnounced).toBe(true);
+    expect(childAnnounced).toBe("delivered");
 
     parentPending = 0;
     const parentAnnounced = await runSubagentAnnounceFlow({
@@ -3180,7 +3179,7 @@ describe("subagent announce formatting", () => {
       ...defaultOutcomeAnnounce,
       expectsCompletionMessage: true,
     });
-    expect(parentAnnounced).toBe(true);
+    expect(parentAnnounced).toBe("delivered");
     expect(agentSpy).toHaveBeenCalledTimes(2);
 
     const childCall = getAgentCall() as { params?: { message?: string } };
@@ -3209,7 +3208,7 @@ describe("subagent announce formatting", () => {
       ...defaultOutcomeAnnounce,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(agentSpy).not.toHaveBeenCalled();
     expect(sendSpy).not.toHaveBeenCalled();
     expect(subagentRegistryMock.countPendingDescendantRuns).not.toHaveBeenCalled();
@@ -3234,7 +3233,7 @@ describe("subagent announce formatting", () => {
       ...defaultOutcomeAnnounce,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     const call = getAgentCall() as { params?: Record<string, unknown> };
     expect(call?.params?.sessionKey).toBe("agent:main:main");
     expect(call?.params?.deliver).toBe(true);
@@ -3259,7 +3258,7 @@ describe("subagent announce formatting", () => {
       cleanup: "delete",
     });
 
-    expect(didAnnounce).toBe(false);
+    expect(didAnnounce).toBe("retryable");
     expect(subagentRegistryMock.resolveRequesterForChildSession).toHaveBeenCalledWith(
       "agent:main:subagent:orchestrator",
     );
@@ -3302,7 +3301,7 @@ describe("subagent announce formatting", () => {
         ...(testCase.expectsCompletionMessage ? { expectsCompletionMessage: true } : {}),
       });
 
-      expect(didAnnounce).toBe(false);
+      expect(didAnnounce).toBe("retryable");
       expect(agentSpy).not.toHaveBeenCalled();
       expect(sendSpy).not.toHaveBeenCalled();
     }
@@ -3330,7 +3329,7 @@ describe("subagent announce formatting", () => {
       ...defaultOutcomeAnnounce,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(agentSpy).toHaveBeenCalledTimes(1);
 
     const call = getAgentCall() as { params?: Record<string, unknown> };
@@ -3425,7 +3424,7 @@ describe("subagent announce formatting", () => {
         task: "QA task",
       });
 
-      expect(didAnnounce, testCase.name).toBe(true);
+      expect(didAnnounce, testCase.name).toBe("delivered");
       const call = getAgentCall() as { params?: Record<string, unknown> };
       expect(call?.params?.sessionKey, testCase.name).toBe(testCase.expectedSessionKey);
       expect(call?.params?.deliver, testCase.name).toBe(testCase.expectedDeliver);
@@ -3478,7 +3477,7 @@ describe("subagent announce formatting", () => {
         roundOneReply: "leaf says done",
       });
 
-      expect(didAnnounce).toBe(true);
+      expect(didAnnounce).toBe("delivered");
       expect(agentSpy).toHaveBeenCalledTimes(1);
       const call = getAgentCall() as { params?: { message?: string } };
       expect(call?.params?.message ?? "").toContain("leaf says done");
@@ -3512,7 +3511,7 @@ describe("subagent announce formatting", () => {
         roundOneReply: "placeholder waiting text",
       });
 
-      expect(didAnnounce).toBe(true);
+      expect(didAnnounce).toBe("delivered");
       const call = getAgentCall() as { params?: { message?: string } };
       const message = call?.params?.message ?? "";
       expect(message).toContain("Child completion results:");
@@ -3557,7 +3556,7 @@ describe("subagent announce formatting", () => {
         ...defaultOutcomeAnnounce,
         expectsCompletionMessage: true,
       });
-      expect(deferred).toBe(false);
+      expect(deferred).toBe("retryable");
       expect(agentSpy).not.toHaveBeenCalled();
 
       pending = 0;
@@ -3569,7 +3568,7 @@ describe("subagent announce formatting", () => {
         ...defaultOutcomeAnnounce,
         expectsCompletionMessage: true,
       });
-      expect(announced).toBe(true);
+      expect(announced).toBe("delivered");
       expect(agentSpy).toHaveBeenCalledTimes(1);
       const call = getAgentCall() as { params?: { message?: string } };
       const message = call?.params?.message ?? "";
@@ -3616,7 +3615,7 @@ describe("subagent announce formatting", () => {
         ...defaultOutcomeAnnounce,
         expectsCompletionMessage: true,
       });
-      expect(prematureAttempt).toBe(false);
+      expect(prematureAttempt).toBe("retryable");
       expect(agentSpy).not.toHaveBeenCalled();
 
       pendingSlowChild = 0;
@@ -3628,7 +3627,7 @@ describe("subagent announce formatting", () => {
         ...defaultOutcomeAnnounce,
         expectsCompletionMessage: true,
       });
-      expect(settledAttempt).toBe(true);
+      expect(settledAttempt).toBe("delivered");
       const call = getAgentCall() as { params?: { message?: string } };
       const message = call?.params?.message ?? "";
       expect(message).toContain("fast child result");
@@ -3689,7 +3688,7 @@ describe("subagent announce formatting", () => {
         ...defaultOutcomeAnnounce,
         expectsCompletionMessage: true,
       });
-      expect(middleDeferred).toBe(false);
+      expect(middleDeferred).toBe("retryable");
 
       middlePending = 0;
       const middleAnnounced = await runSubagentAnnounceFlow({
@@ -3700,7 +3699,7 @@ describe("subagent announce formatting", () => {
         ...defaultOutcomeAnnounce,
         expectsCompletionMessage: true,
       });
-      expect(middleAnnounced).toBe(true);
+      expect(middleAnnounced).toBe("delivered");
 
       const parentAnnounced = await runSubagentAnnounceFlow({
         childSessionKey: "agent:main:subagent:parent-nested",
@@ -3710,7 +3709,7 @@ describe("subagent announce formatting", () => {
         ...defaultOutcomeAnnounce,
         expectsCompletionMessage: true,
       });
-      expect(parentAnnounced).toBe(true);
+      expect(parentAnnounced).toBe("delivered");
       expect(agentSpy).toHaveBeenCalledTimes(2);
 
       const parentCall = getAgentCall(1);
@@ -3760,7 +3759,7 @@ describe("subagent announce formatting", () => {
         expectsCompletionMessage: true,
       });
 
-      expect(didAnnounce).toBe(true);
+      expect(didAnnounce).toBe("delivered");
       const call = getAgentCall() as { params?: { message?: string } };
       const message = call?.params?.message ?? "";
       const firstIndex = message.indexOf("result one");
@@ -3799,7 +3798,7 @@ describe("subagent announce formatting", () => {
         expectsCompletionMessage: true,
       });
 
-      expect(didAnnounce).toBe(true);
+      expect(didAnnounce).toBe("delivered");
       const call = getAgentCall() as { params?: { message?: string } };
       const message = call?.params?.message ?? "";
       expect(message).toContain("status: error: child exploded");
@@ -3835,7 +3834,7 @@ describe("subagent announce formatting", () => {
         ...defaultOutcomeAnnounce,
         expectsCompletionMessage: true,
       });
-      expect(first).toBe(false);
+      expect(first).toBe("retryable");
       expect(agentSpy).not.toHaveBeenCalled();
 
       pending = 0;
@@ -3847,7 +3846,7 @@ describe("subagent announce formatting", () => {
         ...defaultOutcomeAnnounce,
         expectsCompletionMessage: true,
       });
-      expect(second).toBe(true);
+      expect(second).toBe("delivered");
       expect(subagentRegistryMock.countPendingDescendantRuns).toHaveBeenCalledWith(
         "agent:main:subagent:parent-gated",
       );
@@ -3903,7 +3902,7 @@ describe("subagent announce formatting", () => {
         ...defaultOutcomeAnnounce,
         expectsCompletionMessage: true,
       });
-      expect(parentDeferred).toBe(false);
+      expect(parentDeferred).toBe("retryable");
 
       const childAnnounced = await runSubagentAnnounceFlow({
         childSessionKey,
@@ -3913,7 +3912,7 @@ describe("subagent announce formatting", () => {
         ...defaultOutcomeAnnounce,
         expectsCompletionMessage: true,
       });
-      expect(childAnnounced).toBe(true);
+      expect(childAnnounced).toBe("delivered");
 
       parentPending = 0;
       const parentAnnounced = await runSubagentAnnounceFlow({
@@ -3924,7 +3923,7 @@ describe("subagent announce formatting", () => {
         ...defaultOutcomeAnnounce,
         expectsCompletionMessage: true,
       });
-      expect(parentAnnounced).toBe(true);
+      expect(parentAnnounced).toBe("delivered");
       expect(agentSpy).toHaveBeenCalledTimes(2);
 
       const childCall = getAgentCall() as { params?: { message?: string } };

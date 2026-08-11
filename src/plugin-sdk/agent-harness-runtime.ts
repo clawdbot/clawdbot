@@ -71,8 +71,10 @@ export type { AgentMessage } from "../agents/runtime/index.js";
 export type { FastModeAutoProgressState } from "../shared/fast-mode.js";
 export type {
   AgentHarness,
+  AgentHarnessV2,
   AgentHarnessAuthBindingFingerprintParams,
   AgentHarnessAttemptParams,
+  AgentHarnessAttemptParamsV2,
   AgentHarnessAttemptResult,
   AgentHarnessCompactParams,
   AgentHarnessCompactResult,
@@ -80,6 +82,7 @@ export type {
   AgentHarnessResultClassification,
   AgentHarnessRuntimeArtifactBinding,
   AgentHarnessSideQuestionParams,
+  AgentHarnessSideQuestionParamsV2,
   AgentHarnessSideQuestionResult,
   AgentHarnessSettledTurnFinalizationResult,
   AgentHarnessResetParams,
@@ -109,10 +112,24 @@ export type {
   AgentHarnessUserInputQuestion,
 } from "../agents/harness/user-input-bridge.js";
 export type { AgentHarnessQuestionGatewayCall } from "../agents/harness/gateway-question.js";
-export type EmbeddedRunAttemptParams = Omit<
+type EmbeddedRunAttemptParamsBase = Omit<
   CoreEmbeddedRunAttemptParams,
-  "contextEngineLogicalTurnLease" | "onContextEngineTurnCandidate" | "trajectoryRecorder"
+  | "admittedRunContext"
+  | "contextEngineLogicalTurnLease"
+  | "onContextEngineTurnCandidate"
+  | "trajectoryRecorder"
 >;
+/**
+ * @deprecated Use EmbeddedRunAttemptParamsV2. The optional capability keeps
+ * existing harness source compatible through 2026-10-12.
+ */
+export type EmbeddedRunAttemptParams = EmbeddedRunAttemptParamsBase & {
+  hostCapabilities?: import("../agents/harness/host-capability-types.js").AgentHarnessHostCapabilities;
+};
+/** Current host-prepared attempt contract for agent harnesses. */
+export type EmbeddedRunAttemptParamsV2 = EmbeddedRunAttemptParamsBase & {
+  hostCapabilities: import("../agents/harness/host-capability-types.js").AgentHarnessHostCapabilities;
+};
 export type { EmbeddedRunAttemptResult };
 export type {
   ContextEngine as HarnessContextEngine,
@@ -238,9 +255,9 @@ export {
   SKILL_WORKSHOP_TOOL_NAME,
 } from "../agents/skill-workshop-prompt.js";
 export { TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT } from "../agents/transcript-credential-safety.js";
-export { resolveAttemptFsWorkspaceOnly } from "../agents/embedded-agent-runner/run/attempt.prompt-helpers.js";
-export { resolveAttemptSpawnWorkspaceDir } from "../agents/embedded-agent-runner/run/attempt.thread-helpers.js";
-export { buildEmbeddedAttemptToolRunContext } from "../agents/embedded-agent-runner/run/attempt.tool-run-context.js";
+export { resolveAttemptFsWorkspaceOnly } from "../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
+export { resolveAttemptSpawnWorkspaceDir } from "../agents/embedded-agent-runner/run/attempt-thread-helpers.js";
+export { buildEmbeddedAttemptToolRunContext } from "../agents/embedded-agent-runner/run/attempt-tool-run-context.js";
 export {
   applyEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,

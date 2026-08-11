@@ -33,6 +33,9 @@ vi.mock("../auto-reply/continuation/delegate-store-post-compaction.js", () => ({
   failStagedPostCompactionDelegatesForCleanup: failStagedPostCompactionDelegatesForCleanupMock,
 }));
 
+vi.mock("./subagents/registry/subagent-registry-read.js", () => ({
+  countActiveDescendantRuns: countActiveDescendantRunsMock,
+}));
 vi.mock("./subagents/registry/subagent-registry-runtime.js", () => ({
   countActiveDescendantRuns: countActiveDescendantRunsMock,
 }));

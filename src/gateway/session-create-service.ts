@@ -287,6 +287,8 @@ export async function createGatewaySession(params: {
   /** Exact plugin namespace authorized by the scoped plugin runtime. */
   authorizedPluginId?: string;
   afterCreate?: (created: CreatedGatewaySession) => Promise<void>;
+  /** Synchronous caller-authority guard checked by each durable owner boundary. */
+  commitGuard?: () => void;
 }): Promise<CreateGatewaySessionResult> {
   const requestedKey = normalizeOptionalString(params.key);
   const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
@@ -656,6 +658,7 @@ export async function createGatewaySession(params: {
         ...(execCwd ? { execCwd } : {}),
         ...(params.clearExecBinding ? { clearExecBinding: true } : {}),
         ...(params.clearSpawnedCwd && !spawnedCwd ? { clearSpawnedCwd: true } : {}),
+        ...(params.commitGuard ? { assertAuthorizedInstance: params.commitGuard } : {}),
       });
       if (!resetResult.ok) {
         return resetResult;
@@ -693,6 +696,7 @@ export async function createGatewaySession(params: {
         }
       : undefined;
   const createChildSession = async (): Promise<CreateGatewaySessionResult> => {
+    params.commitGuard?.();
     let currentParentSessionEntry = parentSessionEntry;
     if (
       canonicalParentSessionKey &&
@@ -1139,12 +1143,15 @@ export async function createGatewaySession(params: {
           ),
         };
       },
-      params.initialEntry
-        ? {
-            activeSessionKey: target.canonicalKey,
-            requireWriteSuccess: true,
-          }
-        : undefined,
+      {
+        ...(params.initialEntry
+          ? {
+              activeSessionKey: target.canonicalKey,
+              requireWriteSuccess: true,
+            }
+          : {}),
+        ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
+      },
     );
     if (!created.ok) {
       return {

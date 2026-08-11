@@ -48,6 +48,7 @@ type ChatPaneHeaderProps = {
   discussionAction: TemplateResult | typeof nothing;
   diffAction: TemplateResult | typeof nothing;
   backgroundTasksAction: TemplateResult | typeof nothing;
+  sessionRailAction: TemplateResult | typeof nothing;
   workspaceAction: TemplateResult | typeof nothing;
   presence?: TemplateResult | typeof nothing;
   faceControl?: TemplateResult | typeof nothing;
@@ -302,7 +303,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
           ? html`<span
               class="chat-pane__session-title"
               title=${props.renameDisabledReason ?? props.title}
-              >${props.title}</span
+              ><span class="chat-pane__session-title-text">${props.title}</span></span
             >`
           : html`<button
               class="chat-pane__session-title chat-pane__session-title-button"
@@ -311,7 +312,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
               aria-label=${t("chat.sessionHeader.renameAria", { title: props.title })}
               @click=${props.onBeginRename}
             >
-              ${props.title}
+              <span class="chat-pane__session-title-text">${props.title}</span>
             </button>`}
       ${renderSessionOwnerChip(
         props.showOwnerChip ? props.session?.createdActor : undefined,
@@ -434,7 +435,8 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         ${props.panelActions} ${props.discussionAction}
         ${props.catalog
           ? nothing
-          : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}`}
+          : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}
+            ${props.sessionRailAction}`}
         ${props.onOpenSplitView
           ? html`<openclaw-tooltip .content=${t("chat.splitView.open")}>
               <button

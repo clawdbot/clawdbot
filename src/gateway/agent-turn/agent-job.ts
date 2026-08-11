@@ -380,7 +380,7 @@ function ensureAgentRunListener() {
   });
 }
 
-function asString(value: unknown): string | undefined {
+function readNonBlankString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
@@ -422,8 +422,10 @@ function parseDedupeObservation(entry: DedupeEntry): DedupeObservation {
   );
   const startedAt = asFiniteNumber(payload?.startedAt);
   const endedAt = asFiniteNumber(payload?.endedAt) ?? entry.ts;
-  const stopReason = asString(payload?.stopReason) ?? asString(resultMeta?.stopReason);
-  const livenessState = asString(payload?.livenessState) ?? asString(resultMeta?.livenessState);
+  const stopReason =
+    readNonBlankString(payload?.stopReason) ?? readNonBlankString(resultMeta?.stopReason);
+  const livenessState =
+    readNonBlankString(payload?.livenessState) ?? readNonBlankString(resultMeta?.livenessState);
   const terminalOutcome = buildAgentRunTerminalOutcome({
     status: terminalStatus,
     startedAt,

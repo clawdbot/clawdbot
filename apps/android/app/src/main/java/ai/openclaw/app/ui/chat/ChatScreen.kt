@@ -11,6 +11,7 @@ import ai.openclaw.app.SHARED_AUDIO_DOCUMENT_MIME_TYPES
 import ai.openclaw.app.SHARED_VIDEO_MIME_TYPES
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatComposerOwner
+import ai.openclaw.app.chat.ChatDiffStat
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatOutboxItem
@@ -20,6 +21,7 @@ import ai.openclaw.app.chat.ChatPlanStep
 import ai.openclaw.app.chat.ChatPlanStepStatus
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.ChatSubagentActivity
 import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.ChatTranscriptAnchorState
@@ -63,9 +65,12 @@ import ai.openclaw.app.ui.gatewayStatusForDisplay
 import ai.openclaw.app.ui.localizedUppercase
 import ai.openclaw.app.ui.mobileCallout
 import ai.openclaw.app.ui.relativeSessionTime
+import ai.openclaw.app.ui.rememberSystemAnimationsEnabled
 import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -288,6 +293,7 @@ fun ChatScreen(
   val thinkingLevelSelection by viewModel.chatThinkingLevelSelection.collectAsState()
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
+  val subagentActivities by viewModel.chatSubagentActivities.collectAsState()
   val questions by viewModel.chatQuestions.collectAsState()
   val planSteps by viewModel.chatPlanSteps.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
@@ -710,6 +716,7 @@ fun ChatScreen(
       activeRunClockKey = selectedActiveRun.clockKey,
       activeRunOutputTokens = selectedActiveRun.outputTokens,
       pendingToolCalls = pendingToolCalls,
+      subagentActivities = subagentActivities,
       questions = questionsForSession(questions, sessionKey, mainSessionKey, activeAgentId),
       streamingAssistantText = streamingAssistantText,
       healthOk = healthOk,
@@ -1286,6 +1293,7 @@ private fun ChatMessageList(
   activeRunClockKey: String?,
   activeRunOutputTokens: Long?,
   pendingToolCalls: List<ChatPendingToolCall>,
+  subagentActivities: Map<String, ChatSubagentActivity>,
   questions: List<ChatQuestionPrompt>,
   streamingAssistantText: String?,
   healthOk: Boolean,
@@ -1310,12 +1318,13 @@ private fun ChatMessageList(
   modifier: Modifier = Modifier,
 ) {
   val baseTimeline =
-    remember(messages, activeRunCount, pendingToolCalls, questions, streamingAssistantText, outboxItems, recoveryOutboxItems) {
+    remember(messages, activeRunCount, pendingToolCalls, subagentActivities, questions, streamingAssistantText, outboxItems, recoveryOutboxItems) {
       buildChatTimeline(
         messages = messages,
         pendingRunCount = activeRunCount,
         pendingToolCalls = pendingToolCalls,
         streamingAssistantText = streamingAssistantText,
+        subagentActivities = subagentActivities,
         outboxItems = outboxItems,
         recoveryOutboxItems = recoveryOutboxItems,
         questions = questions,
@@ -1412,6 +1421,11 @@ private fun ChatMessageList(
                 ),
             )
           is ChatTimelineItem.PendingTools -> ToolBubble(toolCalls = item.toolCalls)
+          is ChatTimelineItem.SubagentActivity ->
+            SubagentActivityRows(
+              activities = item.activities,
+              moreWorkingCount = item.moreWorkingCount,
+            )
           is ChatTimelineItem.QuestionPrompt ->
             ChatQuestionCard(prompt = item.prompt, onSubmit = onResolveQuestion, onSkip = onSkipQuestion)
           is ChatTimelineItem.TurnRecapSummary -> ChatTurnRecapRow(item.recap)
@@ -1923,7 +1937,11 @@ private fun ToolBubble(toolCalls: List<ChatPendingToolCall>) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
       ClawStatusPill(text = nativeString("Tools running"), status = ClawStatus.Warning)
       toolCalls.take(4).forEach { tool ->
-        ClawListItem(title = tool.name, subtitle = nativeString("OpenClaw is working"))
+        ClawListItem(
+          title = tool.name,
+          subtitle = nativeString("OpenClaw is working"),
+          trailing = { tool.liveDiff?.let { DiffStatChips(it) } },
+        )
       }
       if (toolCalls.size > 4) {
         Text(text = nativeString("+\${toolCalls.size - 4} more", toolCalls.size - 4), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
@@ -1931,6 +1949,126 @@ private fun ToolBubble(toolCalls: List<ChatPendingToolCall>) {
     }
   }
 }
+
+@Composable
+private fun SubagentActivityRows(
+  activities: List<ChatSubagentActivity>,
+  moreWorkingCount: Int,
+) {
+  val animationsEnabled = rememberSystemAnimationsEnabled()
+  ClawPanel {
+    Column(
+      modifier = if (animationsEnabled) Modifier.animateContentSize() else Modifier,
+      verticalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+      activities.forEach { activity -> SubagentActivityRow(activity, animationsEnabled) }
+      if (moreWorkingCount > 0) {
+        Text(
+          text = nativeString("+\${moreWorkingCount} more working", moreWorkingCount),
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textSubtle,
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun SubagentActivityRow(
+  activity: ChatSubagentActivity,
+  animationsEnabled: Boolean,
+) {
+  val completed = activity.status == "completed"
+  val summary = if (activity.isWorking) activity.snippet else activity.terminalSummary ?: activity.error ?: activity.snippet
+  Row(
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    if (activity.isWorking) {
+      WorkingClawIcon(runKey = activity.id, color = ClawTheme.colors.primary)
+    } else {
+      Icon(
+        imageVector = if (completed) Icons.Default.Check else Icons.Default.Close,
+        contentDescription = null,
+        modifier = Modifier.size(15.dp),
+        tint = if (completed) ClawTheme.colors.success else ClawTheme.colors.danger,
+      )
+    }
+    Text(
+      text = subagentActivityStatusLabel(activity.status),
+      style = ClawTheme.type.label,
+      color = ClawTheme.colors.text,
+      maxLines = 1,
+    )
+    if (summary.isNullOrBlank()) {
+      Box(modifier = Modifier.weight(1f))
+    } else if (animationsEnabled) {
+      AnimatedContent(
+        targetState = summary,
+        modifier = Modifier.weight(1f),
+      ) { text ->
+        SubagentActivitySnippet(text)
+      }
+    } else {
+      SubagentActivitySnippet(summary, Modifier.weight(1f))
+    }
+    activity.diffStat?.takeIf { it.added > 0 || it.removed > 0 }?.let { DiffStatChips(it) }
+  }
+}
+
+@Composable
+private fun SubagentActivitySnippet(
+  text: String,
+  modifier: Modifier = Modifier,
+) {
+  Text(
+    text = text,
+    modifier = modifier,
+    style = ClawTheme.type.caption,
+    color = ClawTheme.colors.textMuted,
+    maxLines = 1,
+    overflow = TextOverflow.Ellipsis,
+  )
+}
+
+@Composable
+private fun DiffStatChips(diff: ChatDiffStat) {
+  Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+    if (diff.added > 0) {
+      DiffStatChip(text = nativeString("+\${diff.added}", diff.added), color = ClawTheme.colors.success, background = ClawTheme.colors.successSoft)
+    }
+    if (diff.removed > 0) {
+      DiffStatChip(text = nativeString("−\${diff.removed}", diff.removed), color = ClawTheme.colors.danger, background = ClawTheme.colors.dangerSoft)
+    }
+  }
+}
+
+@Composable
+private fun DiffStatChip(
+  text: String,
+  color: Color,
+  background: Color,
+) {
+  Surface(shape = RoundedCornerShape(ClawTheme.radii.control), color = background) {
+    Text(
+      text = text,
+      modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+      style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
+      color = color,
+      maxLines = 1,
+    )
+  }
+}
+
+@Composable
+private fun subagentActivityStatusLabel(status: String): String =
+  when (status) {
+    "queued", "running" -> nativeString("Subagent working")
+    "completed" -> nativeString("Subagent finished")
+    "failed", "timed_out" -> nativeString("Subagent failed")
+    "cancelled" -> nativeString("Subagent cancelled")
+    else -> nativeString("Subagent finished")
+  }
 
 @Composable
 private fun ChatNotice(

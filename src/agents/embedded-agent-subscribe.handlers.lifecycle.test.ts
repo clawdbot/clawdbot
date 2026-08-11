@@ -66,6 +66,7 @@ function createContext(
     },
     state: {
       lastAssistant: lastAssistant as EmbeddedAgentSubscribeContext["state"]["lastAssistant"],
+      liveEditDiffStateById: new Map(),
       pendingCompactionRetry: 0,
       pendingToolMediaUrls: [],
       pendingToolMediaTrustByUrl: new Map(),

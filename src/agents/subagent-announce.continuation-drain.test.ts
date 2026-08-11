@@ -242,6 +242,7 @@ vi.mock("./subagents/announce/subagent-announce-delivery.js", () => ({
   runAnnounceDeliveryWithRetry: async <T>(params: { run: () => Promise<T> }) => await params.run(),
 }));
 
+vi.mock("./subagents/registry/subagent-registry-read.js", () => subagentRegistryRuntimeMock);
 vi.mock("./subagents/registry/subagent-registry-runtime.js", () => subagentRegistryRuntimeMock);
 
 vi.mock("../auto-reply/continuation/delegate-dispatch.js", () => ({

@@ -66,7 +66,7 @@ import type { DirectCompactionPreparation } from "./direct-compaction-preparatio
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
 import { log } from "./logger.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-discovery-input.js";
-import { resolveAttemptSpawnWorkspaceDir } from "./run/attempt.thread-helpers.js";
+import { resolveAttemptSpawnWorkspaceDir } from "./run/attempt-thread-helpers.js";
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "./sandbox-info.js";
 import {
   mapSandboxSkillEntriesForPrompt,

@@ -25,7 +25,6 @@ import {
   readOpenAICompletionsContentDeltas,
 } from "../transports/openai-transport-shared.js";
 import {
-  assignTransportErrorDetails,
   transportAbortError,
   withProviderResponseHook,
 } from "../transports/transport-stream-shared.js";
@@ -51,7 +50,7 @@ import {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
-import { formatProviderError } from "../utils/provider-error.js";
+import { projectProviderError } from "../utils/provider-error.js";
 import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-partitioner.js";
 import {
   createFirstStreamEventAbortController,
@@ -611,12 +610,8 @@ export const streamOpenAICompletions: StreamFunction<
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
-      const errorReason = options?.signal?.aborted ? "aborted" : "error";
-      if (options?.signal?.aborted) {
-        assignTransportErrorDetails(output, error, options.signal);
-      } else {
-        output.stopReason = errorReason;
-      }
+      const terminal = projectProviderError(error, options?.signal);
+      Object.assign(output, terminal);
       finalizeOpenAICompletionsToolCalls(output, { allowSilentToolCallPromotion: false });
       for (const block of output.content) {
         delete (block as { index?: number }).index;
@@ -624,14 +619,7 @@ export const streamOpenAICompletions: StreamFunction<
         delete (block as { partialArgs?: string }).partialArgs;
         delete (block as { streamIndex?: number }).streamIndex;
       }
-      output.errorMessage = formatProviderError(error);
-      // Some providers via OpenRouter give additional information in this field.
-      const rawMetadata = (error as { error?: { metadata?: { raw?: string } } })?.error?.metadata
-        ?.raw;
-      if (rawMetadata && !output.errorMessage.includes(rawMetadata)) {
-        output.errorMessage += `\n${rawMetadata}`;
-      }
-      stream.push({ type: "error", reason: errorReason, error: output });
+      stream.push({ type: "error", reason: terminal.stopReason, error: output });
       stream.end();
     } finally {
       firstEventAbort?.dispose();

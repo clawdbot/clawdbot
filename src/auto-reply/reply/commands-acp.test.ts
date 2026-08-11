@@ -162,7 +162,7 @@ const { testing: acpResetTargetTesting } = await import("./acp-reset-target.test
 const { createTaskRecord } = await import("../../tasks/task-registry.js");
 const { resetTaskRegistryForTests } = await import("../../tasks/task-runtime.test-helpers.js");
 const { configureTaskRegistryRuntime } = await import("../../tasks/task-registry.store.js");
-const { failTaskRunByRunId } = await import("../../tasks/task-executor.js");
+const { failTaskRunByRunIdCore } = await import("../../tasks/task-executor.js");
 
 function configureInMemoryTaskRegistryStoreForTests(): void {
   configureTaskRegistryRuntime({
@@ -2126,7 +2126,7 @@ describe("/acp command", () => {
       task: "Inspect ACP backlog",
       status: "running",
     });
-    failTaskRunByRunId({
+    failTaskRunByRunIdCore({
       runId: "acp-run-1",
       endedAt: Date.now(),
       error: [

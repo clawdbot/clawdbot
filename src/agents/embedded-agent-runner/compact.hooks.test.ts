@@ -797,7 +797,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
   });
 
-  it("keeps the embedded compaction system prompt after active tool selection", async () => {
+  it("keeps the compaction prompt and durable provider resources after disposal", async () => {
     buildEmbeddedSystemPromptMock.mockReturnValueOnce("compaction system prompt");
 
     await compactEmbeddedAgentSessionDirect({

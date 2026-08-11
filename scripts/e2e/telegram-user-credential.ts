@@ -151,7 +151,7 @@ function requireString(source: JsonObject, key: string) {
   throw new Error(`Missing ${key}.`);
 }
 
-function optionalString(source: JsonObject, key: string) {
+function readOptionalCredentialString(source: JsonObject, key: string) {
   const value = source[key];
   if (typeof value === "number") {
     return String(value);
@@ -274,7 +274,7 @@ function joinBrokerEndpoint(siteUrl: string, endpoint: string) {
 function assertBrokerSuccess(payload: JsonObject, action: string) {
   if (payload.status === "error") {
     throw new Error(
-      `${action} failed: ${requireString(payload, "code")} ${optionalString(payload, "message") || ""}`.trim(),
+      `${action} failed: ${requireString(payload, "code")} ${readOptionalCredentialString(payload, "message") || ""}`.trim(),
     );
   }
   if (payload.status !== "ok") {

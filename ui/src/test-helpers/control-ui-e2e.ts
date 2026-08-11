@@ -141,6 +141,22 @@ export async function waitForControlUiRoute(page: Page, target: ControlUiRouteTa
   }
 }
 
+/**
+ * Wait for the settled in-app confirmation modal. Control UI routes destructive
+ * confirms through `showConfirmDialog`, so no native browser dialog ever fires;
+ * waiting for full opacity keeps the click from landing mid-animation.
+ */
+export async function waitForConfirmModal(page: Page): Promise<Locator> {
+  await page.waitForFunction(() => {
+    const modal = [...document.querySelectorAll("openclaw-modal-dialog")].at(-1);
+    const dialog = modal?.shadowRoot
+      ?.querySelector("wa-dialog")
+      ?.shadowRoot?.querySelector("dialog");
+    return Boolean(dialog) && getComputedStyle(dialog as Element).opacity === "1";
+  });
+  return page.locator("openclaw-modal-dialog").last();
+}
+
 export async function waitForControlUiSettingsTakeover(
   page: Page,
   pathname = "/settings/appearance",
@@ -939,6 +955,8 @@ function installControlUiMockGateway(
     return names;
   }
 
+  // This function is serialized with installControlUiMockGateway.toString().
+  // Keep the guard local so the generated script captures no module imports.
   function isRecord(value: unknown): value is Record<string, unknown> {
     return Boolean(value) && typeof value === "object" && !Array.isArray(value);
   }
@@ -1420,7 +1438,10 @@ function installControlUiMockGateway(
       case "connect":
         return {
           auth: {
-            ...(deviceAuthMigrationPending ? {} : { deviceToken: scenario.deviceToken }),
+            ...(deviceAuthMigrationPending
+              ? {}
+              : { deviceToken: scenario.deviceToken, recoveryMigrationAllowed: true as const }),
+            recoveryScope: "e2e-recovery-scope",
             role: "operator",
             scopes: scenario.operatorScopes,
           },

@@ -463,7 +463,7 @@ export async function updateWithPrecondition(
 export async function remove(
   state: CronServiceState,
   id: string,
-  opts?: { systemOwned?: boolean },
+  opts?: { systemOwned?: boolean; commitGuard?: () => void },
 ) {
   let sessionCleanup:
     | {
@@ -497,6 +497,7 @@ export async function remove(
         "heartbeat monitor jobs are system-owned; edit agents.*.heartbeat config instead",
       );
     }
+    opts?.commitGuard?.();
     const snapshot = snapshotStoreForRollback(state);
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
 

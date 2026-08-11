@@ -5,15 +5,24 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+  type AdmittedRunContext,
+  type PreparedAgentRunAdmission,
+} from "../admitted-run-context.js";
 import { isHostScopedAgentToolActive } from "../agent-tools.ring-zero-context.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../embedded-agent-runner/run/types.js";
+import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
+import { callGatewayTool } from "../tools/gateway.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { maybeCompactAgentHarnessSession } from "./compaction.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
@@ -56,6 +65,7 @@ const providerOwnerMocks = vi.hoisted(() => ({
 const contextEngineTurnAttemptMocks = vi.hoisted(() => ({
   drainPendingContextEngineTurnsBeforeRun: vi.fn(async (_params: unknown) => {}),
 }));
+const builtInHarnesses = vi.hoisted(() => new WeakSet<object>());
 
 function createTranscriptRecorder(
   admission: ReturnType<typeof createTranscriptAnchor> & {
@@ -93,13 +103,18 @@ it("identifies harnesses that expose OpenClaw tools", () => {
 });
 
 vi.mock("./builtin-openclaw.js", () => ({
-  createOpenClawAgentHarness: (): AgentHarness => ({
-    id: "openclaw",
-    label: "OpenClaw embedded agent",
-    contextEngineHostCapabilities: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.capabilities,
-    supports: () => ({ supported: true, priority: 0 }),
-    runAttempt: agentRunAttempt,
-  }),
+  createOpenClawAgentHarness: (): AgentHarness => {
+    const harness: AgentHarness = {
+      id: "openclaw",
+      label: "OpenClaw embedded agent",
+      contextEngineHostCapabilities: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.capabilities,
+      supports: () => ({ supported: true, priority: 0 }),
+      runAttempt: agentRunAttempt,
+    };
+    builtInHarnesses.add(harness);
+    return harness;
+  },
+  isBuiltInOpenClawAgentHarness: (harness: AgentHarness) => builtInHarnesses.has(harness),
 }));
 vi.mock("../model-auth.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../model-auth.js")>()),
@@ -127,10 +142,29 @@ vi.mock("./context-engine-turn-attempt.js", () => ({
   drainPendingContextEngineTurnsBeforeRun:
     contextEngineTurnAttemptMocks.drainPendingContextEngineTurnsBeforeRun,
 }));
+vi.mock("../tools/gateway.js", () => ({ callGatewayTool: vi.fn() }));
+
+const mockCallGatewayTool = vi.mocked(callGatewayTool);
 
 const originalRuntime = process.env.OPENCLAW_AGENT_RUNTIME;
+let selectionAdmission: PreparedAgentRunAdmission;
+let selectionAdmittedRunContext: AdmittedRunContext;
 
-beforeEach(() => {
+beforeEach(async () => {
+  resetAgentRunRegistryForTest();
+  selectionAdmission = prepareAgentRunAdmission({
+    cfg: {},
+    facts: {
+      runId: "run-1",
+      agentId: "main",
+      ingress: { kind: "system", boundary: "harness-selection-test", state: "present" },
+    },
+    operationalRunInstance: createOperationalRunInstanceRef("run-1"),
+  });
+  selectionAdmittedRunContext = await selectionAdmission.admit(
+    "plugin-harness",
+    "harness-selection-test",
+  );
   clearAgentHarnesses();
   compactAuthMocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
   compactAuthMocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
@@ -146,6 +180,7 @@ beforeEach(() => {
   contextEngineTurnAttemptMocks.drainPendingContextEngineTurnsBeforeRun
     .mockReset()
     .mockResolvedValue(undefined);
+  mockCallGatewayTool.mockReset();
   cliBackendsTesting.setDepsForTest({
     resolvePluginSetupRegistry: () => ({
       providers: [],
@@ -172,6 +207,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  selectionAdmission.close();
+  resetAgentRunRegistryForTest();
   clearAgentHarnesses();
   cliBackendsTesting.resetDepsForTest();
   agentRunAttempt.mockClear();
@@ -191,6 +228,7 @@ afterEach(() => {
 
 function createAttemptParams(config?: OpenClawConfig): EmbeddedRunAttemptParams {
   return {
+    admittedRunContext: selectionAdmittedRunContext,
     prompt: "hello",
     sessionId: "session-1",
     runId: "run-1",
@@ -459,6 +497,40 @@ function registerTestCompactor(
 }
 
 describe("runAgentHarnessAttempt", () => {
+  it("uses registry ownership rather than declared harness metadata for approvals", async () => {
+    let observedApprovalOwner: string | undefined;
+    mockCallGatewayTool.mockImplementationOnce(async () => {
+      observedApprovalOwner = getGatewayToolCallerIdentity()?.approvalOwnerPluginId;
+      return undefined;
+    });
+    registerAgentHarness(
+      {
+        id: "spoofed",
+        label: "Spoofed",
+        pluginId: "codex",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: async (attempt) => {
+          await attempt.hostCapabilities?.requestApproval({
+            title: "Approval",
+            description: "Registry owner proof",
+            severity: "warning",
+            toolName: "exec",
+            timeoutMs: 1_000,
+          });
+          return createAttemptResult("spoofed");
+        },
+      },
+      { ownerPluginId: "actual-owner" },
+    );
+    const params = createAttemptParams(providerRuntimeConfig("codex", "spoofed"));
+    params.agentId = "main";
+    params.sessionKey = "agent:main:session-1";
+
+    await runAgentHarnessAttempt(params);
+
+    expect(observedApprovalOwner).toBe("actual-owner");
+  });
+
   it("routes settled turns only through an explicit harness finalizer", async () => {
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("run"));
     let hostAuthorityActive = true;
@@ -466,6 +538,7 @@ describe("runAgentHarnessAttempt", () => {
       async ({ attempt, settledAttempt: _settledAttempt }) => {
         hostAuthorityActive = isHostScopedAgentToolActive("openclaw");
         expect(attempt.operation).toBe("settled-tool-finalization");
+        expect(attempt).not.toHaveProperty("hostCapabilities");
         return {
           assistant: createFinalAssistant(),
         };
@@ -1106,10 +1179,15 @@ describe("runAgentHarnessAttempt", () => {
 
     const classifyCall = classify.mock.calls.at(0);
     expect(classifyCall?.[0].sessionIdUsed).toBe("codex");
-    expect(classifyCall?.[1]).toStrictEqual({
-      ...params,
-      pluginHarnessToolPolicyRestricted: false,
-    });
+    expect(classifyCall?.[1]).toEqual(
+      expect.objectContaining({
+        hostCapabilities: expect.objectContaining({ kind: "agent-harness-host-capability" }),
+        pluginHarnessToolPolicyRestricted: false,
+        runId: params.runId,
+        sessionId: params.sessionId,
+      }),
+    );
+    expect(classifyCall?.[1]).not.toHaveProperty("admittedRunContext");
     expect(result.agentHarnessId).toBe("codex");
     expect(result.agentHarnessResultClassification).toBe("empty");
   });

@@ -2,7 +2,7 @@
  * Codex app-server agent harness registration and lazy runtime boundaries.
  */
 import type {
-  AgentHarness,
+  AgentHarnessV2,
   AgentHarnessCompactParams,
   AgentHarnessCompactResult,
   ContextEngineHostCapability,
@@ -27,7 +27,7 @@ const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
   "thread-bootstrap-projection",
 ] as const satisfies readonly ContextEngineHostCapability[];
 
-type CodexAppServerAgentHarness = AgentHarness & {
+type CodexAppServerAgentHarness = AgentHarnessV2 & {
   compactAfterContextEngine?(
     params: AgentHarnessCompactParams,
   ): Promise<AgentHarnessCompactResult | undefined>;
@@ -56,7 +56,7 @@ export function createCodexAppServerAgentHarness(options: {
   runtime?: PluginRuntime;
   bindingStore: CodexAppServerBindingStore;
   sessionCatalogControl?: CodexSessionCatalogControl;
-}): AgentHarness {
+}): AgentHarnessV2 {
   const harnessRuntimeId = options?.id ?? "codex";
   const normalizedHarnessRuntimeId = harnessRuntimeId.trim().toLowerCase();
   const providerIds = new Set(

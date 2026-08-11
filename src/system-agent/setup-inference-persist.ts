@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
 import { normalizeAuthProfileCredential } from "../agents/auth-profiles/credential-normalize.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
@@ -476,6 +477,12 @@ export async function runSetupInferenceTest(params: {
   const sessionKey = `agent:${effectiveAgentId}:setup-inference:incognito-${runId}`;
   const timeoutMs = deps.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS;
   const started = Date.now();
+  const preparedRunAdmission = prepareSystemAgentRunAdmission(
+    plan.config,
+    runId,
+    effectiveAgentId,
+    "system-agent.setup-inference",
+  );
   let successfulAuth: AgentExecutionAuthBinding | undefined;
   try {
     if (plan.runner === "cli") {
@@ -497,6 +504,7 @@ export async function runSetupInferenceTest(params: {
     if (plan.runner === "cli") {
       const runCli = deps.runCliAgent ?? (await import("../agents/cli-runner.js")).runCliAgent;
       result = (await runCli({
+        preparedRunAdmission,
         sessionId,
         sessionKey,
         sessionManager,
@@ -505,7 +513,7 @@ export async function runSetupInferenceTest(params: {
         sessionFile,
         workspaceDir: tempDir,
         ...(plan.agentDir ? { agentDir: plan.agentDir } : {}),
-        config: plan.config,
+        config: plan.executionConfig ?? plan.config,
         prompt: params.prompt ?? SETUP_INFERENCE_TEST_PROMPT,
         provider: plan.provider,
         model: plan.model,
@@ -526,6 +534,7 @@ export async function runSetupInferenceTest(params: {
       const runEmbedded =
         deps.runEmbeddedAgent ?? (await import("../agents/embedded-agent.js")).runEmbeddedAgent;
       result = (await runEmbedded({
+        preparedRunAdmission,
         sessionId,
         sessionKey,
         sessionManager,
@@ -534,7 +543,7 @@ export async function runSetupInferenceTest(params: {
         sessionFile,
         workspaceDir: tempDir,
         ...(plan.agentDir ? { agentDir: plan.agentDir } : {}),
-        config: plan.config,
+        config: plan.executionConfig ?? plan.config,
         prompt: params.prompt ?? SETUP_INFERENCE_TEST_PROMPT,
         provider: plan.provider,
         model: plan.model,
@@ -618,5 +627,7 @@ export async function runSetupInferenceTest(params: {
       status: mapFailoverReasonToSetupStatus(described.reason),
       error: described.message,
     };
+  } finally {
+    preparedRunAdmission.close();
   }
 }

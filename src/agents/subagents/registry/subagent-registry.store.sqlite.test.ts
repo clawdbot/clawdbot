@@ -265,7 +265,7 @@ describe("subagent registry sqlite store", () => {
         delivery: {
           status: "suspended",
           suspendedAt: 300,
-          suspendedReason: "retry-limit",
+          suspendedReason: "permanent_failure",
           payload: {
             requesterSessionKey: "agent:main:main",
             requesterDisplayKey: "main",

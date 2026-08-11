@@ -28,15 +28,6 @@
     ]
   },
   {
-    "name": "asString",
-    "files": [
-      "src/channels/plugins/status-issues/shared.ts",
-      "src/cli/nodes-media-utils.ts",
-      "src/tui/tui-formatters.ts"
-    ],
-    "sdk": true
-  },
-  {
     "name": "authorizeConfigWrite",
     "files": [
       "src/channels/plugins/config-writes.ts",
@@ -49,13 +40,6 @@
     "files": [
       "src/agents/agent-bundle-mcp-materialize.ts",
       "src/gateway/server-methods/__mocks__/tools-effective.runtime.ts"
-    ]
-  },
-  {
-    "name": "buildChannelAccountSnapshot",
-    "files": [
-      "src/channels/account-summary.ts",
-      "src/channels/plugins/status.ts"
     ]
   },
   {
@@ -125,13 +109,6 @@
     "sdk": true
   },
   {
-    "name": "cancelDetachedTaskRunById",
-    "files": [
-      "src/tasks/task-executor-cancel.runtime.ts",
-      "src/tasks/task-executor.ts"
-    ]
-  },
-  {
     "name": "classifySessionKind",
     "files": [
       "src/agents/tools/sessions-helpers.ts",
@@ -144,14 +121,6 @@
       "src/cli/plugins-cli-test-helpers.ts",
       "src/plugins/loader-cache.ts"
     ]
-  },
-  {
-    "name": "clearRuntimeAuthProfileStoreSnapshots",
-    "files": [
-      "src/agents/auth-profiles/runtime-snapshots.ts",
-      "src/agents/auth-profiles/store.ts"
-    ],
-    "sdk": true
   },
   {
     "name": "clearSecretsRuntimeSnapshot",
@@ -184,46 +153,10 @@
     "sdk": true
   },
   {
-    "name": "compactEmbeddedAgentSessionDirect",
-    "files": [
-      "src/agents/embedded-agent-runner/compact.runtime.ts",
-      "src/agents/embedded-agent-runner/compact.ts"
-    ]
-  },
-  {
-    "name": "completeTaskRunByRunId",
-    "files": [
-      "src/tasks/detached-task-runtime.ts",
-      "src/tasks/task-executor.ts"
-    ]
-  },
-  {
     "name": "containsConfigIncludeDirective",
     "files": [
       "src/config/io.read-helpers.ts",
       "src/plugins/install-persistence.ts"
-    ]
-  },
-  {
-    "name": "countActiveDescendantRuns",
-    "files": [
-      "src/agents/subagents/registry/subagent-registry-read.ts",
-      "src/agents/subagents/registry/subagent-registry.ts"
-    ]
-  },
-  {
-    "name": "countPendingDescendantRuns",
-    "files": [
-      "src/agents/subagents/registry/subagent-registry-announce-read.ts",
-      "src/agents/subagents/registry/subagent-registry.ts"
-    ]
-  },
-  {
-    "name": "createCompactionDiagId",
-    "files": [
-      "src/agents/compaction-attribution.ts",
-      "src/agents/embedded-agent-runner/compaction-diagnostics.ts",
-      "src/agents/embedded-agent-runner/run/helpers.ts"
     ]
   },
   {
@@ -249,27 +182,6 @@
     ]
   },
   {
-    "name": "createQueuedTaskRun",
-    "files": [
-      "src/tasks/detached-task-runtime.ts",
-      "src/tasks/task-executor.ts"
-    ]
-  },
-  {
-    "name": "createRunningTaskRun",
-    "files": [
-      "src/tasks/detached-task-runtime.ts",
-      "src/tasks/task-executor.ts"
-    ]
-  },
-  {
-    "name": "createSessionId",
-    "files": [
-      "src/agents/sessions/session-manager-id.ts",
-      "src/agents/tools/transcripts-tool-runtime.ts"
-    ]
-  },
-  {
     "name": "createSuiteTempRootTracker",
     "files": [
       "src/plugins/test-helpers/fs-fixtures.ts",
@@ -285,13 +197,6 @@
     "sdk": true
   },
   {
-    "name": "DEFAULT_TIMEOUT_MS",
-    "files": [
-      "src/infra/provider-usage.shared.ts",
-      "src/infra/update-runner-command.ts"
-    ]
-  },
-  {
     "name": "defaultRuntime",
     "files": [
       "src/cli/daemon-cli/test-helpers/lifecycle-core-harness.ts",
@@ -304,38 +209,6 @@
     "files": [
       "src/channels/turn/durable-delivery.ts",
       "src/plugin-sdk/channel-outbound.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "describeImagesWithModel",
-    "files": [
-      "src/media-understanding/image-runtime.ts",
-      "src/media-understanding/image.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "describeImagesWithModelPayloadTransform",
-    "files": [
-      "src/media-understanding/image-runtime.ts",
-      "src/media-understanding/image.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "describeImageWithModel",
-    "files": [
-      "src/media-understanding/image-runtime.ts",
-      "src/media-understanding/image.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "describeImageWithModelPayloadTransform",
-    "files": [
-      "src/media-understanding/image-runtime.ts",
-      "src/media-understanding/image.ts"
     ],
     "sdk": true
   },
@@ -404,32 +277,10 @@
     "sdk": true
   },
   {
-    "name": "ensureConfigReady",
-    "files": [
-      "src/cli/program.test-mocks.ts",
-      "src/cli/program/config-guard.ts"
-    ]
-  },
-  {
     "name": "ensureConfiguredAcpBindingReady",
     "files": [
       "src/acp/persistent-bindings.lifecycle.ts",
       "src/plugin-sdk/core.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "ensureRecord",
-    "files": [
-      "src/commands/doctor/shared/legacy-config-record-shared.ts",
-      "src/config/legacy.shared.ts"
-    ]
-  },
-  {
-    "name": "extractAssistantText",
-    "files": [
-      "src/agents/embedded-agent-utils.ts",
-      "src/agents/tools/chat-history-text.ts"
     ],
     "sdk": true
   },
@@ -448,13 +299,6 @@
     ]
   },
   {
-    "name": "failTaskRunByRunId",
-    "files": [
-      "src/tasks/detached-task-runtime.ts",
-      "src/tasks/task-executor.ts"
-    ]
-  },
-  {
     "name": "fileExists",
     "files": [
       "src/infra/state-migrations.fs.ts",
@@ -462,13 +306,6 @@
       "src/plugin-sdk/security-runtime.ts"
     ],
     "sdk": true
-  },
-  {
-    "name": "finalizeTaskRunByRunId",
-    "files": [
-      "src/tasks/detached-task-runtime.ts",
-      "src/tasks/task-registry-record-api.ts"
-    ]
   },
   {
     "name": "formatConfigPath",
@@ -540,24 +377,10 @@
     "sdk": true
   },
   {
-    "name": "getFreeGatewayPort",
-    "files": [
-      "src/gateway/gateway-cli-backend.live-helpers.ts",
-      "src/gateway/test-helpers.e2e.ts"
-    ]
-  },
-  {
     "name": "getFreePort",
     "files": [
       "src/gateway/test-helpers.server.ts",
       "src/test-utils/ports.ts"
-    ]
-  },
-  {
-    "name": "getLatestSubagentRunByChildSessionKey",
-    "files": [
-      "src/agents/subagents/registry/subagent-registry-read.ts",
-      "src/agents/subagents/registry/subagent-registry.ts"
     ]
   },
   {
@@ -577,13 +400,6 @@
     "sdk": true
   },
   {
-    "name": "getSubagentRunByChildSessionKey",
-    "files": [
-      "src/agents/subagents/registry/subagent-registry-read.ts",
-      "src/agents/subagents/registry/subagent-registry.ts"
-    ]
-  },
-  {
     "name": "getSubagentRunByRunId",
     "files": [
       "src/agents/subagents/registry/subagent-registry-runtime.ts",
@@ -595,14 +411,6 @@
     "files": [
       "src/secrets/runtime-shared.ts",
       "src/tts/tts-settings.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "hasUsableOAuthCredential",
-    "files": [
-      "src/agents/auth-profiles/credential-state.ts",
-      "src/agents/auth-profiles/oauth-shared.ts"
     ],
     "sdk": true
   },
@@ -723,13 +531,6 @@
     ]
   },
   {
-    "name": "listDescendantRunsForRequester",
-    "files": [
-      "src/agents/subagents/registry/subagent-registry-read.ts",
-      "src/agents/subagents/registry/subagent-registry.ts"
-    ]
-  },
-  {
     "name": "listManagedPluginNpmRoots",
     "files": [
       "src/commands/doctor-plugin-host-links.ts",
@@ -751,13 +552,6 @@
       "src/plugin-sdk/session-store-runtime.ts"
     ],
     "sdk": true
-  },
-  {
-    "name": "listSubagentRunsForController",
-    "files": [
-      "src/agents/subagents/registry/subagent-registry-read.ts",
-      "src/agents/subagents/registry/subagent-registry.ts"
-    ]
   },
   {
     "name": "loadBundledPluginPublicSurface",
@@ -910,32 +704,10 @@
     ]
   },
   {
-    "name": "normalizeChannelId",
-    "files": [
-      "src/channels/plugins/registry.ts",
-      "src/channels/registry.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "normalizeContainerPath",
-    "files": [
-      "src/agents/sandbox/path-utils.ts",
-      "src/agents/sandbox/remote-fs-bridge-paths.ts"
-    ]
-  },
-  {
     "name": "normalizeCronRunDiagnostics",
     "files": [
       "src/cron/run-diagnostics-normalize.ts",
       "src/cron/run-diagnostics.ts"
-    ]
-  },
-  {
-    "name": "normalizeSqliteNumber",
-    "files": [
-      "src/config/sessions/session-accessor.sqlite-normalize.ts",
-      "src/infra/sqlite-number.ts"
     ]
   },
   {
@@ -951,13 +723,6 @@
       "src/agents/tool-display-common.ts",
       "src/agents/tool-policy-shared.ts",
       "src/cron/run-diagnostics-normalize.ts"
-    ]
-  },
-  {
-    "name": "notifyGatewayPluginMetadataChanged",
-    "files": [
-      "src/cli/plugins-cli-test-helpers.ts",
-      "src/cli/plugins-update-gateway-signal.ts"
     ]
   },
   {
@@ -1051,39 +816,10 @@
     ]
   },
   {
-    "name": "persistSessionEntry",
-    "files": [
-      "src/agents/command/attempt-execution.shared.ts",
-      "src/agents/command/session-helpers.ts",
-      "src/auto-reply/reply/commands-session-store.ts"
-    ]
-  },
-  {
     "name": "planPluginUninstall",
     "files": [
       "src/cli/plugins-cli-test-helpers.ts",
       "src/plugins/uninstall.ts"
-    ]
-  },
-  {
-    "name": "preserveConfigSnapshotAsClobbered",
-    "files": [
-      "src/config/io.observe-recovery.ts",
-      "src/config/io.runtime.ts"
-    ]
-  },
-  {
-    "name": "promoteConfigSnapshotToLastKnownGood",
-    "files": [
-      "src/config/io.observe-recovery.ts",
-      "src/config/io.runtime.ts"
-    ]
-  },
-  {
-    "name": "promptYesNo",
-    "files": [
-      "src/cli/plugins-cli-test-helpers.ts",
-      "src/cli/prompt.ts"
     ]
   },
   {
@@ -1118,13 +854,6 @@
     "sdk": true
   },
   {
-    "name": "readLatestSessionUsageFromTranscriptAsync",
-    "files": [
-      "src/gateway/session-transcript-readers.ts",
-      "src/gateway/session-utils.fs.ts"
-    ]
-  },
-  {
     "name": "readPersistedInstalledPluginIndex",
     "files": [
       "src/cli/plugins-cli-test-helpers.ts",
@@ -1143,14 +872,6 @@
     "files": [
       "src/config/sessions/session-accessor.sqlite-active-events.ts",
       "src/plugin-sdk/session-transcript-runtime.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "readStringParam",
-    "files": [
-      "src/agents/tools/common.ts",
-      "src/agents/tools/transcripts-tool-runtime.ts"
     ],
     "sdk": true
   },
@@ -1176,20 +897,6 @@
     ]
   },
   {
-    "name": "recordTaskRunProgressByRunId",
-    "files": [
-      "src/tasks/detached-task-runtime.ts",
-      "src/tasks/task-executor.ts"
-    ]
-  },
-  {
-    "name": "recoverConfigFromLastKnownGood",
-    "files": [
-      "src/config/io.observe-recovery.ts",
-      "src/config/io.runtime.ts"
-    ]
-  },
-  {
     "name": "redactSecrets",
     "files": [
       "src/commands/status-all/format.ts",
@@ -1205,48 +912,12 @@
     ]
   },
   {
-    "name": "registerPluginsCli",
-    "files": [
-      "src/cli/plugins-cli-test-helpers.ts",
-      "src/cli/plugins-cli.ts"
-    ]
-  },
-  {
-    "name": "registerSubCliByName",
-    "files": [
-      "src/cli/program/register.subclis-core.ts",
-      "src/cli/program/register.subclis.ts"
-    ]
-  },
-  {
-    "name": "registerSubCliCommands",
-    "files": [
-      "src/cli/program/register.subclis-core.ts",
-      "src/cli/program/register.subclis.ts"
-    ]
-  },
-  {
     "name": "replaceConfigFile",
     "files": [
       "src/cli/plugins-cli-test-helpers.ts",
       "src/config/mutate.ts"
     ],
     "sdk": true
-  },
-  {
-    "name": "replaceRuntimeAuthProfileStoreSnapshots",
-    "files": [
-      "src/agents/auth-profiles/runtime-snapshots.ts",
-      "src/agents/auth-profiles/store.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "replaceSubagentRunAfterSteer",
-    "files": [
-      "src/agents/subagents/registry/subagent-registry-runtime.ts",
-      "src/agents/subagents/registry/subagent-registry.ts"
-    ]
   },
   {
     "name": "reportClawHubPluginInstallTelemetry",
@@ -1285,27 +956,12 @@
     ]
   },
   {
-    "name": "resetPreparedModelCatalogForTest",
-    "files": [
-      "src/gateway/server-model-catalog.ts",
-      "src/gateway/server-start.ts",
-      "src/gateway/server.ts"
-    ]
-  },
-  {
     "name": "resolveAdvertisedLanHost",
     "files": [
       "src/infra/advertised-lan-host.ts",
       "src/plugin-sdk/gateway-runtime.ts"
     ],
     "sdk": true
-  },
-  {
-    "name": "resolveAllowlistModelKey",
-    "files": [
-      "src/agents/model-selection-shared.ts",
-      "src/agents/model-selection.ts"
-    ]
   },
   {
     "name": "resolveApiKeyForProvider",
@@ -1336,13 +992,6 @@
       "src/plugin-sdk/command-status.runtime.ts"
     ],
     "sdk": true
-  },
-  {
-    "name": "resolveEffectiveOAuthCredential",
-    "files": [
-      "src/agents/auth-profiles/effective-oauth.ts",
-      "src/agents/auth-profiles/oauth-manager.ts"
-    ]
   },
   {
     "name": "resolveEffectivePluginActivationState",
@@ -1395,24 +1044,10 @@
     ]
   },
   {
-    "name": "resolveMissingPluginCommandMessage",
-    "files": [
-      "src/cli/run-main-policy.ts",
-      "src/cli/run-main.ts"
-    ]
-  },
-  {
     "name": "resolveNode",
     "files": [
       "src/agents/tools/nodes-utils.ts",
       "src/cli/nodes-cli/rpc.ts"
-    ]
-  },
-  {
-    "name": "resolveNodeClaudePlacement",
-    "files": [
-      "src/agents/cli-runner/execute-node-claude.ts",
-      "src/agents/cli-runner/prepare-claude.ts"
     ]
   },
   {
@@ -1435,14 +1070,6 @@
       "src/plugins/provider-runtime.ts",
       "src/plugins/provider-thinking.ts"
     ]
-  },
-  {
-    "name": "resolveProviderUsageDisplayName",
-    "files": [
-      "src/infra/provider-usage.admin.ts",
-      "src/infra/provider-usage.shared.ts"
-    ],
-    "sdk": true
   },
   {
     "name": "resolveSecretInputString",
@@ -1491,13 +1118,6 @@
     "sdk": true
   },
   {
-    "name": "resolveThinkingDefaultForModel",
-    "files": [
-      "src/auto-reply/thinking.shared.ts",
-      "src/auto-reply/thinking.ts"
-    ]
-  },
-  {
     "name": "restorePersistedInstalledPluginIndexIfCurrent",
     "files": [
       "src/cli/plugins-cli-test-helpers.ts",
@@ -1542,13 +1162,6 @@
     ]
   },
   {
-    "name": "runtimeLogs",
-    "files": [
-      "src/cli/daemon-cli/test-helpers/lifecycle-core-harness.ts",
-      "src/cli/plugins-cli-test-helpers.ts"
-    ]
-  },
-  {
     "name": "runTui",
     "files": [
       "src/cli/program.test-mocks.ts",
@@ -1580,13 +1193,6 @@
     "sdk": true
   },
   {
-    "name": "setDetachedTaskDeliveryStatusByRunId",
-    "files": [
-      "src/tasks/detached-task-runtime.ts",
-      "src/tasks/task-executor.ts"
-    ]
-  },
-  {
     "name": "setupCommand",
     "files": [
       "src/cli/program.test-mocks.ts",
@@ -1609,32 +1215,10 @@
     "sdk": true
   },
   {
-    "name": "startGatewayServer",
-    "files": [
-      "src/gateway/server-start.ts",
-      "src/gateway/server.ts",
-      "src/gateway/test-helpers.server.ts"
-    ]
-  },
-  {
     "name": "startHeartbeatRunner",
     "files": [
       "src/infra/heartbeat-runner-scheduler.ts",
       "src/infra/heartbeat-runner.ts"
-    ]
-  },
-  {
-    "name": "startTaskRunByRunId",
-    "files": [
-      "src/tasks/detached-task-runtime.ts",
-      "src/tasks/task-executor.ts"
-    ]
-  },
-  {
-    "name": "stopWithText",
-    "files": [
-      "src/auto-reply/reply/commands-acp/shared.ts",
-      "src/auto-reply/reply/commands-subagents/shared.ts"
     ]
   },
   {
@@ -1669,13 +1253,6 @@
     ]
   },
   {
-    "name": "toError",
-    "files": [
-      "src/agents/prepared-model-runtime.owner.ts",
-      "src/worker/worker-connection-contract.ts"
-    ]
-  },
-  {
     "name": "toPosixPath",
     "files": [
       "src/daemon/output.ts",
@@ -1689,21 +1266,6 @@
       "src/hooks/internal-hooks.ts"
     ],
     "sdk": true
-  },
-  {
-    "name": "truncateText",
-    "files": [
-      "src/agents/harness/native-hook-relay-utils.ts",
-      "src/agents/tools/web-fetch-utils.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "tryDispatchAcpReply",
-    "files": [
-      "src/auto-reply/reply/dispatch-acp.runtime.ts",
-      "src/auto-reply/reply/dispatch-acp.ts"
-    ]
   },
   {
     "name": "updateNpmInstalledHookPacks",

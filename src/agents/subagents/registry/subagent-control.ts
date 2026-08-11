@@ -10,6 +10,7 @@ import { loadSessionEntry, patchSessionEntry } from "../../../config/sessions/se
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { callGateway } from "../../../gateway/call.js";
+import { getGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime-context.js";
 import { logVerbose } from "../../../globals.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -49,6 +50,7 @@ import {
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
 import {
+  countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
   listSubagentRunsForController,
 } from "./subagent-registry-read.js";
@@ -56,12 +58,11 @@ import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
   claimSubagentRunKill,
   clearSubagentRunSteerRestart,
-  countPendingDescendantRuns,
   markSubagentRunTerminated,
   markSubagentRunForSteerRestart,
   recordAcceptedSubagentSteerDispatch,
   releaseSubagentRunKillClaim,
-  replaceSubagentRunAfterSteer,
+  replaceSubagentRunAfterSteerCore,
 } from "./subagent-registry.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -83,8 +84,25 @@ type AbortEmbeddedAgentRun = (sessionId: string) => boolean;
 type IsEmbeddedAgentRunActive = (sessionId: string) => boolean;
 type ClearSessionQueues = (keys: Array<string | undefined>) => ClearSessionQueueResult;
 
+const callSubagentControlGateway: GatewayCaller = async (request) => {
+  const gatewayRuntime = getGatewayRecoveryRuntime();
+  if (gatewayRuntime && request.method === "agent") {
+    return await gatewayRuntime.dispatchAgent(
+      request.params as Parameters<typeof gatewayRuntime.dispatchAgent>[0],
+      request.timeoutMs ?? undefined,
+    );
+  }
+  if (gatewayRuntime && request.method === "agent.wait") {
+    return await gatewayRuntime.waitForAgent(
+      request.params as Parameters<typeof gatewayRuntime.waitForAgent>[0],
+      request.timeoutMs ?? undefined,
+    );
+  }
+  return await callGateway(request);
+};
+
 const defaultSubagentControlDeps = {
-  callGateway,
+  callGateway: callSubagentControlGateway,
   patchSessionEntry,
 };
 
@@ -1291,7 +1309,7 @@ export async function steerControlledSubagentRun(params: {
       );
     }
 
-    const replaced = replaceSubagentRunAfterSteer({
+    const replaced = replaceSubagentRunAfterSteerCore({
       previousRunId: params.entry.runId,
       nextRunId: runId,
       fallback: currentEntry,

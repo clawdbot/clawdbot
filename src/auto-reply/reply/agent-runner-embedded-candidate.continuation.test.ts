@@ -70,6 +70,7 @@ vi.mock("./agent-runner-post-compaction-release.js", () => ({
 }));
 
 import { runEmbeddedFallbackCandidate } from "./agent-runner-embedded-candidate.js";
+import { createTestPreparedRunAdmission } from "../../agents/admitted-run-context.test-support.js";
 
 function createTurn(config: AgentTurnParams["followupRun"]["run"]["config"]): AgentTurnParams {
   return {
@@ -134,6 +135,7 @@ function runCandidate(
   onCompactionCount = vi.fn(),
 ) {
   return runEmbeddedFallbackCandidate({
+    preparedRunAdmission: createTestPreparedRunAdmission("run-test"),
     turn: createTurn(config),
     effectiveRun: createTurn(config).followupRun.run,
     candidateRun: createTurn(config).followupRun.run,

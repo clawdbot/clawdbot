@@ -176,7 +176,8 @@ export async function prepareGatewayRuntimeState(params: {
       (method) =>
         (workerPlacementDispatchAvailable || method !== "sessions.dispatch") &&
         (workerPlacementControlAvailable || method !== "sessions.reclaim") &&
-        (workerDesktopObserveAvailable || method !== "worker.desktop.observe"),
+        (workerDesktopObserveAvailable ||
+          (method !== "worker.desktop.observe" && method !== "worker.desktop.launch")),
     );
   const runtimeConfig = await startupTrace.measure("runtime.config", async () => {
     const { resolveGatewayRuntimeConfig } = await import("./server-runtime-config.js");

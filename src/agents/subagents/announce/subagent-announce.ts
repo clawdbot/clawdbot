@@ -29,6 +29,15 @@ import {
   warnIfCronAnnounceSkipped,
 } from "../../subagent-announce-reply.js";
 import { isAnnounceSkip } from "../../tools/sessions-send-tokens.js";
+import {
+  countPendingDescendantRuns,
+  getLatestSubagentRunByChildSessionKey,
+  isSubagentSessionRunActive,
+  listAncestorSessionKeys,
+  listSubagentRunsForRequester,
+  resolveRequesterForChildSession,
+  shouldIgnorePostCompletionAnnounceForSession,
+} from "../registry/subagent-registry-read.js";
 import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
 import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
 import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
@@ -101,6 +110,10 @@ export { buildSubagentSystemPrompt } from "../spawn/subagent-system-prompt.js";
 export { captureSubagentCompletionReply } from "./subagent-announce-output.js";
 export { hasUsableSessionEntry } from "./subagent-announce-descendant-wake.js";
 export type { SubagentAnnounceType } from "../../subagent-announce-message.js";
+export type { SubagentRunOutcome } from "./subagent-run-outcome.js";
+export type SubagentAnnounceFlowOutcome = NonNullable<
+  SubagentAnnounceDeliveryResult["disposition"]
+>;
 
 export async function runSubagentAnnounceFlow(params: {
   childSessionKey: string;
@@ -144,8 +157,8 @@ export async function runSubagentAnnounceFlow(params: {
   continuationFanoutMode?: "tree" | "all";
   traceparent?: string;
   onBeforeDeleteChildSession?: () => boolean;
-}): Promise<boolean> {
-  let didAnnounce = false;
+}): Promise<SubagentAnnounceFlowOutcome> {
+  let announceOutcome: SubagentAnnounceFlowOutcome = "retryable";
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
   const announceType = params.announceType ?? "subagent task";
   let shouldDeleteChildSession = params.cleanup === "delete";
@@ -198,7 +211,7 @@ export async function runSubagentAnnounceFlow(params: {
         shouldDeleteChildSession = false;
         // Keep delete cleanup retryable until the active child can be removed.
         if (outcome?.status !== "timeout" || params.cleanup === "delete") {
-          return false;
+          return "retryable";
         }
       }
     }
@@ -248,7 +261,7 @@ export async function runSubagentAnnounceFlow(params: {
     try {
       subagentRegistryRuntime = await subagentAnnounceDeps.loadSubagentRegistryRuntime();
       if (requesterIsInternalSession()) {
-        if (!subagentRegistryRuntime.isSubagentSessionRunActive(targetRequesterSessionKey)) {
+        if (!isSubagentSessionRunActive(targetRequesterSessionKey)) {
           // A cleaned-up intermediate child normally must not receive a late
           // ordinary completion announcement. A tree continuation return is
           // different: its ancestor set is resolved from that intermediate
@@ -257,18 +270,18 @@ export async function runSubagentAnnounceFlow(params: {
           if (
             !hasTargeting &&
             !managedArtifactReturn &&
-            subagentRegistryRuntime.shouldIgnorePostCompletionAnnounceForSession(
+            shouldIgnorePostCompletionAnnounceForSession(
               targetRequesterSessionKey,
             )
           ) {
-            return true;
+            return "delivered";
           }
           if (!hasUsableSessionEntry(readSessionEntryByKey(targetRequesterSessionKey))) {
             const fallback =
-              subagentRegistryRuntime.resolveRequesterForChildSession(targetRequesterSessionKey);
+              resolveRequesterForChildSession(targetRequesterSessionKey);
             if (!fallback?.requesterSessionKey) {
               shouldDeleteChildSession = false;
-              return false;
+              return "retryable";
             }
             targetRequesterSessionKey = fallback.requesterSessionKey;
             targetRequesterOrigin =
@@ -280,29 +293,22 @@ export async function runSubagentAnnounceFlow(params: {
 
       const pendingChildDescendantRuns = !childSessionEffectsAllowed()
         ? 0
-        : Math.max(0, subagentRegistryRuntime.countPendingDescendantRuns(params.childSessionKey));
+        : Math.max(0, countPendingDescendantRuns(params.childSessionKey));
       if (pendingChildDescendantRuns > 0 && announceType !== "cron job") {
         shouldDeleteChildSession = false;
-        return false;
+        return "retryable";
       }
 
-      if (
-        childSessionEffectsAllowed() &&
-        typeof subagentRegistryRuntime.listSubagentRunsForRequester === "function"
-      ) {
-        const directChildren = subagentRegistryRuntime.listSubagentRunsForRequester(
-          params.childSessionKey,
-          {
-            requesterRunId: params.childRunId,
-          },
-        );
+      if (childSessionEffectsAllowed()) {
+        const directChildren = listSubagentRunsForRequester(params.childSessionKey, {
+          requesterRunId: params.childRunId,
+        });
         if (Array.isArray(directChildren) && directChildren.length > 0) {
           childCompletionFindings = buildChildCompletionFindings(
             dedupeLatestChildCompletionRows(
               filterCurrentDirectChildCompletionRows(directChildren, {
                 requesterSessionKey: params.childSessionKey,
-                getLatestSubagentRunByChildSessionKey:
-                  subagentRegistryRuntime.getLatestSubagentRunByChildSessionKey,
+                getLatestSubagentRunByChildSessionKey,
               }),
             ),
           );
@@ -344,14 +350,14 @@ export async function runSubagentAnnounceFlow(params: {
       );
       if (wake === "woke") {
         shouldDeleteChildSession = false;
-        return true;
+        return "delivered";
       }
       if (wake === "termination-unconfirmed") {
         // An accepted wake run may still own this child session. Keep the session
         // and leave cleanup unfinished so the registry retries instead of deleting
         // a session out from under a live run.
         shouldDeleteChildSession = false;
-        return false;
+        return "retryable";
       }
     }
 
@@ -373,7 +379,7 @@ export async function runSubagentAnnounceFlow(params: {
           !hasVisibleFallback &&
           (isAnnounceSkip(fallbackReply) || !expectsCompletionMessage)
         ) {
-          return true;
+          return "delivered";
         }
         reply = cleanedFallbackReply;
       }
@@ -501,7 +507,7 @@ export async function runSubagentAnnounceFlow(params: {
         })
       : ({ status: "not-configured" } as const);
     if (artifactFinalization.status === "deferred") {
-      return false;
+      return "retryable";
     }
     if (artifactFinalization.status === "failed") {
       outcome = {
@@ -537,7 +543,7 @@ export async function runSubagentAnnounceFlow(params: {
     });
     findings = continuation.findings;
     if (continuation.skipAnnounceDelivery && !managedArtifactReturn) {
-      return true;
+      return "delivered";
     }
     const requesterIsSubagent = requesterIsInternalSession();
 
@@ -564,7 +570,7 @@ export async function runSubagentAnnounceFlow(params: {
           currentRecipientSessionId: loadSessionEntryByKey(sessionKey)?.sessionId,
         });
         if (delivery.status === "deferred") {
-          return false;
+          return "retryable";
         }
         if (delivery.status === "ready") {
           artifactProjections.set(sessionKey, delivery.projection);
@@ -606,14 +612,16 @@ export async function runSubagentAnnounceFlow(params: {
       continuationTargetSessionKeys: params.continuationTargetSessionKeys,
       continuationFanoutMode: params.continuationFanoutMode,
       traceparent: params.traceparent,
-      registryRuntime: subagentRegistryRuntime,
+      registryRuntime: {
+        listAncestorSessionKeys,
+        shouldIgnorePostCompletionAnnounceForSession,
+      },
     });
     if (returnRoute.deferred) {
-      return false;
+      return "retryable";
     }
     if (returnRoute.handled) {
-      didAnnounce = true;
-      return true;
+      return "delivered";
     }
 
     // Send to the requester session. For nested subagents this is an internal
@@ -679,7 +687,7 @@ export async function runSubagentAnnounceFlow(params: {
       ...(returnRoute.traceparent ? { traceparent: returnRoute.traceparent } : {}),
     });
     reportDeliveryResult(delivery);
-    didAnnounce = delivery.delivered || delivery.disposition === "intentional_non_delivery";
+    announceOutcome = delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable");
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
       defaultRuntime.log(
         `[warn] Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,
@@ -705,7 +713,7 @@ export async function runSubagentAnnounceFlow(params: {
       });
     }
   }
-  return didAnnounce;
+  return announceOutcome;
 }
 
 export const testing = {

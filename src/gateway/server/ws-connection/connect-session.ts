@@ -575,7 +575,7 @@ export async function attachAuthenticatedGatewayConnect(
     );
   }
 
-  await sendGatewayHello(context, state, pluginSurfaceUrls);
+  await sendGatewayHello(context, state, pluginSurfaceUrls, authenticatedUserProfile?.profileId);
 
   const tailscaleProfilePic = authResult.tailscaleIdentity?.profilePic;
   const tailscaleProfileId = authenticatedUserProfile?.profileId;

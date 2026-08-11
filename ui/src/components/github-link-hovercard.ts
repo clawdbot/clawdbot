@@ -46,7 +46,10 @@ function requiredString(record: Record<string, unknown>, key: string): string {
   return value;
 }
 
-function optionalString(record: Record<string, unknown>, key: string): string | undefined {
+function readOptionalGitHubString(
+  record: Record<string, unknown>,
+  key: string,
+): string | undefined {
   const value = record[key];
   return typeof value === "string" && value.trim() ? value : undefined;
 }
@@ -122,19 +125,19 @@ function parsePreviewResponse(target: GitHubLinkTarget, value: unknown): GitHubP
     additions: optionalNumber(value, "additions"),
     avatarDataUrl: safeAvatarDataUrl(value.avatarDataUrl),
     changedFiles: optionalNumber(value, "changedFiles"),
-    closedAt: optionalString(value, "closedAt"),
+    closedAt: readOptionalGitHubString(value, "closedAt"),
     comments: optionalNumber(value, "comments"),
     createdAt: requiredString(value, "createdAt"),
     deletions: optionalNumber(value, "deletions"),
     draft: typeof value.draft === "boolean" ? value.draft : undefined,
     kind: target.kind,
-    login: optionalString(value, "login") ?? "ghost",
-    mergedAt: optionalString(value, "mergedAt"),
+    login: readOptionalGitHubString(value, "login") ?? "ghost",
+    mergedAt: readOptionalGitHubString(value, "mergedAt"),
     number: target.number,
     owner: target.owner,
     repo: target.repo,
     state: requiredString(value, "state"),
-    stateReason: optionalString(value, "stateReason"),
+    stateReason: readOptionalGitHubString(value, "stateReason"),
     title: requiredString(value, "title"),
     updatedAt: requiredString(value, "updatedAt"),
   };

@@ -18,6 +18,7 @@ import {
 } from "../../infra/diagnostic-events.js";
 import type { CliBackendParseJsonlEvent } from "../../plugins/cli-backend.types.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
+import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { findCliMaxTurnsError } from "../failover-error.js";
 import { getCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import { executePreparedCliRun } from "./execute.js";
@@ -83,6 +84,7 @@ function buildPreparedCliRunContext(params: {
   parseJsonlEvent?: CliBackendParseJsonlEvent;
 }): PreparedCliRunContext {
   const provider = params.provider ?? "codex-cli";
+  const runId = params.runId ?? `run-${params.output}`;
   const backend = {
     command: "agent-cli",
     args: [],
@@ -93,6 +95,7 @@ function buildPreparedCliRunContext(params: {
 
   return {
     params: {
+      admittedRunContext: createTestAdmittedRunContext(runId),
       agentId: "main",
       sessionId: "session-1",
       sessionKey: "agent:main:main",
@@ -102,7 +105,7 @@ function buildPreparedCliRunContext(params: {
       provider,
       model: "model",
       timeoutMs: 1_000,
-      runId: params.runId ?? `run-${params.output}`,
+      runId,
     },
     started: Date.now(),
     workspaceDir: "/tmp",

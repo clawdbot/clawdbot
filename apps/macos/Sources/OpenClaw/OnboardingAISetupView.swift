@@ -312,6 +312,10 @@ struct OnboardingAISetupView: View {
                     Spacer(minLength: 0)
                     self.trailingIndicator(status: status, selected: selected)
                 }
+                // Plain buttons hit-test only opaque label pixels; without this the
+                // row's blank stretch (between texts, over the Spacer) ignores clicks
+                // and a mid-testing candidate pick silently does nothing.
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .disabled(!self.model.canSelectCandidate(kind: candidate.kind))

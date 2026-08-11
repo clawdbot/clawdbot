@@ -791,15 +791,23 @@ describe("cron service timer regressions", () => {
       });
       expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
       expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
-      const alert = sendCronFailureAlert.mock.calls[0]?.[0];
-      expect(alert?.channel).toBe("telegram");
-      expect(alert?.to).toBe("12345");
-      expect(alert?.payload).toEqual({
-        text:
-          'Automation "before agent reply unhandled regression" failed 1 times\n' +
-          "Check automation history for details.",
+      expect(sendCronFailureAlert).toHaveBeenCalledExactlyOnceWith({
+        job: expect.objectContaining({
+          id: "isolated-before-agent-reply-unhandled-82811",
+          state: expect.objectContaining({ lastDiagnosticSummary: diagnostic }),
+        }),
+        payload: {
+          text:
+            'Automation "before agent reply unhandled regression" failed 1 times\n' +
+            "Check automation history for details.",
+        },
+        runAtMs: expect.any(Number),
+        channel: "telegram",
+        to: "12345",
+        mode: "announce",
+        accountId: undefined,
+        threadId: undefined,
       });
-      expect(alert?.job.state.lastDiagnosticSummary).toBe(diagnostic);
     } finally {
       vi.useRealTimers();
     }

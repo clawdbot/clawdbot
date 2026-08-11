@@ -40,7 +40,7 @@ import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
-import { replaceSubagentRunAfterSteer } from "./subagent-registry.js";
+import { replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
 import {
   testing as subagentRegistryTesting,
   addSubagentRunForTests,
@@ -2011,7 +2011,7 @@ describe("killControlledSubagentRun", () => {
       onInterrupt: () => undefined,
     });
     expect(
-      replaceSubagentRunAfterSteer({
+      replaceSubagentRunAfterSteerCore({
         previousRunId: source.runId,
         nextRunId: recoveryRunId,
         expected: source,
@@ -2485,7 +2485,7 @@ describe("steerControlledSubagentRun", () => {
     addSubagentRunForTests(entry);
 
     const replaceSpy = vi
-      .spyOn(await import("./subagent-registry.js"), "replaceSubagentRunAfterSteer")
+      .spyOn(await import("./subagent-registry.js"), "replaceSubagentRunAfterSteerCore")
       .mockReturnValue(false);
 
     const callGatewayImplementation: GatewayCaller = async <T = Record<string, unknown>>(
@@ -2651,7 +2651,7 @@ describe("steerControlledSubagentRun", () => {
         seam.replaceResult === undefined
           ? undefined
           : vi
-              .spyOn(await import("./subagent-registry.js"), "replaceSubagentRunAfterSteer")
+              .spyOn(await import("./subagent-registry.js"), "replaceSubagentRunAfterSteerCore")
               .mockReturnValue(seam.replaceResult);
 
       const callGateway = vi.fn(
@@ -2744,7 +2744,7 @@ describe("steerControlledSubagentRun", () => {
           dispatch,
         };
       });
-    const replaceSpy = vi.spyOn(registry, "replaceSubagentRunAfterSteer").mockReturnValue(false);
+    const replaceSpy = vi.spyOn(registry, "replaceSubagentRunAfterSteerCore").mockReturnValue(false);
     const callGateway = vi.fn(async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
       if (request.method === "agent.wait") {
         return {} as T;

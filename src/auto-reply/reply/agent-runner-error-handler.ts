@@ -1,13 +1,21 @@
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { classifyOAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import {
-  formatRateLimitOrOverloadedErrorCopy,
   isCompactionFailureError,
   isLikelyContextOverflowError,
   isTransientHttpError,
 } from "../../agents/embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { isFailoverError } from "../../agents/failover-error.js";
+import {
+  GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+  renderBillingReplyCopy,
+  renderControlUiAgentFailureCopy,
+  renderRateLimitOrOverloadedCopy,
+  renderRateLimitReplyCopy,
+} from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
@@ -24,18 +32,11 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
 import type { AgentTurnInternalResult, AgentTurnParams } from "./agent-runner-execution.types.js";
 import {
-  buildControlUiAgentFailureText,
-  GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
-} from "./agent-runner-failure-copy.js";
-import {
   buildAuthProfileFailoverFailureText,
   buildExternalRunFailureReply,
-  buildRateLimitCooldownMessage,
   isNonDirectConversationContext,
   isVerboseFailureDetailEnabled,
   markAgentRunFailureReplyPayload,
-  resolveBillingFailureReplyText,
   resolveExternalRunFailureTextForConversation,
   resolveReplyFailoverFacts,
 } from "./agent-runner-failure-reply.js";
@@ -52,6 +53,8 @@ const MAX_LIVE_SWITCH_RETRIES = 2;
 const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
 // Overload recovery stays inside one turn: bounded backoff absorbs short provider incidents,
 // while the delayed notice prevents a long silent wait without becoming assistant content.
+// This whole-turn bound multiplies the 32..160 per-run budget in
+// agents/embedded-agent-runner/run/helpers.ts; keep their product test aligned.
 const MAX_OVERLOAD_RETRIES = 10;
 const OVERLOAD_RETRY_BASE_DELAY_MS = 2_500;
 const OVERLOAD_RETRY_MAX_DELAY_MS = 30_000;
@@ -159,7 +162,7 @@ export async function handleAgentExecutionError(params: {
     );
     takePendingLifecycleTerminal()?.emit("error", err);
     const switchErrorText = params.shouldSurfaceToControlUi
-      ? buildControlUiAgentFailureText(
+      ? renderControlUiAgentFailureCopy(
           "model switch could not be completed. The requested model may be temporarily unavailable.",
         )
       : isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel)
@@ -424,13 +427,16 @@ export async function handleAgentExecutionError(params: {
     ? isPureTransientSummary
     : failoverReason === "rate_limit" || failoverReason === "overloaded";
   const rateLimitOrOverloadedCopy =
-    !hasFallbackAttempts || isPureTransientSummary
-      ? formatRateLimitOrOverloadedErrorCopy(
-          isFailoverError(err) && failoverReason === "overloaded" ? "overloaded" : message,
-        )
+    (!hasFallbackAttempts &&
+      (failoverReason === "rate_limit" || failoverReason === "overloaded")) ||
+    isPureTransientSummary
+      ? renderRateLimitOrOverloadedCopy({
+          reason: isOverloaded ? "overloaded" : "rate_limit",
+          raw: message,
+        })
       : undefined;
   const userFacingMessage = isTransientHttp
-    ? sanitizeUserFacingText(message, { errorContext: true })
+    ? renderUserFacingText(message, { errorContext: true })
     : message;
   const externalRunFailureReply =
     !isBilling &&
@@ -450,15 +456,27 @@ export async function handleAgentExecutionError(params: {
         )
       : undefined;
   const fallbackText = isBilling
-    ? resolveBillingFailureReplyText(err)
+    ? renderBillingReplyCopy({
+        attempts: fallbackAttempts,
+        ...(isFailoverError(err)
+          ? { provider: err.provider, model: err.model, authMode: err.authMode }
+          : {}),
+      })
     : isRateLimit && !isOverloaded
-      ? buildRateLimitCooldownMessage(err)
+      ? renderRateLimitReplyCopy({
+          message,
+          reason: failoverReason,
+          attempts: fallbackAttempts,
+          provider: isFailoverError(err) ? err.provider : undefined,
+          cooldownExpiry: isFailoverError(err) ? err.soonestCooldownExpiry : undefined,
+          sanitizeText: (text) => sanitizeUserFacingText(text, { errorContext: true }),
+        })
       : rateLimitOrOverloadedCopy
         ? rateLimitOrOverloadedCopy
         : isContextOverflow
           ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
           : params.shouldSurfaceToControlUi
-            ? buildControlUiAgentFailureText(userFacingMessage)
+            ? renderControlUiAgentFailureCopy(userFacingMessage)
             : (externalRunFailureReply?.text ??
               (turn.isHeartbeat
                 ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT

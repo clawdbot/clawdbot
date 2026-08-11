@@ -419,7 +419,7 @@ export function renderMemory(props: MemoryViewProps) {
           })}
         </div>
         <div class="hub-page-header__actions">
-          ${props.activeTab === "settings"
+          ${props.activeTab === "settings" || props.agents.length <= 1
             ? nothing
             : html`
                 <div class="agent-scope-control">

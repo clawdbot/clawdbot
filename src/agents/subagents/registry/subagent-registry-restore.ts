@@ -40,6 +40,9 @@ const restoredQueuedFailureSettlementClaims = new WeakMap<
   RestoredQueuedFailureSettlementClaim
 >();
 
+const RESTORE_RETRY_DELAY_MS = 1_000;
+const RESTORE_RETRY_MAX_DELAY_MS = 30_000;
+
 export function isRestoredQueuedFailureSettlementClaimed(entry: SubagentRunRecord): boolean {
   return restoredQueuedFailureSettlementClaims.has(entry);
 }
@@ -97,7 +100,11 @@ export function createSubagentRegistryRestorer(config: {
     scheduleSweep,
     warn,
   } = config;
-  let restoreAttempted = false;
+  let restoreState: "idle" | "in-progress" | "succeeded" = "idle";
+  // A dependency can merge rows before throwing. Keep their reconciliation
+  // pending because mergeOnly correctly reports them as existing on retry.
+  let restoredRowsPending = false;
+  let restoreRetryTimer: ReturnType<typeof setTimeout> | undefined;
 
   // Single ownership predicate for the restored queued launch: both the failure
   // settlement path and the scheduler seam must agree on whether this exact row
@@ -105,17 +112,48 @@ export function createSubagentRegistryRestorer(config: {
   const ownsRestoredQueuedLaunch = (runId: string, entry: SubagentRunRecord) =>
     runs.get(runId) === entry && entry.execution.status === "queued";
 
-  function restoreSubagentRunsOnce() {
-    if (restoreAttempted) {
+  function clearRestoreRetryTimer() {
+    if (restoreRetryTimer) {
+      clearTimeout(restoreRetryTimer);
+      restoreRetryTimer = undefined;
+    }
+  }
+
+  function scheduleRestoreRetry(delayMs: number) {
+    if (restoreRetryTimer) {
       return;
     }
-    restoreAttempted = true;
+    const timer = setTimeout(() => {
+      if (restoreRetryTimer !== timer) {
+        return;
+      }
+      restoreRetryTimer = undefined;
+      restoreSubagentRunsOnce(Math.min(delayMs * 2, RESTORE_RETRY_MAX_DELAY_MS));
+    }, delayMs);
+    restoreRetryTimer = timer;
+    timer.unref?.();
+  }
+
+  function completeRestore() {
+    restoredRowsPending = false;
+    restoreState = "succeeded";
+    clearRestoreRetryTimer();
+  }
+
+  function restoreSubagentRunsOnce(retryDelayMs = RESTORE_RETRY_DELAY_MS) {
+    if (restoreState !== "idle") {
+      return;
+    }
+    restoreState = "in-progress";
+    const runCountBeforeRestore = runs.size;
     try {
       const restoredCount = deps().restoreSubagentRunsFromDisk({
         runs,
         mergeOnly: true,
       });
-      if (restoredCount === 0) {
+      restoredRowsPending ||= restoredCount > 0;
+      if (!restoredRowsPending) {
+        completeRestore();
         return;
       }
       const cfg = deps().getRuntimeConfig();
@@ -160,6 +198,7 @@ export function createSubagentRegistryRestorer(config: {
         }
       }
       if (runs.size === 0) {
+        completeRestore();
         return;
       }
       // Resume pending work.
@@ -221,14 +260,24 @@ export function createSubagentRegistryRestorer(config: {
               launchTerminationConfirmed = false;
               await runWithGatewayIndependentRootWorkAdmission(async () => {
                 launchLifecycleGeneration = getAgentEventLifecycleGeneration();
-                const response = await deps().callGateway({
+                const request = {
                   method: "agent",
                   params: applySubagentLaunchAuthorization(launch.request, launch.authorization),
                   // Restart replay must restore the trusted launch capability; otherwise
                   // the queued child silently falls back to its session/default route.
                   ...(launch.authorization ? { scopes: [ADMIN_SCOPE] } : {}),
                   timeoutMs: launch.timeoutMs,
-                });
+                };
+                const gatewayRuntime = deps().getGatewayRecoveryRuntime();
+                const response = gatewayRuntime
+                  ? await gatewayRuntime.dispatchAgent(
+                      request.params as Parameters<typeof gatewayRuntime.dispatchAgent>[0],
+                      request.timeoutMs,
+                      launch.authorization
+                        ? { allowModelOverride: true, scopes: [ADMIN_SCOPE] }
+                        : undefined,
+                    )
+                  : await deps().callGateway(request);
                 launchAcceptanceObserved = true;
                 const gatewayRunId = readGatewayRunId(response) ?? runId;
                 try {
@@ -288,10 +337,14 @@ export function createSubagentRegistryRestorer(config: {
       // Cold-start restore can precede instance-runtime registration. The post-attach
       // startup pass retries this seam once the lifecycle-bound principal exists.
       scheduleSweep();
+      completeRestore();
     } catch (err) {
+      restoredRowsPending ||= runs.size > runCountBeforeRestore;
+      restoreState = "idle";
       warn(
         `failed to restore subagent runs from disk: ${err instanceof Error ? err.message : String(err)}`,
       );
+      scheduleRestoreRetry(retryDelayMs);
     }
   }
 
@@ -468,7 +521,9 @@ export function createSubagentRegistryRestorer(config: {
   return {
     restoreOnce: restoreSubagentRunsOnce,
     reset: () => {
-      restoreAttempted = false;
+      clearRestoreRetryTimer();
+      restoreState = "idle";
+      restoredRowsPending = false;
     },
   };
 }

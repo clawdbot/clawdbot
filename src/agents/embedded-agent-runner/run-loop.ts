@@ -31,8 +31,8 @@ import { createEmbeddedRunReplayState } from "./replay-state.js";
 import { handleEmbeddedAssistantFailure } from "./run/assistant-failure.js";
 import { prepareAndDispatchEmbeddedRunAttempt } from "./run/attempt-dispatch-preparation.js";
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
+import { forgetPromptBuildDrainCacheForRun } from "./run/attempt-prompt-helpers.js";
 import { recoverEmbeddedRunAttempt } from "./run/attempt-recovery.js";
-import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.js";
 import { hasCodexAppServerRecoveryRetryBudget } from "./run/codex-app-server-recovery.js";
 import { createEmbeddedRunCompactionRuntime } from "./run/compaction-runtime.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
@@ -51,6 +51,7 @@ import {
   createRunRetryBudget,
   isRunRetryBudgetExhausted,
   recordRunRetry,
+  type RunRetryBudget,
 } from "./run/retry-budget.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import { prepareEmbeddedRunRuntime } from "./run/runtime-preparation.js";
@@ -66,7 +67,7 @@ import { createUsageAccumulator } from "./usage-accumulator.js";
 export async function runPreparedEmbeddedLoop(
   input: PreparedEmbeddedRunInput,
 ): Promise<EmbeddedAgentRunResult> {
-  const params = input.runParams;
+  let params = input.runParams;
   let { provider, modelId } = input;
   const {
     agentDir,
@@ -105,6 +106,11 @@ export async function runPreparedEmbeddedLoop(
       }),
     { config: params.config },
   );
+  params = { ...params, admittedRunContext: preparedRuntime.admittedRunContext };
+  // Admission is resolved once before the retry loop. Carry that exact object
+  // through every attempt/recovery owner; the original prepared input must not
+  // let downstream dispatch lose the admitted context.
+  const admittedRunInput: PreparedEmbeddedRunInput = { ...input, runParams: params };
   provider = preparedRuntime.provider;
   modelId = preparedRuntime.modelId;
   const {
@@ -182,7 +188,7 @@ export async function runPreparedEmbeddedLoop(
   const maxEmptyResponseRetryAttempts = DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT;
 
   const MAX_RUN_RETRY_ATTEMPTS = resolveMaxRunRetryIterations(profileCandidates.length);
-  const runRetryBudget = createRunRetryBudget(MAX_RUN_RETRY_ATTEMPTS);
+  const runRetryBudget: RunRetryBudget = createRunRetryBudget(MAX_RUN_RETRY_ATTEMPTS);
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
   let bootstrapPromptWarningSignaturesSeen =
     params.bootstrapPromptWarningSignaturesSeen ??
@@ -360,7 +366,7 @@ export async function runPreparedEmbeddedLoop(
         maxRunLoopIterations: runRetryBudget.maxAttempts,
       });
       const dispatch = await prepareAndDispatchEmbeddedRunAttempt({
-        runInput: input,
+        runInput: admittedRunInput,
         preparedRuntime,
         contextEngine,
         sessionPromptState,
@@ -391,7 +397,7 @@ export async function runPreparedEmbeddedLoop(
         dispatchedAttempt.rawAttempt.latestMcpAppChannelView ?? latestMcpAppChannelView;
       dispatchedAttempt.rawAttempt.latestMcpAppChannelView = latestMcpAppChannelView;
       const normalizedAttempt = await normalizeEmbeddedRunAttempt({
-        runInput: input,
+        runInput: admittedRunInput,
         preparedRuntime,
         dispatchedAttempt,
         sessionPromptState,
@@ -434,7 +440,7 @@ export async function runPreparedEmbeddedLoop(
         canRestartForLiveSwitch,
       } = normalizedAttempt;
       const recovery = await recoverEmbeddedRunAttempt({
-        runInput: input,
+        runInput: admittedRunInput,
         preparedRuntime,
         normalizedAttempt,
         runtimePlan,

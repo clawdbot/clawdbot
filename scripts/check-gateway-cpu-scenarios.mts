@@ -7,6 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 import {
   parseNonNegativeInt,
@@ -70,10 +71,6 @@ type ConcurrencyReport = {
     controlUiLatencyMs?: { p99?: number };
   };
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function parseArgs(argv: string[]) {
   const args = stripLeadingPackageManagerSeparator(argv);

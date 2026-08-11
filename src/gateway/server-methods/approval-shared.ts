@@ -1,5 +1,6 @@
 // Approval shared helpers normalize pending exec/plugin approval lookups,
 // decision payloads, turn-source routing, and gateway error responses.
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type {
@@ -75,10 +76,6 @@ type ApprovalResolveParamsValidator<TParams extends ApprovalResolveParams> = ((
 ) => params is TParams) & {
   errors?: ValidationError[] | null;
 };
-
-function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
-  return typeof value === "object" && value !== null && "then" in value;
-}
 
 function isApprovalDecision(value: string): value is ExecApprovalDecision {
   return value === "allow-once" || value === "allow-always" || value === "deny";
@@ -257,7 +254,7 @@ export async function handleApprovalWaitDecision<TPayload>(params: {
     );
     return;
   }
-  const decision = await decisionPromise;
+  const decision = params.manager.projectDecisionIfActive(id, await decisionPromise);
   const terminalSnapshot = params.manager.getSnapshot(id) ?? snapshot;
   const terminalReason = params.resolveTerminalReason?.(terminalSnapshot);
   params.respond(
@@ -354,20 +351,25 @@ export async function handlePendingApprovalRequest<
           : "none";
 
     const respondWithDecision = async (decision: ExecApprovalDecision | null): Promise<void> => {
+      let projectedDecision = params.manager.projectDecisionIfActive(params.record.id, decision);
       if (params.afterDecision) {
         try {
-          await params.afterDecision(decision, params.requestEvent);
+          await params.afterDecision(projectedDecision, params.requestEvent);
         } catch (err) {
           params.context.logGateway?.error?.(
             `${params.afterDecisionErrorLabel ?? "approval follow-up failed"}: ${String(err)}`,
           );
         }
       }
+      projectedDecision = params.manager.projectDecisionIfActive(
+        params.record.id,
+        projectedDecision,
+      );
       params.respond(
         true,
         {
           id: params.record.id,
-          decision,
+          decision: projectedDecision,
           createdAtMs: params.record.createdAtMs,
           expiresAtMs: params.record.expiresAtMs,
         },

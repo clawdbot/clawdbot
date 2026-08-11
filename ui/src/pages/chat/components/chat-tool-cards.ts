@@ -289,10 +289,16 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolC
 
   const verb = resolveToolRowVerb(view.kind, outcome);
   if (verb && view.target) {
+    const stat =
+      outcome === "succeeded"
+        ? view.stat
+        : outcome === "running" && (view.kind === "edit" || view.kind === "write")
+          ? card.liveDiffStat
+          : undefined;
     return html`
       <span class="chat-tool-row__verb">${verb}</span>
       <span class="chat-tool-row__target">${view.target}</span>
-      ${outcome === "succeeded" && view.stat ? renderDiffStatChips(view.stat) : nothing}
+      ${stat ? renderDiffStatChips(stat) : nothing}
       ${view.targetDetail
         ? html`<span class="chat-tool-row__detail">${view.targetDetail}</span>`
         : nothing}

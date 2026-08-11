@@ -179,7 +179,7 @@ function createMockCompactionSession() {
   };
   return session;
 }
-export const createAgentSessionMock = vi.fn(async (_options?: unknown) => ({
+export const createAgentSessionMock = vi.fn(async (..._args: [unknown?, unknown?]) => ({
   session: createMockCompactionSession(),
 }));
 function createMockToolDefinitions(tools: unknown[] = []) {
@@ -741,7 +741,6 @@ export async function loadCompactHooksHarness(): Promise<{
   vi.doMock("../sessions/index.js", () => ({
     AuthStorage: function AuthStorage() {},
     ModelRegistry: function ModelRegistry() {},
-    createAgentSession: createAgentSessionMock,
     DefaultResourceLoader: function DefaultResourceLoader() {
       return {
         reload: vi.fn(async () => undefined),
@@ -757,6 +756,10 @@ export async function loadCompactHooksHarness(): Promise<{
     },
     estimateTokens: estimateTokensMock,
     generateSummary: vi.fn(async () => "summary"),
+  }));
+
+  vi.doMock("../sessions/sdk.js", () => ({
+    createAgentSessionForEmbeddedRunner: createAgentSessionMock,
   }));
 
   vi.doMock("../session-tool-result-guard-wrapper.js", () => ({

@@ -421,7 +421,6 @@ const config = {
     "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],
     // Collection reconcile behavior is asserted by the focused review tests;
     // production wires only the scheduled review loop.
-    "src/skills/workshop/collection-review.ts": ["exports"],
     // Continuation and delivery owner tests import these explicit seams. The
     // all-exports companion config still audits each named consumer.
     "extensions/codex/src/app-server/dynamic-tools.ts": ["exports"],
@@ -725,13 +724,12 @@ const config = {
       "browser-host-inspection.ts!",
       "browser-maintenance.ts!",
       "browser-profiles.ts!",
+      // Built by tsdown as the native messaging executable; Chrome launches it by path.
+      "native-host-entry.ts!",
       // Chrome manifest/package scripts load these without TypeScript imports.
       "chrome-extension/background.js!",
+      "chrome-extension/options.js!",
       "chrome-extension/popup.js!",
-      "chrome-extension/sidepanel.js!",
-      "scripts/build-copilot-runtime.mjs!",
-      // esbuild receives this browser bootstrap by an assembled path.
-      "scripts/copilot-runtime-entry.ts!",
       "scripts/copy-chrome-extension.mjs!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/canvas`]: bundledPluginWorkspace([

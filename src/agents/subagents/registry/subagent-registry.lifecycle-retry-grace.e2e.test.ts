@@ -4,12 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as subagentAnnounceDeliveryTesting } from "../announce/subagent-announce-delivery.test-support.js";
 import { testing as subagentAnnounceOutputTesting } from "../announce/subagent-announce-output.test-support.js";
 import { testing as subagentAnnounceTesting } from "../announce/subagent-announce.js";
+import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import {
-  maybeWakeRequesterAfterAllChildrenSettled,
-  testing as settleWakeTesting,
-} from "../announce/subagent-announce.requester-settle-wake.js";
-import { listAncestorSessionKeys } from "./subagent-registry-announce-read.js";
-import * as announceRead from "./subagent-registry-announce-read.js";
+  hasDescendantRunAwaitingSettle,
+  listAncestorSessionKeys,
+} from "./subagent-registry-read.js";
 import * as mod from "./subagent-registry.test-helpers.js";
 
 const noop = () => {};
@@ -136,7 +135,7 @@ const loadSubagentRegistryRuntimeForTest = async () =>
     countActiveDescendantRuns: mod.countActiveDescendantRuns,
     countPendingDescendantRuns: mod.countPendingDescendantRuns,
     countPendingDescendantRunsExcludingRun: mod.countPendingDescendantRunsExcludingRun,
-    hasDescendantRunAwaitingSettle: announceRead.hasDescendantRunAwaitingSettle,
+    hasDescendantRunAwaitingSettle: hasDescendantRunAwaitingSettle,
     getLatestSubagentRunByChildSessionKey: mod.getLatestSubagentRunByChildSessionKey,
     getSubagentRunByRunId: async (runId: string) => mod.getSubagentRunByRunId(runId),
     isSubagentSessionRunActive: mod.isSubagentSessionRunActive,
@@ -146,8 +145,8 @@ const loadSubagentRegistryRuntimeForTest = async () =>
       params: Parameters<typeof mod.recordAcceptedSubagentSteerDispatch>[0],
     ) => mod.recordAcceptedSubagentSteerDispatch(params),
     replaceSubagentRunAfterSteer: async (
-      params: Parameters<typeof mod.replaceSubagentRunAfterSteer>[0],
-    ) => mod.replaceSubagentRunAfterSteer(params),
+      params: Parameters<typeof mod.replaceSubagentRunAfterSteerCore>[0],
+    ) => mod.replaceSubagentRunAfterSteerCore(params),
     clearSubagentRunSteerRestart: async (
       ...args: Parameters<typeof mod.clearSubagentRunSteerRestart>
     ) => mod.clearSubagentRunSteerRestart(...args),
@@ -220,9 +219,6 @@ describe("subagent registry lifecycle error grace", () => {
         loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
       loadSubagentRegistryRuntime: loadSubagentRegistryRuntimeForTest,
     });
-    settleWakeTesting.setDepsForTest({
-      loadSubagentRegistryRuntime: loadSubagentRegistryRuntimeForTest,
-    });
     subagentAnnounceDeliveryTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../../../gateway/call.js").callGateway,
       getRuntimeConfig:
@@ -251,7 +247,6 @@ describe("subagent registry lifecycle error grace", () => {
     subagentAnnounceDeliveryTesting.setDepsForTest();
     subagentAnnounceOutputTesting.setDepsForTest();
     subagentAnnounceTesting.setDepsForTest();
-    settleWakeTesting.setDepsForTest();
     mod.testing.setDepsForTest();
     mod.resetSubagentRegistryForTests({ persist: false });
     vi.useRealTimers();
@@ -429,7 +424,7 @@ describe("subagent registry lifecycle error grace", () => {
       .filter((result): result is string => typeof result === "string");
   }
 
-  it("lets requester settlement own a yielded batch while child delivery is in progress", async () => {
+  it("lets requester settlement own a yielded batch after sibling deliveries race", async () => {
     const requesterTurnRunId = "run-requester-yield-race";
     const alphaSessionKey = "agent:main:subagent:yield-alpha";
     const betaSessionKey = "agent:main:subagent:yield-beta";
@@ -437,21 +432,6 @@ describe("subagent registry lifecycle error grace", () => {
     registerCompletionRun("run-yield-beta", "yield-beta", "yield beta", requesterTurnRunId);
     setAssistantOutput(alphaSessionKey, "alpha complete");
     setAssistantOutput(betaSessionKey, "beta complete");
-
-    let releaseAlphaWakeRuntime: (() => void) | undefined;
-    const alphaWakeRuntimeGate = new Promise<void>((resolve) => {
-      releaseAlphaWakeRuntime = resolve;
-    });
-    let settleWakeRuntimeLoads = 0;
-    settleWakeTesting.setDepsForTest({
-      loadSubagentRegistryRuntime: async () => {
-        settleWakeRuntimeLoads += 1;
-        if (settleWakeRuntimeLoads === 1) {
-          await alphaWakeRuntimeGate;
-        }
-        return await loadSubagentRegistryRuntimeForTest();
-      },
-    });
 
     let releaseBetaDelivery: (() => void) | undefined;
     agentCallGates.set(
@@ -463,7 +443,6 @@ describe("subagent registry lifecycle error grace", () => {
 
     emitLifecycleEvent("run-yield-alpha", { phase: "end", endedAt: Date.now() });
     await waitForAgentCallCount(1);
-    await vi.waitFor(() => expect(settleWakeRuntimeLoads).toBe(1));
 
     emitLifecycleEvent("run-yield-beta", { phase: "end", endedAt: Date.now() + 1 });
     await waitForAgentCallCount(2);
@@ -493,7 +472,6 @@ describe("subagent registry lifecycle error grace", () => {
       }),
     ).toBe(true);
 
-    releaseAlphaWakeRuntime?.();
     await vi.advanceTimersByTimeAsync(0);
     await flushAsync();
 
@@ -516,8 +494,8 @@ describe("subagent registry lifecycle error grace", () => {
       },
       {
         runId: "run-yield-beta",
-        delivery: "in_progress",
-        disposition: "intentional_non_delivery",
+        delivery: "delivered",
+        disposition: "delivered",
         nextAttemptAt: undefined,
         rearmGeneration: undefined,
       },

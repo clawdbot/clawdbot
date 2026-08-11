@@ -97,7 +97,7 @@ vi.mock("../../../auto-reply/continuation/work-store.js", () => ({
   hasLiveOrRecentlyDispatchedContinuationWork: hasLiveOrRecentlyDispatchedContinuationWorkMock,
 }));
 vi.mock("../announce/subagent-announce.js", () => ({
-  runSubagentAnnounceFlow: vi.fn(async () => true),
+  runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
 }));
 
 vi.mock("../../../plugins/hook-runner-global.js", () => ({
@@ -251,7 +251,7 @@ describe("subagent registry archive behavior", () => {
     vi.mocked(getAgentRunContext).mockReturnValue({} as never);
     setRegistryTestDeps({
       captureSubagentCompletionReply: vi.fn(async () => "completed result"),
-      runSubagentAnnounceFlow: vi.fn(async () => false),
+      runSubagentAnnounceFlow: vi.fn(async () => "retryable" as const),
     });
 
     mod.registerSubagentRun({
@@ -971,7 +971,7 @@ describe("subagent registry archive behavior", () => {
       cleanup: "keep",
     });
 
-    const replaced = mod.replaceSubagentRunAfterSteer({
+    const replaced = mod.replaceSubagentRunAfterSteerCore({
       previousRunId: "run-old",
       nextRunId: "run-new",
     });
@@ -1000,7 +1000,7 @@ describe("subagent registry archive behavior", () => {
 
     await vi.advanceTimersByTimeAsync(5_000);
 
-    const replaced = mod.replaceSubagentRunAfterSteer({
+    const replaced = mod.replaceSubagentRunAfterSteerCore({
       previousRunId: "run-delete-old",
       nextRunId: "run-delete-new",
     });
@@ -1031,7 +1031,7 @@ describe("subagent registry archive behavior", () => {
       attachmentsDir,
     });
 
-    const replaced = mod.replaceSubagentRunAfterSteer({
+    const replaced = mod.replaceSubagentRunAfterSteerCore({
       previousRunId: "run-delete-attachments-old",
       nextRunId: "run-delete-attachments-new",
     });

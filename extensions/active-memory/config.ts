@@ -4,7 +4,7 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import {
-  asOptionalRecord as asRecord,
+  asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -138,7 +138,7 @@ function normalizePromptConfigText(value: unknown): string | undefined {
 }
 
 function hasDeprecatedModelFallbackPolicy(pluginConfig: unknown): boolean {
-  const raw = asRecord(pluginConfig);
+  const raw = asOptionalRecord(pluginConfig);
   return raw ? Object.hasOwn(raw, "modelFallbackPolicy") : false;
 }
 

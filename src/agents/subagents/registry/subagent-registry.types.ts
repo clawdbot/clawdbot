@@ -88,7 +88,7 @@ type SubagentExecutionState = {
   endedAt?: number;
   outcome?: SubagentRunOutcome;
   interruptedAt?: number;
-  interruptionReason?: "gateway-restart" | "lost-execution-context";
+  interruptionReason?: "gateway-restart";
   transcriptTarget?: AgentRunSessionTarget;
 };
 
@@ -154,7 +154,7 @@ export type SubagentCompletionDeliveryState = {
   steeringLeasedAt?: number;
   steeringInjectedAt?: number;
   suspendedAt?: number;
-  suspendedReason?: "retry-limit" | "expiry" | "permanent_failure";
+  suspendedReason?: "expiry" | "permanent_failure";
   dismissedAt?: number;
   discardedAt?: number;
   discardReason?: "expired";

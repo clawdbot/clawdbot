@@ -17,7 +17,7 @@ import {
   MESSAGE_TOOL_ONLY_DELIVERY_HINT,
 } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
-type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
+type CreateMessageTool = typeof import("./message-tool-execution.js").createMessageTool;
 type CreateOpenClawTools = typeof import("../openclaw-tools.js").createOpenClawTools;
 type ResetPluginRuntimeStateForTest =
   typeof import("../../plugins/runtime.js").resetPluginRuntimeStateForTest;
@@ -370,7 +370,7 @@ beforeAll(async () => {
   ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } =
     await import("../../plugins/runtime.js"));
   ({ createTestRegistry } = await import("../../test-utils/channel-plugins.js"));
-  ({ createMessageTool } = await import("./message-tool.js"));
+  ({ createMessageTool } = await import("./message-tool-execution.js"));
   ({ createOpenClawTools } = await import("../openclaw-tools.js"));
 });
 

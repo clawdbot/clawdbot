@@ -13,6 +13,7 @@ import {
   normalizeTasksGetResult,
   normalizeTasksListResult,
   sortTasks,
+  taskTimestampMs,
 } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import {
@@ -25,6 +26,7 @@ import type {
   BackgroundTasksProps,
   BackgroundTasksRailView,
 } from "./chat-background-tasks.types.ts";
+import { deriveSubagentActivity } from "./chat-subagent-activity.ts";
 
 type BackgroundTaskLoadEvent = NonNullable<ReturnType<typeof normalizeTaskEventPayload>>;
 
@@ -54,6 +56,10 @@ type BackgroundTasksState = {
   // wa-tooltip anchors by document id, so the status row's id must stay unique
   // per pane: two panes on the same agent would otherwise cross-anchor.
   statusRowId: string;
+  subagentActivityExpiryAt: number | null;
+  subagentActivityExpiryTimer: number | null;
+  taskActivityById: Map<string, Pick<TaskSummary, "lastActivity" | "diffStat">>;
+  terminalObservedAtByTask: Map<string, number>;
   tasks: TaskSummary[] | null;
   view: BackgroundTasksRailView;
   taskDetails: Map<string, TaskSummary>;
@@ -93,6 +99,12 @@ function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksStat
   ) {
     return current;
   }
+  if (
+    current?.subagentActivityExpiryTimer !== null &&
+    current?.subagentActivityExpiryTimer !== undefined
+  ) {
+    window.clearTimeout(current.subagentActivityExpiryTimer);
+  }
   nextStatusRowId += 1;
   const next: BackgroundTasksState = {
     cancellingTaskIds: new Set(),
@@ -114,6 +126,10 @@ function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksStat
     requestId: 0,
     sessionKey,
     statusRowId: `chat-tasks-status-${nextStatusRowId}`,
+    subagentActivityExpiryAt: null,
+    subagentActivityExpiryTimer: null,
+    taskActivityById: new Map(),
+    terminalObservedAtByTask: new Map(),
     tasks: null,
     view: { kind: "list" },
     taskDetails: new Map(),
@@ -122,6 +138,81 @@ function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksStat
   };
   host.backgroundTasksState = next;
   return next;
+}
+
+function retainTaskStreamingFields(state: BackgroundTasksState, task: TaskSummary): TaskSummary {
+  const retained = state.taskActivityById.get(task.id);
+  const lastActivity = task.lastActivity ?? retained?.lastActivity;
+  const diffStat = task.diffStat ?? retained?.diffStat;
+  if (lastActivity || diffStat) {
+    state.taskActivityById.set(task.id, {
+      ...(lastActivity ? { lastActivity } : {}),
+      ...(diffStat ? { diffStat } : {}),
+    });
+  }
+  if (lastActivity === task.lastActivity && diffStat === task.diffStat) {
+    return task;
+  }
+  return {
+    ...task,
+    ...(lastActivity ? { lastActivity } : {}),
+    ...(diffStat ? { diffStat } : {}),
+  };
+}
+
+function prepareTaskSnapshot(state: BackgroundTasksState, task: TaskSummary): TaskSummary {
+  const retained = retainTaskStreamingFields(state, task);
+  if (isActiveTask(retained)) {
+    state.terminalObservedAtByTask.delete(retained.id);
+  }
+  return retained;
+}
+
+function observeTaskTerminal(
+  state: BackgroundTasksState,
+  task: TaskSummary,
+  source: "event" | "snapshot",
+) {
+  if (isActiveTask(task)) {
+    state.terminalObservedAtByTask.delete(task.id);
+    return;
+  }
+  if (!state.terminalObservedAtByTask.has(task.id)) {
+    const terminalAt =
+      source === "event" ? Date.now() : taskTimestampMs(task.endedAt ?? task.updatedAt);
+    if (terminalAt > 0) {
+      state.terminalObservedAtByTask.set(task.id, terminalAt);
+    }
+  }
+}
+
+function scheduleSubagentActivityExpiry(
+  host: BackgroundTasksHost,
+  state: BackgroundTasksState,
+  nextExpiryAt: number | null,
+) {
+  if (state.subagentActivityExpiryAt === nextExpiryAt) {
+    return;
+  }
+  if (state.subagentActivityExpiryTimer !== null) {
+    window.clearTimeout(state.subagentActivityExpiryTimer);
+  }
+  state.subagentActivityExpiryAt = nextExpiryAt;
+  state.subagentActivityExpiryTimer = null;
+  if (nextExpiryAt === null) {
+    return;
+  }
+  state.subagentActivityExpiryTimer = window.setTimeout(
+    () => {
+      if (getBackgroundTasksState(host) !== state) {
+        return;
+      }
+      state.subagentActivityExpiryAt = null;
+      state.subagentActivityExpiryTimer = null;
+      host.requestUpdate?.();
+    },
+    Math.max(0, nextExpiryAt - Date.now()),
+  );
 }
 
 function loadBackgroundTasks(
@@ -164,8 +255,12 @@ function loadBackgroundTasks(
         }),
         client.request("tasks.list", { sessionKey, limit: RECENT_TASKS_LIMIT }),
       ]);
-      const active = normalizeTasksListResult(activePayload);
-      const recent = normalizeTasksListResult(recentPayload);
+      const active = normalizeTasksListResult(activePayload)?.map((task) =>
+        prepareTaskSnapshot(state, task),
+      );
+      const recent = normalizeTasksListResult(recentPayload)?.map((task) =>
+        prepareTaskSnapshot(state, task),
+      );
       if (!active || !recent) {
         throw new Error(t("tasksPage.invalidResponse"));
       }
@@ -182,6 +277,9 @@ function loadBackgroundTasks(
       current.tasks = sortTasks(
         merged.map((task) => newestTaskSnapshot(task, current.taskDetails.get(task.id))),
       );
+      for (const task of current.tasks) {
+        observeTaskTerminal(current, task, "snapshot");
+      }
       const viewedTaskId = current.view.kind === "list" ? null : current.view.taskId;
       // Detail and transcript navigation depend on the authoritative list;
       // a bounded refresh may legitimately omit the previously viewed task.
@@ -199,6 +297,9 @@ function loadBackgroundTasks(
             (tasks, event) => applyTaskEvent(tasks, event).tasks,
             [],
           );
+          for (const task of current.tasks) {
+            observeTaskTerminal(current, task, "event");
+          }
         }
         current.error =
           error instanceof Error && error.message.trim()
@@ -270,13 +371,23 @@ export function handleBackgroundTasksEvent(host: BackgroundTasksHost, payload: u
   ) {
     return;
   }
-  const event = normalizeTaskEventPayload(payload);
-  if (!event) {
+  const normalizedEvent = normalizeTaskEventPayload(payload);
+  if (!normalizedEvent) {
     return;
   }
-  if (event.action === "upserted" && !taskMatchesSessionScope(host, event.task, state.sessionKey)) {
+  if (
+    normalizedEvent.action === "upserted" &&
+    !taskMatchesSessionScope(host, normalizedEvent.task, state.sessionKey)
+  ) {
     return;
   }
+  const event =
+    normalizedEvent.action === "upserted"
+      ? {
+          ...normalizedEvent,
+          task: prepareTaskSnapshot(state, normalizedEvent.task),
+        }
+      : normalizedEvent;
   const bufferedEvent = bufferBackgroundTaskEvent(host, state, event);
   if (state.tasks === null) {
     // The exact in-flight snapshot already replays its buffered events; a
@@ -299,6 +410,8 @@ export function handleBackgroundTasksEvent(host: BackgroundTasksHost, payload: u
       state.view = { kind: "list" };
     }
     state.taskDetails.delete(event.taskId);
+    state.taskActivityById.delete(event.taskId);
+    state.terminalObservedAtByTask.delete(event.taskId);
     state.taskDetailErrors.delete(event.taskId);
     state.taskDetailLoadingIds.delete(event.taskId);
     host.requestUpdate?.();
@@ -308,6 +421,7 @@ export function handleBackgroundTasksEvent(host: BackgroundTasksHost, payload: u
   const detail = state.taskDetails.get(event.task.id);
   let newest = current ? newestTaskSnapshot(current, event.task, "event") : event.task;
   newest = newestTaskSnapshot(newest, detail);
+  observeTaskTerminal(state, newest, "event");
   state.tasks = sortTasks([newest, ...state.tasks.filter((task) => task.id !== event.task.id)]);
   if (detail) {
     state.taskDetails = new Map(state.taskDetails).set(event.task.id, {
@@ -343,7 +457,8 @@ async function loadBackgroundTaskDetail(
     if (getBackgroundTasksState(host) !== state) {
       return;
     }
-    const detail = normalizeTasksGetResult(payload);
+    const normalizedDetail = normalizeTasksGetResult(payload);
+    const detail = normalizedDetail ? prepareTaskSnapshot(state, normalizedDetail) : null;
     if (!detail || detail.id !== rowId) {
       throw new Error(t("chat.backgroundTasks.detailFailed"));
     }
@@ -354,6 +469,7 @@ async function loadBackgroundTaskDetail(
       return;
     }
     const newest = newestTaskSnapshot(current, detail);
+    observeTaskTerminal(state, newest, "snapshot");
     state.taskDetails = new Map(state.taskDetails).set(rowId, {
       ...newest,
       ...(detail.prompt ? { prompt: detail.prompt } : {}),
@@ -521,7 +637,8 @@ async function cancelBackgroundTask(
     }
     const result = normalizeTasksCancelResult(payload);
     if (result?.task && state.tasks !== null) {
-      const cancelled = result.task;
+      const cancelled = prepareTaskSnapshot(state, result.task);
+      observeTaskTerminal(state, cancelled, "event");
       const event = normalizeTaskEventPayload({ action: "upserted", task: cancelled });
       if (event) {
         // A slow client may miss the best-effort task event; the successful
@@ -581,6 +698,16 @@ export function createBackgroundTasksProps(
   ) {
     loadBackgroundTasks(host, state);
   }
+  const subagentActivity = deriveSubagentActivity({
+    tasks: state.tasks ?? [],
+    sessionKey: state.sessionKey,
+    terminalObservedAtByTask: state.terminalObservedAtByTask,
+    canonicalizeSessionKey: (sessionKey) =>
+      canonicalUiSessionKeyForPersistence(host, sessionKey) ||
+      normalizeOptionalString(sessionKey) ||
+      "",
+  });
+  scheduleSubagentActivityExpiry(host, state, subagentActivity.nextExpiryAt);
   return {
     sessionKey: state.sessionKey,
     statusRowId: state.statusRowId,
@@ -592,6 +719,7 @@ export function createBackgroundTasksProps(
     loading: state.loading,
     error: state.error,
     tasks: state.tasks,
+    subagentActivity,
     view: state.view,
     taskDetails: state.taskDetails,
     taskDetailErrors: state.taskDetailErrors,

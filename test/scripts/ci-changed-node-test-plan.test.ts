@@ -13,6 +13,27 @@ import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
 import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
 
 describe("CI changed Node test plan", () => {
+  it("routes Control UI style changes through source-scanning policy tests", () => {
+    const shards = createChangedNodeTestShards(["ui/src/styles/chat/layout.css"]);
+    const targets = shards?.flatMap((shard) => shard.targets ?? []) ?? [];
+
+    expect(targets).toEqual([
+      "ui/src/styles/base-theme-tokens.node.test.ts",
+      "ui/src/styles/cursor-policy.node.test.ts",
+    ]);
+  });
+
+  it("routes cron alert sanitization changes through alert policy suites", () => {
+    const shards = createChangedNodeTestShards(["src/cron/failure-notification-text.ts"]);
+    const targets = shards?.flatMap((shard) => shard.targets ?? []) ?? [];
+
+    expect(targets).toEqual([
+      "src/cron/service.stream-trigger.test.ts",
+      "src/cron/service.stream-validation.test.ts",
+      "src/cron/service/timer.timeout-watchdog.test.ts",
+    ]);
+  });
+
   it("routes a focused source change into one targeted job", () => {
     expect(createChangedNodeTestShards(["src/agents/live-model-filter.ts"])).toEqual([
       {

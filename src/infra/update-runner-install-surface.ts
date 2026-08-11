@@ -3,7 +3,7 @@ import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { detectGlobalInstallManagerForRoot } from "./update-global.js";
 import { resolveUpdateInstallRoot, updateInstallRootsMatch } from "./update-install-root.js";
-import { buildUpdateCommandRunner, DEFAULT_TIMEOUT_MS } from "./update-runner-command.js";
+import { buildUpdateCommandRunner, UPDATE_RUNNER_TIMEOUT_MS } from "./update-runner-command.js";
 import type {
   CommandRunner,
   UpdateInstallSurface,
@@ -113,7 +113,7 @@ export async function resolveUpdateInstallSurface(
   opts: Pick<UpdateRunnerOptions, "cwd" | "argv1" | "timeoutMs" | "runCommand"> = {},
 ): Promise<UpdateInstallSurface> {
   const { runCommand } = await buildUpdateCommandRunner(opts.runCommand);
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutMs = opts.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS;
   const candidates = buildStartDirs(opts);
   const packageRoot = await findPackageRoot(candidates);
 

@@ -48,8 +48,8 @@ export function createSubagentRegistryLifecycleCommon(
       clearTimeout(timer);
     }
     scheduledResumeTimers.clear();
-    for (const timer of scheduledRequesterSettleWakeTimers.values()) {
-      clearTimeout(timer);
+    for (const scheduled of scheduledRequesterSettleWakeTimers.values()) {
+      clearTimeout(scheduled.timer);
     }
     scheduledRequesterSettleWakeTimers.clear();
     pendingRequesterSettleWakeRearms.clear();

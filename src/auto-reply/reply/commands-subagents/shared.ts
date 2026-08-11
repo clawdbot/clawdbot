@@ -4,9 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { ResolvedSubagentController } from "../../../agents/subagents/registry/subagent-control.js";
-import { subagentRuns } from "../../../agents/subagents/registry/subagent-registry-memory.js";
-import { buildSubagentRunReadIndexFromRuns } from "../../../agents/subagents/registry/subagent-registry-queries.js";
-import { getSubagentRunsSnapshotForRead } from "../../../agents/subagents/registry/subagent-registry-state.js";
+import { buildSubagentRunReadIndex } from "../../../agents/subagents/registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../../../agents/subagents/registry/subagent-registry.types.js";
 import { resolveStoredSubagentCapabilities } from "../../../agents/subagents/spawn/subagent-capabilities.js";
 import {
@@ -18,6 +16,7 @@ import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { looksLikeSessionId } from "../../../sessions/session-id.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../../command-turn-context.js";
+import { commandReply } from "../command-gates.js";
 import { extractMessageText, type ChatMessage } from "../commands-subagents-text.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
 import {
@@ -48,21 +47,15 @@ export type SubagentsCommandContext = {
   restTokens: string[];
 };
 
-export function stopWithText(text: string): CommandHandlerResult {
-  return { shouldContinue: false, reply: { text } };
-}
-
 function stopWithUnknownTargetError(error?: string): CommandHandlerResult {
-  return stopWithText(`⚠️ ${error ?? "Unknown subagent."}`);
+  return commandReply(`⚠️ ${error ?? "Unknown subagent."}`);
 }
 
 function resolveSubagentTarget(
   runs: SubagentRunRecord[],
   token: string | undefined,
 ): SubagentTargetResolution {
-  const readIndex = buildSubagentRunReadIndexFromRuns({
-    runs: getSubagentRunsSnapshotForRead(subagentRuns),
-  });
+  const readIndex = buildSubagentRunReadIndex();
   return resolveSubagentTargetFromRuns({
     runs,
     token,

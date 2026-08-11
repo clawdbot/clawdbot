@@ -21,7 +21,6 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import { stagePostCompactionDelegate } from "../continuation/delegate-store-post-compaction.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
-import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   isReplyPayloadStatusNotice,
   markReplyPayloadForSourceSuppressionDelivery,
@@ -39,10 +38,7 @@ import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
-import {
-  buildPendingFinalDeliveryText,
-  sanitizePendingFinalDeliveryText,
-} from "./pending-final-delivery.js";
+import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { type FollowupRun, type QueueSettings, scheduleFollowupDrain } from "./queue.js";
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 import { type ReplyOperation, runAfterReplyOperationClear } from "./reply-run-registry.js";
@@ -77,18 +73,6 @@ export function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): Rep
   return payloads.map((payload) =>
     setReplyPayloadMetadata(payload, { beforeAgentRunBlocked: true }),
   );
-}
-
-export function resolvePendingFinalDeliveryRetryText(params: {
-  isHeartbeat: boolean;
-  payload: ReplyPayload;
-}): string {
-  const pendingText = buildPendingFinalDeliveryText([params.payload]);
-  if (!params.isHeartbeat) {
-    return pendingText;
-  }
-  const stripped = stripHeartbeatToken(pendingText, { mode: "message" });
-  return stripped.shouldSkip ? "" : stripped.text || pendingText;
 }
 
 export function buildSilentFallbackFailurePayload(params: {

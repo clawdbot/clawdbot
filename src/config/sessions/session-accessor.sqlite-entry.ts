@@ -51,7 +51,7 @@ import {
 } from "./session-accessor.sqlite-maintenance.js";
 import {
   createFallbackSessionEntry,
-  normalizeSqliteNumber,
+  coerceSqliteNumber,
 } from "./session-accessor.sqlite-normalize.js";
 import {
   cloneSessionEntry,
@@ -297,7 +297,7 @@ export function countSqliteSessionEntryRowsReadOnly(scope: SessionEntryListScope
         .selectFrom("session_nodes")
         .select((expression) => expression.fn.countAll<number | bigint>().as("count")),
     );
-    return row ? normalizeSqliteNumber(row.count) : 0;
+    return row ? coerceSqliteNumber(row.count) : 0;
   }, toDatabaseOptions(resolved));
   return result.found ? result.value : 0;
 }
@@ -411,7 +411,7 @@ export function readSqliteSessionUpdatedAt(scope: SessionAccessScope): number | 
   const resolved = resolveSqliteScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   const row = readSessionEntryRow(database, resolved.sessionKey)?.row;
-  return row ? normalizeSqliteNumber(row.updated_at) : undefined;
+  return row ? coerceSqliteNumber(row.updated_at) : undefined;
 }
 
 /** Applies a partial entry update to the additive SQLite session store. */

@@ -132,9 +132,9 @@ describe("terminal main session transcript freshness", () => {
     expect(check(entry, sessionKey)).toBe(true);
   });
 
-  it("reads the transcript header when the caller has no session key", async () => {
+  it("preserves Date.parse semantics for a numeric-looking transcript header", async () => {
     const sessionId = "session-header-without-key";
-    const timestamp = "2026-01-01T12:00:00.000Z";
+    const timestamp = "2026";
     await appendTranscriptEvent(
       { agentId: "main", sessionId, sessionKey: "agent:main:header", storePath },
       { type: "session", version: 3, id: sessionId, timestamp, cwd: stateDir },

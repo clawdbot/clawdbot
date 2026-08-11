@@ -70,7 +70,7 @@ import type { AnyAgentTool } from "./common.js";
 import {
   normalizeToolModelOverride,
   readNonNegativeIntegerParam,
-  readStringParam,
+  readToolStringParam,
 } from "./common.js";
 import {
   callAgentToolGatewayRequest,
@@ -634,7 +634,7 @@ export function createSessionStatusTool(opts?: {
         callGateway: gatewayCall,
       });
 
-      const requestedKeyParam = readStringParam(params, "sessionKey");
+      const requestedKeyParam = readToolStringParam(params, "sessionKey");
       const isImplicitRunSessionStatus =
         requestedKeyParam === undefined && Boolean(opts?.runSessionKey?.trim());
       let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
@@ -878,7 +878,7 @@ export function createSessionStatusTool(opts?: {
           const configured = resolveDefaultModelForAgent({ cfg, agentId });
           const selectedAgentDir = resolveAgentDir(cfg, agentId);
           const selectedWorkspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-          const modelRaw = readStringParam(params, "model");
+          const modelRaw = readToolStringParam(params, "model");
           let changedModel = false;
           if (typeof modelRaw === "string") {
             const selection = await resolveModelOverride({

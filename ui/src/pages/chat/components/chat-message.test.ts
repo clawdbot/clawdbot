@@ -9,9 +9,11 @@ import * as localStorageModule from "../../../local-storage.ts";
 import * as chatAvatar from "../chat-avatar.ts";
 import { renderChatNotice } from "./chat-divider.ts";
 import { isTextyDocumentAttachment } from "./chat-message-document-preview.ts";
-import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import {
-  getAssistantAttachmentAvailabilityRenderVersion,
+  getChatMediaRenderVersion,
+  releaseChatMediaResourceSubscriber,
+} from "./chat-message-media.ts";
+import {
   dismissConfirmedActionPopovers,
   renderActivityGroup,
   renderMessageGroup,
@@ -3988,12 +3990,12 @@ describe("grouped chat rendering", () => {
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toContain("mediaTicket=ticket-old");
-    const renderVersionBeforeRefresh = getAssistantAttachmentAvailabilityRenderVersion();
+    const renderVersionBeforeRefresh = getChatMediaRenderVersion();
 
     await vi.advanceTimersByTimeAsync(1_001);
     await flushAssistantAttachmentAvailabilityChecks();
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(getAssistantAttachmentAvailabilityRenderVersion()).not.toBe(renderVersionBeforeRefresh);
+    expect(getChatMediaRenderVersion()).not.toBe(renderVersionBeforeRefresh);
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toContain("mediaTicket=ticket-new");

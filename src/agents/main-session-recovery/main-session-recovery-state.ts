@@ -355,14 +355,12 @@ export function transitionMainSessionRecovery(
       const executionIdentityAdmission =
         command.executionIdentity.state === "disabled"
           ? undefined
-          : state.executionIdentity
+          : state.executionIdentity?.runId === command.runId
             ? ({ kind: "retry-reference", token: state.executionIdentity } as const)
-            : ({ kind: "capture", token: command.executionIdentity.token } as const);
+            : undefined;
       updateRecoveryState(entry, state, {
+        ...(command.executionIdentity.state === "disabled" ? { executionIdentity: undefined } : {}),
         chargedAttempts: command.attempt,
-        ...(executionIdentityAdmission?.kind === "capture"
-          ? { executionIdentity: executionIdentityAdmission.token }
-          : {}),
         reservation: {
           runId: command.runId,
           attempt: command.attempt,
@@ -381,6 +379,32 @@ export function transitionMainSessionRecovery(
           ...(executionIdentityAdmission ? { executionIdentityAdmission } : {}),
         },
       };
+    }
+    case "bind_admitted_execution_identity": {
+      const state = entry.mainRestartRecovery;
+      if (
+        !state ||
+        state.cycleId !== command.cycleId ||
+        // Recovery may reuse its public run id. The charged attempt is the
+        // durable admission fence that rejects delayed binds from older work.
+        state.chargedAttempts !== command.attempt ||
+        entry.sessionId !== command.sessionId ||
+        entry.lifecycleRunId !== command.runId ||
+        !entry.restartRecoveryRuns?.some(
+          (run) =>
+            run.runId === command.runId && run.lifecycleGeneration === command.lifecycleGeneration,
+        ) ||
+        command.token.runId !== command.runId
+      ) {
+        return { kind: "rejected", reason: "stale_reservation" };
+      }
+      if (state.executionIdentity) {
+        return JSON.stringify(state.executionIdentity) === JSON.stringify(command.token)
+          ? { kind: "no_change" }
+          : { kind: "rejected", reason: "stale_reservation" };
+      }
+      updateRecoveryState(entry, state, { executionIdentity: command.token });
+      return { kind: "applied" };
     }
     case "cancel_reservation":
     case "abandon_reservation": {
@@ -402,10 +426,6 @@ export function transitionMainSessionRecovery(
             ? Math.max(0, command.reservation.attempt - 1)
             : state.chargedAttempts,
         reservation: undefined,
-        ...(command.kind === "cancel_reservation" &&
-        command.reservation.executionIdentityAdmission?.kind === "capture"
-          ? { executionIdentity: undefined }
-          : {}),
       });
       return { kind: "applied" };
     }

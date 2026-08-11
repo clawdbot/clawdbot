@@ -1,7 +1,7 @@
 /**
  * Test harness mocks for embedded-run overflow compaction coverage.
  */
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { matchesContextOverflowMessage } from "@openclaw/ai/internal/runtime";
 import { type Mock, vi } from "vitest";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
@@ -21,6 +21,7 @@ import type {
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import type { markAuthProfileSuccess } from "../auth-profiles.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { extractObservedOverflowTokenCount } from "../embedded-agent-helpers/context-overflow-observation.js";
 import type { FailoverReason } from "../failover/signal.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
@@ -28,6 +29,14 @@ import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import type { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
+
+type ProductionRunEmbeddedAgent = typeof import("./run.js").runEmbeddedAgent;
+export type TestRunEmbeddedAgent = (
+  params: Omit<
+    Parameters<ProductionRunEmbeddedAgent>[0],
+    "admittedRunContext" | "preparedRunAdmission"
+  >,
+) => ReturnType<ProductionRunEmbeddedAgent>;
 
 // Shared Vitest harness for overflow, compaction, failover, and hook tests.
 // Tests import these mocks directly so each scenario can override one seam.
@@ -328,10 +337,7 @@ export const mockedClassifyAssistantFailoverReason = vi.fn(
   (assistant?: { errorMessage?: string | null }): FailoverReason | null =>
     mockedClassifyFailoverReason(assistant?.errorMessage ?? ""),
 );
-const mockedExtractObservedOverflowTokenCount = vi.fn((msg?: string) => {
-  const match = msg?.match(/prompt is too long:\s*([\d,]+)\s+tokens\s*>\s*[\d,]+\s+maximum/i);
-  return match?.[1] ? Number(match[1].replaceAll(",", "")) : undefined;
-});
+const mockedExtractObservedOverflowTokenCount = vi.fn(extractObservedOverflowTokenCount);
 export const mockedFormatAssistantErrorText = vi.fn(() => "");
 const mockedIsAuthAssistantError = vi.fn(() => false);
 const mockedIsBillingAssistantError = vi.fn(() => false);
@@ -341,15 +347,15 @@ const mockedIsFailoverErrorMessage = vi.fn(() => false);
 const mockedIsGenericUnknownStreamErrorMessage = vi.fn((raw: string) =>
   /^\s*an unknown error occurred\.?\s*$/i.test(raw),
 );
-export const mockedIsLikelyContextOverflowError = vi.fn((msg?: string) => {
-  const lower = normalizeLowercaseStringOrEmpty(msg ?? "");
+function matchesCanonicalOverflowFixture(msg?: string): boolean {
+  const raw = msg ?? "";
   return (
-    lower.includes("request_too_large") ||
-    lower.includes("context window exceeded") ||
-    (lower.includes("context window") && lower.includes("ran out of room")) ||
-    lower.includes("prompt is too long")
+    matchesContextOverflowMessage(raw, "failover-explicit") ||
+    matchesContextOverflowMessage(raw, "provider-fallback") ||
+    matchesContextOverflowMessage(raw, "failover-hint")
   );
-});
+}
+export const mockedIsLikelyContextOverflowError = vi.fn(matchesCanonicalOverflowFixture);
 const mockedParseImageSizeError = vi.fn(() => null);
 const mockedParseImageDimensionError = vi.fn(() => null);
 export const mockedIsRateLimitAssistantError = vi.fn<MockAssistantErrorProbe>(() => false);
@@ -569,10 +575,7 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedIsBillingAssistantError.mockReset();
   mockedIsBillingAssistantError.mockReturnValue(false);
   mockedExtractObservedOverflowTokenCount.mockReset();
-  mockedExtractObservedOverflowTokenCount.mockImplementation((msg?: string) => {
-    const match = msg?.match(/prompt is too long:\s*([\d,]+)\s+tokens\s*>\s*[\d,]+\s+maximum/i);
-    return match?.[1] ? Number(match[1].replaceAll(",", "")) : undefined;
-  });
+  mockedExtractObservedOverflowTokenCount.mockImplementation(extractObservedOverflowTokenCount);
   mockedIsCompactionFailureError.mockReset();
   mockedIsCompactionFailureError.mockReturnValue(false);
   mockedIsFailoverAssistantError.mockReset();
@@ -584,15 +587,7 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
     /^\s*an unknown error occurred\.?\s*$/i.test(raw),
   );
   mockedIsLikelyContextOverflowError.mockReset();
-  mockedIsLikelyContextOverflowError.mockImplementation((msg?: string) => {
-    const lower = normalizeLowercaseStringOrEmpty(msg ?? "");
-    return (
-      lower.includes("request_too_large") ||
-      lower.includes("context window exceeded") ||
-      (lower.includes("context window") && lower.includes("ran out of room")) ||
-      lower.includes("prompt is too long")
-    );
-  });
+  mockedIsLikelyContextOverflowError.mockImplementation(matchesCanonicalOverflowFixture);
   mockedParseImageSizeError.mockReset();
   mockedParseImageSizeError.mockReturnValue(null);
   mockedParseImageDimensionError.mockReset();
@@ -716,15 +711,7 @@ export function resetSharedRunIntegrationHarnessMocks(): void {
   mockedIsFailoverAssistantError.mockReset();
   mockedIsFailoverAssistantError.mockReturnValue(false);
   mockedIsLikelyContextOverflowError.mockReset();
-  mockedIsLikelyContextOverflowError.mockImplementation((msg?: string) => {
-    const lower = normalizeLowercaseStringOrEmpty(msg ?? "");
-    return (
-      lower.includes("request_too_large") ||
-      lower.includes("context window exceeded") ||
-      (lower.includes("context window") && lower.includes("ran out of room")) ||
-      lower.includes("prompt is too long")
-    );
-  });
+  mockedIsLikelyContextOverflowError.mockImplementation(matchesCanonicalOverflowFixture);
   mockedIsRateLimitAssistantError.mockReset();
   mockedIsRateLimitAssistantError.mockReturnValue(false);
   mockedResolveAuthProfileOrder.mockReset();
@@ -744,7 +731,7 @@ export function resetSharedRunIntegrationHarnessMocks(): void {
 
 /** Install module mocks, import the runner, and return the mocked entrypoint. */
 export async function loadRunOverflowCompactionHarness(): Promise<{
-  runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
+  runEmbeddedAgent: TestRunEmbeddedAgent;
 }> {
   resetRunOverflowCompactionHarnessMocks();
   vi.resetModules();
@@ -824,6 +811,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   // Runtime preparation already carries the fixture's provider facts. Keep the
   // real handle shape without rediscovering every bundled provider plugin.
   vi.doMock("../../plugins/provider-hook-runtime.js", () => ({
+    attachModelProviderRuntimePluginHandle: (model: object) => model,
     resolveProviderRuntimePluginHandle: vi.fn((params: Record<string, unknown>) => params),
   }));
   vi.doMock("../auth-profiles.js", () => ({
@@ -1110,16 +1098,41 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     };
   });
 
+  const { createOperationalRunInstanceRef, prepareAgentRunAdmission } =
+    await import("../admitted-run-context.js");
   const { runEmbeddedAgent } = await import("./run.js");
   return {
-    runEmbeddedAgent: (params) =>
-      runEmbeddedAgent({ ...params, agentId: params.agentId ?? "main" }),
+    runEmbeddedAgent: async (params) => {
+      const agentId = params.agentId ?? "main";
+      const preparedRunAdmission = prepareAgentRunAdmission({
+        cfg: params.config ?? {},
+        operationalRunInstance: createOperationalRunInstanceRef(params.runId),
+        facts: {
+          runId: params.runId,
+          agentId,
+          ingress: {
+            kind: "system",
+            boundary: "run-overflow-compaction-harness",
+            state: "present",
+          },
+        },
+      });
+      try {
+        return await runEmbeddedAgent({
+          ...params,
+          preparedRunAdmission,
+          agentId,
+        });
+      } finally {
+        preparedRunAdmission.close();
+      }
+    },
   };
 }
 
 /** Move one-time runner compilation out of individual behavior timings. */
 export async function warmRunOverflowCompactionHarness(
-  runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent,
+  runEmbeddedAgent: TestRunEmbeddedAgent,
   params?: Partial<Parameters<typeof runEmbeddedAgent>[0]>,
 ): Promise<void> {
   resetRunOverflowCompactionHarnessMocks();

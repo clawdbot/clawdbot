@@ -9,7 +9,7 @@ import {
   classifyAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
-import { sanitizeUserFacingText } from "../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+import { renderUserFacingText } from "../agents/embedded-agent-helpers/user-facing-text.js";
 import {
   isMainSessionRecoveryLifecycleEvent,
   projectMainSessionRecoveryLifecycle,
@@ -96,7 +96,7 @@ function resolveSessionRunError(
   if ((status !== "failed" && status !== "timeout") || !outcome.error) {
     return undefined;
   }
-  const sanitized = sanitizeUserFacingText(outcome.error, { errorContext: true })
+  const sanitized = renderUserFacingText(outcome.error, { errorContext: true })
     .replace(/\s+/g, " ")
     .trim();
   return sanitized ? truncateUtf16Safe(sanitized, SESSION_RUN_ERROR_MAX_CHARS) : undefined;

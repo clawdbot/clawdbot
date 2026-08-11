@@ -18,6 +18,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { runAgentAttempt } from "./attempt-execution.js";
+import { createTestPreparedRunAdmission } from "../admitted-run-context.test-support.js";
 
 const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
 const runCliAgentMock = vi.hoisted(() => vi.fn());
@@ -146,6 +147,7 @@ describe("runAgentAttempt spawn-init requestCompactionOpts plumbing", () => {
 
   async function runEmbeddedAttempt(cfg: OpenClawConfig) {
     await runAgentAttempt({
+      preparedRunAdmission: createTestPreparedRunAdmission("run-test"),
       providerOverride: "anthropic",
       originalProvider: "anthropic",
       modelOverride: "claude-sonnet-4.7",

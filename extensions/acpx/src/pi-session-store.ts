@@ -4,6 +4,7 @@ import path from "node:path";
 import type { SessionCatalogSession } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { piAcpSessionStoreRoot, piSessionStore } from "./pi-session-paths.js";
+import { parsePiSessionTimestampMs } from "./pi-session-timestamp.js";
 
 const MAX_DISCOVERY_FILES = 10_000;
 const SUMMARY_SCAN_BATCH_SIZE = 100;
@@ -84,7 +85,7 @@ function cacheSummary(file: string, value: CachedSummary): void {
   }
 }
 
-function optionalString(value: unknown, maxLength: number): string | undefined {
+function readBoundedString(value: unknown, maxLength: number): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -258,17 +259,6 @@ function textFromContent(content: unknown): string {
     .join("\n");
 }
 
-function timestampMs(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Date.parse(value);
-    return Number.isNaN(parsed) ? undefined : parsed;
-  }
-  return undefined;
-}
-
 function processSummaryLine(state: PiSummaryScanState, line: Buffer): void {
   const content = line.at(-1) === 0x0d ? line.subarray(0, -1) : line;
   const entry = parsePiJsonLines(content.toString("utf8"))[0];
@@ -285,14 +275,14 @@ function processSummaryLine(state: PiSummaryScanState, line: Buffer): void {
   }
   if (entry.type === "session_info") {
     // Latest metadata wins, including an explicit empty-name clear.
-    state.name = optionalString(entry.name, 1_000);
+    state.name = readBoundedString(entry.name, 1_000);
   } else if (
     !state.firstMessage &&
     entry.type === "message" &&
     isRecord(entry.message) &&
     entry.message.role === "user"
   ) {
-    state.firstMessage = optionalString(textFromContent(entry.message.content), 1_000);
+    state.firstMessage = readBoundedString(textFromContent(entry.message.content), 1_000);
   }
 }
 
@@ -419,10 +409,10 @@ async function readPiSessionSummary(
     const { header, name, firstMessage } = projectedState;
     const version =
       header?.type === "session" && typeof header.version === "number" ? header.version : 1;
-    const threadId = header?.type === "session" ? optionalString(header.id, 256) : undefined;
+    const threadId = header?.type === "session" ? readBoundedString(header.id, 256) : undefined;
     if (header && threadId && SESSION_ID_PATTERN.test(threadId)) {
-      const cwd = optionalString(header.cwd, 4_096);
-      const createdAt = timestampMs(header.timestamp);
+      const cwd = readBoundedString(header.cwd, 4_096);
+      const createdAt = parsePiSessionTimestampMs(header.timestamp);
       summary = {
         file: candidate.file,
         version,

@@ -303,6 +303,19 @@ export function listCloudSessionRecoveries(
   }
 }
 
+export function migrateCloudSessionRecoveryScope(
+  gatewayUrl: string,
+  sourceScope: string,
+  destinationScope: string,
+): void {
+  for (const recovery of listCloudSessionRecoveries(gatewayUrl, sourceScope)) {
+    const destination = { ...recovery, recoveryScope: destinationScope };
+    if (writeCloudSessionRecoveryIfAvailable(destination)) {
+      clearCloudSessionRecovery(gatewayUrl, sourceScope, recovery.sessionKey);
+    }
+  }
+}
+
 export function readCloudSessionRecovery(
   gatewayUrl: string,
   recoveryScope: string,

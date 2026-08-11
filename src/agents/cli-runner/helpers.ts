@@ -62,34 +62,6 @@ export function enqueueCliRun<T>(key: string, task: () => Promise<T>): Promise<T
   return CLI_RUN_QUEUE.enqueue(key, task);
 }
 
-/**
- * Hashes the (account, agent, auth-profile, session) tuple to a stable owner key
- * shared between the CLI run queue (`resolveCliRunQueueKey`) and the Claude live
- * session map (`buildClaudeLiveKey`). The two paths must agree byte-for-byte
- * within a single process so a fresh queued turn picks up the same live session
- * the registry already holds; the golden-hash test below pins the encoding.
- */
-export function buildClaudeOwnerKey(input: {
-  agentAccountId?: string;
-  agentId?: string;
-  authProfileId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-}): string {
-  return crypto
-    .createHash("sha256")
-    .update(
-      JSON.stringify({
-        agentAccountId: input.agentAccountId,
-        agentId: input.agentId,
-        authProfileId: input.authProfileId,
-        sessionId: input.sessionId,
-        sessionKey: input.sessionKey,
-      }),
-    )
-    .digest("hex");
-}
-
 /** Resolves the serialization key for a CLI backend run. */
 export function resolveCliRunQueueKey(params: {
   backendId: string;

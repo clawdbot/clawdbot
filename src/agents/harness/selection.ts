@@ -38,10 +38,11 @@ import {
 } from "../tool-policy.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { resolveAgentHarnessAutoSelectionHint } from "./auto-selection.js";
-import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
+import { createOpenClawAgentHarness, isBuiltInOpenClawAgentHarness } from "./builtin-openclaw.js";
 import { selectContextEngineForTranscriptHost } from "./context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "./context-engine-turn-attempt.js";
 import { AgentHarnessPreflightError, MissingAgentHarnessError } from "./errors.js";
+import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import {
   runAgentHarnessLifecycleAttempt,
   runAgentHarnessLifecycleFinalization,
@@ -50,7 +51,11 @@ import {
   resolveAgentHarnessPolicy as resolveConfiguredAgentHarnessPolicy,
   type AgentHarnessPolicy,
 } from "./policy.js";
-import { getRegisteredAgentHarness, listRegisteredAgentHarnesses } from "./registry.js";
+import {
+  getRegisteredAgentHarness,
+  listRegisteredAgentHarnesses,
+  resolveAgentHarnessOwnerPluginId,
+} from "./registry.js";
 import {
   buildAgentHarnessSupportContext,
   compareHarnessSupport,
@@ -116,6 +121,9 @@ type AgentHarnessSelectionCandidate = {
 
 type AgentHarnessSelectionDecision = {
   harness: AgentHarness;
+  builtIn: boolean;
+  /** Registry-owned identity; absent only for the built-in runtime. */
+  ownerPluginId?: string;
   policy: AgentHarnessPolicy;
   selectedHarnessId: string;
   selectedReason:
@@ -485,13 +493,14 @@ export async function runAgentHarnessSettledTurnFinalization(
   if (internalParams.systemAgentTool && !isSystemAgentOnlyAllowlist(internalParams.toolsAllow)) {
     throw new Error('OpenClaw host authority requires toolsAllow: ["openclaw"]');
   }
-  const pluginParams = withoutInternalHarnessAuthority({
-    ...internalParams,
-    operation: "settled-tool-finalization",
-  });
-  const attemptParams =
-    harness.id === "openclaw" ? pluginParams : preparePluginHarnessParams(pluginParams);
-  return runAgentHarnessOperation(harness, params, () =>
+  const attemptParams = prepareHarnessFinalizationParams(
+    {
+      ...internalParams,
+      operation: "settled-tool-finalization",
+    },
+    isBuiltInOpenClawAgentHarness(harness),
+  );
+  return await runAgentHarnessOperation(harness, params, () =>
     runWithAgentRingZeroTools([], () =>
       runAgentHarnessLifecycleFinalization(harness, attemptParams, () =>
         finalizeSettledTurn({ attempt: attemptParams, settledAttempt }),
@@ -543,34 +552,44 @@ async function runSelectedAgentHarnessAttempt(
       ]
     : [];
   const attemptParams = withoutHarnessSetupAuthority(internalParams);
+  const pluginAttempt = withoutInternalHarnessAuthority(
+    attemptParams,
+    harness,
+    selection.builtIn,
+    selection.ownerPluginId,
+  );
   logAgentHarnessSelection(selection, {
     provider: params.provider,
     modelId: params.modelId,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
   });
-  const result = await runAgentHarnessOperation(harness, params, () =>
-    runWithAgentRingZeroTools(ringZeroTools, () => {
-      // Resolve plugin policy after entering the host scope. Ring-zero tools are
-      // trusted setup authority and must survive ordinary deny-all policy.
-      const hostOpenClawAuthority =
-        isHostScopedAgentToolActive("openclaw") &&
-        isSystemAgentOnlyAllowlist(attemptParams.toolsAllow);
-      const preparedParams =
-        harness.id === "openclaw"
-          ? attemptParams
-          : preparePluginHarnessParams(withoutInternalHarnessAuthority(attemptParams));
-      const authorizedParams =
-        hostOpenClawAuthority && preparedParams.pluginHarnessToolPolicyRestricted
-          ? { ...preparedParams, pluginHarnessToolPolicyRestricted: false }
-          : preparedParams;
-      assertPluginHarnessConversationToolPolicySupport(
-        harness,
-        authorizedParams.pluginHarnessToolPolicyRestricted === true,
-      );
-      return runAgentHarnessLifecycleAttempt(harness, authorizedParams);
-    }),
-  );
+  let result: EmbeddedRunAttemptResult;
+  try {
+    result = await runAgentHarnessOperation(harness, params, () =>
+      runWithAgentRingZeroTools(ringZeroTools, () => {
+        // Resolve plugin policy after entering the host scope. Ring-zero tools are
+        // trusted setup authority and must survive ordinary deny-all policy.
+        const hostOpenClawAuthority =
+          isHostScopedAgentToolActive("openclaw") &&
+          isSystemAgentOnlyAllowlist(pluginAttempt.params.toolsAllow);
+        const preparedParams = selection.builtIn
+          ? pluginAttempt.params
+          : preparePluginHarnessParams(pluginAttempt.params);
+        const effectiveAttemptParams =
+          hostOpenClawAuthority && preparedParams.pluginHarnessToolPolicyRestricted
+            ? { ...preparedParams, pluginHarnessToolPolicyRestricted: false }
+            : preparedParams;
+        assertPluginHarnessConversationToolPolicySupport(
+          harness,
+          effectiveAttemptParams.pluginHarnessToolPolicyRestricted === true,
+        );
+        return runAgentHarnessLifecycleAttempt(harness, effectiveAttemptParams);
+      }),
+    );
+  } finally {
+    pluginAttempt.closeHostCapabilities();
+  }
   const admission = internalParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
   if (
     internalParams.onContextEngineTurnCandidate &&
@@ -644,7 +663,7 @@ async function runAgentHarnessOperation<T>(
   const harnessTrace = freezeDiagnosticTraceContext(
     activeTrace ? createChildDiagnosticTraceContext(activeTrace) : createDiagnosticTraceContext(),
   );
-  if (harness.id === "openclaw") {
+  if (isBuiltInOpenClawAgentHarness(harness)) {
     return await runWithDiagnosticTraceContext(harnessTrace, execute);
   }
 
@@ -678,12 +697,74 @@ function withoutHarnessSetupAuthority(
 
 function withoutInternalHarnessAuthority(
   params: EmbeddedRunAttemptParams,
-): EmbeddedRunAttemptParams {
-  const { onContextEngineTurnCandidate: _onContextEngineTurnCandidate, ...pluginParams } = params;
-  return pluginParams;
+  harness: AgentHarness,
+  builtIn: boolean,
+  ownerPluginId: string | undefined,
+): {
+  params: import("./types.js").AgentHarnessAttemptParamsV2;
+  closeHostCapabilities: () => void;
+} {
+  if (builtIn) {
+    return {
+      // The built-in harness is the internal owner of this authority. Only
+      // plugin handoffs receive the projected public attempt shape below.
+      params: params as import("./types.js").AgentHarnessAttemptParamsV2,
+      closeHostCapabilities: () => {},
+    };
+  }
+  const {
+    admittedRunContext: _admittedRunContext,
+    onContextEngineTurnCandidate: _onContextEngineTurnCandidate,
+    ...pluginParams
+  } = params;
+  const host = createAgentHarnessHostCapabilities({
+    attempt: params,
+    pluginId:
+      ownerPluginId ??
+      (() => {
+        throw new Error(`Agent harness ${harness.id} has no authoritative registry owner.`);
+      })(),
+  });
+  return {
+    params: { ...pluginParams, hostCapabilities: host.capabilities },
+    closeHostCapabilities: host.close,
+  };
 }
 
-function preparePluginHarnessParams(params: EmbeddedRunAttemptParams): EmbeddedRunAttemptParams {
+function prepareHarnessFinalizationParams(
+  params: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
+  builtIn: boolean,
+): import("./types.js").AgentHarnessSettledTurnFinalizationAttemptParams<
+  import("./types.js").AgentHarnessAttemptParamsV2
+> {
+  const {
+    hostCapabilities: _hostCapabilities,
+    systemAgentTool: _systemAgentTool,
+    ...withoutCapabilities
+  } = params;
+  if (builtIn) {
+    return withoutCapabilities;
+  }
+  const {
+    admittedRunContext: _admittedRunContext,
+    contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
+    onContextEngineTurnCandidate: _onContextEngineTurnCandidate,
+    trajectoryRecorder: _trajectoryRecorder,
+    ...pluginParams
+  } = withoutCapabilities;
+  const boundary = "plugin harness finalization handoff";
+  return {
+    ...pluginParams,
+    model: unwrapModelHeaderSentinelsForProviderEgress(pluginParams.model, boundary),
+    resolvedApiKey: pluginParams.resolvedApiKey
+      ? unwrapSecretSentinelsForProviderEgress(pluginParams.resolvedApiKey, boundary)
+      : pluginParams.resolvedApiKey,
+  };
+}
+
+function preparePluginHarnessParams(
+  params: import("./types.js").AgentHarnessAttemptParamsV2,
+): import("./types.js").AgentHarnessAttemptParamsV2 {
   const boundary = "plugin harness handoff";
   const resolvedApiKey = params.resolvedApiKey
     ? unwrapSecretSentinelsForProviderEgress(params.resolvedApiKey, boundary)
@@ -720,9 +801,9 @@ function assertPluginHarnessConversationToolPolicySupport(
 }
 
 function applyPluginHarnessDenyAllToolPolicy(
-  params: EmbeddedRunAttemptParams,
+  params: import("./types.js").AgentHarnessAttemptParamsV2,
   policies: ResolvedPluginHarnessToolPolicies,
-): EmbeddedRunAttemptParams {
+): import("./types.js").AgentHarnessAttemptParamsV2 {
   if (
     isHostScopedAgentToolActive("openclaw") &&
     params.toolsAllow?.length === 1 &&
@@ -924,8 +1005,11 @@ function buildSelectionDecision(params: {
   selectedReason: AgentHarnessSelectionDecision["selectedReason"];
   candidates: AgentHarnessSelectionCandidate[];
 }): AgentHarnessSelectionDecision {
+  const builtIn = isBuiltInOpenClawAgentHarness(params.harness);
   return {
     harness: params.harness,
+    builtIn,
+    ...(!builtIn ? { ownerPluginId: resolveAgentHarnessOwnerPluginId(params.harness) } : {}),
     policy: params.policy,
     selectedHarnessId: params.harness.id,
     selectedReason: params.selectedReason,

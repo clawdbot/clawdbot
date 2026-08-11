@@ -13,7 +13,7 @@ import { killControlledSubagentRun } from "../../agents/subagents/registry/subag
 import {
   getLatestSubagentRunByChildSessionKey,
   listSubagentRunsForController,
-} from "../../agents/subagents/registry/subagent-registry.js";
+} from "../../agents/subagents/registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.js";
 import {
   resolveInternalSessionKey,

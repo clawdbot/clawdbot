@@ -1,3 +1,4 @@
+import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import type { BootstrapContextRunKind } from "../../agents/bootstrap-mode.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
@@ -51,6 +52,7 @@ type CliPresentation = Pick<
 >;
 
 export async function runCliFallbackCandidate(params: {
+  preparedRunAdmission: PreparedAgentRunAdmission;
   turn: AgentTurnParams;
   candidateRun: FollowupRun["run"];
   runtimeConfig: OpenClawConfig;
@@ -184,11 +186,11 @@ export async function runCliFallbackCandidate(params: {
         agentId: turn.followupRun.run.agentId,
         runId: params.runId,
       },
-      () => {
+      async () => {
         // Admission may wait behind another turn that starts detached media.
         // Snapshot only after this turn owns the session placement.
         const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(turn.sessionKey);
-        return runCliAgentWithLifecycle({
+        return await runCliAgentWithLifecycle({
           runId: params.runId,
           lifecycleGeneration: params.lifecycleGeneration,
           provider: params.cliExecutionProvider,
@@ -344,6 +346,7 @@ export async function runCliFallbackCandidate(params: {
                   })
               : undefined,
           runParams: {
+            preparedRunAdmission: params.preparedRunAdmission,
             sessionId: turn.followupRun.run.sessionId,
             sessionKey: turn.sessionKey,
             sessionTarget,

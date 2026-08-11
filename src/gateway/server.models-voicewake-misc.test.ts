@@ -12,7 +12,7 @@ import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { resetPreparedModelCatalogForTest } from "./server-model-catalog.js";
+import { resetPreparedModelCatalogStateForTest } from "./server-model-catalog.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   connectOk,
@@ -24,7 +24,7 @@ import {
   resetTestPluginRegistry,
   setTestPluginRegistry,
   startConnectedServerWithClient,
-  startGatewayServer,
+  startTestGatewayServer,
   startServerWithClient,
   trackConnectChallengeNonce,
 } from "./test-helpers.js";
@@ -240,7 +240,7 @@ describe("gateway server models + voicewake", () => {
   const setAgentCatalog = async (entries: AgentCatalogFixtureEntry[]) => {
     agentDiscoveryMock.enabled = true;
     agentDiscoveryMock.models = entries;
-    await resetPreparedModelCatalogForTest();
+    await resetPreparedModelCatalogStateForTest();
     const [
       { refreshPreparedModelRuntimeSnapshots },
       { clearRuntimeConfigSnapshot: clearIoRuntimeConfigSnapshot, getRuntimeConfig },
@@ -739,7 +739,7 @@ describe("gateway server misc", () => {
 
   test("releases port after close", async () => {
     const releasePort = await getFreePort();
-    const releaseServer = await startGatewayServer(releasePort);
+    const releaseServer = await startTestGatewayServer(releasePort);
     await releaseServer.close();
 
     const probe = createServer();

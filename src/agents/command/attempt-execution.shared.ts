@@ -26,7 +26,7 @@ type PersistSessionEntryParams = {
 };
 
 /** Persists one session entry while keeping the caller's in-memory store aligned. */
-export async function persistSessionEntry(
+export async function persistAgentSession(
   params: PersistSessionEntryParams,
 ): Promise<SessionEntry | undefined> {
   let rejectedMissingEntry = false;

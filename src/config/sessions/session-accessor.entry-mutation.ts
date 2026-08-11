@@ -89,6 +89,7 @@ export async function createSessionEntryWithTranscript<TError = string>(
   }
 
   try {
+    options.commitGuard?.();
     await appendSqliteTranscriptEvent(
       {
         agentId,
@@ -113,6 +114,7 @@ export async function createSessionEntryWithTranscript<TError = string>(
     removals: resolved.legacyKeys.map((sessionKey) => ({ sessionKey })),
     upserts: [{ sessionKey: resolved.normalizedKey, entry }],
     skipMaintenance: true,
+    ...(options.commitGuard ? { beforeCommitInTransaction: options.commitGuard } : {}),
   });
   return { ok: true, entry, sessionFile: resolved.normalizedKey };
 }

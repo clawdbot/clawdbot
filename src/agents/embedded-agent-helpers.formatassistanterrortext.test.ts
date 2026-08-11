@@ -13,6 +13,7 @@ import {
   isRawApiErrorPayload,
 } from "./embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
+import { renderUserFacingText } from "./embedded-agent-helpers/user-facing-text.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
 describe("formatAssistantErrorText", () => {
@@ -71,10 +72,10 @@ describe("formatAssistantErrorText", () => {
       expected: "The AI service is temporarily overloaded. Please try again in a moment.",
     },
     {
-      title: "preserves overload wording for Z.AI rate-limit errors",
+      title: "uses classified rate-limit copy for Z.AI rate-limit errors",
       errorText:
         '429 status code (exceeded limit)\n{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}',
-      expected: "The AI service is temporarily overloaded. Please try again in a moment.",
+      expected: "⚠️ API rate limit reached. Please try again later.",
     },
     {
       title: "rewrites generic provider internal errors without support request ids",
@@ -757,7 +758,7 @@ describe("formatBillingErrorMessage — authMode neutral copy (#80877)", () => {
 
 describe("sanitizeUserFacingText — streaming JSON parse error (#59076)", () => {
   it("rewrites transport-classified malformed streaming fragments in error context", () => {
-    const result = sanitizeUserFacingText(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, {
+    const result = renderUserFacingText(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, {
       errorContext: true,
     });
     expect(result).toBe("LLM streaming response contained a malformed fragment. Please try again.");

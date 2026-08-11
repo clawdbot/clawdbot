@@ -477,7 +477,7 @@
         "questions.0.question"
       ]
     },
-    "spawn_task": {
+    "suggest_task": {
       "emoji": "✨",
       "title": "Suggest Task",
       "detailKeys": [

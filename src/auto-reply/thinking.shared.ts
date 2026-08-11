@@ -118,18 +118,15 @@ export function isSessionDefaultDirectiveValue(raw?: string | null): boolean {
 }
 
 /** Chooses the default thinking level for one provider/model catalog entry. */
-export function resolveThinkingDefaultForModel(params: {
+export function resolveThinkingDefaultForModelCore(params: {
   provider: string;
   model: string;
-  catalog?: ThinkingCatalogEntry[];
+  catalog?: readonly ThinkingCatalogEntry[];
 }): ThinkLevel {
   const candidate = params.catalog?.find(
     (entry) => entry.provider === params.provider && entry.id === params.model,
   );
-  if (candidate?.reasoning) {
-    return "low";
-  }
-  return "off";
+  return candidate?.reasoning ? "low" : "off";
 }
 
 type OnOffFullLevel = "off" | "on" | "full";
