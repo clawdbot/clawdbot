@@ -5,6 +5,7 @@ import { escapeRegExp } from "../../../../src/shared/regexp.js";
 import type {
   ChatItem,
   ChatQueueItem,
+  MessageGroup,
   NormalizedMessage,
   ToolCard,
 } from "../../lib/chat/chat-types.ts";
@@ -72,6 +73,37 @@ export function safeNormalizeMessage(message: unknown): NormalizedMessage | null
   } catch {
     return null;
   }
+}
+
+export function assistantGroupIsForwardedBoundary(group: MessageGroup): boolean {
+  return group.messages.some(({ message }) => {
+    const provenance = asRecord(asRecord(message)?.provenance);
+    return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
+  });
+}
+
+function groupStartsProjectedTurnBoundary(group: MessageGroup): boolean {
+  return asRecord(asRecord(group.messages[0]?.message)?.["__openclaw"])?.turnBoundary === true;
+}
+
+/** Canonical user-turn boundary shared by insertion, outcome, and collapse projections. */
+export function chatItemStartsUserTurn(item: ChatItem | MessageGroup): boolean {
+  if (item.kind === "notice") {
+    return item.startsTurn === true;
+  }
+  if (item.kind === "message") {
+    const normalized = safeNormalizeMessage(item.message);
+    return normalized ? normalizeRoleForGrouping(normalized.role).toLowerCase() === "user" : false;
+  }
+  if (item.kind !== "group") {
+    return false;
+  }
+  const role = item.role.toLowerCase();
+  return (
+    role === "user" ||
+    groupStartsProjectedTurnBoundary(item) ||
+    (role === "assistant" && assistantGroupIsForwardedBoundary(item))
+  );
 }
 
 export function messageMatchesSearchQuery(message: unknown, query: string): boolean {
@@ -202,18 +234,16 @@ export function findNearestAssistantMessageIndex(
   let currentTurnEnd = maximumIndex;
   for (let index = minimumIndex; index < maximumIndex; index += 1) {
     const item = items[index];
-    if (item?.kind !== "message") {
+    if (!item || !chatItemStartsUserTurn(item)) {
       continue;
     }
-    const normalized = safeNormalizeMessage(item.message);
-    if (!normalized || normalizeRoleForGrouping(normalized.role).toLowerCase() !== "user") {
-      continue;
-    }
-    if (
-      toolTimestamp != null &&
-      normalized.timestamp != null &&
-      normalized.timestamp > toolTimestamp
-    ) {
+    const boundaryTimestamp =
+      item.kind === "notice"
+        ? item.timestamp
+        : item.kind === "message"
+          ? (safeNormalizeMessage(item.message)?.timestamp ?? null)
+          : null;
+    if (toolTimestamp != null && boundaryTimestamp != null && boundaryTimestamp > toolTimestamp) {
       currentTurnEnd = index;
       break;
     }

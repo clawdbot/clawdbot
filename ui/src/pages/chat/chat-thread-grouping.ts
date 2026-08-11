@@ -10,6 +10,8 @@ import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import {
+  assistantGroupIsForwardedBoundary,
+  chatItemStartsUserTurn,
   resolveMessageToolUseId,
   resolveToolBlockId,
   safeNormalizeMessage,
@@ -441,33 +443,21 @@ function assistantGroupHasReplyText(group: MessageGroup): boolean {
   });
 }
 
-function assistantGroupIsForwardedBoundary(group: MessageGroup): boolean {
-  return group.messages.some(({ message }) => {
-    const provenance = asRecord(asRecord(message)?.provenance);
-    return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
-  });
-}
-
-function groupStartsProjectedTurnBoundary(group: MessageGroup): boolean {
-  return asRecord(asRecord(group.messages[0]?.message)?.["__openclaw"])?.turnBoundary === true;
-}
-
 export function annotateToolTurnOutcome(
   items: Array<ChatItem | MessageGroup>,
 ): Array<ChatItem | MessageGroup> {
   let sawAssistantReply = false;
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
-    if (item?.kind === "notice" && item.startsTurn) {
-      sawAssistantReply = false;
-      continue;
-    }
     if (!item || item.kind !== "group") {
+      if (item && chatItemStartsUserTurn(item)) {
+        sawAssistantReply = false;
+      }
       continue;
     }
     const role = item.role.toLowerCase();
     const forwardedBoundary = role === "assistant" && assistantGroupIsForwardedBoundary(item);
-    const projectedBoundary = groupStartsProjectedTurnBoundary(item);
+    const startsTurn = chatItemStartsUserTurn(item);
     if (role === "user") {
       sawAssistantReply = false;
     } else if (role === "assistant") {
@@ -481,7 +471,7 @@ export function annotateToolTurnOutcome(
     } else if (role === "tool") {
       item.turnSucceeded = sawAssistantReply;
     }
-    if (role !== "user" && !forwardedBoundary && projectedBoundary) {
+    if (role !== "user" && !forwardedBoundary && startsTurn) {
       // This group belongs to the new hidden-input turn. Reset only after
       // processing it so replies from this turn cannot classify older tools.
       sawAssistantReply = false;
@@ -544,15 +534,6 @@ type ActivityRunRenderItem = {
 
 type TurnRenderItem = RenderChatItem | StreamRunRenderItem;
 
-function isTurnBoundaryGroup(item: TurnRenderItem): boolean {
-  if (item.kind !== "group") {
-    return false;
-  }
-  // sessions_send projections start a new autonomous turn, same contract as
-  // annotateToolTurnOutcome; they are inputs, not work produced by this turn.
-  return messageGroupStartsTurnBoundary(item);
-}
-
 function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
   if (item.kind !== "group" || item.isStreaming) {
     return false;
@@ -585,15 +566,6 @@ export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolea
     group.role.toLowerCase() === "assistant" &&
     !assistantGroupIsForwardedBoundary(group) &&
     assistantGroupHasVisibleReplyContent(group)
-  );
-}
-
-function messageGroupStartsTurnBoundary(group: MessageGroup): boolean {
-  const role = group.role.toLowerCase();
-  return (
-    role === "user" ||
-    groupStartsProjectedTurnBoundary(group) ||
-    (role === "assistant" && assistantGroupIsForwardedBoundary(group))
   );
 }
 
@@ -647,7 +619,7 @@ export function collapseCompletedTurnWork(
   const turns: TurnRenderItem[][] = [];
   let currentTurn: TurnRenderItem[] = [];
   for (const item of items) {
-    if (isTurnBoundaryGroup(item) && currentTurn.length > 0) {
+    if (item.kind !== "stream-run" && chatItemStartsUserTurn(item) && currentTurn.length > 0) {
       turns.push(currentTurn);
       currentTurn = [];
     }
@@ -701,10 +673,14 @@ export function collapseCompletedTurnWork(
       continue;
     }
     const boundary = turn[0];
-    const startTimestamp =
-      boundary && boundary.kind === "group" && isTurnBoundaryGroup(boundary)
+    const boundaryTimestamp =
+      boundary &&
+      boundary.kind !== "stream-run" &&
+      chatItemStartsUserTurn(boundary) &&
+      "timestamp" in boundary
         ? boundary.timestamp
-        : firstGroup.timestamp;
+        : null;
+    const startTimestamp = boundaryTimestamp == null ? firstGroup.timestamp : boundaryTimestamp;
     const finalReply = turn[finalReplyIndex] as MessageGroup;
     const endTimestamp = finalReply.timestamp;
     const durationMs = endTimestamp > startTimestamp ? endTimestamp - startTimestamp : null;

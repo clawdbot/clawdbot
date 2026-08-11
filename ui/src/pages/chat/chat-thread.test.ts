@@ -796,6 +796,28 @@ describe("collapseCompletedTurnWork", () => {
     expect(new Set(workGroups.map((item) => item.key)).size).toBe(2);
   });
 
+  it("keeps recovery work separate when a system notice starts the next turn", () => {
+    const items = collapsedItems({
+      messages: [
+        userMessage("first", 1_000),
+        toolResult("call-1", 2_000),
+        assistantMessage("First done.", 3_000),
+        userMessage("[System] Continue the interrupted turn.", 4_000, {
+          provenance: { kind: "internal_system", sourceTool: "main-session-restart-recovery" },
+        }),
+        toolResult("call-2", 5_000),
+        assistantMessage("Recovery done.", 6_000),
+      ],
+    });
+
+    const workGroups = items.filter((item) => item.kind === "work-group");
+    expect(workGroups).toHaveLength(2);
+    expect(workGroups.map((item) => messageRecord(groupAt(item.groups, 0)).toolCallId)).toEqual([
+      "call-1",
+      "call-2",
+    ]);
+  });
+
   it("collapses hidden-input runs independently without changing duration arithmetic", () => {
     const items = collapsedItems({
       messages: [
@@ -2980,6 +3002,34 @@ describe("buildCachedChatItems", () => {
     expect(groups.map((group) => group.role)).toEqual(["user", "assistant", "user", "assistant"]);
     expect(canvasBlocksIn(groupAt(groups, 1))).toStrictEqual([]);
     expect(canvasBlocksIn(groupAt(groups, 3))).toHaveLength(1);
+  });
+
+  it("keeps a live App preview in the recovery turn after a system notice", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        messages: [
+          userMessage("Interrupted request", 1_000),
+          assistantMessage("Interrupted reply", 2_000),
+          userMessage("[System] Continue the interrupted turn.", 3_000, {
+            provenance: { kind: "internal_system", sourceTool: "main-session-restart-recovery" },
+          }),
+        ],
+        toolMessages: [mcpAppResult("mcp-app-recovery", "call-recovery", 3_001)],
+        showToolCalls: false,
+      }),
+    );
+
+    expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+      "user",
+      "assistant",
+      "notice",
+      "assistant",
+    ]);
+    const assistantGroups = items.filter(
+      (item): item is MessageGroup => item.kind === "group" && item.role === "assistant",
+    );
+    expect(canvasBlocksIn(groupAt(assistantGroups, 0))).toStrictEqual([]);
+    expect(canvasBlocksIn(groupAt(assistantGroups, 1))).toHaveLength(1);
   });
 
   it("keeps a live App preview on an assistant search match", () => {
