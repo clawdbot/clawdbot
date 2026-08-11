@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { listSkillCommandsForAgents as listActualSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
+import { writeSkill } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
@@ -15,7 +16,6 @@ import {
   listSkillCommandsForAgents,
   resetNativeCommandMenuMocks,
 } from "./bot-native-commands.menu-test-support.js";
-import { writeSkill } from "./test-support/write-skill.js";
 
 const tempDirs: string[] = [];
 
