@@ -58,6 +58,28 @@ function mcpServerFromActionDetails(details: Record<string, unknown>): ClawMcpSe
   return "command" in server || "url" in server ? (server as ClawMcpServer) : undefined;
 }
 
+export function portableMcpServerToConfig(
+  server: Record<string, unknown>,
+): Record<string, unknown> {
+  const next = { ...server };
+  for (const [secondsKey, millisecondsKey] of [
+    ["timeout", "requestTimeoutMs"],
+    ["connectTimeout", "connectionTimeoutMs"],
+  ] as const) {
+    const seconds = next[secondsKey];
+    const milliseconds = typeof seconds === "number" ? seconds * 1000 : undefined;
+    if (
+      milliseconds !== undefined &&
+      Number.isFinite(milliseconds) &&
+      next[millisecondsKey] === undefined
+    ) {
+      next[millisecondsKey] = milliseconds;
+      delete next[secondsKey];
+    }
+  }
+  return next;
+}
+
 function rowToRef(row: McpRefRow): PersistedClawMcpServerRef {
   return {
     schemaVersion: CLAW_MCP_REF_SCHEMA_VERSION,
@@ -75,7 +97,9 @@ function rowToRef(row: McpRefRow): PersistedClawMcpServerRef {
 }
 
 export function digestClawMcpServer(server: Record<string, unknown>): string {
-  const canonical = canonicalizeConfiguredMcpServer(server);
+  // Claw manifests use seconds while config/runtime use milliseconds; digest
+  // the canonical projection so portable and installed representations match.
+  const canonical = canonicalizeConfiguredMcpServer(portableMcpServerToConfig(server));
   return `sha256:${createHash("sha256").update(stableStringify(canonical)).digest("hex")}`;
 }
 

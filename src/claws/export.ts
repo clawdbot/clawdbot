@@ -280,8 +280,12 @@ function portableMcpServer(server: Record<string, unknown>): ClawMcpServer {
     ...(server.toolFilter && typeof server.toolFilter === "object"
       ? { toolFilter: server.toolFilter as ClawMcpServer["toolFilter"] }
       : {}),
-    ...(typeof server.timeout === "number" ? { timeout: server.timeout } : {}),
-    ...(typeof server.connectTimeout === "number" ? { connectTimeout: server.connectTimeout } : {}),
+    ...(typeof server.requestTimeoutMs === "number"
+      ? { timeout: server.requestTimeoutMs / 1000 }
+      : {}),
+    ...(typeof server.connectionTimeoutMs === "number"
+      ? { connectTimeout: server.connectionTimeoutMs / 1000 }
+      : {}),
   };
   if (typeof server.url === "string") {
     if (server.transport !== "sse" && server.transport !== "streamable-http") {

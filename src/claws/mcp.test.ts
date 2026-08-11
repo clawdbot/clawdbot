@@ -1,10 +1,16 @@
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { validateConfigObjectRaw } from "../config/validation.js";
 import { markClawMcpServerIndependentlyOwned } from "../state/claw-mcp-adoption.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { buildClawAddPlan } from "./lifecycle.js";
-import { deleteClawMcpServerRef, installClawMcpServers, planClawMcpServerRemoval } from "./mcp.js";
+import {
+  deleteClawMcpServerRef,
+  digestClawMcpServer,
+  installClawMcpServers,
+  planClawMcpServerRemoval,
+} from "./mcp.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
 
@@ -55,6 +61,73 @@ function listedMcpServers(mcpServers: Record<string, Record<string, unknown>> = 
 }
 
 describe("installClawMcpServers", () => {
+  it("converts portable timeout seconds to canonical config milliseconds", async () => {
+    const root = tempDirs.make("openclaw-claw-mcp-timeout-");
+    const parsed = parseClawManifest({
+      schemaVersion: 1,
+      agent: { id: "worker" },
+      mcpServers: {
+        docs: { command: "uvx", args: ["docs-mcp"], timeout: 30, connectTimeout: 5 },
+      },
+    });
+    if (!parsed.ok) {
+      throw new Error(JSON.stringify(parsed.diagnostics));
+    }
+    const canonical = {
+      command: "uvx",
+      args: ["docs-mcp"],
+      requestTimeoutMs: 30_000,
+      connectionTimeoutMs: 5_000,
+    };
+    const source: ClawSourceIdentity = {
+      kind: "package",
+      name: "@acme/worker",
+      version: "1.0.0",
+      packageRoot: root,
+      manifestPath: join(root, "openclaw.claw.json"),
+      integrityKind: "artifact",
+      integrity: "sha256:manifest",
+      byteLength: 100,
+    };
+    const plan = await buildClawAddPlan({
+      manifest: parsed.manifest,
+      source,
+      context: {
+        workspace: join(root, "workspace"),
+        existingMcpServers: { docs: canonical },
+      },
+    });
+    const action = plan.actions.find((entry) => entry.kind === "mcpServer" && entry.id === "docs");
+    const {
+      expectedState: _expectedState,
+      prerequisites: _prerequisites,
+      ...plannedServer
+    } = action?.details ?? {};
+
+    expect(action).toMatchObject({ blocked: false, details: { expectedState: "present-exact" } });
+    expect(plannedServer).toEqual(canonical);
+    expect(validateConfigObjectRaw({ mcp: { servers: { docs: plannedServer } } }).ok).toBe(true);
+    expect(digestClawMcpServer(parsed.manifest.mcpServers.docs!)).toBe(
+      digestClawMcpServer(canonical),
+    );
+
+    const setMcpServer = vi
+      .fn()
+      .mockResolvedValue({ ok: true, path: "config", config: {}, mcpServers: {} });
+    await installClawMcpServers(plan, {
+      env: { OPENCLAW_STATE_DIR: join(root, "state") },
+      setMcpServer,
+      listMcpServers: vi.fn().mockResolvedValue(listedMcpServers()),
+    });
+
+    expect(setMcpServer).toHaveBeenCalledWith({
+      name: "docs",
+      server: canonical,
+      createOnly: true,
+      recordIndependentOwner: false,
+    });
+  });
+
   it("uses create-only config writes and stores digest-only ownership", async () => {
     const current = await fixture();
     const setMcpServer = vi

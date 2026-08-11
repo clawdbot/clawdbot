@@ -94,6 +94,60 @@ function manifest(): ClawManifest {
 }
 
 describe("applyClawMcpUpdate", () => {
+  it("writes portable timeout seconds in canonical config units", async () => {
+    const declared: ClawMcpServer = {
+      command: "uvx",
+      args: ["docs@2"],
+      timeout: 30,
+      connectTimeout: 5,
+    };
+    const canonical = {
+      command: "uvx",
+      args: ["docs@2"],
+      requestTimeoutMs: 30_000,
+      connectionTimeoutMs: 5_000,
+    };
+    const setServer = vi.fn(async () => ({
+      ok: true as const,
+      path: "config",
+      config: {},
+      mcpServers: {},
+    }));
+    const upsertRef = vi.fn();
+
+    await applyClawMcpUpdate(
+      plan([
+        {
+          kind: "mcpServer",
+          id: "docs",
+          action: "add",
+          target: "mcp.servers.docs",
+          blocked: false,
+          reason: "added",
+        },
+      ]),
+      { ...manifest(), mcpServers: { docs: declared } },
+      {
+        config: { mcp: { servers: {} } },
+        sourceMcpServers: {},
+        readRefs: () => [],
+        setServer,
+        upsertRef,
+      },
+    );
+
+    expect(setServer).toHaveBeenCalledWith({
+      name: "docs",
+      server: canonical,
+      createOnly: true,
+      recordIndependentOwner: false,
+    });
+    expect(upsertRef).toHaveBeenCalledWith(
+      expect.objectContaining({ configDigest: digestClawMcpServer(canonical) }),
+      expect.any(Object),
+    );
+  });
+
   it("applies add, change, and remove with CAS writes and reversible ownership", async () => {
     const currentRefs = [ref("docs", oldDocs), ref("legacy", legacy)];
     const setServer = vi.fn(async () => ({

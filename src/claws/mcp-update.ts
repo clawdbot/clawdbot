@@ -9,6 +9,7 @@ import {
   deleteClawMcpServerRef,
   digestClawMcpServer,
   planClawMcpServerRemoval,
+  portableMcpServerToConfig,
   readClawMcpServerRefs,
   readClawMcpServerRefsByName,
   upsertClawMcpServerRef,
@@ -167,12 +168,13 @@ export async function applyClawMcpUpdate(
           return;
         }
 
-        const targetServer = targetManifest.mcpServers[name];
-        if (!targetServer) {
+        const declaredServer = targetManifest.mcpServers[name];
+        if (!declaredServer) {
           throw new ClawMcpUpdateError(
             `Target MCP declaration ${JSON.stringify(name)} is missing.`,
           );
         }
+        const targetServer = portableMcpServerToConfig(declaredServer);
         const targetRef: PersistedClawMcpServerRef = {
           schemaVersion: CLAW_MCP_REF_SCHEMA_VERSION,
           agentId: updatePlan.agentId,

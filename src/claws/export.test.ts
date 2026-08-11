@@ -65,6 +65,7 @@ async function installedFixture(
     packageBootstrapContent?: Buffer;
     soulContent?: string | Buffer;
     withPackage?: boolean;
+    mcpDocsTimeoutSeconds?: number;
   } = {},
 ) {
   const root = tempDirs.make("openclaw-claw-export-");
@@ -95,6 +96,9 @@ async function installedFixture(
         command: "uvx",
         args: ["docs-mcp"],
         env: { DOCS_TOKEN: "${DOCS_TOKEN}" },
+        ...(options.mcpDocsTimeoutSeconds !== undefined
+          ? { timeout: options.mcpDocsTimeoutSeconds }
+          : {}),
       },
       linear: {
         url: "https://mcp.linear.app/mcp",
@@ -395,6 +399,21 @@ describe("exportClawAgent", () => {
       "profile: full",
     );
     await expect(readFile(join(out, "workspace", "SOUL.md"), "utf8")).rejects.toThrow();
+  });
+
+  it("exports canonical MCP timeouts as portable seconds", async () => {
+    const fixture = await installedFixture({ mcpDocsTimeoutSeconds: 30 });
+    const out = join(fixture.root, "exported-timeout");
+
+    const result = await exportClawAgent("worker", out, {
+      env: fixture.env,
+      config: fixture.config,
+      packageDeps: fixture.packageDeps,
+      sourceMcpServers: fixture.sourceMcpServers,
+    });
+
+    expect(fixture.sourceMcpServers.docs).toMatchObject({ requestTimeoutMs: 30_000 });
+    expect(result.manifest.mcpServers.docs).toMatchObject({ timeout: 30 });
   });
 
   it("exports extension plugins into profile v1 without duplicating manifest packages", async () => {
