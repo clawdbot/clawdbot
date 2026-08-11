@@ -16,8 +16,10 @@ import {
   type DelegateArtifactRecipientV1,
   type DelegateArtifactRouteV1,
 } from "./delegate-artifacts.js";
-import { deriveContinuationDelegateChildRunId } from "./subagent-continuation-ids.js";
-import { deriveContinuationDelegateChildSessionKeyFromParent } from "./subagent-continuation-ids.js";
+import {
+  deriveContinuationDelegateChildRunId,
+  deriveContinuationDelegateChildSessionKeyFromParent,
+} from "./subagent-continuation-ids.js";
 import { listAncestorSessionKeys } from "./subagents/registry/subagent-registry-announce-read.js";
 
 export function formatDelegateArtifactTaskInstruction(
