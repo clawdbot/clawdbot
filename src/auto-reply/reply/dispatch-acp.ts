@@ -227,12 +227,16 @@ function finishAcpDispatchAttempt(params: {
 }): AcpDispatchAttemptResult {
   const counts = params.dispatcher.getQueuedCounts();
   params.delivery.applyRoutedCounts(counts);
+  const hasQueuedDelivery = counts.tool + counts.block + counts.final > 0 || params.queuedFinal;
+  const suppressionReason = hasQueuedDelivery
+    ? undefined
+    : params.delivery.getDeliverySuppressionReason();
   const acpStats = params.getStats();
   if (params.outcome.kind === "ok") {
     logVerbose(
       `acp-dispatch: session=${params.sessionKey} outcome=ok latencyMs=${Date.now() - params.startedAt} queueDepth=${acpStats.turns.queueDepth} activeRuntimes=${acpStats.runtimeCache.activeSessions}`,
     );
-    params.recordProcessed("completed", { reason: "acp_dispatch" });
+    params.recordProcessed("completed", { reason: suppressionReason ?? "acp_dispatch" });
   } else {
     logVerbose(
       `acp-dispatch: session=${params.sessionKey} outcome=error code=${params.outcome.error.code} latencyMs=${Date.now() - params.startedAt} queueDepth=${acpStats.turns.queueDepth} activeRuntimes=${acpStats.runtimeCache.activeSessions}`,
