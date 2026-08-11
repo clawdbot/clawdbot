@@ -156,6 +156,6 @@ export async function terminateAcceptedSubagentRun(params: {
       // A changed lifecycle proves the accepted run no longer owns this session.
       return cleanup !== "failed";
     },
-    { shouldRetry: params.shouldRetry },
+    params.shouldRetry ? { shouldRetry: params.shouldRetry } : undefined,
   );
 }

@@ -1526,7 +1526,10 @@ export function createSubagentRunManager(params: {
       return true;
     }
     if (!entry.collect) {
-      return false;
+      // A kill can win while Gateway acceptance is still in flight. The
+      // terminal row already owns failed-launch cleanup; no second transition
+      // is needed before the caller terminates the late accepted run.
+      return entry.launchCleanupPending === true;
     }
     const snapshot = structuredClone(entry);
     entry.swarmLaunchPending = false;

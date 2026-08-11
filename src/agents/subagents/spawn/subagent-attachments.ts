@@ -446,7 +446,7 @@ export async function materializeSubagentAttachments(params: {
       try {
         // An existing configured workspace may itself be a symlink. Let fs-safe pin
         // its canonical target while still rejecting symlink hops beneath that root.
-        workspaceRoot = await root(childWorkspaceDir, { mkdir: true, mode: 0o700 });
+        workspaceRoot = await root(childWorkspaceDir, { mkdir: true, mode: 0o600 });
       } catch (error) {
         if (!(error instanceof FsSafeError) || error.code !== "not-found") {
           throw error;
@@ -458,7 +458,7 @@ export async function materializeSubagentAttachments(params: {
         if (!ensuredWorkspace.ok) {
           throw ensuredWorkspace.error;
         }
-        workspaceRoot = await root(ensuredWorkspace.path, { mkdir: true, mode: 0o700 });
+        workspaceRoot = await root(ensuredWorkspace.path, { mkdir: true, mode: 0o600 });
       }
       // Keep the capability rooted at the workspace. Rooting it at the receipt directory
       // would trust a pre-existing attachments symlink before fs-safe can reject the hop.

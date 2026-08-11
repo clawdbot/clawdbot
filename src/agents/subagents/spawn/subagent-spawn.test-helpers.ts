@@ -3,6 +3,7 @@
 import os from "node:os";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { expect, vi } from "vitest";
+import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "../../../gateway/method-scopes.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
 
@@ -27,7 +28,7 @@ type SubagentSpawnModuleForTest = Awaited<typeof import("./subagent-spawn.js")> 
 export function createSubagentSpawnTestConfig(
   workspaceDir = os.tmpdir(),
   overrides?: Record<string, unknown>,
-) {
+): OpenClawConfig {
   return {
     session: {
       mainKey: "main",
@@ -145,6 +146,8 @@ export async function loadSubagentSpawnModuleForTest(params: {
   startQueuedSubagentRunMock?: MockFn;
   settleFailedQueuedSubagentLaunchMock?: MockFn;
   completeFailedLaunchCleanupMock?: MockFn;
+  completeFailedLaunchContextEngineCleanupMock?: MockFn;
+  scheduleSubagentRegistrySweepMock?: MockFn;
   emitSessionLifecycleEventMock?: MockFn;
   hookRunner?: HookRunner;
   resolveAgentConfig?: (cfg: Record<string, unknown>, agentId: string) => unknown;
@@ -395,6 +398,8 @@ export async function loadSubagentSpawnModuleForTest(params: {
   }));
 
   vi.doMock("../registry/subagent-registry.js", () => ({
+    completeFailedLaunchContextEngineCleanup:
+      params.completeFailedLaunchContextEngineCleanupMock ?? vi.fn(),
     completeFailedLaunchCleanup: params.completeFailedLaunchCleanupMock ?? vi.fn(),
     countActiveRunsForSession: params.countActiveRunsForSession ?? (() => 0),
     listSwarmRunsForGroup: params.listSwarmRunsForGroup ?? vi.fn(() => []),
@@ -402,6 +407,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
       params.registerSubagentRunMock ?? vi.fn((_record: Record<string, unknown>) => undefined),
     releaseSubagentRun: params.releaseSubagentRunMock ?? vi.fn(async () => undefined),
     resetSubagentRegistryForTests,
+    scheduleSubagentRegistrySweep: params.scheduleSubagentRegistrySweepMock ?? vi.fn(),
     settleFailedQueuedSubagentLaunch:
       params.settleFailedQueuedSubagentLaunchMock ?? vi.fn(() => true),
     startQueuedSubagentRun: params.startQueuedSubagentRunMock ?? vi.fn(() => true),

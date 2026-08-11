@@ -50,7 +50,7 @@ import type {
   SpawnSubagentParams,
   SpawnSubagentResult,
 } from "./subagent-spawn-contract.js";
-import { setSubagentSpawnDepsForTest } from "./subagent-spawn-deps.js";
+import { terminateOrRetryFailedAcceptedSubagentLaunch } from "./subagent-spawn-failed-launch-retry.js";
 import { callSubagentGateway, readGatewayRunId } from "./subagent-spawn-gateway.js";
 import { buildSubagentLaunchRequest } from "./subagent-spawn-launch-request.js";
 import {
@@ -526,19 +526,21 @@ export async function spawnSubagentDirect(
           attachmentCleanupOwnerClaimed &&
           acceptedRunId &&
           acceptedRunId !== childIdem &&
-          !(await terminateAcceptedSubagentRun({
+          !(await terminateOrRetryFailedAcceptedSubagentLaunch({
             childSessionKey,
             gatewayRunId: acceptedRunId,
             ...provisionalSessionIdentity,
-            shouldRetry: () => false,
+            cleanupOwnerRunId: childIdem,
+            contextEnginePreparation: state?.contextEnginePreparation,
           }));
         if (attachmentCleanupOwnerClaimed) {
           await retrySubagentCleanup(() =>
             settleFailedQueuedSubagentLaunch(childIdem, `subagent ${phase} failed`),
           );
         }
-        // The sweeper retries exact-session deletion before removing resources.
-        if (acceptedRunTerminationFailed) return;
+        if (acceptedRunTerminationFailed) {
+          return;
+        }
         if (phase !== "initialize") {
           await rollbackPreparedContextEngine(state?.contextEnginePreparation);
         }
@@ -712,10 +714,4 @@ export async function spawnSubagentDirect(
       removeQueuedSwarmRun(childRunId);
     }
   }
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.subagentSpawnTestApi")] = {
-    setDepsForTest: setSubagentSpawnDepsForTest,
-  };
 }

@@ -382,7 +382,7 @@ const subagentRestorer = createSubagentRegistryRestorer({
       expectedLifecycleRevision,
       timeoutMs,
       callGateway: subagentRegistryDeps.callGateway,
-    }),
+    }).then(() => undefined),
   cleanupFailedLaunchResources: contextCleanup.cleanupFailedLaunchResources,
   settleFailedQueuedSubagentLaunch: (runId, error) =>
     subagentRunManager.settleFailedQueuedSubagentLaunch(runId, error),
@@ -621,6 +621,8 @@ export const releasePendingAgentSteeringItems = publicApi.releasePendingAgentSte
 export const getSubagentRunByRunId = publicApi.getSubagentRunByRunId;
 export const getSubagentRunsByRunIds = publicApi.getSubagentRunsByRunIds;
 export const completeFailedLaunchCleanup = publicApi.completeFailedLaunchCleanup;
+export const completeFailedLaunchContextEngineCleanup =
+  publicApi.completeFailedLaunchContextEngineCleanup;
 export const recordSwarmStructuredOutput = publicApi.recordSwarmStructuredOutput;
 export const listSwarmRunsForGroup = publicApi.listSwarmRunsForGroup;
 export const getSwarmRunByLaunchReplayKey = publicApi.getSwarmRunByLaunchReplayKey;

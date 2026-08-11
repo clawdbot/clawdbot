@@ -108,6 +108,15 @@ export function createSubagentRegistryPublicApi(config: {
     persist(entry.runId);
   }
 
+  function completeFailedLaunchContextEngineCleanup(runId: string): void {
+    const entry = findRunById(runs, runId.trim());
+    if (!entry?.launchCleanupPending || entry.execution.status !== "terminal") {
+      return;
+    }
+    entry.contextEngineCleanupCompletedAt ??= Date.now();
+    persist(entry.runId);
+  }
+
   function recordSwarmStructuredOutput(
     identity: { runId?: string; childSessionKey?: string },
     state: SwarmStructuredOutputState,
@@ -196,6 +205,7 @@ export function createSubagentRegistryPublicApi(config: {
     getSubagentRunByRunId,
     getSubagentRunsByRunIds,
     completeFailedLaunchCleanup,
+    completeFailedLaunchContextEngineCleanup,
     recordSwarmStructuredOutput,
     listSwarmRunsForGroup,
     getSwarmRunByLaunchReplayKey,

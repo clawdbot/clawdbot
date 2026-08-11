@@ -1139,6 +1139,36 @@ describe("subagent registry seam flow", () => {
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
+  it("keeps an ordinary killed launch owner settled when acceptance arrives late", async () => {
+    const runId = "run-ordinary-launch-kill";
+    mod.addSubagentRunForTests({
+      runId,
+      taskRunId: runId,
+      childSessionKey: "agent:main:subagent:ordinary-launch-kill",
+      task: "cancel while gateway launch is unresolved",
+      createdAt: Date.now(),
+      launchCleanupPending: true,
+      launchCleanupSessionIdentity: {
+        sessionId: "ordinary-launch-session",
+        lifecycleRevision: "ordinary-launch-revision",
+      },
+      attachmentsDir: "/workspace/.openclaw/attachments/00000000-0000-4000-8000-000000000003",
+      attachmentsRootDir: "/workspace",
+      execution: { status: "queued" },
+      completion: { required: false },
+    });
+
+    expect(mod.markSubagentRunTerminated({ runId, reason: "manual kill" })).toBe(1);
+    expect(mod.startQueuedSubagentRun(runId, "gateway-ordinary-launch-kill")).toBe(false);
+    expect(mod.settleFailedQueuedSubagentLaunch(runId, "launch response lost")).toBe(true);
+    expect(mod.getSubagentRunByRunId(runId)).toMatchObject({
+      launchCleanupPending: true,
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      execution: { status: "terminal", outcome: { status: "error" } },
+    });
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
   it("atomically activates a provisional attachment owner under the gateway run id", () => {
     const provisionalRunId = "attachment-owner-provisional";
     const attachmentsDir = "/workspace/.openclaw/attachments/00000000-0000-4000-8000-000000000001";

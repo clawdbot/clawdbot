@@ -46,7 +46,7 @@ export function retireLegacySubagentAttachmentCleanup(db: DatabaseSync): void {
       if (payload.collectorLaunchCleanupPending === true) {
         payload.launchCleanupPending = true;
         payload.execution = {
-          ...(asNullableRecord(payload.execution) ?? {}),
+          ...asNullableRecord(payload.execution),
           // The retired marker did not freeze the launch's session identity.
           // Preserve resource cleanup without ever deleting a successor session.
           suppressSessionEffects: true,
