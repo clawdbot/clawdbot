@@ -77,7 +77,7 @@
   border-radius: var(--radius-md);
   border-collapse: separate;
   border-spacing: 0;
-  width: 100%;
+  width: fit-content;
   max-width: 100%;
   background: color-mix(in srgb, var(--accent) 2%, var(--bg-elevated));
   box-shadow: 0 6px 20px color-mix(in srgb, var(--accent) 4%, transparent);
