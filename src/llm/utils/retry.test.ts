@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AssistantMessage } from "../types.js";
+import { failoverClassificationCorpus } from "../../agents/failover/failover-classification.corpus.cases.test-support.js";
+import { failoverRetryExpectations } from "../../agents/failover/failover-retry.expected.test-support.js";
+import { PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE, type AssistantMessage } from "../types.js";
 import { isRetryableAssistantError } from "./retry.js";
 
 function errorMessage(message: string): AssistantMessage {
@@ -24,6 +26,35 @@ function errorMessage(message: string): AssistantMessage {
 }
 
 describe("isRetryableAssistantError", () => {
+  it("freezes one retry decision for every failover corpus row", () => {
+    expect(Object.keys(failoverRetryExpectations).toSorted()).toEqual(
+      failoverClassificationCorpus.map((row) => row.id).toSorted(),
+    );
+  });
+
+  it.each(failoverClassificationCorpus)(
+    "preserves the retry decision for $id [$source]",
+    ({ id, signal }) => {
+      const message = signal.message
+        ? errorMessage(signal.message)
+        : ({ ...errorMessage(""), errorMessage: undefined } as AssistantMessage);
+      message.provider = ("provider" in signal ? signal.provider : undefined) ?? "test-provider";
+
+      expect(isRetryableAssistantError(message)).toBe(
+        failoverRetryExpectations[id as keyof typeof failoverRetryExpectations],
+      );
+    },
+  );
+
+  it("does not retry an ambiguous post-dispatch provider outcome", () => {
+    expect(
+      isRetryableAssistantError({
+        ...errorMessage("The WebSocket closed after dispatch"),
+        errorCode: PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
+      }),
+    ).toBe(false);
+  });
+
   it.each([
     "An error occurred while processing your request. You can retry your request.",
     "The system encountered an unexpected error. Try your request again.",

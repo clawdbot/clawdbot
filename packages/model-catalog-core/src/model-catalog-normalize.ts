@@ -1,4 +1,5 @@
 // Model Catalog Core helper module supports model catalog normalize behavior.
+import { asFiniteNumber as normalizeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -125,10 +126,6 @@ function normalizeModelCatalogInputs(value: unknown): ModelCatalogInput[] | unde
 
 function normalizeNonNegativeNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
-function normalizeFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function normalizeStringOrNumber(value: unknown): string | number | undefined {

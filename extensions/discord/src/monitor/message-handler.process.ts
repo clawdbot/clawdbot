@@ -271,7 +271,10 @@ async function processDiscordMessageInner(
 
   const deliverDiscordPayload = async (
     payload: ReplyPayload,
-    info: { kind: ReplyDispatchKind },
+    info: {
+      kind: ReplyDispatchKind;
+      bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
+    },
     options?: {
       allowFallbackOnlyToolWarning?: boolean;
       allowProgressBlock?: boolean;
@@ -328,6 +331,7 @@ async function processDiscordMessageInner(
         threadBindings,
         mediaLocalRoots,
         kind: "block",
+        bindPendingFinalDelivery: info.bindPendingFinalDelivery,
       });
       if (result.visibleReplySent) {
         replyReference.markSent();
@@ -484,6 +488,7 @@ async function processDiscordMessageInner(
             mediaLocalRoots,
             allowedMentions,
             kind: info.kind,
+            bindPendingFinalDelivery: info.bindPendingFinalDelivery,
           });
           return deliveryResult.visibleReplySent;
         },
@@ -542,6 +547,7 @@ async function processDiscordMessageInner(
       threadBindings,
       mediaLocalRoots,
       kind: info.kind,
+      bindPendingFinalDelivery: info.bindPendingFinalDelivery,
     });
     if (!result.visibleReplySent) {
       return result;

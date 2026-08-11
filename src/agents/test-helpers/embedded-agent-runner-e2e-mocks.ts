@@ -81,6 +81,7 @@ function createEmptyPreparedModelRuntimeSnapshot(
     ...(input.workspaceDir !== undefined ? { workspaceDir: input.workspaceDir } : {}),
     activeProjectKeys: [],
     config: input.config,
+    authModes: {},
     metadataSnapshot: createEmptyPluginMetadataSnapshot(input.workspaceDir),
     pluginRegistry: createEmptyPluginRegistry(),
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
@@ -165,6 +166,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
     };
   });
   vi.doMock("../../plugins/provider-hook-runtime.js", () => ({
+    attachModelProviderRuntimePluginHandle: (model: unknown) => model,
     prepareProviderExtraParams: vi.fn(() => undefined),
     resolveProviderExtraParamsForTransport: vi.fn(() => undefined),
     resolveProviderRuntimePlugin: vi.fn(() => undefined),

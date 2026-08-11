@@ -55,7 +55,7 @@ async function updateExecutionIdentityConfig(
   values: { enabled?: boolean; executionIdentity: boolean },
 ) {
   const raw = await fs.readFile(configPath, "utf8");
-  const config = parseJson<Record<string, unknown>>(raw || "{}", "QA Gateway config");
+  const config = parseJson(raw || "{}", "QA Gateway config") as Record<string, unknown>;
   const logging =
     config.logging && typeof config.logging === "object"
       ? (config.logging as Record<string, unknown>)
@@ -83,11 +83,11 @@ function parseOptions(argv: readonly string[]): ProducerOptions {
   };
 }
 
-function parseJson<T>(raw: string, label: string): T {
+function parseJson(raw: string, label: string): unknown {
   try {
-    return JSON.parse(raw) as T;
+    return JSON.parse(raw) as unknown;
   } catch (error) {
-    throw new Error(`${label} was not JSON: ${formatErrorMessage(error)}`);
+    throw new Error(`${label} was not JSON: ${formatErrorMessage(error)}`, { cause: error });
   }
 }
 
@@ -158,10 +158,9 @@ function findLocalRunId(gateway: Awaited<ReturnType<typeof startQaGatewayChild>>
       )
       .all() as Array<{ run_id: string; context_json: string }>;
     const localRows = rows.filter((row) => {
-      const context = parseJson<{ ingress?: { kind?: string } }>(
-        row.context_json,
-        "persisted local context",
-      );
+      const context = parseJson(row.context_json, "persisted local context") as {
+        ingress?: { kind?: string };
+      };
       return context.ingress?.kind === "local-cli";
     });
     if (localRows.length !== 1 || !localRows[0]?.run_id) {
@@ -318,10 +317,10 @@ async function runProof(options: ProducerOptions): Promise<string> {
     const runId = findLocalRunId(gateway);
     const beforeText = await gateway.runCli(["audit", "--run", runId, "--explain"]);
     assertTextProjection(beforeText);
-    const before = parseJson<AuditRunInspectResult>(
+    const before = parseJson(
       await gateway.runCli(["audit", "--run", runId, "--explain", "--json"]),
       "pre-restart audit inspection",
-    );
+    ) as AuditRunInspectResult;
     assertJsonProjection(before, runId);
     const beforeContext = normalizedContextJson(before);
 
@@ -344,10 +343,10 @@ async function runProof(options: ProducerOptions): Promise<string> {
     ) {
       throw new Error("ambiguous run discovery omitted exact-execution selection guidance");
     }
-    const discovery = parseJson<AuditRunInspectResult>(
+    const discovery = parseJson(
       await gateway.runCli(["audit", "--run", repeatedRunId, "--explain", "--json"]),
       "repeated-run discovery",
-    );
+    ) as AuditRunInspectResult;
     if (discovery.identity.state !== "ambiguous" || discovery.identity.candidates.length !== 2) {
       throw new Error("repeated same-session run was not reported as two ambiguous executions");
     }
@@ -355,10 +354,10 @@ async function runProof(options: ProducerOptions): Promise<string> {
     for (const row of repeatedRows) {
       const text = await gateway.runCli(["audit", "--execution", row.execution_id, "--explain"]);
       assertTextProjection(text);
-      const exact = parseJson<AuditRunInspectResult>(
+      const exact = parseJson(
         await gateway.runCli(["audit", "--execution", row.execution_id, "--explain", "--json"]),
         `execution ${row.execution_id}`,
-      );
+      ) as AuditRunInspectResult;
       const context = requireIdentityContext(exact);
       if (
         exact.run.executionId !== row.execution_id ||
@@ -381,20 +380,20 @@ async function runProof(options: ProducerOptions): Promise<string> {
 
     const afterText = await gateway.runCli(["audit", "--run", runId, "--explain"]);
     assertTextProjection(afterText);
-    const after = parseJson<AuditRunInspectResult>(
+    const after = parseJson(
       await gateway.runCli(["audit", "--run", runId, "--explain", "--json"]),
       "post-restart audit inspection",
-    );
+    ) as AuditRunInspectResult;
     assertJsonProjection(after, runId);
     const afterContext = normalizedContextJson(after);
     if (afterContext !== beforeContext) {
       throw new Error("normalized execution identity context bytes changed across Gateway restart");
     }
     for (const [executionId, expectedContext] of repeatedBeforeRestart) {
-      const afterExact = parseJson<AuditRunInspectResult>(
+      const afterExact = parseJson(
         await gateway.runCli(["audit", "--execution", executionId, "--explain", "--json"]),
         `post-restart execution ${executionId}`,
-      );
+      ) as AuditRunInspectResult;
       if (normalizedContextJson(afterExact) !== expectedContext) {
         throw new Error(`repeated execution changed across Gateway restart: ${executionId}`);
       }
@@ -410,10 +409,10 @@ async function runProof(options: ProducerOptions): Promise<string> {
     if (inspectExecutionIdentityStorage(gateway).rowCount !== retainedBeforeGlobalDisable) {
       throw new Error("global audit disable unexpectedly retained a new execution context");
     }
-    const afterGlobalDisable = parseJson<AuditRunInspectResult>(
+    const afterGlobalDisable = parseJson(
       await gateway.runCli(["audit", "--run", runId, "--explain", "--json"]),
       "global-disabled retained inspection",
-    );
+    ) as AuditRunInspectResult;
     if (normalizedContextJson(afterGlobalDisable) !== beforeContext) {
       throw new Error("global audit disable hid or changed retained identity evidence");
     }
@@ -518,7 +517,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     .then((exitCode) => {
       process.exitCode = exitCode;
     })
-    .catch((error) => {
+    .catch((error: unknown) => {
       console.error(formatErrorMessage(error));
       process.exitCode = 1;
     });

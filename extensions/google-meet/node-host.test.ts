@@ -349,7 +349,9 @@ describe("google-meet node host bridge sessions", () => {
     expect(typeof start.bridgeId).toBe("string");
     expect(start.bridgeId.length).toBeGreaterThan(0);
     expect(start).toEqual({
+      audioBackend: "blackhole-2ch",
       audioBridge: { type: "node-command-pair", outputGeneration: true },
+      audioDeviceLabel: "BlackHole 2ch",
       bridgeId: start.bridgeId,
       launched: false,
     });

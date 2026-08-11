@@ -1,4 +1,5 @@
 // Vitest extension config helpers keep extension shard defaults aligned.
+import type { ViteUserConfig } from "vitest/config";
 import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
@@ -13,7 +14,7 @@ export function createExtensionVitestConfig(
   testRoots: readonly string[],
   env: Record<string, string | undefined> = process.env,
   options: ExtensionVitestConfigOptions = {},
-) {
+): ViteUserConfig {
   return createScopedVitestConfig(
     loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env) ??
       testRoots.map((root) => `${root}/**/*.test.ts`),

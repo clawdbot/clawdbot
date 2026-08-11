@@ -202,6 +202,7 @@ extension UnreadTestTransportState {
     }
 }
 
+@Suite(.serialized)
 @MainActor
 struct ChatViewModelUnreadTests {
     @Test func `successful activation clears unread once`() async throws {

@@ -5,6 +5,7 @@ export * from "./browser-device-auth.js";
 export * from "./connect-auth.js";
 export * from "./device-auth.js";
 export * from "./event-loop-ready.js";
+export * from "./gateway-origin-scope.js";
 export * from "./readiness.js";
 export * from "./session-projection.js";
 export * from "./session-subscriptions.js";

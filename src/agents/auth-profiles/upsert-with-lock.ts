@@ -28,3 +28,15 @@ export async function upsertAuthProfileWithLock(params: {
     },
   });
 }
+
+/** Upserts an auth profile under the store lock, failing when the store cannot be written. */
+export async function upsertAuthProfileWithLockOrThrow(
+  params: Parameters<typeof upsertAuthProfileWithLock>[0],
+): Promise<void> {
+  const updated = await upsertAuthProfileWithLock(params);
+  if (!updated) {
+    throw new Error(
+      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
+    );
+  }
+}

@@ -1,7 +1,6 @@
 // Qqbot plugin module implements group behavior.
 import { resolveScopeRequireMention, type ScopeTree } from "openclaw/plugin-sdk/channel-policy";
-import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { asOptionalObjectRecord as asRecord } from "../utils/string-normalize.js";
+import { asBoolean, asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveAccountBase } from "./resolve.js";
 
 interface GroupConfig {
@@ -36,13 +35,13 @@ function readGroupsMap(
   accountId?: string | null,
 ): Record<string, Record<string, unknown>> {
   const account = resolveAccountBase(cfg, accountId);
-  const groups = asRecord(account.config.groups);
+  const groups = asOptionalObjectRecord(account.config.groups);
   if (!groups) {
     return {};
   }
   const normalized: Record<string, Record<string, unknown>> = {};
   for (const [key, value] of Object.entries(groups)) {
-    const sub = asRecord(value);
+    const sub = asOptionalObjectRecord(value);
     if (sub) {
       normalized[key] = sub;
     }
@@ -50,11 +49,7 @@ function readGroupsMap(
   return normalized;
 }
 
-function readBoolean(obj: Record<string, unknown>, key: string): boolean | undefined {
-  return asBoolean(obj[key]);
-}
-
-function readString(obj: Record<string, unknown>, key: string): string | undefined {
+function readNonEmptyGroupString(obj: Record<string, unknown>, key: string): string | undefined {
   const v = obj[key];
   return typeof v === "string" && v.length > 0 ? v : undefined;
 }
@@ -63,7 +58,7 @@ function readCommandLevel(
   obj: Record<string, unknown>,
   key: string,
 ): QQBotGroupCommandLevel | undefined {
-  const v = readString(obj, key);
+  const v = readNonEmptyGroupString(obj, key);
   return v === "all" || v === "safety" || v === "strict" ? v : undefined;
 }
 
@@ -88,11 +83,11 @@ export function resolveGroupConfig(
   // 账户级默认值：defaultRequireMention 配置 > 默认 true
   const accountDefaultRequireMention = asBoolean(account.config.defaultRequireMention);
   const mentionTree: ScopeTree = {
-    defaults: { requireMention: readBoolean(wildcard, "requireMention") },
+    defaults: { requireMention: asBoolean(wildcard.requireMention) },
     scopes: Object.fromEntries(
       Object.entries(scopes).map(([key, entry]) => [
         key,
-        { requireMention: readBoolean(entry, "requireMention") },
+        { requireMention: asBoolean(entry.requireMention) },
       ]),
     ),
   };
@@ -109,15 +104,19 @@ export function resolveGroupConfig(
       overrideOrder: "after-config",
     }),
     ignoreOtherMentions:
-      readBoolean(specific, "ignoreOtherMentions") ??
-      readBoolean(wildcard, "ignoreOtherMentions") ??
+      asBoolean(specific.ignoreOtherMentions) ??
+      asBoolean(wildcard.ignoreOtherMentions) ??
       DEFAULT_GROUP_CONFIG.ignoreOtherMentions,
     commandLevel:
       readCommandLevel(specific, "commandLevel") ??
       readCommandLevel(wildcard, "commandLevel") ??
       DEFAULT_GROUP_CONFIG.commandLevel,
-    name: readString(specific, "name") ?? readString(wildcard, "name") ?? DEFAULT_GROUP_CONFIG.name,
-    prompt: readString(specific, "prompt") ?? readString(wildcard, "prompt"),
+    name:
+      readNonEmptyGroupString(specific, "name") ??
+      readNonEmptyGroupString(wildcard, "name") ??
+      DEFAULT_GROUP_CONFIG.name,
+    prompt:
+      readNonEmptyGroupString(specific, "prompt") ?? readNonEmptyGroupString(wildcard, "prompt"),
     historyLimit:
       readHistoryLimit(specific, "historyLimit") ??
       readHistoryLimit(wildcard, "historyLimit") ??
@@ -129,9 +128,9 @@ export function resolveGroupCommandLevelFromAccountConfig(
   accountConfig: Record<string, unknown> | undefined,
   groupOpenid?: string | null,
 ): QQBotGroupCommandLevel {
-  const groups = asRecord(accountConfig?.groups);
-  const wildcard = asRecord(groups?.["*"]) ?? {};
-  const specific = groupOpenid ? (asRecord(groups?.[groupOpenid]) ?? {}) : {};
+  const groups = asOptionalObjectRecord(accountConfig?.groups);
+  const wildcard = asOptionalObjectRecord(groups?.["*"]) ?? {};
+  const specific = groupOpenid ? (asOptionalObjectRecord(groups?.[groupOpenid]) ?? {}) : {};
   return (
     readCommandLevel(specific, "commandLevel") ??
     readCommandLevel(wildcard, "commandLevel") ??
@@ -181,7 +180,7 @@ export function resolveMentionPatterns(
   agentId?: string | null,
 ): string[] {
   if (agentId) {
-    const agents = asRecord(cfg.agents);
+    const agents = asOptionalObjectRecord(cfg.agents);
     const list = Array.isArray(agents?.list) ? (agents?.list as AgentEntry[]) : [];
     const entry = list.find(
       (a) => typeof a.id === "string" && a.id.trim().toLowerCase() === agentId.trim().toLowerCase(),
@@ -195,8 +194,8 @@ export function resolveMentionPatterns(
     }
   }
 
-  const messages = asRecord(cfg.messages);
-  const globalGroupChat = asRecord(messages?.groupChat);
+  const messages = asOptionalObjectRecord(cfg.messages);
+  const globalGroupChat = asOptionalObjectRecord(messages?.groupChat);
   if (globalGroupChat && Object.hasOwn(globalGroupChat, "mentionPatterns")) {
     const patterns = globalGroupChat.mentionPatterns;
     return Array.isArray(patterns)

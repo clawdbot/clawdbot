@@ -3,6 +3,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -10,7 +11,6 @@ import {
 } from "../../agents/auth-profiles.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createDeferred } from "../../test-utils/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { modelsHandlers } from "./models.js";
@@ -56,6 +56,7 @@ function requestModelsList(params: {
     workspaceDir?: string;
   }) => Promise<Array<Record<string, unknown>>>;
   reqId?: string;
+  agentId?: string;
   includeProviderCapabilities?: boolean;
 }) {
   const respond = params.respond ?? vi.fn();
@@ -71,11 +72,13 @@ function requestModelsList(params: {
       method: "models.list",
       params: {
         view: params.view,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
         ...(params.includeProviderCapabilities ? { includeProviderCapabilities: true } : {}),
       },
     },
     params: {
       view: params.view,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.includeProviderCapabilities ? { includeProviderCapabilities: true } : {}),
     },
     respond: respond as RespondFn,
@@ -106,6 +109,31 @@ function requestModelsList(params: {
 }
 
 describe("models.list", () => {
+  it("loads the requested agent catalog", async () => {
+    const loadGatewayModelCatalog = vi.fn(async () => [
+      { id: "writer-model", name: "Writer Model", provider: "test" },
+    ]);
+    const { request } = requestModelsList({
+      view: "configured",
+      agentId: "writer",
+      runtimeConfig: {
+        agents: {
+          list: [
+            { id: "main", default: true },
+            { id: "writer", model: "test/writer-model" },
+          ],
+        },
+      },
+      loadGatewayModelCatalog,
+    });
+
+    await request;
+
+    expect(loadGatewayModelCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "writer" }),
+    );
+  });
+
   it("uses the replacement owner config for the whole catalog projection", async () => {
     const initialConfig = {
       agents: { defaults: { models: { "test/old": {} } } },

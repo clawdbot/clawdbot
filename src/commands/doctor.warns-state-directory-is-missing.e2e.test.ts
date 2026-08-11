@@ -110,6 +110,10 @@ function mockDoctorBrowserFastPath(): void {
       changes: [],
       warnings: [],
     }),
+    maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
+      changes: [],
+      warnings: [],
+    }),
     noteChromeMcpBrowserReadiness: vi.fn().mockResolvedValue(undefined),
   }));
 }

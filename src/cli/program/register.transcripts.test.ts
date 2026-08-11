@@ -1,9 +1,9 @@
 // Transcripts CLI tests cover SQLite reads and explicit artifact materialization.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -17,10 +17,7 @@ import { summarizeTranscripts } from "../../transcripts/summary.js";
 import { registerTranscriptsCli } from "./register.transcripts.js";
 
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-
-async function makeStateDir(): Promise<string> {
-  return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcripts-cli-"));
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function storeFor(stateDir: string): TranscriptsStore {
   return new TranscriptsStore(path.join(stateDir, "transcripts"), {
@@ -72,7 +69,7 @@ describe("transcripts CLI", () => {
   let stateDir = "";
 
   beforeEach(async () => {
-    stateDir = await makeStateDir();
+    stateDir = tempDirs.make("openclaw-transcripts-cli-");
     process.env.OPENCLAW_STATE_DIR = stateDir;
   });
 

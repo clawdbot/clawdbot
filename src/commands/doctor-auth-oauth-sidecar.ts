@@ -5,7 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentIds, resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
-import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/store.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -16,7 +16,6 @@ import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   isLegacyOAuthRef,
   isLegacyOAuthSidecarPayload,
-  legacyOAuthSidecarTestUtils,
   loadLegacyOAuthSidecarMaterial,
   resolveLegacyOAuthSidecarPath,
   type LegacyOAuthRef,
@@ -328,15 +327,4 @@ export async function maybeRepairLegacyOAuthSidecarProfiles(params: {
     note(result.warnings.map((warning) => `- ${warning}`).join("\n"), "Doctor warnings");
   }
   return result;
-}
-
-const testing = {
-  buildLegacyOAuthSecretAad: legacyOAuthSidecarTestUtils.buildLegacyOAuthSecretAad,
-  buildLegacyOAuthSecretKey: legacyOAuthSidecarTestUtils.buildLegacyOAuthSecretKey,
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.doctorAuthOAuthSidecarTestApi")
-  ] = testing;
 }

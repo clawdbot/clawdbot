@@ -19,10 +19,7 @@ import {
   registerCommandGroups,
   type CommandGroupEntry,
 } from "./register-command-groups.js";
-import {
-  getSubCliEntries as getSubCliEntryDescriptors,
-  type SubCliDescriptor,
-} from "./subcli-descriptors.js";
+import { getSubCliEntriesCore, type SubCliDescriptor } from "./subcli-descriptors.js";
 
 export type SubCliRegistrationContext = {
   purpose?: "runtime" | "completion";
@@ -195,6 +192,11 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       exportName: "registerTuiCli",
     },
     {
+      commandNames: ["resume"],
+      loadModule: () => import("../resume-cli.js"),
+      exportName: "registerResumeCli",
+    },
+    {
       // automations is a commander alias on the cron command; the lazy
       // router only routes names listed here, so the alias must be owned too.
       commandNames: ["cron", "automations"],
@@ -312,7 +314,7 @@ function resolveSubCliCommandGroups(
   argv: string[],
   context: SubCliRegistrationContext = {},
 ): CommandGroupEntry[] {
-  const descriptors = getSubCliEntryDescriptors();
+  const descriptors = getSubCliEntriesCore();
   const descriptorNames = new Set(descriptors.map((descriptor) => descriptor.name));
   return buildCommandGroupEntries(
     descriptors,
@@ -324,10 +326,10 @@ function resolveSubCliCommandGroups(
 }
 
 export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
-  return getSubCliEntryDescriptors();
+  return getSubCliEntriesCore();
 }
 
-export async function registerSubCliByName(
+export async function registerSubCliByNameCore(
   program: Command,
   name: string,
   argv: string[] = process.argv,
@@ -340,7 +342,7 @@ export async function registerSubCliByName(
   return registerCommandGroupByName(program, resolveSubCliCommandGroups(argv, context), name);
 }
 
-export function registerSubCliCommands(program: Command, argv: string[] = process.argv) {
+export function registerSubCliCommandsCore(program: Command, argv: string[] = process.argv) {
   const { primary } = resolveCliArgvInvocation(argv);
   registerCommandGroups(program, resolveSubCliCommandGroups(argv), {
     eager: shouldEagerRegisterSubcommands(),

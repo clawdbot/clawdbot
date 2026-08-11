@@ -28,7 +28,7 @@ import {
 } from "../../../src/config/config.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import { startGatewayServer } from "../../../src/gateway/server.js";
-import { getFreeGatewayPort } from "../../../src/gateway/test-helpers.e2e.js";
+import { getGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.e2e.js";
 import { captureEnv, setTestEnvValue } from "../../../src/test-utils/env.js";
 import {
   canRunPlaywrightChromium,
@@ -424,7 +424,7 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     controlUiServer = await startControlUiE2eServer(undefined, { source: true });
     const appEntryPath = require.resolve("@modelcontextprotocol/ext-apps/app-with-deps");
     const appModuleSource = await fs.readFile(appEntryPath, "utf8");
-    const appAssetPort = await getFreeGatewayPort();
+    const appAssetPort = await getGatewayE2ePortBlock();
     const fixtureAssetServer = createHttpServer((request, response) => {
       if (request.url !== "/app.js") {
         response.writeHead(404).end();
@@ -446,9 +446,9 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     const resourceOrigin = new URL(appModuleUrl).origin;
     const controlUiOrigin = new URL(controlUiServer.baseUrl).origin;
     await writeFixtureServer(fixturePath, appHtml(appModuleUrl), resourceOrigin);
-    gatewayPort = await getFreeGatewayPort();
+    gatewayPort = await getGatewayE2ePortBlock();
     do {
-      sandboxPort = await getFreeGatewayPort();
+      sandboxPort = await getGatewayE2ePortBlock();
     } while (sandboxPort === gatewayPort);
     const cfg: OpenClawConfig = {
       gateway: {

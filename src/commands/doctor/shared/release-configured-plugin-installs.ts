@@ -1,7 +1,6 @@
 // Release-era repair for configs that imply official plugin installs before install records existed.
 import { normalizeNullableString as normalizeId } from "@openclaw/normalization-core/string-coerce";
 import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
-import { listPotentialConfiguredChannelPresenceSignals } from "../../../channels/config-presence.js";
 import { normalizeChatChannelId } from "../../../channels/registry.js";
 import { isChannelConfigured } from "../../../config/channel-configured.js";
 import { detectPluginAutoEnableCandidates } from "../../../config/plugin-auto-enable.js";
@@ -22,6 +21,7 @@ import {
   resolveWebSearchInstallCatalogEntry,
 } from "../../../plugins/web-search-install-catalog.js";
 import { VERSION } from "../../../version.js";
+import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 import { collectConfiguredProviderPluginIds } from "./configured-provider-plugin-installs.js";
 import { repairMissingPluginInstallsForIds } from "./missing-configured-plugin-install.js";
 import { asObjectRecord } from "./object.js";
@@ -123,31 +123,16 @@ function collectSlotPluginIds(cfg: OpenClawConfig): string[] {
 }
 
 function collectConfiguredChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
-  const ids = new Set<string>();
-  const channels = asObjectRecord(cfg.channels);
-  if (channels) {
-    for (const [channelId, value] of Object.entries(channels)) {
-      if (channelId === "defaults" || channelId === "modelByChannel" || !channelId.trim()) {
-        continue;
-      }
-      const entry = asObjectRecord(value);
-      if (entry?.enabled === false) {
-        continue;
-      }
-      if (entry?.enabled === true || Object.keys(entry ?? {}).some((key) => key !== "enabled")) {
-        ids.add(channelId.trim());
-      }
-    }
-  }
-  for (const signal of listPotentialConfiguredChannelPresenceSignals(cfg, env, {
-    includePersistedAuthState: false,
-  })) {
-    const channelId = normalizeChatChannelId(signal.channelId) ?? signal.channelId;
-    if (!isChannelDisabled(cfg, channelId) && isChannelConfigured(cfg, channelId, env)) {
-      ids.add(channelId);
-    }
-  }
-  return [...ids].toSorted((left, right) => left.localeCompare(right));
+  return listDoctorConfiguredChannelIds(cfg, {
+    configEntryPolicy: "enabled-or-meaningful",
+    env,
+    skipWhenPluginsDisabled: true,
+    excludeExplicitlyDisabled: true,
+    mapEnvironmentChannelId: (channelId) => normalizeChatChannelId(channelId) ?? channelId,
+    environmentChannelIsConfigured: (channelId) =>
+      !isChannelDisabled(cfg, channelId) && isChannelConfigured(cfg, channelId, env),
+    sort: "locale",
+  });
 }
 
 function collectAgentHarnessRuntimePluginIds(

@@ -416,6 +416,14 @@ export interface ConfigMachineState {
   value_json: string;
 }
 
+export interface CronJobRuntimeAuthorities {
+  authority_input_fingerprint: string | null;
+  authority_json: string | null;
+  job_id: string;
+  recovery_required: number;
+  store_key: string;
+}
+
 export interface CronJobScratch {
   content: string | null;
   job_id: string;
@@ -700,6 +708,15 @@ export interface GatewayBootLifecycle {
   startup_reason: string | null;
 }
 
+export interface GatewayOriginDeviceTokens {
+  device_id: string;
+  gateway_scope: string;
+  role: string;
+  scopes_json: string;
+  token: string;
+  updated_at_ms: number;
+}
+
 export interface GatewayRestartHandoff {
   created_at: number;
   expires_at: number;
@@ -952,6 +969,12 @@ export interface OnboardingRecommendations {
   updated_at_ms: number;
 }
 
+export interface OperatorApprovalExecutionIdentities {
+  approval_id: string;
+  source_context_id: string;
+  source_execution_id: string;
+}
+
 export interface OperatorApprovals {
   approval_id: string;
   audience_session_keys_json: string;
@@ -1019,6 +1042,16 @@ export interface PluginStateEntries {
   value_json: string;
 }
 
+export interface Projects {
+  created_at_ms: number;
+  display_name: string;
+  id: string;
+  origin_url: string | null;
+  repo_root: string;
+  source: string;
+  updated_at_ms: number;
+}
+
 export interface SandboxRegistryEntries {
   backend_id: string | null;
   cdp_port: number | null;
@@ -1044,6 +1077,18 @@ export interface SchemaMeta {
   role: string;
   schema_version: number;
   updated_at: number;
+}
+
+export interface SecretStoreEntries {
+  created_at_ms: number;
+  deleted_at_ms: number | null;
+  kind: string;
+  name: string;
+  scope_id: string;
+  scope_kind: string;
+  updated_at_ms: number;
+  updated_by: string | null;
+  value: string;
 }
 
 export interface SessionGroups {
@@ -1400,12 +1445,19 @@ export interface WorkerEnvironmentCredentials {
   session_id: string | null;
 }
 
+export interface WorkerEnvironmentSshFallbackPorts {
+  environment_id: string;
+  port: number;
+  position: number;
+}
+
 export interface WorkerEnvironments {
   attached_session_ids_json: Generated<string>;
   bootstrap_bundle_hash: string | null;
   bootstrap_openclaw_version: string | null;
   bootstrap_protocol_features_json: string | null;
   created_at_ms: number;
+  desktop_json: string | null;
   destroy_requested_at_ms: number | null;
   environment_id: string;
   idle_since_at_ms: number | null;
@@ -1416,6 +1468,7 @@ export interface WorkerEnvironments {
   profile_snapshot_json: string;
   provider_id: string;
   provision_operation_id: string;
+  shared_host: number | null;
   ssh_host: string | null;
   ssh_host_key: string | null;
   ssh_key_ref_json: string | null;
@@ -1453,6 +1506,8 @@ export interface WorkerSessionPlacements {
   session_key: string;
   state: string;
   state_changed_at_ms: number;
+  terminal_at_ms: number | null;
+  terminal_reason: string | null;
   transition_generation: Generated<number>;
   turn_claim_generation: number | null;
   turn_claim_id: string | null;
@@ -1462,6 +1517,21 @@ export interface WorkerSessionPlacements {
   updated_at_ms: number;
   worker_bundle_hash: string | null;
   workspace_base_manifest_ref: string | null;
+}
+
+export interface WorkerSessionToolOperations {
+  child_session_key: string | null;
+  created_at_ms: number;
+  gateway_instance_id: string;
+  operation_seed: string;
+  request_digest: string;
+  result_json: string | null;
+  source_claim_id: string;
+  source_session_id: string;
+  status: string;
+  tool_call_id: string;
+  tool_name: string;
+  updated_at_ms: number;
 }
 
 export interface WorkerTranscriptCommitHeads {
@@ -1480,6 +1550,17 @@ export interface WorkerTranscriptCommits {
   seq: number;
   session_id: string;
   state: string;
+  updated_at_ms: number;
+}
+
+export interface WorkerTurnToolAuthorities {
+  claim_id: string;
+  environment_id: string;
+  owner_epoch: number;
+  placement_generation: number;
+  run_id: string;
+  session_id: string;
+  tool_names_json: string;
   updated_at_ms: number;
 }
 
@@ -1558,6 +1639,7 @@ export interface Worktrees {
   removed_at: number | null;
   repo_fingerprint: string;
   repo_root: string;
+  run_end_cleanup_json: string | null;
   snapshot_ref: string | null;
 }
 
@@ -1594,6 +1676,7 @@ export interface DB {
   commitments: Commitments;
   config_health_entries: ConfigHealthEntries;
   config_machine_state: ConfigMachineState;
+  cron_job_runtime_authorities: CronJobRuntimeAuthorities;
   cron_job_scratch: CronJobScratch;
   cron_jobs: CronJobs;
   current_conversation_bindings: CurrentConversationBindings;
@@ -1610,6 +1693,7 @@ export interface DB {
   fleet_cells: FleetCells;
   flow_runs: FlowRuns;
   gateway_boot_lifecycle: GatewayBootLifecycle;
+  gateway_origin_device_tokens: GatewayOriginDeviceTokens;
   gateway_restart_handoff: GatewayRestartHandoff;
   gateway_restart_intent: GatewayRestartIntent;
   gateway_restart_sentinel: GatewayRestartSentinel;
@@ -1629,13 +1713,16 @@ export interface DB {
   node_host_config: NodeHostConfig;
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
   onboarding_recommendations: OnboardingRecommendations;
+  operator_approval_execution_identities: OperatorApprovalExecutionIdentities;
   operator_approvals: OperatorApprovals;
   outbound_media_provenance: OutboundMediaProvenance;
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;
+  projects: Projects;
   sandbox_registry_entries: SandboxRegistryEntries;
   schema_meta: SchemaMeta;
+  secret_store_entries: SecretStoreEntries;
   session_groups: SessionGroups;
   session_state_events: SessionStateEvents;
   session_state_heads: SessionStateHeads;
@@ -1663,11 +1750,14 @@ export interface DB {
   web_push_subscriptions: WebPushSubscriptions;
   web_push_vapid_keys: WebPushVapidKeys;
   worker_environment_credentials: WorkerEnvironmentCredentials;
+  worker_environment_ssh_fallback_ports: WorkerEnvironmentSshFallbackPorts;
   worker_environments: WorkerEnvironments;
   worker_inference_turns: WorkerInferenceTurns;
   worker_session_placements: WorkerSessionPlacements;
+  worker_session_tool_operations: WorkerSessionToolOperations;
   worker_transcript_commit_heads: WorkerTranscriptCommitHeads;
   worker_transcript_commits: WorkerTranscriptCommits;
+  worker_turn_tool_authorities: WorkerTurnToolAuthorities;
   worker_workspace_pending_results: WorkerWorkspacePendingResults;
   worker_workspace_reconciliations: WorkerWorkspaceReconciliations;
   workspace_attestations: WorkspaceAttestations;

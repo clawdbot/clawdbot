@@ -16,7 +16,10 @@ import {
   loadPluginRegistryHandle,
   resolveRuntimePluginRegistry,
 } from "./loader.js";
-import { makeTempDir, resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
+import {
+  makePluginLoaderTempDir,
+  resetPluginLoaderTestStateForTest,
+} from "./loader.test-fixtures.js";
 import {
   getRegisteredMemoryEmbeddingProvider,
   registerMemoryEmbeddingProvider,
@@ -55,7 +58,7 @@ function setLoaderMetadataSnapshot(params: { pluginIds?: readonly string[] } = {
     },
   };
   const env = process.env;
-  const workspaceDir = makeTempDir();
+  const workspaceDir = makePluginLoaderTempDir();
   const installRecords: Record<string, PluginInstallRecord> = {
     demo: {
       source: "npm",
@@ -133,7 +136,7 @@ describe("resolvePluginLoadCacheContext", () => {
   });
 
   it("loads a custom profile's install records instead of reusing the process snapshot", () => {
-    const profileEnv = { ...process.env, OPENCLAW_STATE_DIR: makeTempDir() };
+    const profileEnv = { ...process.env, OPENCLAW_STATE_DIR: makePluginLoaderTempDir() };
     const profileInstallRecords: Record<string, PluginInstallRecord> = {
       demo: {
         source: "npm",
@@ -215,7 +218,8 @@ describe("resolvePluginLoadCacheContext", () => {
     const { config, env } = setLoaderMetadataSnapshot();
 
     expect(
-      resolvePluginLoadCacheContext({ config, env, workspaceDir: makeTempDir() }).installRecords,
+      resolvePluginLoadCacheContext({ config, env, workspaceDir: makePluginLoaderTempDir() })
+        .installRecords,
     ).toEqual(loadInstalledPluginIndexInstallRecordsSync({ env }));
   });
 

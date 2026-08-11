@@ -18,7 +18,7 @@ import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-
 import {
   ArchivedTranscriptReader,
   buildSessionPreviewItems,
-  readLatestSessionUsageFromTranscriptAsync,
+  readLatestSessionUsageFromTranscriptFileAsync,
   resolveSessionTranscriptCandidates,
   type ReadRecentSessionMessagesOptions,
   type ReadSessionMessagesAsyncOptions,
@@ -1420,7 +1420,7 @@ describe("readLatestSessionUsageFromTranscript", () => {
     const readFileSpy = vi.spyOn(fs, "readFileSync");
 
     try {
-      const snapshot = await readLatestSessionUsageFromTranscriptAsync(sessionId, storePath);
+      const snapshot = await readLatestSessionUsageFromTranscriptFileAsync(sessionId, storePath);
       expectUsageFields(snapshot, {
         modelProvider: "anthropic",
         model: "claude-sonnet-4-6",
@@ -1435,6 +1435,67 @@ describe("readLatestSessionUsageFromTranscript", () => {
     } finally {
       readFileSpy.mockRestore();
     }
+  });
+
+  test("treats unavailable JSONL context as terminal until a later valid snapshot", async () => {
+    const sessionId = "usage-unavailable-upgrade-sequence";
+    const oldCumulative = {
+      message: {
+        role: "assistant",
+        api: "cli",
+        provider: "claude-cli",
+        model: "claude-opus-4-7",
+        usage: { input: 128_814, output: 3_000, cacheRead: 992_953, totalTokens: 1_124_767 },
+      },
+    };
+    const unavailable = {
+      message: {
+        role: "assistant",
+        provider: "claude-cli",
+        model: "claude-opus-4-7",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          contextUsage: { state: "unavailable" },
+        },
+      },
+    };
+    writeTranscript(tmpDir, sessionId, [oldCumulative]);
+    const legacySnapshot = await readLatestSessionUsageFromTranscriptFileAsync(
+      sessionId,
+      storePath,
+    );
+    expect(legacySnapshot?.contextUsage).toEqual({ state: "unavailable" });
+    expect(legacySnapshot?.totalTokens).toBeUndefined();
+    writeTranscript(tmpDir, sessionId, [oldCumulative, unavailable]);
+
+    const unavailableSnapshot = await readLatestSessionUsageFromTranscriptFileAsync(
+      sessionId,
+      storePath,
+    );
+    expect(unavailableSnapshot?.contextUsage).toEqual({ state: "unavailable" });
+    expect(unavailableSnapshot?.totalTokens).toBeUndefined();
+    expect(unavailableSnapshot?.totalTokensFresh).toBeUndefined();
+
+    writeTranscript(tmpDir, sessionId, [
+      oldCumulative,
+      unavailable,
+      {
+        message: {
+          role: "assistant",
+          provider: "claude-cli",
+          model: "claude-opus-4-7",
+          usage: { input: 67_932, output: 2_000, cacheRead: 18_944, totalTokens: 88_876 },
+        },
+      },
+    ]);
+    expectUsageFields(await readLatestSessionUsageFromTranscriptFileAsync(sessionId, storePath), {
+      totalTokens: 86_876,
+      totalTokensFresh: true,
+    });
   });
 
   test("estimates transcript context when local model telemetry is missing", async () => {
@@ -1457,7 +1518,7 @@ describe("readLatestSessionUsageFromTranscript", () => {
       estimateStringChars(userText) + estimateStringChars(assistantText),
     );
 
-    expectUsageFields(await readLatestSessionUsageFromTranscriptAsync(sessionId, storePath), {
+    expectUsageFields(await readLatestSessionUsageFromTranscriptFileAsync(sessionId, storePath), {
       modelProvider: "openai-completions",
       model: "local-llama",
       totalTokens: expectedTotalTokens,

@@ -20,7 +20,7 @@ import {
   withGatewayServer,
   withGatewayTempConfig,
 } from "./server-http.test-harness.js";
-import { createTestRegistry } from "./server/__tests__/test-utils.js";
+import { createGatewayTestRegistry } from "./server/__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 import { withTempConfig } from "./test-temp-config.js";
 
@@ -119,7 +119,7 @@ function createRuntimeScopeRecorderHandler(params: {
   match?: "exact" | "prefix";
 }) {
   return createGatewayPluginRequestHandler({
-    registry: createTestRegistry({
+    registry: createGatewayTestRegistry({
       httpRoutes: [
         {
           pluginId: params.pluginId,

@@ -6,6 +6,7 @@ import { AnsiSequenceStripper } from "../../packages/terminal-core/src/ansi-sequ
 import * as ansi from "../../packages/terminal-core/src/ansi.js";
 import { toErrorObject } from "../infra/errors.js";
 import { signalProcessTree } from "../process/kill-tree.js";
+import { sleep } from "../utils/sleep.js";
 
 // Shared PTY harness utilities for fake-backend and local TUI smoke tests.
 type PtyExitEvent = Parameters<Parameters<IPty["onExit"]>[0]>[0];
@@ -221,13 +222,6 @@ export function waitFor<T>(params: {
       setTimeout(tick, 25);
     };
     tick();
-  });
-}
-
-/** Async sleep used to simulate slower PTY typing. */
-export function sleep(ms: number) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
   });
 }
 

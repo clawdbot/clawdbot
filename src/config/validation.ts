@@ -581,7 +581,12 @@ function validateConfigObjectWithPluginsBase(
       return;
     }
     const normalized = normalizeLowercaseStringOrEmpty(trimmed);
-    if (normalized === "last" || normalized === "none" || normalizeBundledChannelId(trimmed)) {
+    if (
+      normalized === "owner" ||
+      normalized === "last" ||
+      normalized === "none" ||
+      normalizeBundledChannelId(trimmed)
+    ) {
       return;
     }
     if (!heartbeatChannelIds.has(normalized)) {

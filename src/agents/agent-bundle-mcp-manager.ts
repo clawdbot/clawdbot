@@ -214,8 +214,12 @@ export function createSessionMcpRuntimeManager(
       });
     },
     async getOrCreateRequesterScoped(params) {
-      // Scoped-only path for shared-thread harnesses: never open static transports
-      // (those stay harness-native) so we do not double-connect.
+      // Anonymous turns own no requester runtime; avoid leaking session keys or
+      // sweeping unrelated runtimes before confirming the requester exists.
+      const requesterSenderId = normalizeOptionalString(params.requesterSenderId);
+      if (!requesterSenderId) {
+        return undefined;
+      }
       const idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs();
       await lifecycle.sweepIdleRuntimes();
       if (idleTtlMs > 0) {
@@ -223,10 +227,6 @@ export function createSessionMcpRuntimeManager(
       }
       if (params.sessionKey) {
         store.sessionIdBySessionKey.set(params.sessionKey, params.sessionId);
-      }
-      const requesterSenderId = normalizeOptionalString(params.requesterSenderId);
-      if (!requesterSenderId) {
-        return undefined;
       }
       const fullConfig = loadSessionMcpConfig({
         workspaceDir: params.workspaceDir,

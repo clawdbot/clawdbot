@@ -19,7 +19,7 @@ import {
   appendTranscriptMessage,
   type TranscriptEvent,
 } from "../../src/config/sessions/session-accessor.js";
-import { importSqliteSessionRows } from "../../src/config/sessions/session-accessor.sqlite.js";
+import { importSqliteSessionRows } from "../../src/config/sessions/session-accessor.sqlite-import.js";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
 import {
   connectGatewayClient,
@@ -2108,8 +2108,13 @@ function readTrackedEntries(db: DatabaseSync, trackedSessionKeys: readonly strin
     .map((row) => {
       const sessionId = typeof row.sessionId === "string" ? row.sessionId : "";
       const entry = typeof row.entryJson === "string" ? parseEntryJson(row.entryJson) : undefined;
-      return {
-        ...(entry ? { entry } : {}),
+      const trackedEntry: {
+        entry?: Record<string, unknown>;
+        sessionId: string;
+        sessionKey: string;
+        trajectoryEvents: number;
+        transcriptEvents: number;
+      } = {
         sessionId,
         sessionKey: typeof row.sessionKey === "string" ? row.sessionKey : "",
         trajectoryEvents: scalarNumber(
@@ -2123,6 +2128,10 @@ function readTrackedEntries(db: DatabaseSync, trackedSessionKeys: readonly strin
           [sessionId],
         ),
       };
+      if (entry) {
+        trackedEntry.entry = entry;
+      }
+      return trackedEntry;
     });
 }
 

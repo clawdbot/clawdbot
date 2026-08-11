@@ -101,6 +101,8 @@ async function buildDevelopmentSnapshot(params: {
       ok: true;
       integrity: string;
       byteLength: number;
+      manifest: { byteLength: number; digest: string };
+      openClawProfile?: { sourcePath: string; byteLength: number; digest: string };
       workspaceSources: ClawWorkspaceSourceSnapshot[];
       packageBootstrap?: ClawWorkspaceSourceSnapshot;
     }
@@ -112,6 +114,17 @@ async function buildDevelopmentSnapshot(params: {
     updateSnapshotHash(hash, label, bytes);
     byteLength += bytes.byteLength;
   };
+  const snapshotFile = (bytes: Buffer) => ({
+    byteLength: bytes.byteLength,
+    digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+  });
+  const manifest = snapshotFile(params.manifestRaw);
+  const openClawProfile = params.openClawProfile
+    ? {
+        sourcePath: params.openClawProfile.path.replaceAll("\\", "/"),
+        ...snapshotFile(params.openClawProfile.raw),
+      }
+    : undefined;
   add("canonical-source", Buffer.from(params.source.manifestPath, "utf8"));
   add("manifest", params.manifestRaw);
   if (params.openClawProfile) {
@@ -272,6 +285,8 @@ async function buildDevelopmentSnapshot(params: {
     ok: true,
     integrity: `sha256:${hash.digest("hex")}`,
     byteLength,
+    manifest,
+    ...(openClawProfile ? { openClawProfile } : {}),
     workspaceSources,
     ...(packageBootstrap ? { packageBootstrap } : {}),
   };
@@ -650,6 +665,8 @@ export async function readClawManifestFile(path: string): Promise<ClawReadResult
     ...(profile.profile ? { openClawProfile: profile.profile } : {}),
     source,
     snapshot: {
+      manifest: snapshot.manifest,
+      ...(snapshot.openClawProfile ? { openClawProfile: snapshot.openClawProfile } : {}),
       workspaceSources: snapshot.workspaceSources,
       ...(snapshot.packageBootstrap ? { packageBootstrap: snapshot.packageBootstrap } : {}),
     },

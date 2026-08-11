@@ -1,9 +1,5 @@
+import { asFiniteNumber, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isJsonObject, type CodexThreadItem, type JsonObject, type JsonValue } from "./protocol.js";
-
-export function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
-}
 
 export function normalizeNonEmptyString(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -39,19 +35,14 @@ export function readNullableString(record: JsonObject, key: string): string | nu
   return typeof value === "string" ? value : undefined;
 }
 
-export function readNumber(record: JsonObject, key: string): number | undefined {
-  const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 export function readNonNegativeInteger(record: JsonObject, key: string): number | undefined {
-  const value = readNumber(record, key);
+  const value = asFiniteNumber(record[key]);
   return value !== undefined && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
 export function readCodexErrorNotificationMessage(record: JsonObject): string | undefined {
   const error = record.error;
-  return isJsonObject(error) ? readString(error, "message") : undefined;
+  return isJsonObject(error) ? readStringField(error, "message") : undefined;
 }
 
 export function readHookOutputEntries(
@@ -64,11 +55,11 @@ export function readHookOutputEntries(
     if (!isJsonObject(entry)) {
       return [];
     }
-    const text = readString(entry, "text");
+    const text = readStringField(entry, "text");
     if (!text) {
       return [];
     }
-    const kind = readString(entry, "kind");
+    const kind = readStringField(entry, "kind");
     return [{ ...(kind ? { kind } : {}), text }];
   });
 }
@@ -86,11 +77,11 @@ export function extractRawAssistantText(item: JsonObject): string | undefined {
     if (!isJsonObject(entry)) {
       return [];
     }
-    const type = readString(entry, "type");
+    const type = readStringField(entry, "type");
     if (type !== "output_text" && type !== "text") {
       return [];
     }
-    const value = readString(entry, "text");
+    const value = readStringField(entry, "text");
     return value === undefined ? [] : [value];
   });
   return parts.length > 0 ? parts.join("").trim() : undefined;

@@ -15,7 +15,9 @@ import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
-const setupInferenceMocks = vi.hoisted(() => ({ verifySetupInference: vi.fn() }));
+const inferenceFallbackMocks = vi.hoisted(() => ({
+  verifySystemAgentInferenceWithFallback: vi.fn(),
+}));
 const greetingMocks = vi.hoisted(() => ({
   acknowledgeSystemAgentGreetingDelivery: vi.fn(),
   buildSystemAgentGreetingQuestion: vi.fn(() => undefined),
@@ -28,8 +30,9 @@ const greetingMocks = vi.hoisted(() => ({
   resolveSystemAgentGreeting: vi.fn(async () => ({ text: "welcome text", source: "template" })),
 }));
 
-vi.mock("../../system-agent/setup-inference.js", () => ({
-  verifySetupInference: setupInferenceMocks.verifySetupInference,
+vi.mock("../../system-agent/inference-fallback.js", () => ({
+  verifySystemAgentInferenceWithFallback:
+    inferenceFallbackMocks.verifySystemAgentInferenceWithFallback,
 }));
 // The transcript store is deliberately NOT mocked: the boundary under test is
 // what survives in the durable store. Only the caretaker greeting is stubbed so
@@ -55,7 +58,7 @@ const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
 beforeEach(async () => {
   const fixture = await createSystemAgentVerifiedInferenceTestFixture(verifiedConfig);
-  setupInferenceMocks.verifySetupInference.mockResolvedValue({
+  inferenceFallbackMocks.verifySystemAgentInferenceWithFallback.mockResolvedValue({
     ok: true,
     modelRef: "openai/gpt-5.5",
     latencyMs: 10,
@@ -65,7 +68,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  setupInferenceMocks.verifySetupInference.mockReset();
+  inferenceFallbackMocks.verifySystemAgentInferenceWithFallback.mockReset();
   closeOpenClawStateDatabase();
   if (originalStateDir === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
@@ -137,7 +140,7 @@ describe("openclaw.chat reset boundary", () => {
     [
       "inference verification fails",
       () => {
-        setupInferenceMocks.verifySetupInference.mockResolvedValueOnce({
+        inferenceFallbackMocks.verifySystemAgentInferenceWithFallback.mockResolvedValueOnce({
           ok: false,
           status: "unavailable",
           error: "no configured model",
@@ -180,7 +183,7 @@ describe("openclaw.chat reset boundary", () => {
       for (const turn of PRE_RESET_TURNS) {
         appendTranscriptTurn(turn);
       }
-      setupInferenceMocks.verifySetupInference.mockResolvedValueOnce({
+      inferenceFallbackMocks.verifySystemAgentInferenceWithFallback.mockResolvedValueOnce({
         ok: false,
         status: "unavailable",
         error: "no configured model",

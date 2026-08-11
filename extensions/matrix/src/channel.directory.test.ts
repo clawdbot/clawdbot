@@ -10,6 +10,17 @@ import type { MatrixSetupInput } from "./setup-config.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
+describe("matrix target classification", () => {
+  it("distinguishes users from rooms", () => {
+    expect(matrixPlugin.messaging?.inferTargetChatType?.({ to: "@owner:example.org" })).toBe(
+      "direct",
+    );
+    expect(matrixPlugin.messaging?.inferTargetChatType?.({ to: "!room:example.org" })).toBe(
+      "channel",
+    );
+  });
+});
+
 function requireMatrixDirectory() {
   const directory = matrixPlugin.directory;
   if (!directory?.listPeers || !directory.listGroups) {

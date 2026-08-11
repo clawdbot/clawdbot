@@ -315,7 +315,23 @@ describe("thread binding lifecycle", () => {
     expect(intro).toContain("\ncwd: /home/bob/clawd\nsession ids: pending");
   });
 
-  it("auto-unfocuses idle-expired bindings and sends inactivity message", async () => {
+  it.each([
+    {
+      name: "auto-unfocuses idle-expired bindings and sends inactivity message",
+      idleTimeoutMs: 60_000,
+      maxAgeMs: 0,
+      introText: "intro",
+      farewellText: "after 1m of inactivity",
+      expectNoProbe: true,
+    },
+    {
+      name: "auto-unfocuses max-age-expired bindings and sends max-age message",
+      idleTimeoutMs: 0,
+      maxAgeMs: 60_000,
+      farewellText: "max age of 1m",
+      expectNoProbe: false,
+    },
+  ])("$name", async ({ idleTimeoutMs, maxAgeMs, introText, farewellText, expectNoProbe }) => {
     vi.useFakeTimers();
     try {
       const manager = createTestThreadBindingManager({
@@ -323,8 +339,8 @@ describe("thread binding lifecycle", () => {
         cfg: EMPTY_DISCORD_TEST_CONFIG,
         persist: false,
         enableSweeper: false,
-        idleTimeoutMs: 60_000,
-        maxAgeMs: 0,
+        idleTimeoutMs,
+        maxAgeMs,
       });
 
       const binding = await manager.bindTarget({
@@ -335,7 +351,7 @@ describe("thread binding lifecycle", () => {
         agentId: "main",
         webhookId: "wh-1",
         webhookToken: "tok-1",
-        introText: "intro",
+        ...(introText ? { introText } : {}),
       });
       expectFields(binding, "binding", {
         threadId: "thread-1",
@@ -348,97 +364,56 @@ describe("thread binding lifecycle", () => {
       await testing.runThreadBindingSweepForAccount("default");
 
       expect(manager.getByThreadId("thread-1")).toBeUndefined();
-      expect(hoisted.restGet).not.toHaveBeenCalled();
+      if (expectNoProbe) {
+        expect(hoisted.restGet).not.toHaveBeenCalled();
+      }
       expect(hoisted.sendWebhookMessageDiscord).not.toHaveBeenCalled();
       expect(hoisted.sendMessageDiscord).toHaveBeenCalledTimes(1);
       const farewell = mockCallArg(hoisted.sendMessageDiscord, 0, 1, "sendMessageDiscord") as
         | string
         | undefined;
-      expect(farewell).toContain("after 1m of inactivity");
+      expect(farewell).toContain(farewellText);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("auto-unfocuses max-age-expired bindings and sends max-age message", async () => {
-    vi.useFakeTimers();
-    try {
-      const manager = createTestThreadBindingManager({
-        accountId: "default",
-        cfg: EMPTY_DISCORD_TEST_CONFIG,
-        persist: false,
-        enableSweeper: false,
-        idleTimeoutMs: 0,
-        maxAgeMs: 60_000,
-      });
-
-      const binding = await manager.bindTarget({
-        threadId: "thread-1",
-        channelId: "parent-1",
-        targetKind: "subagent",
-        targetSessionKey: "agent:main:subagent:child",
-        agentId: "main",
-        webhookId: "wh-1",
-        webhookToken: "tok-1",
-      });
-      expectFields(binding, "binding", {
-        threadId: "thread-1",
-        targetSessionKey: "agent:main:subagent:child",
-      });
-      hoisted.sendMessageDiscord.mockClear();
-
-      await vi.advanceTimersByTimeAsync(120_000);
-      await testing.runThreadBindingSweepForAccount("default");
-
-      expect(manager.getByThreadId("thread-1")).toBeUndefined();
-      expect(hoisted.sendMessageDiscord).toHaveBeenCalledTimes(1);
-      const farewell = mockCallArg(hoisted.sendMessageDiscord, 0, 1, "sendMessageDiscord") as
-        | string
-        | undefined;
-      expect(farewell).toContain("max age of 1m");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps binding when thread sweep probe fails transiently", async () => {
+  it.each<{
+    name: string;
+    probeError: unknown;
+    keepsBinding: boolean;
+  }>([
+    {
+      name: "keeps binding when thread sweep probe fails transiently",
+      probeError: new Error("ECONNRESET"),
+      keepsBinding: true,
+    },
+    {
+      name: "unbinds when thread sweep probe reports unknown channel",
+      probeError: { status: 404, rawError: { code: 10003, message: "Unknown Channel" } },
+      keepsBinding: false,
+    },
+  ])("$name", async ({ probeError, keepsBinding }) => {
     vi.useFakeTimers();
     try {
       const manager = createDefaultSweeperManager();
       await bindDefaultThreadTarget(manager);
 
-      hoisted.restGet.mockRejectedValueOnce(new Error("ECONNRESET"));
+      hoisted.restGet.mockRejectedValueOnce(probeError);
 
       await vi.advanceTimersByTimeAsync(120_000);
       await testing.runThreadBindingSweepForAccount("default");
 
-      expectFields(requireBinding(manager, "thread-1"), "thread binding", {
-        threadId: "thread-1",
-        targetSessionKey: "agent:main:subagent:child",
-        webhookId: "wh-1",
-        webhookToken: "tok-1",
-      });
-      expect(hoisted.sendWebhookMessageDiscord).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("unbinds when thread sweep probe reports unknown channel", async () => {
-    vi.useFakeTimers();
-    try {
-      const manager = createDefaultSweeperManager();
-      await bindDefaultThreadTarget(manager);
-
-      hoisted.restGet.mockRejectedValueOnce({
-        status: 404,
-        rawError: { code: 10003, message: "Unknown Channel" },
-      });
-
-      await vi.advanceTimersByTimeAsync(120_000);
-      await testing.runThreadBindingSweepForAccount("default");
-
-      expect(manager.getByThreadId("thread-1")).toBeUndefined();
+      if (keepsBinding) {
+        expectFields(requireBinding(manager, "thread-1"), "thread binding", {
+          threadId: "thread-1",
+          targetSessionKey: "agent:main:subagent:child",
+          webhookId: "wh-1",
+          webhookToken: "tok-1",
+        });
+      } else {
+        expect(manager.getByThreadId("thread-1")).toBeUndefined();
+      }
       expect(hoisted.sendWebhookMessageDiscord).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();

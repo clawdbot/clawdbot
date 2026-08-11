@@ -35,6 +35,25 @@ async function dragAcross(page: Page, locator: Locator): Promise<string> {
   return page.evaluate(() => globalThis.getSelection()?.toString() ?? "");
 }
 
+async function readFocusOutline(locator: Locator) {
+  return locator.evaluate((element) => {
+    const styles = getComputedStyle(element);
+    const colorProbe = document.createElement("span");
+    colorProbe.style.color = "var(--muted-strong)";
+    document.body.append(colorProbe);
+    const mutedStrongColor = getComputedStyle(colorProbe).color;
+    colorProbe.remove();
+    return {
+      focusVisible: element.matches(":focus-visible"),
+      mutedStrongColor,
+      outlineColor: styles.outlineColor,
+      outlineOffset: styles.outlineOffset,
+      outlineStyle: styles.outlineStyle,
+      outlineWidth: styles.outlineWidth,
+    };
+  });
+}
+
 async function captureUiProof(page: Page, fileName: string) {
   if (!captureUiProofEnabled) {
     return;
@@ -94,7 +113,35 @@ suite.define(() => {
           sidebarScrollbar: "6px",
         });
         expect(await dragAcross(page, transcript)).toContain("Selectable transcript");
+        const thread = page.locator(".chat-thread");
+        expect(await readFocusOutline(thread)).toMatchObject({
+          focusVisible: false,
+          outlineStyle: "none",
+        });
         await captureUiProof(page, "01-chat-selectable-transcript.png");
+
+        await thread.focus();
+        await page.keyboard.press("Tab");
+        await expect
+          .poll(() => thread.evaluate((element) => element !== document.activeElement))
+          .toBe(true);
+        await page.keyboard.press("Shift+Tab");
+        await expect
+          .poll(() =>
+            thread.evaluate(
+              (element) => element === document.activeElement && element.matches(":focus-visible"),
+            ),
+          )
+          .toBe(true);
+        const focusedOutline = await readFocusOutline(thread);
+        expect(focusedOutline).toMatchObject({
+          focusVisible: true,
+          outlineOffset: "-2px",
+          outlineStyle: "solid",
+          outlineWidth: "2px",
+        });
+        expect(focusedOutline.outlineColor).toBe(focusedOutline.mutedStrongColor);
+        await captureUiProof(page, "02-chat-thread-keyboard-focus.png");
 
         await page.setViewportSize({ height: 650, width: 1440 });
         // Appearance renders schema-independent theme/UI sections that overflow
@@ -148,7 +195,7 @@ suite.define(() => {
         await content.evaluate((element) => {
           element.scrollTop = Math.min(160, element.scrollHeight - element.clientHeight);
         });
-        await captureUiProof(page, "02-settings-contextual-scrollbars.png");
+        await captureUiProof(page, "03-settings-contextual-scrollbars.png");
       },
     );
   });

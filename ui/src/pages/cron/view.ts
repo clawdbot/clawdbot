@@ -360,17 +360,23 @@ function renderCronSelect(
   field: CronStringFormField,
   options: CronSelectOptions,
 ) {
+  const selected = options.value ?? props.form[field];
   return html`
     <select
       id=${ifDefined(options.standalone ? undefined : inputIdForField(field))}
       class="settings-select"
-      .value=${options.value ?? props.form[field]}
+      .value=${selected}
       aria-label=${ifDefined(options.standalone ? options.label : undefined)}
       ?disabled=${options.disabled ?? false}
       @change=${(event: Event) =>
         props.onFormChange({ [field]: (event.currentTarget as HTMLSelectElement).value })}
     >
-      ${options.options.map(({ value, label }) => html`<option value=${value}>${label}</option>`)}
+      ${options.options.map(
+        // The .value property commits before these mapped options exist, so the
+        // browser falls back to the first option; ?selected marks the real one.
+        ({ value, label }) =>
+          html`<option value=${value} ?selected=${value === selected}>${label}</option>`,
+      )}
     </select>
   `;
 }
@@ -575,7 +581,11 @@ function renderJobsFilter(
         @change=${(event: Event) =>
           props.onJobsFiltersChange({ [field]: (event.currentTarget as HTMLSelectElement).value })}
       >
-        ${params.options.map(({ value, label }) => html`<option value=${value}>${label}</option>`)}
+        ${params.options.map(
+          // Same first-option fallback as renderCronSelect: mark the bound value.
+          ({ value, label }) =>
+            html`<option value=${value} ?selected=${value === params.value}>${label}</option>`,
+        )}
       </select>
     </label>
   `;

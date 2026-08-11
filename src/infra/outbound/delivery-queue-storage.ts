@@ -58,7 +58,6 @@ import {
   type PreparedOutboundBatch,
 } from "./prepared-batch.js";
 import type { OutboundSessionContext } from "./session-context.js";
-import type { OutboundChannel } from "./targets.js";
 
 export type QueuedRenderedMessageBatchPlan = {
   payloadCount: number;
@@ -80,7 +79,7 @@ export type QueuedReplyPayloadSendingHook = {
 };
 
 export type QueuedDeliveryPayload = {
-  channel: Exclude<OutboundChannel, "none">;
+  channel: string;
   to: string;
   accountId?: string;
   /** Original queue durability policy when known. */
@@ -591,7 +590,10 @@ export async function markDeliveryPlatformSendDispatched(
       producerClaimId: undefined,
       platformSendStartedAt: Date.now(),
       ...(route && "replyToId" in route ? { effectiveReplyToId: route.replyToId ?? null } : {}),
-      recoveryState: "send_attempt_started",
+      // A later batch send must not erase concrete evidence from an earlier result;
+      // recovery could otherwise replay the whole batch and duplicate that delivery.
+      recoveryState:
+        entry.recoveryState === "unknown_after_send" ? entry.recoveryState : "send_attempt_started",
     }),
     expectedPlatformSendAttemptId,
   );

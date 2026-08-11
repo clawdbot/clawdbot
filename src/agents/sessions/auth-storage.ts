@@ -26,7 +26,7 @@ import {
 } from "../auth-profiles/legacy-source-diagnostic.js";
 import { resolveOAuthRefreshLockPath } from "../auth-profiles/paths.js";
 import { loadPersistedAuthProfileStore } from "../auth-profiles/persisted.js";
-import { getRuntimeAuthProfileStoreSnapshot } from "../auth-profiles/runtime-snapshots.js";
+import { getRuntimeAuthProfileStoreSnapshotCore } from "../auth-profiles/runtime-snapshots.js";
 import {
   inspectPersistedAuthProfileStateRaw,
   inspectPersistedAuthProfileStoreRaw,
@@ -297,7 +297,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
   ) {}
 
   private resolveMaterializedRuntimeStores(): AuthProfileStore[] {
-    const current = getRuntimeAuthProfileStoreSnapshot(this.agentDir);
+    const current = getRuntimeAuthProfileStoreSnapshotCore(this.agentDir);
     // A current lifecycle snapshot is authoritative, including an unresolved
     // ref after failed/revoked secrets reload. Prepared data is bootstrap-only.
     return current ? [current] : this.preparedStore ? [this.preparedStore] : [];
@@ -446,7 +446,7 @@ export class AuthStorage {
   static forAgent(agentDir: string = getAgentDir()): AuthStorage {
     assertAuthProfileMigrationReady(agentDir);
     const preparedStore =
-      getRuntimeAuthProfileStoreSnapshot(agentDir) ??
+      getRuntimeAuthProfileStoreSnapshotCore(agentDir) ??
       loadAuthProfileStoreForSecretsRuntime(agentDir);
     assertAuthStorageSecretRefsMaterialized(preparedStore);
     return new AuthStorage(new SqliteAuthStorageBackend(agentDir, preparedStore), agentDir);

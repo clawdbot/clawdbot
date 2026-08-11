@@ -31,6 +31,7 @@ import {
 import {
   CONTROL_UI_CATALOG_ICON_PATH_PREFIX,
   CONTROL_UI_PLUGIN_ICON_PATH_PREFIX,
+  CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX,
 } from "./control-ui-contract.js";
 import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
 import {
@@ -73,6 +74,7 @@ import {
 } from "./server/ws-types.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 import { canonicalizeUserProfileAvatarPath } from "./user-profiles-http-path.js";
+import type { WorkerDesktopTunnels } from "./worker-environments/desktop-tunnel.js";
 
 type PluginGatewayDispatchContext = {
   gatewayAuthSatisfied?: boolean;
@@ -111,6 +113,9 @@ const getManagedMediaAttachmentsModule = createLazyRuntimeModule(
 );
 const getMcpAppStandaloneModule = createLazyRuntimeModule(() => import("./mcp-app-standalone.js"));
 const getPluginIconHttpModule = createLazyRuntimeModule(() => import("./plugin-icon-http.js"));
+const getWorkspaceIconHttpModule = createLazyRuntimeModule(
+  () => import("./workspace-icon-http.js"),
+);
 const getModelsHttpModule = createLazyRuntimeModule(() => import("./models-http.js"));
 const getOpenAiHttpModule = createLazyRuntimeModule(() => import("./openai-http.js"));
 const getOpenResponsesHttpModule = createLazyRuntimeModule(() => import("./openresponses-http.js"));
@@ -710,6 +715,19 @@ export function createGatewayHttpServer(opts: {
             controlUiRouteOptions,
           ),
       );
+      addRequestStage(
+        "control-ui-workspace-icon",
+        controlUiEnabled &&
+          scopedRequestPath.startsWith(
+            `${controlUiRouteBasePath}${CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX}/`,
+          ),
+        async () =>
+          (await getWorkspaceIconHttpModule()).handleWorkspaceIconHttpRequest(
+            req,
+            res,
+            controlUiRouteOptions,
+          ),
+      );
       addRequestStage("control-ui-assistant-media", controlUiEnabled, async () =>
         (await getControlUiModule()).handleControlUiAssistantMediaRequest(req, res, {
           ...controlUiRouteOptions,
@@ -813,6 +831,7 @@ export function attachGatewayUpgradeHandler(opts: {
   rateLimiter?: AuthRateLimiter;
   /** Optional logger for error diagnostics. */
   log?: { warn: (msg: string) => void };
+  workerDesktopTunnels?: WorkerDesktopTunnels;
 }) {
   const {
     httpServer,
@@ -911,6 +930,27 @@ export function attachGatewayUpgradeHandler(opts: {
         ) {
           return;
         }
+      }
+      if (requestPath === "/worker-desktop/observe") {
+        if (!opts.workerDesktopTunnels) {
+          writeGatewayUpgradeServiceUnavailable(socket, "desktop observe unavailable");
+          socket.destroy();
+          return;
+        }
+        // Desktop observers are long-lived Gateway sockets, so they obey the same
+        // suspension/restart admission boundary as core upgrades. Without this a
+        // drained Gateway would keep accepting new desktop streams.
+        if (isGatewayWorkAdmissionClosed()) {
+          writeGatewayUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
+          socket.destroy();
+          return;
+        }
+        const { handleWorkerDesktopUpgrade } =
+          await import("./worker-environments/desktop-observe.js");
+        handleWorkerDesktopUpgrade(req, socket, head, {
+          tunnels: opts.workerDesktopTunnels,
+        });
+        return;
       }
       // Plugin-owned upgrade routes have already had the opportunity to claim the socket.
       // Core Gateway upgrades must stop at the HTTP boundary so a client cannot hold an

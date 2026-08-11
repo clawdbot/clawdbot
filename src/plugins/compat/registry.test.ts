@@ -40,7 +40,7 @@ const deprecationMarkingCodes = [
 const deprecationMarkingSurfaceCounts: Record<(typeof deprecationMarkingCodes)[number], number> = {
   "plugin-sdk-channel-setup-input-fields": 22,
   "plugin-sdk-broad-runtime-barrels": 12,
-  "plugin-sdk-provider-owned-helper-shims": 35,
+  "plugin-sdk-provider-owned-helper-shims": 34,
   "message-presentation-legacy-bridges": 21,
   "plugin-sdk-focused-compat-aliases": 23,
   "agent-harness-terminal-result-aliases": 10,
@@ -80,7 +80,10 @@ describe("plugin compatibility registry", () => {
       if (record.status === "deprecated") {
         expect(record.deprecated, record.code).toMatch(datePattern);
         expect(record.warningStarts, record.code).toMatch(datePattern);
-        if (removalDatePendingCompatCodes.has(record.code)) {
+        if (record.removalGate !== undefined) {
+          expect(record.removalGate, record.code).toBe("next-plugin-sdk-major");
+          expect(record.removeAfter, record.code).toBeUndefined();
+        } else if (removalDatePendingCompatCodes.has(record.code)) {
           expect(record.removeAfter, record.code).toBeUndefined();
         } else {
           expect(record.removeAfter, record.code).toMatch(datePattern);
@@ -123,6 +126,11 @@ describe("plugin compatibility registry", () => {
       expect(records.get(code)?.removeAfter).toBeUndefined();
       expect(records.get(code)?.replacement).toMatch(/retain/u);
     }
+    expect(records.get("plugin-sdk-inbound-reply-dispatch-subpath")).toMatchObject({
+      status: "deprecated",
+      removalGate: "next-plugin-sdk-major",
+      removeAfter: undefined,
+    });
     expect(records.get("agent-harness-sdk-alias")?.surfaces).toEqual([
       "openclaw/plugin-sdk/agent-harness",
       "openclaw/plugin-sdk/agent-harness-runtime",

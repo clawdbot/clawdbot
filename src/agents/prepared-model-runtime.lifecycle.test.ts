@@ -176,6 +176,22 @@ describe("prepared model runtime snapshots", () => {
     );
   });
 
+  it("publishes a static turn generation without live catalog discovery", async () => {
+    const lease = await acquireAgentRunPreparedModelRuntime(
+      {
+        config: {},
+        agentId: "default",
+        agentDir: "/tmp/static-run-agent",
+        workspaceDir: "/tmp/static-run-workspace",
+      },
+      { catalogMode: "static" },
+    );
+
+    expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
+    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
+    lease.release();
+  });
+
   it("retains only the latest idle direct-run owner", async () => {
     const firstInput = {
       config: {},
@@ -757,7 +773,7 @@ describe("prepared model runtime snapshots", () => {
       refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true, catalogMode: "static" }),
     ).resolves.toBeUndefined();
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledOnce();
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(2);
     expect(mocks.discoverAuthStorage).toHaveBeenCalledOnce();
     expect(mocks.discoverModels).toHaveBeenCalledOnce();
   });

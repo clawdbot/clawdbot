@@ -1,5 +1,6 @@
 // QQBot durable ingress tests cover raw admission, recovery, and twin parity.
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayEvent } from "./constants.js";
@@ -12,14 +13,6 @@ import {
 } from "./ingress.test-support.js";
 
 type QQBotIngressDispatch = Parameters<typeof createQQBotIngressMonitor>[0]["dispatch"];
-
-function createDeferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((innerResolve) => {
-    resolve = innerResolve;
-  });
-  return { promise, resolve };
-}
 
 function startMonitor(
   queue: ChannelIngressQueue<QQBotTestIngressPayload>,
@@ -42,7 +35,7 @@ afterEach(() => {
 describe("QQBot durable ingress", () => {
   it("does not stage or dispatch before the raw envelope is durable", async () => {
     await withQQBotIngressQueue(async (queue) => {
-      const appendGate = createDeferred();
+      const appendGate = createDeferred<void>();
       const enqueue = vi.fn(async (...args: Parameters<typeof queue.enqueue>) => {
         await appendGate.promise;
         return await queue.enqueue(...args);
@@ -167,8 +160,8 @@ describe("QQBot durable ingress", () => {
 
   it("does not dispatch from a pump racing stop through async prune", async () => {
     await withQQBotIngressQueue(async (queue) => {
-      const pruneGate = createDeferred();
-      const pruneStarted = createDeferred();
+      const pruneGate = createDeferred<void>();
+      const pruneStarted = createDeferred<void>();
       const prune = queue.prune.bind(queue);
       queue.prune = async (...args) => {
         pruneStarted.resolve();

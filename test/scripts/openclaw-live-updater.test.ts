@@ -17,7 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import {
   acquireMaintenanceLock,
   assertNoSystemLaunchDaemonOwnership,
@@ -46,12 +46,14 @@ import {
 import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
-} from "../../scripts/lib/local-build-metadata.mjs";
-import { listCoreRuntimePostBuildOutputs } from "../../scripts/runtime-postbuild.mjs";
+} from "../../scripts/lib/local-build-metadata.mts";
+import { listCoreRuntimePostBuildOutputs } from "../../scripts/runtime-postbuild.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const script = path.join(repoRoot, ".agents/skills/openclaw-live-updater/scripts/update-main.mjs");
 const fixtureOrigins = new Map<string, string>();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let fixtureTemplate: ReturnType<typeof initializeFixture> | undefined;
 const posixTest = process.platform === "win32" ? test.skip : test;
 
@@ -165,7 +167,7 @@ function makeFixture(options?: { includeSeed?: boolean }) {
   if (!fixtureTemplate) {
     throw new Error("fixture template is not initialized");
   }
-  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-live-updater-")));
+  const root = realpathSync(tempDirs.make("openclaw-live-updater-"));
   const origin = path.join(root, "origin.git");
   const seed = path.join(root, "seed");
   const mirror = path.join(root, "mirror");
@@ -245,9 +247,15 @@ function managedTimeoutError() {
 }
 
 describe("openclaw live updater", () => {
+  let cleanupProbeRoot = "";
+
   beforeAll(() => {
     const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-live-updater-template-")));
     fixtureTemplate = initializeFixture(root);
+  });
+
+  afterEach(() => {
+    fixtureOrigins.clear();
   });
 
   afterAll(() => {
@@ -255,6 +263,17 @@ describe("openclaw live updater", () => {
       rmSync(fixtureTemplate.root, { recursive: true, force: true });
       fixtureTemplate = undefined;
     }
+  });
+
+  describe.sequential("fixture cleanup boundary", () => {
+    test("creates a disposable clone fixture", () => {
+      cleanupProbeRoot = makeFixture().root;
+      expect(existsSync(cleanupProbeRoot)).toBe(true);
+    });
+
+    test("removes the disposable clone before the next test", () => {
+      expect(existsSync(cleanupProbeRoot), cleanupProbeRoot).toBe(false);
+    });
   });
 
   test("audits only error and warning logs emitted after Gateway restart", () => {
@@ -559,7 +578,7 @@ describe("openclaw live updater", () => {
   });
 
   test("ignores restart-window logs emitted by a foreign OpenClaw checkout", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-log-attribution-"));
+    const root = tempDirs.make("openclaw-log-attribution-");
     const sourceRoot = path.join(root, "managed/openclaw/dist");
     const foreignRoot = path.join(root, "worktree/openclaw");
     mkdirSync(path.join(foreignRoot, ".git"), { recursive: true });
@@ -609,7 +628,7 @@ describe("openclaw live updater", () => {
   });
 
   test("keeps managed restart logs when the deployment root is symlinked", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-log-symlink-attribution-"));
+    const root = tempDirs.make("openclaw-log-symlink-attribution-");
     const releaseRoot = path.join(root, "releases/abc");
     const releaseDist = path.join(releaseRoot, "dist");
     const linkedRoot = path.join(root, "current");
@@ -639,7 +658,7 @@ describe("openclaw live updater", () => {
   });
 
   test("scopes embedded RPC records without dropping unattributed errors", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-rpc-log-attribution-"));
+    const root = tempDirs.make("openclaw-rpc-log-attribution-");
     const sourceRoot = path.join(root, "managed/openclaw/dist");
     const foreignRoot = path.join(root, "worktree/openclaw");
     mkdirSync(path.join(foreignRoot, ".git"), { recursive: true });
@@ -1076,7 +1095,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
   });
 
   test("pins managed Gateway calls with a backward-compatible local overlay", () => {
-    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-gateway-call-")));
+    const root = realpathSync(tempDirs.make("openclaw-gateway-call-"));
     const checkout = path.join(root, "checkout");
     const entrypoint = path.join(checkout, "dist/index.js");
     const capture = path.join(root, "capture.mjs");
@@ -1832,7 +1851,9 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
         throw new Error("cleanup blocker did not expose a process group id");
       }
       const processGroupId = blocker.pid;
-      const blockerClosed = new Promise<void>((resolve) => blocker.once("close", () => resolve()));
+      const blockerClosed = new Promise<void>((resolve) => {
+        blocker.once("close", () => resolve());
+      });
       const events: string[] = [];
 
       try {
@@ -2679,6 +2700,9 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
               });
             }
           },
+          waitForGatewayProcess: () => {
+            throw new Error("managed process was not observed");
+          },
         },
       );
     } catch (error) {
@@ -3174,6 +3198,126 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
       `/bin/launchctl setenv OPENCLAW_GATEWAY_STARTUP_TRACE already-enabled`,
       "disarm launchd environment restore",
     ]);
+  });
+
+  test("accepts an observed LaunchAgent process after bootstrap reports failure", async () => {
+    const uid = process.getuid?.() ?? 501;
+    const { root, mirror } = makeFixture();
+    mkdirSync(path.join(mirror, "node_modules"));
+    writeBuild(mirror);
+    const source = path.join(mirror, "dist/index.js");
+    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
+    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
+    const calls: string[] = [];
+    let processObserved = false;
+
+    const output = await maintainFixture(
+      { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+      {
+        runCommand(command: string, args: string[]) {
+          const call = [command, ...args].join(" ");
+          calls.push(call);
+          if (command === "/bin/launchctl" && args[0] === "bootstrap") {
+            throw Object.assign(new Error("Bootstrap failed: 5: Input/output error"), {
+              status: 5,
+            });
+          }
+        },
+        inspectGatewayDeployment: () => ({
+          configPath: path.join(root, "openclaw.json"),
+          entrypoint: source,
+          entrypointIndex: 1,
+          executable: process.execPath,
+          invocationPrefix: [source],
+          label: "ai.openclaw.gateway",
+          plistPath,
+          port: 18789,
+          runtime: process.execPath,
+        }),
+        isGatewayLoaded: () => false,
+        verifyGateway: () => {
+          throw new Error("managed job is unloaded");
+        },
+        verifyAndAuditGateway: () => ({
+          entries: 0,
+          errorCount: 0,
+          warningCount: 0,
+          errors: [],
+          warnings: [],
+        }),
+        verifyGatewayRuntime: () => ({ entrypoint: source, pid: 123, port: 18789 }),
+        waitForGatewayProcess: () => {
+          processObserved = true;
+        },
+      },
+    );
+
+    expect(processObserved).toBe(true);
+    expect(output.actions).toMatchObject({
+      gatewayBuild: false,
+      gatewayRestart: true,
+      gatewaySelfHeal: true,
+    });
+    expect(calls).toContain(`/bin/launchctl bootstrap gui/${uid} ${plistPath}`);
+  });
+
+  test("rejects unsafe bootstrap command cleanup before process observation", async () => {
+    const { root, mirror } = makeFixture();
+    mkdirSync(path.join(mirror, "node_modules"));
+    writeBuild(mirror);
+    const source = path.join(mirror, "dist/index.js");
+    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
+    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
+    let processObserved = false;
+
+    const failure = await maintainFixture(
+      { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+      {
+        inspectGatewayDeployment: () => ({
+          configPath: path.join(root, "openclaw.json"),
+          entrypoint: source,
+          entrypointIndex: 1,
+          executable: process.execPath,
+          invocationPrefix: [source],
+          label: "ai.openclaw.gateway",
+          plistPath,
+          port: 18789,
+          runtime: process.execPath,
+        }),
+        isGatewayLoaded: () => false,
+        runManagedCommand: ({ args, bin }: { args: string[]; bin: string }) => {
+          if (bin === "/bin/launchctl" && args[0] === "bootstrap") {
+            throw Object.assign(new Error("launchctl cleanup remained live"), {
+              code: "EPROCESSGROUP_CLEANUP_FAILED",
+              processGroupId: 4321,
+              processTreeState: "live",
+            });
+          }
+          return 0;
+        },
+        verifyGateway: () => {
+          throw new Error("managed job is unloaded");
+        },
+        waitForGatewayProcess: () => {
+          processObserved = true;
+        },
+      },
+    ).catch((error: unknown) => error);
+
+    expect(processObserved).toBe(false);
+    expect(formatUpdateFailure(failure)).toMatchObject({
+      error: {
+        code: "command_cleanup_failed",
+        diagnostics: {
+          kind: "invariant",
+          code: "command_cleanup_failed",
+          details: {
+            processTreeState: "live",
+            serviceState: "stopped",
+          },
+        },
+      },
+    });
   });
 
   test("keeps successful CLI stdout as one machine-readable JSON object", () => {

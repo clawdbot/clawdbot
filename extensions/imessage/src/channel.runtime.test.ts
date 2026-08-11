@@ -59,8 +59,9 @@ describe("startIMessageGatewayAccount duplicate-source handling", () => {
     const settled = vi.fn();
     const task = startIMessageGatewayAccount(ctx).then(settled);
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.waitFor(() => {
+      expect(logEvents.some((event) => event.line.includes("skipping watcher"))).toBe(true);
+    });
     expect(monitorMock).not.toHaveBeenCalled();
     expect(settled).not.toHaveBeenCalled();
     expect(logEvents.some((e) => e.line.includes("skipping watcher"))).toBe(true);
@@ -132,8 +133,11 @@ describe("startIMessageGatewayAccount duplicate-source handling", () => {
     await startIMessageGatewayAccount(owner.ctx);
     const duplicateTask = startIMessageGatewayAccount(duplicate.ctx);
     try {
-      await Promise.resolve();
-      await Promise.resolve();
+      await vi.waitFor(() => {
+        expect(duplicate.logEvents.some((event) => event.line.includes("skipping watcher"))).toBe(
+          true,
+        );
+      });
       expect(monitorMock).toHaveBeenCalledTimes(1);
       expect(duplicate.logEvents.some((event) => event.line.includes("skipping watcher"))).toBe(
         true,
@@ -161,19 +165,11 @@ describe("startIMessageGatewayAccount duplicate-source handling", () => {
       },
     } as never;
     const configured = makeCtx({ cfg, accountId: "secondary" });
-    const task = startIMessageGatewayAccount(configured.ctx);
-
-    try {
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(monitorMock).toHaveBeenCalledTimes(1);
-      expect(configured.statusEvents).toContainEqual(
-        expect.objectContaining({ lifecycle: "starting", accountId: "secondary" }),
-      );
-    } finally {
-      configured.abort();
-      await task;
-    }
+    await startIMessageGatewayAccount(configured.ctx);
+    expect(monitorMock).toHaveBeenCalledTimes(1);
+    expect(configured.statusEvents).toContainEqual(
+      expect.objectContaining({ lifecycle: "starting", accountId: "secondary" }),
+    );
   });
 
   it("starts independent monitors for distinct auto-detected remote wrappers named imsg", async () => {
@@ -201,16 +197,9 @@ describe("startIMessageGatewayAccount duplicate-source handling", () => {
     const second = makeCtx({ cfg, accountId: "secondary" });
 
     await startIMessageGatewayAccount(first.ctx);
-    const secondTask = startIMessageGatewayAccount(second.ctx);
-    try {
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(monitorMock).toHaveBeenCalledTimes(2);
-      expect(second.logEvents.some((event) => event.line.includes("skipping watcher"))).toBe(false);
-    } finally {
-      second.abort();
-      await secondTask;
-    }
+    await startIMessageGatewayAccount(second.ctx);
+    expect(monitorMock).toHaveBeenCalledTimes(2);
+    expect(second.logEvents.some((event) => event.line.includes("skipping watcher"))).toBe(false);
   });
 
   it("starts monitorIMessageProvider when an account has no duplicate sibling", async () => {

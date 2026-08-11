@@ -40,7 +40,7 @@ import {
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { optionalStringEnum } from "./schema/typebox.js";
 import type { ToolDefinition } from "./sessions/index.js";
-import { resolveSwarmConfig } from "./swarm-config.js";
+import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import { isDirectVisibleCatalogTool } from "./tool-search-catalog.js";
 import { formatToolSearchControlResult, type ToolSearchRuntime } from "./tool-search-runtime.js";
 import {

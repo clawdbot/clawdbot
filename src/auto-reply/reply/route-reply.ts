@@ -11,6 +11,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { createChannelReplyTransform } from "../../channels/message/reply-transform.js";
 import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
@@ -25,7 +26,7 @@ import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/m
 import { getReplyPayloadMetadata, type ReplyDeliveryContext } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
-import { normalizeReplyPayload } from "./normalize-reply.js";
+import { normalizeReplyPayloadOutcome } from "./normalize-reply.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import {
   formatBtwTextForExternalDelivery,
@@ -120,6 +121,7 @@ type RouteReplyResult = {
   /** Delivery disposition reason when additional caller context is useful. */
   reason?:
     | "reasoning_payload_not_external"
+    | "channel_transform"
     | "adapter_returned_no_identity"
     | "cancelled_by_message_sending_hook"
     | "cancelled_by_reply_payload_sending_hook"
@@ -202,21 +204,24 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     resolvedAgentId ?? resolveSessionAgentId({ config: cfg }),
     { channel: normalizedChannel, accountId },
   ).responsePrefix;
-  const normalized = normalizeReplyPayload(payload, {
+  const transformReplyPayload = createChannelReplyTransform({ messaging, cfg, accountId });
+  const normalization = normalizeReplyPayloadOutcome(payload, {
     responsePrefix,
     responsePrefixContext: params.responsePrefixContext,
-    transformReplyPayload: messaging?.transformReplyPayload
-      ? (nextPayload) =>
-          messaging.transformReplyPayload?.({
-            payload: nextPayload,
-            cfg,
-            accountId,
-          }) ?? nextPayload
-      : undefined,
+    transformReplyPayload,
   });
-  if (!normalized) {
+  if (normalization.kind === "suppress") {
+    if (normalization.reason === "channel_transform") {
+      return {
+        ok: true,
+        delivered: false,
+        suppressed: true,
+        reason: normalization.reason,
+      };
+    }
     return { ok: true, delivered: false };
   }
+  const normalized = normalization.payload;
   const externalPayload: ReplyPayload = {
     ...normalized,
     text: formatBtwTextForExternalDelivery(normalized),

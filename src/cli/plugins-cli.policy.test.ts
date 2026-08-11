@@ -2,14 +2,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  buildPluginRegistrySnapshotReport,
-  enablePluginInConfig,
+  buildPluginRegistrySnapshotReportMock,
+  enablePluginInConfigMock,
   loadConfig,
   replaceConfigFile,
   refreshPluginRegistry,
   resetPluginsCliTestState,
   runtimeErrors,
-  runtimeLogs,
+  pluginsCliRuntimeLogs,
   runPluginsCommand,
   writeConfigFile,
 } from "./plugins-cli-test-helpers.js";
@@ -35,7 +35,7 @@ describe("plugins cli policy mutations", () => {
   });
 
   function mockPluginRegistry(ids: string[]) {
-    buildPluginRegistrySnapshotReport.mockReturnValue({
+    buildPluginRegistrySnapshotReportMock.mockReturnValue({
       plugins: ids.map((id) => ({ id })),
       diagnostics: [],
       registrySource: "derived",
@@ -74,7 +74,7 @@ describe("plugins cli policy mutations", () => {
       },
     } as OpenClawConfig;
     loadConfig.mockReturnValue(sourceConfig);
-    enablePluginInConfig.mockReturnValue({
+    enablePluginInConfigMock.mockReturnValue({
       config: enabledConfig,
       enabled: true,
       pluginId: "alpha",
@@ -83,7 +83,7 @@ describe("plugins cli policy mutations", () => {
 
     await runPluginsCommand(["plugins", "enable", "alpha"]);
 
-    expect(enablePluginInConfig).toHaveBeenCalledWith(sourceConfig, "alpha", {
+    expect(enablePluginInConfigMock).toHaveBeenCalledWith(sourceConfig, "alpha", {
       updateChannelConfig: false,
     });
     expect(replaceConfigFile).toHaveBeenCalledWith({
@@ -121,7 +121,7 @@ describe("plugins cli policy mutations", () => {
   ])("fails without mutations when $policy blocks enablement", async ({ plugins, reason }) => {
     const sourceConfig = { plugins } as OpenClawConfig;
     loadConfig.mockReturnValue(sourceConfig);
-    enablePluginInConfig.mockReturnValue({
+    enablePluginInConfigMock.mockReturnValue({
       config: sourceConfig,
       enabled: false,
       pluginId: "alpha",
@@ -135,7 +135,7 @@ describe("plugins cli policy mutations", () => {
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
     expect(runtimeErrors).toContain(`Plugin "alpha" could not be enabled (${reason}).`);
-    expect(runtimeLogs).not.toContain(`Plugin "alpha" could not be enabled (${reason}).`);
+    expect(pluginsCliRuntimeLogs).not.toContain(`Plugin "alpha" could not be enabled (${reason}).`);
   });
 
   it("refuses plugin enablement in Nix mode before config mutation", async () => {
@@ -153,7 +153,7 @@ describe("plugins cli policy mutations", () => {
       }
     }
 
-    expect(enablePluginInConfig).not.toHaveBeenCalled();
+    expect(enablePluginInConfigMock).not.toHaveBeenCalled();
     expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
@@ -199,7 +199,7 @@ describe("plugins cli policy mutations", () => {
         },
       } as OpenClawConfig;
       loadConfig.mockReturnValue(sourceConfig);
-      enablePluginInConfig.mockReturnValue({
+      enablePluginInConfigMock.mockReturnValue({
         config: enabledConfig,
         enabled: true,
         pluginId,
@@ -208,7 +208,7 @@ describe("plugins cli policy mutations", () => {
 
       await runPluginsCommand(["plugins", "enable", alias]);
 
-      expect(enablePluginInConfig).toHaveBeenCalledWith(sourceConfig, pluginId, {
+      expect(enablePluginInConfigMock).toHaveBeenCalledWith(sourceConfig, pluginId, {
         updateChannelConfig: false,
       });
       expect(replaceConfigFile).toHaveBeenCalledWith({
@@ -262,7 +262,7 @@ describe("plugins cli policy mutations", () => {
       expect(runtimeErrors).toContain(
         "Plugin not found: missing-plugin. Run `openclaw plugins list` to see installed plugins, or `openclaw plugins search missing-plugin` to look for installable plugins.",
       );
-      expect(enablePluginInConfig).not.toHaveBeenCalled();
+      expect(enablePluginInConfigMock).not.toHaveBeenCalled();
       expect(writeConfigFile).not.toHaveBeenCalled();
       expect(refreshPluginRegistry).not.toHaveBeenCalled();
     },

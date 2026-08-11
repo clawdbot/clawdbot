@@ -91,7 +91,7 @@ export const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =
     .option("--json", "Output JSON", false);
 
 /** Call a Gateway method through the lazily loaded node CLI RPC runtime. */
-export const callGatewayCli = async (
+export const callNodesGatewayCli = async (
   method: string,
   opts: NodesRpcOpts,
   params?: unknown,
@@ -132,7 +132,7 @@ export const callNodeDiagnosticsGatewayCli = async (
   params?: unknown,
 ) => {
   try {
-    return await callGatewayCli(method, opts, params, {
+    return await callNodesGatewayCli(method, opts, params, {
       useStoredDeviceAuth: true,
       requiredStoredDeviceAuthScopes: ["operator.read", "operator.pairing"],
     });
@@ -142,7 +142,7 @@ export const callNodeDiagnosticsGatewayCli = async (
     }
   }
   try {
-    return await callGatewayCli(method, opts, params, {
+    return await callNodesGatewayCli(method, opts, params, {
       scopes: ["operator.read", "operator.pairing"],
       useLocalBackendSharedAuth: true,
     });
@@ -151,7 +151,7 @@ export const callNodeDiagnosticsGatewayCli = async (
       throw error;
     }
   }
-  return await callGatewayCli(method, opts, params);
+  return await callNodesGatewayCli(method, opts, params);
 };
 
 /** Call pairing approval methods with explicit operator scopes. */
@@ -292,10 +292,10 @@ export async function resolveNodeDiagnosticsId(opts: NodesRpcOpts, query: string
 export async function resolveNode(opts: NodesRpcOpts, query: string): Promise<NodeListNode> {
   let nodes: NodeListNode[];
   try {
-    const res = await callGatewayCli("node.list", opts, {});
+    const res = await callNodesGatewayCli("node.list", opts, {});
     nodes = parseNodeList(res);
   } catch {
-    const res = await callGatewayCli("node.pair.list", opts, {});
+    const res = await callNodesGatewayCli("node.pair.list", opts, {});
     const { paired } = parsePairingList(res);
     nodes = paired.map((n) => ({
       nodeId: n.nodeId,

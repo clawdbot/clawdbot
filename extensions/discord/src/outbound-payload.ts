@@ -18,8 +18,9 @@ import {
 } from "./outbound-components.js";
 import { createDiscordPayloadSendContext } from "./outbound-send-context.js";
 import { hasDiscordMessageCreateAmbiguity } from "./retry.js";
-import { createDiscordSendReceipt } from "./send.receipt.js";
+import { createDiscordSendReceipt, createDiscordSendReceiptFromResults } from "./send.receipt.js";
 import type { DiscordSendComponents, DiscordSendEmbeds } from "./send.shared.js";
+import type { DiscordSendResult } from "./send.types.js";
 
 type DiscordOutboundPayloadContext = Parameters<
   NonNullable<ChannelOutboundAdapter["sendPayload"]>
@@ -56,6 +57,7 @@ function resolveDiscordDeliveryOptions(
     accountId: ctx.accountId ?? undefined,
     silent: ctx.silent ?? undefined,
     cfg: ctx.cfg,
+    onPlatformSendDispatch: ctx.onPlatformSendDispatch,
   };
 }
 
@@ -197,14 +199,39 @@ export async function sendDiscordOutboundPayload(params: {
       });
       return attachChannelToResult("discord", result);
     }
-    return await sendTextMediaPayload({
+    const payloadContext = { ...ctx, payload };
+    const deliveredResults: DiscordSendResult[] = [];
+    let createdThreadId: string | undefined;
+    payloadContext.onDeliveryResult = async (result) => {
+      await ctx.onDeliveryResult?.(result);
+      const threadId = result.receipt?.threadId;
+      if (threadId && payloadContext.threadId == null) {
+        // A forum parent creates its conversation on the first platform send.
+        payloadContext.threadId = threadId;
+        createdThreadId = threadId;
+      }
+      if (createdThreadId && result.channelId && result.receipt) {
+        deliveredResults.push({
+          messageId: result.messageId,
+          channelId: result.channelId,
+          receipt: result.receipt,
+        });
+      }
+    };
+    const result = await sendTextMediaPayload({
       channel: "discord",
-      ctx: {
-        ...ctx,
-        payload,
-      },
+      ctx: payloadContext,
       adapter: params.fallbackAdapter,
     });
+    return createdThreadId
+      ? {
+          ...result,
+          receipt: createDiscordSendReceiptFromResults({
+            results: deliveredResults,
+            threadId: createdThreadId,
+          }),
+        }
+      : result;
   }
 
   const result = await sendPayloadMediaSequenceOrFallback({

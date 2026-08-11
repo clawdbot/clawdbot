@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { parseAgentSessionKey, parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
-import { asOptionalRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCanonicalSessionKeyFromSessionId } from "./session.js";
 import {
   DEFAULT_AGENT_ID,
@@ -108,7 +108,7 @@ function formatActiveMemoryCommandHelp(): string {
 }
 
 function isActiveMemoryGloballyEnabled(cfg: OpenClawConfig): boolean {
-  const entry = asRecord(cfg.plugins?.entries?.["active-memory"]);
+  const entry = asOptionalRecord(cfg.plugins?.entries?.["active-memory"]);
   if (entry?.enabled === false) {
     return false;
   }
@@ -142,8 +142,8 @@ function updateActiveMemoryGlobalEnabledInConfig(
   enabled: boolean,
 ): OpenClawConfig {
   const entries = { ...cfg.plugins?.entries };
-  const existingEntry = asRecord(entries["active-memory"]) ?? {};
-  const existingConfig = asRecord(existingEntry.config) ?? {};
+  const existingEntry = asOptionalRecord(entries["active-memory"]) ?? {};
+  const existingConfig = asOptionalRecord(existingEntry.config) ?? {};
   entries["active-memory"] = {
     ...existingEntry,
     enabled: true,

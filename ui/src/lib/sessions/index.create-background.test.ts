@@ -4,7 +4,7 @@ import type { SessionsListResult } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createSessionCapability } from "./index.ts";
 
-it("carries submitted work placement and model through background list reconciliation", async () => {
+it("claims created placement while carrying work metadata through background reconciliation", async () => {
   let resolveList: (result: SessionsListResult) => void = () => undefined;
   const pendingList = new Promise<SessionsListResult>((resolve) => {
     resolveList = resolve;
@@ -40,7 +40,8 @@ it("carries submitted work placement and model through background list reconcili
       { reconciliation: "background" },
     ),
   ).resolves.toMatchObject({ key });
-  expect(created).not.toHaveBeenCalled();
+  expect(created).toHaveBeenCalledOnce();
+  expect(created).toHaveBeenCalledWith(key);
   expect(sessions.isPreparedWorkSession(key)).toBe(true);
   expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-5.6-sol");
 
@@ -58,7 +59,8 @@ it("carries submitted work placement and model through background list reconcili
       },
     ],
   });
-  await waitForFast(() => expect(created).toHaveBeenCalledWith(key));
+  await waitForFast(() => expect(sessions.isPreparedWorkSession(key)).toBe(false));
+  expect(created).toHaveBeenCalledOnce();
   expect(sessions.isPreparedWorkSession(key)).toBe(false);
   sessions.dispose();
 });

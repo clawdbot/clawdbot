@@ -10,9 +10,11 @@ import {
   clampTimerTimeoutMs,
   finiteSecondsToTimerSafeMilliseconds,
   isFutureDateTimestampMs,
+  MAX_DATE_TIMESTAMP_MS,
   MAX_TIMER_TIMEOUT_MS,
   MAX_TIMER_TIMEOUT_SECONDS,
   nonNegativeSecondsToSafeMilliseconds,
+  parseDateTimestampMs,
   parseFiniteNumber,
   positiveSecondsToSafeMilliseconds,
   resolveIntegerOption,
@@ -137,6 +139,35 @@ describe("number-coercion", () => {
     expect(timestampMsToIsoString(8_640_000_000_000_001)).toBeUndefined();
     expect(timestampMsToIsoString(Number.POSITIVE_INFINITY)).toBeUndefined();
     expect(timestampMsToIsoString("0")).toBeUndefined();
+  });
+
+  test.each([
+    { value: 0, expected: 0 },
+    { value: 1_700_000_000_000, expected: 1_700_000_000_000 },
+    { value: "0", expected: 0 },
+    { value: " 1e3 ", expected: 1_000 },
+    { value: "2026-07-13T10:00:00.000Z", expected: 1_783_936_800_000 },
+    { value: -MAX_DATE_TIMESTAMP_MS, expected: -MAX_DATE_TIMESTAMP_MS },
+    { value: String(MAX_DATE_TIMESTAMP_MS), expected: MAX_DATE_TIMESTAMP_MS },
+  ])("parseDateTimestampMs parses $value as milliseconds", ({ value, expected }) => {
+    expect(parseDateTimestampMs(value)).toBe(expected);
+  });
+
+  test.each([
+    new Date("2026-07-13T10:00:00.000Z"),
+    true,
+    false,
+    "",
+    "   ",
+    "123ms",
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    MAX_DATE_TIMESTAMP_MS + 1,
+    String(MAX_DATE_TIMESTAMP_MS + 1),
+    "+275761-01-01T00:00:00.000Z",
+  ])("parseDateTimestampMs rejects %o", (value) => {
+    expect(parseDateTimestampMs(value)).toBeUndefined();
   });
 
   test("future timestamp helper rejects invalid Date timestamps", () => {

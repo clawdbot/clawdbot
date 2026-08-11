@@ -337,9 +337,9 @@ Supported surfaces:
   `streaming.preview.toolProgress` or `streaming.progress.toolProgress` to
   `false` for that channel (both default `true`, and both are honored in every
   mode). To keep tool-progress lines visible while hiding command/exec text,
-  set `streaming.preview.commandText` to `"status"` or
-  `streaming.progress.commandText` to `"status"`; the default is `"raw"` to
-  preserve released behavior. This policy is shared by draft/progress channels
+  set `streaming.preview.commandText` or `streaming.progress.commandText` to
+  `"status"` (the default). Set either option to `"raw"` to opt into command
+  text. This policy is shared by draft/progress channels
   that use OpenClaw's compact progress renderer, including Discord, Matrix,
   Microsoft Teams, Mattermost, Slack draft previews, and Telegram. To disable
   preview edits entirely, set `streaming.mode` to `off`.

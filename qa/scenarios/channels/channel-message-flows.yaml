@@ -29,6 +29,7 @@ scenario:
     - extensions/telegram/src/draft-stream.ts
   execution:
     kind: flow
+    retryCount: 0
     channels:
       - qa-channel
       - telegram

@@ -13,6 +13,7 @@ import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { formatPhoneNumberForCli } from "../../infra/phone-number-presentation.js";
 import { listConfiguredAnnounceChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { requireValidConfig } from "../config-validation.js";
 import {
   appendBaseUrlBit,
   appendEnabledConfiguredLinkedBits,
@@ -20,7 +21,6 @@ import {
   appendTokenSourceBits,
   buildChannelAccountLine,
   type ChatChannel,
-  requireValidConfigSnapshot,
 } from "./shared.js";
 import { formatConfigChannelsStatusLines } from "./status-config-format.js";
 import type { ChannelsStatusOptions } from "./status.js";
@@ -217,7 +217,7 @@ export async function renderChannelsStatusFallback(params: {
   runtime.error(
     `${gatewayAuthUnavailable ? "Gateway auth unavailable" : "Gateway not reachable"}: ${safeError}`,
   );
-  const cfg = await requireValidConfigSnapshot(runtime);
+  const cfg = await requireValidConfig(runtime);
   if (!cfg) {
     return;
   }

@@ -582,27 +582,6 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     expect(params.onlyPluginIds).toEqual(["kilocode"]);
   });
 
-  it("enables bundled provider Vitest compat when falling back from discovery entries", () => {
-    const fullProviders = [createProvider({ id: "deepseek", mode: "catalog" })];
-    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue([]);
-    mocks.resolvePluginProviders.mockReturnValue(fullProviders);
-
-    expect(
-      resolvePluginDiscoveryProvidersRuntime({
-        env: { VITEST: "true" } as NodeJS.ProcessEnv,
-        onlyPluginIds: ["deepseek"],
-      }),
-    ).toEqual(fullProviders);
-
-    expect(mocks.resolvePluginProviders).toHaveBeenCalledTimes(1);
-    expect(requireResolvePluginProvidersParams()).toEqual(
-      expect.objectContaining({
-        bundledProviderVitestCompat: true,
-        onlyPluginIds: ["deepseek"],
-      }),
-    );
-  });
-
   it("shares one metadata snapshot between provider id discovery and entry loading", () => {
     const registry = { plugins: [] };
     const manifestRegistry = {

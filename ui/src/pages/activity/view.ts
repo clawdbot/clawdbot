@@ -48,7 +48,7 @@ function formatDuration(value: number): string {
   if (!Number.isFinite(value) || value < 0) {
     return t("common.na");
   }
-  return formatDurationCompact(value, { spaced: true }) ?? "0ms";
+  return formatDurationCompact(value) ?? "0ms";
 }
 
 function statusLabel(status: ActivityStatus): string {

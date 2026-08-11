@@ -653,10 +653,15 @@ describe("registerSlackMessageEvents", () => {
         ...makeChangedEvent({ channel: "C1", user: "U1" }),
         channel_type: "channel",
       },
+      body: { event_id: "Ev-message-change-1" },
     });
 
     expect(handleSlackMessage).not.toHaveBeenCalled();
     expect(messageQueueMock).toHaveBeenCalledTimes(1);
+    expect(messageQueueMock).toHaveBeenCalledWith("Slack message edited in #general.", {
+      sessionKey: "agent:main:main",
+      contextKey: "slack:message:changed:C1:123.456:Ev-message-change-1",
+    });
   });
 
   it("keeps bot edit and delete events on a remembered C-prefix mpDM session", async () => {

@@ -176,10 +176,11 @@ function readTuiPtyCase(value: unknown, index: number): TuiPtyCase {
     );
   }
   try {
-    new RegExp(testNamePattern);
+    RegExp(testNamePattern);
   } catch (error) {
     throw new Error(
       `execution.config.tuiPtyCases[${index}].testNamePattern is invalid: ${formatErrorMessage(error)}`,
+      { cause: error },
     );
   }
   return { coverageId, testFile, testNamePattern };
@@ -266,6 +267,10 @@ export function buildTuiPtyVitestCommand(params: {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     OPENCLAW_BEHAVIOR_EVIDENCE: "1",
+    OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(
+      path.dirname(params.reportPath),
+      "vitest-fs-module-cache",
+    ),
   };
   if (usesLocalPty) {
     env.OPENCLAW_TUI_PTY_INCLUDE_LOCAL = "1";

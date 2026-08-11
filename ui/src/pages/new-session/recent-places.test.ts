@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { isKnownWorkspacePath } from "./path.ts";
 import { recentPlaces } from "./recent-places.ts";
 
 describe("recentPlaces", () => {
@@ -22,6 +23,7 @@ describe("recentPlaces", () => {
         {
           workspace: "/workspace",
           execNodes: [{ nodeId: "macbook" }],
+          allowGatewayFolder: () => true,
         },
       ),
     ).toEqual([
@@ -30,5 +32,22 @@ describe("recentPlaces", () => {
       { folder: "/worktree/one", execNode: "" },
       { folder: "/cwd/two", execNode: "" },
     ]);
+  });
+
+  it("filters Gateway recents through the viewer's folder boundary", () => {
+    expect(
+      recentPlaces(
+        [
+          { execCwd: "/workspace/packages/app" },
+          { execCwd: "/workspace-other/private" },
+          { execCwd: "/node/repo", execNode: "macbook" },
+        ],
+        {
+          workspace: "/workspace",
+          execNodes: [],
+          allowGatewayFolder: (folder) => isKnownWorkspacePath(["/workspace"], folder),
+        },
+      ),
+    ).toEqual([{ folder: "/workspace/packages/app", execNode: "" }]);
   });
 });

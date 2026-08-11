@@ -3,6 +3,9 @@ import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { parseMusicGenerationModelRef } from "../media-generation/model-ref.js";
+import { getMusicGenerationProvider } from "../media-generation/registry.js";
+import { listMusicGenerationProviders } from "../media-generation/registry.js";
 import {
   buildMediaGenerationNormalizationMetadata,
   buildNoCapabilityModelConfiguredMessage,
@@ -11,9 +14,7 @@ import {
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
-import { parseMusicGenerationModelRef } from "./model-ref.js";
 import { resolveMusicGenerationOverrides } from "./normalization.js";
-import { getMusicGenerationProvider, listMusicGenerationProviders } from "./provider-registry.js";
 import type { GenerateMusicParams, GenerateMusicRuntimeResult } from "./runtime-types.js";
 import type { MusicGenerationResult } from "./types.js";
 
