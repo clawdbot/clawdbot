@@ -305,6 +305,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
     "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
     "server-close.runtime": "src/gateway/server-close.runtime.ts",
+    "gateway/plugin-channel-reload-targets": "src/gateway/plugin-channel-reload-targets.ts",
     "gateway/worker-environments/runtime": "src/gateway/worker-environments/runtime.ts",
     "worker/workspace-rsync-receiver": "src/worker/workspace-rsync-receiver.ts",
     "plugins/hook-runner-global": "src/plugins/hook-runner-global.ts",

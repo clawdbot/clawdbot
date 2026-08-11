@@ -22,10 +22,6 @@ import {
 } from "./methods/registry.js";
 import { isLoopbackHost } from "./net.js";
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
-import {
-  listChannelPluginConfigTargetIds,
-  pluginConfigTargetsChanged,
-} from "./plugin-channel-reload-targets.js";
 import type { prepareGatewayLifecycle } from "./server-lifecycle.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
@@ -392,17 +388,6 @@ export async function startGatewayCoreRuntime(input: {
       logDiscovery.warn(`gateway discovery refresh failed after plugin load: ${String(err)}`);
     }
   };
-  const listAttachedChannelConfigTargets = () =>
-    new Map(
-      listGatewayStartupChannelPlugins().map((plugin) => [
-        plugin.id,
-        listChannelPluginConfigTargetIds({
-          channelId: plugin.id,
-          pluginId: getLoadedChannelPluginEntryById(plugin.id)?.pluginId,
-          aliases: plugin.meta.aliases,
-        }),
-      ]),
-    );
   const reloadAttachedGatewayPlugins = async (params: {
     nextConfig: OpenClawConfig;
     changedPaths: readonly string[];
@@ -411,19 +396,32 @@ export async function startGatewayCoreRuntime(input: {
     env: NodeJS.ProcessEnv;
     isAborted?: () => boolean;
   }): Promise<GatewayPluginReloadResult> => {
-    const beforeChannelTargets = listAttachedChannelConfigTargets();
-    const beforeChannelIds = new Set(beforeChannelTargets.keys());
     const [
       { loadPluginLookUpTable },
       { listAmbientOnlyConfiguredChannelIds },
       { prepareGatewayPluginLoad },
       { startPluginServices },
+      { listChannelPluginConfigTargetIds, pluginConfigTargetsChanged },
     ] = await Promise.all([
       import("../plugins/plugin-lookup-table.js"),
       import("../plugins/channel-presence-policy.js"),
       loadGatewayPluginBootstrapModule(),
       import("../plugins/services.js"),
+      import("./plugin-channel-reload-targets.js"),
     ]);
+    const listAttachedChannelConfigTargets = () =>
+      new Map(
+        listGatewayStartupChannelPlugins().map((plugin) => [
+          plugin.id,
+          listChannelPluginConfigTargetIds({
+            channelId: plugin.id,
+            pluginId: getLoadedChannelPluginEntryById(plugin.id)?.pluginId,
+            aliases: plugin.meta.aliases,
+          }),
+        ]),
+      );
+    const beforeChannelTargets = listAttachedChannelConfigTargets();
+    const beforeChannelIds = new Set(beforeChannelTargets.keys());
     const nextPluginActivationConfig = resolveGatewayStartupPluginActivationConfig({
       runtimeConfig: params.nextConfig,
       activationSourceConfig: params.nextConfig,

@@ -176,7 +176,7 @@ export type GatewayReloadHandlerParams = {
 
 export type ManagedGatewayConfigReloaderParams = Omit<
   GatewayReloadHandlerParams,
-  "createHealthMonitor" | "logReload"
+  "assertRestartReady" | "createHealthMonitor" | "logReload"
 > & {
   minimalTestGateway: boolean;
   initialConfig: OpenClawConfig;

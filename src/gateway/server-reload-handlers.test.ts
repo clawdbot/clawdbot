@@ -227,6 +227,7 @@ const hoisted = vi.hoisted(() => ({
   activeEmbeddedRunSessionKeys: [] as string[],
   markRestartAbortedMainSessions: vi.fn(async (_params: unknown) => ({ marked: 1, skipped: 0 })),
   runtimeConfig: { value: { session: { store: "/tmp/active-sessions.json" } } as OpenClawConfig },
+  assertOpenClawDatabasesReadyForRestart: vi.fn(() => {}),
   resetSkillSnapshotConfigFingerprintCache: vi.fn(),
   reloadEvents: [] as string[],
   loadModelCatalog: vi.fn(async (_params: { config: OpenClawConfig }) => []),
@@ -312,6 +313,10 @@ vi.mock("../config/config.js", async () => {
     getRuntimeConfig: () => hoisted.runtimeConfig.value,
   };
 });
+
+vi.mock("../state/openclaw-database-preflight.js", () => ({
+  assertOpenClawDatabasesReadyForRestart: hoisted.assertOpenClawDatabasesReadyForRestart,
+}));
 
 vi.mock("../skills/runtime/snapshot-config-fingerprint.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../skills/runtime/snapshot-config-fingerprint.js")>()),
@@ -759,7 +764,6 @@ function createManagedRestartSequenceHarness(
   const requestRecoveryRestart = vi.fn<NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>>(
     () => ({ status: "emitted" }),
   );
-  const assertRestartReady = vi.fn(async () => {});
   const sharedGatewaySessionGenerationState = { current: undefined, required: null };
   let generationInvalidated = false;
   const reloader = startManagedGatewayConfigReloader({
@@ -789,7 +793,6 @@ function createManagedRestartSequenceHarness(
     acceptTerminalConfig: terminalPolicy.acceptConfig,
     sharedGatewaySessionGenerationState,
     requestRecoveryRestart,
-    assertRestartReady,
   });
   const writeConfig = (
     config: OpenClawConfig,
@@ -812,7 +815,7 @@ function createManagedRestartSequenceHarness(
 
   return {
     activateRuntimeSecrets,
-    assertRestartReady,
+    assertRestartReady: hoisted.assertOpenClawDatabasesReadyForRestart,
     deferredConfig,
     initialConfig,
     invalidConfig,
@@ -879,6 +882,7 @@ afterEach(() => {
   hoisted.activeEmbeddedRunSessionKeys.length = 0;
   hoisted.markRestartAbortedMainSessions.mockClear();
   hoisted.runtimeConfig.value = { session: { store: "/tmp/active-sessions.json" } };
+  hoisted.assertOpenClawDatabasesReadyForRestart.mockClear();
   hoisted.reloadEvents.length = 0;
   hoisted.markPreparedModelRuntimeSnapshotsStale.mockClear();
   hoisted.rejectPendingPreparedModelRuntimeReplacement.mockClear();
