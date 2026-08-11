@@ -3081,15 +3081,19 @@ public struct ProjectsListParams: Codable, Sendable {}
 
 public struct ProjectsListResult: Codable, Sendable {
     public let projects: [ProjectsRegisterResult]
+    public let recents: [ProjectRecent]?
 
     public init(
-        projects: [ProjectsRegisterResult])
+        projects: [ProjectsRegisterResult],
+        recents: [ProjectRecent]? = nil)
     {
         self.projects = projects
+        self.recents = recents
     }
 
     private enum CodingKeys: String, CodingKey {
         case projects
+        case recents
     }
 }
 
