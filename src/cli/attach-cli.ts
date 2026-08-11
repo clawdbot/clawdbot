@@ -221,13 +221,15 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
           // keep the parent alive indefinitely by ignoring SIGINT.
           forceKillTimer = setTimeout(() => {
             forceKillTimer = undefined;
-            child.kill("SIGKILL");
-            // Record the forced signal so finish() returns SIGKILL's
-            // exit code (128+9) even when the child exit event has not
-            // fired yet. Without this, finish() falls back to 0 and
-            // shell callers see successful completion after forced
-            // termination.
-            childExitSignal = "SIGKILL";
+            const delivered = child.kill("SIGKILL");
+            // Node child-process contract: kill() returns true when the
+            // signal was successfully delivered. A false return means the
+            // child has already exited or delivery was not confirmed, so
+            // the authoritative outcome lives in the child's exit handler
+            // — do not overwrite it.
+            if (delivered) {
+              childExitSignal = "SIGKILL";
+            }
             void (async () => {
               await revokeOnce();
               finish();

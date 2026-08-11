@@ -318,16 +318,39 @@ describe("openclaw attach (action)", () => {
       const handler = sigintListeners[sigintListeners.length - 1] as () => void;
       handler();
       expect(spawnedChild.kill).toHaveBeenCalledWith("SIGINT");
-      // Child survives SIGINT — timer should escalate to SIGKILL
+      // Child survives SIGINT — timer should escalate to SIGKILL.
+      // kill() must return true for the force-kill path to record
+      // the signal and report exit code 128+9.
+      spawnedChild.kill.mockReturnValueOnce(true);
       vi.advanceTimersByTime(5_000);
       expect(spawnedChild.kill).toHaveBeenCalledWith("SIGKILL");
-      // finish() must report SIGKILL's exit code (128+9) even before
-      // the child exit event fires — the force-kill path records
-      // childExitSignal = "SIGKILL" synchronously so callers never see
-      // a misleading success (0) after forced termination.
       await vi.runAllTimersAsync();
       expect(gatewayCalls.find((c) => c.method === "attach.revoke")?.params.token).toBe("tok-123");
       expect(exitCode).toBe(128 + 9); // SIGKILL
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not report SIGKILL when kill delivery fails (child already exited)", async () => {
+    vi.useFakeTimers();
+    try {
+      await runAttach("--session", "agent:main:spawn");
+      const sigintListeners = process.listeners("SIGINT");
+      const handler = sigintListeners[sigintListeners.length - 1] as () => void;
+      handler();
+      expect(spawnedChild.kill).toHaveBeenCalledWith("SIGINT");
+      // kill() returns false: the child has already exited, so the
+      // forced signal was not delivered. The child exit handler owns
+      // the authoritative outcome.
+      spawnedChild.kill.mockReturnValueOnce(false);
+      vi.advanceTimersByTime(5_000);
+      expect(spawnedChild.kill).toHaveBeenCalledWith("SIGKILL");
+      // The timer path revokes and finishes, but exitCode must reflect
+      // the already-delivered child exit status (0), not SIGKILL.
+      await vi.runAllTimersAsync();
+      expect(gatewayCalls.find((c) => c.method === "attach.revoke")?.params.token).toBe("tok-123");
+      expect(exitCode).toBe(0);
     } finally {
       vi.useRealTimers();
     }
@@ -345,7 +368,9 @@ describe("openclaw attach (action)", () => {
       // Second Ctrl+C before escalation fires: must clear the first timer
       handler();
       // Advance well past the first timer's deadline; only the second
-      // timer should still be alive.
+      // timer should still be alive. The SIGKILL call must return true
+      // so the force-kill path records the signal.
+      spawnedChild.kill.mockImplementation((signal: string) => signal === "SIGKILL");
       vi.advanceTimersByTime(5_000);
       expect(spawnedChild.kill).toHaveBeenCalledTimes(3); // SIGINT ×2 + SIGKILL
       spawnedChild.emit("exit", null, "SIGKILL");
