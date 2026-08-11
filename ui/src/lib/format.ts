@@ -97,7 +97,7 @@ export function formatRelativeTimestamp(
 
 export function formatDurationCompact(
   ms?: number | null,
-  options: FormatDurationCompactOptions = {},
+  options: FormatDurationCompactOptions = { spaced: true },
 ): string | undefined {
   const coreValue = formatDurationCompactCore(ms, options);
   if (!coreValue || ms == null || !Number.isFinite(ms) || ms <= 0) {
