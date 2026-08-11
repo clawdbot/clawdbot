@@ -72,6 +72,18 @@ function mcpOAuthAdditionalAuthorizationError(serverName: string): Error {
   );
 }
 
+function bindMcpOAuthTokensIssuer(store: McpOAuthStore): McpOAuthStore {
+  const issuedBy = store.discoveryState?.authorizationServerUrl;
+  if (
+    !store.tokens?.refresh_token ||
+    store.tokensAuthorizationServerUrl !== undefined ||
+    issuedBy === undefined
+  ) {
+    return store;
+  }
+  return { ...store, tokensAuthorizationServerUrl: issuedBy };
+}
+
 function applyMcpOAuthAuthorizationChallenge(
   current: McpOAuthStore,
   params: {
@@ -104,7 +116,9 @@ function applyMcpOAuthAuthorizationChallenge(
     params.resourceMetadataUrl &&
     current.discoveryState?.resourceMetadataUrl !== params.resourceMetadataUrl
   ) {
-    delete next.discoveryState;
+    const bound = bindMcpOAuthTokensIssuer(next);
+    delete bound.discoveryState;
+    return bound;
   }
   return next;
 }
@@ -197,6 +211,7 @@ export async function resolveMcpOAuthAccessToken(
       }
 
       const pendingChallenge = store.pendingAuthorizationChallenge;
+      updateMcpOAuthStore(storeKey, bindMcpOAuthTokensIssuer, bindMcpOAuthLeaseAssertion(lease));
       const provider = createMcpOAuthClientProvider({ ...params, lease });
       const result = await auth(provider, {
         serverUrl: params.serverUrl,

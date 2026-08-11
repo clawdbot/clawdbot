@@ -172,7 +172,7 @@ export function buildSuppressedBuiltInModelError(params: {
 }
 
 /** Build a reusable suppression predicate for repeated catalog filtering. */
-export function buildShouldSuppressBuiltInModel(params: {
+export function buildShouldSuppressBuiltInModelCore(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
 }): (input: { provider?: string | null; id?: string | null; baseUrl?: string | null }) => boolean {

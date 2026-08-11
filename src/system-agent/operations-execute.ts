@@ -142,8 +142,8 @@ export async function executeSystemAgentOperation(
       return { applied: false };
     }
     case "config-schema": {
-      const { buildConfigSchema, lookupConfigSchema } = await import("../config/schema.js");
-      const response = buildConfigSchema();
+      const { buildConfigSchemaCore, lookupConfigSchema } = await import("../config/schema.js");
+      const response = buildConfigSchemaCore();
       const path = operation.path ?? ".";
       const result = lookupConfigSchema(response, path);
       if (!result) {

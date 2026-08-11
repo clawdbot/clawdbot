@@ -5,7 +5,7 @@ import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
-import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
+import { collectBundledChannelConfigsCore } from "./bundled-channel-config-metadata.js";
 import {
   listBundledPluginMetadata,
   resolveBundledPluginGeneratedPath,
@@ -143,7 +143,7 @@ let repoBundledPluginManifestsCache:
   | undefined;
 const repoBundledChannelConfigsCache = new Map<
   string,
-  ReturnType<typeof collectBundledChannelConfigs>
+  ReturnType<typeof collectBundledChannelConfigsCore>
 >();
 
 function listRepoBundledPluginMetadata(): readonly BundledPluginMetadata[] {
@@ -292,7 +292,7 @@ function collectRepoBundledChannelConfigsForTest(dirName: string) {
   if (!manifest.ok) {
     throw toLintErrorObject(manifest.error, "Non-Error thrown");
   }
-  const configs = collectBundledChannelConfigs({
+  const configs = collectBundledChannelConfigsCore({
     pluginDir,
     manifest: manifest.manifest,
     packageManifest: getPackageManifestMetadata(readPackageManifest(pluginDir)),

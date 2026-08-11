@@ -21,7 +21,7 @@ import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { verifyPairingToken } from "../infra/pairing-token.js";
 import { isWithinDir } from "../infra/path-safety.js";
-import { assertLocalMediaAllowed, getDefaultLocalRoots } from "../media/local-media-access.js";
+import { assertLocalMediaAllowed, getDefaultLocalRootsCore } from "../media/local-media-access.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import { probePlaybackMediaFileDescriptor, type MediaProbeResult } from "../media/media-probe.js";
 import {
@@ -699,7 +699,7 @@ export async function handleControlUiAssistantMediaRequest(
   }
   const localRoots = opts?.config
     ? getAgentScopedMediaLocalRoots(opts.config, opts.agentId)
-    : getDefaultLocalRoots();
+    : getDefaultLocalRootsCore();
 
   if (isMetaRequest) {
     const availability = await resolveAssistantMediaAvailability(source, localRoots);
