@@ -328,6 +328,7 @@ export async function prepareAgentRunDispatch(params: {
       logGateway: params.context.logGateway,
     }),
     modelRun: params.isOneShotModelRun,
+    runId: params.runId,
   });
   const dispatchTaskTrackingMode: PreparedAgentRunDispatch["dispatchTaskTrackingMode"] =
     taskTrackingMode === "cli" ? "cli" : "none";

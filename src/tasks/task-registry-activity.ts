@@ -117,7 +117,27 @@ function readEditPairs(args: Record<string, unknown>): EditPair[] {
 
 function readPatchDelta(args: Record<string, unknown>): DiffDelta | undefined {
   if (typeof args.input !== "string") {
-    return undefined;
+    let added = 0;
+    let removed = 0;
+    const files: string[] = [];
+    for (const candidate of Array.isArray(args.changes) ? args.changes : []) {
+      const change = asOptionalObjectRecord(candidate);
+      const target = change ? readTarget(change) : undefined;
+      if (!change || !target) {
+        continue;
+      }
+      files.push(target);
+      const stat = asOptionalObjectRecord(change.stat);
+      added +=
+        typeof stat?.added === "number" && Number.isFinite(stat.added)
+          ? Math.max(0, stat.added)
+          : 0;
+      removed +=
+        typeof stat?.removed === "number" && Number.isFinite(stat.removed)
+          ? Math.max(0, stat.removed)
+          : 0;
+    }
+    return files.length > 0 ? { files, added, removed } : undefined;
   }
   const files = extractApplyPatchTargetPaths(args);
   if (files.length === 0) {

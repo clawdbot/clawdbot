@@ -2572,6 +2572,38 @@ describe("gateway agent handler", () => {
       });
     });
 
+    it("keeps a host-owned subagent run to its pre-registered task row", async () => {
+      await withTempDir({ prefix: "openclaw-gateway-subagent-owner-" }, async (root) => {
+        useTestStateDir(root);
+        resetAgentTaskRegistryForTests();
+        const childSessionKey = "agent:main:subagent:owned";
+        const runId = "host-owned-subagent-run";
+        mockAcpChildSessionEntry(childSessionKey);
+        getDetachedTaskLifecycleRuntime().createRunningTaskRun({
+          runtime: "subagent",
+          requesterSessionKey: "agent:main:main",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          childSessionKey,
+          runId,
+          task: "Run one owned subagent",
+          deliveryStatus: "pending",
+        });
+        const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
+
+        await invokeAgent(
+          { message: "host-owned child turn", sessionKey: childSessionKey, idempotencyKey: runId },
+          { reqId: runId, client: backendGatewayClient() },
+        );
+        await waitForAgentCommandCall();
+
+        expect(createRunningTaskRunSpy).not.toHaveBeenCalled();
+        expect(listTaskRecords().filter((task) => task.runId === runId)).toEqual([
+          expect.objectContaining({ runtime: "subagent", childSessionKey }),
+        ]);
+      });
+    });
+
     it("keeps CLI tracking when a non-backend operator-write caller sets acpTurnSource", async () => {
       await withTempDir({ prefix: "openclaw-gateway-acp-operator-write-" }, async (root) => {
         useTestStateDir(root);
