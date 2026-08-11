@@ -44,7 +44,7 @@ import { createIdleTimeoutBreakerState } from "./run/idle-timeout-breaker.js";
 import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
-} from "./run/incomplete-turn.js";
+} from "./run/incomplete-turn-recovery.js";
 import { measureEmbeddedAgentPreparation } from "./run/preparation-timing.js";
 import {
   beginRunAttempt,
