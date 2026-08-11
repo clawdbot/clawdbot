@@ -92,6 +92,8 @@ Channels that normally render commentary in one evolving progress draft can also
 `shouldDeliverCommentaryPayloads`. Core freezes verbose visibility for the turn, registers that
 getter through `onVerboseProgressVisibility`, evaluates the delivery callback once before
 dispatch, and snapshots that result for the whole turn. Session changes apply on the next turn.
+The callback is inert unless `commentaryPayloadsEnabled` is also `true`; without that static
+opt-in, core neither evaluates the callback nor freezes the registered visibility getter.
 
 Return `false` while the draft owns normal progress and `true` when verbose progress makes that
 draft yield to durable commentary. Keep the callback synchronous and read only channel-owned,

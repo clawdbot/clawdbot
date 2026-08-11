@@ -265,8 +265,8 @@ export type GetReplyOptions = {
   reasoningPayloadsEnabled?: boolean;
   /** Deliver durable commentary (💬) payloads to channels that own a separate commentary lane. */
   commentaryPayloadsEnabled?: boolean;
-  /** With the static opt-in, evaluated once after frozen verbose visibility registers.
-   * Omit to retain durable delivery; the result is snapshotted for the turn. */
+  /** Optional turn-frozen commentary owner; visibility is live by default.
+   * With the static opt-in and this callback, core freezes, evaluates once, and snapshots. */
   shouldDeliverCommentaryPayloads?: () => boolean;
   /** Called when the agent emits a structured plan update. */
   onPlanUpdate?: (payload: {
