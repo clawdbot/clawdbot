@@ -35,7 +35,7 @@ export type CandidateSkillDir = {
   skillMdRealPath: string;
 };
 
-export type DiscoveredSkillCandidates = {
+type DiscoveredSkillCandidates = {
   candidates: CandidateSkillDir[];
   rootIsSkill: boolean;
 };
