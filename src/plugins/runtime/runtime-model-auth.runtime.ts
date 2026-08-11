@@ -1,6 +1,6 @@
 // Runtime model auth helpers expose provider auth resolution to plugin runtimes.
 import {
-  getApiKeyForModel as resolveModelApiKey,
+  getApiKeyForModelCore,
   resolveApiKeyForProvider as resolveProviderApiKey,
 } from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -9,9 +9,9 @@ import { prepareProviderRuntimeAuth } from "../provider-runtime.runtime.js";
 import type { ResolvedProviderRuntimeAuth } from "./model-auth-types.js";
 
 export async function getApiKeyForModel(
-  params: Parameters<typeof resolveModelApiKey>[0],
-): Promise<Awaited<ReturnType<typeof resolveModelApiKey>>> {
-  return resolveModelApiKey(params);
+  params: Parameters<typeof getApiKeyForModelCore>[0],
+): Promise<Awaited<ReturnType<typeof getApiKeyForModelCore>>> {
+  return getApiKeyForModelCore(params);
 }
 
 export async function resolveApiKeyForProvider(
@@ -29,7 +29,7 @@ export async function getRuntimeAuthForModelCore(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
 }): Promise<ResolvedProviderRuntimeAuth> {
-  const resolvedAuth = await resolveModelApiKey({
+  const resolvedAuth = await getApiKeyForModelCore({
     model: params.model,
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,

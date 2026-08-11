@@ -308,7 +308,10 @@ export function createHarness(
       return minted;
     }),
     startTunnel: vi.fn(async ({ ownerEpoch }) => {
-      fail(ownerEpoch === 1 ? "tunnel:ready" : "tunnel:attached");
+      fail("tunnel:attached");
+      if (ownerEpoch !== currentEnvironment?.ownerEpoch) {
+        throw new Error("tunnel fixture received a stale owner epoch");
+      }
       return tunnelHandle(ownerEpoch);
     }),
     stopTunnel: vi.fn(async () => {

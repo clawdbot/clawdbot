@@ -144,7 +144,7 @@ function resolvePackageChannelMeta(
   return channelMeta?.id?.trim() === channelId ? channelMeta : undefined;
 }
 
-export function collectBundledChannelConfigs(params: {
+export function collectBundledChannelConfigsCore(params: {
   pluginDir: string;
   manifest: PluginManifest;
   packageManifest?: OpenClawPackageManifest;

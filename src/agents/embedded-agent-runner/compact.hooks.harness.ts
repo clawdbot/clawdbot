@@ -781,7 +781,7 @@ export async function loadCompactHooksHarness(): Promise<{
       (auth: { mode: string; source: string }, provider: string) =>
         `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}, checked: ${auth.source}).`,
     ),
-    getApiKeyForModel: (params: { profileId?: string; allowAuthProfileFallback?: boolean }) =>
+    getApiKeyForModelCore: (params: { profileId?: string; allowAuthProfileFallback?: boolean }) =>
       getApiKeyForModelMock(params),
     hasUsableCustomProviderApiKey: vi.fn(() => false),
     resolveProviderEntryApiKeyProfileReference: resolveProviderEntryApiKeyProfileReferenceMock,

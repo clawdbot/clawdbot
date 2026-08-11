@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { sha256Hex, sha256HexPrefix } from "../infra/crypto-digest.js";
 import { syncDirectoryIfSupported } from "../infra/directory-durability.js";
+import { isMissingPathError } from "../infra/errors.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { sameFileIdentity, type FileIdentityStat } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as createFsSafeRoot } from "../infra/fs-safe.js";
@@ -20,7 +21,6 @@ import { KeyedAsyncQueue } from "./keyed-async-queue.js";
 import { resolveMemoryDreamingWorkspaces } from "./memory-core-host-status.js";
 import {
   isMemoryHostEventArtifactAtIdentity,
-  isMissingPathError,
   isRejectedWorkspaceArtifactPath,
   memoryHostEventExportOwnerContent,
   publishMemoryHostEventArtifact,
