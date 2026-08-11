@@ -287,6 +287,7 @@ async function reconstructMcpAppView(params: {
   }
   const fetched = await fetchMcpAppView({
     runtime,
+    agentId,
     serverName: data.descriptor.serverName,
     toolName: data.descriptor.toolName,
     uiResourceUri: data.descriptor.uiResourceUri,

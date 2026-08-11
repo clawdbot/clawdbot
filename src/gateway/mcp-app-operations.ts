@@ -119,7 +119,9 @@ export async function resolveMcpAppActiveView(params: {
   if (params.cfg && params.cfg.mcp?.apps?.enabled !== true) {
     throw new Error("MCP App runtime is unavailable");
   }
-  const liveView = getMcpAppViewLeaseForSession(params.viewId, params.sessionKey);
+  const liveView = params.agentId
+    ? getMcpAppViewLeaseForSession(params.viewId, params.sessionKey, params.agentId)
+    : undefined;
   if (liveView) {
     if (liveView.runtime.mcpAppsEnabled !== true) {
       throw new Error("MCP App runtime is unavailable");

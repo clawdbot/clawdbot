@@ -292,7 +292,10 @@ export async function resolveSessionReference(params: {
         buildSessionResolveQuery({
           input,
           kind,
-          agentId: kind === "key" ? (params.keyAgentId ?? params.agentId) : params.agentId,
+          agentId:
+            kind === "key"
+              ? (parseAgentSessionKey(input)?.agentId ?? params.keyAgentId ?? params.agentId)
+              : params.agentId,
           requesterInternalKey: params.requesterInternalKey,
           restrictToSpawned: params.restrictToSpawned,
           allowMissing,

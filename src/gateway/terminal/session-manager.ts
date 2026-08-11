@@ -48,10 +48,14 @@ function terminalOwnerMatches(
   if (owner?.kind !== "agent") {
     return false;
   }
-  if ((owner as TaskBoundAgentOwner).taskId === ownerKey) {
-    return true;
-  }
-  return owner.agentSessionKey === ownerKey && (!agentId || owner.agentId === agentId);
+  return owner.agentSessionKey === ownerKey && owner.agentId === agentId;
+}
+
+function terminalLifecycleOwnerMatches(owner: TerminalOwner | null, ownerKey: string): boolean {
+  return (
+    owner?.kind === "agent" &&
+    (owner.agentSessionKey === ownerKey || (owner as TaskBoundAgentOwner).taskId === ownerKey)
+  );
 }
 
 /**
@@ -408,14 +412,22 @@ export class TerminalSessionManager {
   }
 
   /** Closes every live or spawning PTY owned by one exact agent session or task. */
-  closeAgentSessions(agentSessionKey: string): number {
+  closeAgentSessions(agentSessionKey: string, agentId?: string): number {
     for (const [pending, owner] of this.pendingOpens) {
-      if (terminalOwnerMatches(owner, agentSessionKey)) {
+      if (
+        agentId
+          ? terminalOwnerMatches(owner, agentSessionKey, agentId)
+          : terminalLifecycleOwnerMatches(owner, agentSessionKey)
+      ) {
         pending.abort("terminal closed because its task ended");
       }
     }
     const owned = [...this.sessions.values()].filter(
-      (session) => !session.closed && terminalOwnerMatches(session.owner, agentSessionKey),
+      (session) =>
+        !session.closed &&
+        (agentId
+          ? terminalOwnerMatches(session.owner, agentSessionKey, agentId)
+          : terminalLifecycleOwnerMatches(session.owner, agentSessionKey)),
     );
     for (const session of owned) {
       this.finalize(session, "closed", {});

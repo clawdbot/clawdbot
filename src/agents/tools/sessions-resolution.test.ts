@@ -305,6 +305,32 @@ describe("resolved session visibility checks", () => {
 });
 
 describe("resolveSessionReference", () => {
+  it("uses a scoped key's encoded owner before visibility policy", async () => {
+    callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: { key?: string; agentId?: string } }) => {
+        expect(request.method).toBe("sessions.resolve");
+        expect(request.params).toMatchObject({ key: "Agent:ops:main", agentId: "ops" });
+        return { key: "agent:ops:main", agentId: "ops" };
+      },
+    );
+
+    const result = await resolveSessionReference({
+      sessionKey: "Agent:ops:main",
+      keyAgentId: "main",
+      agentId: "main",
+      alias: "main",
+      mainKey: "main",
+      requesterInternalKey: "agent:main:main",
+      restrictToSpawned: false,
+    });
+
+    expectResolvedSessionReference(result, {
+      key: "agent:ops:main",
+      displayKey: "agent:ops:main",
+      resolvedViaSessionId: false,
+    });
+  });
+
   it("resolves current directly to the requester without probing another owner", async () => {
     const result = await resolveSessionReference({
       sessionKey: "current",

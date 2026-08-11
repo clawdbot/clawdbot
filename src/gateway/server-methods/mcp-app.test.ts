@@ -35,6 +35,7 @@ import { mcpAppHandlers } from "./mcp-app.js";
 
 const view = {
   viewId: "cv_app",
+  agentId: "main",
   sessionId: "session-1",
   serverName: "demo",
   toolName: "show",
@@ -207,8 +208,37 @@ describe("MCP App gateway bridge", () => {
 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect(respond.mock.calls[0]?.[1]).toMatchObject({ html: "<html>demo</html>" });
-    expect(mocks.getMcpAppViewLeaseForSession).toHaveBeenCalledWith("cv_app", "agent:main:main");
+    expect(mocks.getMcpAppViewLeaseForSession).toHaveBeenCalledWith(
+      "cv_app",
+      "agent:main:main",
+      "main",
+    );
     expect(mocks.restoreMcpAppView).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse a live bare-key view owned by another agent", async () => {
+    const nativeRuntime = runtime();
+    const nativeView = { ...view, agentId: "ops", runtime: nativeRuntime };
+    mocks.peekSessionMcpRuntime.mockReturnValue(undefined);
+    mocks.getMcpAppViewLeaseForSession.mockImplementation(
+      (_viewId: string, _sessionKey: string, agentId: string) =>
+        agentId === "ops" ? nativeView : undefined,
+    );
+
+    const respond = await invoke(
+      "mcp.app.view",
+      { sessionKey: "global", agentId: "research", viewId: "cv_app" },
+      true,
+      {
+        agents: {
+          ownership: "explicit",
+          list: [{ id: "ops" }, { id: "research" }],
+        },
+      },
+    );
+
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    expect(mocks.getMcpAppViewLeaseForSession).toHaveBeenCalledWith("cv_app", "global", "research");
   });
 
   it("preserves the existing view payload when standalone ticket issuance is unavailable", async () => {

@@ -115,23 +115,44 @@ function selectAcpSessionRow(db: DatabaseSync, sessionKey: string): AcpSessionRo
   );
 }
 
-const ACP_AGENT_SCOPED_DB_KEY_PREFIX = "@agent:";
+const ACP_DATABASE_KEY_PREFIX = "@acp:v1:";
+const ACP_LEGACY_AGENT_SCOPED_DB_KEY_PREFIX = "@agent:";
 
 function buildAcpDatabaseSessionKey(storeSessionKey: string, agentId?: string): string {
   const normalizedKey = storeSessionKey.trim();
-  return agentId && !parseAgentSessionKey(normalizedKey)
-    ? `${ACP_AGENT_SCOPED_DB_KEY_PREFIX}${normalizeAgentId(agentId)}:${normalizedKey}`
-    : normalizedKey;
+  const identity = [agentId ? normalizeAgentId(agentId) : null, normalizedKey];
+  return `${ACP_DATABASE_KEY_PREFIX}${Buffer.from(JSON.stringify(identity), "utf8").toString("base64url")}`;
 }
 
 function parseAcpDatabaseSessionKey(sessionKey: string): {
   agentId?: string;
   storeSessionKey: string;
 } {
-  if (!sessionKey.startsWith(ACP_AGENT_SCOPED_DB_KEY_PREFIX)) {
+  if (sessionKey.startsWith(ACP_DATABASE_KEY_PREFIX)) {
+    try {
+      const decoded = JSON.parse(
+        Buffer.from(sessionKey.slice(ACP_DATABASE_KEY_PREFIX.length), "base64url").toString("utf8"),
+      ) as unknown;
+      if (
+        Array.isArray(decoded) &&
+        decoded.length === 2 &&
+        (decoded[0] === null || typeof decoded[0] === "string") &&
+        typeof decoded[1] === "string"
+      ) {
+        return {
+          ...(decoded[0] ? { agentId: normalizeAgentId(decoded[0]) } : {}),
+          storeSessionKey: decoded[1],
+        };
+      }
+    } catch {
+      // A legacy raw key may happen to use the reserved prefix. Treat it as raw.
+    }
     return { storeSessionKey: sessionKey };
   }
-  const remainder = sessionKey.slice(ACP_AGENT_SCOPED_DB_KEY_PREFIX.length);
+  if (!sessionKey.startsWith(ACP_LEGACY_AGENT_SCOPED_DB_KEY_PREFIX)) {
+    return { storeSessionKey: sessionKey };
+  }
+  const remainder = sessionKey.slice(ACP_LEGACY_AGENT_SCOPED_DB_KEY_PREFIX.length);
   const separator = remainder.indexOf(":");
   return separator > 0
     ? {
@@ -139,6 +160,42 @@ function parseAcpDatabaseSessionKey(sessionKey: string): {
         storeSessionKey: remainder.slice(separator + 1),
       }
     : { storeSessionKey: sessionKey };
+}
+
+function parseAcpDatabaseSessionKeyCandidates(sessionKey: string): Array<{
+  agentId?: string;
+  storeSessionKey: string;
+}> {
+  const parsed = parseAcpDatabaseSessionKey(sessionKey);
+  if (parsed.storeSessionKey === sessionKey && parsed.agentId === undefined) {
+    return [parsed];
+  }
+  // Reserved prefixes existed before the composite identity. Keep the literal
+  // raw interpretation as a fallback and let the lifecycle binding disambiguate.
+  return [parsed, { storeSessionKey: sessionKey }];
+}
+
+function legacyAcpDatabaseSessionKeys(
+  storeSessionKey: string,
+  agentId?: string,
+  cfg?: OpenClawConfig,
+): string[] {
+  const normalizedKey = storeSessionKey.trim();
+  const keys: string[] = [];
+  if (agentId && !parseAgentSessionKey(normalizedKey)) {
+    keys.push(
+      `${ACP_LEGACY_AGENT_SCOPED_DB_KEY_PREFIX}${normalizeAgentId(agentId)}:${normalizedKey}`,
+    );
+  }
+  const compatibilityOwner = resolveAcpLegacyUnscopedOwner(cfg, normalizedKey);
+  if (
+    parseAgentSessionKey(normalizedKey) ||
+    !agentId ||
+    compatibilityOwner === normalizeAgentId(agentId)
+  ) {
+    keys.push(normalizedKey);
+  }
+  return [...new Set(keys)];
 }
 
 function resolveAcpLegacyUnscopedOwner(
@@ -161,17 +218,16 @@ function selectAcpSessionRowForStoreEntry(
   storeSessionKey: string,
   agentId?: string,
   cfg?: OpenClawConfig,
+  entry?: AcpSessionEntryBinding,
 ): AcpSessionRow | undefined {
   const databaseKey = buildAcpDatabaseSessionKey(storeSessionKey, agentId);
-  const compatibilityOwner = resolveAcpLegacyUnscopedOwner(cfg, storeSessionKey);
-  const mayReadLegacyUnscopedRow =
-    databaseKey === storeSessionKey || Boolean(agentId && compatibilityOwner === agentId);
-  return (
-    selectAcpSessionRow(db, databaseKey) ??
-    (mayReadLegacyUnscopedRow && databaseKey !== storeSessionKey
-      ? selectAcpSessionRow(db, storeSessionKey)
-      : undefined)
-  );
+  for (const key of [databaseKey, ...legacyAcpDatabaseSessionKeys(storeSessionKey, agentId, cfg)]) {
+    const row = selectAcpSessionRow(db, key);
+    if (row && (!entry || acpSessionRowMatchesEntry(row, entry))) {
+      return row;
+    }
+  }
+  return undefined;
 }
 
 function acpSessionRowMatchesEntry(
@@ -261,6 +317,7 @@ export function readAcpSessionMeta(params: {
       storeEntry.storeSessionKey,
       storeEntry.agentId,
       storeEntry.cfg,
+      storeEntry.entry,
     ),
     entry: storeEntry.entry,
     env: params.env,
@@ -289,7 +346,13 @@ export function readAcpSessionMetaForEntry(params: {
     path: params.databasePath,
   });
   const row = resolveReadableAcpSessionRow({
-    row: selectAcpSessionRowForStoreEntry(database.db, sessionKey, params.agentId, params.cfg),
+    row: selectAcpSessionRowForStoreEntry(
+      database.db,
+      sessionKey,
+      params.agentId,
+      params.cfg,
+      params.entry,
+    ),
     entry: params.entry,
     env: params.env,
     databasePath: params.databasePath,
@@ -313,7 +376,7 @@ export function readAcpSessionMetaBatch(params: {
   const result = new Map<SessionEntry, SessionAcpMeta | undefined>();
   const entriesByKey = new Map<
     string,
-    Array<{ entry: SessionEntry; rawSessionKey: string; legacyKey?: string }>
+    Array<{ entry: SessionEntry; rawSessionKey: string; legacyKeys: string[] }>
   >();
   for (const item of params.entries) {
     const rawSessionKey = item.sessionKey.trim();
@@ -325,13 +388,9 @@ export function readAcpSessionMetaBatch(params: {
       result.set(item.entry, item.entry.acp);
       continue;
     }
-    const legacyKey =
-      sessionKey !== rawSessionKey &&
-      item.agentId === resolveAcpLegacyUnscopedOwner(params.cfg, rawSessionKey)
-        ? rawSessionKey
-        : undefined;
+    const legacyKeys = legacyAcpDatabaseSessionKeys(rawSessionKey, item.agentId, params.cfg);
     const entries = entriesByKey.get(sessionKey) ?? [];
-    entries.push({ entry: item.entry, rawSessionKey, legacyKey });
+    entries.push({ entry: item.entry, rawSessionKey, legacyKeys });
     entriesByKey.set(sessionKey, entries);
   }
   if (entriesByKey.size === 0) {
@@ -349,7 +408,7 @@ export function readAcpSessionMetaBatch(params: {
     ...new Set(
       [...entriesByKey].flatMap(([sessionKey, entries]) => [
         sessionKey,
-        ...entries.flatMap((item) => (item.legacyKey ? [item.legacyKey] : [])),
+        ...entries.flatMap((item) => item.legacyKeys),
       ]),
     ),
   ];
@@ -368,14 +427,17 @@ export function readAcpSessionMetaBatch(params: {
   const legacyRowsToRekey: Array<{ row: AcpSessionRow; sessionKey: string }> = [];
   for (const [sessionKey, entries] of entriesByKey) {
     for (const item of entries) {
-      const candidateRow =
-        rowsByKey.get(sessionKey) ?? (item.legacyKey ? rowsByKey.get(item.legacyKey) : undefined);
-      const row = resolveReadableAcpSessionRow({
-        row: candidateRow,
-        entry: item.entry,
-        env: params.env,
-        databasePath: params.databasePath,
-      });
+      const row = [sessionKey, ...item.legacyKeys]
+        .map((key) => rowsByKey.get(key))
+        .map((candidateRow) =>
+          resolveReadableAcpSessionRow({
+            row: candidateRow,
+            entry: item.entry,
+            env: params.env,
+            databasePath: params.databasePath,
+          }),
+        )
+        .find((candidateRow) => candidateRow !== undefined);
       result.set(item.entry, row ? rowToAcpSessionMeta(row) : undefined);
       if (row && row.session_key !== sessionKey) {
         legacyRowsToRekey.push({ row, sessionKey });
@@ -569,6 +631,7 @@ export function readAcpSessionEntry(params: {
       storeEntry.storeSessionKey,
       storeEntry.agentId,
       storeEntry.cfg,
+      storeEntry.entry,
     ),
     entry: storeEntry.entry,
     env: params.env,
@@ -601,47 +664,49 @@ export async function listAcpSessionEntries(params: {
   const entries: AcpSessionStoreEntry[] = [];
 
   for (const row of rows) {
-    const databaseIdentity = parseAcpDatabaseSessionKey(row.session_key);
-    const sessionKey = databaseIdentity.storeSessionKey;
-    const { agentId, storePath } = resolveSessionStorePathForAcp({
-      sessionKey,
-      agentId: databaseIdentity.agentId,
-      cfg,
-      env: params.env,
-    });
-    if (!storePath) {
-      continue;
-    }
-    let storeSessionKey: string;
-    let entry: SessionEntry | undefined;
-    try {
-      ({ storeSessionKey, entry } = resolveStoreEntryForSessionKey({
-        ...(agentId ? { agentId } : {}),
+    for (const databaseIdentity of parseAcpDatabaseSessionKeyCandidates(row.session_key)) {
+      const sessionKey = databaseIdentity.storeSessionKey;
+      const { agentId, storePath } = resolveSessionStorePathForAcp({
+        sessionKey,
+        agentId: databaseIdentity.agentId,
+        cfg,
+        env: params.env,
+      });
+      if (!storePath) {
+        continue;
+      }
+      let storeSessionKey: string;
+      let entry: SessionEntry | undefined;
+      try {
+        ({ storeSessionKey, entry } = resolveStoreEntryForSessionKey({
+          ...(agentId ? { agentId } : {}),
+          storePath,
+          sessionKey,
+          ...(params.clone === false ? { clone: false } : {}),
+        }));
+      } catch {
+        continue;
+      }
+      const readableRow = resolveReadableAcpSessionRow({
+        row,
+        entry,
+        env: params.env,
+        databasePath: params.databasePath,
+      });
+      if (!entry || !readableRow) {
+        continue;
+      }
+      entries.push({
+        cfg,
+        agentId,
         storePath,
         sessionKey,
-        ...(params.clone === false ? { clone: false } : {}),
-      }));
-    } catch {
-      continue;
+        storeSessionKey,
+        entry,
+        acp: rowToAcpSessionMeta(readableRow),
+      });
+      break;
     }
-    const readableRow = resolveReadableAcpSessionRow({
-      row,
-      entry,
-      env: params.env,
-      databasePath: params.databasePath,
-    });
-    if (!entry || !readableRow) {
-      continue;
-    }
-    entries.push({
-      cfg,
-      agentId,
-      storePath,
-      sessionKey,
-      storeSessionKey,
-      entry,
-      acp: rowToAcpSessionMeta(readableRow),
-    });
   }
 
   return entries;
@@ -729,6 +794,7 @@ export async function upsertAcpSessionMeta(params: {
   const storageSessionKey = storeEntry.storeSessionKey;
   const databaseSessionKey = buildAcpDatabaseSessionKey(storageSessionKey, storeEntry.agentId);
   let current: SessionAcpMeta | undefined;
+  let currentRowKey: string | undefined;
   let nextMeta: SessionAcpMeta | null | undefined;
   let preparedEntry: SessionEntry | undefined;
   const updatedAt = params.now?.() ?? Date.now();
@@ -739,11 +805,10 @@ export async function upsertAcpSessionMeta(params: {
         storageSessionKey,
         storeEntry.agentId,
         storeEntry.cfg,
+        entry,
       );
-      current =
-        currentRow && acpSessionRowMatchesEntry(currentRow, entry)
-          ? rowToAcpSessionMeta(currentRow)
-          : undefined;
+      currentRowKey = currentRow?.session_key;
+      current = currentRow ? rowToAcpSessionMeta(currentRow) : undefined;
       preparedEntry = mergeSessionEntry(entry, { updatedAt });
       nextMeta = params.mutate(
         current,
@@ -778,6 +843,9 @@ export async function upsertAcpSessionMeta(params: {
     runOpenClawStateWriteTransaction(
       (database) => {
         const sessionKeysToDelete = new Set([databaseSessionKey]);
+        if (currentRowKey) {
+          sessionKeysToDelete.add(currentRowKey);
+        }
         if (patched?.sessionKey) {
           sessionKeysToDelete.add(
             buildAcpDatabaseSessionKey(patched.sessionKey, storeEntry.agentId),
@@ -848,6 +916,14 @@ export async function upsertAcpSessionMeta(params: {
           getAcpSessionKysely(database.db)
             .deleteFrom("acp_sessions")
             .where("session_key", "=", databaseSessionKey),
+        );
+      }
+      if (currentRowKey && currentRowKey !== persistedDatabaseSessionKey) {
+        executeSqliteQuerySync(
+          database.db,
+          getAcpSessionKysely(database.db)
+            .deleteFrom("acp_sessions")
+            .where("session_key", "=", currentRowKey),
         );
       }
       if (persistedDatabaseSessionKey !== persisted.sessionKey) {

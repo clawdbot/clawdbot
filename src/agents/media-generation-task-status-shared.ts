@@ -10,8 +10,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { getRuntimeConfig } from "../config/config.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { listFreshTasksForOwnerKey } from "../tasks/runtime-internal.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
+import { resolveSessionAgentId } from "./agent-scope.js";
 import { buildSessionAsyncTaskStatusDetails } from "./session-async-task-status.js";
 
 /** Marks media as ready while requester delivery is still being confirmed. */
@@ -88,6 +91,26 @@ function mediaGenerationTaskLabelMatches(task: TaskRecord, taskLabel: string): b
   return normalizeOptionalString(task.task) === taskLabel;
 }
 
+function resolveMediaGenerationTaskRequesterAgentId(task: TaskRecord): string | undefined {
+  const explicit = normalizeOptionalString(task.requesterAgentId);
+  if (explicit) {
+    return explicit;
+  }
+  const ownerKey = normalizeOptionalString(task.ownerKey ?? task.requesterSessionKey);
+  const parsed = parseAgentSessionKey(ownerKey)?.agentId;
+  if (parsed) {
+    return parsed;
+  }
+  if (!ownerKey) {
+    return undefined;
+  }
+  try {
+    return resolveSessionAgentId({ config: getRuntimeConfig(), sessionKey: ownerKey });
+  } catch {
+    return undefined;
+  }
+}
+
 function isTaskStillBlockingDuplicateGuard(task: TaskRecord): boolean {
   return task.status === "queued" || task.status === "running";
 }
@@ -137,7 +160,7 @@ function findPersistedTaskForRecentMediaGenerationStart(params: {
       task.scopeKind !== "session" ||
       task.taskKind !== params.taskKind ||
       !mediaGenerationSourceMatches(task, params.sourcePrefix) ||
-      (params.agentId && task.requesterAgentId !== params.agentId)
+      (params.agentId && resolveMediaGenerationTaskRequesterAgentId(task) !== params.agentId)
     ) {
       return false;
     }
@@ -346,7 +369,7 @@ function listActiveMediaGenerationTasksForSession(params: {
     ) {
       return false;
     }
-    if (params.agentId && task.requesterAgentId !== params.agentId) {
+    if (params.agentId && resolveMediaGenerationTaskRequesterAgentId(task) !== params.agentId) {
       return false;
     }
     if (sourcePrefix && !mediaGenerationSourceMatches(task, sourcePrefix)) {

@@ -560,6 +560,8 @@ export function listAgentRunsForSession(params: {
 export type ProjectedAgentRunIndex = {
   sessionKeys: ReadonlySet<string>;
   sessionIds: ReadonlySet<string>;
+  ownerlessSessionKeys: ReadonlySet<string>;
+  ownerlessSessionIds: ReadonlySet<string>;
 };
 
 function projectedRunIdentity(agentId: string, value: string): string {
@@ -570,6 +572,8 @@ export function buildProjectedAgentRunIndex(): ProjectedAgentRunIndex {
   const state = getAgentRunRegistryState();
   const sessionKeys = new Set<string>();
   const sessionIds = new Set<string>();
+  const ownerlessSessionKeys = new Set<string>();
+  const ownerlessSessionIds = new Set<string>();
   for (const context of state.contexts.values()) {
     if (
       context.projectSessionActive !== true ||
@@ -580,12 +584,16 @@ export function buildProjectedAgentRunIndex(): ProjectedAgentRunIndex {
     const agentId = context.agentId ?? parseAgentSessionKey(context.sessionKey)?.agentId;
     if (context.sessionKey !== undefined && agentId) {
       sessionKeys.add(projectedRunIdentity(agentId, context.sessionKey));
+    } else if (context.sessionKey !== undefined) {
+      ownerlessSessionKeys.add(context.sessionKey);
     }
     if (context.sessionId !== undefined && agentId) {
       sessionIds.add(projectedRunIdentity(agentId, context.sessionId));
+    } else if (context.sessionId !== undefined) {
+      ownerlessSessionIds.add(context.sessionId);
     }
   }
-  return { sessionKeys, sessionIds };
+  return { sessionKeys, sessionIds, ownerlessSessionKeys, ownerlessSessionIds };
 }
 
 export function hasProjectedAgentRunForSession(params: {
@@ -603,12 +611,18 @@ export function hasProjectedAgentRunForSession(params: {
   if (!agentId) {
     return false;
   }
+  const mayAdoptOwnerless =
+    params.defaultAgentId !== undefined &&
+    normalizeAgentId(agentId) === normalizeAgentId(params.defaultAgentId);
   return (
     params.sessionKeys.some((sessionKey) =>
       index.sessionKeys.has(projectedRunIdentity(agentId, sessionKey)),
     ) ||
+    (mayAdoptOwnerless &&
+      params.sessionKeys.some((sessionKey) => index.ownerlessSessionKeys.has(sessionKey))) ||
     (params.sessionId !== undefined &&
-      index.sessionIds.has(projectedRunIdentity(agentId, params.sessionId)))
+      (index.sessionIds.has(projectedRunIdentity(agentId, params.sessionId)) ||
+        (mayAdoptOwnerless && index.ownerlessSessionIds.has(params.sessionId))))
   );
 }
 

@@ -407,3 +407,38 @@ it("keeps projected bare runs agent-scoped", () => {
     clearAgentRunContext("projected-ops");
   }
 });
+
+it("resolves projected ownerless bare runs through the stable default owner", () => {
+  registerAgentRunContext("projected-ownerless", {
+    projectSessionActive: true,
+    sessionKey: "incident-42",
+    sessionId: "ownerless-id",
+  });
+  try {
+    const index = buildProjectedAgentRunIndex();
+    expect(
+      resolveVisibleActiveSessionRunState({
+        context: {},
+        requestedKey: "incident-42",
+        canonicalKey: "incident-42",
+        sessionId: "ownerless-id",
+        agentId: "ops",
+        defaultAgentId: "ops",
+        projectedAgentRunIndex: index,
+      }).active,
+    ).toBe(true);
+    expect(
+      resolveVisibleActiveSessionRunState({
+        context: {},
+        requestedKey: "incident-42",
+        canonicalKey: "incident-42",
+        sessionId: "ownerless-id",
+        agentId: "research",
+        defaultAgentId: "ops",
+        projectedAgentRunIndex: index,
+      }).active,
+    ).toBe(false);
+  } finally {
+    clearAgentRunContext("projected-ownerless");
+  }
+});

@@ -10,6 +10,7 @@ import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../../agents/internal-runtime-context.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import {
   createTaskRecord as createTaskRecordOrNull,
@@ -217,6 +218,49 @@ describe("tasks gateway handlers", () => {
 
     expect(calls[0]?.[0]).toBe(true);
     expect(payload?.tasks?.map((entry) => entry.taskId)).toEqual([task.taskId]);
+  });
+
+  it("does not use the executor as the requester owner for a legacy bare task", () => {
+    const task = createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "global",
+      ownerKey: "global",
+      scopeKind: "session",
+      childSessionKey: "agent:research:subagent:child",
+      agentId: "research",
+      runId: "run-legacy-owner",
+      task: "Owned by ops, executed by research",
+      status: "running",
+      deliveryStatus: "pending",
+    });
+    expect(task.requesterAgentId).toBeUndefined();
+    const cfg = {
+      session: { scope: "global", store: "/tmp/shared-sessions.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      listTaskRecordPage({
+        offset: 0,
+        limit: 10,
+        sessionKey: "global",
+        sessionAgentId: "ops",
+        cfg,
+      }).tasks.map((entry) => entry.taskId),
+    ).toEqual([task.taskId]);
+    expect(
+      listTaskRecordPage({
+        offset: 0,
+        limit: 10,
+        sessionKey: "global",
+        sessionAgentId: "research",
+        cfg,
+      }).tasks,
+    ).toEqual([]);
   });
 
   it("orders the ledger by last activity, not creation time", async () => {

@@ -55,7 +55,9 @@ function taskMatchesRelatedSession(
   return [
     { key: task.requesterSessionKey, agentId: task.requesterAgentId },
     { key: task.childSessionKey, agentId: task.agentId },
-    { key: task.ownerKey, agentId: task.requesterAgentId ?? task.agentId },
+    // ownerKey belongs to the requester. task.agentId is the executor/child
+    // candidate and must never adopt a colliding bare requester session.
+    { key: task.ownerKey, agentId: task.requesterAgentId },
   ].some((candidate) => {
     if (normalizeOptionalString(candidate.key) !== sessionKey) {
       return false;
