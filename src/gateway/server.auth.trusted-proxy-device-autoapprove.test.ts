@@ -279,6 +279,7 @@ describe("trusted-proxy browser device auto-approval", () => {
       const auth = (res.payload as { auth?: Record<string, unknown> } | undefined)?.auth;
       expect(res.ok).toBe(true);
       expect(auth?.deviceToken).toBeUndefined();
+      expect(auth?.recoveryMigrationAllowed).toBeUndefined();
       expect(auth?.recoveryScope).toMatch(/^[A-Za-z0-9_-]+$/u);
       expect(JSON.stringify(auth)).not.toContain("operator@example.com");
     });

@@ -77,7 +77,7 @@ export async function sendGatewayHello(
     bootstrapDeviceTokens,
     controlUiDeviceAuthMigrationPending,
   } = state;
-  // Prefer the authenticated human; otherwise credential rotation must rotate recovery ownership.
+  // Prefer the authenticated human; principal scopes never inherit device-token rows.
   const authenticatedPrincipal = authenticatedUserProfileId ?? authResult.user;
   const recoveryScopeMaterial = authenticatedPrincipal
     ? ["principal", authenticatedPrincipal, device?.id ?? ""]
@@ -92,6 +92,7 @@ export async function sendGatewayHello(
     role === "operator" && recoveryScopeMaterial
       ? sha256Base64Url(JSON.stringify(recoveryScopeMaterial))
       : undefined;
+  const canMigrateRecovery = role === "operator" && !authenticatedPrincipal && Boolean(deviceToken);
   const snapshot = buildGatewaySnapshot({
     includeSensitive: scopes.includes(ADMIN_SCOPE),
     includeUpdateDetails: canReadDetailedUpdateMetadata(role, scopes),
@@ -135,6 +136,7 @@ export async function sendGatewayHello(
       role,
       scopes,
       ...(recoveryScope ? { recoveryScope } : {}),
+      ...(canMigrateRecovery ? { recoveryMigrationAllowed: true as const } : {}),
       ...(deviceToken
         ? {
             deviceToken: deviceToken.token,

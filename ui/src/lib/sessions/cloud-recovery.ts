@@ -308,9 +308,6 @@ export function migrateCloudSessionRecoveryScope(
   sourceScope: string,
   destinationScope: string,
 ): void {
-  if (sourceScope === destinationScope) {
-    return;
-  }
   for (const recovery of listCloudSessionRecoveries(gatewayUrl, sourceScope)) {
     const destination = { ...recovery, recoveryScope: destinationScope };
     if (writeCloudSessionRecoveryIfAvailable(destination)) {

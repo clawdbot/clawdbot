@@ -1420,7 +1420,9 @@ function installControlUiMockGateway(
       case "connect":
         return {
           auth: {
-            ...(deviceAuthMigrationPending ? {} : { deviceToken: scenario.deviceToken }),
+            ...(deviceAuthMigrationPending
+              ? {}
+              : { deviceToken: scenario.deviceToken, recoveryMigrationAllowed: true as const }),
             recoveryScope: "e2e-recovery-scope",
             role: "operator",
             scopes: scenario.operatorScopes,

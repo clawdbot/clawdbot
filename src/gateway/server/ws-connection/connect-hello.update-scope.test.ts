@@ -206,6 +206,7 @@ describe("sendGatewayHello update detail scope", () => {
     expect(helloPayload(context)?.auth).toEqual({
       role: "operator",
       scopes: ["operator.pairing"],
+      recoveryMigrationAllowed: true,
       recoveryScope: expect.stringMatching(/^[A-Za-z0-9_-]+$/u),
       deviceToken: "paired-token",
       issuedAtMs: 1,
@@ -234,7 +235,9 @@ describe("sendGatewayHello update detail scope", () => {
         sessionSharedGatewaySessionGeneration: generation,
       };
       await sendGatewayHello(context as never, state as never, {}, principal);
-      return helloPayload(context)?.auth?.recoveryScope;
+      const auth = helloPayload(context)?.auth;
+      expect(auth?.recoveryMigrationAllowed).toBeUndefined();
+      return auth?.recoveryScope;
     };
 
     const alice = await sendFor("profile-alice", "device-token-a", "shared-generation-a");

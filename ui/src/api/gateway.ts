@@ -547,7 +547,7 @@ export class GatewayBrowserClient {
         plan.selectedAuth.authToken,
     );
     const migrateRecoveryScope =
-      serverScope && legacyScope
+      serverScope && hello.auth?.recoveryMigrationAllowed === true && legacyScope
         ? (await import("../lib/sessions/cloud-recovery-migration.runtime.ts")).default
         : undefined;
     if (plan.generation !== this.recoveryScopeGeneration || !this.client.connected) {
