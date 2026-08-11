@@ -6,7 +6,6 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { createCronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/dispatch.js";
@@ -443,22 +442,18 @@ export async function handleChatSend(
               }
             }
             applyChatSendManagedMedia(ctx, await pluginBoundMediaPromise);
-            const cronCreatorAuthorityCapability = cronCreatorAuthority
-              ? createCronCreatorAuthorityCapability(cronCreatorAuthority.runId)
-              : undefined;
             const dispatchInbound = () =>
               dispatchInboundMessageWithProjectedDispatcher({
                 ctx,
                 cfg,
                 dispatcherOptions: replyDispatch.dispatcherOptions,
-                onSessionMetadataChanges: (changes) => {
-                  for (const change of changes) {
-                    emitSessionsChanged(context, change);
-                  }
-                },
+                onSessionMetadataChanges: (changes) =>
+                  changes.forEach((change) => emitSessionsChanged(context, change)),
                 replyOptions: {
                   runId: clientRunId,
-                  ...(cronCreatorAuthorityCapability ? { cronCreatorAuthorityCapability } : {}),
+                  ...(cronCreatorAuthority
+                    ? { cronCreatorAuthorityCapability: cronCreatorAuthority }
+                    : {}),
                   ...(isOperatorUiClient(clientInfo)
                     ? {
                         promptCacheKey: resolveWebchatPromptCacheKey({
@@ -572,10 +567,9 @@ export async function handleChatSend(
                   },
                 },
               });
-            const dispatchResult = await (cronCreatorAuthorityCapability &&
-            externalAuthorityAdmission
+            const dispatchResult = await (cronCreatorAuthority && externalAuthorityAdmission
               ? externalAuthorityAdmission.run(
-                  cronCreatorAuthorityCapability,
+                  cronCreatorAuthority,
                   dispatchInbound,
                   activeRunAbort.controller.signal,
                 )

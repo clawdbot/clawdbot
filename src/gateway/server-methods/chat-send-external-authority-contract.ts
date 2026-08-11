@@ -15,6 +15,6 @@ export type ChatSendExternalAuthorityAdmission = {
     isReconnectResume: boolean;
     isSystemGenerated: boolean;
     turnKind: "btw" | "main";
-  }): Readonly<{ runId: string }> | undefined;
+  }): CronCreatorAuthorityCapability | undefined;
   run<T>(capability: CronCreatorAuthorityCapability, run: () => T, signal?: AbortSignal): T;
 };
