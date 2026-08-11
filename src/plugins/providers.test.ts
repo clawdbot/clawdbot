@@ -477,7 +477,7 @@ describe("resolvePluginProviders", () => {
         applyPluginAutoEnableMock(...args),
     }));
     vi.doMock("./manifest-registry.js", () => ({
-      loadPluginManifestRegistry: (...args: Parameters<LoadPluginManifestRegistry>) =>
+      loadPluginManifestRegistryCore: (...args: Parameters<LoadPluginManifestRegistry>) =>
         loadPluginManifestRegistryMock(...args),
     }));
     vi.doMock("./plugin-metadata-snapshot.js", () => {
