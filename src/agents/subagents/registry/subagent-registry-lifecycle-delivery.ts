@@ -362,7 +362,7 @@ export function createSubagentRegistryLifecycleDelivery(
     const candidates = listPendingCompletionRunsForSession(sessionKey).filter(
       (entry) => entry.execution.outcome?.status !== "error",
     );
-    const entry = candidates.sort(compareSubagentRunGeneration).at(-1);
+    const entry = candidates.toSorted(compareSubagentRunGeneration).at(-1);
     if (!entry || newerGenerationOwnsSession(entry)) {
       return false;
     }
