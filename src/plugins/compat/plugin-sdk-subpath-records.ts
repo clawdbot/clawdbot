@@ -1,6 +1,6 @@
 import type { PluginCompatRecord } from "./types.js";
 
-type SeedFields = "code" | "owner" | "removeAfter" | "replacement";
+type SeedFields = "code" | "owner" | "removeAfter" | "removalGate" | "replacement";
 type DeprecatedPluginSdkSubpathSeed = Pick<PluginCompatRecord, SeedFields> &
   Record<"subpath", string>;
 
@@ -24,7 +24,7 @@ const DEPRECATED_PLUGIN_SDK_SUBPATH_SEEDS = [
     code: "plugin-sdk-inbound-reply-dispatch-subpath",
     subpath: "inbound-reply-dispatch",
     owner: "channel",
-    removeAfter: "2026-08-15",
+    removalGate: "next-plugin-sdk-major",
     replacement: "`openclaw/plugin-sdk/channel-inbound` and `openclaw/plugin-sdk/channel-outbound`",
   },
   {
@@ -110,7 +110,14 @@ const DEPRECATED_PLUGIN_SDK_SUBPATH_SEEDS = [
 ] as const satisfies readonly DeprecatedPluginSdkSubpathSeed[];
 
 export const DEPRECATED_PLUGIN_SDK_SUBPATH_RECORDS = DEPRECATED_PLUGIN_SDK_SUBPATH_SEEDS.map(
-  ({ code, subpath, owner, removeAfter, replacement }) =>
+  ({
+    code,
+    subpath,
+    owner,
+    removeAfter,
+    removalGate,
+    replacement,
+  }: DeprecatedPluginSdkSubpathSeed) =>
     ({
       code,
       status: "deprecated" as const,
@@ -119,6 +126,7 @@ export const DEPRECATED_PLUGIN_SDK_SUBPATH_RECORDS = DEPRECATED_PLUGIN_SDK_SUBPA
       deprecated: "2026-07-06",
       warningStarts: "2026-07-06",
       removeAfter,
+      removalGate,
       replacement,
       docsPath: "/plugins/sdk-migration",
       surfaces: [`openclaw/plugin-sdk/${subpath}`],
