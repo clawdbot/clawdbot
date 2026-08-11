@@ -4,7 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
-import { sha256HexPrefix } from "../infra/crypto-digest.js";
+import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import {
   openNodeSqliteDatabase,
@@ -179,7 +179,7 @@ function resolveOpenClawStateOwnershipCoordinatorPath(databasePath: string): str
   const stateDir = resolveOpenClawStateDirForDatabasePath(canonicalDatabasePath);
   return path.join(
     resolveGatewayLockDir(stateDir),
-    `state-ownership.${sha256HexPrefix(canonicalDatabasePath, 8)}.lock.sqlite`,
+    `state-ownership.${sha256HexPrefixCore(canonicalDatabasePath, 8)}.lock.sqlite`,
   );
 }
 

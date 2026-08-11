@@ -568,7 +568,10 @@ function hasActiveGatewayExecProbeCredential(params: {
         explicitAuth: params.explicitAuth,
         modeOverride: params.mode,
         path,
+        // Remote probe config suppresses ambient credentials across auth types.
+        // Mirror that owner here so env auth cannot hide a winning exec ref.
         remoteTokenFallback: "remote-only",
+        remotePasswordFallback: "remote-only",
       })
     ) {
       return false;

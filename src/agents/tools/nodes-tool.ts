@@ -24,7 +24,7 @@ import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 import { executeNodeCommandAction, type NodeCommandAction } from "./nodes-tool-commands.js";
 import { executeNodeMediaAction, MEDIA_INVOKE_ACTIONS } from "./nodes-tool-media.js";
-import { resolveNodeId } from "./nodes-utils.js";
+import { resolveAgentNodeId } from "./nodes-utils.js";
 
 const NODES_TOOL_ACTIONS = [
   "status",
@@ -202,7 +202,7 @@ export function createNodesTool(options?: {
                 'node required for describe; call nodes with action="status" to list nodes, then retry with node',
               );
             }
-            const nodeId = await resolveNodeId(gatewayOpts, node);
+            const nodeId = await resolveAgentNodeId(gatewayOpts, node);
             return jsonResult(await callGatewayTool("node.describe", gatewayOpts, { nodeId }));
           }
           case "pending":
@@ -240,7 +240,7 @@ export function createNodesTool(options?: {
             if (!title.trim() && !body.trim()) {
               throw new Error("title or body required");
             }
-            const nodeId = await resolveNodeId(gatewayOpts, node);
+            const nodeId = await resolveAgentNodeId(gatewayOpts, node);
             await callGatewayTool("node.invoke", gatewayOpts, {
               nodeId,
               command: "system.notify",

@@ -4,7 +4,7 @@
  * Collects operator/user allowlist sources and explains when no callable tools remain.
  */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { normalizeToolList, normalizeToolName } from "./tool-policy.js";
+import { normalizeToolList, normalizeToolPolicyName } from "./tool-policy.js";
 
 type ExplicitToolAllowlistSource = {
   label: string;
@@ -49,7 +49,7 @@ export function buildEmptyExplicitToolAllowlistError(params: {
     return null;
   }
   const requested = sources
-    .map((source) => `${source.label}: ${source.entries.map(normalizeToolName).join(", ")}`)
+    .map((source) => `${source.label}: ${source.entries.map(normalizeToolPolicyName).join(", ")}`)
     .join("; ");
   const reason =
     params.disableTools === true

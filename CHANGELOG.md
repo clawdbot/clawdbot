@@ -68,6 +68,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Updater plugin convergence:** keep pre-plugin doctor passes from installing configured plugins before the updater's plugin sweep, while preserving the final post-plugin migration pass and preventing ambient update-phase state from leaking into fresh doctor processes.
 - **Control UI browser tab identity:** keep selected tab styling, accessibility, focus, address, and page snapshot aligned across in-place navigation and tab reordering. Fixes #120745. Thanks @shakkernerd.
 - **Control UI staged attachments:** preserve unsent images, files, pasted images, and large pasted text across same-tab route and narrow split-pane remounts while keeping pane close, mismatched pane/session/Gateway remounts, application shutdown, and hard reload as cleanup boundaries. Fixes #121519. Thanks @shakkernerd.
 - **Control UI browser annotations:** keep marked screenshots and generated page context together in structured composer cards, preserve user-written drafts when annotations are removed or replaced, retain complete unsent annotation packages across same-tab route and active split-pane remounts, and offer bounded Undo without restoring removed context into another session. Fixes #120744. Thanks @shakkernerd.

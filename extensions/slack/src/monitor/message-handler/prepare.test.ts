@@ -4906,110 +4906,191 @@ describe("slack implicit mention policy", () => {
     storeFixture.setup();
   });
 
+  beforeEach(() => {
+    clearSlackThreadParticipationCache();
+  });
+
   afterAll(() => {
     storeFixture.cleanup();
   });
 
-  function createCtxWithImplicitMentions(implicitMentions?: {
-    replyToBot?: boolean;
-    threadParticipation?: boolean;
-  }) {
+  function createCtxWithImplicitMentions(
+    implicitMentions?: {
+      replyToBot?: boolean;
+      threadParticipation?: boolean;
+    },
+    options?: Pick<
+      Parameters<typeof createInboundSlackTestContext>[0],
+      "channelsConfig" | "groupPolicy"
+    >,
+  ) {
     const ctx = createInboundSlackTestContext({
       cfg: {
-        channels: { slack: { enabled: true, implicitMentions } },
+        channels: {
+          slack: {
+            enabled: true,
+            implicitMentions,
+            ...(options?.channelsConfig ? { channels: options.channelsConfig } : {}),
+            ...(options?.groupPolicy ? { groupPolicy: options.groupPolicy } : {}),
+          },
+        },
         session: {},
       } as OpenClawConfig,
+      ...options,
     });
     ctx.resolveUserName = async () => ({ name: "Alice" });
     return ctx;
   }
 
-  it("drops a reply to the bot when replyToBot is disabled", async () => {
-    const ctx = createCtxWithImplicitMentions({ replyToBot: false });
+  async function prepareThreadMessage(params: {
+    ctx: SlackMonitorContext;
+    message?: Partial<SlackMessageEvent>;
+    eventScope?: SlackEventScope;
+  }) {
     const { storePath } = storeFixture.makeTmpStorePath();
     vi.spyOn(
       await import("openclaw/plugin-sdk/session-store-runtime"),
       "resolveStorePath",
     ).mockReturnValue(storePath);
-    const account = createSlackTestAccount();
-    const message: SlackMessageEvent = {
-      type: "message",
-      channel: "C123",
-      channel_type: "channel",
-      user: "U1",
-      text: "hello",
-      ts: "1700000001.000001",
-      thread_ts: "1700000000.000000",
-      parent_user_id: "B1", // bot is thread parent
-    };
-    const result = await prepareSlackMessage({
+    return await prepareSlackMessage({
+      ctx: params.ctx,
+      account: createSlackTestAccount(),
+      message: {
+        type: "message",
+        channel: "C123",
+        channel_type: "channel",
+        user: "U1",
+        text: "hello",
+        ts: "1700000001.000001",
+        thread_ts: "1700000000.000000",
+        parent_user_id: "U2",
+        ...params.message,
+      },
+      opts: {
+        source: "message",
+        ...(params.eventScope ? { eventScope: params.eventScope } : {}),
+      },
+    });
+  }
+
+  it("drops a reply to the bot when replyToBot is disabled", async () => {
+    const ctx = createCtxWithImplicitMentions({ replyToBot: false });
+    const result = await prepareThreadMessage({
       ctx,
-      account,
-      message,
-      opts: { source: "message" },
+      message: { parent_user_id: "B1" },
     });
     expect(result).toBeNull();
   });
 
   it("allows an explicit mention when all implicit thread signals are disabled", async () => {
-    const ctx = createCtxWithImplicitMentions({
-      replyToBot: false,
-      threadParticipation: false,
-    });
-    const { storePath } = storeFixture.makeTmpStorePath();
-    vi.spyOn(
-      await import("openclaw/plugin-sdk/session-store-runtime"),
-      "resolveStorePath",
-    ).mockReturnValue(storePath);
-    const account = createSlackTestAccount();
-    const message: SlackMessageEvent = {
-      type: "message",
-      channel: "C123",
-      channel_type: "channel",
-      user: "U1",
-      text: "<@B1> hello",
-      ts: "1700000001.000002",
-      thread_ts: "1700000000.000000",
-      parent_user_id: "B1",
-    };
-    const result = await prepareSlackMessage({
+    const ctx = createCtxWithImplicitMentions(
+      { replyToBot: false, threadParticipation: false },
+      { channelsConfig: { C123: { requireMention: true } } },
+    );
+    const result = await prepareThreadMessage({
       ctx,
-      account,
-      message,
-      opts: { source: "message" },
+      message: { text: "<@B1> hello", parent_user_id: "B1" },
     });
-    if (!result) {
-      throw new Error("expected Slack thread reply message");
-    }
+    expect(result?.ctxPayload.MentionSource).toBe("explicit_bot");
   });
 
   it("controls persisted thread participation independently from replies to the bot", async () => {
     const threadTs = "1700000000.000000";
     recordSlackThreadParticipation("default", "C123", threadTs);
     const ctx = createCtxWithImplicitMentions({ threadParticipation: false });
-    const { storePath } = storeFixture.makeTmpStorePath();
-    vi.spyOn(
-      await import("openclaw/plugin-sdk/session-store-runtime"),
-      "resolveStorePath",
-    ).mockReturnValue(storePath);
-    const account = createSlackTestAccount();
-    const message: SlackMessageEvent = {
-      type: "message",
-      channel: "C123",
-      channel_type: "channel",
-      user: "U1",
-      text: "hello",
-      ts: "1700000001.000003",
-      thread_ts: threadTs,
-      parent_user_id: "U2",
-    };
-    const result = await prepareSlackMessage({
+    const result = await prepareThreadMessage({
       ctx,
-      account,
-      message,
-      opts: { source: "message" },
+      message: { thread_ts: threadTs },
     });
     expect(result).toBeNull();
+  });
+
+  it("accepts an unmentioned reply more than 24 hours after joining a required-mention thread", async () => {
+    const threadTs = "1700000000.000000";
+    const initialNow = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(initialNow);
+
+    try {
+      recordSlackThreadParticipation("default", "C123", threadTs);
+      nowSpy.mockReturnValue(initialNow + 25 * 60 * 60 * 1000);
+
+      const ctx = createCtxWithImplicitMentions(undefined, {
+        channelsConfig: { C123: { requireMention: true } },
+      });
+      const result = await prepareThreadMessage({ ctx, message: { thread_ts: threadTs } });
+
+      expect(result?.ctxPayload.MentionSource).toBe("implicit_thread");
+      expect(result?.ctxPayload.ImplicitMentionKinds).toEqual(["bot_thread_participant"]);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("continues requiring a mention in an unrelated thread the bot never joined", async () => {
+    recordSlackThreadParticipation("default", "C123", "1700000000.000999");
+    const ctx = createCtxWithImplicitMentions(undefined, {
+      channelsConfig: { C123: { requireMention: true } },
+    });
+
+    expect(await prepareThreadMessage({ ctx })).toBeNull();
+  });
+
+  it("preserves explicit channel settings that do not require mentions", async () => {
+    const ctx = createCtxWithImplicitMentions(undefined, {
+      channelsConfig: { C123: { requireMention: false } },
+    });
+
+    const result = await prepareThreadMessage({ ctx });
+
+    expect(result?.ctxPayload.MentionSource).toBe("none");
+    expect(result?.ctxPayload.ImplicitMentionKinds).toBeUndefined();
+  });
+
+  const unauthorizedThreadCases: Array<{
+    authorization: string;
+    options: Pick<
+      Parameters<typeof createInboundSlackTestContext>[0],
+      "channelsConfig" | "groupPolicy"
+    >;
+  }> = [
+    {
+      authorization: "channel",
+      options: {
+        channelsConfig: { C_ALLOWED: { enabled: true, requireMention: true } },
+        groupPolicy: "allowlist" as const,
+      },
+    },
+    {
+      authorization: "sender",
+      options: {
+        channelsConfig: { C123: { requireMention: true, users: ["U_ALLOWED"] } },
+      },
+    },
+  ];
+
+  it.each(unauthorizedThreadCases)(
+    "rejects a joined thread when $authorization authorization fails",
+    async ({ options }) => {
+      recordSlackThreadParticipation("default", "C123", "1700000000.000000");
+      const ctx = createCtxWithImplicitMentions(undefined, options);
+
+      expect(await prepareThreadMessage({ ctx })).toBeNull();
+    },
+  );
+
+  it("does not accept participation recorded in a different enterprise workspace", async () => {
+    recordSlackThreadParticipation("default", "C123", "1700000000.000000", {
+      teamId: "T_OTHER",
+    });
+    const ctx = createCtxWithImplicitMentions(undefined, {
+      channelsConfig: { C123: { requireMention: true } },
+    });
+    const eventScope = {
+      teamId: "T1",
+      client: {} as SlackEventScope["client"],
+    } satisfies SlackEventScope;
+
+    expect(await prepareThreadMessage({ ctx, eventScope })).toBeNull();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

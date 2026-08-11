@@ -65,9 +65,6 @@ export function listRegisteredMemoryEmbeddingProviders(): RegisteredMemoryEmbedd
   return getMemoryEmbeddingProviders();
 }
 
-export function listMemoryEmbeddingProviders(): MemoryEmbeddingProviderAdapter[] {
-  return listRegisteredMemoryEmbeddingProviders().map((entry) => entry.adapter);
-}
 export function restoreRegisteredMemoryEmbeddingProviders(
   entries: RegisteredMemoryEmbeddingProvider[],
 ): void {

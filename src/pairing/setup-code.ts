@@ -18,7 +18,7 @@ import { normalizeSecretInputString, resolveSecretInputRef } from "../config/typ
 import { materializeGatewayAuthSecretRefs } from "../gateway/auth-config-utils.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
 import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
-import { resolveAdvertisedLanHost } from "../infra/advertised-lan-host.js";
+import { resolveAdvertisedLanHostCore } from "../infra/advertised-lan-host.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
 import {
   pickMatchingExternalInterfaceAddress,
@@ -380,7 +380,7 @@ async function resolveGatewayUrl(
 
   const advertisedLanHost =
     cfg.gateway?.bind === "lan"
-      ? await resolveAdvertisedLanHost({
+      ? await resolveAdvertisedLanHostCore({
           networkInterfaces: opts.networkInterfaces,
           runCommandWithTimeout: opts.runCommandWithTimeout,
         })

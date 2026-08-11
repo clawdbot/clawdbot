@@ -40,7 +40,7 @@ export function normalizeStringListRecord(value: unknown): Record<string, string
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-export function normalizeStringRecord(value: unknown): Record<string, string> | undefined {
+export function normalizeManifestStringRecord(value: unknown): Record<string, string> | undefined {
   if (!isRecord(value)) {
     return undefined;
   }

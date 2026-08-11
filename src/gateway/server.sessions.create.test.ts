@@ -17,11 +17,11 @@ import { managedWorktrees } from "../agents/worktrees/service.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { initSessionState } from "../auto-reply/reply/session.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
+import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -283,7 +283,9 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
         .get(key),
     ).toEqual({ session_key: key });
     expect(loadSessionEntry({ agentId: "main", sessionKey: key })?.incognito).toBe(true);
-    expect(loadCombinedSessionStoreForGateway(getRuntimeConfig()).store[key]?.incognito).toBe(true);
+    expect(loadCombinedSessionStoreForGatewayCore(getRuntimeConfig()).store[key]?.incognito).toBe(
+      true,
+    );
     expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.incognito).toBe(true);
     const persistentDatabase = openOpenClawAgentDatabase({
       agentId: "main",
@@ -357,7 +359,7 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
       error: { code: "INVALID_REQUEST", message: "incognito sessions are web-only" },
     });
     const durableSubagentKey = "agent:main:subagent:durable-existing";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey: durableSubagentKey, storePath },
       { sessionId: "durable-subagent", updatedAt: Date.now() },
     );
@@ -402,7 +404,7 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
     );
     expect(afterReset.payload?.sessions.some((session) => session.key === key)).toBe(false);
 
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey: key, storePath },
       { sessionId: "rematerialized-incognito", updatedAt: Date.now() },
     );
@@ -2250,7 +2252,9 @@ test("sessions.create commits no session after delegated authority closes", asyn
 
   expect(created.ok).toBe(false);
   expect(created.error?.message).toContain("agent runtime authority is no longer active");
-  expect(loadCombinedSessionStoreForGateway(getRuntimeConfig()).store[sessionKey]).toBeUndefined();
+  expect(
+    loadCombinedSessionStoreForGatewayCore(getRuntimeConfig()).store[sessionKey],
+  ).toBeUndefined();
 });
 
 test("sessions.create starts no initial turn when authority closes after session commit", async () => {
@@ -2288,7 +2292,9 @@ test("sessions.create starts no initial turn when authority closes after session
     expect(created.ok).toBe(true);
     expect(created.payload?.runStarted).toBe(false);
     expect(chatSend).not.toHaveBeenCalled();
-    expect(loadCombinedSessionStoreForGateway(getRuntimeConfig()).store[sessionKey]).toBeDefined();
+    expect(
+      loadCombinedSessionStoreForGatewayCore(getRuntimeConfig()).store[sessionKey],
+    ).toBeDefined();
   } finally {
     chatSend.mockRestore();
   }

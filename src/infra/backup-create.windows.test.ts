@@ -19,7 +19,7 @@ describe("writeArchiveStreamToFile", () => {
     try {
       const writePromise = writeArchiveStreamToFile({
         archivePath,
-        archiveStream,
+        createArchiveStream: () => archiveStream,
       });
       archiveStream.end("partial archive");
 
@@ -36,7 +36,7 @@ describe("writeArchiveStreamToFile", () => {
     const archiveStream = new PassThrough();
     const writePromise = writeArchiveStreamToFile({
       archivePath,
-      archiveStream,
+      createArchiveStream: () => archiveStream,
     });
     archiveStream.write("partial archive");
     archiveStream.destroy(new Error("injected tar read failure"));
@@ -53,13 +53,13 @@ describe("writeArchiveStreamToFile", () => {
       const archiveStream = new PassThrough();
       const writePromise = writeArchiveStreamToFile({
         archivePath,
-        archiveStream,
+        createArchiveStream: () => archiveStream,
         idleTimeoutMs: 50,
       });
       archiveStream.write("partial archive");
 
       const rejection = expect(writePromise).rejects.toThrow(
-        "Backup archive write stalled: no data produced for 50ms",
+        "Backup archive write stalled: no progress observed for 50ms",
       );
       await vi.advanceTimersByTimeAsync(60);
       await rejection;
@@ -78,7 +78,7 @@ describe("writeArchiveStreamToFile", () => {
       const archiveStream = new PassThrough();
       const writePromise = writeArchiveStreamToFile({
         archivePath,
-        archiveStream,
+        createArchiveStream: () => archiveStream,
         idleTimeoutMs: 50,
       });
 
@@ -90,6 +90,34 @@ describe("writeArchiveStreamToFile", () => {
 
       await expect(writePromise).resolves.toMatchObject({ archivePath });
       await expect(fs.readFile(archivePath, "utf8")).resolves.toBe("firstsecondthird");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the archive alive while the producer reports silent traversal progress", async () => {
+    vi.useFakeTimers();
+    try {
+      const tempDir = tempDirs.make("openclaw-backup-stream-traversal-progress-");
+      const archivePath = path.join(tempDir, "complete.tar.gz");
+      const archiveStream = new PassThrough();
+      let reportProgress: (() => void) | undefined;
+      const writePromise = writeArchiveStreamToFile({
+        archivePath,
+        createArchiveStream: (progress) => {
+          reportProgress = progress;
+          return archiveStream;
+        },
+      });
+
+      for (let elapsed = 0; elapsed < 360_000; elapsed += 60_000) {
+        await vi.advanceTimersByTimeAsync(60_000);
+        reportProgress?.();
+      }
+      archiveStream.end("archive after traversal");
+
+      await expect(writePromise).resolves.toMatchObject({ archivePath });
+      await expect(fs.readFile(archivePath, "utf8")).resolves.toBe("archive after traversal");
     } finally {
       vi.useRealTimers();
     }

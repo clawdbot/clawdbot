@@ -42,7 +42,7 @@ export function removePreparedBackupArchive(prepared: PreparedBackupArchive): bo
 
 export async function writeArchiveStreamToFile(params: {
   archivePath: string;
-  archiveStream: DestroyableArchiveStream;
+  createArchiveStream: (reportProgress: () => void) => DestroyableArchiveStream;
   idleTimeoutMs?: number;
   onPartialArchive?: (receipt: BackupArchiveCleanupReceipt) => void;
 }): Promise<PreparedBackupArchive> {
@@ -51,18 +51,25 @@ export async function writeArchiveStreamToFile(params: {
   // refuses a pre-existing path instead of following a symlink.
   const idleTimeoutMs = params.idleTimeoutMs ?? BACKUP_ARCHIVE_IDLE_TIMEOUT_MS;
   const controller = new AbortController();
+  let archiveStream: DestroyableArchiveStream | undefined;
   let openedIdentity: Stats | undefined;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let idleTimeoutError: Error | undefined;
+  let settled = false;
   const armIdleTimer = () => {
+    // A destroyed producer may finish an in-flight filesystem callback later;
+    // never let that callback retain the process after cleanup has completed.
+    if (settled) {
+      return;
+    }
     if (idleTimer) {
       clearTimeout(idleTimer);
     }
     idleTimer = setTimeout(() => {
       idleTimeoutError = new Error(
-        `Backup archive write stalled: no data produced for ${idleTimeoutMs}ms`,
+        `Backup archive write stalled: no progress observed for ${idleTimeoutMs}ms`,
       );
-      params.archiveStream.destroy(idleTimeoutError);
+      archiveStream?.destroy(idleTimeoutError);
       controller.abort(idleTimeoutError);
     }, idleTimeoutMs);
   };
@@ -86,7 +93,8 @@ export async function writeArchiveStreamToFile(params: {
     }
   });
   try {
-    const pipelinePromise = pipeline(params.archiveStream, progress, archiveWriteStream, {
+    archiveStream = params.createArchiveStream(armIdleTimer);
+    const pipelinePromise = pipeline(archiveStream, progress, archiveWriteStream, {
       signal: controller.signal,
     });
     armIdleTimer();
@@ -148,6 +156,7 @@ export async function writeArchiveStreamToFile(params: {
     }
     throw idleTimeoutError ?? err;
   } finally {
+    settled = true;
     if (idleTimer) {
       clearTimeout(idleTimer);
     }

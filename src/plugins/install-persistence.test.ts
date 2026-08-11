@@ -9,15 +9,15 @@ import {
   buildPluginSnapshotReportMock,
   clearPluginRegistryLoadCacheMock,
   enablePluginInConfigMock,
-  loadPluginManifestRegistry,
-  planPluginUninstall,
-  replaceConfigFile,
-  refreshPluginRegistry,
+  loadPluginManifestRegistryMock,
+  planPluginUninstallMock,
+  replaceConfigFileMock,
+  refreshPluginRegistryMock,
   resetPluginsCliTestState,
   pluginsCliRuntimeLogs,
   setInstalledPluginIndexInstallRecords,
-  writeConfigFile,
-  writePersistedInstalledPluginIndexInstallRecordsWithLease,
+  configWriteMock,
+  writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
   applyPluginUninstallDirectoryRemovalMock,
 } from "../cli/plugins-cli-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -130,8 +130,8 @@ describe("persistPluginInstall", () => {
 
     expect(next).toEqual(enabledConfig);
     const persistedRecords = requireMockCallArg(
-      writePersistedInstalledPluginIndexInstallRecordsWithLease,
-      "writePersistedInstalledPluginIndexInstallRecordsWithLease",
+      writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
+      "writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock",
     );
     expect(persistedRecords.alpha).toEqual({
       source: "npm",
@@ -139,8 +139,8 @@ describe("persistPluginInstall", () => {
       installPath: "/tmp/alpha",
       installedAt: "2026-04-25T00:00:00.000Z",
     });
-    expect(writeConfigFile).toHaveBeenCalledWith(enabledConfig);
-    expect(replaceConfigFile).toHaveBeenCalledWith({
+    expect(configWriteMock).toHaveBeenCalledWith(enabledConfig);
+    expect(replaceConfigFileMock).toHaveBeenCalledWith({
       nextConfig: enabledConfig,
       baseHash: "config-1",
       writeOptions: {
@@ -153,7 +153,10 @@ describe("persistPluginInstall", () => {
         unsetPaths: [["plugins", "installs"]],
       },
     });
-    const refreshParams = requireMockCallArg(refreshPluginRegistry, "refreshPluginRegistry");
+    const refreshParams = requireMockCallArg(
+      refreshPluginRegistryMock,
+      "refreshPluginRegistryMock",
+    );
     expect(refreshParams.config).toBe(enabledConfig);
     expect(refreshParams.reason).toBe("source-changed");
     expect((refreshParams.installRecords as Record<string, unknown>).alpha).toEqual({
@@ -199,7 +202,7 @@ describe("persistPluginInstall", () => {
     });
 
     expect(next).toEqual(enabledConfig);
-    expect(refreshPluginRegistry).toHaveBeenCalledTimes(1);
+    expect(refreshPluginRegistryMock).toHaveBeenCalledTimes(1);
     expectRuntimeLogIncludes("Plugin runtime cache invalidation failed");
   });
 
@@ -225,7 +228,7 @@ describe("persistPluginInstall", () => {
         installPath: "/tmp/openclaw/extensions/codex",
       },
     });
-    planPluginUninstall.mockReturnValueOnce({
+    planPluginUninstallMock.mockReturnValueOnce({
       ok: true,
       config: {} as OpenClawConfig,
       pluginId: "codex",
@@ -263,7 +266,7 @@ describe("persistPluginInstall", () => {
       },
     });
 
-    expect(planPluginUninstall).toHaveBeenCalledWith({
+    expect(planPluginUninstallMock).toHaveBeenCalledWith({
       config: {
         plugins: {
           installs: {
@@ -284,7 +287,7 @@ describe("persistPluginInstall", () => {
     const cleanupOrder =
       applyPluginUninstallDirectoryRemovalMock.mock.invocationCallOrder[0] ??
       Number.MAX_SAFE_INTEGER;
-    const refreshOrder = refreshPluginRegistry.mock.invocationCallOrder[0] ?? 0;
+    const refreshOrder = refreshPluginRegistryMock.mock.invocationCallOrder[0] ?? 0;
     expect(cleanupOrder).toBeLessThan(refreshOrder);
     expect(pluginsCliRuntimeLogs.join("\n")).toContain(
       "Removed previous plugin install directory: /tmp/openclaw/extensions/codex",
@@ -328,7 +331,7 @@ describe("persistPluginInstall", () => {
       },
     });
 
-    expect(planPluginUninstall).not.toHaveBeenCalled();
+    expect(planPluginUninstallMock).not.toHaveBeenCalled();
     expect(applyPluginUninstallDirectoryRemovalMock).not.toHaveBeenCalled();
   });
 
@@ -372,7 +375,7 @@ describe("persistPluginInstall", () => {
         installPath: previousInstallPath,
       },
     });
-    planPluginUninstall.mockReturnValueOnce({
+    planPluginUninstallMock.mockReturnValueOnce({
       ok: true,
       config: {} as OpenClawConfig,
       pluginId: "codex",
@@ -412,7 +415,7 @@ describe("persistPluginInstall", () => {
         },
       });
 
-      expect(planPluginUninstall).toHaveBeenCalledWith({
+      expect(planPluginUninstallMock).toHaveBeenCalledWith({
         config: {
           plugins: {
             installs: {
@@ -552,7 +555,7 @@ describe("persistPluginInstall", () => {
       },
     } as OpenClawConfig;
     enablePluginInConfigMock.mockReturnValue({ config: enabledConfig });
-    refreshPluginRegistry.mockRejectedValueOnce(new Error("registry unavailable"));
+    refreshPluginRegistryMock.mockRejectedValueOnce(new Error("registry unavailable"));
 
     const next = await persistPluginInstall({
       snapshot: {
@@ -569,7 +572,7 @@ describe("persistPluginInstall", () => {
     });
 
     expect(next).toEqual(enabledConfig);
-    expect(refreshPluginRegistry).toHaveBeenCalledTimes(1);
+    expect(refreshPluginRegistryMock).toHaveBeenCalledTimes(1);
     expect(clearPluginRegistryLoadCacheMock).toHaveBeenCalledTimes(1);
     expectRuntimeLogIncludes("Plugin registry refresh failed");
   });
@@ -606,7 +609,7 @@ describe("persistPluginInstall", () => {
     });
 
     expect(next).toEqual(enabledConfig);
-    expect(refreshPluginRegistry).toHaveBeenCalledTimes(1);
+    expect(refreshPluginRegistryMock).toHaveBeenCalledTimes(1);
     expect(clearPluginRegistryLoadCacheMock).not.toHaveBeenCalled();
   });
 
@@ -667,7 +670,7 @@ describe("persistPluginInstall", () => {
       },
     } as OpenClawConfig;
     enablePluginInConfigMock.mockReturnValue({ config: enabledConfig });
-    loadPluginManifestRegistry.mockReturnValue({
+    loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [createManifestRecord("legacy-memory")],
       diagnostics: [],
     });
@@ -720,7 +723,8 @@ describe("persistPluginInstall", () => {
       onlyPluginIds: ["legacy-memory"],
     });
     expect(
-      requireMockCallArg(loadPluginManifestRegistry, "loadPluginManifestRegistry", 1).config,
+      requireMockCallArg(loadPluginManifestRegistryMock, "loadPluginManifestRegistryMock", 1)
+        .config,
     ).toBe(enabledConfig);
     expect(next.plugins?.entries?.["legacy-memory-a"]?.enabled).toBe(true);
     expect(next.plugins?.slots?.memory).toBe("legacy-memory");
@@ -744,7 +748,7 @@ describe("persistPluginInstall", () => {
       },
     } as OpenClawConfig;
     enablePluginInConfigMock.mockReturnValue({ config: enabledConfig });
-    loadPluginManifestRegistry.mockReturnValue({
+    loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [createManifestRecord("memory-b", { kind: "memory" })],
       diagnostics: [],
     });
@@ -789,7 +793,8 @@ describe("persistPluginInstall", () => {
 
     expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
     expect(
-      requireMockCallArg(loadPluginManifestRegistry, "loadPluginManifestRegistry", 1).config,
+      requireMockCallArg(loadPluginManifestRegistryMock, "loadPluginManifestRegistryMock", 1)
+        .config,
     ).toBe(enabledConfig);
     expect(next.plugins?.entries?.["legacy-memory-a"]?.enabled).toBe(true);
     expect(next.plugins?.slots?.memory).toBe("memory-b");
@@ -810,7 +815,7 @@ describe("persistPluginInstall", () => {
       },
     } as OpenClawConfig;
     enablePluginInConfigMock.mockReturnValue({ config: enabledConfig });
-    loadPluginManifestRegistry.mockReturnValue({
+    loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [createManifestRecord("plain")],
       diagnostics: [],
     });
@@ -844,7 +849,8 @@ describe("persistPluginInstall", () => {
       onlyPluginIds: ["plain"],
     });
     expect(
-      requireMockCallArg(loadPluginManifestRegistry, "loadPluginManifestRegistry", 1).config,
+      requireMockCallArg(loadPluginManifestRegistryMock, "loadPluginManifestRegistryMock", 1)
+        .config,
     ).toBe(enabledConfig);
     expect(next).toEqual(enabledConfig);
   });
@@ -860,7 +866,7 @@ describe("persistPluginInstall", () => {
         },
       },
     } as OpenClawConfig;
-    loadPluginManifestRegistry.mockReturnValue({
+    loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [
         {
           id: "needs-config",
@@ -903,8 +909,8 @@ describe("persistPluginInstall", () => {
       'Installed plugin "needs-config" without enabling it because it requires configuration first.',
     );
     const persistedRecords = requireMockCallArg(
-      writePersistedInstalledPluginIndexInstallRecordsWithLease,
-      "writePersistedInstalledPluginIndexInstallRecordsWithLease",
+      writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
+      "writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock",
     );
     expect(persistedRecords["needs-config"]).toMatchObject({
       source: "npm",
@@ -926,7 +932,7 @@ describe("persistPluginInstall", () => {
         },
       },
     } as OpenClawConfig;
-    loadPluginManifestRegistry.mockReturnValue({
+    loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [
         {
           id: "needs-config",
@@ -959,8 +965,8 @@ describe("persistPluginInstall", () => {
     ).rejects.toThrow("has invalid configured settings");
 
     expect(enablePluginInConfigMock).not.toHaveBeenCalled();
-    expect(writePersistedInstalledPluginIndexInstallRecordsWithLease).not.toHaveBeenCalled();
-    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock).not.toHaveBeenCalled();
+    expect(configWriteMock).not.toHaveBeenCalled();
   });
 
   it("can persist an install record without enabling a plugin that needs config first", async () => {
@@ -991,8 +997,8 @@ describe("persistPluginInstall", () => {
     expect(enablePluginInConfigMock).not.toHaveBeenCalled();
     expect(applyExclusiveSlotSelectionMock).not.toHaveBeenCalled();
     const persistedRecords = requireMockCallArg(
-      writePersistedInstalledPluginIndexInstallRecordsWithLease,
-      "writePersistedInstalledPluginIndexInstallRecordsWithLease",
+      writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
+      "writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock",
     );
     expect(persistedRecords["memory-lancedb"]).toEqual({
       source: "path",
@@ -1001,7 +1007,7 @@ describe("persistPluginInstall", () => {
       installPath: "/app/dist/extensions/memory-lancedb",
       installedAt: "2026-04-25T00:00:00.000Z",
     });
-    expect(writeConfigFile).toHaveBeenCalledWith(baseConfig);
+    expect(configWriteMock).toHaveBeenCalledWith(baseConfig);
   });
 
   it("does not add disabled installs to restrictive allowlists", async () => {

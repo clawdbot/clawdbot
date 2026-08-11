@@ -1,5 +1,5 @@
 import { stableStringify } from "@openclaw/normalization-core";
-import { normalizeToolName } from "../tool-policy.js";
+import { normalizeToolPolicyName } from "../tool-policy.js";
 import { codexNativeHookRelayResponseCodec } from "./native-hook-relay-response-codec.js";
 import type {
   JsonValue,
@@ -186,6 +186,6 @@ export function readNativeHookRelayApprovalMode(rawPayload: JsonValue): "report"
 }
 
 export function normalizeNativeHookToolName(toolName: string | undefined): string {
-  const normalized = normalizeToolName(toolName ?? "tool");
+  const normalized = normalizeToolPolicyName(toolName ?? "tool");
   return CODEX_NATIVE_HOOK_TOOL_NAME_ALIASES[normalized] ?? normalized;
 }

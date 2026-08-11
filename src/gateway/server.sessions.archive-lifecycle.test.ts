@@ -1,7 +1,7 @@
 // Archive lifecycle tests protect fence-before-cancel, terminal drains, and sentinels.
 import { afterEach, expect, test, vi } from "vitest";
 import { SessionManager } from "../agents/sessions/session-manager.js";
-import { loadSessionEntry, upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import {
   beginSessionWorkAdmission,
@@ -1033,7 +1033,7 @@ test("sessions.patch rejects a generation replaced after the exact preparation r
       },
     );
     await vi.waitFor(() => expect(active.controller.signal.aborted).toBe(true));
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { storePath, sessionKey },
       { sessionId: "session-archive-generation-replacement", updatedAt: 2 },
     );

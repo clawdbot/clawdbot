@@ -271,8 +271,8 @@ export function unauthorizedHintForMessage(message: string): string | null {
 }
 
 /** Resolve a node query to a node id via live node list or paired-node fallback. */
-export async function resolveNodeId(opts: NodesRpcOpts, query: string) {
-  return (await resolveNode(opts, query)).nodeId;
+export async function resolveCliNodeId(opts: NodesRpcOpts, query: string) {
+  return (await resolveCliNode(opts, query)).nodeId;
 }
 
 /** Resolve a node through the pairing-aware diagnostics view when available. */
@@ -284,12 +284,12 @@ export async function resolveNodeDiagnosticsId(opts: NodesRpcOpts, query: string
     if (!isUnknownGatewayMethodError(error, "node.list")) {
       throw error;
     }
-    return await resolveNodeId(opts, query);
+    return await resolveCliNodeId(opts, query);
   }
 }
 
 /** Resolve a node query to the best available node record. */
-export async function resolveNode(opts: NodesRpcOpts, query: string): Promise<NodeListNode> {
+export async function resolveCliNode(opts: NodesRpcOpts, query: string): Promise<NodeListNode> {
   let nodes: NodeListNode[];
   try {
     const res = await callNodesGatewayCli("node.list", opts, {});

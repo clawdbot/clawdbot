@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import type { PluginEnableResult } from "../plugins/enable.js";
 import { resolveNpmInstallSpecsForUpdateChannel } from "../plugins/install-channel-specs.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { VERSION } from "../version.js";
 
 function expectedNpmInstallSpec(spec: string): string {
@@ -1240,7 +1240,7 @@ describe("ensureOnboardingPluginInstalled", () => {
   });
 
   it("does not offer local installs when the workspace only has a spoofed .git marker", async () => {
-    await withTempDir({ prefix: "openclaw-onboarding-install-spoofed-git-" }, async (temp) => {
+    await withTestDir({ prefix: "openclaw-onboarding-install-spoofed-git-" }, async (temp) => {
       const workspaceDir = path.join(temp, "workspace");
       const cwdDir = path.join(temp, "cwd");
       const pluginDir = path.join(workspaceDir, "plugins", "demo");
@@ -1298,7 +1298,7 @@ describe("ensureOnboardingPluginInstalled", () => {
   });
 
   it("allows local installs for real gitdir checkouts and sanitizes prompt text", async () => {
-    await withTempDir({ prefix: "openclaw-onboarding-install-gitdir-" }, async (temp) => {
+    await withTestDir({ prefix: "openclaw-onboarding-install-gitdir-" }, async (temp) => {
       const workspaceDir = path.join(temp, "workspace");
       const pluginDir = path.join(workspaceDir, "plugins", "demo");
       await fs.mkdir(pluginDir, { recursive: true });
@@ -1356,7 +1356,7 @@ describe("ensureOnboardingPluginInstalled", () => {
   });
 
   it("does not add local plugin paths when enablement is blocked by policy", async () => {
-    await withTempDir({ prefix: "openclaw-onboarding-install-blocked-enable-" }, async (temp) => {
+    await withTestDir({ prefix: "openclaw-onboarding-install-blocked-enable-" }, async (temp) => {
       const workspaceDir = path.join(temp, "workspace");
       const pluginDir = path.join(workspaceDir, "plugins", "demo");
       await fs.mkdir(pluginDir, { recursive: true });
@@ -1404,7 +1404,7 @@ describe("ensureOnboardingPluginInstalled", () => {
   });
 
   it("allows local installs for linked git worktrees", async () => {
-    await withTempDir({ prefix: "openclaw-onboarding-install-worktree-" }, async (temp) => {
+    await withTestDir({ prefix: "openclaw-onboarding-install-worktree-" }, async (temp) => {
       const workspaceDir = path.join(temp, "workspace");
       const pluginDir = path.join(workspaceDir, "plugins", "demo");
       const commonGitDir = path.join(temp, "repo.git");
@@ -1458,7 +1458,7 @@ describe("ensureOnboardingPluginInstalled", () => {
   });
 
   it("records local install source metadata when a local path is selected", async () => {
-    await withTempDir({ prefix: "openclaw-onboarding-install-local-record-" }, async (temp) => {
+    await withTestDir({ prefix: "openclaw-onboarding-install-local-record-" }, async (temp) => {
       const workspaceDir = path.join(temp, "workspace");
       const pluginDir = path.join(workspaceDir, "plugins", "demo");
       await fs.mkdir(path.join(workspaceDir, ".git"), { recursive: true });
@@ -1514,7 +1514,7 @@ describe("ensureOnboardingPluginInstalled", () => {
   });
 
   it("hides the npm download option for bundled plugins so the menu matches non-npm channels", async () => {
-    await withTempDir({ prefix: "openclaw-onboarding-install-bundled-prompt-" }, async (temp) => {
+    await withTestDir({ prefix: "openclaw-onboarding-install-bundled-prompt-" }, async (temp) => {
       const bundledDir = path.join(temp, "dist", "extensions", "tlon");
       await fs.mkdir(bundledDir, { recursive: true });
       const realBundledDir = await fs.realpath(bundledDir);
@@ -1577,7 +1577,7 @@ describe("ensureOnboardingPluginInstalled", () => {
   });
 
   it("enables bundled plugins without adding their bundled directory as a local install", async () => {
-    await withTempDir({ prefix: "openclaw-onboarding-install-bundled-record-" }, async (temp) => {
+    await withTestDir({ prefix: "openclaw-onboarding-install-bundled-record-" }, async (temp) => {
       const bundledDir = path.join(temp, "dist", "extensions", "discord");
       await fs.mkdir(bundledDir, { recursive: true });
       const realBundledDir = await fs.realpath(bundledDir);
@@ -1623,7 +1623,7 @@ describe("ensureOnboardingPluginInstalled", () => {
   });
 
   it("records local install source metadata when npm install falls back to local", async () => {
-    await withTempDir(
+    await withTestDir(
       { prefix: "openclaw-onboarding-install-npm-fallback-record-" },
       async (temp) => {
         const workspaceDir = path.join(temp, "workspace");
@@ -1687,7 +1687,7 @@ describe("ensureOnboardingPluginInstalled", () => {
   });
 
   it("records absolute local catalog paths as workspace-relative source metadata", async () => {
-    await withTempDir({ prefix: "openclaw-onboarding-install-portable-record-" }, async (temp) => {
+    await withTestDir({ prefix: "openclaw-onboarding-install-portable-record-" }, async (temp) => {
       const workspaceDir = path.join(temp, "workspace");
       const pluginDir = path.join(workspaceDir, "plugins", "demo");
       await fs.mkdir(path.join(workspaceDir, ".git"), { recursive: true });
@@ -1730,7 +1730,7 @@ describe("ensureOnboardingPluginInstalled", () => {
   });
 
   it("keeps local installs available when cwd is a git repo but workspaceDir is not", async () => {
-    await withTempDir({ prefix: "openclaw-onboarding-install-cwd-git-" }, async (temp) => {
+    await withTestDir({ prefix: "openclaw-onboarding-install-cwd-git-" }, async (temp) => {
       const repoDir = path.join(temp, "repo");
       const workspaceDir = path.join(temp, "workspace");
       const pluginDir = path.join(repoDir, "demo-plugin");
@@ -1784,7 +1784,7 @@ describe("ensureOnboardingPluginInstalled", () => {
   });
 
   it("rejects local install paths outside the trusted workspace roots", async () => {
-    await withTempDir({ prefix: "openclaw-onboarding-install-outside-root-" }, async (temp) => {
+    await withTestDir({ prefix: "openclaw-onboarding-install-outside-root-" }, async (temp) => {
       const workspaceDir = path.join(temp, "workspace");
       const pluginDir = path.join(temp, "external-plugin");
       await fs.mkdir(path.join(workspaceDir, ".git"), { recursive: true });
@@ -1824,7 +1824,7 @@ describe("ensureOnboardingPluginInstalled", () => {
   });
 
   it("rejects local install paths when relative resolution looks cross-drive", async () => {
-    await withTempDir({ prefix: "openclaw-onboarding-install-cross-drive-" }, async (temp) => {
+    await withTestDir({ prefix: "openclaw-onboarding-install-cross-drive-" }, async (temp) => {
       const workspaceDir = path.join(temp, "workspace");
       const pluginDir = path.join(workspaceDir, "plugins", "demo");
       await fs.mkdir(path.join(workspaceDir, ".git"), { recursive: true });

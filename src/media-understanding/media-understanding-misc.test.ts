@@ -6,7 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as fsSafe from "../infra/fs-safe.js";
 import { saveMediaBuffer } from "../media/store.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { MediaAttachmentCache } from "./attachments.js";
@@ -43,7 +43,7 @@ async function withLocalAttachmentCache(
     canonicalAttachmentPath: string;
   }) => Promise<void>,
 ) {
-  await withTempDir({ prefix }, async (base) => {
+  await withTestDir({ prefix }, async (base) => {
     const allowedRoot = path.join(base, "allowed");
     const attachmentPath = path.join(allowedRoot, "voice-note.m4a");
     await fs.mkdir(allowedRoot, { recursive: true });
@@ -110,6 +110,7 @@ describe("media understanding attachments SSRF", () => {
     });
     expect(result).toStrictEqual({
       buffer: Buffer.from("image"),
+      classification: { mime: "image/jpeg", class: "image" },
       mime: "image/jpeg",
       fileName: "file.jpg",
       size: 5,
@@ -139,6 +140,53 @@ describe("media understanding attachments SSRF", () => {
     expect(result.fileName).toBe("image.png");
   });
 
+  it("keeps the attachment's concrete MIME when the download reports octet-stream", async () => {
+    const url = "http://198.18.0.153/export";
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response('{"report":"q3"}', {
+        headers: { "content-type": "application/octet-stream" },
+      }),
+    );
+    globalThis.fetch = withFetchPreconnect(fetchSpy);
+    const cache = new MediaAttachmentCache([{ index: 0, url, mime: "application/json" }], {
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    });
+
+    const result = await cache.getBuffer({
+      attachmentIndex: 0,
+      maxBytes: 1024,
+      timeoutMs: 1000,
+    });
+
+    // A generic download header is a non-answer; the declared concrete type
+    // must survive so allowlists and extraction see application/json.
+    expect(result.classification.mime).toBe("application/json");
+    expect(result.classification.class).toBe("text");
+  });
+
+  it("prefers the channel-declared MIME over a generic fetched text header", async () => {
+    const url = "http://198.18.0.153/export.data";
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response('{"report":"q4"}', {
+        headers: { "content-type": "text/plain" },
+      }),
+    );
+    globalThis.fetch = withFetchPreconnect(fetchSpy);
+    const cache = new MediaAttachmentCache([{ index: 0, url, mime: "application/json" }], {
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    });
+
+    const result = await cache.getBuffer({
+      attachmentIndex: 0,
+      maxBytes: 1024,
+      timeoutMs: 1000,
+    });
+
+    // Channel declaration outranks transport Content-Type: a JSON-only
+    // allowlist must keep matching when a proxy relabels the download.
+    expect(result.classification.mime).toBe("application/json");
+  });
+
   it("reads local attachments inside configured roots", async () => {
     await withLocalAttachmentCache("openclaw-media-cache-allowed-", async ({ cache }) => {
       const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
@@ -147,7 +195,7 @@ describe("media understanding attachments SSRF", () => {
   });
 
   it("resolves relative attachment paths against the provided workspaceDir", async () => {
-    await withTempDir({ prefix: "openclaw-media-cache-workspace-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-media-cache-workspace-" }, async (base) => {
       const workspaceDir = path.join(base, "workspace");
       const attachmentPath = path.join(workspaceDir, "media", "inbound", "report.pdf");
       await fs.mkdir(path.dirname(attachmentPath), { recursive: true });
@@ -164,7 +212,7 @@ describe("media understanding attachments SSRF", () => {
   });
 
   it("resolves each relative attachment against its own workspace", async () => {
-    await withTempDir({ prefix: "openclaw-media-cache-workspaces-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-media-cache-workspaces-" }, async (base) => {
       const workspaces = ["first", "second"].map((name) => path.join(base, name));
       await Promise.all(
         workspaces.map(async (workspaceDir, index) => {
@@ -195,7 +243,7 @@ describe("media understanding attachments SSRF", () => {
   });
 
   it("resolves existing state-relative media paths when cwd differs from state dir", async () => {
-    await withTempDir({ prefix: "openclaw-media-cache-state-relative-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-media-cache-state-relative-" }, async (base) => {
       const stateDir = path.join(base, "state");
       const cwd = path.join(base, "cwd");
       const relativePath = "media/inbound/telegram.jpg";
@@ -217,7 +265,7 @@ describe("media understanding attachments SSRF", () => {
   });
 
   it("resolves managed inbound media URI attachments", async () => {
-    await withTempDir({ prefix: "openclaw-media-cache-managed-inbound-" }, async (stateDir) => {
+    await withTestDir({ prefix: "openclaw-media-cache-managed-inbound-" }, async (stateDir) => {
       setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
       const saved = await saveMediaBuffer(Buffer.from("managed-media"), "text/plain", "inbound");
 
@@ -246,7 +294,7 @@ describe("media understanding attachments SSRF", () => {
   });
 
   it("keeps cwd-relative fallback when a state-relative candidate does not exist", async () => {
-    await withTempDir({ prefix: "openclaw-media-cache-cwd-relative-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-media-cache-cwd-relative-" }, async (base) => {
       const stateDir = path.join(base, "state");
       const cwd = path.join(base, "cwd");
       const relativePath = "media/inbound/local.jpg";
@@ -268,7 +316,7 @@ describe("media understanding attachments SSRF", () => {
   });
 
   it("prefers an existing cwd-relative attachment over a state-relative collision", async () => {
-    await withTempDir({ prefix: "openclaw-media-cache-relative-collision-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-media-cache-relative-collision-" }, async (base) => {
       const stateDir = path.join(base, "state");
       const cwd = path.join(base, "cwd");
       const relativePath = "media/inbound/photo.jpg";
@@ -291,7 +339,7 @@ describe("media understanding attachments SSRF", () => {
   });
 
   it("falls back to state media when a cwd collision is outside allowed roots", async () => {
-    await withTempDir({ prefix: "openclaw-media-cache-blocked-cwd-collision-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-media-cache-blocked-cwd-collision-" }, async (base) => {
       const stateDir = path.join(base, "state");
       const cwd = path.join(base, "cwd");
       const relativePath = "media/inbound/photo.jpg";
@@ -327,7 +375,7 @@ describe("media understanding attachments SSRF", () => {
   });
 
   it("blocks directory attachments even inside configured roots", async () => {
-    await withTempDir({ prefix: "openclaw-media-cache-dir-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-media-cache-dir-" }, async (base) => {
       const allowedRoot = path.join(base, "allowed");
       const attachmentPath = path.join(allowedRoot, "nested");
       await fs.mkdir(attachmentPath, { recursive: true });
@@ -346,7 +394,7 @@ describe("media understanding attachments SSRF", () => {
     if (process.platform === "win32") {
       return;
     }
-    await withTempDir({ prefix: "openclaw-media-cache-symlink-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-media-cache-symlink-" }, async (base) => {
       const allowedRoot = path.join(base, "allowed");
       const outsidePath = "/etc/passwd";
       const symlinkPath = path.join(allowedRoot, "note.txt");
@@ -415,7 +463,7 @@ describe("media understanding attachments SSRF", () => {
   });
 
   it("rejects local attachments when canonicalization fails", async () => {
-    await withTempDir({ prefix: "openclaw-media-cache-realpath-failure-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-media-cache-realpath-failure-" }, async (base) => {
       const allowedRoot = path.join(base, "allowed");
       const attachmentPath = path.join(allowedRoot, "voice-note.m4a");
       await fs.mkdir(allowedRoot, { recursive: true });

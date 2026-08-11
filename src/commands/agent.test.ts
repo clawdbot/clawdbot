@@ -23,7 +23,7 @@ import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
@@ -337,7 +337,7 @@ function expectLastRunProviderModel(provider: string, model: string): void {
 
 function readSessionStore<T>(storePath: string): Record<string, T> {
   return Object.fromEntries(
-    listSessionEntries({ storePath }).map(({ entry, sessionKey }) => [sessionKey, entry as T]),
+    listSessionEntriesCore({ storePath }).map(({ entry, sessionKey }) => [sessionKey, entry as T]),
   );
 }
 

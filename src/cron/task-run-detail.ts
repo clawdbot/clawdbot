@@ -11,7 +11,7 @@ import {
   type FailoverReason,
 } from "../../packages/gateway-protocol/src/failover-reasons.js";
 import { isCronTimeoutErrorText } from "./execution-error-constants.js";
-import { normalizeCronRunDiagnostics } from "./run-diagnostics-normalize.js";
+import { normalizeCronRunDiagnosticsCore } from "./run-diagnostics-normalize.js";
 
 type JsonValue = import("../tasks/task-registry.types.js").JsonValue;
 type TaskRecord = import("../tasks/task-registry.types.js").TaskRecord;
@@ -105,7 +105,7 @@ export function parseCronRunLogEntryObject(
     errorReason: normalizeCronRunLogErrorReason(entryObj.errorReason) ?? undefined,
     summary: typeof entryObj.summary === "string" ? entryObj.summary : undefined,
     runId: typeof entryObj.runId === "string" && entryObj.runId.trim() ? entryObj.runId : undefined,
-    diagnostics: normalizeCronRunDiagnostics(entryObj.diagnostics),
+    diagnostics: normalizeCronRunDiagnosticsCore(entryObj.diagnostics),
     runAtMs: normalizeTimestamp(entryObj.runAtMs),
     durationMs: asSafeIntegerInRange(entryObj.durationMs, { min: 0 }),
     nextRunAtMs: normalizeTimestamp(entryObj.nextRunAtMs),

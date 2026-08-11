@@ -10,7 +10,7 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/r
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+import { loadJsonFileThroughSymlink, writeJsonTarget } from "../infra/json-file.js";
 import { shortenHomePath } from "../utils.js";
 import { resolveLegacyAuthProfilesPath as resolveAuthStorePath } from "./doctor-auth-legacy-paths.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -104,7 +104,7 @@ function resolveLegacyOAuthSidecarStore(
   if (!fs.existsSync(candidate.authPath)) {
     return null;
   }
-  const raw = loadJsonFile(candidate.authPath);
+  const raw = loadJsonFileThroughSymlink(candidate.authPath);
   if (!isRecord(raw) || !isRecord(raw.profiles)) {
     return null;
   }
@@ -148,7 +148,9 @@ function listUnreferencedLegacyOAuthSidecars(
       return [];
     }
     const sidecarPath = path.join(sidecarDir, entry.name);
-    return isLegacyOAuthSidecarPayload(loadJsonFile(sidecarPath)) ? [{ sidecarPath }] : [];
+    return isLegacyOAuthSidecarPayload(loadJsonFileThroughSymlink(sidecarPath))
+      ? [{ sidecarPath }]
+      : [];
   });
 }
 
@@ -278,7 +280,7 @@ export async function maybeRepairLegacyOAuthSidecarProfiles(params: {
       if (!("version" in store.raw)) {
         store.raw.version = AUTH_STORE_VERSION;
       }
-      saveJsonFile(store.authPath, store.raw);
+      writeJsonTarget(store.authPath, store.raw);
       for (const [refId, sidecarPath] of storeMigratedSidecarsByRefId) {
         migratedSidecarsByRefId.set(refId, sidecarPath);
       }

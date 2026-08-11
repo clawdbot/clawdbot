@@ -467,7 +467,7 @@ async function loadEnvelopeTimestampHelpers() {
 }
 
 async function loadInboundContextContract() {
-  return await import("./test-support/inbound-context-contract.js");
+  return await import("openclaw/plugin-sdk/channel-contract-testing");
 }
 
 type MockCallSource = {

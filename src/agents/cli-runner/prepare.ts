@@ -114,7 +114,7 @@ import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
-import { expandToolGroups, normalizeToolName } from "../tool-policy.js";
+import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -479,13 +479,13 @@ export async function prepareCliRunContext(
         `CLI backend ${backendResolved.id} received conflicting runtime tool policies`,
       );
     }
-    if (params.toolsAllow.some((toolName) => normalizeToolName(toolName) === "*")) {
+    if (params.toolsAllow.some((toolName) => normalizeToolPolicyName(toolName) === "*")) {
       params = { ...params, toolsAllow: undefined };
     } else {
       runtimeToolsAllowPolicy = [...params.toolsAllow];
       const fallbackOpenClawTools = uniqueStrings(
         expandToolGroups(params.toolsAllow)
-          .map((toolName) => normalizeToolName(toolName))
+          .map((toolName) => normalizeToolPolicyName(toolName))
           .filter(Boolean),
       );
       if (
@@ -795,7 +795,7 @@ export async function prepareCliRunContext(
   );
   const promptBuildRestrictsTools =
     promptBuildToolsAllow !== undefined &&
-    !promptBuildToolsAllow.some((toolName) => normalizeToolName(toolName) === "*");
+    !promptBuildToolsAllow.some((toolName) => normalizeToolPolicyName(toolName) === "*");
   const isClaudeCli = isClaudeCliBackendId(params.provider);
   const requestedContextModelId = isClaudeCli ? resolveClaudeCliContextModelId(modelId) : modelId;
   const normalizedContextModelId = isClaudeCli
@@ -1055,7 +1055,7 @@ export async function prepareCliRunContext(
     : hookFilteredProjectedTools;
   const promptTools = bundleMcpEnabled ? projectedTools : [];
   const messageToolAvailable = promptTools.some(
-    (tool) => normalizeToolName(tool.name) === "message",
+    (tool) => normalizeToolPolicyName(tool.name) === "message",
   );
   const resultContentSourceByToolName = new Map(
     promptTools.flatMap((tool) =>

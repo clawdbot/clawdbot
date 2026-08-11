@@ -17,7 +17,7 @@ import { recordReplyOperationAgentTurn } from "../auto-reply/reply/reply-operati
 import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { patchSessionEntry } from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   deleteCronJobScratch,
@@ -510,7 +510,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       const pendingText = `Original exec completion\n\n${warning}`;
       const sessionKey = await seedTelegramSession(storePath, cfg);
       replySpy.mockImplementation(async () => {
-        await patchSessionEntry(
+        await patchSessionEntryCore(
           { storePath, sessionKey },
           () => ({
             pendingFinalDelivery: {
@@ -554,7 +554,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       const warning = "⚠️ Message failed";
       const sessionKey = await seedTelegramSession(storePath, cfg);
       replySpy.mockImplementation(async () => {
-        await patchSessionEntry(
+        await patchSessionEntryCore(
           { storePath, sessionKey },
           () => ({
             pendingFinalDelivery: {

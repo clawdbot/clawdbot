@@ -8,7 +8,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   beginConversationDeliveryOperation,
@@ -23,7 +23,7 @@ import {
 import { resolveConversation } from "./conversation-registry.js";
 import {
   deleteSessionEntryLifecycle,
-  upsertSessionEntry as upsertCanonicalSessionEntry,
+  upsertSessionEntryCore as upsertCanonicalSessionEntry,
 } from "./session-accessor.js";
 import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { SessionEntry, SessionOrigin } from "./types.js";
@@ -44,7 +44,7 @@ async function withConversationStore(
     conversationRef: string;
   }) => Promise<void> | void,
 ): Promise<void> {
-  await withTempDir({ prefix: "openclaw-conversation-delivery-" }, async (dir) => {
+  await withTestDir({ prefix: "openclaw-conversation-delivery-" }, async (dir) => {
     const storePath = path.join(dir, "sessions.json");
     const scope = { agentId: "main", storePath };
     try {

@@ -25,7 +25,7 @@ import {
   parseSqliteSessionFileMarker,
   type SqliteSessionFileMarker,
 } from "./legacy-sqlite-marker.js";
-import { resolveDefaultSessionStorePath, resolveStorePath } from "./paths.js";
+import { resolveDefaultSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
 import {
   loadSessionEntryReadOnly,
   loadTranscriptEvents,
@@ -592,7 +592,8 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   const storeAgentId =
     transcriptAgentId ?? resolveAgentIdFromSessionKey(sessionKey, configuredDefaultAgentId);
   const storePath =
-    params.storePath ?? resolveStorePath(params.config?.session?.store, { agentId: storeAgentId });
+    params.storePath ??
+    resolveSessionStorePathCore(params.config?.session?.store, { agentId: storeAgentId });
   const resolved = resolveSessionEntrySelection({
     ...(transcriptAgentId ? { agentId: transcriptAgentId } : {}),
     sessionKey,

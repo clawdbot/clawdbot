@@ -95,6 +95,7 @@ function applyProviderSimpleCompletionWrapper(
   registry: ApiRegistry,
   model: Model,
   cfg?: unknown,
+  hookSourceApi: Api = model.api,
 ): Model {
   if (model.api.startsWith(PROVIDER_SIMPLE_COMPLETION_API_PREFIX)) {
     return model;
@@ -104,9 +105,9 @@ function applyProviderSimpleCompletionWrapper(
     return model;
   }
 
-  const sourceApi = model.api;
+  const dispatchApi = model.api;
   const sourceStreamFn: StreamFn = (runtimeModel, context, options) =>
-    sourceProvider.streamSimple(projectModel(runtimeModel, { api: sourceApi }), context, options);
+    sourceProvider.streamSimple(projectModel(runtimeModel, { api: dispatchApi }), context, options);
   const streamFn = getAiTransportHost().plugin.wrapSimpleCompletionStream({
     provider: model.provider,
     config: cfg,
@@ -115,6 +116,7 @@ function applyProviderSimpleCompletionWrapper(
       provider: model.provider,
       modelId: model.id,
       model,
+      sourceApi: hookSourceApi,
       streamFn: sourceStreamFn,
     },
   });
@@ -226,19 +228,19 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
   const { apiRegistry, model, cfg } = params;
   const providerStreamModel = prepareProviderStreamModel({ model, cfg, apiRegistry });
   if (providerStreamModel) {
-    return applyProviderSimpleCompletionWrapper(apiRegistry, providerStreamModel, cfg);
+    return applyProviderSimpleCompletionWrapper(apiRegistry, providerStreamModel, cfg, model.api);
   }
 
   const codexTransportModel = prepareCodexSimpleTransportModel(apiRegistry, model, cfg);
   if (codexTransportModel) {
-    return applyProviderSimpleCompletionWrapper(apiRegistry, codexTransportModel, cfg);
+    return applyProviderSimpleCompletionWrapper(apiRegistry, codexTransportModel, cfg, model.api);
   }
 
   const transportAwareModel = prepareTransportAwareSimpleModel(model, { cfg });
   if (transportAwareModel !== model) {
     const streamFn = buildTransportAwareSimpleStreamFn(model, { cfg });
     if (streamFn && registerCustomApi(apiRegistry, transportAwareModel.api, streamFn)) {
-      return applyProviderSimpleCompletionWrapper(apiRegistry, transportAwareModel, cfg);
+      return applyProviderSimpleCompletionWrapper(apiRegistry, transportAwareModel, cfg, model.api);
     }
   }
 
@@ -247,6 +249,7 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
       apiRegistry,
       getAiTransportHost().prepareGoogleSimpleCompletionModel(apiRegistry, model),
       cfg,
+      model.api,
     );
   }
 
@@ -256,7 +259,7 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
     const streamFn = host.plugin.createAnthropicVertexStream(model);
     if (registerCustomApi(apiRegistry, api, streamFn)) {
       const transportModel = projectModel(model, { api });
-      return applyProviderSimpleCompletionWrapper(apiRegistry, transportModel, cfg);
+      return applyProviderSimpleCompletionWrapper(apiRegistry, transportModel, cfg, model.api);
     }
   }
 

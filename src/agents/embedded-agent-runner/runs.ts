@@ -23,7 +23,7 @@ import {
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { getRuntimeConfig } from "../../config/io.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import {
@@ -978,7 +978,7 @@ function tryLoadForceClearSessionSnapshot(
   try {
     const cfg = getRuntimeConfig();
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
-    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
     const entry = loadSessionEntry({ sessionKey, storePath });
     if (!entry || entry.status !== "running") {
       return undefined;

@@ -1,6 +1,6 @@
 /** Tests raw body handling for command and reply prompt paths. */
 import { describe, expect, it } from "vitest";
-import { parseInlineDirectives } from "./reply/directive-handling.parse.js";
+import { parseInlineSessionDirectives } from "./reply/directive-handling.parse.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import { buildInboundUserContextPrefix } from "./reply/inbound-meta.js";
 import { buildReplyPromptEnvelope } from "./reply/prompt-prelude.js";
@@ -21,7 +21,7 @@ describe("RawBody directive parsing", () => {
       SenderE164: "+6421807830",
       CommandAuthorized: true,
     });
-    const directives = parseInlineDirectives(sessionCtx.BodyForCommands ?? "", {
+    const directives = parseInlineSessionDirectives(sessionCtx.BodyForCommands ?? "", {
       allowStatusDirective: true,
     });
     const contextPrefix = buildInboundUserContextPrefix(sessionCtx);

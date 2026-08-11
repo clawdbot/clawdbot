@@ -10,7 +10,7 @@ import {
   publishTranscriptUpdate,
   persistSessionTranscriptTurn,
   readTranscriptRawDelta,
-  readSessionTranscriptVisibleMessageDelta as readVisibleMessageDelta,
+  readSessionTranscriptVisibleMessageDeltaCore as readVisibleMessageDelta,
   readLatestTranscriptAssistantText,
   resolveSessionTranscriptRuntimeTarget,
   withTranscriptWriteLock,

@@ -3,9 +3,9 @@ import {
   applyExclusiveSlotSelectionMock,
   applyPluginUninstallDirectoryRemovalMock,
   buildPluginSnapshotReportMock,
-  loadPluginManifestRegistry,
-  planPluginUninstall,
-  refreshPluginRegistry,
+  loadPluginManifestRegistryMock,
+  planPluginUninstallMock,
+  refreshPluginRegistryMock,
   resetPluginsCliTestState,
   pluginsCliRuntimeLogs,
   setInstalledPluginIndexInstallRecords,
@@ -31,7 +31,7 @@ describe("plugin install persistence warning audiences", () => {
   it("reports missing required configuration without forwarding informational logs", async () => {
     const { persistPluginInstall } = await import("./install-persistence.js");
     const warn = vi.fn();
-    loadPluginManifestRegistry.mockReturnValue({
+    loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [
         {
           id: "workboard",
@@ -67,7 +67,7 @@ describe("plugin install persistence warning audiences", () => {
     const { persistPluginInstall } = await import("./install-persistence.js");
     const warn = vi.fn();
     const warning = 'Exclusive slot "memory" switched from "memory-core" to "workboard".';
-    loadPluginManifestRegistry.mockReturnValue({
+    loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [
         {
           id: "workboard",
@@ -116,7 +116,7 @@ describe("plugin install persistence warning audiences", () => {
           installPath: "/private/previous-source/workboard",
         },
       });
-      planPluginUninstall.mockReturnValueOnce({
+      planPluginUninstallMock.mockReturnValueOnce({
         ok: true,
         config: {},
         pluginId: "workboard",
@@ -127,7 +127,7 @@ describe("plugin install persistence warning audiences", () => {
         directoryRemoved: false,
         warnings: [cleanupDetail],
       });
-      refreshPluginRegistry.mockRejectedValueOnce(new Error(refreshDetail));
+      refreshPluginRegistryMock.mockRejectedValueOnce(new Error(refreshDetail));
       buildPluginSnapshotReportMock.mockReturnValue({
         plugins: [{ id: "workboard", origin: "config", source: configuredSource }],
         diagnostics: [],
