@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
+  createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
@@ -263,6 +264,13 @@ describe("Telegram durable ingress coalescing", () => {
         openChannelIngressQueue: (
           options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
         ) => createChannelIngressQueueForTests({ ...options, channelId: "telegram" }),
+        // Command-menu locale ledger reads the keyed store during hydration;
+        // an absent store degrades with a warning that breaks watchdog asserts.
+        openKeyedStore: ((options) =>
+          createPluginStateKeyedStoreForTests(
+            "telegram",
+            options,
+          )) as TelegramRuntime["state"]["openKeyedStore"],
       },
       channel: {},
     } as TelegramRuntime);

@@ -11,7 +11,6 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { appendSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
 import { sessionsTailCommand } from "./sessions-tail.js";
-import { setSessionsTailFollowIntervalMsForTests } from "./sessions-tail.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
@@ -53,29 +52,12 @@ function runtimeOutput(runtime: RuntimeEnv): string {
     .join("\n");
 }
 
-async function waitForRuntimeOutput(
-  runtime: RuntimeEnv,
-  pattern: string,
-  timeoutMs = 3_000,
-): Promise<void> {
-  const startedAt = Date.now();
-  while (!runtimeOutput(runtime).includes(pattern)) {
-    if (Date.now() - startedAt > timeoutMs) {
-      throw new Error(`Timed out waiting for output containing ${pattern}`);
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 5);
-    });
-  }
-}
-
 describe("sessionsTailCommand", () => {
   let tmpDir: string;
   let storePath: string;
   let previousStateDir: string | undefined;
 
   beforeEach(() => {
-    setSessionsTailFollowIntervalMsForTests(2);
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-tail-"));
     process.env.OPENCLAW_STATE_DIR = path.join(tmpDir, "state");
@@ -88,7 +70,7 @@ describe("sessionsTailCommand", () => {
   });
 
   afterEach(() => {
-    setSessionsTailFollowIntervalMsForTests();
+    vi.useRealTimers();
     if (previousStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -256,6 +238,7 @@ describe("sessionsTailCommand", () => {
   });
 
   it("continues following when SQLite trajectory rows are appended", async () => {
+    vi.useFakeTimers();
     const runtime = makeRuntime();
     await writeSessionEntry();
     appendSqliteTrajectoryRuntimeEvents({ agentId: "main", sessionId: "session-one", storePath }, [
@@ -287,7 +270,7 @@ describe("sessionsTailCommand", () => {
       runtime,
     );
     try {
-      await waitForRuntimeOutput(runtime, "sqlite ok");
+      await vi.advanceTimersByTimeAsync(1_000);
     } finally {
       process.emit("SIGTERM", "SIGTERM");
       await run;

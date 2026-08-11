@@ -37,6 +37,17 @@ function sanitizeToolResultText(text: string, fallback: string): string {
   return sanitized.trim().length > 0 ? sanitized : fallback;
 }
 
+/** Whether replayed messages require a tools marker for proxy compatibility. */
+export function hasToolCallHistory(messages: Context["messages"]): boolean {
+  return messages.some(
+    (message) =>
+      message.role === "toolResult" ||
+      (message.role === "assistant" &&
+        Array.isArray(message.content) &&
+        message.content.some((block) => block.type === "toolCall")),
+  );
+}
+
 /** Convert a normalized transcript to OpenAI Chat Completions messages. */
 export function convertMessages(
   model: Model<"openai-completions">,

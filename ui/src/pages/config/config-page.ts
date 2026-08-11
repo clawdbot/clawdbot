@@ -34,7 +34,7 @@ import {
 } from "../../app/settings.ts";
 import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
-import { confirmAndStartUpdate } from "../../app/update-confirmation.ts";
+import { confirmAndStartUpdate, type UpdateProgress } from "../../app/update-confirmation.ts";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import {
   loadStoredHiddenSessionCatalogIds,
@@ -981,6 +981,26 @@ export class ConfigPage extends OpenClawLightDomElement {
     return update.updateRunning || update.updateReconciliationPending;
   }
 
+  // The update dialog outlives this page and the connection, so it reads live
+  // snapshots rather than the values captured during a render.
+  private readonly watchUpdateProgress = (listener: (progress: UpdateProgress) => void) => {
+    const emit = () => {
+      const banner = this.context.overlays.snapshot.updateStatusBanner;
+      listener({
+        busy: this.isUpdateBusy(),
+        connected: this.context.gateway.snapshot.phase === "connected",
+        failure: banner && banner.tone !== "info" ? banner.text : null,
+      });
+    };
+    const stopOverlays = this.context.overlays.subscribe(emit);
+    const stopGateway = this.context.gateway.subscribe(emit);
+    emit();
+    return () => {
+      stopOverlays();
+      stopGateway();
+    };
+  };
+
   private isCuratedConfigMutationDisabled(): boolean {
     const runtimeState = this.context.runtimeConfig.state;
     return (
@@ -1025,6 +1045,7 @@ export class ConfigPage extends OpenClawLightDomElement {
         onUpdateNow: () =>
           void confirmAndStartUpdate({
             startGatewayUpdate: () => void this.context.overlays.runUpdate(),
+            watchUpdateProgress: this.watchUpdateProgress,
             updateAvailable: overlaySnapshot.updateAvailable,
             updateSchedule: overlaySnapshot.updateSchedule,
             // This row has no native-decline listener, so a handoff the Mac app

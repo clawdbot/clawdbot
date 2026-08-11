@@ -502,6 +502,30 @@ openclaw-session-owner-chip {
    Buttons - Tactile with personality
    =========================================== */
 
+/* A disabled button reads as "unavailable"; the spinner says "working" so a
+   multi-minute update does not look like a dead control. */
+.btn__spinner {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  border: 2px solid color-mix(in srgb, currentColor 35%, transparent);
+  border-top-color: currentColor;
+  border-radius: var(--radius-full);
+  animation: btn-spinner-spin 0.7s linear infinite;
+}
+
+@keyframes btn-spinner-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn__spinner {
+    animation: none;
+  }
+}
+
 .btn {
   display: inline-flex;
   align-items: center;

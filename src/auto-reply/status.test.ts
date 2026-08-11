@@ -1330,6 +1330,7 @@ describe("buildStatusMessage", () => {
         {
           capability: "audio",
           outcome: "skipped",
+          attachmentDispositions: { 1: { kind: "failed" } },
           attachments: [
             {
               attachmentIndex: 1,
@@ -1360,6 +1361,7 @@ describe("buildStatusMessage", () => {
         {
           capability: "audio",
           outcome: "success",
+          attachmentDispositions: { 0: { kind: "handled" } },
           attachments: [
             {
               attachmentIndex: 0,
@@ -1391,6 +1393,7 @@ describe("buildStatusMessage", () => {
         {
           capability: "audio",
           outcome: "failed",
+          attachmentDispositions: { 0: { kind: "failed" } },
           attachments: [
             {
               attachmentIndex: 0,
@@ -1425,9 +1428,25 @@ describe("buildStatusMessage", () => {
       sessionKey: "agent:main:main",
       queue: { mode: "none" },
       mediaDecisions: [
-        { capability: "image", outcome: "no-attachment", attachments: [] },
-        { capability: "audio", outcome: "no-attachment", attachments: [] },
-        { capability: "video", outcome: "no-attachment", attachments: [] },
+        {
+          capability: "image",
+          outcome: "no-attachment",
+          attachments: [],
+          attachmentDispositions: {},
+          nativeVisionActive: false,
+        },
+        {
+          capability: "audio",
+          outcome: "no-attachment",
+          attachments: [],
+          attachmentDispositions: {},
+        },
+        {
+          capability: "video",
+          outcome: "no-attachment",
+          attachments: [],
+          attachmentDispositions: {},
+        },
       ],
     });
 

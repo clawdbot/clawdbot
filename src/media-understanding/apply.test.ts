@@ -282,16 +282,6 @@ async function applyWithDisabledMedia(params: {
   return { ctx, result };
 }
 
-function expectFileNotApplied(params: {
-  ctx: MsgContext;
-  result: { appliedFile: boolean };
-  body: string;
-}) {
-  expect(params.result.appliedFile).toBe(false);
-  expect(params.ctx.Body).toBe(params.body);
-  expect(params.ctx.Body).not.toContain("<file");
-}
-
 function expectUnsupportedFileApplied(params: {
   ctx: MsgContext;
   result: { appliedFile: boolean };
@@ -687,7 +677,7 @@ describe("applyMediaUnderstanding", () => {
 
     expect(result.appliedAudio).toBe(false);
     expect(transcribeAudio).not.toHaveBeenCalled();
-    expect(ctx.Body).toBe("");
+    expect(ctx.Body).toBe("[Audio attachment could not be analyzed]");
   });
 
   it("falls back to CLI model when provider fails", async () => {
@@ -874,7 +864,7 @@ describe("applyMediaUnderstanding", () => {
     );
 
     expect(ctx.Transcript).toBeUndefined();
-    expect(ctx.Body).toBe("");
+    expect(ctx.Body).toBe("[Audio attachment could not be analyzed]");
     const [command] = getRunExecCall();
     expect(command).toBe("sherpa-onnx-offline");
   });
@@ -1016,7 +1006,9 @@ describe("applyMediaUnderstanding", () => {
     );
 
     expect(ctx.Transcript).toBeUndefined();
-    expect(ctx.Body).toBe("");
+    expect(ctx.Body).toBe(
+      "[Audio attachment not analyzed: no audio-understanding model is configured]",
+    );
     expect(mockedRunExec).not.toHaveBeenCalled();
   });
 
@@ -1048,7 +1040,9 @@ describe("applyMediaUnderstanding", () => {
     );
 
     expect(ctx.Transcript).toBeUndefined();
-    expect(ctx.Body).toBe("");
+    expect(ctx.Body).toBe(
+      "[Audio attachment not analyzed: no audio-understanding model is configured]",
+    );
     expect(mockedRunExec).not.toHaveBeenCalled();
   });
 
@@ -1075,8 +1069,49 @@ describe("applyMediaUnderstanding", () => {
       expect(result.appliedImage).toBe(false);
     });
 
-    expect(ctx.Body).toBe("");
+    expect(ctx.Body).toBe(
+      "[Image attachment not analyzed: no image-understanding model is configured]",
+    );
     expect(mockedRunExec).not.toHaveBeenCalled();
+  });
+
+  it("suppresses markers only for images the ACP caller actually delivers", async () => {
+    clearMediaUnderstandingBinaryCacheForTests();
+    const binDir = await createTempMediaDir();
+    await createMockExecutable(binDir, "agy");
+    const deliveredPath = await createTempMediaFile({
+      fileName: "delivered.jpg",
+      content: "image-bytes",
+    });
+    const undeliveredPath = await createTempMediaFile({
+      fileName: "undelivered.jpg",
+      content: "image-bytes",
+    });
+    const ctx: MsgContext = {
+      Body: "",
+      media: [
+        { path: deliveredPath, contentType: "image/jpeg" },
+        { path: undeliveredPath, contentType: "image/jpeg" },
+      ],
+    };
+    const cfg: OpenClawConfig = {
+      tools: { media: { image: { attachments: { mode: "all", maxAttachments: 4 } } } },
+    };
+    mockedResolveApiKey.mockResolvedValue({ source: "none", mode: "api-key" });
+
+    await withMediaAutoDetectEnv({ PATH: binDir }, async () => {
+      const result = await applyMediaUnderstanding({
+        ctx,
+        cfg,
+        deliveredImageIndexes: new Set([0]),
+      });
+      expect(result.appliedImage).toBe(false);
+    });
+
+    // Index 0 rides with the ACP turn (no marker); index 1 was not resolved
+    // into an attachment, so its non-delivery stays model-visible.
+    const markerCount = ctx.Body?.split("[Image attachment not analyzed").length ?? 0;
+    expect(markerCount - 1).toBe(1);
   });
 
   it("uses CLI image understanding and preserves caption for commands", async () => {
@@ -1270,6 +1305,56 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toBe("[Image]\nDescription:\nnormalized image");
   });
 
+  it("renders recorded outcomes for every image candidate when no model is configured", async () => {
+    const ctx: MsgContext = {
+      Body: "",
+      media: Array.from({ length: 4 }, (_, index) => ({
+        path: `/tmp/photo-${index}.jpg`,
+        contentType: "image/jpeg",
+      })),
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg: { tools: { media: { image: { enabled: true } } } },
+    });
+
+    const imageDecision = result.decisions.find((decision) => decision.capability === "image");
+    expect(imageDecision).toMatchObject({
+      attachmentDispositions: {
+        0: { kind: "no-model" },
+        1: { kind: "not-selected" },
+        2: { kind: "not-selected" },
+        3: { kind: "not-selected" },
+      },
+    });
+    expect(ctx.Body).toBe(
+      [
+        "[Image attachment not analyzed: no image-understanding model is configured]",
+        "[Image attachment not processed: attachment limit reached]",
+        "[Image attachment not processed: attachment limit reached]",
+        "[Image attachment not processed: attachment limit reached]",
+      ].join("\n\n"),
+    );
+  });
+
+  it("caps markers for disabled image understanding", async () => {
+    const ctx: MsgContext = {
+      Body: "",
+      media: Array.from({ length: 7 }, (_, index) => ({
+        path: `/tmp/disabled-photo-${index}.jpg`,
+        contentType: "image/jpeg",
+      })),
+    };
+
+    await applyMediaUnderstanding({ ctx, cfg: createMediaDisabledConfig() });
+
+    expect(
+      ctx.Body?.split("[Image attachment not analyzed: image understanding is disabled]"),
+    ).toHaveLength(6);
+    expect(ctx.Body).toContain("[2 more attachments skipped]");
+  });
+
   it("uses active model when enabled and models are missing", async () => {
     const audioPath = await createTempMediaFile({
       fileName: "fallback.ogg",
@@ -1394,6 +1479,7 @@ describe("applyMediaUnderstanding", () => {
       capability: "audio",
       outcome: "no-attachment",
       attachments: [],
+      attachmentDispositions: {},
     });
   });
 
@@ -1751,7 +1837,10 @@ describe("applyMediaUnderstanding", () => {
       mediaType: "audio/mpeg",
     });
 
-    expectFileNotApplied({ ctx, result, body: "<media:audio>" });
+    expect(result.appliedFile).toBe(false);
+    expect(ctx.Body).toBe(
+      "<media:audio>\n\n[Audio attachment not analyzed: audio understanding is disabled]",
+    );
   });
 
   it("reports archive container attachments with +zip MIME types as unsupported", async () => {
@@ -2176,31 +2265,32 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toContain("[2 more attachments skipped]");
   });
 
-  it("keeps the overflow summary reason-neutral when skipped kinds are mixed", async () => {
+  it("shares one reason-neutral overflow budget across document and media markers", async () => {
     const olePayload = Buffer.from("Root Entry WordDocument legacy preview", "utf8");
     const media: { path: string; contentType: string }[] = [];
-    for (let i = 0; i < 5; i += 1) {
+    for (let i = 0; i < 4; i += 1) {
       const filePath = await createTempMediaFile({
         fileName: `mixed-legacy-${i}.doc`,
         content: olePayload,
       });
       media.push({ path: filePath, contentType: "application/msword" });
     }
-    const pdfPath = await createTempMediaFile({
-      fileName: "report.pdf",
-      content: Buffer.from("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n", "utf8"),
-    });
-    media.push({ path: pdfPath, contentType: "application/pdf" });
+    for (let i = 0; i < 3; i += 1) {
+      media.push({ path: `/tmp/junk-image-${i}.jpg`, contentType: "image/jpeg" });
+    }
 
     const ctx: MsgContext = { Body: "<media:file>", media };
     const result = await applyMediaUnderstanding({
       ctx,
-      cfg: createMediaDisabledConfigWithAllowedMimes(["text/plain"]),
+      cfg: createMediaDisabledConfig(),
     });
 
     expect(result.appliedFile).toBe(true);
-    expect(ctx.Body).toContain("[1 more attachment skipped]");
-    expect(ctx.Body).not.toContain("[Attachment type not allowed");
+    expect(ctx.Body?.split("[Unsupported document format")).toHaveLength(5);
+    expect(
+      ctx.Body?.split("[Image attachment not analyzed: image understanding is disabled]"),
+    ).toHaveLength(2);
+    expect(ctx.Body).toContain("[2 more attachments skipped]");
   });
 
   it("keeps vendor +json attachments eligible for text extraction", async () => {

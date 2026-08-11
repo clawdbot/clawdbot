@@ -80,6 +80,7 @@ function mockRedirectFlow(redirectUrl: string): void {
   authorizationUrl.searchParams.set("redirect_uri", redirectUrl);
   authorizationUrl.searchParams.set("state", "state-1234567890");
   mocks.startMcpOAuthAuthorization.mockResolvedValue({
+    status: "redirect",
     authorizationUrl: authorizationUrl.toString(),
     redirectUrl,
     state: "state-1234567890",
@@ -137,6 +138,21 @@ describe("mcp login loopback callback", () => {
       expect(mocks.completeMcpOAuthAuthorization).toHaveBeenCalledOnce();
       expect(mocks.completeMcpOAuthAuthorization.mock.calls[0]?.[2]).toEqual({ code: "right" });
       expect(mocks.runtime.log).toHaveBeenCalledWith('MCP OAuth credentials saved for "docs".');
+    });
+  });
+
+  it("reports an existing session without starting the loopback", async () => {
+    await withTempHome("openclaw-cli-mcp-loopback-home-", async () => {
+      await configureServer();
+      mocks.startMcpOAuthAuthorization.mockResolvedValue({ status: "authorized" });
+
+      await program.parseAsync(["mcp", "login", "docs"], { from: "user" });
+
+      expect(mocks.runtime.log).toHaveBeenCalledWith('MCP OAuth credentials saved for "docs".');
+      expect(mocks.completeMcpOAuthAuthorization).not.toHaveBeenCalled();
+      expect(
+        mocks.runtime.log.mock.calls.some(([line]) => String(line).includes("Open this URL")),
+      ).toBe(false);
     });
   });
 

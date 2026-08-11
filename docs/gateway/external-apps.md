@@ -77,11 +77,18 @@ reconnecting; expiry reopens admission automatically.
 The RPC contract is:
 
 - `gateway.suspend.prepare` — `operator.admin`; params
-  `{ "requestId": "stable-host-operation-id" }`
+  `{ "requestId": "stable-host-operation-id", "terminalPolicy": "preserve" }`
 - `gateway.suspend.status` — `operator.read`; params
   `{ "suspensionId": "id-from-prepare" }`
 - `gateway.suspend.resume` — `operator.admin`; params
   `{ "suspensionId": "id-from-prepare" }`
+
+`terminalPolicy` is optional and accepts only `"preserve"` or `"terminate"`.
+Omitting it defaults to `"preserve"`, so open terminal sessions block normal
+host suspension. A caller preparing an update that will terminate the Gateway
+may explicitly use `"terminate"`; this ignores open process-local terminal
+sessions only. Terminal persistence activity and all other tracked work still
+block preparation.
 
 IDs are trimmed, must contain a non-whitespace character, and are limited to
 128 characters. A busy prepare result has `status: "busy"`, `reason`,

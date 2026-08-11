@@ -1645,15 +1645,19 @@ public struct GatewaySuspendBlocker: Codable, Sendable {
 
 public struct GatewaySuspendPrepareParams: Codable, Sendable {
     public let requestid: String
+    public let terminalpolicy: AnyCodable?
 
     public init(
-        requestid: String)
+        requestid: String,
+        terminalpolicy: AnyCodable? = nil)
     {
         self.requestid = requestid
+        self.terminalpolicy = terminalpolicy
     }
 
     private enum CodingKeys: String, CodingKey {
         case requestid = "requestId"
+        case terminalpolicy = "terminalPolicy"
     }
 }
 
