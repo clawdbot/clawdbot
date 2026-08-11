@@ -1,4 +1,5 @@
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
 import {
   createGatewayKernel,
   gatewayKernelLogs,
@@ -27,6 +28,15 @@ export async function startGatewayServerCore(
     releasePostReadyWork = resolve;
   });
   const gatewayKernel = await createGatewayKernel(port, opts);
+  // Bump the skills snapshot version on every gateway start so persisted
+  // sessions re-resolve skills instead of silently reusing a stale (or
+  // fully empty) cached snapshot. This function runs on cold boot AND on
+  // in-process "gateway restart" (SIGUSR1, the default in unsupervised/
+  // containerized deployments -- see src/cli/gateway-cli/run-loop.ts's
+  // startup loop, which re-invokes the gateway start path in the same OS
+  // process without a fresh module registry), so both restart paths are
+  // covered by this single call. Fixes openclaw#22517.
+  bumpSkillsSnapshotVersion({ reason: "manual" });
   const {
     beginClosePrelude,
     clearFallbackGatewayContextForServer,
