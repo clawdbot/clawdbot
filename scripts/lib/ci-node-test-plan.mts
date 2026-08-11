@@ -115,7 +115,8 @@ const UNIT_FAST_NODE_TEST_STRIPES = 2;
 // dropping cache-warm/contention outliers outside [median/1.5, median*1.5].
 // Packing only: a stale entry skews job balance but never correctness.
 // Unknown shards fall back to a per-file estimate.
-// Outlier hints were refreshed from child-process walls in green run 31453973052.
+// Outlier hints were refreshed from child-process walls in runs 31453973052
+// and 31455822921.
 const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-agents-core-auth", 27],
   ["agentic-agents-core-isolated", 9],
@@ -230,7 +231,7 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["core-tooling-3", 108],
   ["core-tooling-4", 125],
   ["core-tooling-isolated", 49],
-  ["core-unit-fast-1", 41],
+  ["core-unit-fast-1", 89],
   ["core-unit-fast-2", 92],
   // Fork-per-file isolation parallelizes poorly on 4 vCPU; keep it on the
   // 8 vCPU class, where it still runs a measured ~90s under fleet load.

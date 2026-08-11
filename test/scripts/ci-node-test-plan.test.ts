@@ -360,10 +360,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         (group) => group.env?.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS === "660000",
       ),
     ).toBe(true);
-    const embeddedBaseJob = compact.find((shard) =>
-      shard.groups.some((group) => group.shard_name === "agentic-agents-embedded-base"),
-    );
-    expect(embeddedBaseJob?.groups).toHaveLength(1);
     expect(
       compact
         .filter((shard) => shard.groups.some((group) => !group.includePatterns))
