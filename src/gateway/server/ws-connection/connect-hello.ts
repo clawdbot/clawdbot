@@ -19,7 +19,6 @@ import {
 import {
   broadcastSetupHandoffCompletion,
   consumeSetupHandoff,
-  restoreSetupHandoff,
   type SetupHandoff,
 } from "../../device-pair-setup-completion.js";
 import { canReadDetailedUpdateMetadata } from "../../events.js";
@@ -197,15 +196,6 @@ export async function sendGatewayHello(
   try {
     await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
   } catch (err) {
-    if (bootstrapHandoff) {
-      try {
-        await restoreSetupHandoff({ handoff: bootstrapHandoff });
-      } catch (restoreErr) {
-        logGateway.warn(
-          `bootstrap token restore after hello-send failure failed device=${device?.id ?? "unknown"}: ${formatForLog(restoreErr)}`,
-        );
-      }
-    }
     await releasePendingNodePairingCleanup();
     setCloseCause("hello-send-failed", { error: formatForLog(err) });
     close();

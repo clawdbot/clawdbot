@@ -612,35 +612,6 @@ export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(para
   }, resolveDevicePairingStateDbOptions(params.baseDir));
 }
 
-/** Restore an undelivered credential and remove only its exact setup outcome atomically. */
-export function restoreConsumedDeviceBootstrapTokenInTransaction(params: {
-  record: DeviceBootstrapTokenRecord;
-  completion?: DevicePairSetupCompletionRecord;
-  baseDir?: string;
-}): void {
-  runOpenClawStateWriteTransaction(({ db }) => {
-    ensureDevicePairSetupCompletionSchema(db);
-    const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
-    if (params.completion) {
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .deleteFrom("device_pair_setup_completions")
-          .where("setup_id", "=", params.completion.setupId)
-          .where("device_id", "=", params.completion.deviceId)
-          .where("completed_at_ms", "=", params.completion.completedAtMs),
-      );
-    }
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .insertInto("device_bootstrap_tokens")
-        .values(toBootstrapRow(params.record.token, params.record))
-        .onConflict((oc) => oc.column("token_key").doNothing()),
-    );
-  }, resolveDevicePairingStateDbOptions(params.baseDir));
-}
-
 /** Read one setup-completion record, ignoring any record past its retention horizon. */
 export function loadDevicePairSetupCompletionRecord(
   setupId: string,

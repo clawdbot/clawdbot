@@ -697,6 +697,13 @@ describe("watch node HTTP transport", () => {
       expect(
         abortedRuntime.broadcasts.find((entry) => entry.event === "device.pair.setup.completed"),
       ).toBeUndefined();
+      expect(
+        loadDevicePairSetupCompletionRecord(abortedBootstrap.setupId, Date.now(), abortedBaseDir),
+      ).toMatchObject({
+        setupId: abortedBootstrap.setupId,
+        deviceId: abortedIdentity.deviceId,
+        access: "node",
+      });
       const stillLimited = await fetch(`${abortedRuntime.baseUrl}/challenge`);
       expect(stillLimited.status).toBe(429);
       abortedRuntime.runtime.close();

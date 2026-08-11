@@ -11,7 +11,6 @@ const {
   redeemDeviceBootstrapTokenProfileMock,
   broadcastSetupHandoffCompletionMock,
   consumeSetupHandoffMock,
-  restoreSetupHandoffMock,
 } = vi.hoisted(() => ({
   emitGatewayAuthSecurityEventMock: vi.fn(),
   listControlUiPluginTabsMock: vi.fn((_scopes: readonly string[]) => []),
@@ -21,7 +20,6 @@ const {
     recorded: true,
     fullyRedeemed: true,
   })),
-  restoreSetupHandoffMock: vi.fn(async () => undefined),
   consumeSetupHandoffMock: vi.fn(async () => ({
     record: {
       token: "bootstrap-secret",
@@ -77,7 +75,6 @@ vi.mock("../../../infra/device-bootstrap.js", () => ({
 vi.mock("../../device-pair-setup-completion.js", () => ({
   broadcastSetupHandoffCompletion: broadcastSetupHandoffCompletionMock,
   consumeSetupHandoff: consumeSetupHandoffMock,
-  restoreSetupHandoff: restoreSetupHandoffMock,
 }));
 
 vi.mock("../health-state.js", () => ({
@@ -281,7 +278,7 @@ describe("sendGatewayHello update detail scope", () => {
     }
   });
 
-  it("restores a setup token without completing it when hello delivery fails", async () => {
+  it("keeps setup completion committed when hello delivery fails", async () => {
     const context = makeContext("node", []);
     context.sendFrame.mockRejectedValueOnce(new Error("socket closed"));
     const state = {
@@ -297,11 +294,6 @@ describe("sendGatewayHello update detail scope", () => {
     expect(consumeSetupHandoffMock).toHaveBeenCalledWith({
       token: "bootstrap-secret",
       deviceId: "device-123",
-    });
-    expect(restoreSetupHandoffMock).toHaveBeenCalledWith({
-      handoff: expect.objectContaining({
-        record: expect.objectContaining({ setupId: "setup-failed-send" }),
-      }),
     });
     expect(broadcastSetupHandoffCompletionMock).not.toHaveBeenCalled();
     expect(context.handler.close).toHaveBeenCalled();

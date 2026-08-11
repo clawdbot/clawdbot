@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readDevicePairSetupCompletion } from "../infra/device-bootstrap.js";
 import {
-  loadDeviceBootstrapTokenRecords,
   persistDeviceBootstrapTokenRecords,
   persistDevicePairingStoreState,
 } from "../infra/device-pairing-store.js";
@@ -16,7 +15,6 @@ import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   broadcastSetupHandoffCompletion,
   consumeSetupHandoff,
-  restoreSetupHandoff,
 } from "./device-pair-setup-completion.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
@@ -195,38 +193,5 @@ describe("device pair setup completion", () => {
     expect(handoff).toMatchObject({ record: { token: "generic" } });
     broadcastSetupHandoffCompletion({ handoff: handoff!, broadcast });
     expect(broadcast).not.toHaveBeenCalled();
-  });
-
-  it("restores the exact credential and removes completion after delivery failure", async () => {
-    const baseDir = await tempDirs.make("openclaw-setup-completion-restore-");
-    persistDeviceBootstrapTokenRecords(
-      {
-        "bootstrap-secret": {
-          token: "bootstrap-secret",
-          setupId: "setup-restore",
-          ts: 1,
-          deviceId: "device-123",
-          profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
-          issuedAtMs: 1,
-        },
-      },
-      baseDir,
-    );
-    const handoff = await consumeSetupHandoff({
-      token: "bootstrap-secret",
-      deviceId: "device-123",
-      baseDir,
-      ts: 5,
-    });
-    expect(handoff).not.toBeNull();
-
-    await restoreSetupHandoff({ handoff: handoff!, baseDir });
-
-    expect(loadDeviceBootstrapTokenRecords(baseDir)["bootstrap-secret"]).toMatchObject({
-      setupId: "setup-restore",
-    });
-    await expect(
-      readDevicePairSetupCompletion({ baseDir, setupId: "setup-restore" }),
-    ).resolves.toBeNull();
   });
 });

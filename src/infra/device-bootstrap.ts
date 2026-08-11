@@ -22,12 +22,8 @@ import {
   loadDeviceBootstrapTokenRecords,
   loadDevicePairSetupCompletionRecord,
   persistDeviceBootstrapTokenRecords as persistState,
-  restoreConsumedDeviceBootstrapTokenInTransaction,
 } from "./device-pairing-store.js";
-import type {
-  DeviceBootstrapTokenRecord,
-  DevicePairSetupCompletionRecord,
-} from "./device-pairing.types.js";
+import type { DeviceBootstrapTokenRecord } from "./device-pairing.types.js";
 import { createAsyncLock, pruneExpiredPending } from "./pairing-files.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
@@ -274,16 +270,6 @@ export async function consumeDeviceBootstrapTokenWithSetupCompletion(params: {
       retainUntilMs: nowMs + DEVICE_PAIR_SETUP_COMPLETION_RETENTION_MS,
       ...(params.baseDir ? { baseDir: params.baseDir } : {}),
     });
-  });
-}
-
-export async function restoreConsumedDeviceBootstrapToken(params: {
-  record: DeviceBootstrapTokenRecord;
-  completion?: DevicePairSetupCompletionRecord;
-  baseDir?: string;
-}): Promise<void> {
-  return await withLock(async () => {
-    restoreConsumedDeviceBootstrapTokenInTransaction(params);
   });
 }
 

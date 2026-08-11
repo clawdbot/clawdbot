@@ -55,7 +55,6 @@ import { hasForwardedRequestHeaders } from "./auth.js";
 import {
   broadcastSetupHandoffCompletion,
   consumeSetupHandoff,
-  restoreSetupHandoff,
   type SetupHandoff,
 } from "./device-pair-setup-completion.js";
 import {
@@ -799,10 +798,6 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         sendUnauthorized(res);
         return;
       }
-      if (closed || responseLifecycle.isAborted()) {
-        return;
-      }
-
       let bootstrapHandoff: SetupHandoff | undefined;
       if (bootstrapToken) {
         const consumed = await consumeSetupHandoff({
@@ -826,13 +821,14 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
             options.pairingBaseDir,
           )
         ) {
-          await restoreSetupHandoff({
-            handoff: bootstrapHandoff,
-            baseDir: options.pairingBaseDir,
-          });
-          sendUnauthorized(res);
+          if (!closed && !responseLifecycle.isAborted()) {
+            sendUnauthorized(res);
+          }
           return;
         }
+      }
+      if (closed || responseLifecycle.isAborted()) {
+        return;
       }
 
       const registeredConnect = connect as ConnectParams & {
@@ -897,12 +893,6 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         const responseCompleted = await responseLifecycle.completed;
         if (!responseCompleted) {
           closeSession(session, "connect response aborted");
-          if (bootstrapHandoff) {
-            await restoreSetupHandoff({
-              handoff: bootstrapHandoff,
-              baseDir: options.pairingBaseDir,
-            });
-          }
           return;
         }
         if (bootstrapHandoff) {
@@ -951,12 +941,6 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       } catch (error) {
         if (session) {
           closeSession(session, "connect failed");
-        }
-        if (bootstrapHandoff) {
-          await restoreSetupHandoff({
-            handoff: bootstrapHandoff,
-            baseDir: options.pairingBaseDir,
-          });
         }
         throw error;
       }

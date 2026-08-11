@@ -1,8 +1,5 @@
 import type { DevicePairSetupCompletedEvent } from "../../packages/gateway-protocol/src/index.js";
-import {
-  consumeDeviceBootstrapTokenWithSetupCompletion,
-  restoreConsumedDeviceBootstrapToken,
-} from "../infra/device-bootstrap.js";
+import { consumeDeviceBootstrapTokenWithSetupCompletion } from "../infra/device-bootstrap.js";
 import type {
   DeviceBootstrapTokenRecord,
   DevicePairSetupCompletionRecord,
@@ -30,18 +27,6 @@ export async function consumeSetupHandoff(params: {
     ...(params.baseDir ? { baseDir: params.baseDir } : {}),
   });
   return consumed;
-}
-
-/** Compensate an explicit delivery failure without leaving a false completion behind. */
-export async function restoreSetupHandoff(params: {
-  handoff: SetupHandoff;
-  baseDir?: string;
-}): Promise<void> {
-  await restoreConsumedDeviceBootstrapToken({
-    record: params.handoff.record,
-    ...(params.handoff.completion ? { completion: params.handoff.completion } : {}),
-    ...(params.baseDir ? { baseDir: params.baseDir } : {}),
-  });
 }
 
 /** Broadcast the already-committed completion; status reconciliation owns delivery loss. */
