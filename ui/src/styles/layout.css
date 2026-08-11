@@ -2426,11 +2426,12 @@ html.openclaw-native-macos
   max-width: 264px;
   max-height: 420px;
   overflow-y: auto;
-  padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
-  border-radius: var(--radius-lg);
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
+  animation: menu-in 140ms var(--ease-out);
 }
 
 wa-dropdown.sidebar-customize-menu {
@@ -2443,11 +2444,11 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   max-width: 264px;
   max-height: 420px;
   overflow-y: auto;
-  padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
-  border-radius: var(--radius-lg);
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
 }
 
 .sidebar-customize-menu__title {
@@ -2482,10 +2483,10 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: 30px;
+  min-height: 28px;
   padding: 0 8px;
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: var(--menu-item-radius);
   background: transparent;
   color: var(--text);
   font: inherit;
@@ -2497,7 +2498,7 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
 }
 
 .sidebar-customize-menu__item:hover {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  background: var(--bg-hover);
 }
 
 /* Web Awesome's shadow row adds `margin-inline-end: 0.75em !important` to the
@@ -2572,11 +2573,12 @@ wa-dropdown-item.sidebar-customize-menu__item {
   z-index: 121;
   min-width: 224px;
   max-width: 264px;
-  padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
-  border-radius: var(--radius-lg);
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
+  animation: menu-in 140ms var(--ease-out);
 }
 
 wa-dropdown.session-menu {
@@ -2587,11 +2589,11 @@ wa-dropdown.session-menu {
 wa-dropdown.session-menu::part(menu) {
   min-width: 224px;
   max-width: 264px;
-  padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
-  border-radius: var(--radius-lg);
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
 }
 
 /* Popover hosts live in the top layer so menus escape in-page stacking
@@ -2614,11 +2616,12 @@ openclaw-session-menu[popover] {
   z-index: 121;
   min-width: 176px;
   max-width: 220px;
-  padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
-  border-radius: var(--radius-lg);
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
+  animation: menu-in 140ms var(--ease-out);
 }
 
 wa-dropdown.sidebar-session-sort-menu {
@@ -2629,11 +2632,11 @@ wa-dropdown.sidebar-session-sort-menu {
 wa-dropdown.sidebar-session-sort-menu::part(menu) {
   min-width: 176px;
   max-width: 220px;
-  padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
-  border-radius: var(--radius-lg);
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
 }
 
 .sidebar-session-sort-menu__title {
@@ -2651,10 +2654,10 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: 30px;
+  min-height: 28px;
   padding: 0 8px;
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: var(--menu-item-radius);
   background: transparent;
   color: var(--text);
   font: inherit;
@@ -2688,7 +2691,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 .session-menu__item:focus-visible,
 .sidebar-session-sort-menu__item:hover,
 .sidebar-session-sort-menu__item:focus-visible {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  background: var(--bg-hover);
 }
 
 .session-menu__item:disabled {
