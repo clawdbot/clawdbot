@@ -237,6 +237,93 @@ describe("gateway sessions patch", () => {
     expect(res.entry.groupActivation).toBe("always");
   });
 
+  test("clears exec companion fields when execNode is set to null", async () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess",
+        updatedAt: 1,
+        execHost: "node",
+        execSecurity: "allowlist",
+        execAsk: "on-miss",
+        execNode: "worker-1",
+      } as SessionEntry,
+    };
+    const res = await applySessionsPatchToStore({
+      cfg: {} as OpenClawConfig,
+      store,
+      storeKey: "agent:main:main",
+      patch: { key: "agent:main:main", execNode: null },
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.execNode).toBeUndefined();
+    expect(res.entry.execHost).toBeUndefined();
+    expect(res.entry.execSecurity).toBeUndefined();
+    expect(res.entry.execAsk).toBeUndefined();
+  });
+
+  test("preserves explicitly-set execHost when execNode is null in same patch", async () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess",
+        updatedAt: 1,
+        execHost: "node",
+        execSecurity: "allowlist",
+        execAsk: "on-miss",
+        execNode: "worker-1",
+      } as SessionEntry,
+    };
+    const res = await applySessionsPatchToStore({
+      cfg: {} as OpenClawConfig,
+      store,
+      storeKey: "agent:main:main",
+      patch: { key: "agent:main:main", execNode: null, execHost: "sandbox" },
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.execNode).toBeUndefined();
+    expect(res.entry.execHost).toBe("sandbox");
+    expect(res.entry.execSecurity).toBeUndefined();
+    expect(res.entry.execAsk).toBeUndefined();
+  });
+
+  test("preserves all companion fields when explicitly set alongside execNode null", async () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess",
+        updatedAt: 1,
+        execHost: "node",
+        execSecurity: "full",
+        execAsk: "always",
+        execNode: "worker-1",
+      } as SessionEntry,
+    };
+    const res = await applySessionsPatchToStore({
+      cfg: {} as OpenClawConfig,
+      store,
+      storeKey: "agent:main:main",
+      patch: {
+        key: "agent:main:main",
+        execNode: null,
+        execHost: "gateway",
+        execSecurity: "deny",
+        execAsk: "off",
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.execNode).toBeUndefined();
+    expect(res.entry.execHost).toBe("gateway");
+    expect(res.entry.execSecurity).toBe("deny");
+    expect(res.entry.execAsk).toBe("off");
+  });
+
   test("rejects invalid execHost values", async () => {
     const store: Record<string, SessionEntry> = {};
     const res = await applySessionsPatchToStore({
