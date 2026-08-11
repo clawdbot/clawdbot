@@ -70,6 +70,9 @@ function isStableSlackAllowlistUserEntry(value: unknown): boolean {
   if (normalized === "*") {
     return true;
   }
+  if (isWorkspaceQualifiedSlackTarget(normalized, "user")) {
+    return true;
+  }
   const prefixed = /^(?:slack|user):([UW][A-Z0-9]{8,})$/.exec(normalized);
   return Boolean(prefixed?.[1]) || SLACK_USER_ID_RE.test(normalized);
 }

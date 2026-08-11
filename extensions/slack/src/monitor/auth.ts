@@ -23,6 +23,7 @@ import {
   normalizeAllowListLower,
   normalizeSlackAllowOwnerEntry,
   normalizeSlackSlug,
+  resolveSlackUserAllowListForTeam,
 } from "./allow-list.js";
 import { resolveSlackChannelConfig } from "./channel-config.js";
 import { inferSlackChannelType } from "./channel-type.js";
@@ -179,15 +180,16 @@ function pruneChannelMembersCache(cache: Map<string, SlackChannelMembersCacheEnt
   }
 }
 
-function buildBaseAllowFrom(ctx: SlackMonitorContext): string[] {
-  return normalizeAllowListLower(normalizeAllowList(ctx.allowFrom));
+function buildBaseAllowFrom(ctx: SlackMonitorContext, teamId?: string): string[] {
+  return resolveSlackUserAllowListForTeam({ allowList: ctx.allowFrom, teamId });
 }
 
 export async function resolveSlackEffectiveAllowFrom(
   ctx: SlackMonitorContext,
   options?: { includePairingStore?: boolean; eventScope?: SlackEventScope },
 ) {
-  const base = buildBaseAllowFrom(ctx);
+  const teamId = options?.eventScope?.teamId ?? ctx.teamId;
+  const base = buildBaseAllowFrom(ctx, teamId);
   if (options?.includePairingStore !== true) {
     return base;
   }
@@ -203,16 +205,21 @@ export async function resolveSlackEffectiveAllowFrom(
     storeAllowFrom = [];
   }
   if (ctx.installationIdentity.kind !== "enterprise") {
-    return normalizeAllowListLower([...base, ...storeAllowFrom]);
+    return resolveSlackUserAllowListForTeam({
+      allowList: [...base, ...storeAllowFrom],
+      teamId,
+    });
   }
-  const teamId = options.eventScope?.teamId.toLowerCase();
-  if (!teamId) {
+  const normalizedTeamId = teamId?.toLowerCase();
+  if (!normalizedTeamId) {
     return base;
   }
   const workspaceAllowFrom = storeAllowFrom.flatMap((entry) => {
     try {
       const target = parseSlackTarget(entry);
-      return target?.kind === "user" && target.teamId?.toLowerCase() === teamId ? [target.id] : [];
+      return target?.kind === "user" && target.teamId?.toLowerCase() === normalizedTeamId
+        ? [target.id]
+        : [];
     } catch {
       return [];
     }
@@ -318,6 +325,7 @@ export async function authorizeSlackBotRoomMessage(params: {
     channelUserAllowList.length > 0 &&
     allowListMatches({
       allowList: channelUserAllowList,
+      teamId: params.eventScope?.teamId ?? params.ctx.teamId,
       id: params.senderId,
       name: params.senderName,
       allowNameMatching: params.ctx.allowNameMatching,

@@ -11,7 +11,7 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { buildSlackChannelIdCandidates, buildSlackChannelPolicyScope } from "../group-policy.js";
-import { normalizeSlackSlug } from "./allow-list.js";
+import { normalizeSlackSlug, resolveSlackUserAllowListForTeam } from "./allow-list.js";
 
 export type SlackChannelConfigResolved = {
   allowed: boolean;
@@ -116,7 +116,13 @@ export function resolveSlackChannelConfig(params: {
     fallback?.botLoopProtection,
     matched?.botLoopProtection,
   );
-  const users = firstDefined(resolved.users, fallback?.users);
+  const users = resolveSlackUserAllowListForTeam({
+    allowList: firstDefined(resolved.users, fallback?.users),
+    teamId: params.teamId,
+    // Keeping an unmatched scoped entry preserves the configured allowlist gate;
+    // generic ingress treats that qualified value as non-matching instead of open.
+    preserveUnmatchedScopedEntries: true,
+  });
   const skills = firstDefined(resolved.skills, fallback?.skills);
   const systemPrompt = firstDefined(resolved.systemPrompt, fallback?.systemPrompt);
   const presenceEvents = firstDefined(resolved.presenceEvents, fallback?.presenceEvents);
@@ -127,7 +133,7 @@ export function resolveSlackChannelConfig(params: {
     replyToMode,
     allowBots,
     botLoopProtection,
-    users,
+    users: users.length > 0 ? users : undefined,
     skills,
     systemPrompt,
     presenceEvents,

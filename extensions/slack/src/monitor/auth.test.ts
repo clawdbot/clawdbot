@@ -195,6 +195,23 @@ describe("resolveSlackEffectiveAllowFrom", () => {
       resolveSlackEffectiveAllowFrom(ctx, { includePairingStore: true }),
     ).resolves.toEqual(["uconfig123"]);
   });
+
+  it("keeps only configured users for the current Enterprise workspace", async () => {
+    const ctx = makeSlackCtx(["team:T11111111:user:U01234567"]);
+    ctx.installationIdentity = { kind: "enterprise", enterpriseId: "E11111111" };
+
+    await expect(
+      resolveSlackEffectiveAllowFrom(ctx, {
+        eventScope: { teamId: "T11111111", client: {} as never },
+      }),
+    ).resolves.toEqual(["u01234567"]);
+    await expect(
+      resolveSlackEffectiveAllowFrom(ctx, {
+        eventScope: { teamId: "T22222222", client: {} as never },
+      }),
+    ).resolves.toEqual([]);
+    await expect(resolveSlackEffectiveAllowFrom(ctx)).resolves.toEqual([]);
+  });
 });
 
 describe("authorizeSlackSystemEventSender", () => {

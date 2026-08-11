@@ -1773,7 +1773,7 @@ export async function prepareSlackMessage(params: {
   const pinnedMainDmOwner = isDirectMessage
     ? resolvePinnedMainDmOwnerFromAllowlist({
         dmScope: cfg.session?.dmScope,
-        allowFrom: ctx.allowFrom,
+        allowFrom: allowFromLower,
         normalizeEntry: normalizeSlackAllowOwnerEntry,
       })
     : null;
