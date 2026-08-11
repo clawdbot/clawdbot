@@ -125,7 +125,3 @@ function normalizeCompactedSkillPath(filePath: string, matchedHomePrefix: string
 export function compactSkillPath(filePath: string): string {
   return compactHomePath(filePath, resolveCompactHomePrefixes());
 }
-
-export const testing = {
-  compactHomePath,
-};

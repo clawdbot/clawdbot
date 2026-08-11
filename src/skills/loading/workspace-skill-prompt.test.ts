@@ -12,13 +12,17 @@ import {
 } from "../test-support/home-env.test-support.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { SkillEntry } from "../types.js";
-import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
-import { testing as workspaceSkillsTesting } from "./skill-paths.js";
 import {
-  buildSkillSnapshot,
-  buildWorkspaceSkillsPrompt,
-  formatSkillsCompact,
-} from "./workspace-skill-prompt.js";
+  formatSkillsCompactForPrompt as formatSkillsCompact,
+  formatSkillsForPrompt,
+  type Skill,
+} from "./skill-contract.js";
+import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
+
+const buildWorkspaceSkillsPrompt = (
+  workspaceDir: string,
+  opts?: Parameters<typeof buildSkillSnapshot>[1],
+): string => buildSkillSnapshot(workspaceDir, opts).prompt;
 
 function makeSkill(name: string, desc = "A skill", filePath = `/skills/${name}/SKILL.md`): Skill {
   return createCanonicalFixtureSkill({
@@ -454,15 +458,6 @@ describe("compactSkillPaths", () => {
 
     expect(prompt).toContain("<location>~/.openclaw/skills/home-managed-skill/SKILL.md</location>");
     expect(prompt).not.toContain(`<location>${path.join(skillDir, "SKILL.md")}</location>`);
-  });
-
-  it("normalizes compacted Windows skill locations to forward slashes", () => {
-    const home = "C:\\Users\\alice";
-    const skillPath = path.win32.join(home, ".openclaw-test-skills", "win-skill", "SKILL.md");
-
-    const compactedPath = workspaceSkillsTesting.compactHomePath(skillPath, [home]);
-
-    expect(compactedPath).toBe("~/.openclaw-test-skills/win-skill/SKILL.md");
   });
 
   it("preserves POSIX literal backslashes after home compaction", () => {

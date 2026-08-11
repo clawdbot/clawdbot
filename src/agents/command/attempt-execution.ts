@@ -44,7 +44,7 @@ import {
   type UserTurnInput,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
-import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
@@ -535,7 +535,7 @@ export function runAgentAttempt(params: {
   runContext: ReturnType<typeof resolveAgentRunContext>;
   spawnedBy: string | undefined;
   messageChannel: ReturnType<typeof resolveMessageChannel>;
-  skillsSnapshot: ReturnType<typeof buildSkillSnapshot> | undefined;
+  skillsSnapshot: SkillSnapshot | undefined;
   resolvedVerboseLevel: VerboseLevel | undefined;
   agentDir: string;
   onAgentEvent: (evt: {

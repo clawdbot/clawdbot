@@ -3,7 +3,7 @@ import { formatSkillsForPrompt as upstreamFormatSkillsForPrompt } from "openclaw
 import { describe, expect, it } from "vitest";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
-import { formatSkillsCompact } from "./workspace-skill-prompt.js";
+import { formatSkillsCompactForPrompt as formatSkillsCompact } from "./skill-contract.js";
 
 function makeSkill(name: string, desc = "A skill", filePath = `/skills/${name}/SKILL.md`): Skill {
   return createCanonicalFixtureSkill({

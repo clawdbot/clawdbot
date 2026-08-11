@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { withEnv, withEnvAsync } from "../../test-utils/env.js";
 import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
-import { buildSkillSnapshot, buildWorkspaceSkillsPrompt } from "./workspace-skill-prompt.js";
+import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 import { syncWorkspaceSkills } from "./workspace-skill-sync.runtime.js";
 
 const mockResolvePluginSkillDirs = vi.hoisted(() => vi.fn(() => [] as string[]));
@@ -41,6 +41,13 @@ async function syncSourceSkillsToTarget(sourceWorkspace: string, targetWorkspace
     bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
     managedSkillsDir: path.join(sourceWorkspace, ".managed"),
   });
+}
+
+function buildWorkspaceSkillsPrompt(
+  workspaceDir: string,
+  opts?: Parameters<typeof buildSkillSnapshot>[1],
+): string {
+  return buildSkillSnapshot(workspaceDir, opts).prompt;
 }
 
 async function expectSyncedSkillConfinement(params: {

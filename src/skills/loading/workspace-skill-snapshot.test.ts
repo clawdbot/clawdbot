@@ -11,7 +11,7 @@ import {
   setMockSkillsHomeEnv,
   type SkillsHomeEnvSnapshot,
 } from "../test-support/home-env.test-support.js";
-import { buildSkillSnapshot, buildWorkspaceSkillsPrompt } from "./workspace-skill-prompt.js";
+import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 
 vi.mock("./plugin-skills.js", () => ({
   resolvePluginSkillDirs: () => [],
@@ -158,7 +158,7 @@ describe("buildSkillSnapshot", () => {
     expect(snapshot.skills.map((skill) => skill.name)).toContain("visible-skill");
   });
 
-  it("keeps prompt output aligned with buildWorkspaceSkillsPrompt", async () => {
+  it("keeps prompt output stable across equivalent snapshot builds", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     await writeSkill({
       dir: path.join(workspaceDir, "skills", "visible"),
@@ -194,8 +194,9 @@ describe("buildSkillSnapshot", () => {
     };
 
     const snapshot = withWorkspaceHome(workspaceDir, () => buildSkillSnapshot(workspaceDir, opts));
-    const prompt = withWorkspaceHome(workspaceDir, () =>
-      buildWorkspaceSkillsPrompt(workspaceDir, opts),
+    const prompt = withWorkspaceHome(
+      workspaceDir,
+      () => buildSkillSnapshot(workspaceDir, opts).prompt,
     );
 
     expect(snapshot.prompt).toBe(prompt);

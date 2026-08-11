@@ -41,9 +41,9 @@ import {
   canonicalSkillDirForSource,
   discoverPluginSkills,
   discoverSkillCandidates,
-  resolveSkillsLimits,
+  resolveSkillDiscoveryLimits,
   type CandidateSkillDir,
-  type ResolvedSkillsLimits,
+  type ResolvedSkillDiscoveryLimits,
 } from "./skill-root-discovery.js";
 import { resolveAllowedSkillSymlinkTargetRealPaths, tryRealpath } from "./symlink-targets.js";
 
@@ -100,27 +100,6 @@ function filterSkillEntries(
   return filtered;
 }
 
-function unwrapLoadedSkillRecords(loaded: unknown): LoadedSkillRecord[] {
-  if (Array.isArray(loaded)) {
-    return (loaded as Skill[]).map((skill) => ({ skill }));
-  }
-  if (loaded && typeof loaded === "object" && "skills" in loaded) {
-    const skills = (loaded as { skills?: unknown }).skills;
-    if (Array.isArray(skills)) {
-      const loadedResult = loaded as { frontmatterByFilePath?: unknown };
-      const frontmatterByFilePath =
-        loadedResult.frontmatterByFilePath instanceof Map
-          ? (loadedResult.frontmatterByFilePath as ReadonlyMap<string, ParsedSkillFrontmatter>)
-          : undefined;
-      return (skills as Skill[]).map((skill) => ({
-        skill,
-        frontmatter: frontmatterByFilePath?.get(skill.filePath),
-      }));
-    }
-  }
-  return [];
-}
-
 function loadContainedSkillRecords(params: {
   skillDir: string;
   source: string;
@@ -134,9 +113,12 @@ function loadContainedSkillRecords(params: {
     maxBytes: params.maxSkillFileBytes,
     onDiagnostic: (diagnostic) => warnInvalidSkillFrontmatter(params.source, diagnostic),
   });
-  const records = unwrapLoadedSkillRecords(loaded).filter(
-    (record) => path.resolve(record.skill.baseDir) === expectedBaseDir,
-  );
+  const records = loaded.skills
+    .map((skill) => ({
+      skill,
+      frontmatter: loaded.frontmatterByFilePath.get(skill.filePath),
+    }))
+    .filter((record) => path.resolve(record.skill.baseDir) === expectedBaseDir);
   const canonicalSkillDir = params.canonicalSkillDir;
   return canonicalSkillDir
     ? records.map((record) => canonicalizeLoadedSkillRecord(record, canonicalSkillDir))
@@ -223,7 +205,7 @@ function setSyncSourceForPluginSkill(
 
 function isCandidateOversized(
   candidate: CandidateSkillDir,
-  limits: ResolvedSkillsLimits,
+  limits: ResolvedSkillDiscoveryLimits,
   rootIsSkill: boolean,
 ): boolean {
   try {
@@ -258,7 +240,7 @@ function isCandidateOversized(
 function loadDiscoveredSkillRecords(params: {
   dir: string;
   source: string;
-  limits: ResolvedSkillsLimits;
+  limits: ResolvedSkillDiscoveryLimits;
   allowedSymlinkTargetRealPaths: readonly string[];
 }): LoadedSkillRecord[] {
   const discovered = discoverSkillCandidates(params);
@@ -292,7 +274,7 @@ function loadGeneratedPluginSkillRecords(params: {
   pluginSkillsDir: string;
   pluginSkillDirs: readonly string[];
   source: string;
-  limits: ResolvedSkillsLimits;
+  limits: ResolvedSkillDiscoveryLimits;
 }): LoadedSkillRecord[] {
   const candidates = discoverPluginSkills(params);
   const maxSkillsLoadedPerSource = Math.max(0, params.limits.maxSkillsLoadedPerSource);
@@ -335,7 +317,7 @@ function loadSkillEntries(
     includeArchived?: boolean;
   },
 ): SkillEntry[] {
-  const limits = resolveSkillsLimits(opts?.config, opts?.agentId);
+  const limits = resolveSkillDiscoveryLimits(opts?.config);
   const allowedSymlinkTargetRealPaths = resolveAllowedSkillSymlinkTargetRealPaths(opts?.config);
   const loadSkills = (params: { dir: string; source: string }): LoadedSkillRecord[] =>
     loadDiscoveredSkillRecords({ ...params, limits, allowedSymlinkTargetRealPaths });

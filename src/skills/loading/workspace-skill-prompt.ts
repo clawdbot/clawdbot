@@ -1,84 +1,43 @@
 // Workspace skill prompt helpers render bounded catalogs and reusable snapshots.
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveEffectiveAgentSkillsLimits } from "../discovery/agent-filter.js";
 import { filterPromptVisibleSkillEntries } from "../discovery/skill-index.js";
 import type { SkillEligibilityContext, SkillEntry, SkillSnapshot } from "../types.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import { hasUnavailableSkillSecretOwners, isSkillSecretOwnerUnavailable } from "./config.js";
 import { resolveSkillKey } from "./frontmatter.js";
-import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
+import {
+  escapeSkillXml,
+  formatSkillsCompactForPrompt,
+  formatSkillsForPrompt,
+  type Skill,
+} from "./skill-contract.js";
 import { compactPromptSkills } from "./skill-paths.js";
-import { resolveSkillsLimits } from "./skill-root-discovery.js";
 import { resolveWorkspaceSkillPromptEntries } from "./workspace-skill-loader.js";
-
-function escapeXml(str: string): string {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
 
 const COMPACT_DESCRIPTION_MAX_CHARS = 220;
 const COMPACT_DESCRIPTION_MIN_CHARS = 4;
+const DEFAULT_MAX_SKILLS_IN_PROMPT = 150;
+const DEFAULT_MAX_SKILLS_PROMPT_CHARS = 18_000;
 
-function truncateSkillDescription(description: string, maxChars: number): string {
-  const normalized = description.replace(/\s+/g, " ").trim();
-  if (normalized.length <= maxChars) {
-    return normalized;
-  }
-  if (maxChars <= 3) {
-    return truncateUtf16Safe(normalized, maxChars);
-  }
-  return `${truncateUtf16Safe(normalized, maxChars - 3).trimEnd()}...`;
-}
+type ResolvedSkillsPromptLimits = {
+  maxSkillsInPrompt: number;
+  maxSkillsPromptChars: number;
+};
 
-/**
- * Compact skill catalog with descriptions bounded independently from identities.
- * A zero description budget preserves the previous name/location-only format.
- */
-export function formatSkillsCompact(
-  skills: Skill[],
-  opts?: { descriptionMaxChars?: number },
-): string {
-  if (skills.length === 0) {
-    return "";
-  }
-  const descriptionMaxChars = Math.max(
-    0,
-    Math.floor(opts?.descriptionMaxChars ?? COMPACT_DESCRIPTION_MAX_CHARS),
-  );
-  const lines = [
-    "\n\nThe following skills provide specialized instructions for specific tasks.",
-    descriptionMaxChars > 0
-      ? "Use the read tool to load a skill's file when the task matches its name or description."
-      : "Use the read tool to load a skill's file when the task matches its name.",
-    "If a skill's <version> differs from a previous turn, re-read its SKILL.md before using it.",
-    "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
-    "",
-    "<available_skills>",
-  ];
-  for (const skill of skills) {
-    lines.push("  <skill>");
-    lines.push(`    <name>${escapeXml(skill.name)}</name>`);
-    if (descriptionMaxChars > 0) {
-      const description = truncateSkillDescription(skill.description, descriptionMaxChars);
-      if (description) {
-        lines.push(`    <description>${escapeXml(description)}</description>`);
-      }
-    }
-    lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
-    if (skill.locationNote) {
-      lines.push(`    <location_note>${escapeXml(skill.locationNote)}</location_note>`);
-    }
-    if (skill.promptVersion) {
-      lines.push(`    <version>${escapeXml(skill.promptVersion)}</version>`);
-    }
-    lines.push("  </skill>");
-  }
-  lines.push("</available_skills>");
-  return lines.join("\n");
+function resolveSkillsPromptLimits(
+  config?: OpenClawConfig,
+  agentId?: string,
+): ResolvedSkillsPromptLimits {
+  const limits = config?.skills?.limits;
+  const agentLimits = resolveEffectiveAgentSkillsLimits(config, agentId);
+  return {
+    maxSkillsInPrompt: limits?.maxSkillsInPrompt ?? DEFAULT_MAX_SKILLS_IN_PROMPT,
+    maxSkillsPromptChars:
+      agentLimits?.maxSkillsPromptChars ??
+      limits?.maxSkillsPromptChars ??
+      DEFAULT_MAX_SKILLS_PROMPT_CHARS,
+  };
 }
 
 type SkillsPromptFormat = { kind: "full" } | { kind: "compact"; descriptionMaxChars: number };
@@ -125,7 +84,7 @@ function buildRenderedSkillsPrompt(params: {
         });
   const catalog =
     params.format.kind === "compact"
-      ? formatSkillsCompact(params.skills, {
+      ? formatSkillsCompactForPrompt(params.skills, {
           descriptionMaxChars: params.format.descriptionMaxChars,
         })
       : formatSkillsForPrompt(params.skills);
@@ -138,7 +97,7 @@ function applySkillsPromptLimits(params: {
   agentId?: string;
   remoteNote?: string;
 }): string {
-  const limits = resolveSkillsLimits(params.config, params.agentId);
+  const limits = resolveSkillsPromptLimits(params.config, params.agentId);
   const total = params.skills.length;
   const byCount = params.skills.slice(0, Math.max(0, limits.maxSkillsInPrompt));
   let skillsForPrompt = byCount;
@@ -297,13 +256,6 @@ export function buildSkillSnapshot(
   };
 }
 
-export function buildWorkspaceSkillsPrompt(
-  workspaceDir: string,
-  opts?: WorkspaceSkillBuildOptions,
-): string {
-  return resolveWorkspaceSkillPromptState(workspaceDir, opts).prompt;
-}
-
 export function resolveSkillsPrompt(params: {
   skillsSnapshot?: SkillSnapshot;
   entries?: SkillEntry[];
@@ -339,7 +291,7 @@ export function resolveSkillsPrompt(params: {
         .filter(
           (skill) => skill.skillKey !== undefined && isSkillSecretOwnerUnavailable(skill.skillKey),
         )
-        .map((skill) => escapeXml(skill.name)),
+        .map((skill) => escapeSkillXml(skill.name)),
     );
     if (unavailableNames.size === 0) {
       return snapshotPrompt;
@@ -381,12 +333,12 @@ export function resolveSkillsPrompt(params: {
     return `${snapshotPrompt.slice(0, bodyStart)}${filteredBody}${tail}${snapshotPrompt.slice(catalogEnd)}`.trim();
   }
   if (params.entries && params.entries.length > 0) {
-    const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
+    const prompt = buildSkillSnapshot(params.workspaceDir, {
       entries: params.entries,
       config: params.config,
       agentId: params.agentId,
       eligibility: params.eligibility,
-    });
+    }).prompt;
     return prompt.trim() ? prompt : "";
   }
   return "";

@@ -29,21 +29,13 @@ function resolveUniqueSyncedSkillDirName(base: string, used: Set<string>): strin
     used.add(base);
     return base;
   }
-  for (let index = 2; index < 10_000; index += 1) {
+  for (let index = 2; ; index += 1) {
     const candidate = `${base}-${index}`;
     if (!used.has(candidate)) {
       used.add(candidate);
       return candidate;
     }
   }
-  let fallbackIndex = 10_000;
-  let fallback = `${base}-${fallbackIndex}`;
-  while (used.has(fallback)) {
-    fallbackIndex += 1;
-    fallback = `${base}-${fallbackIndex}`;
-  }
-  used.add(fallback);
-  return fallback;
 }
 
 const SYNCED_SKILLS_MANIFEST_NAME = ".openclaw-sync.json";

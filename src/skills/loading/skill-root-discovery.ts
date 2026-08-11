@@ -6,17 +6,14 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveEffectiveAgentSkillsLimits } from "../discovery/agent-filter.js";
 import { readSkillFrontmatterSafe } from "./local-loader.js";
 import { compactSkillPath } from "./skill-paths.js";
-import { tryRealpath } from "./symlink-targets.js";
+import { findContainingAllowedSkillSymlinkTarget, tryRealpath } from "./symlink-targets.js";
 
 const skillsLogger = createSubsystemLogger("skills");
 
 const DEFAULT_MAX_CANDIDATES_PER_ROOT = 300;
 const DEFAULT_MAX_SKILLS_LOADED_PER_SOURCE = 200;
-const DEFAULT_MAX_SKILLS_IN_PROMPT = 150;
-const DEFAULT_MAX_SKILLS_PROMPT_CHARS = 18_000;
 const DEFAULT_MAX_SKILL_FILE_BYTES = 256_000;
 const DEFAULT_MIN_RAW_ENTRIES_PER_DIRECTORY_SCAN = 1_000;
 const DEFAULT_MAX_RAW_ENTRIES_PER_DIRECTORY_SCAN = 10_000;
@@ -25,11 +22,9 @@ const DEFAULT_MAX_RAW_ENTRIES_PER_DIRECTORY_SCAN = 10_000;
 const MAX_GROUPED_SKILL_SCAN_DEPTH = 6;
 const MAX_CONFIGURED_ROOT_GROUPED_SKILL_SCAN_DEPTH = 2;
 
-export type ResolvedSkillsLimits = {
+export type ResolvedSkillDiscoveryLimits = {
   maxCandidatesPerRoot: number;
   maxSkillsLoadedPerSource: number;
-  maxSkillsInPrompt: number;
-  maxSkillsPromptChars: number;
   maxSkillFileBytes: number;
 };
 
@@ -57,21 +52,12 @@ type SkillDiscoveryBudget = {
   truncated: boolean;
 };
 
-export function resolveSkillsLimits(
-  config?: OpenClawConfig,
-  agentId?: string,
-): ResolvedSkillsLimits {
+export function resolveSkillDiscoveryLimits(config?: OpenClawConfig): ResolvedSkillDiscoveryLimits {
   const limits = config?.skills?.limits;
-  const agentSkillsLimits = resolveEffectiveAgentSkillsLimits(config, agentId);
   return {
     maxCandidatesPerRoot: limits?.maxCandidatesPerRoot ?? DEFAULT_MAX_CANDIDATES_PER_ROOT,
     maxSkillsLoadedPerSource:
       limits?.maxSkillsLoadedPerSource ?? DEFAULT_MAX_SKILLS_LOADED_PER_SOURCE,
-    maxSkillsInPrompt: limits?.maxSkillsInPrompt ?? DEFAULT_MAX_SKILLS_IN_PROMPT,
-    maxSkillsPromptChars:
-      agentSkillsLimits?.maxSkillsPromptChars ??
-      limits?.maxSkillsPromptChars ??
-      DEFAULT_MAX_SKILLS_PROMPT_CHARS,
     maxSkillFileBytes: limits?.maxSkillFileBytes ?? DEFAULT_MAX_SKILL_FILE_BYTES,
   };
 }
@@ -313,10 +299,6 @@ function warnEscapedSkillPath(params: {
   });
 }
 
-function isPathInsideAnyRoot(rootRealPaths: readonly string[], candidateRealPath: string): boolean {
-  return rootRealPaths.some((rootRealPath) => isPathInside(rootRealPath, candidateRealPath));
-}
-
 function resolveContainedSkillPath(params: {
   source: string;
   rootDir: string;
@@ -330,7 +312,10 @@ function resolveContainedSkillPath(params: {
   }
   if (
     isPathInside(params.rootRealPath, candidateRealPath) ||
-    isPathInsideAnyRoot(params.allowedSymlinkTargetRealPaths ?? [], candidateRealPath)
+    findContainingAllowedSkillSymlinkTarget(
+      params.allowedSymlinkTargetRealPaths ?? [],
+      candidateRealPath,
+    ) !== null
   ) {
     return candidateRealPath;
   }
@@ -454,7 +439,7 @@ function resolveSkillFilePath(params: {
 export function discoverSkillCandidates(params: {
   dir: string;
   source: string;
-  limits: ResolvedSkillsLimits;
+  limits: ResolvedSkillDiscoveryLimits;
   allowedSymlinkTargetRealPaths: readonly string[];
 }): DiscoveredSkillCandidates {
   const rootDir = path.resolve(params.dir);
@@ -662,7 +647,7 @@ export function discoverPluginSkills(params: {
   pluginSkillsDir: string;
   pluginSkillDirs: readonly string[];
   source: string;
-  limits: ResolvedSkillsLimits;
+  limits: ResolvedSkillDiscoveryLimits;
 }): CandidateSkillDir[] {
   const allowedRootRealPaths = resolvePluginSkillRootRealPaths(params.pluginSkillDirs);
   if (allowedRootRealPaths.length === 0) {
@@ -691,7 +676,10 @@ export function discoverPluginSkills(params: {
       continue;
     }
     const skillDirRealPath = tryRealpath(skillDir);
-    if (!skillDirRealPath || !isPathInsideAnyRoot(allowedRootRealPaths, skillDirRealPath)) {
+    if (
+      !skillDirRealPath ||
+      findContainingAllowedSkillSymlinkTarget(allowedRootRealPaths, skillDirRealPath) === null
+    ) {
       if (skillDirRealPath) {
         warnEscapedSkillPath({
           source: params.source,
