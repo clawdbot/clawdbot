@@ -89,7 +89,12 @@ export async function stageSandboxMedia(params: {
       ? path.join("media", "inbound", `openclaw-staged-${crypto.randomUUID()}`)
       : undefined;
   if (hostWorkspaceStagingDir) {
-    await pruneEmptyStagedMediaDirs(path.join(effectiveWorkspaceDir, "media", "inbound"));
+    // Best-effort housekeeping: a prune failure (e.g. EACCES on a sibling
+    // leftover) must never abort staging the current inbound media, which is
+    // the reply path's actual job.
+    await pruneEmptyStagedMediaDirs(path.join(effectiveWorkspaceDir, "media", "inbound")).catch(
+      () => {},
+    );
   }
 
   for (const entry of pathEntries) {

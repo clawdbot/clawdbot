@@ -344,6 +344,52 @@ describe("stageSandboxMedia", () => {
     });
   });
 
+  it("keeps staging media when pruning a stale leftover fails", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const { cfg, workspaceDir } = await setupSandboxWorkspace(home);
+      sandboxMocks.ensureSandboxWorkspaceForSession.mockResolvedValue(null);
+      const inboundMediaDir = join(workspaceDir, "media", "inbound");
+      await fs.mkdir(inboundMediaDir, { recursive: true });
+
+      const staleEmpty = join(
+        inboundMediaDir,
+        "openclaw-staged-8a4ba094-a431-423d-acd3-cd2cc4e3cf50",
+      );
+      await fs.mkdir(staleEmpty, { recursive: true });
+      const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      await fs.utimes(staleEmpty, old, old);
+
+      const fileName = "host-prune-error.png";
+      await writeInboundMedia(home, fileName, "host-image-bytes");
+      const mediaUri = `media://inbound/${fileName}`;
+      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaUri);
+
+      // A non-tolerated prune error (EACCES) must not abort the reply-path
+      // staging of the current inbound media.
+      const rmdirSpy = vi
+        .spyOn(fs, "rmdir")
+        .mockRejectedValueOnce(Object.assign(new Error("denied"), { code: "EACCES" }));
+
+      try {
+        await expect(
+          stageSandboxMedia({
+            ctx,
+            sessionCtx,
+            cfg,
+            sessionKey: "agent:main:main",
+            workspaceDir,
+          }),
+        ).resolves.toBeDefined();
+      } finally {
+        rmdirSpy.mockRestore();
+      }
+
+      await expect(fs.readFile(ctx.media?.[0]?.path ?? "", "utf8")).resolves.toBe(
+        "host-image-bytes",
+      );
+    });
+  });
+
   it("stages allowed media and blocks unsafe paths", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
       const { cfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);
