@@ -26,7 +26,11 @@ import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { readScopeUpgradeAvailability } from "./device-scope-upgrade.ts";
-import { isOptionalElementDefined, type OptionalCustomElement } from "./lazy-custom-element.ts";
+import {
+  ensureOptionalElementForHost,
+  isOptionalElementDefined,
+  type OptionalCustomElement,
+} from "./lazy-custom-element.ts";
 import { isMobileNavLayout, shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import type { NativeHistoryState } from "./native-web-chrome.ts";
 import { isNativeWebChromeHost } from "./native-web-chrome.ts";
@@ -46,9 +50,14 @@ const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platfo
   ? "⌘K"
   : "Ctrl K";
 
-let scopeUpgradeBannerLoad: Promise<unknown> | null = null;
+const SCOPE_UPGRADE_BANNER_ELEMENT = {
+  tagName: "openclaw-device-scope-upgrade-banner",
+  label: "device scope upgrade banner",
+  loadModule: () => import("./device-scope-upgrade.runtime.ts"),
+} satisfies OptionalCustomElement;
 
 function renderScopeUpgradeBanner(
+  host: ShellViewHost,
   snapshot: ApplicationContext["gateway"]["snapshot"],
   chromeOffset: boolean,
 ) {
@@ -56,11 +65,18 @@ function renderScopeUpgradeBanner(
   if (state.phase === "hidden") {
     return nothing;
   }
-  scopeUpgradeBannerLoad ??= import("./device-scope-upgrade.runtime.ts").catch((error: unknown) => {
-    scopeUpgradeBannerLoad = null;
-    console.error("[scope-upgrade] failed to load banner:", error);
-  });
-  if (customElements.get("openclaw-device-scope-upgrade-banner")) {
+  if (state.phase === "guidance") {
+    return html`<openclaw-update-banner
+      .props=${{
+        statusBanner: {
+          tone: "warn",
+          text: t("connection.scopeUpgrade.guidance"),
+        },
+      }}
+    ></openclaw-update-banner>`;
+  }
+  void ensureOptionalElementForHost(host, SCOPE_UPGRADE_BANNER_ELEMENT).catch(() => undefined);
+  if (isOptionalElementDefined(SCOPE_UPGRADE_BANNER_ELEMENT)) {
     return html`<openclaw-device-scope-upgrade-banner
       .props=${{
         snapshot,
@@ -112,6 +128,7 @@ export interface ShellViewHost {
   openPalette(): void;
   refreshControlUi(): void;
   replaceChatWithCurrentSession(): boolean;
+  requestUpdate(): void;
   resizeNavigation(splitRatio: number): void;
   selectChatSession(sessionKey: string, agentId?: string | null): void;
   storedOutboxScopeHost(context: ApplicationContext<RouteId>): StoredOutboxScopeHost;
@@ -489,7 +506,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           : ""} ${activeRoute === "workboard" ? "content--workboard" : ""}"
         .tabIndex=${-1}
       >
-        ${renderScopeUpgradeBanner(gatewaySnapshot, !settingsTakeover && !mobileNavLayout)}
+        ${renderScopeUpgradeBanner(host, gatewaySnapshot, !settingsTakeover && !mobileNavLayout)}
         ${gatewaySnapshot.hello?.deviceAuthMigration?.pending === true
           ? // The migration banner is registered by a rare-flow dynamic import after first render.
             customElements.get("openclaw-device-auth-migration-banner")

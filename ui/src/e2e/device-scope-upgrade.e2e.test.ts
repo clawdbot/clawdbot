@@ -25,6 +25,12 @@ const FULL_SCOPES = [
   "operator.questions",
   "operator.pairing",
 ];
+const SCOPE_UPGRADE_METHODS = [
+  "device.scopes.requestUpgrade",
+  "device.scopes.waitUpgrade",
+] as const;
+const MANUAL_UPGRADE_GUIDANCE =
+  "This browser has limited access. Manage it with openclaw devices on the Gateway or from Devices on an admin browser.";
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -80,6 +86,19 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
   it("requests admin explicitly, shows pending repair guidance, and reconnects approved", async () => {
     const context = await createContext();
     const page = await context.newPage();
+    let releaseBannerModule = () => {};
+    const bannerModuleRelease = new Promise<void>((resolve) => {
+      releaseBannerModule = resolve;
+    });
+    let heldBannerModule = false;
+    await page.route(/device-scope-upgrade\.runtime(?:-[^/.]+)?\.(?:js|ts)/u, async (route) => {
+      if (!heldBannerModule) {
+        heldBannerModule = true;
+        void bannerModuleRelease.then(() => route.continue());
+        return;
+      }
+      await route.continue();
+    });
     const gateway = await installMockGateway(page, {
       deferredMethods: ["device.scopes.waitUpgrade"],
       operatorScopes: LIMITED_SCOPES,
@@ -87,12 +106,20 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
         "device.scopes.requestUpgrade": { requestId: "upgrade-1" },
       },
     });
-    await page.goto(`${server.baseUrl}new`);
+    const navigation = page.goto(`${server.baseUrl}new`);
 
     const limitedBanner = page.getByText("This browser has limited access.", { exact: true });
-    await limitedBanner.waitFor();
-    expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
-    await captureProof(page, "limited.png");
+    try {
+      await limitedBanner.waitFor();
+      await expect.poll(() => heldBannerModule).toBe(true);
+      expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
+      expect(await page.getByRole("button", { name: "Request admin" }).count()).toBe(0);
+      await captureProof(page, "limited.png");
+    } finally {
+      releaseBannerModule();
+    }
+    await navigation;
+    await page.getByRole("button", { name: "Request admin" }).waitFor();
 
     await page.locator("#new-session-place-trigger").click();
     const browse = page.getByRole("button", { name: "Browse folders" });
@@ -144,6 +171,28 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     await expect.poll(() => limitedBanner.count()).toBe(0);
     await captureProof(page, "approved.png");
   });
+
+  it.each(SCOPE_UPGRADE_METHODS)(
+    "shows manual repair guidance when %s is not advertised",
+    async (missingMethod) => {
+      const context = await createContext();
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page, {
+        featureMethods: [
+          "chat.metadata",
+          "chat.startup",
+          ...SCOPE_UPGRADE_METHODS.filter((method) => method !== missingMethod),
+        ],
+        operatorScopes: LIMITED_SCOPES,
+      });
+
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true }).waitFor();
+
+      expect(await page.getByRole("button", { name: "Request admin" }).count()).toBe(0);
+      expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
+    },
+  );
 
   it("never shows the upgrade banner or files a request for admin connections", async () => {
     const context = await createContext();

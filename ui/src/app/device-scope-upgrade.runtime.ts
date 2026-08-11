@@ -32,15 +32,17 @@ export class ScopeUpgradeController {
   sync(snapshot: ApplicationGatewaySnapshot): void {
     this.current = snapshot;
     const client = snapshot.client;
-    if (!client || readScopeUpgradeAvailability(snapshot).phase === "hidden") {
+    const availability = readScopeUpgradeAvailability(snapshot);
+    if (!client || availability.phase !== "available") {
       this.retireOperation();
-      this.setState({ phase: "hidden" });
+      this.setState(availability);
       return;
     }
     if (this.operation && this.operation.client !== client) {
       this.retireOperation();
+      this.setState({ phase: "available" });
     }
-    if (this.value.phase === "hidden") {
+    if (this.value.phase === "hidden" || this.value.phase === "guidance") {
       this.setState({ phase: "available" });
     }
   }
@@ -64,7 +66,7 @@ export class ScopeUpgradeController {
 
   private start(retry: boolean): void {
     const client = this.current.client;
-    if (!client || readScopeUpgradeAvailability(this.current).phase === "hidden") {
+    if (!client || readScopeUpgradeAvailability(this.current).phase !== "available") {
       return;
     }
     if (this.operation) {
@@ -165,19 +167,21 @@ class ScopeUpgradeBanner extends OpenClawLightDomContentsElement {
     const retryable =
       state.phase === "pending" || state.phase === "rejected" || state.phase === "error";
     const text =
-      state.phase === "available"
-        ? t("connection.scopeUpgrade.limited")
-        : state.phase === "requesting"
-          ? t("connection.scopeUpgrade.requesting")
-          : state.phase === "pending"
-            ? t("connection.scopeUpgrade.pending")
-            : state.phase === "rejected"
-              ? t(
-                  state.expired
-                    ? "connection.scopeUpgrade.expired"
-                    : "connection.scopeUpgrade.rejected",
-                )
-              : t("connection.scopeUpgrade.error", { error: state.message });
+      state.phase === "guidance"
+        ? t("connection.scopeUpgrade.guidance")
+        : state.phase === "available"
+          ? t("connection.scopeUpgrade.limited")
+          : state.phase === "requesting"
+            ? t("connection.scopeUpgrade.requesting")
+            : state.phase === "pending"
+              ? t("connection.scopeUpgrade.pending")
+              : state.phase === "rejected"
+                ? t(
+                    state.expired
+                      ? "connection.scopeUpgrade.expired"
+                      : "connection.scopeUpgrade.rejected",
+                  )
+                : t("connection.scopeUpgrade.error", { error: state.message });
     return html`<div
       class="callout ${state.phase === "error" || state.phase === "rejected"
         ? "danger"
