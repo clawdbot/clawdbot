@@ -22,12 +22,13 @@ import {
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { i18n, t } from "../../i18n/index.ts";
+import { resolveReviewedGatewayErrorMessage } from "../../lib/gateway-error-localization.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { createRequestFailure, type ApprovalRequestFailure } from "./approval-request-failure.ts";
 const APPROVAL_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_MIN_POLL_DELAY_MS = 250;
 const APPROVAL_REQUIRED_SCOPE = "operator.approvals";
 
-type ApprovalRequestError = "connection" | "unavailable" | null;
 type ResolutionOrigin = "here" | "elsewhere" | "observed";
 
 function isUnavailableApprovalError(error: unknown): boolean {
@@ -189,7 +190,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
   @state() private loading = true;
   @state() private resolving = false;
   @state() private resolvingDecision: ApprovalDecision | null = null;
-  @state() private requestError: ApprovalRequestError = null;
+  @state() private requestFailure: ApprovalRequestFailure = null;
   @state() private resolutionOrigin: ResolutionOrigin = "observed";
 
   private client: GatewayBrowserClient | null = null;
@@ -251,7 +252,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
     this.loading = Boolean(this.approvalId);
     this.resolving = false;
     this.resolvingDecision = null;
-    this.requestError = this.approvalId ? null : "unavailable";
+    this.requestFailure = this.approvalId ? null : createRequestFailure("unavailable");
     this.resolutionOrigin = "observed";
     if (this.approvalId && this.connected && this.client && this.hasApprovalAccess) {
       void this.loadApproval();
@@ -284,20 +285,22 @@ export class ApprovalPage extends OpenClawLightDomElement {
     if (snapshot.phase !== "connected" || !snapshot.client) {
       if (this.approvalId) {
         this.loading = false;
-        this.requestError =
-          !this.approval || this.approval.status === "pending" ? "connection" : null;
+        this.requestFailure =
+          !this.approval || this.approval.status === "pending"
+            ? createRequestFailure("connection")
+            : null;
       }
       return;
     }
     if (!this.approvalsAccess) {
       this.approval = null;
       this.loading = false;
-      this.requestError = null;
+      this.requestFailure = null;
       return;
     }
     if (!this.approvalId) {
       this.loading = false;
-      this.requestError = "unavailable";
+      this.requestFailure = createRequestFailure("unavailable");
       return;
     }
     if (clientChanged || becameConnected || approvalAccessChanged || !this.approval) {
@@ -363,10 +366,10 @@ export class ApprovalPage extends OpenClawLightDomElement {
       }
       if (!validateApprovalGetResult(result) || result.approval.id !== id) {
         this.approval = null;
-        this.requestError = "unavailable";
+        this.requestFailure = createRequestFailure("unavailable");
         return;
       }
-      this.requestError = null;
+      this.requestFailure = null;
       this.approval = result.approval;
       if (result.approval.status === "pending") {
         this.resolutionOrigin = "observed";
@@ -378,12 +381,11 @@ export class ApprovalPage extends OpenClawLightDomElement {
       if (!this.isCurrentOperation({ client, generation, id })) {
         return;
       }
-      if (isUnavailableApprovalError(error)) {
+      const kind = isUnavailableApprovalError(error) ? "unavailable" : "connection";
+      if (kind === "unavailable") {
         this.approval = null;
-        this.requestError = "unavailable";
-      } else {
-        this.requestError = "connection";
       }
+      this.requestFailure = createRequestFailure(kind, error);
     } finally {
       if (this.isCurrentOperation({ client, generation, id })) {
         this.loading = false;
@@ -419,7 +421,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
     this.clearPollTimer();
     this.resolving = true;
     this.resolvingDecision = decision;
-    this.requestError = null;
+    this.requestFailure = null;
     try {
       const result = await client.request<ApprovalResolveResult>("approval.resolve", {
         id,
@@ -437,7 +439,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
       ) {
         // The write outcome is unknown. Keep every decision disabled until a
         // fresh, strictly validated read establishes canonical Gateway truth.
-        this.requestError = "connection";
+        this.requestFailure = createRequestFailure("connection");
         shouldRecoverCanonicalState = true;
       } else {
         this.approval = result.approval;
@@ -448,7 +450,10 @@ export class ApprovalPage extends OpenClawLightDomElement {
       if (!isCurrentDecision()) {
         return;
       }
-      this.requestError = isUnavailableApprovalError(error) ? "unavailable" : "connection";
+      this.requestFailure = createRequestFailure(
+        isUnavailableApprovalError(error) ? "unavailable" : "connection",
+        error,
+      );
     } finally {
       if (isCurrentDecision()) {
         this.resolving = false;
@@ -491,7 +496,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
       !this.hasGatewayConnection ||
       !this.hasApprovalAccess ||
       this.resolving ||
-      this.requestError === "unavailable" ||
+      this.requestFailure?.kind === "unavailable" ||
       approval?.status !== "pending" ||
       document.visibilityState !== "visible"
     ) {
@@ -554,7 +559,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
       <div class="approval-page__state approval-page__state--unavailable" role="alert">
         <div class="approval-page__state-mark" aria-hidden="true">!</div>
         <h1 id="approval-page-title">${t("approvalPage.unavailableTitle")}</h1>
-        <p>${t("approvalPage.unavailableDescription")}</p>
+        <p>${this.renderRequestError("approvalPage.unavailableDescription")}</p>
       </div>
     `;
   }
@@ -574,7 +579,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
       <div class="approval-page__state approval-page__state--connection" role="alert">
         <div class="approval-page__state-mark" aria-hidden="true">!</div>
         <h1 id="approval-page-title">${t("approvalPage.connectionErrorTitle")}</h1>
-        <p>${t("approvalPage.connectionErrorDescription")}</p>
+        <p>${this.renderRequestError("approvalPage.connectionErrorDescription")}</p>
         <button
           type="button"
           class="btn"
@@ -592,7 +597,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
       <div class="approval-page__callout" role="alert">
         <div>
           <strong>${t("approvalPage.connectionErrorTitle")}</strong>
-          <span>${t("approvalPage.connectionErrorDescription")}</span>
+          <span>${this.renderRequestError("approvalPage.connectionErrorDescription")}</span>
         </div>
         <button
           type="button"
@@ -604,6 +609,10 @@ export class ApprovalPage extends OpenClawLightDomElement {
         </button>
       </div>
     `;
+  }
+
+  private renderRequestError(fallbackKey: string): string {
+    return resolveReviewedGatewayErrorMessage(this.requestFailure?.gatewayError) ?? t(fallbackKey);
   }
 
   private renderApproval(approval: ApprovalSnapshot) {
@@ -638,7 +647,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
           ${formatApprovalTime(pending ? approval.expiresAtMs : approval.resolvedAtMs)}
         </time>
       </div>
-      ${this.requestError === "connection" ? this.renderConnectionError() : nothing}
+      ${this.requestFailure?.kind === "connection" ? this.renderConnectionError() : nothing}
       ${pending
         ? html`
             <div
@@ -655,7 +664,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
                     ?disabled=${this.resolving ||
                     !this.hasGatewayConnection ||
                     !this.hasApprovalGrantAccess ||
-                    this.requestError !== null}
+                    this.requestFailure !== null}
                     @click=${() => void this.resolveApproval(decision)}
                   >
                     ${this.resolvingDecision === decision
@@ -676,8 +685,8 @@ export class ApprovalPage extends OpenClawLightDomElement {
 
   override render() {
     const missingScope = this.connected && !this.approvalsAccess;
-    const unavailable = this.requestError === "unavailable";
-    const disconnected = this.requestError === "connection" && !this.approval;
+    const unavailable = this.requestFailure?.kind === "unavailable";
+    const disconnected = this.requestFailure?.kind === "connection" && !this.approval;
     const documentState = missingScope
       ? "missing-scope"
       : unavailable
@@ -717,9 +726,9 @@ export class ApprovalPage extends OpenClawLightDomElement {
     const pageTitle =
       this.connected && !this.approvalsAccess
         ? t("common.disabled")
-        : this.requestError === "unavailable"
+        : this.requestFailure?.kind === "unavailable"
           ? t("approvalPage.unavailableTitle")
-          : this.requestError === "connection" && !this.approval
+          : this.requestFailure?.kind === "connection" && !this.approval
             ? t("approvalPage.connectionErrorTitle")
             : this.approval
               ? this.approval.status === "pending"

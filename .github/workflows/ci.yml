@@ -81,6 +81,7 @@ jobs:
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       docs_changed: ${{ steps.manifest.outputs.docs_changed }}
       run_node: ${{ steps.manifest.outputs.run_node }}
+      run_localization: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_localization || 'false' }}
       run_macos: ${{ steps.manifest.outputs.run_macos }}
       run_android: ${{ steps.manifest.outputs.run_android }}
       run_skills_python: ${{ steps.manifest.outputs.run_skills_python }}
@@ -1479,6 +1480,80 @@ jobs:
             pnpm native:i18n:check
           else
             echo "Historical target was validated by the legacy native checks."
+          fi
+
+  localization-catalogs:
+    permissions:
+      contents: read
+    name: localization-catalogs
+    needs: [preflight]
+    if: needs.preflight.outputs.run_localization == 'true'
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    timeout-minutes: 10
+    steps:
+      - *linux_node_checkout_step
+      - name: Ensure localization diff base (PR strict path)
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ needs.preflight.outputs.diff_base_revision }}
+          fetch-ref: ${{ github.event.pull_request.base.ref }}
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.x"
+          install-bun: "false"
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+      - name: Check localization surface dispositions
+        env:
+          COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
+        run: |
+          set -euo pipefail
+          if node -e 'const scripts = require("./package.json").scripts ?? {}; process.exit(scripts["localization:surfaces:check"] ? 0 : 1)'; then
+            pnpm localization:surfaces:check
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$COMPATIBILITY_TARGET" == "true" ]]; then
+            echo "Selected proven compatibility target predates the surface-disposition gate."
+          else
+            echo "Current CI targets must provide localization:surfaces:check." >&2
+            exit 1
+          fi
+      - name: Check adopted localization catalogs
+        env:
+          COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DIFF_BASE_REVISION: ${{ needs.preflight.outputs.diff_base_revision }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          TARGET_REPOSITORY: ${{ github.repository }}
+        run: |
+          if node -e 'const scripts = require("./package.json").scripts ?? {}; process.exit(scripts["localization:catalogs:check"] ? 0 : 1)'; then
+            generated_paths_output="$(
+              node --import tsx scripts/localization-catalogs.ts paths targets
+            )"
+            mapfile -t generated_paths <<< "${generated_paths_output}"
+            source_paths_output="$(
+              node --import tsx scripts/localization-catalogs.ts paths sources
+            )"
+            mapfile -t source_paths <<< "${source_paths_output}"
+            if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]] ||
+              { [[ "$GITHUB_EVENT_NAME" == "pull_request" ]] &&
+                ! git diff --quiet "${DIFF_BASE_REVISION}" HEAD -- "${generated_paths[@]}"; }; then
+              pnpm localization:catalogs:check
+            elif [[ "$GITHUB_EVENT_NAME" == "pull_request" &&
+              "$PR_BASE_REF" == "$DEFAULT_BRANCH" &&
+              "$PR_HEAD_REPOSITORY" == "$TARGET_REPOSITORY" ]] &&
+              ! git diff --quiet "${DIFF_BASE_REVISION}" HEAD -- \
+                localization/catalogs.json "${source_paths[@]}"; then
+              pnpm localization:catalogs:gate
+            else
+              pnpm localization:catalogs:detect
+            fi
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$COMPATIBILITY_TARGET" == "true" ]]; then
+            echo "Selected proven compatibility target predates the adopted-catalog gate."
+          else
+            echo "Current CI targets must provide localization:catalogs:check." >&2
+            exit 1
           fi
 
   checks-ui:
@@ -3752,6 +3827,7 @@ jobs:
       - pnpm-store-warmup
       - build-artifacts
       - native-i18n
+      - localization-catalogs
       - checks-ui
       - checks-ui-e2e
       - checks-ui-e2e-real-gateway
@@ -3785,6 +3861,7 @@ jobs:
             pnpm-store-warmup=${{ needs.pnpm-store-warmup.result }}
             build-artifacts=${{ needs.build-artifacts.result }}
             native-i18n=${{ needs.native-i18n.result }}
+            localization-catalogs=${{ needs.localization-catalogs.result }}
             checks-ui=${{ needs.checks-ui.result }}
             checks-ui-e2e=${{ needs.checks-ui-e2e.result }}
             checks-ui-e2e-real-gateway=${{ needs.checks-ui-e2e-real-gateway.result }}

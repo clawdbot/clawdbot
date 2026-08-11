@@ -45,6 +45,13 @@
       "@openclaw/llm-core/event-stream": ["./packages/llm-core/src/utils/event-stream.ts"],
       "@openclaw/llm-core/validation": ["./packages/llm-core/src/validation.ts"],
       "@openclaw/llm-core/*": ["./packages/llm-core/src/*"],
+      "@openclaw/localization-core": ["./packages/localization-core/src/index.ts"],
+      "@openclaw/localization-core/catalog": ["./packages/localization-core/src/catalog.ts"],
+      "@openclaw/localization-core/context": ["./packages/localization-core/src/context.ts"],
+      "@openclaw/localization-core/locale-registry": [
+        "./packages/localization-core/src/locale-registry.ts"
+      ],
+      "@openclaw/localization-core/*": ["./packages/localization-core/src/*"],
       "@openclaw/model-catalog-core": ["./packages/model-catalog-core/src/index.ts"],
       "@openclaw/model-catalog-core/configured-model-refs": [
         "./packages/model-catalog-core/src/configured-model-refs.ts"

@@ -6,12 +6,8 @@ import type {
   ExecApprovalRecord,
 } from "../exec-approval-manager.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
+import { approvalNotFoundErrorShape } from "./approval-error.js";
 import type { GatewayClient, RespondFn } from "./types.js";
-
-const APPROVAL_NOT_FOUND_DETAILS = {
-  reason: ErrorCodes.APPROVAL_NOT_FOUND,
-  remediation: "Re-request the action; pending approvals are cleared after expiry or restart.",
-} as const;
 
 type PendingApprovalLookupError =
   | "missing"
@@ -151,8 +147,9 @@ export function respondUnknownOrExpiredApproval(respond: RespondFn): void {
   respond(
     false,
     undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired approval id", {
-      details: APPROVAL_NOT_FOUND_DETAILS,
+    approvalNotFoundErrorShape({
+      message: "unknown or expired approval id",
+      remediation: "Re-request the action; pending approvals are cleared after expiry or restart.",
     }),
   );
 }
