@@ -1086,6 +1086,16 @@ extension GatewayEndpointStoreTests {
         #expect(resolution.directURL == nil)
     }
 
+    @Test func `legacy stored SSH target keeps SSH transport without a config route`() {
+        let resolution = GatewayRemoteConfig.resolveTransportResolution(
+            root: ["gateway": ["mode": "remote"]],
+            legacySSHTarget: "user@gateway.example")
+
+        #expect(resolution.transport == .ssh)
+        #expect(resolution.source == .legacySSH)
+        #expect(resolution.directURL == nil)
+    }
+
     @Test func `unknown transport does not enable SSH`() {
         let root: [String: Any] = ["gateway": ["remote": ["transport": "legacy"]]]
         let resolution = GatewayRemoteConfig.resolveTransportResolution(root: root)

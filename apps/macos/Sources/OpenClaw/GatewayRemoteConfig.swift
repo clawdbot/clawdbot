@@ -44,11 +44,17 @@ enum GatewayRemoteConfig {
         }
     }
 
-    static func resolveTransport(root: [String: Any]) -> AppState.RemoteTransport {
-        self.resolveTransportResolution(root: root).transport
+    static func resolveTransport(
+        root: [String: Any],
+        legacySSHTarget: String? = nil) -> AppState.RemoteTransport
+    {
+        self.resolveTransportResolution(root: root, legacySSHTarget: legacySSHTarget).transport
     }
 
-    static func resolveTransportResolution(root: [String: Any]) -> TransportResolution {
+    static func resolveTransportResolution(
+        root: [String: Any],
+        legacySSHTarget: String? = nil) -> TransportResolution
+    {
         let explicit = self.resolveExplicitTransport(root: root)
         switch explicit {
         case .direct:
@@ -72,8 +78,14 @@ enum GatewayRemoteConfig {
             return TransportResolution(transport: .direct, source: .inferredRemoteURL, directURL: url)
         }
 
+        if let legacySSHTarget,
+           !legacySSHTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return TransportResolution(transport: .ssh, source: .legacySSH, directURL: nil)
+        }
+
         // New remote clients connect to the Gateway application endpoint.
-        // Existing SSH routes are made explicit by `openclaw doctor --fix`.
+        // Older macOS routes may retain their SSH target in UserDefaults.
         return TransportResolution(transport: .direct, source: .defaultDirect, directURL: nil)
     }
 

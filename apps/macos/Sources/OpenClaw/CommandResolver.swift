@@ -540,7 +540,6 @@ enum CommandResolver {
     {
         let root = configRoot ?? OpenClawConfigFile.loadDict()
         let mode = ConnectionModeResolver.resolve(root: root, defaults: defaults).mode
-        let transport = GatewayRemoteConfig.resolveTransport(root: root)
         let remote = (root["gateway"] as? [String: Any])?["remote"] as? [String: Any]
         let hasConfiguredTarget = remote?.keys.contains("sshTarget") == true
         let configuredTarget = self.sanitizedTarget(remote?["sshTarget"] as? String ?? "")
@@ -549,6 +548,9 @@ enum CommandResolver {
         let target = hasConfiguredTarget
             ? configuredTarget
             : self.sanitizedTarget(defaults.string(forKey: remoteTargetKey) ?? "")
+        let transport = GatewayRemoteConfig.resolveTransport(
+            root: root,
+            legacySSHTarget: hasConfiguredTarget ? nil : target)
         let hasConfiguredIdentity = remote?.keys.contains("sshIdentity") == true
         let configuredIdentity = (remote?["sshIdentity"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

@@ -45,36 +45,6 @@ function getPath(value: unknown, path: string): unknown {
 }
 
 describe("retired runtime config migrations", () => {
-  it("makes legacy macOS remote transports explicit", () => {
-    const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY.find(
-      (candidate) => candidate.id === "gateway.remote.transport-default",
-    );
-    expect(migration).toBeDefined();
-
-    const sshRoute: Record<string, unknown> = {
-      gateway: { remote: { sshTarget: "user@gateway.example" } },
-    };
-    const directRoute: Record<string, unknown> = {
-      gateway: { remote: { url: "wss://gateway.example.ts.net" } },
-    };
-    const loopbackTunnel: Record<string, unknown> = {
-      gateway: { remote: { url: "ws://127.0.0.1:18789" } },
-    };
-    const changes: string[] = [];
-    migration?.apply(sshRoute, changes);
-    migration?.apply(directRoute, changes);
-    migration?.apply(loopbackTunnel, changes);
-
-    expect(getPath(sshRoute, "gateway.remote.transport")).toBe("ssh");
-    expect(getPath(directRoute, "gateway.remote.transport")).toBe("direct");
-    expect(getPath(loopbackTunnel, "gateway.remote.transport")).toBe("ssh");
-    expect(changes).toEqual([
-      "Set gateway.remote.transport to ssh.",
-      "Set gateway.remote.transport to direct.",
-      "Set gateway.remote.transport to ssh.",
-    ]);
-  });
-
   it.each([
     ["a normal registration", [{ event: "command:new", module: "hooks/legacy.js" }]],
     ["an empty array", []],

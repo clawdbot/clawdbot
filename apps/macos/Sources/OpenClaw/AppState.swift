@@ -517,19 +517,20 @@ final class AppState {
         self.lastConfigFingerprint = Self.configFingerprint(configRoot)
         self.lastObservedGatewayConfig = Self.gatewayConfigSnapshot(configRoot)
         let configRemoteToken = GatewayRemoteConfig.resolveTokenValue(root: configRoot)
-        let configRemoteResolution = GatewayRemoteConfig.resolveTransportResolution(root: configRoot)
+        let configRemote = (configRoot["gateway"] as? [String: Any])?["remote"] as? [String: Any]
+        let hasConfigRemoteTarget = configRemote?.keys.contains("sshTarget") == true
+        let configRemoteTarget = (configRemote?["sshTarget"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let storedRemoteTarget = UserDefaults.standard.string(forKey: remoteTargetKey) ?? ""
+        let configRemoteResolution = GatewayRemoteConfig.resolveTransportResolution(
+            root: configRoot,
+            legacySSHTarget: hasConfigRemoteTarget ? nil : storedRemoteTarget)
         let configRemoteTransport = configRemoteResolution.transport
         let configRemoteUrl = configRemoteResolution.directURL?.absoluteString
             ?? GatewayRemoteConfig.resolveUrlString(root: configRoot)
         let resolvedConnectionMode = ConnectionModeResolver.resolve(root: configRoot).mode
         self.remoteTransport = configRemoteTransport
         self.connectionMode = resolvedConnectionMode
-
-        let configRemote = (configRoot["gateway"] as? [String: Any])?["remote"] as? [String: Any]
-        let hasConfigRemoteTarget = configRemote?.keys.contains("sshTarget") == true
-        let configRemoteTarget = (configRemote?["sshTarget"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let storedRemoteTarget = AppDefaults.standard.string(forKey: remoteTargetKey) ?? ""
         if resolvedConnectionMode == .remote,
            hasConfigRemoteTarget
         {
