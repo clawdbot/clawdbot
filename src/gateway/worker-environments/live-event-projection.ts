@@ -3,7 +3,7 @@ import {
   capLiveExecResult,
   sanitizeToolArgs,
   sanitizeToolResult,
-} from "../../agents/embedded-agent-subscribe.tools.js";
+} from "../../agents/embedded-agent-tool-results.js";
 import { normalizeToolPolicyName } from "../../agents/tool-policy.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 

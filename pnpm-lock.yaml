@@ -1667,40 +1667,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
-  extensions/qqbot:
-    dependencies:
-      '@tencent-connect/qqbot-connector':
-        specifier: 1.2.0
-        version: 1.2.0
-      mpg123-decoder:
-        specifier: 1.0.3
-        version: 1.0.3
-      p-map:
-        specifier: 7.0.6
-        version: 7.0.6
-      pretty-ms:
-        specifier: 9.3.0
-        version: 9.3.0
-      silk-wasm:
-        specifier: 3.7.1
-        version: 3.7.1
-      ws:
-        specifier: 8.21.1
-        version: 8.21.1
-      zod:
-        specifier: 4.4.3
-        version: 4.4.3
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
-      '@types/ws':
-        specifier: 8.18.1
-        version: 8.18.1
-      openclaw:
-        specifier: workspace:*
-        version: link:../..
-
   extensions/qwen:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -5229,10 +5195,6 @@ packages:
 
   '@tanstack/virtual-core@3.17.6':
     resolution: {integrity: sha512-h0/Ebo18CkOrChlQIhNtQkM5ySUnh/GumQ/D1st3hG2HWUPEF+ILUc2k29UtivCi/9G7w7G3/f7Xyd5cCFbKBw==}
-
-  '@tencent-connect/qqbot-connector@1.2.0':
-    resolution: {integrity: sha512-FAOUCvgxP4M9UiYbHrtVgJ7BavSlh1CHJPjeEQuTAkP9MZ91lX4yATqv6I/lB9yp15nVq+G2DaGSSJwQTSoSsA==}
-    engines: {node: '>=18.0.0'}
 
   '@thi.ng/bitstream@2.4.54':
     resolution: {integrity: sha512-uInkAJge5O0bWWEaYKrQpMccPbFg0z6eIA5NDCJXPm7l3rjlDje6RBHBXll3LiQz9Y051EdzlAEQRaB5hEifdg==}
@@ -12385,10 +12347,6 @@ snapshots:
       lit: 3.3.3
 
   '@tanstack/virtual-core@3.17.6': {}
-
-  '@tencent-connect/qqbot-connector@1.2.0':
-    dependencies:
-      qrcode-terminal: 0.12.0
 
   '@thi.ng/bitstream@2.4.54':
     dependencies:

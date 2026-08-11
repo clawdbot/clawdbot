@@ -311,7 +311,6 @@
     "!dist/extensions/parallel/**",
     "!dist/extensions/perplexity/**",
     "!dist/extensions/qianfan/**",
-    "!dist/extensions/qqbot/**",
     "!dist/extensions/raft/**",
     "!dist/extensions/pixverse/**",
     "!dist/extensions/qa-channel/**",

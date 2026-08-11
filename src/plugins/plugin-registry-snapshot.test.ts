@@ -499,6 +499,49 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(whatsappPlugin.origin).toBe("global");
   });
 
+  it("recovers configured global source plugins missing from a stale persisted registry", () => {
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const env = {
+      ...createHermeticEnv(tempRoot),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    const config = {
+      plugins: {
+        entries: {
+          "memory-demo": { enabled: true },
+        },
+        allow: ["memory-demo"],
+        slots: {
+          memory: "memory-demo",
+        },
+      },
+    };
+    const staleIndex = loadInstalledPluginIndex({
+      config,
+      env,
+      stateDir,
+      installRecords: {},
+    });
+    expect(staleIndex.plugins.map((plugin) => plugin.pluginId)).not.toContain("memory-demo");
+    writePersistedInstalledPluginIndexSync(staleIndex, { stateDir });
+    writePackagePlugin(path.join(stateDir, "extensions", "memory-demo-source"), {
+      pluginId: "memory-demo",
+    });
+
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      config,
+      env,
+      stateDir,
+    });
+
+    expect(result.source).toBe("derived");
+    expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
+    const memoryPlugin = requirePluginRecord(result.snapshot.plugins, "memory-demo");
+    expect(memoryPlugin.origin).toBe("global");
+  });
+
   it("does not recover retained managed npm generations as install records", async () => {
     const tempRoot = makeTempDir();
     const stateDir = path.join(tempRoot, "state");

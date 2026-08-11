@@ -272,7 +272,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: add high-use coercion primitives while retaining shipped object-record exports.
       // +1: rooted directory creation for plugin sandbox bridges that must preserve private modes.
       // +2: channel-neutral location and provider-update hook contracts.
-      4871,
+      // +1: QQBot 2.0.1 operator-approval Gateway client compatibility export.
+      4872,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -336,7 +337,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: add canonical coercion exports while retaining the shipped asString compatibility name.
       // +2: add high-use callable coercion primitives while retaining shipped object-record exports.
       // +1: rooted directory creation for plugin sandbox bridges that must preserve private modes.
-      2925,
+      // +1: QQBot 2.0.1 operator-approval Gateway client compatibility export.
+      2926,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
