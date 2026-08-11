@@ -6,8 +6,10 @@ import type {
   FsListDirResult,
   ProjectRecord,
   ProjectRecent,
+  ProjectsAddResult,
   ProjectsListResult,
   ProjectsRegisterResult,
+  ProjectsSearchRemoteResult,
   SessionsCatalogStartTerminalResult,
   UsersPrefsGetResult,
   UsersPrefsSetResult,
@@ -79,7 +81,7 @@ import { discoverGatewayName } from "./gateway-name-discovery.ts";
 import { newSessionSearch, type NewSessionRouteData } from "./location.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 import { isAbsolutePath, isKnownWorkspacePath } from "./path.ts";
-import { renderPlaceSelect } from "./place-picker.ts";
+import { projectCloneInput, renderPlaceSelect } from "./place-picker.ts";
 import {
   decodeIdentityPreferences,
   encodeIdentityPreferences,
@@ -94,6 +96,7 @@ import { retainRejectedInitialTurn } from "./rejected-initial-turn.ts";
 import { renderAgentSelect } from "./target-controls.ts";
 
 const CATALOG_RETRY_DELAYS_MS = [0, 1_000, 3_000] as const;
+const PROJECT_SEARCH_DEBOUNCE_MS = 300;
 
 class NewSessionPage extends OpenClawLightDomElement {
   @property({ attribute: false }) data: NewSessionRouteData | undefined;
@@ -106,6 +109,10 @@ class NewSessionPage extends OpenClawLightDomElement {
   @state() private projects: ProjectRecord[] = [];
   @state() private projectRecents: ProjectRecent[] | undefined;
   @state() private projectId = "";
+  @state() private projectQuery = "";
+  @state() private debouncedProjectQuery = "";
+  @state() private projectCloneBusy = false;
+  @state() private projectCloneError: string | null = null;
   @state() private worktree = false;
   @state() private visibility: NewSessionVisibility = "normal";
   @state() private worktreeName = "";
@@ -152,6 +159,8 @@ class NewSessionPage extends OpenClawLightDomElement {
   private branchesRequestToken = 0;
   private baseRefEditGeneration = 0;
   private browserRequestToken = 0;
+  private projectCloneRequestToken = 0;
+  private projectSearchTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
   private restoredFolderValidationToken = 0;
   private readonly attachmentDraft = new NewSessionAttachmentDraft(() => this.requestUpdate());
   private readonly composerTextarea = new NewSessionComposerTextareaController();
@@ -246,6 +255,29 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.projects = [];
       this.projectRecents = undefined;
       this.projectId = "";
+    },
+  });
+
+  private readonly projectSearchTask = new Task(this, {
+    args: () =>
+      [
+        this.isConnected && this.gatewayConnected ? this.gatewayClient : null,
+        this.context
+          ? isGatewayMethodAdvertised(this.context.gateway.snapshot, "projects.searchRemote") ===
+            true
+          : false,
+        this.debouncedProjectQuery,
+        this.gatewayConnectionEpoch,
+      ] as const,
+    task: ([client, advertised, query, _connectionEpoch], { signal }) => {
+      if (!client || !advertised || query.length < 2 || projectCloneInput(query)) {
+        return initialState;
+      }
+      return client.request<ProjectsSearchRemoteResult>(
+        "projects.searchRemote",
+        { query },
+        { signal },
+      );
     },
   });
 
@@ -492,6 +524,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.cancelRestoredFolderValidation();
     this.gatewayApprovedWorkspaceRoots = [];
     this.folderGatewayApproved = false;
+    this.resetProjectSearch();
     this.invalidateSubmission(submissionOutcome);
     if (!resetHostSelection) {
       return;
@@ -637,6 +670,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.composerTextarea.disconnect();
     void this.gatewayNameTask.run([null, false, -1]);
     void this.projectsTask.run([null, false, -1]);
+    void this.projectSearchTask.run([null, false, "", -1]);
     void this.cloudProfileTask.run([null, -1, false, ""]);
     this.resetCloudProfileRetry();
     super.disconnectedCallback();
@@ -725,6 +759,124 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private selectedProject() {
     return this.projects.find((project) => project.id === this.projectId);
+  }
+
+  private get projectSearchResult(): ProjectsSearchRemoteResult | null {
+    return this.projectSearchTask.status === TaskStatus.COMPLETE &&
+      this.debouncedProjectQuery === this.projectQuery.trim()
+      ? (this.projectSearchTask.value ?? null)
+      : null;
+  }
+
+  private get projectSearchLoading(): boolean {
+    return (
+      this.debouncedProjectQuery.length >= 2 &&
+      this.debouncedProjectQuery === this.projectQuery.trim() &&
+      this.projectSearchTask.status === TaskStatus.PENDING
+    );
+  }
+
+  private get projectSearchError(): string | null {
+    if (
+      this.projectSearchTask.status !== TaskStatus.ERROR ||
+      this.debouncedProjectQuery !== this.projectQuery.trim()
+    ) {
+      return null;
+    }
+    const error = this.projectSearchTask.error;
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  private clearProjectSearchTimer() {
+    globalThis.clearTimeout(this.projectSearchTimer);
+    this.projectSearchTimer = undefined;
+  }
+
+  private resetProjectSearch() {
+    this.clearProjectSearchTimer();
+    this.projectCloneRequestToken += 1;
+    this.projectQuery = "";
+    this.debouncedProjectQuery = "";
+    this.projectCloneBusy = false;
+    this.projectCloneError = null;
+  }
+
+  private changeProjectQuery(query: string) {
+    this.projectQuery = query;
+    this.projectCloneError = null;
+    this.clearProjectSearchTimer();
+    this.debouncedProjectQuery = "";
+    void this.projectSearchTask.run([null, false, "", this.gatewayConnectionEpoch]);
+    const normalized = query.trim();
+    if (
+      normalized.length < 2 ||
+      projectCloneInput(normalized) ||
+      !this.gatewayConnected ||
+      !this.gatewayClient ||
+      !this.context ||
+      !isGatewayMethodAdvertised(this.context.gateway.snapshot, "projects.searchRemote")
+    ) {
+      return;
+    }
+    const client = this.gatewayClient;
+    const connectionEpoch = this.gatewayConnectionEpoch;
+    this.projectSearchTimer = globalThis.setTimeout(() => {
+      this.projectSearchTimer = undefined;
+      if (client !== this.gatewayClient || connectionEpoch !== this.gatewayConnectionEpoch) {
+        return;
+      }
+      this.debouncedProjectQuery = normalized;
+      void this.projectSearchTask.run([client, true, normalized, connectionEpoch]);
+    }, PROJECT_SEARCH_DEBOUNCE_MS);
+  }
+
+  private async addRemoteProject(gitUrl: string) {
+    const client = this.gatewayClient;
+    if (
+      !client ||
+      !this.gatewayConnected ||
+      this.projectCloneBusy ||
+      !this.context ||
+      !isGatewayMethodAdvertised(this.context.gateway.snapshot, "projects.add")
+    ) {
+      return;
+    }
+    const requestId = ++this.projectCloneRequestToken;
+    const connectionEpoch = this.gatewayConnectionEpoch;
+    this.projectCloneBusy = true;
+    this.projectCloneError = null;
+    try {
+      const project = await client.request<ProjectsAddResult>(
+        "projects.add",
+        { gitUrl },
+        { timeoutMs: null },
+      );
+      if (
+        requestId !== this.projectCloneRequestToken ||
+        client !== this.gatewayClient ||
+        connectionEpoch !== this.gatewayConnectionEpoch
+      ) {
+        return;
+      }
+      await this.projectsTask.run([client, true, connectionEpoch]);
+      if (
+        requestId !== this.projectCloneRequestToken ||
+        client !== this.gatewayClient ||
+        connectionEpoch !== this.gatewayConnectionEpoch
+      ) {
+        return;
+      }
+      this.selectProjectId(project.id);
+      this.closeBrowser();
+    } catch (error) {
+      if (requestId === this.projectCloneRequestToken && client === this.gatewayClient) {
+        this.projectCloneError = error instanceof Error ? error.message : String(error);
+      }
+    } finally {
+      if (requestId === this.projectCloneRequestToken) {
+        this.projectCloneBusy = false;
+      }
+    }
   }
 
   private execNodes(): DraftNode[] {
@@ -1070,6 +1222,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.agentSelectedByUser = false;
     this.folder = "";
     this.projectId = "";
+    this.resetProjectSearch();
     this.folderSelectedByUser = false;
     this.folderGatewayApproved = false;
     this.gatewayApprovedWorkspaceRoots = [];
@@ -1828,6 +1981,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       return;
     }
     this.cancelRestoredFolderValidation();
+    this.resetProjectSearch();
     this.projectId = project.id;
     this.execNode = "";
     this.cloudProfileId = "";
@@ -2114,6 +2268,20 @@ class NewSessionPage extends OpenClawLightDomElement {
       workspaceRoots: this.knownWorkspaceRoots(),
       projects: catalog.isTarget(this.data) ? [] : this.projects,
       recents: catalog.isTarget(this.data) ? [] : this.projectRecents,
+      projectQuery: this.projectQuery,
+      projectSearchAvailable: Boolean(
+        this.context &&
+        isGatewayMethodAdvertised(this.context.gateway.snapshot, "projects.searchRemote"),
+      ),
+      projectAddAvailable: Boolean(
+        this.context && isGatewayMethodAdvertised(this.context.gateway.snapshot, "projects.add"),
+      ),
+      remoteProjects: this.projectSearchResult?.projects ?? [],
+      projectSearchCredential: this.projectSearchResult?.credential ?? null,
+      projectSearchLoading: this.projectSearchLoading,
+      projectSearchError: this.projectSearchError,
+      projectCloneBusy: this.projectCloneBusy,
+      projectCloneError: this.projectCloneError,
       projectId: this.projectId,
       sessions: this.context?.sessions.state.result?.sessions ?? [],
       execNodes: this.isAdmin() ? execNodes : [],
@@ -2136,7 +2304,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       branchesLoading: this.repository.kind === "checking",
       baseRef: this.baseRef,
       worktreeName: this.worktreeName,
-      submitting: this.submitting,
+      submitting: this.submitting || this.projectCloneBusy,
       pendingCloud: Boolean(this.pendingCloud.sessionKey),
       // Admin gates only the discovered choices. An existing node or cloud
       // selection always keeps the destination axis visible — hiding it (e.g.
@@ -2173,6 +2341,8 @@ class NewSessionPage extends OpenClawLightDomElement {
       onSelectExecNode: (nodeId) => this.selectExecNode(nodeId),
       onSelectCloudProfile: (profileId) => this.selectCloudProfile(profileId),
       onSelectProject: (projectId) => this.selectProjectId(projectId),
+      onProjectQueryInput: (query) => this.changeProjectQuery(query),
+      onCloneProject: (gitUrl) => void this.addRemoteProject(gitUrl),
       onApplyFolder: (folder, execNode) =>
         this.applyFolder(folder, execNode, !execNode && this.browserListing?.path === folder),
       onBrowse: (target) => this.selectBrowserTarget(target),

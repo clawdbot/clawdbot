@@ -3,6 +3,7 @@ import type {
   FsListDirResult,
   ProjectRecord,
   ProjectRecent,
+  RemoteProject,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
@@ -20,6 +21,15 @@ function parentFolderDisplayName(path: string): string | undefined {
   }
   const parent = separator === 0 ? trimmed.slice(0, 1) : trimmed.slice(0, separator);
   return folderDisplayName(parent) || undefined;
+}
+
+/** Detects pasted clone URLs; the Gateway remains authoritative for host validation. */
+export function projectCloneInput(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.startsWith("-") || /\s/u.test(trimmed)) {
+    return null;
+  }
+  return /^(?:https:\/\/|ssh:\/\/git@|git@[^:]+:)/iu.test(trimmed) ? trimmed : null;
 }
 
 function renderBrowseView(params: {
@@ -158,6 +168,15 @@ export function renderPlaceSelect(params: {
   workspaceRoots: readonly string[];
   projects: readonly ProjectRecord[];
   recents?: readonly ProjectRecent[];
+  projectQuery: string;
+  projectSearchAvailable: boolean;
+  projectAddAvailable: boolean;
+  remoteProjects: readonly RemoteProject[];
+  projectSearchCredential: "configured" | "missing" | null;
+  projectSearchLoading: boolean;
+  projectSearchError: string | null;
+  projectCloneBusy: boolean;
+  projectCloneError: string | null;
   projectId: string;
   sessions: readonly RecentPlaceSource[];
   execNodes: DraftNode[];
@@ -195,6 +214,8 @@ export function renderPlaceSelect(params: {
   onSelectExecNode: (nodeId: string) => void;
   onSelectCloudProfile: (profileId: string) => void;
   onSelectProject: (projectId: string) => void;
+  onProjectQueryInput: (query: string) => void;
+  onCloneProject: (gitUrl: string) => void;
   onApplyFolder: (folder: string, execNode: string) => void;
   onBrowse: (target: BrowserTarget) => void;
   onBrowserPathDraftChange: (value: string) => void;
@@ -207,6 +228,17 @@ export function renderPlaceSelect(params: {
   onWorktreeNameInput: (name: string) => void;
 }) {
   const folder = params.folder.trim();
+  const projectQuery = params.projectQuery.trim();
+  const cloneInput = projectCloneInput(params.projectQuery);
+  const normalizedProjectQuery = projectQuery.toLowerCase();
+  const localProjects = normalizedProjectQuery
+    ? params.projects.filter((project) =>
+        [project.displayName, project.originUrl ?? "", project.repoRoot ?? ""]
+          .join("\n")
+          .toLowerCase()
+          .includes(normalizedProjectQuery),
+      )
+    : params.projects;
   const selectedProject = params.projects.find((project) => project.id === params.projectId);
   const folderLabel = selectedProject
     ? selectedProject.displayName
@@ -369,31 +401,103 @@ export function renderPlaceSelect(params: {
                     params.submitting,
                   )
                 : nothing}
-              ${params.projects.length > 0
+              <div class="new-session-page__menu-title">${t("newSession.projects")}</div>
+              <label class="new-session-page__project-search">
+                <span class="sr-only">${t("newSession.projectSearchPlaceholder")}</span>
+                <input
+                  type="search"
+                  placeholder=${t("newSession.projectSearchPlaceholder")}
+                  .value=${params.projectQuery}
+                  ?disabled=${params.submitting || params.pendingCloud || params.projectCloneBusy}
+                  @input=${(event: Event) =>
+                    params.onProjectQueryInput((event.target as HTMLInputElement).value)}
+                  @keydown=${(event: KeyboardEvent) => {
+                    if (event.key === "Enter" && cloneInput && params.projectAddAvailable) {
+                      event.preventDefault();
+                      params.onCloneProject(cloneInput);
+                    }
+                  }}
+                />
+              </label>
+              ${localProjects.map((project) =>
+                renderSessionMenuItem(
+                  {
+                    value: `project:${project.id}`,
+                    label: project.displayName,
+                    icon: icons.gitBranch,
+                    checked: params.projectId === project.id,
+                    title: project.repoRoot,
+                    onSelect: () => params.onSelectProject(project.id),
+                  },
+                  params.submitting || params.projectCloneBusy,
+                ),
+              )}
+              ${cloneInput && params.projectAddAvailable
+                ? renderSessionMenuItem(
+                    {
+                      value: "project-clone-url",
+                      label: cloneInput,
+                      icon: icons.gitBranch,
+                      sub: t("newSession.cloneProject"),
+                      checked: false,
+                      keepOpen: true,
+                      onSelect: () => params.onCloneProject(cloneInput),
+                    },
+                    params.submitting || params.projectCloneBusy,
+                  )
+                : nothing}
+              ${!cloneInput && projectQuery.length >= 2 && params.projectSearchAvailable
                 ? html`
-                    <div class="new-session-page__menu-title">${t("newSession.projects")}</div>
-                    ${params.projects.map((project) =>
+                    <div class="new-session-page__menu-title">
+                      ${t("newSession.githubProjects")}
+                    </div>
+                    ${params.projectSearchCredential === "missing"
+                      ? html`<div class="new-session-page__menu-note">
+                          ${t("newSession.githubTokenHint")}
+                        </div>`
+                      : nothing}
+                    ${params.projectSearchLoading
+                      ? html`<div class="new-session-page__project-status" role="status">
+                          ${t("common.loading")}
+                        </div>`
+                      : nothing}
+                    ${params.projectSearchError
+                      ? html`<div class="new-session-page__project-error" role="alert">
+                          ${params.projectSearchError}
+                        </div>`
+                      : nothing}
+                    ${params.remoteProjects.map((project) =>
                       renderSessionMenuItem(
                         {
-                          value: `project:${project.id}`,
-                          label: project.displayName,
+                          value: `remote-project:${project.fullName}`,
+                          label: project.fullName,
                           icon: icons.gitBranch,
-                          checked: params.projectId === project.id,
-                          title: project.repoRoot,
-                          onSelect: () => params.onSelectProject(project.id),
+                          sub: project.description ?? t("newSession.cloneProject"),
+                          checked: false,
+                          title: project.webUrl,
+                          keepOpen: true,
+                          onSelect: () => params.onCloneProject(project.cloneUrl),
                         },
-                        params.submitting,
+                        params.submitting || params.projectCloneBusy,
                       ),
                     )}
                   `
-                : params.canWrite && !params.isAdmin
-                  ? html`
-                      <div class="new-session-page__menu-title">${t("newSession.projects")}</div>
-                      <div class="new-session-page__menu-note">
-                        ${t("newSession.projectsAdminHint")}
-                      </div>
-                    `
-                  : nothing}
+                : nothing}
+              ${params.projectCloneBusy
+                ? html`<div class="new-session-page__project-status" role="status">
+                    ${t("newSession.cloningProject")}
+                  </div>`
+                : nothing}
+              ${params.projectCloneError
+                ? html`<div class="new-session-page__project-error" role="alert">
+                    ${params.projectCloneError}
+                  </div>`
+                : nothing}
+              ${params.projects.length === 0 && params.canWrite && !params.isAdmin
+                ? html`<div class="new-session-page__menu-note">
+                    ${t("newSession.projectsAdminHint")}
+                  </div>`
+                : nothing}
               ${recents.length > 0
                 ? html`
                     <div class="new-session-page__menu-title">${t("newSession.recentFolders")}</div>
