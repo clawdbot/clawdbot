@@ -1,7 +1,7 @@
 // Tests private message-tool final delivery and visibility suppression.
 import { describe, expect, it } from "vitest";
 import { estimateStringChars } from "../../utils/cjk-chars.js";
-import { shouldWarnAboutPrivateMessageToolFinal } from "./private-message-tool-final.js";
+import { classifyPrivateMessageToolFinal } from "./private-message-tool-final.js";
 
 const base = {
   sourceReplyDeliveryMode: "message_tool_only" as const,
@@ -12,6 +12,12 @@ const base = {
   finalText:
     "Here is the answer the user asked for. It includes enough detail to look like a visible response rather than an internal no-op note.",
 };
+
+function shouldWarnAboutPrivateMessageToolFinal(
+  params: Parameters<typeof classifyPrivateMessageToolFinal>[0],
+): boolean {
+  return classifyPrivateMessageToolFinal(params) === "substantive";
+}
 
 describe("shouldWarnAboutPrivateMessageToolFinal", () => {
   it("flags a multi-sentence private final that was never delivered via the message tool (#85714)", () => {

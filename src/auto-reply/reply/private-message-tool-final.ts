@@ -55,13 +55,6 @@ export function classifyPrivateMessageToolFinal(
   return substantive ? "substantive" : "short";
 }
 
-/** Substantive private finals usually indicate a missed configured delivery tool. */
-export function shouldWarnAboutPrivateMessageToolFinal(
-  params: Parameters<typeof classifyPrivateMessageToolFinal>[0],
-): boolean {
-  return classifyPrivateMessageToolFinal(params) === "substantive";
-}
-
 /**
  * Emit metadata-only operator signal. The body is intentionally omitted:
  * `message_tool_only` keeps normal final text private by design.
