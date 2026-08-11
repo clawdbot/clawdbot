@@ -68,6 +68,24 @@ describe("LongCat doctor contract", () => {
     });
   });
 
+  it("repairs the historical row after core Doctor removes catalog-owned compat", () => {
+    const { compat: _compat, ...normalizedLegacyStockModel } = LEGACY_STOCK_MODEL;
+    const custom = {
+      ...normalizedLegacyStockModel,
+      compat: { supportsStore: true },
+    };
+    const config = longcatConfig([normalizedLegacyStockModel, custom]);
+
+    const result = normalizeCompatibilityConfig({ cfg: config });
+    expect(result.config.models?.providers?.longcat?.models).toEqual([
+      {
+        ...normalizedLegacyStockModel,
+        cost: { ...normalizedLegacyStockModel.cost, cacheWrite: 0 },
+      },
+      custom,
+    ]);
+  });
+
   it("preserves customized prices and already-correct rows", () => {
     for (const cacheWrite of [0, 0.5]) {
       const model = {

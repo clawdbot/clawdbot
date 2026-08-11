@@ -18,7 +18,24 @@ function isStringArray(value: unknown, expected: readonly string[]): boolean {
 function isLegacyStockLongCatModel(value: unknown): boolean {
   const model = asObjectRecord(value);
   const cost = asObjectRecord(model?.cost);
-  const compat = asObjectRecord(model?.compat);
+  const compatValue = model?.compat;
+  const compat = asObjectRecord(compatValue);
+  // Core Doctor removes catalog-owned compat fields before plugin repairs run.
+  // Accept that normalized shape, but preserve rows with any divergent compat override.
+  const hasHistoricalCompat =
+    compatValue === undefined ||
+    Boolean(
+      compat &&
+      compat.supportsStore === false &&
+      compat.supportsDeveloperRole === false &&
+      compat.supportsReasoningEffort === false &&
+      compat.supportsUsageInStreaming === false &&
+      compat.supportsStrictMode === false &&
+      compat.maxTokensField === "max_tokens" &&
+      compat.requiresReasoningContentOnAssistantMessages === true &&
+      compat.thinkingFormat === "deepseek" &&
+      Object.keys(compat).length === 8,
+    );
   return Boolean(
     model &&
     model.id === "LongCat-2.0" &&
@@ -31,14 +48,7 @@ function isLegacyStockLongCatModel(value: unknown): boolean {
     cost.output === 2.95 &&
     cost.cacheRead === 0.015 &&
     cost.cacheWrite === LEGACY_CACHE_WRITE_PRICE &&
-    compat?.supportsStore === false &&
-    compat.supportsDeveloperRole === false &&
-    compat.supportsReasoningEffort === false &&
-    compat.supportsUsageInStreaming === false &&
-    compat.supportsStrictMode === false &&
-    compat.maxTokensField === "max_tokens" &&
-    compat.requiresReasoningContentOnAssistantMessages === true &&
-    compat.thinkingFormat === "deepseek",
+    hasHistoricalCompat,
   );
 }
 
