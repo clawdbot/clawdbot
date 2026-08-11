@@ -36,10 +36,8 @@ import { testing as replyRunTesting } from "./reply-run-registry.test-support.js
 import { routeReply } from "./route-reply.runtime.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import {
-  publishPreparedHarnessSourceReplyDeliveryMode,
-  readSourceReplyDeliveryModeOrigin,
-  setSourceReplyDeliveryModeOrigin,
-  setSourceReplyDeliveryPromptComponents,
+  createSourceReplyDeliveryRuntime,
+  readSourceReplyDeliveryRuntime,
   type SourceReplyDeliveryRuntimeOptions,
 } from "./source-reply-delivery-runtime.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
@@ -672,7 +670,7 @@ describe("runPreparedReply media-only handling", () => {
     );
   });
 
-  it("binds prepared embedded prompt variants without changing CLI session guidance", async () => {
+  it("projects prepared embedded prompt variants without changing CLI session guidance", async () => {
     vi.mocked(buildDirectChatContext).mockImplementation(
       ({ sourceReplyDeliveryMode }) => `direct:${sourceReplyDeliveryMode ?? "automatic"}`,
     );
@@ -686,14 +684,19 @@ describe("runPreparedReply media-only handling", () => {
       sessionCtx: { ...createSessionTurn("hello", "discord", "direct") },
     });
 
-    const run = requireLastRunReplyAgentCall().followupRun.run;
+    const call = requireLastRunReplyAgentCall();
+    const followupRun = call.followupRun;
+    const run = followupRun.run;
+    const sourceReplyDeliveryRuntime = readSourceReplyDeliveryRuntime(run);
     expect(run.extraSystemPrompt).toBe("direct:message_tool_only");
     expect(run.extraSystemPromptStatic).toBe("direct:message_tool_only");
     run.extraSystemPrompt += "\n\npost-compaction refresh";
-    publishPreparedHarnessSourceReplyDeliveryMode(run, "automatic");
+    sourceReplyDeliveryRuntime?.applyMode(run, "automatic");
+    expect(run.extraSystemPrompt).toBe("direct:message_tool_only\n\npost-compaction refresh");
+    sourceReplyDeliveryRuntime?.applyPreparedMode(run, "automatic");
     expect(run.extraSystemPrompt).toBe("direct:automatic\n\npost-compaction refresh");
     expect(run.extraSystemPromptStatic).toBe("direct:message_tool_only");
-    publishPreparedHarnessSourceReplyDeliveryMode(run, "message_tool_only");
+    sourceReplyDeliveryRuntime?.applyPreparedMode(run, "message_tool_only");
     expect(run.extraSystemPrompt).toBe("direct:message_tool_only\n\npost-compaction refresh");
     expect(run.cliSessionBindingFacts).toEqual({
       extraSystemPromptStatic: "direct:message_tool_only",
@@ -704,34 +707,41 @@ describe("runPreparedReply media-only handling", () => {
   it("replaces only the bound delivery prompt component", () => {
     const repeatedPrefix = "same guidance\n\nindependent context\n\n";
     const run = { extraSystemPrompt: `${repeatedPrefix}same guidance\n\nlater context` };
-    setSourceReplyDeliveryModeOrigin(run, "runtime_default");
-    setSourceReplyDeliveryPromptComponents(
-      run,
-      { automatic: "automatic guidance", message_tool_only: "same guidance" },
-      repeatedPrefix.length,
-    );
+    const runtime = createSourceReplyDeliveryRuntime({
+      origin: "runtime_default",
+      initialMode: "message_tool_only",
+      projections: [run],
+      promptComponentByMode: {
+        automatic: "automatic guidance",
+        message_tool_only: "same guidance",
+      },
+      promptComponentOffset: repeatedPrefix.length,
+    });
 
-    publishPreparedHarnessSourceReplyDeliveryMode(run, "automatic");
+    runtime.applyPreparedMode(run, "automatic");
     expect(run.extraSystemPrompt).toBe(`${repeatedPrefix}automatic guidance\n\nlater context`);
 
     const absent = { extraSystemPrompt: "independent context only" };
-    setSourceReplyDeliveryModeOrigin(absent, "runtime_default");
-    setSourceReplyDeliveryPromptComponents(
-      absent,
-      { automatic: "automatic guidance", message_tool_only: "missing guidance" },
-      undefined,
-    );
-    publishPreparedHarnessSourceReplyDeliveryMode(absent, "automatic");
+    createSourceReplyDeliveryRuntime({
+      origin: "runtime_default",
+      initialMode: "message_tool_only",
+      projections: [absent],
+      promptComponentByMode: {
+        automatic: "automatic guidance",
+        message_tool_only: "missing guidance",
+      },
+      promptComponentOffset: undefined,
+    }).applyPreparedMode(absent, "automatic");
     expect(absent.extraSystemPrompt).toBe("independent context only");
 
     const empty = { extraSystemPrompt: "independent context only" };
-    setSourceReplyDeliveryModeOrigin(empty, "runtime_default");
-    setSourceReplyDeliveryPromptComponents(
-      empty,
-      { automatic: "", message_tool_only: "" },
-      undefined,
-    );
-    publishPreparedHarnessSourceReplyDeliveryMode(empty, "automatic");
+    createSourceReplyDeliveryRuntime({
+      origin: "runtime_default",
+      initialMode: "message_tool_only",
+      projections: [empty],
+      promptComponentByMode: { automatic: "", message_tool_only: "" },
+      promptComponentOffset: undefined,
+    }).applyPreparedMode(empty, "automatic");
     expect(empty.extraSystemPrompt).toBe("independent context only");
   });
 
@@ -865,9 +875,13 @@ describe("runPreparedReply media-only handling", () => {
         SourceReplyDeliveryRuntimeOptions,
     });
 
-    const run = requireRunReplyAgentCall().followupRun.run;
+    const call = requireRunReplyAgentCall();
+    const followupRun = call.followupRun;
+    const run = followupRun.run;
     expect(run.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(readSourceReplyDeliveryModeOrigin(run)).toBe("runtime_default");
+    const sourceReplyDeliveryRuntime = readSourceReplyDeliveryRuntime(run);
+    expect(sourceReplyDeliveryRuntime?.origin).toBe("runtime_default");
+    expect(sourceReplyDeliveryRuntime?.currentMode).toBe("message_tool_only");
   });
 
   it("persists pure media turns without the model-facing placeholder", async () => {

@@ -7,108 +7,84 @@ export type SourceReplyDeliveryRuntimeOptions = {
   onSourceReplyDeliveryModeResolved?: (mode: SourceReplyDeliveryMode) => void;
 };
 
-// The shared enumerable binding follows queue/run spreads without widening their public types.
-// Its listener and bounded prompt pair move prepared ownership before prompt/live callbacks;
-// plugin handoff strips this symbol so neither mutable authority nor alternate prompt leaks.
-const sourceReplyDeliveryModeOriginKey: unique symbol = Symbol.for(
-  "openclaw.source-reply-delivery-runtime",
-);
-type SourceReplyDeliveryRuntimeBinding = {
-  origin?: SourceReplyDeliveryModeOrigin;
-  preparedHarnessMode?: SourceReplyDeliveryMode;
-  preparedHarnessModeListener?: (mode: SourceReplyDeliveryMode) => void;
-  promptComponentByMode?: Record<SourceReplyDeliveryMode, string>;
-  promptComponentOffset?: number;
-};
-type SourceReplyDeliveryModeOwner = {
-  [sourceReplyDeliveryModeOriginKey]?: SourceReplyDeliveryRuntimeBinding;
+type SourceReplyDeliveryProjection = {
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  extraSystemPrompt?: string;
 };
 
-function readSourceReplyDeliveryRuntimeBinding(
-  owner: object,
-): SourceReplyDeliveryRuntimeBinding | undefined {
-  return (owner as SourceReplyDeliveryModeOwner)[sourceReplyDeliveryModeOriginKey];
-}
+type SourceReplyDeliveryRuntime = {
+  readonly origin: SourceReplyDeliveryModeOrigin;
+  readonly currentMode: SourceReplyDeliveryMode;
+  track: (owner: SourceReplyDeliveryProjection) => void;
+  applyMode: (owner: SourceReplyDeliveryProjection, mode: SourceReplyDeliveryMode) => void;
+  applyPreparedMode: (owner: SourceReplyDeliveryProjection, mode: SourceReplyDeliveryMode) => void;
+};
 
-export function setSourceReplyDeliveryModeOrigin(
+const sourceReplyDeliveryRuntimeKey = "__openclawSourceReplyDeliveryRuntime" as const;
+type SourceReplyDeliveryRuntimeOwner = {
+  [sourceReplyDeliveryRuntimeKey]?: SourceReplyDeliveryRuntime;
+};
+
+export function bindSourceReplyDeliveryRuntime(
   owner: object,
-  origin: SourceReplyDeliveryModeOrigin | undefined,
+  runtime: SourceReplyDeliveryRuntime,
 ): void {
-  const binding = readSourceReplyDeliveryRuntimeBinding(owner) ?? {};
-  binding.origin = origin;
-  (owner as SourceReplyDeliveryModeOwner)[sourceReplyDeliveryModeOriginKey] = binding;
+  (owner as SourceReplyDeliveryRuntimeOwner)[sourceReplyDeliveryRuntimeKey] = runtime;
 }
 
-export function readSourceReplyDeliveryModeOrigin(
+export function readSourceReplyDeliveryRuntime(
   owner: object,
-): SourceReplyDeliveryModeOrigin | undefined {
-  return readSourceReplyDeliveryRuntimeBinding(owner)?.origin;
+): SourceReplyDeliveryRuntime | undefined {
+  return (owner as SourceReplyDeliveryRuntimeOwner)[sourceReplyDeliveryRuntimeKey];
 }
 
-export function setSourceReplyDeliveryPromptComponents(
-  owner: object,
-  components: Record<SourceReplyDeliveryMode, string>,
-  componentOffset: number | undefined,
-): void {
-  const binding = readSourceReplyDeliveryRuntimeBinding(owner) ?? {};
-  binding.promptComponentByMode = components;
-  binding.promptComponentOffset = componentOffset;
-  (owner as SourceReplyDeliveryModeOwner)[sourceReplyDeliveryModeOriginKey] = binding;
-}
-
-export function copySourceReplyDeliveryRuntimeBinding(source: object, target: object): void {
-  const binding = readSourceReplyDeliveryRuntimeBinding(source);
-  if (binding) {
-    (target as SourceReplyDeliveryModeOwner)[sourceReplyDeliveryModeOriginKey] = binding;
-  }
-}
-
-export function publishPreparedHarnessSourceReplyDeliveryMode(
-  owner: object,
-  mode: SourceReplyDeliveryMode,
-): void {
-  const binding = readSourceReplyDeliveryRuntimeBinding(owner);
-  if (binding?.origin === "runtime_default") {
-    binding.preparedHarnessMode = mode;
-    const components = binding.promptComponentByMode;
-    const nextComponent = components?.[mode];
-    const promptOwner = owner as { extraSystemPrompt?: string };
-    const prompt = promptOwner.extraSystemPrompt;
-    if (components && nextComponent && prompt) {
-      const offset = binding.promptComponentOffset ?? -1;
-      const currentComponent = [...new Set(Object.values(components))].find(
+export function createSourceReplyDeliveryRuntime(params: {
+  origin: SourceReplyDeliveryModeOrigin;
+  initialMode: SourceReplyDeliveryMode;
+  projections: SourceReplyDeliveryProjection[];
+  promptComponentByMode: Record<SourceReplyDeliveryMode, string>;
+  promptComponentOffset: number | undefined;
+  onModeResolved?: (mode: SourceReplyDeliveryMode) => void;
+}): SourceReplyDeliveryRuntime {
+  const projections = new Set(params.projections);
+  let currentMode = params.initialMode;
+  const applyMode = (
+    owner: SourceReplyDeliveryProjection,
+    mode: SourceReplyDeliveryMode,
+    updatePrompt: boolean,
+  ) => {
+    currentMode = mode;
+    for (const projection of new Set([...projections, owner])) {
+      projection.sourceReplyDeliveryMode = mode;
+      if (!updatePrompt) {
+        continue;
+      }
+      const nextComponent = params.promptComponentByMode[mode];
+      const prompt = projection.extraSystemPrompt;
+      if (!nextComponent || !prompt) {
+        continue;
+      }
+      const offset = params.promptComponentOffset ?? -1;
+      const currentComponent = [...new Set(Object.values(params.promptComponentByMode))].find(
         (component) => component && prompt.slice(offset, offset + component.length) === component,
       );
       // Replace only the delivery-owned prompt component. Later context additions
       // must survive prepared harness selection instead of restoring a stale prompt.
       if (currentComponent && currentComponent !== nextComponent && offset >= 0) {
-        promptOwner.extraSystemPrompt =
+        projection.extraSystemPrompt =
           prompt.slice(0, offset) + nextComponent + prompt.slice(offset + currentComponent.length);
-        binding.promptComponentOffset = offset;
       }
     }
-    binding.preparedHarnessModeListener?.(mode);
-  }
-}
-
-export function bindPreparedHarnessSourceReplyDeliveryMode(
-  owner: object,
-  listener: (mode: SourceReplyDeliveryMode) => void,
-): () => void {
-  const binding = readSourceReplyDeliveryRuntimeBinding(owner);
-  if (binding?.origin !== "runtime_default") {
-    return () => {};
-  }
-  binding.preparedHarnessModeListener = listener;
-  return () => {
-    if (binding.preparedHarnessModeListener === listener) {
-      binding.preparedHarnessModeListener = undefined;
-    }
+    params.onModeResolved?.(mode);
   };
-}
-
-export function readPreparedHarnessSourceReplyDeliveryMode(
-  owner: object,
-): SourceReplyDeliveryMode | undefined {
-  return readSourceReplyDeliveryRuntimeBinding(owner)?.preparedHarnessMode;
+  const runtime: SourceReplyDeliveryRuntime = {
+    origin: params.origin,
+    get currentMode() {
+      return currentMode;
+    },
+    track: (owner) => projections.add(owner),
+    applyMode: (owner, mode) => applyMode(owner, mode, false),
+    applyPreparedMode: (owner, mode) => applyMode(owner, mode, true),
+  };
+  return runtime;
 }

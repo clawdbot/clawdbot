@@ -28,11 +28,7 @@ import { runMemoryFlushIfNeeded, runPreflightCompactionIfNeeded } from "./agent-
 import { setAgentRunnerMemoryTestDeps } from "./agent-runner-memory.test-support.js";
 import { createTestFollowupRun, writeTestSessionStore } from "./agent-runner.test-fixtures.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
-import {
-  publishPreparedHarnessSourceReplyDeliveryMode,
-  setSourceReplyDeliveryModeOrigin,
-  setSourceReplyDeliveryPromptComponents,
-} from "./source-reply-delivery-runtime.js";
+import { createSourceReplyDeliveryRuntime } from "./source-reply-delivery-runtime.js";
 
 const compactEmbeddedAgentSessionMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
@@ -3353,12 +3349,16 @@ describe("runMemoryFlushIfNeeded", () => {
       workspaceDir: rootDir,
       extraSystemPrompt: [inboundPrompt, messageToolPrompt, independentPrompt].join("\n\n"),
     });
-    setSourceReplyDeliveryModeOrigin(followupRun.run, "runtime_default");
-    setSourceReplyDeliveryPromptComponents(
-      followupRun.run,
-      { automatic: automaticPrompt, message_tool_only: messageToolPrompt },
-      inboundPrompt.length + 2,
-    );
+    const sourceReplyDeliveryRuntime = createSourceReplyDeliveryRuntime({
+      origin: "runtime_default",
+      initialMode: "message_tool_only",
+      projections: [followupRun.run],
+      promptComponentByMode: {
+        automatic: automaticPrompt,
+        message_tool_only: messageToolPrompt,
+      },
+      promptComponentOffset: inboundPrompt.length + 2,
+    });
 
     const entry = await runPreflightCompactionIfNeeded({
       cfg: {
@@ -3390,7 +3390,7 @@ describe("runMemoryFlushIfNeeded", () => {
       "Reload this required startup context after compaction.",
     );
 
-    publishPreparedHarnessSourceReplyDeliveryMode(followupRun.run, "automatic");
+    sourceReplyDeliveryRuntime.applyPreparedMode(followupRun.run, "automatic");
     expect(followupRun.run.extraSystemPrompt).toContain(automaticPrompt);
     expect(followupRun.run.extraSystemPrompt).not.toContain(messageToolPrompt);
     expect(followupRun.run.extraSystemPrompt).toContain(inboundPrompt);

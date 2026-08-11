@@ -639,31 +639,28 @@ describe("runAgentHarnessAttempt", () => {
     },
   );
 
-  it("strips internal symbol metadata at the plugin harness handoff", async () => {
-    const internalKey = Symbol.for("openclaw.source-reply-delivery-runtime");
-    let handedOffSymbols: symbol[] = [];
+  it("strips the internal source delivery controller at the plugin harness handoff", async () => {
+    const internalKey = "__openclawSourceReplyDeliveryRuntime";
+    let handedOffRuntime: unknown;
     registerAgentHarness(
       {
         id: "codex",
         label: "Codex",
         supports: () => ({ supported: true, priority: 100 }),
         runAttempt: async (attemptParams) => {
-          handedOffSymbols = Object.getOwnPropertySymbols(attemptParams);
+          handedOffRuntime = (attemptParams as unknown as Record<string, unknown>)[internalKey];
           return createAttemptResult("codex");
         },
       },
       { ownerPluginId: "codex" },
     );
     const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
-    Object.defineProperty(params, internalKey, {
-      enumerable: true,
-      value: { preparedHarnessModeListener: vi.fn() },
-    });
+    (params as unknown as Record<string, unknown>)[internalKey] = { currentMode: "automatic" };
 
     await runAgentHarnessAttempt(params);
 
-    expect(Object.getOwnPropertySymbols(params)).toEqual([internalKey]);
-    expect(handedOffSymbols).toEqual([]);
+    expect((params as unknown as Record<string, unknown>)[internalKey]).toBeDefined();
+    expect(handedOffRuntime).toBeUndefined();
   });
 
   it.each(["heartbeat"] as const)(

@@ -22,7 +22,9 @@ import {
   resolveRunFastModeForFallbackCandidate,
 } from "./agent-runner-utils.js";
 import {
-  readSourceReplyDeliveryModeOrigin,
+  bindSourceReplyDeliveryRuntime,
+  createSourceReplyDeliveryRuntime,
+  readSourceReplyDeliveryRuntime,
   type SourceReplyDeliveryRuntimeOptions,
 } from "./source-reply-delivery-runtime.js";
 
@@ -32,9 +34,22 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   const sourceReplyDeliveryRuntimeOptions = turn.opts as
     | SourceReplyDeliveryRuntimeOptions
     | undefined;
-  const sourceReplyDeliveryModeOrigin =
-    readSourceReplyDeliveryModeOrigin(turn.followupRun.run) ??
-    sourceReplyDeliveryRuntimeOptions?.sourceReplyDeliveryModeOrigin;
+  const sourceReplyDeliveryRuntime =
+    readSourceReplyDeliveryRuntime(turn.followupRun.run) ??
+    createSourceReplyDeliveryRuntime({
+      origin: sourceReplyDeliveryRuntimeOptions?.sourceReplyDeliveryModeOrigin ?? "stable_policy",
+      initialMode: turn.followupRun.run.sourceReplyDeliveryMode ?? "automatic",
+      projections: [turn.followupRun.run, ...(turn.opts ? [turn.opts] : [])],
+      promptComponentByMode: { automatic: "", message_tool_only: "" },
+      promptComponentOffset: undefined,
+      onModeResolved: sourceReplyDeliveryRuntimeOptions?.onSourceReplyDeliveryModeResolved,
+    });
+  sourceReplyDeliveryRuntime.track(turn.followupRun.run);
+  if (turn.opts) {
+    sourceReplyDeliveryRuntime.track(turn.opts);
+  }
+  bindSourceReplyDeliveryRuntime(turn.followupRun.run, sourceReplyDeliveryRuntime);
+  const sourceReplyDeliveryModeOrigin = sourceReplyDeliveryRuntime.origin;
   const preserveProgressCallbackStartOrder = turn.opts?.preserveProgressCallbackStartOrder === true;
   const runLane = CommandLane.Main;
   let queuedUserMessagePersistedAcrossFallback = false;
@@ -178,21 +193,15 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           resolveCandidateRuntime(provider, model),
         );
         const candidateRun = runtime.candidateRun;
+        bindSourceReplyDeliveryRuntime(candidateRun, sourceReplyDeliveryRuntime);
         const candidateSourceReplyDeliveryMode =
           sourceReplyDeliveryModeOrigin === "runtime_default" && runtime.useCliExecution
             ? "message_tool_only"
-            : turn.followupRun.run.sourceReplyDeliveryMode;
+            : sourceReplyDeliveryRuntime.currentMode;
         const applySourceReplyDeliveryModeBeforeInvocation =
           sourceReplyDeliveryModeOrigin !== "runtime_default" || runtime.useCliExecution;
         if (candidateSourceReplyDeliveryMode && applySourceReplyDeliveryModeBeforeInvocation) {
-          candidateRun.sourceReplyDeliveryMode = candidateSourceReplyDeliveryMode;
-          turn.followupRun.run.sourceReplyDeliveryMode = candidateSourceReplyDeliveryMode;
-          if (turn.opts) {
-            turn.opts.sourceReplyDeliveryMode = candidateSourceReplyDeliveryMode;
-          }
-          sourceReplyDeliveryRuntimeOptions?.onSourceReplyDeliveryModeResolved?.(
-            candidateSourceReplyDeliveryMode,
-          );
+          sourceReplyDeliveryRuntime.applyMode(candidateRun, candidateSourceReplyDeliveryMode);
         }
         const candidateThinkLevel = resolveCandidateThinkingLevel({
           cfg: params.runtimeConfig,

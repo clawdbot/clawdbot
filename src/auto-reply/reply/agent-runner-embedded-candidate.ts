@@ -44,9 +44,8 @@ import type { FollowupRun } from "./queue.js";
 import { isReplyOperationRestartAbort } from "./reply-operation-abort.js";
 import { markReplyOperationGlobalLaneWaitProgress } from "./reply-run-registry.js";
 import {
-  bindPreparedHarnessSourceReplyDeliveryMode,
-  readPreparedHarnessSourceReplyDeliveryMode,
-  type SourceReplyDeliveryRuntimeOptions,
+  bindSourceReplyDeliveryRuntime,
+  readSourceReplyDeliveryRuntime,
 } from "./source-reply-delivery-runtime.js";
 
 type EmbeddedPresentation = Pick<
@@ -105,15 +104,14 @@ export async function runEmbeddedFallbackCandidate(params: {
   bootstrapPromptWarningSignaturesSeen: string[];
 }> {
   const turn = params.turn;
-  const sourceReplyDeliveryRuntimeOptions = turn.opts as
-    | SourceReplyDeliveryRuntimeOptions
-    | undefined;
+  const sourceReplyDeliveryRuntime = readSourceReplyDeliveryRuntime(params.candidateRun);
+  const candidateRun = {
+    ...params.candidateRun,
+    ...params.candidateFastMode,
+    thinkLevel: params.candidateThinkLevel,
+  };
   const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
-    run: {
-      ...params.candidateRun,
-      ...params.candidateFastMode,
-      thinkLevel: params.candidateThinkLevel,
-    },
+    run: candidateRun,
     replyRoute: turn.followupRun,
     sessionCtx: turn.sessionCtx,
     hasRepliedRef: turn.opts?.hasRepliedRef,
@@ -123,6 +121,9 @@ export async function runEmbeddedFallbackCandidate(params: {
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     model: params.model,
   });
+  if (sourceReplyDeliveryRuntime) {
+    bindSourceReplyDeliveryRuntime(runBaseParams, sourceReplyDeliveryRuntime);
+  }
   const agentHarnessPolicy = params.sessionRuntimeOverride
     ? ({ runtime: params.sessionRuntimeOverride, runtimeSource: "model" } as const)
     : resolveAgentHarnessPolicy({
@@ -194,17 +195,6 @@ export async function runEmbeddedFallbackCandidate(params: {
     }),
   });
   params.onLifecycleBackstop(lifecycleBackstop);
-  const unbindPreparedHarnessSourceReplyDeliveryMode = bindPreparedHarnessSourceReplyDeliveryMode(
-    params.candidateRun,
-    (mode) => {
-      params.candidateRun.sourceReplyDeliveryMode = mode;
-      turn.followupRun.run.sourceReplyDeliveryMode = mode;
-      if (turn.opts) {
-        turn.opts.sourceReplyDeliveryMode = mode;
-      }
-      sourceReplyDeliveryRuntimeOptions?.onSourceReplyDeliveryModeResolved?.(mode);
-    },
-  );
   try {
     // Profiler milestone. Exposes pre-dispatch delay without normal-path logging.
     params.timing.logMilestoneIfSlow({
@@ -214,8 +204,8 @@ export async function runEmbeddedFallbackCandidate(params: {
       milestone: "before_embedded_run",
     });
     let eventHandler: ReturnType<typeof createAgentRunEventHandler> | undefined;
-    const result = await params.timing.measure("embedded_run", () =>
-      runEmbeddedAgent({
+    const result = await params.timing.measure("embedded_run", () => {
+      const embeddedRunParams: Parameters<typeof runEmbeddedAgent>[0] = {
         preparedRunAdmission: params.preparedRunAdmission,
         ...embeddedContext,
         messageActionTurnCapability,
@@ -379,7 +369,7 @@ export async function runEmbeddedFallbackCandidate(params: {
             lifecycleBackstop,
             notifyAgentRunStart: params.notifyAgentRunStart,
             sourceRepliesAreToolOnly:
-              (readPreparedHarnessSourceReplyDeliveryMode(params.candidateRun) ??
+              (sourceReplyDeliveryRuntime?.currentMode ??
                 turn.followupRun.run.sourceReplyDeliveryMode) === "message_tool_only",
             messageToolDeliveryState: params.messageToolDeliveryState,
             provider: params.provider,
@@ -437,8 +427,9 @@ export async function runEmbeddedFallbackCandidate(params: {
               };
             })()
           : undefined,
-      }),
-    );
+      };
+      return runEmbeddedAgent(embeddedRunParams);
+    });
     const resultCompactionCount = Math.max(0, result.meta?.agentMeta?.compactionCount ?? 0);
     attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
     return {
@@ -448,7 +439,6 @@ export async function runEmbeddedFallbackCandidate(params: {
       ),
     };
   } finally {
-    unbindPreparedHarnessSourceReplyDeliveryMode();
     params.onCompactionCount(attemptCompactionCount);
     revokeMessageActionTurnCapability(messageActionTurnCapability);
   }

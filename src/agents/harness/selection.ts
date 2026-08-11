@@ -712,12 +712,14 @@ function withoutInternalHarnessAuthority(
       closeHostCapabilities: () => {},
     };
   }
-  // Core symbol metadata crosses internal spreads but is not part of the public plugin contract.
   const {
     admittedRunContext: _admittedRunContext,
     onContextEngineTurnCandidate: _onContextEngineTurnCandidate,
+    __openclawSourceReplyDeliveryRuntime: _sourceReplyDeliveryRuntime,
     ...pluginParams
-  } = Object.fromEntries(Object.entries(params)) as EmbeddedRunAttemptParams;
+  } = params as EmbeddedRunAttemptParams & {
+    __openclawSourceReplyDeliveryRuntime?: unknown;
+  };
   const host = createAgentHarnessHostCapabilities({
     attempt: params,
     pluginId:

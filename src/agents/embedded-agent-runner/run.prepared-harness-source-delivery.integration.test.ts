@@ -22,8 +22,9 @@ import type { InternalGetReplyOptions } from "../../auto-reply/reply/get-reply.t
 import { buildDirectChatContext } from "../../auto-reply/reply/groups.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import {
-  setSourceReplyDeliveryModeOrigin,
-  setSourceReplyDeliveryPromptComponents,
+  bindSourceReplyDeliveryRuntime,
+  createSourceReplyDeliveryRuntime,
+  type SourceReplyDeliveryRuntimeOptions,
 } from "../../auto-reply/reply/source-reply-delivery-runtime.js";
 import { buildTestCtx } from "../../auto-reply/reply/test-ctx.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -220,10 +221,7 @@ describe("prepared harness source delivery", () => {
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const modeTransitions: string[] = [];
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      const runtimeOpts = opts as InternalGetReplyOptions & {
-        sourceReplyDeliveryModeOrigin?: "runtime_default" | "stable_policy";
-        onSourceReplyDeliveryModeResolved?: (mode: "automatic" | "message_tool_only") => void;
-      };
+      const runtimeOpts = opts as InternalGetReplyOptions & SourceReplyDeliveryRuntimeOptions;
       expect(runtimeOpts.sourceReplyDeliveryMode).toBe(
         testCase.preliminaryVisibleReplies === "message_tool" ? "message_tool_only" : "automatic",
       );
@@ -251,12 +249,15 @@ describe("prepared harness source delivery", () => {
         extraSystemPromptBySourceReplyDeliveryMode[
           runtimeOpts.sourceReplyDeliveryMode ?? "automatic"
         ];
-      setSourceReplyDeliveryPromptComponents(
-        followupRun.run,
-        extraSystemPromptBySourceReplyDeliveryMode,
-        0,
-      );
-      setSourceReplyDeliveryModeOrigin(followupRun.run, runtimeOpts.sourceReplyDeliveryModeOrigin);
+      const sourceReplyDeliveryRuntime = createSourceReplyDeliveryRuntime({
+        origin: runtimeOpts.sourceReplyDeliveryModeOrigin ?? "stable_policy",
+        initialMode: runtimeOpts.sourceReplyDeliveryMode ?? "automatic",
+        projections: [followupRun.run, runtimeOpts],
+        promptComponentByMode: extraSystemPromptBySourceReplyDeliveryMode,
+        promptComponentOffset: 0,
+        onModeResolved: runtimeOpts.onSourceReplyDeliveryModeResolved,
+      });
+      bindSourceReplyDeliveryRuntime(followupRun.run, sourceReplyDeliveryRuntime);
       // Dispatch already captured its session snapshot; the embedded fixture uses
       // a SQLite compatibility key and has no durable row for writer admission.
       sessionStoreMocks.currentEntry = undefined;
