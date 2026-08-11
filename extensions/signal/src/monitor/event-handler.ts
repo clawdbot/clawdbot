@@ -21,6 +21,7 @@ import {
   formatInboundFromLabel,
   logInboundDrop,
   matchesMentionPatterns,
+  readAgentRunTerminalOutcome,
   resolveInboundMentionDecision,
   resolveEnvelopeFormatOptions,
   hasVisibleInboundReplyDispatch,
@@ -582,9 +583,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             result.dispatched && hasVisibleInboundReplyDispatch(result.dispatchResult);
           const hasDeliveryFailure =
             result.dispatched && hasSignalStatusReplyDeliveryFailure(result.dispatchResult);
+          const hasAgentRunFailure =
+            result.dispatched && readAgentRunTerminalOutcome(result.dispatchResult) === "failed";
           await finalizeSignalStatusReaction({
             controller: statusReactionController,
-            outcome: hasFinalResponse && !hasDeliveryFailure ? "done" : "error",
+            outcome:
+              hasFinalResponse && !hasDeliveryFailure && !hasAgentRunFailure ? "done" : "error",
           }).catch((err: unknown) => {
             logVerbose(`signal: status reaction finalize failed: ${String(err)}`);
           });

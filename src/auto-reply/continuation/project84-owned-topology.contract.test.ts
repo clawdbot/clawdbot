@@ -9,7 +9,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const MONITORED_MODULES = [
   "src/agents/openclaw-tools.ts",
   "src/agents/openclaw-tools.continuation.ts",
-  "src/agents/subagent-announce.ts",
+  "src/agents/subagents/announce/subagent-announce.ts",
   "src/agents/subagent-announce.continuation.runtime.ts",
   "src/agents/subagent-announce.continuation.accounting.ts",
   "src/agents/subagent-announce.continuation-return.ts",
@@ -337,7 +337,7 @@ describe("Project 84 owned topology contract", () => {
 
   it("keeps subagent continuation behavior behind the runtime coordinator", () => {
     expectEdge(
-      "src/agents/subagent-announce.ts",
+      "src/agents/subagents/announce/subagent-announce.ts",
       "src/agents/subagent-announce.continuation.runtime.ts",
       "dynamic-import",
     );
@@ -351,11 +351,11 @@ describe("Project 84 owned topology contract", () => {
       "static-export",
     );
     expectNoEdge(
-      "src/agents/subagent-announce.ts",
+      "src/agents/subagents/announce/subagent-announce.ts",
       "src/agents/subagent-announce.continuation.accounting.ts",
     );
     expectNoEdge(
-      "src/agents/subagent-announce.ts",
+      "src/agents/subagents/announce/subagent-announce.ts",
       "src/agents/subagent-announce.continuation-return.ts",
     );
   });

@@ -2011,6 +2011,51 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   });
 
   it.each(["dark", "light"] as const)(
+    "keeps punctuation attached to inline code in %s mode",
+    async (themeMode) => {
+      const page = await openBrowserPage(800, 400);
+      try {
+        await page.setContent(
+          `<!doctype html><html data-theme-mode="${themeMode}"><head><style>${readUiCss()}</style></head><body>
+            <div class="chat-text"><p>Use <code>status</code>; then <code>restart</code>.</p></div>
+          </body></html>`,
+        );
+
+        const spacing = await page.locator(".chat-text code").evaluateAll((nodes) =>
+          nodes.map((node) => {
+            const punctuation = node.nextSibling;
+            if (!(punctuation instanceof Text)) {
+              throw new Error("Expected punctuation text after inline code");
+            }
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            const textRect = range.getBoundingClientRect();
+            range.setStart(punctuation, 0);
+            range.setEnd(punctuation, 1);
+            const punctuationRect = range.getBoundingClientRect();
+            range.detach();
+            const chipRect = (node as HTMLElement).getBoundingClientRect();
+            return {
+              horizontalGap: punctuationRect.left - textRect.right,
+              heightDelta: chipRect.height - punctuationRect.height,
+            };
+          }),
+        );
+
+        expect(spacing).toHaveLength(2);
+        for (const { horizontalGap, heightDelta } of spacing) {
+          // Include the chip border/inset, but keep both measurements within a
+          // quarter of the 14px prose size across browser font metrics.
+          expect(horizontalGap).toBeLessThanOrEqual(3.75);
+          expect(heightDelta).toBeLessThanOrEqual(3.75);
+        }
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
+
+  it.each(["dark", "light"] as const)(
     "keeps mobile controls inside the viewport with touch targets in %s mode",
     async (themeMode) => {
       const page = await openFixture(320, 568);

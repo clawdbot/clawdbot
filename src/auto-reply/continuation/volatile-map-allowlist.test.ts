@@ -95,7 +95,7 @@ const ALLOWLIST = [
       "Lost on process restart; pending continuation work remains in TaskFlow and restart recovery/normal scheduling can re-arm recovery or hedge timers from durable rows.",
   },
   {
-    file: "src/auto-reply/reply/reply-run-registry.ts",
+    file: "src/auto-reply/reply/reply-run-registry.state.ts",
     symbol: "activeRunsByKey",
     owner: "reply run registry singleton",
     purpose: "Maps sessionKey to the live ReplyOperation currently executing in this process.",
@@ -105,7 +105,7 @@ const ALLOWLIST = [
       "Lost on process restart; no in-flight operation is reported active and a later request creates a new ReplyOperation.",
   },
   {
-    file: "src/auto-reply/reply/reply-run-registry.ts",
+    file: "src/auto-reply/reply/reply-run-registry.state.ts",
     symbol: "activeSessionIdsByKey",
     owner: "reply run registry singleton",
     purpose:
@@ -116,7 +116,7 @@ const ALLOWLIST = [
       "Lost on process restart together with the live ReplyOperation; durable session identity remains in the session store.",
   },
   {
-    file: "src/auto-reply/reply/reply-run-registry.ts",
+    file: "src/auto-reply/reply/reply-run-registry.state.ts",
     symbol: "activeKeysBySessionId",
     owner: "reply run registry singleton",
     purpose:
@@ -127,7 +127,7 @@ const ALLOWLIST = [
       "Lost on process restart; lookups return no active run until a new operation registers itself.",
   },
   {
-    file: "src/auto-reply/reply/reply-run-registry.ts",
+    file: "src/auto-reply/reply/reply-run-registry.state.ts",
     symbol: "waitKeysBySessionId",
     owner: "reply run registry singleton",
     purpose:
@@ -138,7 +138,7 @@ const ALLOWLIST = [
       "Lost on process restart; callers waiting in the old process disappear with that process.",
   },
   {
-    file: "src/auto-reply/reply/reply-run-registry.ts",
+    file: "src/auto-reply/reply/reply-run-registry.state.ts",
     symbol: "waitersByKey",
     owner: "reply run registry singleton",
     purpose: "Stores waitForIdle promise resolvers and timeout handles by active sessionKey.",
@@ -148,7 +148,7 @@ const ALLOWLIST = [
       "Lost on process restart; old waiters cannot be resolved because their callers no longer exist.",
   },
   {
-    file: "src/auto-reply/reply/reply-run-registry.ts",
+    file: "src/auto-reply/reply/reply-run-registry.state.ts",
     symbol: "attachedBackendByOperation",
     owner: "reply run registry singleton",
     purpose: "Weakly associates live ReplyOperation objects with their current backend handles.",
@@ -158,7 +158,7 @@ const ALLOWLIST = [
       "Lost on process restart; new ReplyOperation instances attach fresh backend handles when work resumes.",
   },
   {
-    file: "src/auto-reply/reply/reply-run-registry.ts",
+    file: "src/auto-reply/reply/reply-run-registry.state.ts",
     symbol: "followupAdmissionBarriersByKey",
     owner: "reply run registry singleton",
     purpose:
@@ -169,7 +169,7 @@ const ALLOWLIST = [
       "Lost on process restart; durable followup intent remains in TaskFlow and the session store, and the next admission pass arms a fresh barrier.",
   },
   {
-    file: "src/auto-reply/reply/reply-run-registry.ts",
+    file: "src/auto-reply/reply/reply-run-registry.state.ts",
     symbol: "afterClearCallbacksByOperation",
     owner: "reply run registry singleton",
     purpose:
@@ -189,6 +189,131 @@ const ALLOWLIST = [
       "The count is turn-scoped rate state, not durable delegate substrate; the delegates themselves are persisted in the TaskFlow-backed delegate store, and the cap is also enforced by the post-response dispatcher.",
     restartContract:
       "Lost on process restart, which is the correct post-restart state: the next turn starts at a zero admission count and the durable delegate queue is unaffected.",
+  },
+  {
+    file: "src/auto-reply/continuation/delegate-taskflow-registry.test-harness.ts",
+    symbol: "mockTaskFlows",
+    owner: "continuation TaskFlow test harness",
+    purpose:
+      "Holds the in-memory TaskFlow rows a unit test registers in place of the durable TaskFlow store.",
+    safeVolatileClassification:
+      "Test-harness-only fixture state; it never runs in production and is reset between tests by resetMockTaskFlows().",
+    restartContract:
+      "Not applicable to production restarts; each test run starts from an empty map and the real durable store is untouched.",
+  },
+  {
+    file: "src/auto-reply/continuation/work-terminal-notice.ts",
+    symbol: "retryTimers",
+    owner: "continuation terminal-notice retrier",
+    purpose:
+      "Keeps one live retry setTimeout per terminal-notice key while a failed durable handoff notice is re-attempted.",
+    safeVolatileClassification:
+      "The map stores Node timeout handles for the current process; the terminal-notice intent itself is persisted durably.",
+    restartContract:
+      "Lost on process restart; the durable terminal notice remains and the next delivery pass can arm a fresh retry timer.",
+  },
+  {
+    file: "src/auto-reply/reply/reply-run-finalization-lease.ts",
+    symbol: "activeLeases",
+    owner: "reply run finalization lease registry",
+    purpose:
+      "Tracks the finalization leases currently held by in-process reply runs so shutdown can drain them.",
+    safeVolatileClassification:
+      "Leases wrap live in-process callbacks and abort plumbing that cannot outlive the Node process.",
+    restartContract:
+      "Lost on process restart; no lease is reported held and a new run acquires a fresh lease before finalizing.",
+  },
+  {
+    file: "src/auto-reply/reply/reply-run-finalization-lease.ts",
+    symbol: "activeSettleTimers",
+    owner: "reply run finalization lease registry",
+    purpose: "Tracks the live settle timers armed for in-process reply-run finalization.",
+    safeVolatileClassification:
+      "Settle timers are Node timeout wrappers; persisting them could not make a restarted process clear or fire the old timeout.",
+    restartContract:
+      "Lost on process restart; the durable reply/continuation state remains and a later run arms new settle timers.",
+  },
+  {
+    file: "src/auto-reply/reply/reply-run-finalization-lease.ts",
+    symbol: "leasesByOwner",
+    owner: "reply run finalization lease registry",
+    purpose: "Weakly maps a live owner object to the finalization lease it currently holds.",
+    safeVolatileClassification:
+      "WeakMap keyed by process objects; persisting it would be meaningless and would defeat weak-reference semantics.",
+    restartContract:
+      "Lost on process restart together with its owner objects; no durable finalization state depends on it.",
+  },
+  {
+    file: "src/auto-reply/reply/reply-run-registry.state.ts",
+    symbol: "successorAdmissionBarriersByKey",
+    owner: "reply run registry singleton",
+    purpose:
+      "Holds the admission barrier a successor reply run must clear before it may start on a sessionKey.",
+    safeVolatileClassification:
+      "Barriers wrap in-process promises/resolvers that only gate live operations in this Node process.",
+    restartContract:
+      "Lost on process restart; with no live predecessor operation there is nothing to fence, so a new run admits immediately.",
+  },
+  {
+    file: "src/auto-reply/reply/reply-run-registry.state.ts",
+    symbol: "evictOperationByOperation",
+    owner: "reply run registry singleton",
+    purpose: "Weakly associates a live ReplyOperation with its registry eviction callback.",
+    safeVolatileClassification:
+      "WeakMap of process objects to closures; neither side is serializable or meaningful across processes.",
+    restartContract: "Lost on process restart; the operations it would evict no longer exist.",
+  },
+  {
+    file: "src/auto-reply/reply/reply-run-registry.state.ts",
+    symbol: "operationsByUpstreamAbortSignal",
+    owner: "reply run registry singleton",
+    purpose: "Resolves the live ReplyOperation that an upstream AbortSignal should cancel.",
+    safeVolatileClassification:
+      "AbortSignals and ReplyOperations are process objects; the mapping has no meaning outside this process.",
+    restartContract:
+      "Lost on process restart; the upstream callers holding those signals are gone with the process.",
+  },
+  {
+    file: "src/auto-reply/reply/reply-run-registry.state.ts",
+    symbol: "successorBarrierStartsByOperation",
+    owner: "reply run registry singleton",
+    purpose:
+      "Weakly records the start callbacks that release successor fences once an operation begins.",
+    safeVolatileClassification:
+      "WeakMap of live ReplyOperations to in-process closures; nothing durable is represented.",
+    restartContract:
+      "Lost on process restart; no live successor is waiting, so no fence needs releasing.",
+  },
+  {
+    file: "src/auto-reply/reply/reply-run-registry.state.ts",
+    symbol: "successorBarrierGroupsByOperation",
+    owner: "reply run registry singleton",
+    purpose:
+      "Weakly groups the alias-keyed successor fences that rotate together for one lane of a live operation.",
+    safeVolatileClassification:
+      "WeakMap of live ReplyOperations to in-process barrier sets; lane identity is rebuilt from durable session state when runs restart.",
+    restartContract:
+      "Lost on process restart; a restarted process re-registers lane fences when it creates new operations.",
+  },
+  {
+    file: "src/auto-reply/reply/reply-run-registry.state.ts",
+    symbol: "expireReplyOperationByOperation",
+    owner: "reply run registry singleton",
+    purpose: "Weakly associates a live ReplyOperation with its stale-expiry callback.",
+    safeVolatileClassification:
+      "WeakMap of process objects to closures; expiring an operation is only meaningful while it is running.",
+    restartContract: "Lost on process restart; there is no in-flight operation left to expire.",
+  },
+  {
+    file: "src/auto-reply/reply/reply-run-typing.ts",
+    symbol: "typingByReplyOperation",
+    owner: "reply run typing binder",
+    purpose:
+      "Keeps one typing/feedback controller attached to the live ReplyOperation that owns a reply run.",
+    safeVolatileClassification:
+      "WeakMap of live ReplyOperations to transport-bound typing controllers; both are process objects.",
+    restartContract:
+      "Lost on process restart; typing indicators stop with the process and are re-established by the next run.",
   },
 ] as const satisfies readonly AllowlistEntry[];
 
@@ -220,7 +345,7 @@ function collectContinuationSurfaceFiles(): string[] {
     );
   });
   const agentFiles = [
-    "src/agents/subagent-announce.ts",
+    "src/agents/subagents/announce/subagent-announce.ts",
     "src/agents/subagents/spawn/subagent-spawn.ts",
   ];
 

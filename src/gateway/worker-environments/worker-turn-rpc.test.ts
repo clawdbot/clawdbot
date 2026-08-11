@@ -149,7 +149,7 @@ describe("worker environment service", () => {
     expect(liveEvents.rotateCredential).not.toHaveBeenCalled();
   });
 
-  it("persists worker transcript and terminal live ACK cursors", async () => {
+  it("keeps preview ACKs in memory and persists only transcript and terminal cursors", async () => {
     const applyTranscriptCommit = support.successfulTranscriptCommit("entry-placement");
     const { liveEvents } = support.sequencedLiveEvents();
     const { identity, placementStore, workerService } = support.placementHarness(
@@ -174,15 +174,19 @@ describe("worker environment service", () => {
     });
 
     await expect(
-      workerService.pushLiveEvent(identity, support.terminalEvent(identity)),
-    ).resolves.toEqual({
-      ok: true,
-      result: { ackedSeq: 1 },
-    });
+      workerService.pushLiveEvent(identity, support.assistantEvent(identity, "preview")),
+    ).resolves.toEqual({ ok: true, result: { ackedSeq: 1 } });
+    expect(placementStore.updateAckCursors).toHaveBeenCalledOnce();
+
+    await expect(
+      workerService.pushLiveEvent(
+        identity,
+        support.terminalEvent(identity, { lastAckedSeq: 1, seq: 2 }),
+      ),
+    ).resolves.toEqual({ ok: true, result: { ackedSeq: 2 } });
     expect(placementStore.updateAckCursors).toHaveBeenLastCalledWith({
       ...binding,
-      liveSeq: 1,
-      workspaceResultPending: true,
+      liveSeq: 2,
     });
   });
 
@@ -209,7 +213,6 @@ describe("worker environment service", () => {
     expect(placementStore.updateAckCursors).toHaveBeenLastCalledWith({
       ...support.placementBinding(identity),
       liveSeq: 1,
-      workspaceResultPending: true,
     });
   });
 
@@ -288,15 +291,16 @@ describe("worker environment service", () => {
     await expect(
       workerService.pushLiveEvent(identity, support.terminalEvent(identity, { seq: 2 })),
     ).resolves.toEqual({ ok: true, result: { ackedSeq: 0 } });
-    expect(placementStore.updateAckCursors).toHaveBeenCalledWith({
-      ...support.placementBinding(identity),
-      liveSeq: 0,
-      workspaceResultPending: true,
-    });
+    expect(placementStore.updateAckCursors).not.toHaveBeenCalled();
 
     await expect(
       workerService.pushLiveEvent(identity, support.assistantEvent(identity, "fills gap")),
     ).resolves.toEqual({ ok: true, result: { ackedSeq: 2 } });
+    expect(placementStore.updateAckCursors).toHaveBeenCalledOnce();
+    expect(placementStore.updateAckCursors).toHaveBeenCalledWith({
+      ...support.placementBinding(identity),
+      liveSeq: 2,
+    });
     await expect(
       workerService.commitTranscript(
         identity,
@@ -352,7 +356,6 @@ describe("worker environment service", () => {
         {
           ...support.placementBinding(identity),
           liveSeq: 1,
-          workspaceResultPending: true,
         },
       ],
     ]);

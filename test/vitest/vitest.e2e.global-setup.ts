@@ -28,19 +28,25 @@ export function runE2eSetupCommand(args: string[], env: NodeJS.ProcessEnv): Prom
 
 export async function runE2eGlobalSetup(
   runCommand: SetupCommandRunner = runE2eSetupCommand,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
+  // Exact-run CI artifact consumers already have the complete built surface.
+  // Rebuilding here would discard that provenance and duplicate the slow step.
+  if (env.OPENCLAW_E2E_USE_PREBUILT_DIST === "1") {
+    return;
+  }
   const commands = [
     {
       args: ["scripts/run-node.mjs", "--version"],
       env: {
-        ...process.env,
+        ...env,
         OPENCLAW_BUILD_PRIVATE_QA: "1",
         OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
       },
     },
     {
       args: ["--import", "tsx", "scripts/tsdown-build.mts", "--config", "tsdown.ai.config.ts"],
-      env: process.env,
+      env,
     },
   ];
   for (const { args, env } of commands) {

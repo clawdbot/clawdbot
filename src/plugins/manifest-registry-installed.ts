@@ -240,6 +240,7 @@ function normalizePackageChannelDoctorCapabilities(
     normalized.groupModel = groupModel;
   }
   for (const key of [
+    "openDmRequiresAllowFromWildcard",
     "groupAllowFromFallbackToAllowFrom",
     "warnOnEmptyGroupSenderAllowlist",
   ] as const) {

@@ -5904,17 +5904,17 @@ class ChatController internal constructor(
               ?: existing?.childSessionKey,
         )
       _subagentActivities.value = _subagentActivities.value + (taskId to activity)
-      subagentActivityExpiryJobs.remove(taskId)?.cancel()
-      if (!activity.isWorking) {
-        val expiresAt = (activity.endedAtMs ?: now) + SUBAGENT_ACTIVITY_RETENTION_MS
-        val expiryDelayMs = (expiresAt - now).coerceAtLeast(0L)
+      if (activity.isWorking) {
+        subagentActivityExpiryJobs.remove(taskId)?.cancel()
+      } else if (terminal && existing?.isWorking != false) {
+        // Local receipt starts retention; remote endedAt may be old.
+        // Duplicate terminal updates must not extend that retention window.
         subagentActivityExpiryJobs[taskId] =
           scope.launch {
-            delay(expiryDelayMs)
+            delay(SUBAGENT_ACTIVITY_RETENTION_MS)
             synchronized(subagentActivityLock) {
-              if (_subagentActivities.value[taskId] == activity) {
-                _subagentActivities.value = _subagentActivities.value - taskId
-              }
+              if (subagentActivityExpiryJobs[taskId] !== coroutineContext[Job]) return@synchronized
+              _subagentActivities.value = _subagentActivities.value - taskId
               subagentActivityExpiryJobs.remove(taskId)
             }
           }
@@ -6343,6 +6343,8 @@ class ChatController internal constructor(
           timestampMs = ts,
           idempotencyKey = obj["idempotencyKey"].asStringOrNull(),
           entryId = obj["__openclaw"].asObjectOrNull()?.get("id").asStringOrNull(),
+          provenance = parseChatMessageProvenance(obj["provenance"]),
+          transcriptMarker = parseChatTranscriptMarker(obj["__openclaw"]),
         )
       }
 
@@ -6353,6 +6355,26 @@ class ChatController internal constructor(
       messages = reconcileMessageIds(previous = previousMessages, incoming = messages),
       sessionInfo = sessionInfo,
       inFlightRun = parseInFlightRun(root),
+    )
+  }
+
+  private fun parseChatMessageProvenance(element: JsonElement?): ChatMessageProvenance? {
+    val obj = element.asObjectOrNull() ?: return null
+    val kind = obj["kind"].asJsonStringOrNull() ?: return null
+    return ChatMessageProvenance(
+      kind = kind,
+      sourceTool = obj["sourceTool"].asJsonStringOrNull(),
+    )
+  }
+
+  private fun parseChatTranscriptMarker(element: JsonElement?): ChatTranscriptMarker? {
+    val obj = element.asObjectOrNull() ?: return null
+    val kind = obj["kind"].asJsonStringOrNull() ?: return null
+    return ChatTranscriptMarker(
+      kind = kind,
+      id = obj["id"].asJsonStringOrNull(),
+      tokensBefore = obj["tokensBefore"].asJsonNumberOrNull(),
+      tokensAfter = obj["tokensAfter"].asJsonNumberOrNull(),
     )
   }
 
@@ -7291,6 +7313,17 @@ private fun JsonElement?.asStringOrNull(): String? =
     is JsonPrimitive -> content
     else -> null
   }
+
+private fun JsonElement?.asJsonStringOrNull(): String? =
+  (this as? JsonPrimitive)
+    ?.takeIf(JsonPrimitive::isString)
+    ?.content
+
+private fun JsonElement?.asJsonNumberOrNull(): Double? =
+  (this as? JsonPrimitive)
+    ?.takeUnless(JsonPrimitive::isString)
+    ?.content
+    ?.toDoubleOrNull()
 
 private fun JsonElement?.asLongOrNull(): Long? =
   when (this) {

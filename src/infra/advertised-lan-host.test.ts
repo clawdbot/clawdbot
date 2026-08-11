@@ -49,7 +49,7 @@ describe("advertised LAN host", () => {
     const runner = createRouteRunner(
       JSON.stringify([
         { InterfaceAlias: "Ethernet", RouteMetric: 1, InterfaceMetric: 1000 },
-        { InterfaceAlias: "Ethernet 2", RouteMetric: 100, InterfaceMetric: 1 },
+        { InterfaceAlias: "réseau-网卡", RouteMetric: 100, InterfaceMetric: 1 },
       ]),
     );
 
@@ -60,7 +60,7 @@ describe("advertised LAN host", () => {
         networkInterfaces: () =>
           ({
             Ethernet: [ipv4("10.37.129.4")],
-            "Ethernet 2": [ipv4("10.211.55.3")],
+            "réseau-网卡": [ipv4("10.211.55.3")],
           }) as NetworkInterfacesSnapshot,
       }),
     ).resolves.toBe("10.211.55.3");
@@ -71,7 +71,9 @@ describe("advertised LAN host", () => {
         "-ExecutionPolicy",
         "Bypass",
         "-Command",
-        expect.stringContaining("Get-NetRoute"),
+        expect.stringMatching(
+          /^\[Console\]::OutputEncoding=\[Text\.UTF8Encoding\]::new\(\$false\); Get-NetRoute/,
+        ),
       ],
       { timeoutMs: 3_000, maxOutputBytes: 16 * 1024 },
     );

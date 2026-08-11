@@ -42,7 +42,7 @@ import {
   consumePendingToolMediaIntoReply,
   hasAssistantVisibleReply,
   readPendingToolMediaReply,
-} from "./embedded-agent-subscribe.handlers.messages.js";
+} from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import {
   cleanupRunToolStartData,
   handleToolExecutionEnd,
@@ -52,12 +52,12 @@ import type {
   EmbeddedAgentSubscribeContext,
   EmbeddedAgentSubscribeState,
 } from "./embedded-agent-subscribe.handlers.types.js";
+import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 import {
-  buildToolLifecycleErrorResult,
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
-} from "./embedded-agent-subscribe.tools.js";
-import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
+} from "./embedded-agent-tool-media.js";
+import { buildToolLifecycleErrorResult } from "./embedded-agent-tool-results.js";
 import {
   createThinkingTagStreamState,
   stripDowngradedToolCallText,

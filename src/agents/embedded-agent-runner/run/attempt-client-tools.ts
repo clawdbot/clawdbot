@@ -6,7 +6,7 @@ import {
 } from "../../agent-tool-definition-adapter.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import { addClientToolsToCodeModeCatalog } from "../../code-mode.js";
-import { isCoreToolResultMediaTrustedName } from "../../embedded-agent-subscribe.tools.js";
+import { isCoreToolResultMediaTrustedName } from "../../embedded-agent-tool-media.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { collectReplaySafeToolNames, isAgentToolReplaySafe } from "../../tool-replay-safety.js";
 import { addClientToolsToToolSearchCatalog, type ToolSearchCatalogRef } from "../../tool-search.js";

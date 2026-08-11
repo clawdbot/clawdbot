@@ -1192,6 +1192,47 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
     });
   });
 
+  it("starts a renamed external channel after its bundled owner is removed", () => {
+    const registry = createManifestRegistryFixture();
+    registry.plugins.push(
+      withManifestLoadPaths({
+        id: "openclaw-qqbot",
+        channels: ["qqbot"],
+        channelConfigs: {
+          qqbot: {
+            schema: { type: "object" },
+            preferOver: ["qqbot"],
+          },
+        },
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      }),
+    );
+    const index = createInstalledPluginIndexFixture(registry);
+    const sourceConfig = {
+      channels: { qqbot: { appId: "app", clientSecret: "secret" } },
+      plugins: { entries: { "openclaw-qqbot": { enabled: true } } },
+    } as OpenClawConfig;
+    const runtimeConfig = applyPluginAutoEnable({
+      config: sourceConfig,
+      env: createPluginPlanningTestEnv(),
+      manifestRegistry: registry,
+    }).config;
+
+    expect(runtimeConfig.plugins?.entries?.qqbot).toBeUndefined();
+    expect(
+      resolveGatewayStartupPluginPlanFromRegistry({
+        config: runtimeConfig,
+        activationSourceConfig: sourceConfig,
+        env: createPluginPlanningTestEnv(),
+        index,
+        manifestRegistry: registry,
+      }).pluginIds,
+    ).toContain("openclaw-qqbot");
+  });
+
   it("loads configured worker-provider owners from the activation source", () => {
     const activationSourceConfig = {
       channels: {},

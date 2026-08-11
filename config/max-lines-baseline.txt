@@ -220,11 +220,6 @@ extensions/qa-lab/src/suite-launch.runtime.test.ts
 extensions/qa-lab/src/suite-launch.runtime.ts
 extensions/qa-lab/src/test-file-scenario-runner.test.ts
 extensions/qa-lab/web/src/app.ts
-extensions/qqbot/src/engine/gateway/outbound-dispatch.test.ts
-extensions/qqbot/src/engine/gateway/outbound-dispatch.ts
-extensions/qqbot/src/engine/messaging/outbound-deliver.ts
-extensions/qqbot/src/engine/messaging/outbound-media-send.ts
-extensions/qqbot/src/engine/messaging/streaming-c2c.ts
 extensions/signal/src/approval-reactions.ts
 extensions/signal/src/client-container.test.ts
 extensions/signal/src/client-container.ts
@@ -385,11 +380,8 @@ src/agents/embedded-agent-runner/tool-result-truncation.test.ts
 src/agents/embedded-agent-runner/tool-result-truncation.ts
 src/agents/embedded-agent-runner/transcript-file-state.test.ts
 src/agents/embedded-agent-subscribe.handlers.lifecycle.test.ts
-src/agents/embedded-agent-subscribe.handlers.messages.test.ts
-src/agents/embedded-agent-subscribe.handlers.messages.ts
 src/agents/embedded-agent-subscribe.handlers.tools.test.ts
 src/agents/embedded-agent-subscribe.subscribe-embedded-agent-session.subscribeembeddedagentsession.test.ts
-src/agents/embedded-agent-subscribe.tools.ts
 src/agents/embedded-agent-subscribe.ts
 src/agents/failover-error.test.ts
 src/agents/failover-error.ts
