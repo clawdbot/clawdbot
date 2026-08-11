@@ -7,6 +7,7 @@ import type {
 } from "../../channels/plugins/types.public.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { OutboundIdentity } from "../../infra/outbound/identity.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -180,6 +181,7 @@ function latestOutboundDeliveryArgs(): {
   payloads: ReplyPayload[];
   bestEffort?: boolean;
   queuePolicy?: string;
+  identity?: OutboundIdentity;
   replyPayloadSendingHook?: ReplyPayloadSendingHookArgs;
 } {
   const args = lastMockArg(deliverOutboundPayloadsMock, "outbound delivery arguments");
@@ -195,6 +197,7 @@ function latestOutboundDeliveryArgs(): {
     payloads: ReplyPayload[];
     bestEffort?: boolean;
     queuePolicy?: string;
+    identity?: OutboundIdentity;
     replyPayloadSendingHook?: ReplyPayloadSendingHookArgs;
   };
 }
@@ -437,6 +440,31 @@ describe("deliverAgentCommandResult payload normalization", () => {
         sessionKey: "agent:tester:slack:direct:alice",
         runId: "run-1",
       },
+    });
+  });
+
+  it("passes the active agent identity through durable delivery", async () => {
+    await deliverAgentCommandResultForTest({
+      cfg: {
+        agents: {
+          list: [
+            {
+              id: "tester",
+              identity: { name: "  Pulse  ", emoji: "  📟  " },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      outboundSession: {
+        key: "agent:tester:slack:direct:alice",
+        agentId: "tester",
+      } as never,
+      payloads: [{ text: "final answer" }],
+    });
+
+    expect(latestOutboundDeliveryArgs().identity).toMatchObject({
+      name: "Pulse",
+      emoji: "📟",
     });
   });
 
