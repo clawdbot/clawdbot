@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
+import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
-  setActivePluginRegistry,
+  stageActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
@@ -37,23 +38,46 @@ describe("createGatewayKernel", () => {
         VITEST: "1",
       },
     });
-    const activePluginRegistry = captureActivePluginRegistrySnapshot();
+    const originalPluginRegistry = captureActivePluginRegistrySnapshot();
     const inspectAccount = vi.fn(() => ({ enabled: true, configured: true }));
+    const capturedRegistryCleanup = vi.fn();
     const ambientPlugin = createChannelTestPluginBase({
       id: "telegram",
       config: { inspectAccount },
     });
+    const ambientRegistry = createTestRegistry([
+      {
+        pluginId: ambientPlugin.id,
+        plugin: ambientPlugin,
+        source: "gateway-kernel-test",
+      },
+    ]);
+    ambientRegistry.plugins.push(
+      createPluginRecord({
+        id: ambientPlugin.id,
+        source: "gateway-kernel-test",
+        origin: "bundled",
+        enabled: true,
+        configSchema: false,
+      }),
+    );
+    ambientRegistry.runtimeLifecycles.push({
+      pluginId: ambientPlugin.id,
+      pluginName: ambientPlugin.meta.label,
+      lifecycle: {
+        id: "gateway-kernel-test-cleanup",
+        cleanup: capturedRegistryCleanup,
+      },
+      source: "gateway-kernel-test",
+    });
+    let capturedLoadedPluginRegistry:
+      | ReturnType<typeof captureActivePluginRegistrySnapshot>
+      | undefined;
+    let prematureCleanupCalls: number | undefined;
     let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
     try {
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: ambientPlugin.id,
-            plugin: ambientPlugin,
-            source: "gateway-kernel-test",
-          },
-        ]),
-      );
+      stageActivePluginRegistry(ambientRegistry, null, "default");
+      capturedLoadedPluginRegistry = captureActivePluginRegistrySnapshot();
       const timelinePath = state.path("kernel-startup.jsonl");
       state.envVars.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = timelinePath;
       const token = "gateway-kernel-no-transport-token";
@@ -65,7 +89,7 @@ describe("createGatewayKernel", () => {
         },
       });
       state.applyEnv();
-      setActivePluginRegistry(createEmptyPluginRegistry());
+      stageActivePluginRegistry(createEmptyPluginRegistry(), null, "default");
 
       kernel = await createGatewayKernel(port, {
         auth: { mode: "token", token },
@@ -164,10 +188,16 @@ describe("createGatewayKernel", () => {
         try {
           await state.cleanup();
         } finally {
-          restoreActivePluginRegistrySnapshot(activePluginRegistry);
+          if (capturedLoadedPluginRegistry) {
+            restoreActivePluginRegistrySnapshot(capturedLoadedPluginRegistry);
+          }
+          prematureCleanupCalls = capturedRegistryCleanup.mock.calls.length;
+          restoreActivePluginRegistrySnapshot(originalPluginRegistry);
         }
       }
     }
+    expect(prematureCleanupCalls).toBe(0);
+    await vi.waitFor(() => expect(capturedRegistryCleanup).toHaveBeenCalledOnce());
     expect(inspectAccount).not.toHaveBeenCalled();
   });
 
