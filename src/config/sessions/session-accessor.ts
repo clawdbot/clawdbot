@@ -232,6 +232,14 @@ export {
 } from "./session-accessor.transcript-range.js";
 export { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
 export {
+  readRecentSessionTranscriptHistoryEvents,
+  readSessionTranscriptHistoryAnchorPage,
+  readSessionTranscriptHistoryEventById,
+  readSessionTranscriptHistoryEventCount,
+  readSessionTranscriptHistoryEventPage,
+  readSessionTranscriptHistoryEvents,
+} from "./session-accessor.sqlite-history-events.js";
+export {
   isSessionTranscriptProjectionUnavailableError,
   readRecentSessionTranscriptActiveEvents,
   readSessionTranscriptActiveStats,
