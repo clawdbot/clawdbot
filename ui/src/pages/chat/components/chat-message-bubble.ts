@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons, type IconName } from "../../../components/icons.ts";
@@ -112,18 +113,50 @@ function renderInlineToolCards(
  * Max characters for auto-detecting and pretty-printing JSON.
  * Prevents DoS from large JSON payloads in assistant/tool messages.
  */
-function renderReplyPill(replyTarget: NormalizedMessage["replyTarget"]) {
+type ReplyPreview = {
+  sourceMessageId?: string;
+  senderLabel?: string | null;
+  text: string;
+};
+
+function renderReplyPreview(
+  replyTarget: NormalizedMessage["replyTarget"],
+  preview: ReplyPreview | undefined,
+  onOpenReply: ((replyToId: string) => void) | undefined,
+) {
   if (!replyTarget) {
     return nothing;
   }
+  const replyToId = replyTarget.kind === "id" ? replyTarget.id : null;
+  const name = preview?.senderLabel?.trim()
+    ? preview.senderLabel
+    : replyTarget.kind === "current"
+      ? t("chat.messages.currentMessage")
+      : t("chat.messages.message");
+  const content = preview?.text.trim() ?? "";
+  const body = html`
+    <span class="chat-reply-preview__icon">${icons.messageSquare}</span>
+    <span class="chat-reply-preview__label"> ${t("chat.messages.replyingTo", { name })} </span>
+    ${content
+      ? html`<span class="chat-reply-preview__text"
+          >${truncateUtf16Safe(content, 120)}${content.length > 120 ? "..." : ""}</span
+        >`
+      : nothing}
+  `;
+  if (replyToId && preview?.sourceMessageId && onOpenReply) {
+    return html`
+      <button
+        type="button"
+        class="chat-reply-preview chat-reply-preview--message"
+        @click=${() => onOpenReply(replyToId)}
+      >
+        ${body}
+      </button>
+    `;
+  }
   return html`
-    <div class="chat-reply-pill">
-      <span class="chat-reply-pill__icon">${icons.messageSquare}</span>
-      <span class="chat-reply-pill__label">
-        ${t("chat.messages.replyingTo", {
-          name: replyTarget.kind === "current" ? t("chat.messages.currentMessage") : replyTarget.id,
-        })}
-      </span>
+    <div class="chat-reply-preview chat-reply-preview--message chat-reply-preview--unavailable">
+      ${body}
     </div>
   `;
 }
@@ -191,6 +224,8 @@ export function renderGroupedMessage(
     entryId?: string;
     /** Freshly submitted user turn: play the one-shot composer entry animation. */
     entryAnimated?: boolean;
+    resolveReplyPreview?: (replyToId: string) => ReplyPreview | undefined;
+    onOpenReply?: (replyToId: string) => void;
   },
   onOpenSidebar?: (content: SidebarContent) => void,
 ) {
@@ -350,7 +385,14 @@ export function renderGroupedMessage(
         data-entry-id=${opts.entryId || nothing}
         data-message-text=${actionText || nothing}
       >
-        ${renderReplyPill(normalizedMessage.replyTarget)}
+        ${renderReplyPreview(
+          normalizedMessage.replyTarget,
+          normalizedMessage.replyTarget?.kind === "id"
+            ? (opts.resolveReplyPreview?.(normalizedMessage.replyTarget.id) ??
+                normalizedMessage.replyPreview)
+            : undefined,
+          opts.onOpenReply,
+        )}
         ${renderInlineToolCards(toolCards, {
           messageKey,
           sessionKey: opts.sessionKey,
@@ -385,7 +427,14 @@ export function renderGroupedMessage(
       data-entry-id=${opts.entryId || nothing}
       data-message-text=${actionText || nothing}
     >
-      ${renderReplyPill(normalizedMessage.replyTarget)}
+      ${renderReplyPreview(
+        normalizedMessage.replyTarget,
+        normalizedMessage.replyTarget?.kind === "id"
+          ? (opts.resolveReplyPreview?.(normalizedMessage.replyTarget.id) ??
+              normalizedMessage.replyPreview)
+          : undefined,
+        opts.onOpenReply,
+      )}
       ${isStandaloneToolMessage
         ? html`
             <div

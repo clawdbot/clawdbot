@@ -2983,7 +2983,7 @@ describe("grouped chat rendering", () => {
     });
   });
 
-  it("renders assistant MEDIA attachments, voice-note badge, and reply pill", async () => {
+  it("renders assistant MEDIA attachments, voice-note badge, and reply preview", async () => {
     const container = document.body.appendChild(document.createElement("div"));
     container.dataset.mediaPlayerTestFixture = "";
     const onOpenImage = vi.fn();
@@ -2998,7 +2998,7 @@ describe("grouped chat rendering", () => {
       { showToolCalls: false, onOpenImage },
     );
 
-    expect(container.querySelector(".chat-reply-pill__label")?.textContent?.trim()).toBe(
+    expect(container.querySelector(".chat-reply-preview__label")?.textContent?.trim()).toBe(
       "Replying to current message",
     );
     expect(container.querySelector(".chat-text")?.textContent?.trim()).toBe("Here is the image.");
@@ -3017,6 +3017,54 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-assistant-attachment-badge")?.textContent?.trim()).toBe(
       "Voice note",
     );
+  });
+
+  it("renders a clickable quoted preview for structured user replies", () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    const onOpenReply = vi.fn();
+    renderGroupedMessage(
+      container,
+      createUserMessage("Follow up", {
+        __openclaw: { replyToId: "transcript-123" },
+      }),
+      "user",
+      {
+        resolveReplyPreview: () => ({
+          messageId: "source-message",
+          sourceMessageId: "transcript-123",
+          senderLabel: "Marie",
+          text: "The original answer",
+        }),
+        onOpenReply,
+      },
+    );
+
+    const preview = container.querySelector<HTMLButtonElement>(".chat-reply-preview--message");
+    expect(preview?.textContent).toContain("Replying to Marie");
+    expect(preview?.textContent).toContain("The original answer");
+    preview?.click();
+    expect(onOpenReply).toHaveBeenCalledWith("transcript-123");
+    expect(container.querySelector(".chat-text")?.textContent?.trim()).toBe("Follow up");
+  });
+
+  it("keeps the persisted quoted preview when its source is outside loaded history", () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    renderGroupedMessage(
+      container,
+      createUserMessage("Follow up", {
+        __openclaw: {
+          replyToId: "unloaded-message",
+          replyToPreview: { senderLabel: "Marie", text: "The original answer" },
+        },
+      }),
+      "user",
+      {},
+    );
+
+    const preview = container.querySelector<HTMLElement>(".chat-reply-preview--message");
+    expect(preview?.textContent).toContain("Replying to Marie");
+    expect(preview?.textContent).toContain("The original answer");
+    expect(preview).not.toBeInstanceOf(HTMLButtonElement);
   });
 
   it("notifies when assistant audio and video attachment metadata loads", async () => {

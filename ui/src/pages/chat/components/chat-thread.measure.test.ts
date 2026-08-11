@@ -173,6 +173,43 @@ describe("chat transcript row measurement", () => {
     }
   });
 
+  it("resolves persisted replies to their source and highlights it on click", async () => {
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = threadProps("pane-reply-preview", "agent:main:main", [
+      {
+        role: "assistant",
+        content: "The original answer",
+        __openclaw: { id: "source-message" },
+        timestamp: 1_000,
+      },
+      {
+        role: "user",
+        content: "Follow up",
+        __openclaw: { id: "reply-message", replyToId: "source-message" },
+        timestamp: 2_000,
+      },
+    ]);
+    render(renderChatThread(props, transcript), container);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+
+    const preview = container.querySelector<HTMLButtonElement>(".chat-reply-preview--message");
+    expect(preview?.textContent).toContain("Replying to Molty");
+    expect(preview?.textContent).toContain("The original answer");
+    expect(preview?.textContent).not.toContain("source-message");
+
+    preview?.click();
+    await Promise.resolve();
+
+    const sourceBubble = [...container.querySelectorAll<HTMLElement>(".chat-bubble")].find(
+      (bubble) => bubble.dataset.entryId === "source-message",
+    );
+    expect(sourceBubble?.classList.contains("chat-bubble--reply-target")).toBe(true);
+    transcript.hostDisconnected();
+  });
+
   it("loads a truncated assistant message once and keeps the full text visible", async () => {
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));

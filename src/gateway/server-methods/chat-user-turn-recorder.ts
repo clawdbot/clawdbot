@@ -34,6 +34,7 @@ export function createGatewayChatUserTurnController(params: {
   now: number;
   provenance?: InputProvenance;
   rawMessage: string;
+  replyToId?: string;
   restartAdmission?: RestartSafeChatAdmission;
   sender?: UserTurnInput["sender"];
   senderIsOwner: boolean;
@@ -47,6 +48,7 @@ export function createGatewayChatUserTurnController(params: {
     text: params.rawMessage,
     timestamp: params.now,
     idempotencyKey: buildRunUserTurnIdempotencyKey(params.clientRunId),
+    ...(params.replyToId ? { replyToId: params.replyToId } : {}),
     ...(params.sender ? { sender: params.sender } : {}),
     ...(params.senderIsOwner ? { senderIsOwner: true } : {}),
     ...(params.provenance ? { provenance: params.provenance } : {}),
@@ -108,7 +110,11 @@ export function createGatewayChatUserTurnController(params: {
       acceptedSessionId = sessionId;
     },
     setInputPromise: (input) => {
-      inputPromise = input;
+      const previousInputPromise = inputPromise;
+      inputPromise = Promise.all([previousInputPromise, input]).then(([previous, next]) => ({
+        ...previous,
+        ...next,
+      }));
     },
   };
 }

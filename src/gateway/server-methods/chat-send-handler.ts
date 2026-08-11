@@ -162,8 +162,19 @@ export async function handleChatSend(
       storePath,
       ...terminalState,
     });
-
   try {
+    const replyContextFieldsPromise = p.replyToId
+      ? resolveChatSendReplyContext({
+          replyToId: p.replyToId,
+          cfg,
+          agentId,
+          sessionKey,
+          sessionEntry: entry,
+          storePath,
+          userSenderLabel: clientInfo?.displayName,
+          warn: (message) => context.logGateway.warn(message),
+        })
+      : undefined;
     const userTurn = createGatewayChatUserTurnController({
       agentId,
       cfg,
@@ -172,6 +183,7 @@ export async function handleChatSend(
       now,
       ...(systemInputProvenance ? { provenance: systemInputProvenance } : {}),
       rawMessage,
+      ...(p.replyToId ? { replyToId: p.replyToId } : {}),
       ...(restartSafeAdmission ? { restartAdmission: restartSafeAdmission } : {}),
       ...gatewayClientSenderFields(client),
       senderIsOwner: hasGatewayAdminScope(client),
@@ -186,15 +198,29 @@ export async function handleChatSend(
       persistBestEffort: persistGatewayUserTurnTranscriptBestEffort,
       recorder: userTurnRecorder,
     } = userTurn;
+    if (replyContextFieldsPromise) {
+      userTurn.setInputPromise(
+        replyContextFieldsPromise.then((fields) => ({
+          ...userTurn.baseInput,
+          ...(fields.ReplyToBody
+            ? {
+                replyToPreview: {
+                  text: fields.ReplyToBody,
+                  ...(fields.ReplyToSender ? { senderLabel: fields.ReplyToSender } : {}),
+                },
+              }
+            : {}),
+        })),
+      );
+    }
     if (restartSafeAdmission) {
       const persistedUserTurn = await persistGatewayUserTurnTranscript();
-      const admittedEntry = persistedUserTurn?.sessionEntry;
       // A matching idempotency row and lifecycle claim commit atomically, so
       // retries adopt the durable turn without submitting it twice.
       if (
         !persistedUserTurn ||
-        admittedEntry?.status !== "running" ||
-        admittedEntry.restartRecoveryDeliveryRunId !== clientRunId
+        persistedUserTurn.sessionEntry?.status !== "running" ||
+        persistedUserTurn.sessionEntry.restartRecoveryDeliveryRunId !== clientRunId
       ) {
         throw new Error("chat turn was not durably admitted");
       }
@@ -251,18 +277,6 @@ export async function handleChatSend(
       imageOrder,
       userTurnTranscriptRecorder: userTurnRecorder,
     });
-    const replyContextFieldsPromise = p.replyToId
-      ? resolveChatSendReplyContext({
-          replyToId: p.replyToId,
-          cfg,
-          agentId,
-          sessionKey,
-          sessionEntry: entry,
-          storePath,
-          userSenderLabel: clientInfo?.displayName,
-          warn: (message) => context.logGateway.warn(message),
-        })
-      : undefined;
     const preAckReplyContextPromise =
       messageInjectionTarget && !isInternalTextSlashCommandTurn
         ? replyContextFieldsPromise

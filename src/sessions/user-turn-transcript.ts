@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import {
   persistSessionTranscriptTurn,
@@ -33,6 +34,9 @@ import type {
   UserTurnTranscriptUpdateMode,
 } from "./user-turn-transcript.types.js";
 
+const REPLY_PREVIEW_TEXT_MAX_CHARS = 2000;
+const REPLY_PREVIEW_SENDER_MAX_CHARS = 200;
+
 export type {
   PersistedUserTurnMessage,
   UserTurnInput,
@@ -59,11 +63,7 @@ function resolveTranscriptMediaType(params: {
 export function buildPersistedUserTurnMediaInputsFromFields(
   fields: PersistedUserTurnMessage | null | undefined,
 ): PersistedUserTurnMediaInput[] {
-  if (!fields) {
-    return [];
-  }
-
-  const facts = readPersistedMediaFacts(fields) ?? [];
+  const facts = fields ? (readPersistedMediaFacts(fields) ?? []) : [];
   const normalizedMedia = facts.map((fact) => {
     const rawPath = normalizeOptionalString(fact.path);
     const mediaPath = rawPath
@@ -138,14 +138,15 @@ function buildUserTurnSenderMeta(
     ...(senderUsername ? { senderUsername } : {}),
   };
 }
-
 function readOpenClawMessageMeta(message: AgentMessage): Record<string, unknown> | undefined {
   return asOptionalRecord((message as unknown as Record<string, unknown>)["__openclaw"]);
 }
-
 export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurnMessage {
   const normalizedMedia = (params.media ?? []).map(normalizeStructuredMediaEntryForTranscript);
   const text = params.text ?? "";
+  const replyToId = normalizeOptionalString(params.replyToId);
+  const replyPreviewText = normalizeOptionalString(params.replyToPreview?.text);
+  const replyPreviewSender = normalizeOptionalString(params.replyToPreview?.senderLabel);
   // Storage is BARE (no timestamp prefix). The per-message timestamp is added
   // at the single LLM-boundary stamping site (normalizeMessagesForLlmBoundary),
   // derived from each message's own `timestamp` field, so the current turn and
@@ -163,6 +164,22 @@ export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedU
             (!params.provenance || params.provenance.kind === "external_user"),
         }),
     ...senderMeta,
+    ...(replyToId ? { replyToId } : {}),
+    ...(replyPreviewText
+      ? {
+          replyToPreview: {
+            text: truncateUtf16Safe(replyPreviewText, REPLY_PREVIEW_TEXT_MAX_CHARS),
+            ...(replyPreviewSender
+              ? {
+                  senderLabel: truncateUtf16Safe(
+                    replyPreviewSender,
+                    REPLY_PREVIEW_SENDER_MAX_CHARS,
+                  ),
+                }
+              : {}),
+          },
+        }
+      : {}),
     ...(params.transport ? { transport: params.transport } : {}),
     ...(normalizedMedia.length > 0 ? { media: normalizedMedia } : {}),
     ...(params.mediaImageLayout

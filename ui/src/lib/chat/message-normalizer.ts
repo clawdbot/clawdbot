@@ -623,6 +623,22 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     rawOpenClawMeta && typeof rawOpenClawMeta === "object" && !Array.isArray(rawOpenClawMeta)
       ? (rawOpenClawMeta as Record<string, unknown>)
       : undefined;
+  const structuredReplyToId =
+    typeof openClawMeta?.replyToId === "string" ? openClawMeta.replyToId.trim() : "";
+  if (structuredReplyToId) {
+    replyTarget = { kind: "id", id: structuredReplyToId };
+  }
+  const rawReplyPreview = openClawMeta?.replyToPreview;
+  const replyPreviewRecord =
+    rawReplyPreview && typeof rawReplyPreview === "object" && !Array.isArray(rawReplyPreview)
+      ? (rawReplyPreview as Record<string, unknown>)
+      : undefined;
+  const replyPreviewText =
+    typeof replyPreviewRecord?.text === "string" ? replyPreviewRecord.text.trim() : "";
+  const replyPreviewSender =
+    typeof replyPreviewRecord?.senderLabel === "string"
+      ? replyPreviewRecord.senderLabel.trim()
+      : "";
   const metaSender = normalizeSenderIdentity({
     id: openClawMeta?.senderId,
     name: openClawMeta?.senderName,
@@ -658,6 +674,14 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     senderLabel,
     ...(sender ? { sender } : {}),
     ...(audioAsVoice ? { audioAsVoice: true } : {}),
+    ...(replyPreviewText
+      ? {
+          replyPreview: {
+            text: replyPreviewText,
+            ...(replyPreviewSender ? { senderLabel: replyPreviewSender } : {}),
+          },
+        }
+      : {}),
     ...(replyTarget ? { replyTarget } : {}),
   };
 }

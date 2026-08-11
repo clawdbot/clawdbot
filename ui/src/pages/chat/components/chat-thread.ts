@@ -81,6 +81,8 @@ import { getToolTitlesVersion } from "../tool-titles.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import { renderChatDivider, renderChatNotice } from "./chat-divider.ts";
+import { resolveMessageGroupSenderLabel } from "./chat-message-group.ts";
+import { resolveMessageReplyText } from "./chat-message-markdown.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import {
   dismissConfirmedActionPopovers,
@@ -203,6 +205,11 @@ type ChatTranscriptRow =
 type ChatTranscriptAnnouncement = {
   key: string;
   text: string;
+};
+
+type LoadedReplySource = {
+  rowKey: string;
+  preview: MessageReplyTarget & { sourceMessageId: string };
 };
 
 const CHAT_TRANSCRIPT_ESTIMATED_ROW_PX = 120;
@@ -536,6 +543,33 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
       this.scrollElement.scrollTop = offset;
     }
     this.virtualizerController.getVirtualizer().scrollToOffset(offset);
+  }
+
+  revealMessage(rowKey: string, messageId: string): void {
+    const rowIndex = this.rowIndexesByKey.get(rowKey);
+    if (rowIndex === undefined) {
+      return;
+    }
+    this.virtualizerController.getVirtualizer().scrollToIndex(rowIndex, { align: "center" });
+    this.host.requestUpdate();
+    void this.host.updateComplete.then(() => {
+      const bubble = [
+        ...(this.threadInnerElement?.querySelectorAll<HTMLElement>(".chat-bubble") ?? []),
+      ].find((candidate) => candidate.dataset.entryId === messageId);
+      if (!bubble) {
+        return;
+      }
+      this.threadInnerElement
+        ?.querySelector(".chat-bubble--reply-target")
+        ?.classList.remove("chat-bubble--reply-target");
+      bubble.scrollIntoView?.({ behavior: "smooth", block: "center" });
+      bubble.classList.add("chat-bubble--reply-target");
+      bubble.addEventListener(
+        "animationend",
+        () => bubble.classList.remove("chat-bubble--reply-target"),
+        { once: true },
+      );
+    });
   }
 
   getScrollOffset(): number | null {
@@ -1582,6 +1616,7 @@ function renderChatThreadContents(
     { parts: StreamGroupPart[]; options: StreamGroupOptions }
   >();
   const turnRecapByGroupKey = new Map<string, TurnRecap>();
+  const loadedReplySources = new Map<string, LoadedReplySource>();
   const sharedMessageRenderOptions = {
     onOpenSidebar: props.onOpenSidebar,
     sessionKey: props.sessionKey,
@@ -1646,6 +1681,13 @@ function renderChatThreadContents(
       onReply: props.onSetReply
         ? (target) => state.transcriptRenderContext.onSetReply?.(target)
         : undefined,
+      resolveReplyPreview: (replyToId: string) => loadedReplySources.get(replyToId)?.preview,
+      onOpenReply: (replyToId: string) => {
+        const source = loadedReplySources.get(replyToId);
+        if (source) {
+          transcript.revealMessage(source.rowKey, replyToId);
+        }
+      },
       onRewind:
         rewindEntryId && props.onRewindMessage
           ? () => {
@@ -1779,6 +1821,32 @@ function renderChatThreadContents(
     });
     return false;
   });
+  for (const item of transcriptItems) {
+    if (item.kind !== "group") {
+      continue;
+    }
+    const senderLabel = resolveMessageGroupSenderLabel(item, {
+      assistantName: props.assistantName,
+      userId: props.userId,
+      userName: props.userName,
+      userAvatar: props.userAvatar,
+    });
+    for (const source of item.messages) {
+      const sourceMessageId = persistedMessageEntryId(source.message);
+      const text = resolveMessageReplyText(source.message);
+      if (sourceMessageId && text) {
+        loadedReplySources.set(sourceMessageId, {
+          rowKey: item.key,
+          preview: {
+            messageId: source.key,
+            sourceMessageId,
+            senderLabel,
+            text,
+          },
+        });
+      }
+    }
+  }
   let turnRecapOwnerKey: string | null = null;
   if (turnRecap !== null) {
     const lastItem = transcriptItems.at(-1);
