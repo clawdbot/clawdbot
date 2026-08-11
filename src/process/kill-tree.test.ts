@@ -372,7 +372,7 @@ describe("killProcessTree", () => {
 
     await withMockedPlatform("linux", async () => {
       killProcessTree(5555, { graceMs: 10, detached: false });
-      
+
       // The tree snapshot happens synchronously on SIGTERM.
       expect(killSpy).toHaveBeenCalledWith(5557, "SIGTERM");
       expect(killSpy).toHaveBeenCalledWith(5556, "SIGTERM");
