@@ -76,6 +76,7 @@ const chatMediaResources = new Map<string, ChatMediaResource<unknown>>();
 const chatMediaSubscribers = new Map<() => void, ChatMediaSubscriber>();
 const managedImageBlobUrls = new Map<string, ManagedImageBlobUrl>();
 const MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES = 64;
+let chatMediaRenderVersion = 0;
 
 function chatMediaResourceKey(kind: ChatMediaResourceKind, cacheKey: string): string {
   return `${kind}\0${cacheKey}`;
@@ -157,10 +158,15 @@ export function isChatMediaResourceCurrent<Value>(resource: ChatMediaResource<Va
   );
 }
 
+export function getChatMediaRenderVersion(): number {
+  return chatMediaRenderVersion;
+}
+
 export function notifyChatMediaResourceSubscribers<Value>(resource: ChatMediaResource<Value>) {
   if (!isChatMediaResourceCurrent(resource)) {
     return;
   }
+  chatMediaRenderVersion = (chatMediaRenderVersion + 1) % Number.MAX_SAFE_INTEGER;
   // A pane can change its subscription while another pane is being notified.
   // Snapshot the current generation so a replacement never receives stale work.
   for (const subscriber of Array.from(resource.subscribers)) {

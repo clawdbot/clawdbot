@@ -9,8 +9,6 @@ import {
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES,
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS,
   ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS,
-  bumpAssistantAttachmentAvailabilityRenderVersion,
-  getAssistantAttachmentAvailabilityRenderVersion,
   isManagedOutgoingMediaSource,
   managedAttachmentRefreshDelayMs,
   resolveAssistantAttachmentAvailability,
@@ -38,8 +36,6 @@ import {
   type ChatMediaResource,
 } from "./chat-message-media.ts";
 
-export { getAssistantAttachmentAvailabilityRenderVersion };
-
 function retainManagedAttachmentUntilExpiry(
   resource: ChatMediaResource<ManagedAttachmentAvailability>,
   availability: Extract<ManagedAttachmentAvailability, { status: "available" }> | null,
@@ -66,7 +62,6 @@ function setManagedAttachmentAvailability(
     return;
   }
   resource.value = availability;
-  bumpAssistantAttachmentAvailabilityRenderVersion();
   const refreshAt =
     availability.status === "checking"
       ? availability.refreshAfter
@@ -86,7 +81,6 @@ function setManagedAttachmentAvailability(
       resource.retryAttempted = true;
       resource.value = undefined;
     }
-    bumpAssistantAttachmentAvailabilityRenderVersion();
     notifyChatMediaResourceSubscribers(resource);
   });
 }

@@ -84,7 +84,7 @@ import { renderChatDivider, renderChatNotice } from "./chat-divider.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import {
   dismissConfirmedActionPopovers,
-  getAssistantAttachmentAvailabilityRenderVersion,
+  getChatMediaRenderVersion,
   openChatRewindConfirmation,
   renderMessageGroup,
   renderActivityGroup,
@@ -1756,7 +1756,7 @@ function renderChatThreadContents(
     expandedUserMessages,
     getExpansionStateVersion(expandedUserMessages),
     assistantMessageExpansionSignature(expandedAssistantMessages),
-    getAssistantAttachmentAvailabilityRenderVersion(),
+    getChatMediaRenderVersion(),
     // The host minute poll requests an update; this key crosses row guard() memoization.
     Math.floor(Date.now() / 60_000),
     getToolTitlesVersion(),
