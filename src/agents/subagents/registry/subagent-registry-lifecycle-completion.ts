@@ -21,12 +21,12 @@ import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recover
 import { resolveKilledSubagentTaskEndedAt } from "./subagent-registry-completion.js";
 import { updateSubagentArchiveAtMs } from "./subagent-registry-helpers.js";
 import { completeTerminalEffects } from "./subagent-registry-lifecycle-cleanup.js";
+import type { SubagentLifecycleCompletionContext } from "./subagent-registry-lifecycle-context.js";
 import {
   freezeRunResultAtCompletion,
   refreshPendingFinalDeliveryPayload,
   safeFinalizeSubagentTaskRun,
 } from "./subagent-registry-lifecycle-delivery.js";
-import type { SubagentLifecycleCompletionContext } from "./subagent-registry-lifecycle.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   resolveSubagentRunDeadlineMs,

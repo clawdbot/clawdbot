@@ -8,27 +8,21 @@ import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announ
 import { ensureDeliveryState } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
+import type {
+  CleanupBookkeepingParams,
+  SubagentLifecycleWakeContext,
+} from "./subagent-registry-lifecycle-context.js";
 import {
   buildSafeLifecycleErrorMeta,
   maskLifecycleIdentifier,
   safeMarkRequiredCompletionDeliveryBlocked,
   safeSetSubagentTaskDeliveryStatus,
 } from "./subagent-registry-lifecycle-delivery.js";
-import type {
-  CleanupBookkeepingParams,
-  SubagentLifecycleWakeContext,
-} from "./subagent-registry-lifecycle.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
 type RequesterSettleWakeBatchState =
   import("../announce/subagent-announce.requester-settle-wake.js").RequesterSettleWakeBatchState;
-
-export type ScheduledRequesterSettleWake = {
-  timer: ReturnType<typeof setTimeout>;
-  deadline: number;
-  rearmGeneration?: number;
-};
 
 const transitionRequesterSettleWakeBatch = (
   context: SubagentLifecycleWakeContext,

@@ -36,7 +36,7 @@ import { capFrozenResultText } from "./subagent-registry-helpers.js";
 import type {
   SubagentLifecycleCommonContext,
   SubagentLifecycleOptions,
-} from "./subagent-registry-lifecycle.js";
+} from "./subagent-registry-lifecycle-context.js";
 import type { PendingFinalDeliveryPayload, SubagentRunRecord } from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 

@@ -28,6 +28,7 @@ import {
   scheduleResumeSubagentRun,
   suspendPendingFinalDelivery,
 } from "./subagent-registry-lifecycle-cleanup.js";
+import type { SubagentLifecycleAnnounceCleanupContext } from "./subagent-registry-lifecycle-context.js";
 import {
   buildSafeLifecycleErrorMeta,
   clearSubagentPendingDelivery,
@@ -41,7 +42,6 @@ import {
   safeMarkRequiredCompletionDeliveryBlocked,
   safeSetSubagentTaskDeliveryStatus,
 } from "./subagent-registry-lifecycle-delivery.js";
-import type { SubagentLifecycleAnnounceCleanupContext } from "./subagent-registry-lifecycle.js";
 import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
 
 type RunSubagentAnnounceFlow =

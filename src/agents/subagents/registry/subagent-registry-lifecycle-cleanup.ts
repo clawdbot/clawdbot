@@ -25,6 +25,12 @@ import {
   persistSubagentSessionTiming,
   resolveAnnounceRetryDelayMs,
 } from "./subagent-registry-helpers.js";
+import type {
+  SubagentLifecycleCommonContext,
+  SubagentLifecycleCompletionContext,
+  SubagentLifecycleCleanupContext,
+  SubagentLifecycleWakeContext,
+} from "./subagent-registry-lifecycle-context.js";
 import {
   buildSafeLifecycleErrorMeta,
   markPendingFinalDelivery,
@@ -36,12 +42,6 @@ import {
   markRequesterSettleWakePending,
   scheduleRequesterSettleWake,
 } from "./subagent-registry-lifecycle-wake.js";
-import type {
-  SubagentLifecycleCommonContext,
-  SubagentLifecycleCompletionContext,
-  SubagentLifecycleCleanupContext,
-  SubagentLifecycleWakeContext,
-} from "./subagent-registry-lifecycle.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
 const MAX_DETACHED_CLEANUP_RETRIES = 3;
