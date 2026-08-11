@@ -22,7 +22,6 @@ import type { GatewayInstanceRuntime } from "./server-instance-runtime.types.js"
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createGatewayResidentRegistry } from "./server-resident-registry.js";
-import { createGatewayHttpTransport } from "./server-runtime-state.js";
 import type { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import type { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
 import { createGatewayTransportBridge } from "./server-transport-bridge.js";
@@ -378,46 +377,42 @@ export async function prepareGatewayKernelState(params: {
     }),
   );
   const transportBridge = createGatewayTransportBridge();
-  const createHttpTransport = async () => {
-    const transport = await createGatewayHttpTransport({
-      cfg: cfgAtStart,
-      getRuntimeConfig,
-      bindHost,
-      port,
-      controlUiEnabled,
-      controlUiBasePath,
-      controlUiRoot: controlUiRootLifecycle.state,
-      openAiChatCompletionsEnabled,
-      openAiChatCompletionsConfig,
-      openResponsesEnabled,
-      openResponsesConfig,
-      strictTransportSecurityHeader,
-      resolvedAuth,
-      rateLimiter: authRateLimiter,
-      isTerminalEnabled: terminalLaunchPolicy.isEnabled,
-      gatewayTls,
-      getResolvedAuth,
-      hooksConfig: () => runtimeStateRef.current?.hooksConfig ?? initialHooksConfig,
-      getHookClientIpConfig: () =>
-        runtimeStateRef.current?.hookClientIpConfig ?? initialHookClientIpConfig,
-      pluginRegistry: pluginRuntime.registry,
-      getPluginRouteRegistry: () => pluginRuntime.registry,
-      isStartupPluginRuntimeReady: () => startupState.sidecarsReady,
-      getGatewayRequestContext: () => pluginGatewayContext.current,
-      deps,
-      log,
-      logHooks,
-      logPlugins,
-      getReadiness,
-      handleWatchNodeRequest: async (req, res) =>
-        (await watchNodeRequestHandler.current?.(req, res)) ?? false,
-      workerIngressEnabled: Boolean(workerEnvironmentService),
-      workerDesktopTunnels: workerTunnelManager?.desktop,
-      clients: connectionState.clients,
-    });
-    transportBridge.attach(transport);
-    return transport;
-  };
+  const createHttpTransportOptions = () => ({
+    cfg: cfgAtStart,
+    getRuntimeConfig,
+    bindHost,
+    port,
+    controlUiEnabled,
+    controlUiBasePath,
+    controlUiRoot: controlUiRootLifecycle.state,
+    openAiChatCompletionsEnabled,
+    openAiChatCompletionsConfig,
+    openResponsesEnabled,
+    openResponsesConfig,
+    strictTransportSecurityHeader,
+    resolvedAuth,
+    rateLimiter: authRateLimiter,
+    isTerminalEnabled: terminalLaunchPolicy.isEnabled,
+    gatewayTls,
+    getResolvedAuth,
+    hooksConfig: () => runtimeStateRef.current?.hooksConfig ?? initialHooksConfig,
+    getHookClientIpConfig: () =>
+      runtimeStateRef.current?.hookClientIpConfig ?? initialHookClientIpConfig,
+    pluginRegistry: pluginRuntime.registry,
+    getPluginRouteRegistry: () => pluginRuntime.registry,
+    isStartupPluginRuntimeReady: () => startupState.sidecarsReady,
+    getGatewayRequestContext: () => pluginGatewayContext.current,
+    deps,
+    log,
+    logHooks,
+    logPlugins,
+    getReadiness,
+    handleWatchNodeRequest: async (req: IncomingMessage, res: ServerResponse) =>
+      (await watchNodeRequestHandler.current?.(req, res)) ?? false,
+    workerIngressEnabled: Boolean(workerEnvironmentService),
+    workerDesktopTunnels: workerTunnelManager?.desktop,
+    clients: connectionState.clients,
+  });
   const {
     clients,
     broadcast,
@@ -494,7 +489,7 @@ export async function prepareGatewayKernelState(params: {
     isGatewayStartupPending,
     pluginGatewayContext,
     watchNodeRequestHandler,
-    createHttpTransport,
+    createHttpTransportOptions,
     transportBridge,
     clients,
     broadcast,

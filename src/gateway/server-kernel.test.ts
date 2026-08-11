@@ -6,8 +6,8 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
+import { createGatewayKernel } from "./server-kernel.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
-import { createGatewayKernel } from "./server-start.js";
 
 describe("createGatewayKernel", () => {
   it("dispatches health and an agent turn without creating a transport", async () => {
