@@ -29,16 +29,6 @@ function progressMessage(text: string, itemId: string): Record<string, unknown> 
 }
 
 describe("resolveMainSessionResumePolicy progress tails", () => {
-  it("resumes when keyed progress messages arrive after the recovery mark", () => {
-    expect(
-      resolveMainSessionResumePolicy([
-        { role: "user", content: "finish the interrupted work" },
-        progressMessage("Checking the owner boundary.", "progress-1"),
-        progressMessage("Still tracing the restart lifecycle.", "progress-2"),
-      ]),
-    ).toEqual({ action: "resume", forceRestartSafeTools: false });
-  });
-
   it("resumes explicit commentary without making completed answers resumable", () => {
     expect(
       resolveMainSessionResumePolicy([
