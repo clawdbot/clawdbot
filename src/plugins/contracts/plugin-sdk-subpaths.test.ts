@@ -832,6 +832,10 @@ describe("plugin-sdk subpath exports", () => {
       "formatEnvelopeTimestamp",
       "expectPairingReplyText",
     ]);
+    expectSourceOmits("channel-test-helpers", [
+      "admitFollowupRunLifecycle",
+      "markFollowupRunEnqueued",
+    ]);
     expectSourceMentions("provider-test-contracts", [
       "expectPassthroughReplayPolicy",
       "runRealtimeSttLiveTest",
