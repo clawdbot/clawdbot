@@ -152,7 +152,7 @@ const runtimeAbortMocks = vi.hoisted(() => ({
   abortEmbeddedAgentRun: vi.fn<
     (sessionId: string | undefined, opts?: AbortEmbeddedAgentRunOptions) => boolean
   >(() => true),
-  resolveActiveEmbeddedRunId: vi.fn(() => undefined as string | undefined),
+  resolveActiveEmbeddedRunId: vi.fn<(sessionId: string) => string | undefined>(() => undefined),
   resolveActiveEmbeddedRunSessionId: vi.fn(() => undefined as string | undefined),
 }));
 
