@@ -362,7 +362,7 @@ export function renderLobsterSvg(
                         ? PIXEL_LOBSTER(openEyeStyle, closedEyeStyle)
                         : svg`
               ${hasRetroGeometry ? RETRO_ANTENNAE : ANTENNAE_SPRITES[look.antennae]}
-              ${look.tailFan ? TAIL_FAN : nothing}
+              ${hasRetroGeometry && look.tailFan ? TAIL_FAN : nothing}
               <g class="lob-claw lob-claw--l">
                 <path d="M20 42 C5 37 0 47 5 57 C10 67 20 62 25 52 C28 45 25 42 20 42 Z" fill="var(--lob-claw)" />
               </g>

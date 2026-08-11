@@ -158,7 +158,7 @@ function renderCommit(props: AboutProps) {
 // The poke button replays the claw wave; ambient motion lives in about.css.
 function renderHero(props: AboutProps) {
   const palette =
-    LOBSTER_PET_PALETTES.find((entry) => entry.id === "crimson") ??
+    LOBSTER_PET_PALETTES.find((entry) => entry.id === "emerald") ??
     expectDefined(LOBSTER_PET_PALETTES[0], "about lobster palette");
   const look = canonicalLobsterLook(palette);
   return html`

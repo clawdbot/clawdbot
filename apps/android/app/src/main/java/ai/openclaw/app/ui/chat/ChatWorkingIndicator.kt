@@ -451,7 +451,7 @@ private fun localizedWorkingPhrase(index: Int): String =
     11 -> nativeStringResource("Nautiling")
     12 -> nativeStringResource("Krilling")
     13 -> nativeStringResource("Barnacling")
-    14 -> nativeStringResource("Lobstering")
+    14 -> nativeStringResource("Clawing")
     15 -> nativeStringResource("Tidepooling")
     16 -> nativeStringResource("Pearling")
     17 -> nativeStringResource("Snapping")

@@ -13709,7 +13709,7 @@
       "kind": "ui-call",
       "line": 454,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
-      "source": "Lobstering",
+      "source": "Clawing",
       "surface": "android",
       "id": "native.android.32a8072679db94bb"
     },
@@ -42549,7 +42549,7 @@
       "kind": "ui-localized-call",
       "line": 60,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
-      "source": "Lobstering",
+      "source": "Clawing",
       "surface": "apple",
       "id": "native.apple.2f27f7676f6a5406"
     },

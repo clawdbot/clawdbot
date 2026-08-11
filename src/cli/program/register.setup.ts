@@ -173,7 +173,7 @@ async function runOnboardingEntry(
 
 function addSystemAgentOptions(command: Command): Command {
   return command
-    .option("-m, --message <text>", "Run one OpenClaw request")
+    .option("-m, --message <text>", "Run one OpenCrustacean request")
     .option("--yes", "Approve persistent config writes for one --message request", false)
     .option("--json", "Output system overview or onboarding summary as JSON", false);
 }

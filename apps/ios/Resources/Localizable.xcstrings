@@ -98329,12 +98329,12 @@
         }
       }
     },
-    "Lobstering": {
+    "Clawing": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Lobstering"
+            "value": "Clawing"
           }
         },
         "zh-CN": {

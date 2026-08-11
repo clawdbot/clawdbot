@@ -45,15 +45,15 @@ export type MascotPalette = {
 };
 
 const DARK_PALETTE: MascotPalette = {
-  gradientTop: "#ff4d4d",
-  gradientBottom: "#991b1b",
-  antenna: "#ff4d4d",
+  gradientTop: "#35a55b",
+  gradientBottom: "#1f6b38",
+  antenna: "#35a55b",
 };
 
 const LIGHT_PALETTE: MascotPalette = {
-  gradientTop: "#ff7079",
-  gradientBottom: "#ea4c59",
-  antenna: "#ef4b58",
+  gradientTop: "#57c785",
+  gradientBottom: "#3a9d5f",
+  antenna: "#4db36c",
 };
 
 export function createMascotPose(): MascotPose {

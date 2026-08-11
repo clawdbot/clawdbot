@@ -15,7 +15,7 @@ import {
 type LobsterPetPaletteId = ReturnType<typeof createLobsterPetLook>["palette"]["id"];
 
 const LOBSTER_PET_PALETTE_IDS: LobsterPetPaletteId[] = [
-  "crimson",
+  "emerald",
   "blue",
   "gold",
   "lumen",
@@ -166,16 +166,16 @@ describe("lobster pet variants", () => {
     const goldenRetroWeight = expectDefined(weights.get("goldenretro"), "golden retro weight");
     const retroWeight = expectDefined(weights.get("retro"), "retro weight");
     const totalWeight = [...weights.values()].reduce((sum, weight) => sum + weight, 0);
-    const crimsonWeight = expectDefined(weights.get("crimson"), "crimson weight");
+    const emeraldWeight = expectDefined(weights.get("emerald"), "emerald weight");
     expect(totalWeight).toBeCloseTo(79.15, 10);
-    expect(crimsonWeight / totalWeight).toBeGreaterThan(0.25);
+    expect(emeraldWeight / totalWeight).toBeGreaterThan(0.25);
     expect(goldenRetroWeight).toBeLessThan(retroWeight);
     for (const [paletteId, weight] of weights) {
       if (paletteId !== "retro" && paletteId !== "goldenretro") {
         expect(retroWeight).toBeLessThan(weight);
       }
     }
-    expect(counts.get("crimson") ?? 0).toBeGreaterThan(total * 0.25);
+    expect(counts.get("emerald") ?? 0).toBeGreaterThan(total * 0.25);
     expect(shinies).toBeGreaterThan(0);
     expect(shinies).toBeLessThan(total * 0.006);
   });
@@ -211,7 +211,7 @@ describe("lobster pet variants", () => {
       "chimera palette",
     );
     expect(canonicalLobsterLook(palette).chimeraParts).toEqual({
-      body: "#ff4f40",
+      body: "#35a55b",
       clawLeft: "#4a7dfc",
       clawRight: "#f4b840",
       antennae: "#3f9d63",
@@ -219,19 +219,19 @@ describe("lobster pet variants", () => {
   });
 
   it("stably offsets canonical blink timing by palette", () => {
-    const crimson = expectDefined(
-      LOBSTER_PET_PALETTES.find((palette) => palette.id === "crimson"),
-      "crimson palette",
+    const emerald = expectDefined(
+      LOBSTER_PET_PALETTES.find((palette) => palette.id === "emerald"),
+      "emerald palette",
     );
     const blue = expectDefined(
       LOBSTER_PET_PALETTES.find((palette) => palette.id === "blue"),
       "blue palette",
     );
-    expect(canonicalLobsterLook(crimson).blinkDelayS).not.toBe(
+    expect(canonicalLobsterLook(emerald).blinkDelayS).not.toBe(
       canonicalLobsterLook(blue).blinkDelayS,
     );
-    expect(canonicalLobsterLook(crimson).blinkDelayS).toBe(
-      canonicalLobsterLook(crimson).blinkDelayS,
+    expect(canonicalLobsterLook(emerald).blinkDelayS).toBe(
+      canonicalLobsterLook(emerald).blinkDelayS,
     );
   });
 

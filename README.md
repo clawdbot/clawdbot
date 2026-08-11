@@ -298,7 +298,7 @@ Minimal `~/.openclaw/openclaw.json` (model + defaults):
 
 ## Molty
 
-OpenClaw was built for **Molty**, a space lobster AI assistant, by Peter Steinberger and the community. 🦞
+OpenClaw was built for **Molty**, a space crab AI assistant, by Peter Steinberger and the community. 🦀
 
 - [openclaw.ai](https://openclaw.ai)
 - [soul.md](https://soul.md)

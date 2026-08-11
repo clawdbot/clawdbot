@@ -669,8 +669,8 @@ describe("lobster pet element", () => {
 
   it("props an open book against the claws while keeping both eyes open", () => {
     const palette = expectDefined(
-      LOBSTER_PET_PALETTES.find((entry) => entry.id === "crimson"),
-      "crimson palette",
+      LOBSTER_PET_PALETTES.find((entry) => entry.id === "emerald"),
+      "emerald palette",
     );
     const container = document.createElement("div");
     render(
@@ -959,7 +959,7 @@ describe("rare lobster loads", () => {
     const element = createPet(191);
     await arrive(element);
 
-    // The seeded crimson look is repainted as the remembered gold visitor.
+    // The seeded emerald look is repainted as the remembered gold visitor.
     expect(spriteClasses(element)).toContain("lobster-pet--palette-gold");
     expect(element.querySelector(".lobster-pet")?.getAttribute("title")).toBe(
       "Goldenrod · an old friend",

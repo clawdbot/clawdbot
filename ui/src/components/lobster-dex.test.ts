@@ -27,10 +27,10 @@ afterEach(() => {
 describe("lobsterdex", () => {
   it("records palettes once and round-trips through storage", () => {
     expect(getLobsterdex().size).toBe(0);
-    recordLobsterVisit("crimson");
+    recordLobsterVisit("emerald");
     recordLobsterVisit("gold");
-    recordLobsterVisit("crimson");
-    expect([...getLobsterdex()].toSorted()).toEqual(["crimson", "gold"]);
+    recordLobsterVisit("emerald");
+    expect([...getLobsterdex()].toSorted()).toEqual(["emerald", "gold"]);
   });
 
   it("remembers the first visitor's name and date, immutably", () => {
@@ -46,12 +46,13 @@ describe("lobsterdex", () => {
 
   it("migrates v1 array entries and backfills memories on the next visit", () => {
     localStorage.setItem("openclaw.control.lobsterdex.v1", JSON.stringify(["crimson"]));
-    const migrated = getLobsterdexEntries().get("crimson");
+    // The legacy crimson id migrates to the emerald shell.
+    const migrated = getLobsterdexEntries().get("emerald");
     expect(migrated).toEqual({ firstSeenAt: null, name: null, shinySeenAt: null });
-    expect(getLobsterdex().has("crimson")).toBe(true);
+    expect(getLobsterdex().has("emerald")).toBe(true);
 
-    recordLobsterVisit("crimson", { name: "Pinchy" });
-    const backfilled = getLobsterdexEntries().get("crimson");
+    recordLobsterVisit("emerald", { name: "Pinchy" });
+    const backfilled = getLobsterdexEntries().get("emerald");
     expect(backfilled?.name).toBe("Pinchy");
     expect(backfilled?.firstSeenAt).not.toBeNull();
   });

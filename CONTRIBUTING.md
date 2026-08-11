@@ -1,6 +1,6 @@
 # Contributing to OpenClaw
 
-Welcome to the lobster tank! 🦞
+Welcome to the crab shell! 🦀
 
 ## Quick Links
 

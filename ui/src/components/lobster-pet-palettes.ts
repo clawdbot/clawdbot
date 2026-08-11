@@ -4,7 +4,7 @@ import type { LobsterPetLook, LobsterPetPalette } from "./lobster-pet-contract.t
 // Rarity ladder loosely mirrors real lobster genetics: blue and gold lead into
 // terminal fantasies whose geometry and styling key off each id.
 export const LOBSTER_PALETTE_WEIGHTS: Array<[LobsterPetPalette, number]> = [
-  [{ id: "crimson", shell: "#ff4f40", claw: "#ff775f" }, 26],
+  [{ id: "emerald", shell: "#35a55b", claw: "#57c785" }, 26],
   [{ id: "blue", shell: "#4a7dfc", claw: "#7fa4ff" }, 7],
   [{ id: "gold", shell: "#f4b840", claw: "#f9d47a" }, 5],
   [{ id: "lumen", shell: "#1d2f4e", claw: "#2e4a77" }, 2],
@@ -23,7 +23,7 @@ export const LOBSTER_PALETTE_WEIGHTS: Array<[LobsterPetPalette, number]> = [
   [{ id: "geode", shell: "#6b6474", claw: "#7d7588" }, 1],
   [{ id: "ghost", shell: "#dce8f2", claw: "#ecf3fa" }, 1],
   [{ id: "glass", shell: "#cfe4f4", claw: "#e0eef8" }, 1],
-  [{ id: "split", shell: "#ff4f40", claw: "#ff775f" }, 1],
+  [{ id: "split", shell: "#35a55b", claw: "#57c785" }, 1],
   [{ id: "sourdough", shell: "#d9a662", claw: "#e6bc82" }, 1],
   [{ id: "zombie", shell: "#9db08a", claw: "#86a17a" }, 1],
   [{ id: "plush", shell: "#e8967a", claw: "#f2b09a" }, 1],
@@ -59,10 +59,10 @@ export const LOBSTER_PET_PALETTES: readonly LobsterPetPalette[] = LOBSTER_PALETT
   ([palette]) => palette,
 );
 
-const CHIMERA_DONOR_IDS = ["crimson", "blue", "gold", "banana", "watermelon"] as const;
+const CHIMERA_DONOR_IDS = ["emerald", "blue", "gold", "banana", "watermelon"] as const;
 
 export const CANONICAL_CHIMERA_PARTS: NonNullable<LobsterPetLook["chimeraParts"]> = {
-  body: "#ff4f40",
+  body: "#35a55b",
   clawLeft: "#4a7dfc",
   clawRight: "#f4b840",
   antennae: "#3f9d63",
