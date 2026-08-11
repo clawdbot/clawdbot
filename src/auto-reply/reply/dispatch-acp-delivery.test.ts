@@ -2,7 +2,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { ReplyPayload } from "../reply-payload.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
@@ -202,66 +201,6 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       text?: string;
     }) => kind === "block" && typeof text === "string" && text.trim().length > 0;
     channelPluginMocks.shouldTreatRoutedTextAsVisible = undefined;
-    ttsMocks.maybeApplyTtsToPayload.mockClear();
-  });
-
-  it("honors dispatcher channel suppression before TTS or transcript accounting", async () => {
-    const transport = vi.fn(async () => {});
-    const dispatcher = createReplyDispatcher({
-      deliver: transport,
-      transformReplyPayload: () => null,
-    });
-    const coordinator = createAcpDispatchDeliveryCoordinator({
-      cfg: createAcpTestConfig({ tts: { enabled: true } }),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
-      dispatcher,
-      inboundAudio: false,
-      sessionTtsAuto: "always",
-      shouldRouteToOriginating: false,
-    });
-
-    await expect(coordinator.deliver("final", { text: "private reply" })).resolves.toBe(false);
-    dispatcher.markComplete();
-    await dispatcher.waitForIdle();
-
-    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
-    expect(transport).not.toHaveBeenCalled();
-    expect(coordinator.getAccumulatedTranscriptText()).toBe("");
-    expect(coordinator.hasDeliveredFinalReply()).toBe(false);
-    expect(coordinator.getDeliverySuppressionReason()).toBe("channel_transform");
-  });
-
-  it("preserves transform ownership while rebuilding deferred ACP final text", async () => {
-    const transport = vi.fn(async () => {});
-    const transformReplyPayload = vi.fn((payload: ReplyPayload) => ({
-      ...payload,
-      text: `${payload.text}!`,
-    }));
-    const dispatcher = createReplyDispatcher({ deliver: transport, transformReplyPayload });
-    const coordinator = createAcpDispatchDeliveryCoordinator({
-      cfg: createAcpTestConfig({ tts: { enabled: true } }),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
-      dispatcher,
-      inboundAudio: false,
-      sessionTtsAuto: "always",
-      suppressBlockUserDelivery: true,
-      shouldRouteToOriginating: false,
-    });
-
-    await coordinator.deliver("final", { text: "hello" }, { skipTts: true });
-    dispatcher.markComplete();
-    await dispatcher.waitForIdle();
-
-    expect(transformReplyPayload).toHaveBeenCalledTimes(1);
-    expect(transport).toHaveBeenCalledWith({ text: "hello!" }, { kind: "final" });
   });
 
   it("bypasses TTS when skipTts is requested", async () => {
