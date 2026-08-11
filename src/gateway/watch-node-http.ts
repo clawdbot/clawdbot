@@ -50,7 +50,6 @@ import {
   buildRateLimitIdentityKey,
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
-import { hasForwardedRequestHeaders } from "./auth.js";
 import {
   broadcastSetupHandoffDeliveryUncertain,
   broadcastSetupHandoffCompletion,
@@ -66,7 +65,9 @@ import {
   sendRateLimited,
   sendUnauthorized,
 } from "./http-common.js";
+import { readPreparedGatewayIngressAttribution } from "./ingress-attribution.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
+import { hasForwardedRequestHeaders } from "./net.js";
 import { isLoopbackAddress, resolveRequestClientIp } from "./net.js";
 import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
 import { reconcileNodePairingOnConnect } from "./node-connect-reconcile.js";
@@ -165,6 +166,13 @@ function resolveWatchClientAddress(
   req: IncomingMessage,
   config: OpenClawConfig,
 ): { clientIp?: string; rateLimitKey: string } {
+  const attribution = readPreparedGatewayIngressAttribution(req);
+  if (attribution && attribution.kind !== "unattributable-proxy") {
+    return {
+      clientIp: attribution.clientIp,
+      rateLimitKey: attribution.rateLimit.subject.key,
+    };
+  }
   const trustedProxies = config.gateway?.trustedProxies ?? [];
   const clientIp = resolveRequestClientIp(
     req,
@@ -588,6 +596,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         authMethod: "token",
         sharedAuthOk: false,
         sharedAuthProvided: false,
+        pendingSharedAuthFailure: false,
         ...(bootstrapToken ? { bootstrapTokenCandidate: bootstrapToken } : {}),
         ...(deviceToken
           ? {

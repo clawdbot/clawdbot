@@ -10,6 +10,8 @@ export type GatewayCloseOptions = {
 };
 
 export type GatewayServer = {
+  /** Process-local endpoint used by OpenClaw-managed Tailscale proxying. */
+  getTailscaleIngressEndpoint: () => { host: "127.0.0.1"; port: number } | undefined;
   close: (opts?: GatewayCloseOptions) => Promise<void>;
   /**
    * Resolves when this generation finishes mandatory sidecar startup and rejects on failure.

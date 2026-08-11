@@ -25,6 +25,7 @@ import { buildAssistantMediaContentDisposition } from "./assistant-media-content
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+  createAuthRateLimiter,
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -225,6 +226,7 @@ describe("handleControlUiHttpRequest", () => {
     headers?: IncomingMessage["headers"];
     config?: OpenClawConfig;
     rateLimiter?: AuthRateLimiter;
+    remoteAddress?: string;
     trustedProxies?: string[];
   }) {
     const { res, end, setHeader } = makeMockHttpResponse();
@@ -236,7 +238,7 @@ describe("handleControlUiHttpRequest", () => {
         url,
         method: "GET",
         headers: params.headers ?? {},
-        socket: { remoteAddress: "127.0.0.1" },
+        socket: { remoteAddress: params.remoteAddress ?? "127.0.0.1" },
       } as IncomingMessage,
       res,
       {
@@ -332,6 +334,7 @@ describe("handleControlUiHttpRequest", () => {
     return {
       host: "gateway.example.com",
       "x-forwarded-user": "nick@example.com",
+      "x-forwarded-for": "203.0.113.10",
       "x-forwarded-proto": "https",
       ...extraHeaders,
     };
@@ -2405,6 +2408,41 @@ describe("handleControlUiHttpRequest", () => {
         });
       },
     });
+  });
+
+  it("rejects unattributable proxy ingress before bootstrap device-token fallback", async () => {
+    const rateLimiter = createAuthRateLimiter({
+      maxAttempts: 2,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      pruneIntervalMs: 0,
+    });
+
+    try {
+      await withPairedOperatorDeviceToken({
+        fn: async (operatorToken) => {
+          await withControlUiRoot({
+            fn: async (tmp) => {
+              const sendBootstrap = async (token: string) =>
+                await runBootstrapConfigRequest({
+                  rootPath: tmp,
+                  auth: { mode: "token", token: "shared", allowTailscale: false },
+                  headers: {
+                    authorization: `Bearer ${token}`,
+                    forwarded: "for=203.0.113.10",
+                  },
+                  rateLimiter,
+                });
+
+              expect((await sendBootstrap(operatorToken)).res.statusCode).toBe(403);
+              expect((await sendBootstrap("wrong-one")).res.statusCode).toBe(403);
+            },
+          });
+        },
+      });
+    } finally {
+      rateLimiter.dispose();
+    }
   });
 
   it("selects higher-scope frame tabs using paired device-token scopes", async () => {

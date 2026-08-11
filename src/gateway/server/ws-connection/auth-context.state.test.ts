@@ -1,6 +1,6 @@
 // WebSocket auth-context state tests cover shared-auth fallback and device-token candidate selection.
 import { describe, expect, it, vi } from "vitest";
-import type { AuthRateLimiter } from "../../auth-rate-limit.js";
+import { createAuthRateLimiter, type AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import { resolveConnectAuthDecision, resolveConnectAuthState } from "./auth-context.js";
 
@@ -61,7 +61,7 @@ async function resolveTokenAuthState(params: {
 }
 
 describe("resolveConnectAuthState", () => {
-  it("records shared-secret failures even when an explicit device token is also present", async () => {
+  it("defers shared-secret failures when an explicit device token is also present", async () => {
     const rateLimiter = createLimiter();
     const state = await resolveTokenAuthState({
       connectAuth: {
@@ -74,7 +74,8 @@ describe("resolveConnectAuthState", () => {
 
     expect(state.authOk).toBe(false);
     expect(state.authResult.reason).toBe("token_mismatch");
-    expect(rateLimiter.recordFailure).toHaveBeenCalled();
+    expect(state.pendingSharedAuthFailure).toBe(true);
+    expect(rateLimiter.recordFailure).not.toHaveBeenCalled();
   });
 
   it("does not apply shared-secret lockouts to explicit device-token-only handshakes", async () => {
@@ -130,6 +131,7 @@ describe("resolveConnectAuthDecision", () => {
         authMethod: "token",
         sharedAuthOk: false,
         sharedAuthProvided: true,
+        pendingSharedAuthFailure: true,
         deviceTokenCandidate: "device-token",
         deviceTokenCandidateSource: "explicit-device-token",
       },
@@ -145,5 +147,46 @@ describe("resolveConnectAuthDecision", () => {
     });
 
     expect(rateLimiter.reset).toHaveBeenCalledWith(CLIENT_IP, "shared-secret");
+  });
+
+  it("does not let valid device reconnects consume remote shared-secret attempts", async () => {
+    const limiter = createAuthRateLimiter({
+      maxAttempts: 2,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      pruneIntervalMs: 0,
+    });
+    try {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const state = await resolveTokenAuthState({
+          connectAuth: { token: "device", deviceToken: "device" },
+          hasDeviceIdentity: true,
+          rateLimiter: limiter,
+        });
+        const decision = await resolveConnectAuthDecision({
+          state,
+          hasDeviceIdentity: true,
+          deviceId: "dev-1",
+          publicKey: "pub-1",
+          role: "operator",
+          scopes: ["operator.read"],
+          verifyBootstrapToken: async () => ({
+            ok: false,
+            reason: "bootstrap_token_invalid",
+          }),
+          verifyDeviceToken: async () => ({ ok: true }),
+          rateLimiter: limiter,
+          clientIp: CLIENT_IP,
+        });
+        expect(decision.authOk).toBe(true);
+      }
+
+      expect(limiter.check(CLIENT_IP, "shared-secret")).toMatchObject({
+        allowed: true,
+        remaining: 2,
+      });
+    } finally {
+      limiter.dispose();
+    }
   });
 });

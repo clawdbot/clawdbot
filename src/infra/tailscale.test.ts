@@ -350,4 +350,11 @@ describe("tailscale helpers", () => {
 
     await expect(hasTailscaleFunnelRouteForPort(18789, exec)).rejects.toThrow(SyntaxError);
   });
+
+  it("hasTailscaleFunnelRouteForPort preserves status command failures", async () => {
+    const failure = new Error("tailscale status unavailable");
+    const exec = vi.fn().mockRejectedValue(failure);
+
+    await expect(hasTailscaleFunnelRouteForPort(18789, exec)).rejects.toBe(failure);
+  });
 });

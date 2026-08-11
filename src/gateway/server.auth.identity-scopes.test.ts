@@ -36,13 +36,17 @@ function deviceIdentityPath(label: string): string {
   return path.join(os.tmpdir(), `openclaw-${label}-${randomUUID()}.sqlite`);
 }
 
-async function configureGatewayAuth(auth: GatewayAuthConfig): Promise<void> {
+async function configureGatewayAuth(
+  auth: GatewayAuthConfig,
+  options?: { tailscaleMode?: "serve" },
+): Promise<void> {
   testState.gatewayAuth = auth;
   testState.gatewayControlUi = { allowedOrigins: [BROWSER_ORIGIN] };
   await writeConfigFile({
     gateway: {
       auth,
       trustedProxies: ["127.0.0.1"],
+      ...(options?.tailscaleMode ? { tailscale: { mode: options.tailscaleMode } } : {}),
       controlUi: { allowedOrigins: [BROWSER_ORIGIN] },
     },
   });
@@ -141,16 +145,23 @@ describe("gateway identity scope grants", () => {
   ])(
     "matches a verified Tailscale identity exactly ($configuredIdentity)",
     async ({ configuredIdentity, verifiedIdentity, expectedAdmin }) => {
-      await configureGatewayAuth({
-        mode: "token",
-        token: "secret",
-        allowTailscale: true,
-        identityScopes: { [configuredIdentity]: ["operator.admin"] },
-      });
+      await configureGatewayAuth(
+        {
+          mode: "token",
+          token: "secret",
+          allowTailscale: true,
+          identityScopes: { [configuredIdentity]: ["operator.admin"] },
+        },
+        { tailscaleMode: "serve" },
+      );
       testTailscaleWhois.value = { login: verifiedIdentity, name: "Peter" };
 
-      await withGatewayServer(async ({ port }) => {
-        const ws = await openTailscaleWs(port, {
+      await withGatewayServer(async ({ server }) => {
+        const endpoint = server.getTailscaleIngressEndpoint();
+        if (!endpoint) {
+          throw new Error("expected managed Tailscale listener");
+        }
+        const ws = await openTailscaleWs(endpoint.port, {
           origin: BROWSER_ORIGIN,
           "tailscale-user-login": verifiedIdentity,
         });

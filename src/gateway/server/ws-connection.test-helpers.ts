@@ -5,6 +5,7 @@ import { EventEmitter } from "node:events";
 import { expect, vi } from "vitest";
 import type { WebSocketServer } from "ws";
 import type { ResolvedGatewayAuth } from "../auth.js";
+import { prepareGatewayIngressAttribution } from "../ingress-attribution.js";
 import type { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 
 type AttachGatewayWsConnectionParams = Parameters<typeof attachGatewayWsConnectionHandler>[0];
@@ -87,6 +88,7 @@ export function attachGatewayWsForTest(params: {
   host?: string;
   options?: Partial<AttachGatewayWsConnectionParams>;
   socket?: GatewayWsTestSocket;
+  trustedProxies?: string[];
 }) {
   const listeners = new Map<string, (...args: unknown[]) => void>();
   const wss = {
@@ -97,8 +99,16 @@ export function attachGatewayWsForTest(params: {
   const socket = params.socket ?? createGatewayWsTestSocket();
   const upgradeReq = {
     headers: { host: params.host ?? "127.0.0.1:19001", ...params.headers },
-    socket: { localAddress: "127.0.0.1" },
+    socket: {
+      remoteAddress: socket["_socket"].remoteAddress,
+      localAddress: socket["_socket"].localAddress,
+      localPort: socket["_socket"].localPort,
+    },
   };
+  prepareGatewayIngressAttribution({
+    req: upgradeReq as never,
+    trustedProxies: params.trustedProxies,
+  });
   const clients = params.clients ?? new Set<unknown>();
 
   params.attach({

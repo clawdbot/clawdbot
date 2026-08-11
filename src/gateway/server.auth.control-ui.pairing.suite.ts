@@ -208,8 +208,14 @@ export function registerControlUiPairingSuite(): void {
     });
     await overwritePairedPublicKey(identity.deviceId, "mismatched-public-key");
 
-    const { server, port, prevToken } = await startControlUiServer("secret");
-    const ws2 = await openTailscaleWs(port);
+    const { server, prevToken } = await startControlUiServer("secret", {
+      tailscale: { mode: "serve" },
+    });
+    const tailscaleEndpoint = server.getTailscaleIngressEndpoint();
+    if (!tailscaleEndpoint) {
+      throw new Error("expected managed Tailscale listener");
+    }
+    const ws2 = await openTailscaleWs(tailscaleEndpoint.port);
     try {
       const nonce2 = await readConnectChallengeNonce(ws2);
       const mismatched = await connectReq(ws2, {

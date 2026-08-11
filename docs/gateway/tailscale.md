@@ -109,7 +109,7 @@ openclaw gateway --tailscale funnel --auth password
 
 ### Tailscale identity headers (Serve only)
 
-When `tailscale.mode: "serve"` and `gateway.auth.allowTailscale` is `true`, Control UI/WebSocket auth can use Tailscale identity headers (`tailscale-user-login`) instead of a token/password. OpenClaw verifies the header by resolving the request's `x-forwarded-for` address via the local Tailscale daemon (`tailscale whois`) and matching it to the header login before accepting it. A request only qualifies for this path when it arrives from loopback carrying Tailscale's `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host` headers.
+When `tailscale.mode: "serve"` and `gateway.auth.allowTailscale` is `true`, Control UI/WebSocket auth can use Tailscale identity headers (`tailscale-user-login`) instead of a token/password. OpenClaw verifies the header by resolving the request's `x-forwarded-for` address via the local Tailscale daemon (`tailscale whois`) and matching it to the header login before accepting it. A request only qualifies when it reaches OpenClaw's dedicated managed-Tailscale listener with Tailscale's `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host` headers; sending those headers to the ordinary Gateway listener is rejected.
 
 This tokenless flow assumes the gateway host is trusted. If untrusted local code may run on the same host, set `gateway.auth.allowTailscale: false` and require token/password auth instead.
 
@@ -125,7 +125,7 @@ Scope of the bypass:
 - `tailscale.mode: "funnel"` refuses to start unless auth mode is `password`, to avoid public exposure.
 - `gateway.tailscale.serviceName` applies only to Serve mode and is passed to `tailscale serve --service=<name>`. The value must use Tailscale's `svc:<dns-label>` format, for example `svc:openclaw`. Tailscale requires Service hosts to be tagged nodes, and the Service may need admin-console approval before Serve can publish it.
 - `gateway.tailscale.resetOnExit` undoes `tailscale serve`/`tailscale funnel` configuration on shutdown.
-- `gateway.tailscale.preserveFunnel: true` keeps an externally configured `tailscale funnel` route alive across gateway restarts. With `mode: "serve"`, OpenClaw checks `tailscale funnel status` before re-applying Serve and skips it when a Funnel route already covers the gateway port. The OpenClaw-managed Funnel password-only policy is unchanged.
+- `gateway.tailscale.preserveFunnel: true` is a deprecated migration guard. It detects an externally configured `tailscale funnel` route before reapplying Serve. If that route still targets the ordinary Gateway listener, OpenClaw leaves it unchanged and warns because requests lack managed-ingress provenance. Plugin-authenticated webhook routes such as Google Chat and SMS keep using their own signature/auth checks and ignore forwarded client claims; Gateway-authenticated HTTP and WebSocket routes reject that ingress. First configure a durable `gateway.auth.password` (prefer a SecretRef) or `OPENCLAW_GATEWAY_PASSWORD`, then set `gateway.auth.mode` to `password`. After password auth is ready, run `openclaw config set gateway.tailscale.mode funnel`, then `openclaw config unset gateway.tailscale.preserveFunnel`; managed Funnel targets the dedicated ingress.
 - `gateway.bind: "tailnet"` uses a direct Tailnet bind (no HTTPS, no Serve/Funnel) plus required local `127.0.0.1` when a Tailnet IPv4 is available; otherwise it falls back to loopback only.
 - `gateway.bind: "auto"` prefers loopback; use `tailnet` to limit network exposure to the Tailnet while retaining same-host loopback access.
 - Serve/Funnel only expose the **Gateway control UI + WS**. Nodes connect over the same Gateway WS endpoint, so Serve works for node access too.
@@ -134,6 +134,7 @@ Scope of the bypass:
 
 - Serve requires HTTPS enabled for your tailnet; the CLI prompts if it is missing.
 - Serve injects Tailscale identity headers; Funnel does not.
+- OpenClaw-managed Serve/Funnel proxy to a private ephemeral loopback listener. The ordinary Gateway listener does not trust Tailscale-shaped headers by themselves.
 - Funnel requires Tailscale v1.38.3+, MagicDNS, HTTPS enabled, and a funnel node attribute.
 - Funnel only supports ports `443`, `8443`, and `10000` over TLS.
 - Funnel on macOS requires the open-source Tailscale app variant.

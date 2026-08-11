@@ -812,10 +812,16 @@ Gateway or node host and check `openclaw nodes pending` again.
 --service` so the Control UI can be exposed through a named Service instead
   of the device hostname. The value must use Tailscale's `svc:<dns-label>`
   Service name format; startup reports the derived Service URL.
-- `tailscale.preserveFunnel`: when `true` and `tailscale.mode = "serve"`, OpenClaw
-  checks `tailscale funnel status` before re-applying Serve at startup and skips
-  it if an externally configured Funnel route already covers the gateway port.
-  Default `false`.
+- `tailscale.preserveFunnel`: deprecated migration guard. When `true` and
+  `tailscale.mode = "serve"`, OpenClaw checks `tailscale funnel status` before
+  re-applying Serve at startup. An external Funnel that still targets the
+  ordinary Gateway port cannot provide request provenance. OpenClaw leaves the
+  external route unchanged and warns; plugin-authenticated webhooks retain
+  their own authentication, while Gateway-authenticated routes reject that
+  ingress. First configure `gateway.auth.password` (prefer a SecretRef) or
+  `OPENCLAW_GATEWAY_PASSWORD`, and set `gateway.auth.mode` to `password`. Then
+  run `openclaw config set gateway.tailscale.mode funnel`, followed by
+  `openclaw config unset gateway.tailscale.preserveFunnel`. Default `false`.
 - `controlUi.allowedOrigins`: explicit browser-origin allowlist for Gateway WebSocket connects. Required for public non-loopback browser origins. Private same-origin LAN/Tailnet UI loads from loopback, RFC1918/link-local, `.local`, `.ts.net`, or Tailscale CGNAT hosts are accepted without enabling Host-header fallback.
 - `controlUi.toolTitles`: opt in to AI-generated purpose titles for tool calls in Control UI chat. Default: `false` (tool rendering stays fully deterministic with no background model calls). When enabled, the `chat.toolTitles` method labels complex calls through standard utility-model routing — the agent's `utilityModel` (an operator decision that may send bounded tool arguments to the chosen provider, like every utility task), or the session provider's declared small-model default (OpenAI → `gpt-5.6-luna`, Anthropic → `claude-haiku-4-5`) — and caches results in the per-agent state database so repeat views never re-bill. `utilityModel: \"\"` disables titles like every other utility task; titles never fall back to the primary model.
 - `controlUi.dangerouslyAllowHostHeaderOriginFallback`: dangerous mode that enables Host-header origin fallback for deployments that intentionally rely on Host-header origin policy.

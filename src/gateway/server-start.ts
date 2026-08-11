@@ -74,6 +74,7 @@ export async function startGatewayServerCore(
 
   return {
     startupSettled,
+    getTailscaleIngressEndpoint: gatewayKernel.transportBridge.getTailscaleIngressEndpoint,
     close: async (optsLocal) => {
       await runGatewayShutdownSteps({
         steps: [

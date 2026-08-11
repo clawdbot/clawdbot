@@ -267,6 +267,7 @@ export function registerAuthModesSuite(): void {
         nextConfig: {
           gateway: {
             auth: testState.gatewayAuth,
+            tailscale: { mode: "serve" },
             controlUi: testState.gatewayControlUi,
           },
         },
@@ -274,6 +275,11 @@ export function registerAuthModesSuite(): void {
       });
       port = await getGatewayTestPort();
       server = await startTestGatewayServer(port);
+      const tailscaleEndpoint = server.getTailscaleIngressEndpoint();
+      if (!tailscaleEndpoint) {
+        throw new Error("expected managed Tailscale listener");
+      }
+      port = tailscaleEndpoint.port;
     });
 
     afterAll(async () => {

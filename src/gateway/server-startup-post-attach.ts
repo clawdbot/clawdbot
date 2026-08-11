@@ -1087,6 +1087,7 @@ export async function startGatewayPostAttachRuntime(
     getClientConnIds: (filter?: (client: GatewayClient) => boolean) => ReadonlySet<string>;
     broadcastPluginEvent?: import("./server-broadcast-types.js").GatewayPluginEventBroadcastFn;
     tailscaleMode: GatewayTailscaleMode;
+    tailscaleBackendPort?: number;
     resetOnExit: boolean;
     serviceName?: string;
     preserveFunnel: boolean;
@@ -1299,6 +1300,7 @@ export async function startGatewayPostAttachRuntime(
                 serviceName: params.serviceName,
                 preserveFunnel: params.preserveFunnel,
                 port: params.port,
+                backendPort: params.tailscaleBackendPort,
                 controlUiBasePath: params.controlUiBasePath,
                 logTailscale: params.logTailscale,
               }),
@@ -1621,35 +1623,46 @@ export async function startGatewayPostAttachRuntime(
       params.log.warn(`gateway sidecars failed to start: ${String(err)}`);
     });
 
-  if (params.sidecarStartup !== "defer") {
-    const [tailscaleCleanup, sidecarsResult] = await Promise.all([
-      tailscaleCleanupPromise,
-      sidecarsPromise,
-    ]);
+  try {
+    if (params.sidecarStartup !== "defer") {
+      const [tailscaleCleanup, sidecarsResult] = await Promise.all([
+        tailscaleCleanupPromise,
+        sidecarsPromise,
+      ]);
+      updateCheckResident.start();
+      return {
+        stopGatewayUpdateCheck: updateCheckResident.stop,
+        tailscaleCleanup,
+        pluginServices: sidecarsResult.pluginServices,
+        startupSettled: Promise.resolve(),
+      };
+    }
+
+    const tailscaleCleanup = await tailscaleCleanupPromise;
     updateCheckResident.start();
+    const startupSettled = Promise.all([sidecarsPromise, startupLogSettled.promise]).then(
+      () => undefined,
+    );
+    // Direct callers may ignore this handle; only the managed run loop observes it.
+    // Pre-handle so an ignored deferred sidecar failure never becomes an unhandled rejection.
+    void startupSettled.catch(() => {});
+
     return {
       stopGatewayUpdateCheck: updateCheckResident.stop,
       tailscaleCleanup,
-      pluginServices: sidecarsResult.pluginServices,
-      startupSettled: Promise.resolve(),
+      pluginServices: reportedPluginServices,
+      startupSettled,
     };
+  } catch (error) {
+    // Post-attach has not handed this cleanup to the server lifecycle yet. Join
+    // Tailscale startup and release any route before its private listener closes.
+    try {
+      await tailscaleResident.stop();
+    } catch (cleanupError) {
+      params.log.warn(`gateway Tailscale rollback failed: ${String(cleanupError)}`);
+    }
+    throw error;
   }
-
-  const tailscaleCleanup = await tailscaleCleanupPromise;
-  updateCheckResident.start();
-  const startupSettled = Promise.all([sidecarsPromise, startupLogSettled.promise]).then(
-    () => undefined,
-  );
-  // Direct callers may ignore this handle; only the managed run loop observes it.
-  // Pre-handle so an ignored deferred sidecar failure never becomes an unhandled rejection.
-  void startupSettled.catch(() => {});
-
-  return {
-    stopGatewayUpdateCheck: updateCheckResident.stop,
-    tailscaleCleanup,
-    pluginServices: reportedPluginServices,
-    startupSettled,
-  };
 }
 
 export const testing = {

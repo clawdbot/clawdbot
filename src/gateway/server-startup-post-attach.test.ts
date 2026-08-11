@@ -613,6 +613,26 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(methodsAtRecoveryRegistration).toStrictEqual([["chat.history", "models.list"]]);
   });
 
+  it("targets managed Tailscale at the bound private ingress port", async () => {
+    const startGatewayTailscaleExposure = vi.fn(async () => null);
+
+    await startGatewayPostAttachRuntime(
+      createPostAttachParams({
+        tailscaleMode: "serve",
+        tailscaleBackendPort: 19_000,
+      }),
+      createPostAttachRuntimeDeps({ startGatewayTailscaleExposure }),
+    );
+
+    expect(startGatewayTailscaleExposure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tailscaleMode: "serve",
+        port: 18_789,
+        backendPort: 19_000,
+      }),
+    );
+  });
+
   it("fences startup recovery as soon as its gateway close prelude begins", async () => {
     let closing = false;
     const recoverySidecar = { stop: vi.fn(async () => {}) };
@@ -3055,6 +3075,30 @@ describe("startGatewayPostAttachRuntime", () => {
 
     expect(onStartupPluginsLoaded).not.toHaveBeenCalled();
     expect(startGatewaySidecarsValue).not.toHaveBeenCalled();
+  });
+
+  it("rolls back managed Tailscale exposure when post-attach startup fails", async () => {
+    const startupError = new Error("sidecar startup failed");
+    const tailscaleCleanup = vi.fn(async () => {});
+    const startGatewayTailscaleExposure = vi.fn(async () => tailscaleCleanup);
+
+    await expect(
+      startGatewayPostAttachRuntime(
+        createPostAttachParams({
+          tailscaleMode: "serve",
+          tailscaleBackendPort: 19_000,
+        }),
+        createPostAttachRuntimeDeps({
+          startGatewayTailscaleExposure,
+          startGatewaySidecars: vi.fn(async () => {
+            throw startupError;
+          }),
+        }),
+      ),
+    ).rejects.toBe(startupError);
+
+    expect(startGatewayTailscaleExposure).toHaveBeenCalledTimes(1);
+    expect(tailscaleCleanup).toHaveBeenCalledTimes(1);
   });
 
   it("does not start the worker environment sidecar after close begins", async () => {

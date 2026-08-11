@@ -259,10 +259,10 @@ export type GatewayTailscaleConfig = {
   /** Optional Tailscale Service name, such as `svc:openclaw`, for Serve mode. */
   serviceName?: string;
   /**
-   * When `mode="serve"` and an externally configured Tailscale Funnel route
-   * already covers the gateway port, skip re-applying `tailscale serve` on
-   * startup. Lets operators manage Funnel exposure outside OpenClaw without
-   * losing it across gateway restarts.
+   * Detect an external Funnel route left on the ordinary Gateway listener and
+   * leave exposure unchanged with migration guidance. Gateway-authenticated
+   * routes reject that ingress; plugin-authenticated webhooks keep their owner auth.
+   * @deprecated Migrate to `mode="funnel"`, which uses managed ingress.
    */
   preserveFunnel?: boolean;
 };

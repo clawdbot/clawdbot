@@ -23,7 +23,14 @@ vi.mock("../infra/tailscale.js", () => ({
 }));
 
 import { getMcpAppChannelOrigin, prepareMcpAppChannelOrigin } from "./mcp-app-channel-origin.js";
-import { startGatewayTailscaleExposure } from "./server-tailscale.js";
+import { startGatewayTailscaleExposure as startGatewayTailscaleExposureBase } from "./server-tailscale.js";
+
+const MANAGED_BACKEND_PORT = 19_000;
+function startGatewayTailscaleExposure(
+  params: Omit<Parameters<typeof startGatewayTailscaleExposureBase>[0], "backendPort">,
+) {
+  return startGatewayTailscaleExposureBase({ ...params, backendPort: MANAGED_BACKEND_PORT });
+}
 
 function createLogger() {
   return { info: vi.fn(), warn: vi.fn() };
@@ -47,7 +54,20 @@ afterEach(() => {
   mocks.hasTailscaleFunnelRouteForPort.mockResolvedValue(false);
 });
 
-describe("startGatewayTailscaleExposure preserveFunnel", () => {
+describe("startGatewayTailscaleExposure", () => {
+  it("does not change Tailscale state before the private backend is bound", async () => {
+    await expect(
+      startGatewayTailscaleExposureBase({
+        tailscaleMode: "serve",
+        port: 18789,
+        logTailscale: createLogger(),
+      }),
+    ).rejects.toThrow("Managed Tailscale ingress failed to start");
+
+    expect(mocks.enableTailscaleServe).not.toHaveBeenCalled();
+    expect(mocks.enableTailscaleFunnel).not.toHaveBeenCalled();
+  });
+
   it("calls enableTailscaleServe in serve mode when preserveFunnel is unset", async () => {
     const logTailscale = createLogger();
 
@@ -57,48 +77,98 @@ describe("startGatewayTailscaleExposure preserveFunnel", () => {
       logTailscale,
     });
 
-    expect(mocks.enableTailscaleServe).toHaveBeenCalledWith(18789);
+    expect(mocks.enableTailscaleServe).toHaveBeenCalledWith(MANAGED_BACKEND_PORT);
     expect(mocks.getTailnetHostnameAfterServe).toHaveBeenCalledOnce();
     expect(mocks.getTailnetHostname).not.toHaveBeenCalled();
     expect(mocks.hasTailscaleFunnelRouteForPort).not.toHaveBeenCalled();
   });
 
-  it("skips enableTailscaleServe when preserveFunnel is true and a Funnel route covers the port", async () => {
-    const logTailscale = createLogger();
-    mocks.hasTailscaleFunnelRouteForPort.mockResolvedValue(true);
-
-    await startGatewayTailscaleExposure({
+  it("cleans up the owned Serve route", async () => {
+    const cleanup = await startGatewayTailscaleExposure({
       tailscaleMode: "serve",
       port: 18789,
-      preserveFunnel: true,
-      logTailscale,
+      resetOnExit: true,
+      logTailscale: createLogger(),
     });
 
-    expect(mocks.hasTailscaleFunnelRouteForPort).toHaveBeenCalledWith(18789);
-    expect(mocks.enableTailscaleServe).not.toHaveBeenCalled();
-    expect(logTailscale.info.mock.calls).toEqual([
-      ["serve skipped: preserving externally configured Tailscale Funnel for port 18789"],
-    ]);
+    await cleanup?.();
+    expect(mocks.disableTailscaleServe).toHaveBeenCalledOnce();
   });
 
-  it("notes resetOnExit is a no-op when preserveFunnel skips Serve", async () => {
-    const logTailscale = createLogger();
-    mocks.hasTailscaleFunnelRouteForPort.mockResolvedValue(true);
+  it.each([
+    ["serve", mocks.enableTailscaleServe],
+    ["funnel", mocks.enableTailscaleFunnel],
+  ] as const)(
+    "restores a persistent %s route before releasing the private port",
+    async (mode, enable) => {
+      const cleanup = await startGatewayTailscaleExposure({
+        tailscaleMode: mode,
+        port: 18789,
+        logTailscale: createLogger(),
+      });
 
-    await startGatewayTailscaleExposure({
+      await cleanup?.();
+
+      expect(enable).toHaveBeenNthCalledWith(1, MANAGED_BACKEND_PORT);
+      expect(enable).toHaveBeenNthCalledWith(2, 18789);
+      expect(mocks.disableTailscaleServe).not.toHaveBeenCalled();
+      expect(mocks.disableTailscaleFunnel).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves node-wide routes when restoring the stable target fails", async () => {
+    const failure = new Error("stable target unavailable");
+    const logTailscale = createLogger();
+    mocks.enableTailscaleServe.mockResolvedValueOnce(undefined).mockRejectedValueOnce(failure);
+    const cleanup = await startGatewayTailscaleExposure({
       tailscaleMode: "serve",
       port: 18789,
-      preserveFunnel: true,
-      resetOnExit: true,
       logTailscale,
     });
 
+    await cleanup?.();
+
+    expect(mocks.disableTailscaleServe).not.toHaveBeenCalled();
+    expect(mocks.disableTailscaleFunnel).not.toHaveBeenCalled();
+    expect(logTailscale.warn).toHaveBeenCalledWith(expect.stringContaining(failure.message));
+  });
+
+  it("keeps the Gateway up with complete migration guidance for an external Funnel", async () => {
+    const logTailscale = createLogger();
+    mocks.hasTailscaleFunnelRouteForPort.mockResolvedValue(true);
+
+    const cleanup = await startGatewayTailscaleExposure({
+      tailscaleMode: "serve",
+      port: 18789,
+      preserveFunnel: true,
+      logTailscale,
+    });
+
+    expect(cleanup).toBeNull();
+    expect(mocks.hasTailscaleFunnelRouteForPort).toHaveBeenCalledWith(18789);
     expect(mocks.enableTailscaleServe).not.toHaveBeenCalled();
-    expect(logTailscale.info.mock.calls).toEqual([
-      [
-        "serve skipped: preserving externally configured Tailscale Funnel for port 18789; resetOnExit is a no-op because no Serve route was applied this run",
-      ],
-    ]);
+    expect(logTailscale.warn).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /plugin-authenticated.*gateway\.auth\.password.*gateway\.auth\.mode=password.*mode funnel.*unset/s,
+      ),
+    );
+  });
+
+  it("keeps the local Gateway up without changing exposure when Funnel status is unknown", async () => {
+    const failure = new Error("tailscale status unavailable");
+    const logTailscale = createLogger();
+    mocks.hasTailscaleFunnelRouteForPort.mockRejectedValue(failure);
+
+    const cleanup = await startGatewayTailscaleExposure({
+      tailscaleMode: "serve",
+      port: 18789,
+      preserveFunnel: true,
+      logTailscale,
+    });
+
+    expect(cleanup).toBeNull();
+    expect(mocks.enableTailscaleServe).not.toHaveBeenCalled();
+    expect(logTailscale.warn).toHaveBeenCalledWith(expect.stringContaining(failure.message));
   });
 
   it("falls back to enableTailscaleServe when preserveFunnel is true but no Funnel route exists for the port", async () => {
@@ -113,7 +183,7 @@ describe("startGatewayTailscaleExposure preserveFunnel", () => {
     });
 
     expect(mocks.hasTailscaleFunnelRouteForPort).toHaveBeenCalledWith(18789);
-    expect(mocks.enableTailscaleServe).toHaveBeenCalledWith(18789);
+    expect(mocks.enableTailscaleServe).toHaveBeenCalledWith(MANAGED_BACKEND_PORT);
   });
 
   it("passes serviceName through to Tailscale Serve setup and cleanup", async () => {
@@ -128,7 +198,11 @@ describe("startGatewayTailscaleExposure preserveFunnel", () => {
       logTailscale,
     });
 
-    expect(mocks.enableTailscaleServe).toHaveBeenCalledWith(18789, undefined, "svc:openclaw");
+    expect(mocks.enableTailscaleServe).toHaveBeenCalledWith(
+      MANAGED_BACKEND_PORT,
+      undefined,
+      "svc:openclaw",
+    );
     expect(logTailscale.info).toHaveBeenCalledWith(
       "serve enabled for svc:openclaw: https://openclaw.tailnet.ts.net/ (WS via wss://openclaw.tailnet.ts.net)",
     );
@@ -150,7 +224,7 @@ describe("startGatewayTailscaleExposure preserveFunnel", () => {
       logTailscale,
     });
 
-    expect(mocks.enableTailscaleFunnel).toHaveBeenCalledWith(18789);
+    expect(mocks.enableTailscaleFunnel).toHaveBeenCalledWith(MANAGED_BACKEND_PORT);
     expect(mocks.enableTailscaleServe).not.toHaveBeenCalled();
     expect(logTailscale.info).toHaveBeenCalledWith(
       "funnel enabled: https://node.tailnet.ts.net/ (WS via wss://node.tailnet.ts.net)",
@@ -180,7 +254,7 @@ describe("startGatewayTailscaleExposure preserveFunnel", () => {
     expect(mocks.disableTailscaleServe).not.toHaveBeenCalled();
   });
 
-  it("marks preserved Funnel as internet reachable without taking route ownership", async () => {
+  it("does not publish an origin for an externally preserved Funnel", async () => {
     mocks.getTailnetHostname.mockResolvedValue("node.tailnet.ts.net");
     mocks.hasTailscaleFunnelRouteForPort.mockResolvedValue(true);
 
@@ -192,11 +266,7 @@ describe("startGatewayTailscaleExposure preserveFunnel", () => {
       logTailscale: createLogger(),
     });
 
-    expect(getMcpAppChannelOrigin()).toEqual({
-      origin: "https://node.tailnet.ts.net",
-      reachability: "internet",
-    });
-    await cleanup?.();
+    expect(cleanup).toBeNull();
     expect(getMcpAppChannelOrigin()).toBeUndefined();
     expect(mocks.disableTailscaleServe).not.toHaveBeenCalled();
     expect(mocks.disableTailscaleFunnel).not.toHaveBeenCalled();
@@ -216,7 +286,11 @@ describe("startGatewayTailscaleExposure preserveFunnel", () => {
       logTailscale,
     });
 
-    expect(mocks.enableTailscaleServe).toHaveBeenCalledWith(18789, undefined, "svc:openclaw");
+    expect(mocks.enableTailscaleServe).toHaveBeenCalledWith(
+      MANAGED_BACKEND_PORT,
+      undefined,
+      "svc:openclaw",
+    );
     expect(logTailscale.info).toHaveBeenCalledWith("serve enabled");
   });
 
@@ -231,6 +305,6 @@ describe("startGatewayTailscaleExposure preserveFunnel", () => {
     });
 
     expect(mocks.hasTailscaleFunnelRouteForPort).not.toHaveBeenCalled();
-    expect(mocks.enableTailscaleFunnel).toHaveBeenCalledWith(18789);
+    expect(mocks.enableTailscaleFunnel).toHaveBeenCalledWith(MANAGED_BACKEND_PORT);
   });
 });

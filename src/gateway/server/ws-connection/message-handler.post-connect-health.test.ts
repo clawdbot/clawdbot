@@ -20,6 +20,7 @@ import { mintAgentRuntimeIdentityToken } from "../../agent-runtime-identity-toke
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import type { HealthSummary } from "../../health/types.js";
+import type { GatewayAttributedIngress } from "../../ingress-attribution.js";
 import { getGatewayLocalUserIngress } from "../../local-user-ingress.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { handleGatewayRequest } from "../../server-methods.js";
@@ -246,6 +247,7 @@ function attachGatewayHarness(options: {
   requestOrigin?: string;
   requestHost?: string;
   headers?: Record<string, string>;
+  ingressAttribution?: GatewayAttributedIngress;
   remoteAddr?: string;
   localAddr?: string;
   resolvedAuth?: ResolvedGatewayAuth;
@@ -290,6 +292,19 @@ function attachGatewayHarness(options: {
       },
       socket: { localAddress: localAddr, remoteAddress: remoteAddr },
     } as unknown as IncomingMessage,
+    ingressAttribution:
+      options.ingressAttribution ??
+      (remoteAddr === "127.0.0.1"
+        ? {
+            kind: "direct-local",
+            clientIp: remoteAddr,
+            rateLimit: { subject: { key: remoteAddr }, resetOnSuccess: true },
+          }
+        : {
+            kind: "direct-remote",
+            clientIp: remoteAddr,
+            rateLimit: { subject: { key: remoteAddr }, resetOnSuccess: true },
+          }),
     connId: options.connId,
     remoteAddr,
     localAddr,
@@ -444,8 +459,14 @@ function connectTrustedProxyUser(connId: string) {
       },
     },
     headers: {
+      "x-forwarded-for": "203.0.113.10",
       "x-forwarded-user": "alice@example.com",
       "x-forwarded-proto": "https",
+    },
+    ingressAttribution: {
+      kind: "trusted-proxy",
+      clientIp: "203.0.113.10",
+      rateLimit: { subject: { key: "203.0.113.10" }, resetOnSuccess: true },
     },
   });
   harness.sendConnect(`connect-${connId}`, {

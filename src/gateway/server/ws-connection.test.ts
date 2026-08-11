@@ -77,6 +77,7 @@ async function connectTestWs(
     socket?: GatewayWsTestSocket;
     clients?: Set<unknown>;
     options?: Partial<Parameters<typeof attachGatewayWsConnectionHandler>[0]>;
+    trustedProxies?: string[];
   } = {},
 ) {
   const logWsControl = createGatewayWsTestLogger();
@@ -87,6 +88,7 @@ async function connectTestWs(
     host: params.host,
     options: { ...params.options, logWsControl: logWsControl as never },
     socket: params.socket,
+    trustedProxies: params.trustedProxies,
   });
   await waitForLazyMessageHandler();
 
@@ -240,9 +242,11 @@ describe("attachGatewayWsConnectionHandler", () => {
     const { passed } = await connectTestWs({
       host: "10.0.0.2:18789",
       headers: {
+        "x-forwarded-for": "203.0.113.10",
         "x-forwarded-host": "gateway.example.com",
         "x-forwarded-proto": "https",
       },
+      trustedProxies: ["127.0.0.1"],
       options: {
         gatewayHost: "10.0.0.2",
         port: 18789,
