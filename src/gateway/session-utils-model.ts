@@ -39,6 +39,7 @@ import {
   resolveSupportedThinkingLevel,
 } from "../auto-reply/thinking.js";
 import { resolveAgentMainSessionKey, type SessionEntry } from "../config/sessions.js";
+import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
@@ -172,6 +173,13 @@ type GatewaySessionThinkingProjectionParams = {
   entry?: SessionEntry;
   modelCatalog?: ModelCatalogEntry[];
   rowContext?: SessionListRowContext;
+  /**
+   * Pre-resolved persisted ACP runtime metadata for this session. When
+   * provided, the projection skips its own store/DB lookup; callers that
+   * already resolved the metadata (e.g. row builders that also project the
+   * ACP model overlay) avoid reading the same row twice.
+   */
+  acpMeta?: SessionAcpMeta;
 };
 
 export function resolveGatewaySessionThinkingProjectionInternal(
@@ -179,10 +187,12 @@ export function resolveGatewaySessionThinkingProjectionInternal(
 ) {
   const cachedAcpMeta = params.rowContext?.acpSessionMetaByEntry;
   const acpMeta =
-    params.entry?.acp ??
-    (params.entry && cachedAcpMeta?.has(params.entry)
-      ? cachedAcpMeta.get(params.entry)
-      : readAcpSessionMeta({ sessionKey: params.sessionKey }));
+    params.acpMeta !== undefined
+      ? params.acpMeta
+      : (params.entry?.acp ??
+        (params.entry && cachedAcpMeta?.has(params.entry)
+          ? cachedAcpMeta.get(params.entry)
+          : readAcpSessionMeta({ sessionKey: params.sessionKey })));
   const configuredAgentRuntime = resolveModelAgentRuntimeMetadata({
     cfg: params.cfg,
     agentId: params.agentId,

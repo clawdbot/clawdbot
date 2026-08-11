@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/index.js";
+import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -29,6 +30,7 @@ import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.j
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
+import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
@@ -325,6 +327,16 @@ export function buildGatewaySessionRow(params: {
     agentId: sessionAgentId,
     sessionKey: key,
   });
+  // Persisted ACP runtime metadata gates both the ACP model overlay below and
+  // the thinking projection's runtime classification. Key shape alone is not
+  // sufficient: ACP bridge sessions (translator.ts) use ACP-shaped keys without
+  // ever writing `SessionAcpMeta` and still run the configured model.
+  const acpMeta =
+    entry?.acp ??
+    (entry && rowContext?.acpSessionMetaByEntry?.has(entry)
+      ? rowContext.acpSessionMetaByEntry.get(entry)
+      : readAcpSessionMeta({ sessionKey: acpSessionKey }));
+  const acpRuntime = acpMeta != null && isAcpSessionKey(key);
   const estimatedCostUsd = lightweight
     ? resolveNonNegativeNumber(entry?.estimatedCostUsd)
     : (resolveEstimatedSessionCostUsd({
@@ -382,6 +394,7 @@ export function buildGatewaySessionRow(params: {
     model: thinkingModel,
     sessionKey: acpSessionKey,
     entry,
+    acpMeta,
     modelCatalog: params.modelCatalog,
     rowContext,
   });
@@ -503,9 +516,14 @@ export function buildGatewaySessionRow(params: {
       channel: INTERNAL_MESSAGE_CHANNEL,
       sessionEntry: entry,
     }).mode,
-    modelProvider: rowModelProvider,
-    model: rowModel,
-    modelSelectionLocked: entry?.modelSelectionLocked,
+    // ACP runtime sessions are answered by the external harness, not the
+    // agent's configured model: report the canonical ACP display identity
+    // (mirroring `sessions list`'s sentinel overlay) and lock model selection
+    // so the composer footer cannot present or mutate an inapplicable model.
+    modelProvider: acpRuntime ? "acpx" : rowModelProvider,
+    model: acpRuntime ? `${sessionAgentId}-acp` : rowModel,
+    modelSelectionLocked:
+      entry?.modelSelectionLocked === true || acpRuntime ? true : entry?.modelSelectionLocked,
     agentRuntime: thinkingProjection.agentRuntime,
     contextTokens,
     contextBudgetStatus: entry?.contextBudgetStatus,

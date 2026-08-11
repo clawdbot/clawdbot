@@ -334,6 +334,81 @@ describe("gateway session utils", () => {
     expect(buildGatewaySessionEventFields({ sessionRow: row }).observerDigest).toBeNull();
   });
 
+  describe("ACP runtime session row projection", () => {
+    const ACP_KEY = "agent:cursor:acp:22222222-2222-4222-8222-222222222222";
+
+    test("overlays the canonical ACP display identity and locks model selection when persisted ACP metadata exists", () => {
+      const row = buildGatewaySessionRow({
+        cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+        storePath: "",
+        store: {},
+        key: ACP_KEY,
+        entry: {
+          sessionId: "sess-acp",
+          updatedAt: 1,
+          modelProvider: "openrouter",
+          model: "z-ai/glm-5.2",
+          acp: {
+            backend: "acpx",
+            agent: "cursor",
+            runtimeSessionName: ACP_KEY,
+            mode: "oneshot",
+            state: "idle",
+            lastActivityAt: 1,
+          },
+        } as SessionEntry,
+      });
+
+      // The external harness answers in this session, so the row must report
+      // the canonical ACP identity (matching `sessions list`) instead of the
+      // owning agent's configured model, and lock the model selector.
+      expect(row.model).toBe("cursor-acp");
+      expect(row.modelProvider).toBe("acpx");
+      expect(row.modelSelectionLocked).toBe(true);
+      expect(row.agentRuntime?.id).toBe("acpx");
+    });
+
+    test("keeps the configured model for ACP-shaped bridge keys without persisted ACP metadata", () => {
+      const row = buildGatewaySessionRow({
+        cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+        storePath: "",
+        store: {},
+        key: "agent:cursor:acp:configured-bridge-without-meta",
+        entry: {
+          sessionId: "sess-bridge",
+          updatedAt: 1,
+          modelProvider: "openrouter",
+          model: "z-ai/glm-5.2",
+        } as SessionEntry,
+      });
+
+      // ACP bridge sessions run the configured model; key shape alone must not
+      // trigger the sentinel overlay.
+      expect(row.model).toBe("z-ai/glm-5.2");
+      expect(row.modelProvider).toBe("openrouter");
+      expect(row.modelSelectionLocked).toBeUndefined();
+    });
+
+    test("leaves non-ACP sessions untouched", () => {
+      const row = buildGatewaySessionRow({
+        cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        entry: {
+          sessionId: "sess-main",
+          updatedAt: 1,
+          modelProvider: "openai",
+          model: "gpt-5.4",
+        } as SessionEntry,
+      });
+
+      expect(row.model).toBe("gpt-5.4");
+      expect(row.modelProvider).toBe("openai");
+      expect(row.modelSelectionLocked).toBeUndefined();
+    });
+  });
+
   test("session lists apply a bounded default and expose truncation metadata", async () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
     const store = Object.fromEntries(
