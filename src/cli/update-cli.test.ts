@@ -500,6 +500,8 @@ const { defaultRuntime } = await import("../runtime.js");
 const postCorePluginConvergence = await import("./update-cli/post-core-plugin-convergence.js");
 const { completePostCorePluginUpdate } =
   await import("./update-cli/update-command-fresh-doctor.js");
+const { continuePostCoreUpdateInFreshProcess } =
+  await import("./update-cli/update-command-post-core.js");
 const runPostCorePluginConvergenceSpy = vi.spyOn(
   postCorePluginConvergence,
   "runPostCorePluginConvergence",
@@ -1608,6 +1610,41 @@ describe("update-cli", () => {
       suppressFutureVersionWarning: true,
     });
     expectNoSideEffects(updateNpmInstalledPlugins, runDaemonInstall, runDaemonRestart);
+  });
+
+  it("isolates stale handoff values at the post-core CLI spawn boundary", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(FRESH_POST_UPDATE_ENTRYPOINT);
+    readPackageVersion.mockResolvedValueOnce(null);
+
+    await withEnvAsync(
+      {
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: "stale-version",
+        OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL: "beta",
+        OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH: "/tmp/stale-config.json",
+        OPENCLAW_UNRELATED: "preserved",
+      },
+      async () => {
+        await continuePostCoreUpdateInFreshProcess({
+          root: "/tmp/openclaw-updated-root",
+          channel: "stable",
+          requestedChannel: null,
+          opts: {},
+          pluginInstallRecords: {},
+          updateStartedAtMs: 123,
+        });
+
+        const env = spawnCall()?.[2]?.env;
+        expect(env?.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
+        expect(env?.OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL).toBeUndefined();
+        expect(env?.OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH).toBeUndefined();
+        expect(env?.OPENCLAW_UNRELATED).toBe("preserved");
+        expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("stale-version");
+        expect(process.env.OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL).toBe("beta");
+        expect(process.env.OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH).toBe(
+          "/tmp/stale-config.json",
+        );
+      },
+    );
   });
 
   it("keeps stopped owned-service config and plugin state through fresh post-core handoff", async () => {

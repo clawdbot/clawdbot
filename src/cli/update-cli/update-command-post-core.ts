@@ -40,6 +40,7 @@ import {
   type ControlPlaneUpdateSentinelMetaFile,
 } from "../../infra/update-control-plane-sentinel.js";
 import {
+  buildPostCoreHandoffEnv,
   POST_CORE_UPDATE_ENV,
   POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
   type PreUpdateConfigRestoreInput,
@@ -91,7 +92,6 @@ import {
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 export { POST_CORE_UPDATE_ENV };
 export const POST_CORE_UPDATE_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_CHANNEL";
-export const POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL";
 export const POST_CORE_UPDATE_RESULT_PATH_ENV = "OPENCLAW_UPDATE_POST_CORE_RESULT_PATH";
 export const POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV =
   "OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH";
@@ -560,25 +560,22 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
     await writePostCoreSourceConfigFile(sourceConfigPath, params.preUpdateConfig);
     const jsonMode = params.opts.json === true;
     const childStdio = resolvePostCoreUpdateChildStdio(process.platform, jsonMode);
+    const handoffEnv = buildPostCoreHandoffEnv({
+      baseEnv: stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
+      compatHostVersion: postCoreHostVersion,
+      requestedChannel: params.requestedChannel,
+      sourceConfigPath: params.preUpdateConfig ? sourceConfigPath : undefined,
+    });
     const child = spawn(params.nodeRunner ?? resolveNodeRunner(), argv, {
       stdio: childStdio,
       env: {
-        ...stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
+        ...handoffEnv,
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
         [POST_CORE_UPDATE_ENV]: "1",
         [POST_CORE_UPDATE_CHANNEL_ENV]: params.channel,
-        ...(params.requestedChannel
-          ? { [POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV]: params.requestedChannel }
-          : {}),
         [POST_CORE_UPDATE_RESULT_PATH_ENV]: resultPath,
         [POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV]: installRecordsPath,
         [POST_CORE_UPDATE_STARTED_AT_ENV]: String(params.updateStartedAtMs),
-        ...(postCoreHostVersion === null
-          ? {}
-          : { OPENCLAW_COMPATIBILITY_HOST_VERSION: postCoreHostVersion }),
-        ...(params.preUpdateConfig
-          ? { [POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV]: sourceConfigPath }
-          : {}),
       },
     });
     // JSON callers own stdout, so child diagnostics must remain off that protocol stream.
