@@ -44,8 +44,13 @@ function textMentionsSecurityAuditSuppressions(value: string): boolean {
 
 function isReadOnlySecurityAuditSuppressionInspection(argv: string[]): boolean {
   const command = normalizeCommandName(argv[0]);
-  let offset = command === "pnpm" && argv[1] === "openclaw" ? 1 : 0;
-  if (normalizeCommandName(argv[offset]) !== "openclaw") {
+  const pkgRunnerName = command === "pnpm" ? argv[1] : undefined;
+  let offset =
+    command === "pnpm" && (pkgRunnerName === "openclaw" || pkgRunnerName === "opencrustacean")
+      ? 1
+      : 0;
+  const cliName = normalizeCommandName(argv[offset]);
+  if (cliName !== "openclaw" && cliName !== "opencrustacean") {
     return false;
   }
   offset += 1;
