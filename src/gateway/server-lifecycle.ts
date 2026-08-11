@@ -98,6 +98,8 @@ export async function prepareGatewayLifecycle(params: {
     sessionEventSubscribers,
     watchNodeRequestHandler,
     defaultWorkspaceDir,
+    activeTaskCount,
+    residentRegistry,
   } = runtime;
   const completeControlUiDeviceAuthMigrationForEffectiveOperator = (
     device: EffectiveOperatorDeviceIdentity,
@@ -263,6 +265,66 @@ export async function prepareGatewayLifecycle(params: {
     },
     publishMethodSurface: (methods: readonly string[]) => {
       runtimeState.gatewayMethods.splice(0, runtimeState.gatewayMethods.length, ...methods);
+    },
+    setEarlyRuntimeHandles: (handles: {
+      bonjourStop: typeof runtimeState.bonjourStop;
+      getActiveTaskCount: () => number;
+      skillsChangeUnsub: typeof runtimeState.skillsChangeUnsub;
+    }) => {
+      runtimeState.bonjourStop = handles.bonjourStop;
+      activeTaskCount.get = handles.getActiveTaskCount;
+      runtimeState.skillsChangeUnsub = handles.skillsChangeUnsub;
+    },
+    swapBonjourStop: (next: typeof runtimeState.bonjourStop) => {
+      const previous = runtimeState.bonjourStop;
+      runtimeState.bonjourStop = next;
+      return previous;
+    },
+    setScheduledServiceHandles: (handles: {
+      heartbeatRunner: typeof runtimeState.heartbeatRunner;
+      stopOutboundDeliveryRecovery: typeof runtimeState.stopOutboundDeliveryRecovery;
+    }) => {
+      runtimeState.heartbeatRunner = handles.heartbeatRunner;
+      runtimeState.stopOutboundDeliveryRecovery = handles.stopOutboundDeliveryRecovery;
+    },
+    setPostAttachHandles: (handles: {
+      stopGatewayUpdateCheck: typeof runtimeState.stopGatewayUpdateCheck;
+      tailscaleCleanup: typeof runtimeState.tailscaleCleanup;
+      pluginServices: typeof runtimeState.pluginServices;
+    }) => {
+      runtimeState.stopGatewayUpdateCheck = handles.stopGatewayUpdateCheck;
+      runtimeState.tailscaleCleanup = handles.tailscaleCleanup;
+      runtimeState.pluginServices = handles.pluginServices;
+    },
+    setPluginServices: (pluginServices: typeof runtimeState.pluginServices) => {
+      runtimeState.pluginServices = pluginServices;
+    },
+    setConfigReloaderHandle: (configReloader: typeof runtimeState.configReloader) => {
+      runtimeState.configReloader = configReloader;
+    },
+    setPostReadySidecars: (sidecars: typeof runtimeState.postReadySidecars) => {
+      runtimeState.postReadySidecars = sidecars;
+    },
+    setGatewayLifetimeSidecars: (sidecars: typeof runtimeState.gatewayLifetimeSidecars) => {
+      runtimeState.gatewayLifetimeSidecars = sidecars;
+    },
+    addGatewayLifetimeSidecar: (sidecar: (typeof runtimeState.gatewayLifetimeSidecars)[number]) => {
+      runtimeState.gatewayLifetimeSidecars.push(sidecar);
+    },
+    setMaintenanceHandles: (handles: {
+      tickInterval: typeof runtimeState.tickInterval;
+      healthInterval: typeof runtimeState.healthInterval;
+      dedupeCleanup: typeof runtimeState.dedupeCleanup;
+      stopMediaCleanup: typeof runtimeState.stopMediaCleanup;
+      worktreeCleanup: typeof runtimeState.worktreeCleanup;
+      skillCuratorCleanup: typeof runtimeState.skillCuratorCleanup;
+    }) => {
+      runtimeState.tickInterval = handles.tickInterval;
+      runtimeState.healthInterval = handles.healthInterval;
+      runtimeState.dedupeCleanup = handles.dedupeCleanup;
+      runtimeState.stopMediaCleanup = handles.stopMediaCleanup;
+      runtimeState.worktreeCleanup = handles.worktreeCleanup;
+      runtimeState.skillCuratorCleanup = handles.skillCuratorCleanup;
     },
   };
   runtimeState.controlUiSessionPullRequests = createControlUiSessionPullRequestSubscriptions({
@@ -500,28 +562,35 @@ export async function prepareGatewayLifecycle(params: {
     }
   };
 
+  const diagnosticHeartbeatResident = residentRegistry.register({
+    name: "diagnostic-heartbeat",
+    start: () => {
+      // Gateway lifecycle owns both this existing heartbeat timer and the monitor
+      // it samples, so startup failure and normal close tear them down together.
+      startDiagnosticHeartbeat(undefined, {
+        getConfig: getRuntimeConfig,
+        startupGraceMs: 60_000,
+        sampleLiveness: () => {
+          const sample = readinessEventLoopHealth.persistentDegradationSnapshot();
+          if (!sample || sample.degradedSinceMs == null) {
+            return null;
+          }
+          return {
+            reasons: sample.reasons,
+            intervalMs: sample.intervalMs,
+            degradedSinceMs: sample.degradedSinceMs,
+            eventLoopDelayP99Ms: sample.delayP99Ms,
+            eventLoopDelayMaxMs: sample.delayMaxMs,
+            eventLoopUtilization: sample.utilization,
+            cpuCoreRatio: sample.cpuCoreRatio,
+          };
+        },
+      });
+    },
+    stop: () => stopDiagnosticHeartbeat(),
+  });
   if (diagnosticsEnabled) {
-    // Gateway lifecycle owns both this existing heartbeat timer and the monitor
-    // it samples, so startup failure and normal close tear them down together.
-    startDiagnosticHeartbeat(undefined, {
-      getConfig: getRuntimeConfig,
-      startupGraceMs: 60_000,
-      sampleLiveness: () => {
-        const sample = readinessEventLoopHealth.persistentDegradationSnapshot();
-        if (!sample || sample.degradedSinceMs == null) {
-          return null;
-        }
-        return {
-          reasons: sample.reasons,
-          intervalMs: sample.intervalMs,
-          degradedSinceMs: sample.degradedSinceMs,
-          eventLoopDelayP99Ms: sample.delayP99Ms,
-          eventLoopDelayMaxMs: sample.delayMaxMs,
-          eventLoopUtilization: sample.utilization,
-          cpuCoreRatio: sample.cpuCoreRatio,
-        };
-      },
-    });
+    diagnosticHeartbeatResident.start();
   }
 
   return {

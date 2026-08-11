@@ -274,14 +274,22 @@ async function closeCliResources(): Promise<void> {
       }
     },
     async () => {
-      const { stopManagedProviderLocalServices } =
-        await import("../agents/provider-local-service.js");
-      stopManagedProviderLocalServices();
+      const { hasManagedProviderLocalServices } =
+        await import("../agents/provider-runtime-lifecycle.js");
+      if (hasManagedProviderLocalServices()) {
+        const { stopManagedProviderLocalServices } =
+          await import("../agents/provider-local-service.js");
+        stopManagedProviderLocalServices();
+      }
     },
     async () => {
-      const { closeProviderTransportDispatcherPool } =
-        await import("../agents/provider-transport-dispatcher-pool.js");
-      await closeProviderTransportDispatcherPool();
+      const { hasProviderTransportDispatcherPool } =
+        await import("../agents/provider-runtime-lifecycle.js");
+      if (hasProviderTransportDispatcherPool()) {
+        const { closeProviderTransportDispatcherPool } =
+          await import("../agents/provider-transport-dispatcher-pool.js");
+        await closeProviderTransportDispatcherPool();
+      }
     },
     async () => {
       const { getActiveMcpLoopbackRuntime } =

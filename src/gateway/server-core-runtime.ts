@@ -114,7 +114,6 @@ export async function startGatewayCoreRuntime(input: {
     runtimeState,
     kernel,
     startupTrace,
-    activeTaskCount,
     channelManager,
     workerDispatchAuthority,
     clients,
@@ -141,9 +140,13 @@ export async function startGatewayCoreRuntime(input: {
     workerEnvironmentStartup,
     broadcastPluginEvent,
     activateRuntimeSecrets,
+    residentRegistry,
   } = runtime;
-  const earlyRuntime = await startupTrace.measure("runtime.early", () =>
-    loadGatewayStartupEarlyModule().then(({ startGatewayEarlyRuntime }) =>
+  let earlyRuntimePromise: ReturnType<
+    Awaited<ReturnType<typeof loadGatewayStartupEarlyModule>>["startGatewayEarlyRuntime"]
+  > | null = null;
+  const startEarlyRuntime = () => {
+    earlyRuntimePromise ??= loadGatewayStartupEarlyModule().then(({ startGatewayEarlyRuntime }) =>
       startGatewayEarlyRuntime({
         minimalTestGateway,
         cfgAtStart,
@@ -180,11 +183,31 @@ export async function startGatewayCoreRuntime(input: {
         getRuntimeConfig,
         startupTrace,
       }),
-    ),
+    );
+    return earlyRuntimePromise;
+  };
+  const discoveryResident = residentRegistry.register({
+    name: "bonjour-discovery",
+    start: startEarlyRuntime,
+    stop: async () => {
+      const earlyRuntime = await startEarlyRuntime();
+      await earlyRuntime.bonjourStop?.();
+    },
+  });
+  const taskAndSkillsResident = residentRegistry.register({
+    name: "task-and-skills-runtime",
+    start: async () => await discoveryResident.start(),
+    stop: async () => {
+      const earlyRuntime = await startEarlyRuntime();
+      earlyRuntime.skillsChangeUnsub();
+      const { stopTaskRegistryMaintenance } = await import("../tasks/task-registry.maintenance.js");
+      stopTaskRegistryMaintenance();
+    },
+  });
+  const earlyRuntime = await startupTrace.measure("runtime.early", () =>
+    taskAndSkillsResident.start(),
   );
-  runtimeState.bonjourStop = earlyRuntime.bonjourStop;
-  activeTaskCount.get = earlyRuntime.getActiveTaskCount;
-  runtimeState.skillsChangeUnsub = earlyRuntime.skillsChangeUnsub;
+  kernel.setEarlyRuntimeHandles(earlyRuntime);
 
   const [{ startGatewayEventSubscriptions }, { startGatewayRuntimeServices }] =
     await startupTrace.measure("runtime.post-early-imports", () =>
@@ -193,8 +216,9 @@ export async function startGatewayCoreRuntime(input: {
         import("./server-runtime-startup-services.js"),
       ]),
     );
-  const { sessionCompanion, sessionObserver, ...runtimeSubscriptionUnsubs } =
-    await startupTrace.measure("runtime.subscriptions", () =>
+  const eventSubscriptionsResident = residentRegistry.register({
+    name: "event-subscriptions",
+    start: () =>
       startGatewayEventSubscriptions({
         log,
         broadcast,
@@ -209,7 +233,16 @@ export async function startGatewayCoreRuntime(input: {
         restartRecoveryCandidates,
         terminalSessions,
       }),
-    );
+    stop: async () => {
+      await runtimeState.agentUnsub?.();
+      runtimeState.heartbeatUnsub?.();
+      runtimeState.transcriptUnsub?.();
+      runtimeState.lifecycleUnsub?.();
+      runtimeState.taskUnsub?.();
+    },
+  });
+  const { sessionCompanion, sessionObserver, ...runtimeSubscriptionUnsubs } =
+    await startupTrace.measure("runtime.subscriptions", () => eventSubscriptionsResident.start());
   Object.assign(runtimeState, runtimeSubscriptionUnsubs);
 
   const runtimeServices = await startupTrace.measure("runtime.services", () =>
@@ -289,7 +322,7 @@ export async function startGatewayCoreRuntime(input: {
       coreGatewayHandlers: coreGatewayHandlersLocal,
     };
   });
-  runtimeState.gatewayLifetimeSidecars.push({
+  kernel.addGatewayLifetimeSidecar({
     stop: async () => {
       unregisterApprovalAuthorityObserver();
     },
@@ -385,8 +418,7 @@ export async function startGatewayCoreRuntime(input: {
       return;
     }
     try {
-      const stopPreviousDiscovery = runtimeState.bonjourStop;
-      runtimeState.bonjourStop = null;
+      const stopPreviousDiscovery = kernel.swapBonjourStop(null);
       if (stopPreviousDiscovery) {
         try {
           await stopPreviousDiscovery();
@@ -395,16 +427,18 @@ export async function startGatewayCoreRuntime(input: {
         }
       }
       const { startGatewayPluginDiscovery } = await loadGatewayStartupEarlyModule();
-      runtimeState.bonjourStop = await startGatewayPluginDiscovery({
-        minimalTestGateway,
-        cfgAtStart,
-        port,
-        gatewayTls,
-        gatewayDirectReachable: !isLoopbackHost(bindHost),
-        tailscaleMode,
-        logDiscovery,
-        pluginRegistry: nextPluginRegistry,
-      });
+      kernel.swapBonjourStop(
+        await startGatewayPluginDiscovery({
+          minimalTestGateway,
+          cfgAtStart,
+          port,
+          gatewayTls,
+          gatewayDirectReachable: !isLoopbackHost(bindHost),
+          tailscaleMode,
+          logDiscovery,
+          pluginRegistry: nextPluginRegistry,
+        }),
+      );
     } catch (err) {
       logDiscovery.warn(`gateway discovery refresh failed after plugin load: ${String(err)}`);
     }
