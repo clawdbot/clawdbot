@@ -4504,113 +4504,41 @@ describe("Codex app-server thread lifecycle timing", () => {
 });
 
 describe("resolveReasoningEffort (#71946)", () => {
-  describe("modern Codex models (none/low/medium/high/xhigh enum)", () => {
-    it.each([
-      "gpt-5.6",
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-      "gpt-5.5",
-      "gpt-5.4",
-      "gpt-5.4-mini",
-      "gpt-5.3-codex-spark",
-    ] as const)(
-      "translates 'minimal' -> 'low' for %s so the first request is accepted",
-      (modelId) => {
-        expect(resolveReasoningEffort("minimal", modelId)).toBe("low");
-      },
-    );
+  const standardEfforts = ["low", "medium", "high", "xhigh"];
+  const maxEfforts = [...standardEfforts, "max"];
+  const ultraEfforts = [...maxEfforts, "ultra"];
 
-    it.each([
-      "gpt-5.6",
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-      "gpt-5.5",
-      "gpt-5.4",
-      "gpt-5.4-mini",
-      "gpt-5.3-codex-spark",
-    ] as const)(
-      "passes 'low' / 'medium' / 'high' / 'xhigh' through unchanged for %s",
-      (modelId) => {
-        expect(resolveReasoningEffort("low", modelId)).toBe("low");
-        expect(resolveReasoningEffort("medium", modelId)).toBe("medium");
-        expect(resolveReasoningEffort("high", modelId)).toBe("high");
-        expect(resolveReasoningEffort("xhigh", modelId)).toBe("xhigh");
-      },
-    );
+  it.each([
+    { requested: "minimal", supported: standardEfforts, expected: "low" },
+    { requested: "low", supported: standardEfforts, expected: "low" },
+    { requested: "medium", supported: standardEfforts, expected: "medium" },
+    { requested: "high", supported: standardEfforts, expected: "high" },
+    { requested: "xhigh", supported: standardEfforts, expected: "xhigh" },
+    { requested: "minimal", supported: ["medium", "high", "xhigh"], expected: "medium" },
+    { requested: "low", supported: ["medium", "high", "xhigh"], expected: "medium" },
+    { requested: "max", supported: ["medium", "high", "xhigh"], expected: "xhigh" },
+    { requested: "max", supported: maxEfforts, expected: "max" },
+    { requested: "ultra", supported: maxEfforts, expected: "max" },
+    { requested: "ultra", supported: ultraEfforts, expected: "ultra" },
+  ] as const)(
+    "maps $requested to $expected using provider-supported efforts",
+    ({ requested, supported, expected }) => {
+      expect(resolveReasoningEffort(requested, "catalog-model", supported)).toBe(expected);
+    },
+  );
 
-    it("normalizes case-variant model ids", () => {
-      expect(resolveReasoningEffort("minimal", "GPT-5.5")).toBe("low");
-      expect(resolveReasoningEffort("minimal", " gpt-5.4-mini ")).toBe("low");
-    });
-
-    it.each(["gpt-5.5-pro", "gpt-5.4-pro"] as const)(
-      "uses the %s minimum effort when metadata is unavailable",
-      (modelId) => {
-        expect(resolveReasoningEffort("minimal", modelId)).toBe("medium");
-        expect(resolveReasoningEffort("low", modelId)).toBe("medium");
-        expect(resolveReasoningEffort("medium", modelId)).toBe("medium");
-        expect(resolveReasoningEffort("max", modelId)).toBe("xhigh");
-      },
-    );
-
-    it("honors stricter app-server reasoning metadata", () => {
-      const supported = ["medium", "high", "xhigh"];
-
-      expect(resolveReasoningEffort("minimal", "gpt-5.5-pro", supported)).toBe("medium");
-      expect(resolveReasoningEffort("low", "gpt-5.5-pro", supported)).toBe("medium");
-      expect(resolveReasoningEffort("medium", "gpt-5.5-pro", supported)).toBe("medium");
-      expect(resolveReasoningEffort("max", "gpt-5.5-pro", supported)).toBe("xhigh");
-    });
+  it("preserves legacy compatibility when metadata is unavailable", () => {
+    expect(resolveReasoningEffort("minimal", "gpt-5.5")).toBe("low");
+    expect(resolveReasoningEffort("minimal", "gpt-4o")).toBe("minimal");
+    expect(resolveReasoningEffort("low", "gpt-5.5-pro")).toBe("medium");
+    expect(resolveReasoningEffort("max", "gpt-5.5-pro")).toBe("xhigh");
+    expect(resolveReasoningEffort("max", "gpt-5.6-sol")).toBeNull();
+    expect(resolveReasoningEffort("ultra", "gpt-5.6-sol")).toBeNull();
   });
 
-  describe("legacy / non-modern Codex models", () => {
-    it.each(["gpt-5", "gpt-4o", "o3-mini", "codex-mini-latest"] as const)(
-      "preserves 'minimal' for %s — pre-modern enum still supports it",
-      (modelId) => {
-        expect(resolveReasoningEffort("minimal", modelId)).toBe("minimal");
-      },
-    );
-
-    it("preserves 'minimal' for empty / unknown model ids (conservative default)", () => {
-      expect(resolveReasoningEffort("minimal", "")).toBe("minimal");
-      expect(resolveReasoningEffort("minimal", "unknown-model-xyz")).toBe("minimal");
-    });
-  });
-
-  describe("non-effort thinkLevel values", () => {
-    it("returns null for 'off'", () => {
-      expect(resolveReasoningEffort("off", "gpt-5.5")).toBeNull();
-      expect(resolveReasoningEffort("off", "gpt-4o")).toBeNull();
-    });
-
-    it("returns null for 'adaptive' (non-effort enum value)", () => {
-      expect(resolveReasoningEffort("adaptive", "gpt-5.5")).toBeNull();
-      expect(resolveReasoningEffort("adaptive", "gpt-4o")).toBeNull();
-    });
-
-    it("passes max only for known native GPT-5.6 models", () => {
-      expect(resolveReasoningEffort("max", "gpt-5.6-sol")).toBe("max");
-      expect(resolveReasoningEffort("max", "gpt-5.6-terra")).toBe("max");
-      expect(resolveReasoningEffort("max", "gpt-5.6-luna")).toBe("max");
-      expect(resolveReasoningEffort("max", "gpt-5.6")).toBeNull();
-      expect(resolveReasoningEffort("max", "gpt-5.6-sol-oai")).toBeNull();
-      expect(resolveReasoningEffort("max", "gpt-5.5")).toBeNull();
-      expect(resolveReasoningEffort("max", "gpt-4o")).toBeNull();
-    });
-
-    it("uses known GPT-5.6 fallbacks when app-server metadata is unavailable", () => {
-      const ultraEfforts = ["low", "medium", "high", "xhigh", "max", "ultra"];
-      const maxEfforts = ["low", "medium", "high", "xhigh", "max"];
-
-      expect(resolveReasoningEffort("ultra", "gpt-5.6-sol", ultraEfforts)).toBe("ultra");
-      expect(resolveReasoningEffort("ultra", "gpt-5.6-terra", ultraEfforts)).toBe("ultra");
-      expect(resolveReasoningEffort("ultra", "gpt-5.6-luna", maxEfforts)).toBe("max");
-      expect(resolveReasoningEffort("ultra", "gpt-5.6-sol")).toBe("ultra");
-      expect(resolveReasoningEffort("ultra", "gpt-5.6-terra")).toBe("ultra");
-      expect(resolveReasoningEffort("ultra", "gpt-5.6-luna")).toBe("max");
-    });
+  it("omits non-effort think levels", () => {
+    expect(resolveReasoningEffort("off", "catalog-model", ultraEfforts)).toBeNull();
+    expect(resolveReasoningEffort("adaptive", "catalog-model", ultraEfforts)).toBeNull();
   });
 });
 

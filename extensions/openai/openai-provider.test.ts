@@ -816,7 +816,7 @@ describe("buildOpenAIProvider", () => {
       expect(openai?.models.find((model) => model.id === "gpt-5.6-sol")).toMatchObject({
         contextWindow: 372_000,
         compat: {
-          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
         },
         thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
       });
@@ -829,7 +829,7 @@ describe("buildOpenAIProvider", () => {
           api: "openai-chatgpt-responses",
           compat: liveSol?.compat,
         } as never)?.levels,
-      ).not.toContainEqual({ id: "ultra" });
+      ).toContainEqual({ id: "ultra" });
       expect(openai?.models.find((model) => model.id === "gpt-5.6-terra")).toMatchObject({
         contextWindow: 372_000,
         contextTokens: 272_000,
@@ -1016,6 +1016,7 @@ describe("buildOpenAIProvider", () => {
             supported_reasoning_levels: [
               { effort: "low", description: "low" },
               { effort: "high", description: "high" },
+              ...(tier === "luna" ? [{ effort: "ultra", description: "ultra" }] : []),
             ],
           })),
         ],
@@ -1035,12 +1036,20 @@ describe("buildOpenAIProvider", () => {
       contextWindow: 1_050_000,
       contextTokens: 272_000,
     });
-    for (const tier of ["sol", "terra", "luna"]) {
+    for (const tier of ["sol", "terra"] as const) {
       expect(provider.models.find((model) => model.id === `gpt-5.6-${tier}`)).toMatchObject({
         reasoning: true,
-        compat: { supportedReasoningEfforts: ["low", "high"] },
+        compat: {
+          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        },
       });
     }
+    expect(provider.models.find((model) => model.id === "gpt-5.6-luna")).toMatchObject({
+      reasoning: true,
+      compat: {
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      },
+    });
   });
 
   it("keeps an explicit empty Codex reasoning catalog authoritative", async () => {
