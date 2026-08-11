@@ -1,9 +1,9 @@
 // Transcripts tool tests cover manual imports, live provider lifecycle, summary
 // artifacts, and date-qualified session selectors.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type { TranscriptStopRequest } from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
@@ -21,9 +21,7 @@ vi.mock("../../transcripts/provider-registry.js", async (importOriginal) => {
   };
 });
 
-async function makeStateDir(): Promise<string> {
-  return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcripts-"));
-}
+const tempDirs = createTempDirTracker();
 
 function currentDateDir(): string {
   return new Date().toISOString().slice(0, 10);
@@ -55,21 +53,24 @@ function storeFor(stateDir: string): TranscriptsStore {
 }
 
 describe("transcripts tool", () => {
-  afterEach(() => closeOpenClawStateDatabaseForTest());
+  afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
+    tempDirs.cleanup();
+  });
 
   beforeEach(() => {
     getTranscriptSourceProviderMock.mockReset();
   });
 
   it("creates the core transcripts tool", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const { tool } = await createHarness(stateDir);
 
     expect(tool.name).toBe("transcripts");
   });
 
   it("adds the trusted tool agent to live source ownership metadata", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const start = vi.fn(async (request) => {
       expect(request.session).toMatchObject({
         source: {
@@ -110,7 +111,7 @@ describe("transcripts tool", () => {
   });
 
   it("keeps ownerless shipped sessions visible only to the main agent", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const store = storeFor(stateDir);
     const legacySession = {
       sessionId: "legacy-ownerless",
@@ -142,7 +143,7 @@ describe("transcripts tool", () => {
   });
 
   it("requires explicit enablement before execution", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const { tool } = await createHarness(stateDir, { enabled: false });
 
     await expect(tool.execute("call-1", { action: "status" }, undefined, vi.fn())).rejects.toThrow(
@@ -151,7 +152,7 @@ describe("transcripts tool", () => {
   });
 
   it("cancels a pending live capture when the agent run is aborted", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const controller = new AbortController();
     const stop = vi.fn(async () => ({ ok: true, sessionId: "cancelled-meeting" }));
     const start = vi.fn(async (request) => {
@@ -193,7 +194,7 @@ describe("transcripts tool", () => {
   });
 
   it("keeps capturing after a successfully started agent run is later aborted", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const controller = new AbortController();
     let emitAfterStart: (() => Promise<void>) | undefined;
     let startupSignal: AbortSignal | undefined;
@@ -255,7 +256,7 @@ describe("transcripts tool", () => {
   });
 
   it("drops late utterances and keeps repeated abort cleanup failures retryable", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const controller = new AbortController();
     let cleanupFailuresRemaining = 2;
     const stop = vi.fn(async () =>
@@ -333,7 +334,7 @@ describe("transcripts tool", () => {
   });
 
   it("reserves a session id while provider startup is pending", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     let releaseStart: (() => void) | undefined;
     const startGate = new Promise<void>((resolve) => {
       releaseStart = resolve;
@@ -384,7 +385,7 @@ describe("transcripts tool", () => {
   });
 
   it("keeps thrown abort cleanup failures retryable", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const controller = new AbortController();
     let stopAttempts = 0;
     const stop = vi.fn(async (_request: TranscriptStopRequest) => {
@@ -435,7 +436,7 @@ describe("transcripts tool", () => {
   });
 
   it("keeps missing abort cleanup hooks visible until the provider can stop", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const controller = new AbortController();
     const start = vi.fn(async (request) => {
       controller.abort();
@@ -490,7 +491,7 @@ describe("transcripts tool", () => {
   });
 
   it("imports a speaker transcript and writes summary artifacts", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const { tool } = await createHarness(stateDir);
 
     const result = await tool.execute(
@@ -536,7 +537,7 @@ describe("transcripts tool", () => {
   it("bounds summary input while retaining the full transcript", async () => {
     // Exercise the fixed 2,000-utterance summary window while proving the
     // durable transcript still retains the complete import.
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const { tool } = await createHarness(stateDir);
     const transcript = Array.from(
       { length: 2_001 },
@@ -570,7 +571,7 @@ describe("transcripts tool", () => {
   });
 
   it("requires date-qualified selectors for repeated stored session ids", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const store = storeFor(stateDir);
     await store.writeSession({
       sessionId: "standup",
@@ -596,7 +597,7 @@ describe("transcripts tool", () => {
   it("stops date-qualified active sessions with the canonical provider session id", async () => {
     // Date-qualified selectors disambiguate storage paths; providers still own
     // the original session id.
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const start = vi.fn(async (request) => {
       await request.onUtterance({
         text: "Sam: Decision: use date-qualified selectors for repeated names.",
@@ -653,7 +654,7 @@ describe("transcripts tool", () => {
   });
 
   it("finalizes an active session when the live provider stop fails", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const start = vi.fn(async (request) => {
       await request.onUtterance({
         text: "Alex: Action item: publish the notes even after voice disconnects.",
@@ -708,7 +709,7 @@ describe("transcripts tool", () => {
   });
 
   it("does not stop a current active session when summarizing an older dated duplicate", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const store = storeFor(stateDir);
     const olderSession = {
       sessionId: "standup",
@@ -778,7 +779,7 @@ describe("transcripts tool", () => {
   });
 
   it("auto-starts configured live meeting sources", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const start = vi.fn(async (request) => ({ ok: true, session: request.session }));
     const stop = vi.fn(async () => ({ ok: true as const, sessionId: "standup" }));
     getTranscriptSourceProviderMock.mockReturnValue({
@@ -834,7 +835,7 @@ describe("transcripts tool", () => {
   });
 
   it("aborts pending auto-starts when the service stops", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const stop = vi.fn(async () => ({ ok: true, sessionId: "standup" }));
     const start = vi.fn(
       async (request) =>

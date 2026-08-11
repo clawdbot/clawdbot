@@ -279,7 +279,6 @@ export async function executeParallelWebSearchProviderTool(
 
 export const testing = {
   buildParallelCacheKey,
-  invalidSearchQueriesPayload,
   missingParallelKeyPayload,
   normalizeParallelClientModel,
   normalizeParallelObjective,
@@ -287,12 +286,8 @@ export const testing = {
   normalizeParallelSearchQueries,
   normalizeParallelSessionId,
   resolveParallelApiKey,
-  resolveParallelConfig,
   resolveParallelSearchCount,
   resolveParallelSearchEndpoint,
-  PARALLEL_ERROR_BODY_LIMIT_BYTES,
   PARALLEL_SEARCH_RESPONSE_LIMIT_BYTES,
   USER_AGENT,
 } as const;
-
-export { testing as __testing };

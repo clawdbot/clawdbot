@@ -7,9 +7,13 @@ import {
   type GatewayClientId,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { upsertPresence } from "../infra/system-presence.js";
+import { resolveUserProfileId } from "../state/user-profiles.js";
+import { buildAuthenticatedPresenceUser } from "./authenticated-presence-user.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { disconnectAllSharedGatewayAuthClients } from "./server-shared-auth-generation.js";
+import { broadcastPresenceSnapshot } from "./server/presence-events.js";
 import type { SessionCompanionService } from "./session-companion.js";
 import type { SessionObserverService } from "./session-observer-contract.js";
 
@@ -24,7 +28,7 @@ type GatewayRequestContextParams = {
   deps: GatewayRequestContext["deps"];
   runtimeState: Pick<
     GatewayServerLiveState,
-    "cronState" | "configReloader" | "controlUiSessionPullRequests" | "sessionViewerPresence"
+    "cronState" | "controlUiSessionPullRequests" | "sessionViewerPresence"
   >;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
   sessionCompanion: SessionCompanionService;
@@ -44,6 +48,7 @@ type GatewayRequestContextParams = {
   loadGatewayModelCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"];
   readPreparedGatewayModelCatalog?: GatewayRequestContext["readPreparedGatewayModelCatalog"];
   readChatMetadata: GatewayRequestContext["readChatMetadata"];
+  readChatStartupProjection?: GatewayRequestContext["readChatStartupProjection"];
   getHealthCache: GatewayRequestContext["getHealthCache"];
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
   logHealth: GatewayRequestContext["logHealth"];
@@ -76,6 +81,7 @@ type GatewayRequestContextParams = {
   workerEnvironmentService?: GatewayRequestContext["workerEnvironmentService"];
   workerSessionPlacementService?: GatewayRequestContext["workerSessionPlacementService"];
   workerPlacementDispatchService?: GatewayRequestContext["workerPlacementDispatchService"];
+  validateAgentRuntimeApprovalAuthority: GatewayRequestContext["validateAgentRuntimeApprovalAuthority"];
   terminalSessions?: GatewayRequestContext["terminalSessions"];
   agentRunSeq: GatewayRequestContext["agentRunSeq"];
   chatAbortControllers: GatewayRequestContext["chatAbortControllers"];
@@ -104,6 +110,8 @@ type GatewayRequestContextParams = {
   channelWizardRunner: GatewayRequestContext["channelWizardRunner"];
   broadcastVoiceWakeChanged: GatewayRequestContext["broadcastVoiceWakeChanged"];
   broadcastVoiceWakeRoutingChanged: GatewayRequestContext["broadcastVoiceWakeRoutingChanged"];
+  notifyPluginMetadataChanged: GatewayRequestContext["notifyPluginMetadataChanged"];
+  getConfigReloaderHotReloadStatus: GatewayRequestContext["getConfigReloaderHotReloadStatus"];
   unavailableGatewayMethods: ReadonlySet<string>;
 };
 
@@ -169,8 +177,7 @@ export function createGatewayRequestContext(
     sessionViewerPresence: params.runtimeState.sessionViewerPresence,
     sessionCompanion: params.sessionCompanion,
     sessionObserver: params.sessionObserver,
-    notifyPluginMetadataChanged: () =>
-      params.runtimeState.configReloader.notifyPluginMetadataChanged(),
+    notifyPluginMetadataChanged: params.notifyPluginMetadataChanged,
     getMcpAppSandboxPort: params.getMcpAppSandboxPort,
     ensureSandboxHostPort: params.ensureSandboxHostPort,
     resolveTerminalLaunchPolicy: params.resolveTerminalLaunchPolicy,
@@ -190,6 +197,9 @@ export function createGatewayRequestContext(
       ? { readPreparedGatewayModelCatalog: params.readPreparedGatewayModelCatalog }
       : {}),
     readChatMetadata: params.readChatMetadata,
+    ...(params.readChatStartupProjection
+      ? { readChatStartupProjection: params.readChatStartupProjection }
+      : {}),
     getHealthCache: params.getHealthCache,
     refreshHealthSnapshot: params.refreshHealthSnapshot,
     logHealth: params.logHealth,
@@ -257,6 +267,52 @@ export function createGatewayRequestContext(
       }
       return false;
     },
+    refreshConnectedUserProfile: (profile) => {
+      let presenceChanged = false;
+      for (const gatewayClient of params.clients) {
+        const authenticatedUserProfile = gatewayClient.authenticatedUserProfile;
+        if (!authenticatedUserProfile) {
+          continue;
+        }
+        const canonicalProfileId =
+          authenticatedUserProfile.profileId === profile.id
+            ? profile.id
+            : resolveUserProfileId(authenticatedUserProfile.profileId);
+        if (canonicalProfileId !== profile.id) {
+          continue;
+        }
+        Object.assign(authenticatedUserProfile, {
+          profileId: canonicalProfileId,
+          displayName: profile.displayName,
+          avatarRevision: profile.avatarRevision,
+          hasAvatar: profile.hasAvatar,
+          updatedAt: profile.updatedAt,
+        });
+        if (!gatewayClient.presenceKey || !gatewayClient.authenticatedUserId) {
+          continue;
+        }
+        upsertPresence(gatewayClient.presenceKey, {
+          user: buildAuthenticatedPresenceUser({
+            authenticatedUserId: gatewayClient.authenticatedUserId,
+            authenticatedUserIsTailscaleProvider:
+              gatewayClient.authenticatedUserIsTailscaleProvider,
+            authenticatedUserProfile: {
+              profileId: profile.id,
+              displayName: profile.displayName,
+              avatarRevision: profile.avatarRevision,
+            },
+          }),
+        });
+        presenceChanged = true;
+      }
+      if (presenceChanged) {
+        broadcastPresenceSnapshot({
+          broadcast: params.broadcast,
+          incrementPresenceVersion: params.incrementPresenceVersion,
+          getHealthVersion: params.getHealthVersion,
+        });
+      }
+    },
     invalidateClientsForDevice: (deviceId: string, opts?: { role?: string; reason?: string }) => {
       const reason = opts?.reason ?? "device-invalidated";
       for (const gatewayClient of params.clients) {
@@ -312,6 +368,7 @@ export function createGatewayRequestContext(
     ...(params.workerSessionPlacementService
       ? { workerSessionPlacementService: params.workerSessionPlacementService }
       : {}),
+    validateAgentRuntimeApprovalAuthority: params.validateAgentRuntimeApprovalAuthority,
     ...(params.workerPlacementDispatchService
       ? { workerPlacementDispatchService: params.workerPlacementDispatchService }
       : {}),
@@ -341,7 +398,7 @@ export function createGatewayRequestContext(
     purgeWizardSession: params.purgeWizardSession,
     getRuntimeSnapshot: params.getRuntimeSnapshot,
     getEventLoopHealth: params.getEventLoopHealth,
-    getConfigReloaderHotReloadStatus: () => params.runtimeState.configReloader.hotReloadStatus?.(),
+    getConfigReloaderHotReloadStatus: params.getConfigReloaderHotReloadStatus,
     startChannel: params.startChannel,
     stopChannel: params.stopChannel,
     markChannelLoggedOut: params.markChannelLoggedOut,

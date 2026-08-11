@@ -229,8 +229,10 @@ export function renderSidebarSessionSortMenu(params: {
   trigger: HTMLElement | null;
   grouping: SidebarSessionsGrouping;
   sortMode: SidebarSessionSortMode;
+  peopleSortAvailable: boolean;
   statusFilter: SidebarSessionStatusFilter;
   showCron: boolean;
+  showSystem: boolean;
   creators: readonly SessionCreatorOption[];
   creatorFilterId: string | null;
   onGroupingChange: (grouping: SidebarSessionsGrouping) => void;
@@ -238,6 +240,7 @@ export function renderSidebarSessionSortMenu(params: {
   onStatusFilterChange: (statusFilter: SidebarSessionStatusFilter) => void;
   onCreatorFilterChange: (creatorId: string | null) => void;
   onShowCronChange: (show: boolean) => void;
+  onShowSystemChange: (show: boolean) => void;
   onClose: (restoreFocus: boolean) => void;
 }) {
   const position = params.position;
@@ -273,6 +276,8 @@ export function renderSidebarSessionSortMenu(params: {
               params.onCreatorFilterChange(value.slice("creator:".length) || null);
             } else if (value === "show-cron") {
               params.onShowCronChange(!params.showCron);
+            } else if (value === "show-system") {
+              params.onShowSystemChange(!params.showSystem);
             }
           }}
           @keydown=${(event: KeyboardEvent) =>
@@ -291,7 +296,9 @@ export function renderSidebarSessionSortMenu(params: {
           )}
           <div class="session-menu__separator" role="separator"></div>
           <div class="sidebar-session-sort-menu__title">${t("chat.sidebar.sortBy")}</div>
-          ${SIDEBAR_SESSION_SORT_OPTIONS.map((option) =>
+          ${SIDEBAR_SESSION_SORT_OPTIONS.filter(
+            (option) => option.mode !== "people" || params.peopleSortAvailable,
+          ).map((option) =>
             renderSidebarMenuRadioItem({
               value: `sort:${option.mode}`,
               checked: params.sortMode === option.mode,
@@ -321,6 +328,20 @@ export function renderSidebarSessionSortMenu(params: {
             .checked=${params.showCron}
           >
             <span class="session-menu__text">${t("sessionsView.showCronSessions")}</span>
+            <span slot="details" class="session-menu__check" aria-hidden="true"
+              >${params.showCron ? icons.check : nothing}</span
+            >
+          </wa-dropdown-item>
+          <wa-dropdown-item
+            class="sidebar-session-sort-menu__item"
+            type="checkbox"
+            value="show-system"
+            .checked=${params.showSystem}
+          >
+            <span class="session-menu__text">${t("sessionsView.showSystemSessions")}</span>
+            <span slot="details" class="session-menu__check" aria-hidden="true"
+              >${params.showSystem ? icons.check : nothing}</span
+            >
           </wa-dropdown-item>
         </wa-dropdown>
       </openclaw-menu-surface>

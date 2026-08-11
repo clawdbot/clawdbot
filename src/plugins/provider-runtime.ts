@@ -612,14 +612,30 @@ export function resolveProviderTransportTurnStateWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  runtimeHandle?: ProviderRuntimePluginHandle;
   allowRuntimePluginLoad?: boolean;
   context: ProviderResolveTransportTurnStateContext;
 }): ProviderTransportTurnState | undefined {
-  const plugin =
-    params.allowRuntimePluginLoad === false
+  const plugin = params.runtimeHandle
+    ? ensureProviderRuntimePluginHandle(params).plugin
+    : params.allowRuntimePluginLoad === false
       ? resolveLoadedProviderRuntimePlugin(params)
       : resolveProviderRuntimePlugin(params);
-  return plugin?.resolveTransportTurnState?.(params.context) ?? undefined;
+  const turnState = plugin?.resolveTransportTurnState?.(params.context) ?? undefined;
+  if (params.context.transport !== "websocket") {
+    return turnState;
+  }
+  const legacyPolicy = plugin?.resolveWebSocketSessionPolicy?.(params.context);
+  if (!legacyPolicy) {
+    return turnState;
+  }
+  return {
+    ...turnState,
+    websocket: {
+      ...legacyPolicy,
+      ...turnState?.websocket,
+    },
+  };
 }
 
 export async function createProviderEmbeddingProvider(params: {
@@ -761,23 +777,7 @@ export function listProviderUsagePluginDescriptors(params: {
   return [...descriptors.values()].toSorted((a, b) => a.provider.localeCompare(b.provider));
 }
 
-export function matchesProviderContextOverflowWithPlugin(params: {
-  provider?: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  context: ProviderFailoverErrorContext;
-}): boolean {
-  const plugins = resolveProviderPluginsForScopedHook(params);
-  for (const plugin of plugins) {
-    if (plugin.matchesContextOverflowError?.(params.context)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-export function classifyProviderFailoverReasonWithPlugin(params: {
+export function classifyProviderFailoverSignalWithPlugin(params: {
   provider?: string;
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -786,6 +786,9 @@ export function classifyProviderFailoverReasonWithPlugin(params: {
 }) {
   const plugins = resolveProviderPluginsForScopedHook(params);
   for (const plugin of plugins) {
+    if (plugin.matchesContextOverflowError?.(params.context)) {
+      return "context_overflow";
+    }
     const reason = plugin.classifyFailoverReason?.(params.context);
     if (reason) {
       return reason;
@@ -917,7 +920,7 @@ export function resolveProviderCacheTtlEligibility(params: {
   return resolveProviderRuntimePlugin(params)?.isCacheTtlEligible?.(params.context);
 }
 
-export function resolveProviderThinkingProfile(params: {
+export function resolveRuntimeThinkingProfile(params: {
   provider: string;
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -1020,7 +1023,6 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
   const runtimeResolved = resolveProviderRuntimePlugin({
     ...params,
     applyAutoEnable: false,
-    bundledProviderVitestCompat: false,
   })?.resolveSyntheticAuth?.(params.context);
   if (runtimeResolved) {
     return runtimeResolved;
@@ -1033,17 +1035,21 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
       ...params,
       provider: providerRef,
       applyAutoEnable: false,
-      bundledProviderVitestCompat: false,
     })?.resolveSyntheticAuth?.(params.context);
     if (runtimeProviderResolved) {
       return runtimeProviderResolved;
     }
   }
   if (providerRefs.length === 1) {
+    // Last-resort match for custom provider ids with no resolvable owning plugin (e.g. Ollama
+    // aliases). Entry modules only: a full plugin-runtime sweep here costs seconds per ref on
+    // source checkouts and belongs to explicit control-plane loads.
     return resolvePluginDiscoveryProvidersRuntime({
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
+      discoveryEntriesOnly: true,
+      includeSyntheticAuthProviders: true,
     })
       .find((provider) => matchesAnyProviderPluginRef(provider, providerRefs))
       ?.resolveSyntheticAuth?.(params.context);
@@ -1061,9 +1067,9 @@ export function resolveExternalAuthProfilesWithPlugins(params: {
   const env = params.env ?? process.env;
   const config = params.config ?? {};
   const currentMetadataSnapshot = getCurrentPluginMetadataSnapshot({
-    config,
     env,
-    ...(workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : { workspaceDir }),
+    ...(params.config ? { config } : { requireDefaultDiscoveryContext: true }),
+    ...(workspaceDir ? { workspaceDir } : { allowWorkspaceScopedSnapshot: true }),
   });
   const { manifestRegistry } =
     currentMetadataSnapshot ?? resolvePluginMetadataSnapshot({ config, workspaceDir, env });

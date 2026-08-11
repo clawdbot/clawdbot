@@ -22,7 +22,6 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { runGitHubCopilotDeviceFlow } from "./login.js";
 
 const mocks = vi.hoisted(() => ({
-  githubCopilotLoginCommand: vi.fn(),
   fetchWithSsrFGuard: vi.fn<typeof fetchWithSsrFGuard>(async (params) => ({
     response: await fetch(params.url, params.init),
     finalUrl: params.url,
@@ -50,7 +49,6 @@ vi.mock("./register.runtime.js", () => ({
   DEFAULT_COPILOT_API_BASE_URL: "https://api.githubcopilot.test",
   resolveCopilotRuntimeAuth: mocks.resolveCopilotRuntimeAuth,
   resolveCopilotStarterModel: mocks.resolveCopilotStarterModel,
-  githubCopilotLoginCommand: mocks.githubCopilotLoginCommand,
   fetchCopilotUsage: vi.fn(),
 }));
 
@@ -663,7 +661,6 @@ describe("github-copilot plugin", () => {
       message: "GitHub Copilot auth already exists. Re-run login?",
       initialValue: false,
     });
-    expect(mocks.githubCopilotLoginCommand).not.toHaveBeenCalled();
     expect(result).toEqual({
       profiles: [
         {
@@ -1012,7 +1009,6 @@ describe("github-copilot plugin", () => {
         message: "GitHub Copilot auth already exists. Re-run login?",
         initialValue: false,
       });
-      expect(mocks.githubCopilotLoginCommand).not.toHaveBeenCalled();
       if (!result) {
         throw new Error("Expected GitHub Copilot auth result");
       }
@@ -1287,7 +1283,6 @@ describe("github-copilot plugin", () => {
       message: "GitHub Copilot auth already exists. Re-run login?",
       initialValue: false,
     });
-    expect(mocks.githubCopilotLoginCommand).not.toHaveBeenCalled();
     expect(result.profiles[0]?.credential).toEqual({
       type: "token",
       provider: "github-copilot",

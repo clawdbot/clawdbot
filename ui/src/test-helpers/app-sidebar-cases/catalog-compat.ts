@@ -22,7 +22,7 @@ describe("AppSidebar session catalog pagination", () => {
         {
           defaultId: "main",
           mainKey: "main",
-          scope: "agent",
+          scope: "per-sender",
           agents: [{ id: "main" }, { id: "research" }],
         },
       );

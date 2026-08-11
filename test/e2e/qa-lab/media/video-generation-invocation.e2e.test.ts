@@ -5,7 +5,7 @@ import type { PreparedModelRuntimeSnapshot } from "../../../../src/agents/prepar
 import { createVideoGenerateTool } from "../../../../src/agents/tools/video-generate-tool.js";
 import type { OpenClawConfig } from "../../../../src/config/types.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
-import { resolveVideoGenerationMode } from "../../../../src/video-generation/capabilities.js";
+import { resolveVideoGenerationModeCapabilities } from "../../../../src/video-generation/capabilities.js";
 import type {
   VideoGenerationProvider,
   VideoGenerationRequest,
@@ -58,7 +58,7 @@ describe("video generation invocation QA", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   it("selects image-to-video fallback, forwards declared options, and persists video bytes", async () => {
-    const root = await fs.realpath(tempDirs.make("openclaw-qa-video-invocation-"));
+    const root = tempDirs.make("openclaw-qa-video-invocation-");
     const referenceBytes = createSolidPngBuffer(2, 2, { r: 32, g: 112, b: 224 });
     const referencePath = path.join(root, "reference.png");
     await fs.writeFile(referencePath, referenceBytes);
@@ -143,10 +143,12 @@ describe("video generation invocation QA", () => {
         providerOptions,
       });
       expect(
-        resolveVideoGenerationMode({
+        resolveVideoGenerationModeCapabilities({
+          provider: fallbackProvider,
+          model: fallbackRequest?.model,
           inputImageCount: fallbackRequest?.inputImages?.length,
           inputVideoCount: fallbackRequest?.inputVideos?.length,
-        }),
+        }).mode,
       ).toBe("imageToVideo");
       expect(fallbackRequest?.inputImages).toEqual([
         {

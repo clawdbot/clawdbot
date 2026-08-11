@@ -6,13 +6,13 @@ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { hasNewGeneratedMediaTaskForSessionKey } from "../../tasks/task-status-access.js";
-import { formatForLog } from "../ws-log.js";
 import {
   CRON_CONTINUATION_RELEASE_RECOVERY_DELAYS_MS,
   waitForCronContinuationReleaseRecovery,
   withoutCronRunContinuation,
-} from "./agent-handler-helpers.js";
-import type { CronContinuationClaim } from "./agent-session-persist.js";
+} from "../agent-turn/agent-handler-helpers.js";
+import type { CronContinuationClaim } from "../agent-turn/agent-session-persist.js";
+import { formatForLog } from "../ws-log.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 

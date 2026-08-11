@@ -24,6 +24,7 @@ import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../../wizard/prompts.js";
+import { normalizeExternalChannelSetupConfig } from "../channel-setup/config-compatibility.js";
 import { channelLabel } from "./runtime-label.js";
 import { requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
 
@@ -293,7 +294,7 @@ async function channelsAddCommandImpl(
       ? { beforePersistentEffect: params.beforePersistentEffect }
       : {}),
   });
-  nextConfig = applied.nextConfig;
+  nextConfig = normalizeExternalChannelSetupConfig({ cfg: applied.nextConfig, channel });
 
   await params?.beforePersistentEffect?.();
   const committed = await commitConfigWithPendingPluginInstalls({

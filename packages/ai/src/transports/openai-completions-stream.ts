@@ -1,0 +1,607 @@
+import { randomUUID } from "node:crypto";
+import type { Model } from "@openclaw/llm-core";
+import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
+import type { OpenAICompletionsOptions } from "../provider-options.js";
+import {
+  createOpenAICompletionsToolCallDeltaNormalizer,
+  finalizeOpenAICompletionsToolCalls,
+} from "../providers/openai-completions-tool-calls.js";
+import { mapOpenAIStopReason } from "../providers/openai-stop-reason.js";
+import {
+  clearPendingCommentaryText,
+  rememberPendingCommentaryTags,
+  tagPendingCommentaryText,
+  type PendingCommentaryTags,
+} from "../utils/assistant-text-phase.js";
+import { parseStreamingJson } from "../utils/json-parse.js";
+import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
+import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-partitioner.js";
+import { withFirstStreamEventTimeout } from "../utils/stream-first-event-timeout.js";
+import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
+import {
+  createDsmlRecoverer,
+  type RecoveredDeepSeekDsmlToolCall,
+} from "./openai-completions-dsml.js";
+import { getCompat } from "./openai-transport-params.js";
+import {
+  createModelStreamCooperativeScheduler,
+  isOpenAICompletionsThinkingEnabled,
+  parseOpenAICompletionsUsage,
+  readOpenAICompletionsContentDeltas,
+  throwIfModelStreamAborted,
+  type MutableAssistantOutput,
+  type OpenAICompletionsContentDelta as CompletionsReasoningDelta,
+  type OpenAIModeModel,
+} from "./openai-transport-shared.js";
+
+function extractToolCallThoughtSignature(toolCall: unknown): string | undefined {
+  const tc = toolCall as Record<string, unknown> | undefined;
+  if (!tc) {
+    return undefined;
+  }
+  const extra = (tc.extra_content as Record<string, unknown> | undefined)?.google as
+    | Record<string, unknown>
+    | undefined;
+  const fromExtra = extra?.thought_signature;
+  if (typeof fromExtra === "string" && fromExtra.length > 0) {
+    return fromExtra;
+  }
+  const fromFunction = (tc.function as { thought_signature?: unknown } | undefined)
+    ?.thought_signature;
+  if (typeof fromFunction === "string" && fromFunction.length > 0) {
+    return fromFunction;
+  }
+  const fromToolCall = tc.thought_signature;
+  return typeof fromToolCall === "string" && fromToolCall.length > 0 ? fromToolCall : undefined;
+}
+
+export async function processCompletionsStream(
+  responseStream: AsyncIterable<ChatCompletionChunk>,
+  output: MutableAssistantOutput,
+  model: Model,
+  stream: { push(event: unknown): void },
+  options?: {
+    signal?: AbortSignal;
+    emitReasoning?: boolean;
+    firstEventTimeoutMs?: number;
+    abortFirstEventStream?: (reason: Error) => void;
+    onFirstEventTimeout?: (reason: Error) => void;
+    sawStreamDONE?: () => boolean;
+  },
+) {
+  const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
+  const emitReasoning = options?.emitReasoning ?? true;
+  const compat = getCompat(model as OpenAIModeModel);
+  const shouldFilterDeepSeekDsmlText = compat.thinkingFormat === "deepseek";
+  const deepSeekTextFilter = shouldFilterDeepSeekDsmlText ? createDeepSeekTextFilter() : null;
+  const deepSeekToolCallRecoverer = shouldFilterDeepSeekDsmlText ? createDsmlRecoverer() : null;
+  const reasoningTagTextPartitioner = createReasoningTagTextPartitioner();
+  type ToolCallBlock = {
+    type: "toolCall";
+    id: string;
+    name: string;
+    arguments: Record<string, unknown>;
+    partialArgs: string;
+    thoughtSignature?: string;
+  };
+  let currentBlock:
+    | { type: "text"; text: string }
+    | { type: "thinking"; thinking: string; thinkingSignature?: string }
+    | ToolCallBlock
+    | null = null;
+  let pendingPostToolCallDeltas: CompletionsReasoningDelta[] = [];
+  let pendingPostToolCallBytes = 0;
+  let isFlushingPendingPostToolCallDeltas = false;
+  const toolCallBlocksByIndex = new Map<number, ToolCallBlock>();
+  const toolCallBlocksById = new Map<string, ToolCallBlock>();
+  const provisionalCommentaryTags: PendingCommentaryTags = new Map();
+  const toolCallBlockIndices = new WeakMap<ToolCallBlock, number>();
+  const normalizeToolCallDeltas = createOpenAICompletionsToolCallDeltaNormalizer();
+  let sawStopFinishReason = false;
+  let sawNativeToolCallDelta = false;
+  const blockIndex = () => output.content.length - 1;
+  const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
+  let chunkPushedEvent = false;
+  const pushStreamEvent = (event: unknown) => {
+    chunkPushedEvent = true;
+    stream.push(event);
+  };
+  const queuePostToolCallDelta = (next: CompletionsReasoningDelta) => {
+    const nextBytes = measureUtf8Bytes(next.text);
+    if (pendingPostToolCallBytes + nextBytes > MAX_POST_TOOL_CALL_BUFFER_BYTES) {
+      throw new Error("Exceeded post-tool-call delta buffer limit");
+    }
+    pendingPostToolCallBytes += nextBytes;
+    const previous = pendingPostToolCallDeltas[pendingPostToolCallDeltas.length - 1];
+    if (!previous || previous.kind !== next.kind) {
+      pendingPostToolCallDeltas.push(next);
+      return;
+    }
+    if (next.kind === "thinking" && previous.kind === "thinking") {
+      if (previous.signature !== next.signature) {
+        pendingPostToolCallDeltas.push(next);
+        return;
+      }
+      previous.text += next.text;
+      return;
+    }
+    previous.text += next.text;
+  };
+  const appendThinkingDeltaInternal = (reasoningDelta: { signature?: string; text: string }) => {
+    if (!currentBlock || currentBlock.type !== "thinking") {
+      currentBlock = {
+        type: "thinking",
+        thinking: "",
+        ...(reasoningDelta.signature ? { thinkingSignature: reasoningDelta.signature } : {}),
+      };
+      output.content.push(currentBlock);
+      pushStreamEvent({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
+    }
+    currentBlock.thinking += reasoningDelta.text;
+    pushStreamEvent({
+      type: "thinking_delta",
+      contentIndex: blockIndex(),
+      delta: reasoningDelta.text,
+      partial: output,
+    });
+  };
+  const appendTextDeltaInternal = (text: string) => {
+    if (!currentBlock || currentBlock.type !== "text") {
+      currentBlock = { type: "text", text: "" };
+      output.content.push(currentBlock);
+      pushStreamEvent({ type: "text_start", contentIndex: blockIndex(), partial: output });
+    }
+    currentBlock.text += text;
+    pushStreamEvent({
+      type: "text_delta",
+      contentIndex: blockIndex(),
+      delta: text,
+    });
+  };
+  const flushPendingPostToolCallDeltas = () => {
+    if (
+      isFlushingPendingPostToolCallDeltas ||
+      currentBlock?.type === "toolCall" ||
+      pendingPostToolCallDeltas.length === 0
+    ) {
+      return;
+    }
+    isFlushingPendingPostToolCallDeltas = true;
+    const bufferedDeltas = pendingPostToolCallDeltas;
+    pendingPostToolCallDeltas = [];
+    pendingPostToolCallBytes = 0;
+    for (const delta of bufferedDeltas) {
+      if (delta.kind === "text") {
+        appendTextDeltaInternal(delta.text);
+      } else if (emitReasoning) {
+        appendThinkingDeltaInternal(delta);
+      }
+    }
+    isFlushingPendingPostToolCallDeltas = false;
+  };
+  const appendThinkingDelta = (reasoningDelta: { signature?: string; text: string }) => {
+    flushPendingPostToolCallDeltas();
+    appendThinkingDeltaInternal(reasoningDelta);
+  };
+  const appendTextDelta = (text: string) => {
+    flushPendingPostToolCallDeltas();
+    appendTextDeltaInternal(text);
+  };
+  const appendVisibleTextDelta = (text: string) => {
+    if (!text) {
+      return;
+    }
+    if (currentBlock?.type === "toolCall") {
+      queuePostToolCallDelta({ kind: "text", text });
+    } else {
+      appendTextDelta(text);
+    }
+  };
+  const appendRecoveredToolCall = (toolCall: RecoveredDeepSeekDsmlToolCall) => {
+    const switchingToolCall = currentBlock?.type === "toolCall";
+    if (switchingToolCall) {
+      currentBlock = null;
+      flushPendingPostToolCallDeltas();
+    }
+    rememberPendingCommentaryTags(
+      provisionalCommentaryTags,
+      tagPendingCommentaryText(output.content),
+    );
+    const block: ToolCallBlock = {
+      type: "toolCall",
+      // DSML has no provider call id. A response-local counter would alias a
+      // later assistant response and could collapse distinct mutating calls.
+      id: `call_${randomUUID().replaceAll("-", "").slice(0, 24)}`,
+      name: toolCall.name,
+      arguments: toolCall.arguments,
+      partialArgs: toolCall.partialArgs,
+    };
+    currentBlock = block;
+    output.content.push(block);
+    toolCallBlockIndices.set(block, output.content.length - 1);
+    pushStreamEvent({
+      type: "toolcall_start",
+      contentIndex: toolCallBlockIndices.get(block) ?? -1,
+      partial: output,
+    });
+    pushStreamEvent({
+      type: "toolcall_delta",
+      contentIndex: toolCallBlockIndices.get(block) ?? -1,
+      delta: toolCall.partialArgs,
+      partial: output,
+    });
+  };
+  const appendFilteredVisibleTextDelta = (text: string) => {
+    const recoveredParts = deepSeekToolCallRecoverer?.push(text) ?? [
+      { kind: "text" as const, text },
+    ];
+    for (const recoveredPart of recoveredParts) {
+      if (recoveredPart.kind === "toolCall") {
+        appendRecoveredToolCall(recoveredPart);
+        continue;
+      }
+      const parts = deepSeekTextFilter?.push(recoveredPart.text) ?? [recoveredPart.text];
+      for (const part of parts) {
+        appendVisibleTextDelta(part);
+      }
+    }
+  };
+  const flushDeepSeekToolCallRecovererAtEnd = () => {
+    const recoveredParts = deepSeekToolCallRecoverer?.flush();
+    if (!recoveredParts) {
+      return;
+    }
+    for (const recoveredPart of recoveredParts) {
+      if (recoveredPart.kind === "toolCall") {
+        appendRecoveredToolCall(recoveredPart);
+        continue;
+      }
+      const parts = deepSeekTextFilter?.push(recoveredPart.text) ?? [recoveredPart.text];
+      for (const part of parts) {
+        appendVisibleTextDelta(part);
+      }
+    }
+  };
+  const flushDeepSeekTextFilterAtEnd = () => {
+    const parts = deepSeekTextFilter?.flush();
+    if (!parts) {
+      return;
+    }
+    for (const part of parts) {
+      appendVisibleTextDelta(part);
+    }
+  };
+  const appendRoutedContentDelta = (delta: CompletionsReasoningDelta) => {
+    if (delta.kind === "text") {
+      appendFilteredVisibleTextDelta(delta.text);
+      return;
+    }
+    if (!emitReasoning) {
+      return;
+    }
+    if (currentBlock?.type === "toolCall") {
+      queuePostToolCallDelta(delta);
+    } else {
+      appendThinkingDelta(delta);
+    }
+  };
+  const appendPartitionedVisibleDelta = (delta: { kind: "text" | "thinking"; text: string }) => {
+    if (delta.kind === "text") {
+      appendFilteredVisibleTextDelta(delta.text);
+    }
+  };
+  const emitReasoningUsageActivity = (hasReasoningUsageActivity: boolean) => {
+    if (!hasReasoningUsageActivity || chunkPushedEvent || !emitReasoning) {
+      return;
+    }
+    const latestBlock = output.content[output.content.length - 1];
+    if (currentBlock?.type === "text" || currentBlock?.type === "toolCall") {
+      return;
+    }
+    if (latestBlock?.type === "text" || latestBlock?.type === "toolCall") {
+      return;
+    }
+    appendThinkingDelta({ text: "" });
+  };
+  const flushReasoningTagTextPartitionerAtEnd = () => {
+    for (const delta of reasoningTagTextPartitioner.flush()) {
+      appendPartitionedVisibleDelta(delta);
+    }
+  };
+  const cooperativeScheduler = createModelStreamCooperativeScheduler(options?.signal);
+  const guardedStream = withFirstStreamEventTimeout(responseStream as AsyncIterable<unknown>, {
+    provider: model.provider,
+    api: model.api,
+    model: model.id,
+    timeoutMs: options?.firstEventTimeoutMs ?? 0,
+    stage: "completions",
+    abort: options?.abortFirstEventStream,
+    onTimeout: options?.onFirstEventTimeout,
+    hint: "The provider may be stalled while parsing the tool payload; retry with a smaller tool surface or enable OPENCLAW_DEBUG_MODEL_PAYLOAD=tools to inspect exposed tools.",
+  });
+  for await (const rawChunk of guardedStream) {
+    throwIfModelStreamAborted(options?.signal);
+    chunkPushedEvent = false;
+    if (!rawChunk || typeof rawChunk !== "object") {
+      await cooperativeScheduler.afterEvent();
+      continue;
+    }
+    // Hidden reasoning is still provider progress; keep the idle watchdog alive without exposing it.
+    notifyLlmRequestActivity(options?.signal);
+    const chunk = rawChunk as ChatCompletionChunk;
+    output.responseId ||= chunk.id;
+    let hasReasoningUsageActivity = false;
+    if (chunk.usage) {
+      output.usage = parseOpenAICompletionsUsage(chunk.usage, model);
+      hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(chunk.usage);
+    }
+    const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
+    if (!choice) {
+      emitReasoningUsageActivity(hasReasoningUsageActivity);
+      await cooperativeScheduler.afterEvent();
+      continue;
+    }
+    const choiceUsage = (choice as unknown as { usage?: ChatCompletionChunk["usage"] }).usage;
+    if (!chunk.usage && choiceUsage) {
+      output.usage = parseOpenAICompletionsUsage(choiceUsage, model);
+      hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(choiceUsage);
+    }
+    if (choice.finish_reason) {
+      const finishReasonResult = mapOpenAIStopReason(choice.finish_reason, {
+        allowSingularToolCall: true,
+      });
+      output.stopReason = finishReasonResult.stopReason;
+      if (finishReasonResult.stopReason === "stop") {
+        sawStopFinishReason = true;
+      }
+      if (finishReasonResult.errorMessage) {
+        output.errorMessage = finishReasonResult.errorMessage;
+      }
+    }
+    const rawChoiceDelta =
+      choice.delta ??
+      (choice as unknown as { message?: ChatCompletionChunk["choices"][number]["delta"] }).message;
+    if (!rawChoiceDelta) {
+      emitReasoningUsageActivity(hasReasoningUsageActivity);
+      await cooperativeScheduler.afterEvent();
+      continue;
+    }
+    for (const normalizedDelta of normalizeToolCallDeltas(rawChoiceDelta, choice.finish_reason)) {
+      const choiceDelta = normalizedDelta.delta;
+      const reasoningDeltas = getCompletionsReasoningDeltas(
+        choiceDelta as Record<string, unknown>,
+        compat.visibleReasoningDetailTypes,
+      );
+      const hasMirroredReasoning = reasoningDeltas.some((delta) => delta.kind === "thinking");
+      if (hasMirroredReasoning) {
+        reasoningTagTextPartitioner.markStrict();
+      }
+      // Share the content/refusal owner to avoid duplicate mirrored refusals.
+      const contentDeltas = readOpenAICompletionsContentDeltas(
+        choiceDelta.content,
+        choiceDelta.refusal,
+        reasoningDeltas
+          .filter((reasoningDelta) => reasoningDelta.kind === "thinking")
+          .map((reasoningDelta) => reasoningDelta.text),
+      );
+      const appendReasoningDeltas = () => {
+        for (const reasoningDelta of reasoningDeltas) {
+          if (reasoningDelta.kind === "thinking" && !emitReasoning) {
+            continue;
+          }
+          if (currentBlock?.type === "toolCall") {
+            queuePostToolCallDelta({ ...reasoningDelta });
+            continue;
+          }
+          if (reasoningDelta.kind === "text") {
+            appendTextDelta(reasoningDelta.text);
+          } else if (emitReasoning) {
+            appendThinkingDelta(reasoningDelta);
+          }
+        }
+      };
+      // The dedicated field owns reasoning order/signature; a distinct content
+      // thought follows it, while an exact mirror was removed by the decoder.
+      if (hasMirroredReasoning) {
+        appendReasoningDeltas();
+      }
+      for (const contentDelta of contentDeltas) {
+        if (contentDelta.kind === "text") {
+          const routedDeltas = hasMirroredReasoning
+            ? reasoningTagTextPartitioner.push(contentDelta.text)
+            : reasoningTagTextPartitioner.pushVisible(contentDelta.text);
+          for (const routedDelta of routedDeltas) {
+            appendPartitionedVisibleDelta(routedDelta);
+          }
+        } else {
+          if (reasoningTagTextPartitioner.hasPending()) {
+            reasoningTagTextPartitioner.markStrict();
+          }
+          appendRoutedContentDelta(contentDelta);
+        }
+      }
+      if (!hasMirroredReasoning) {
+        appendReasoningDeltas();
+      }
+      const toolCallDeltas = normalizedDelta.toolCalls;
+      if (toolCallDeltas.length > 0) {
+        sawNativeToolCallDelta = true;
+        flushReasoningTagTextPartitionerAtEnd();
+        rememberPendingCommentaryTags(
+          provisionalCommentaryTags,
+          tagPendingCommentaryText(output.content),
+        );
+        for (const toolCall of toolCallDeltas) {
+          const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
+          let block =
+            streamIndex !== undefined ? toolCallBlocksByIndex.get(streamIndex) : undefined;
+          if (!block && toolCall.id) {
+            block = toolCallBlocksById.get(toolCall.id);
+          }
+          if (!block) {
+            const switchingToolCall = currentBlock?.type === "toolCall";
+            if (switchingToolCall) {
+              currentBlock = null;
+              flushPendingPostToolCallDeltas();
+            }
+            const initialSig = extractToolCallThoughtSignature(toolCall);
+            block = {
+              type: "toolCall",
+              id: toolCall.id || "",
+              name: toolCall.function?.name || "",
+              arguments: {},
+              partialArgs: "",
+              ...(initialSig ? { thoughtSignature: initialSig } : {}),
+            };
+            output.content.push(block);
+            toolCallBlockIndices.set(block, output.content.length - 1);
+            pushStreamEvent({
+              type: "toolcall_start",
+              contentIndex: toolCallBlockIndices.get(block) ?? -1,
+              partial: output,
+            });
+          }
+          if (streamIndex !== undefined && !toolCallBlocksByIndex.has(streamIndex)) {
+            toolCallBlocksByIndex.set(streamIndex, block);
+          }
+          if (toolCall.id) {
+            block.id = toolCall.id;
+            toolCallBlocksById.set(toolCall.id, block);
+          }
+          currentBlock = block;
+          if (toolCall.function?.name) {
+            block.name = toolCall.function.name;
+          }
+          const deltaSig = extractToolCallThoughtSignature(toolCall);
+          if (deltaSig) {
+            block.thoughtSignature = deltaSig;
+          }
+          if (toolCall.function?.arguments) {
+            block.partialArgs += toolCall.function.arguments;
+            block.arguments = parseStreamingJson(block.partialArgs);
+            pushStreamEvent({
+              type: "toolcall_delta",
+              contentIndex: toolCallBlockIndices.get(block) ?? -1,
+              delta: toolCall.function.arguments,
+              partial: output,
+            });
+          }
+        }
+      }
+    }
+    flushPendingPostToolCallDeltas();
+    emitReasoningUsageActivity(hasReasoningUsageActivity);
+    await cooperativeScheduler.afterEvent();
+  }
+  flushReasoningTagTextPartitionerAtEnd();
+  flushDeepSeekToolCallRecovererAtEnd();
+  flushDeepSeekTextFilterAtEnd();
+  currentBlock = null;
+  flushPendingPostToolCallDeltas();
+  // Promote complete silent tool-call-only responses when the stream finished
+  // cleanly (reached post-loop). Two paths:
+  //   sawStopFinishReason: explicit provider terminal (legacy DSML / #88791)
+  //   sawNativeToolCallDelta + sawStreamDONE: structured delta.tool_calls with
+  //     a clean SSE [DONE] terminal but no finish_reason (e.g. Evolink
+  //     DeepSeek V4). [DONE] tracking distinguishes clean termination from
+  //     connection drops (EOF without [DONE] remains fail-closed).
+  // Truncated streams throw before reaching this code.
+  finalizeOpenAICompletionsToolCalls(output, {
+    allowSilentToolCallPromotion:
+      sawStopFinishReason || (sawNativeToolCallDelta && (options?.sawStreamDONE?.() ?? false)),
+    onConfirmedToolCall(block, contentIndex) {
+      pushStreamEvent({
+        type: "toolcall_end",
+        contentIndex,
+        toolCall: block,
+        partial: output,
+      });
+    },
+  });
+  if (output.stopReason !== "toolUse") {
+    clearPendingCommentaryText(provisionalCommentaryTags);
+  }
+  if (output.stopReason === "toolUse") {
+    tagPendingCommentaryText(output.content);
+  }
+}
+
+function getCompletionsReasoningDeltas(
+  delta: Record<string, unknown>,
+  visibleReasoningDetailTypes: readonly string[],
+): CompletionsReasoningDelta[] {
+  const output: CompletionsReasoningDelta[] = [];
+  const pushDelta = (next: CompletionsReasoningDelta) => {
+    const previous = output[output.length - 1];
+    if (!previous || previous.kind !== next.kind) {
+      output.push(next);
+      return;
+    }
+    if (next.kind === "thinking" && previous.kind === "thinking") {
+      if (previous.signature !== next.signature) {
+        output.push(next);
+        return;
+      }
+      previous.text += next.text;
+      return;
+    }
+    previous.text += next.text;
+  };
+  const reasoningDetails = delta.reasoning_details;
+  let usedReasoningThinkingDetails = false;
+  if (Array.isArray(reasoningDetails)) {
+    const visibleTypes = new Set(visibleReasoningDetailTypes);
+    for (const item of reasoningDetails) {
+      const detail = item as { type?: unknown; text?: unknown };
+      if (typeof detail.text !== "string" || !detail.text) {
+        continue;
+      }
+      if (detail.type === "reasoning.text") {
+        usedReasoningThinkingDetails = true;
+        pushDelta({ kind: "thinking", signature: "reasoning_details", text: detail.text });
+        continue;
+      }
+      if (typeof detail.type === "string" && visibleTypes.has(detail.type)) {
+        pushDelta({ kind: "text", text: detail.text });
+      }
+    }
+  }
+  if (!usedReasoningThinkingDetails) {
+    const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"] as const;
+    for (const field of reasoningFields) {
+      const value = delta[field];
+      if (typeof value === "string" && value.length > 0) {
+        pushDelta({ kind: "thinking", signature: field, text: value });
+        break;
+      }
+    }
+  }
+  return output;
+}
+
+function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptions | undefined) {
+  return options?.reasoningEffort ?? options?.reasoning ?? "high";
+}
+
+export function shouldEmitOpenAICompletionsReasoning(
+  model: OpenAIModeModel,
+  options: OpenAICompletionsOptions | undefined,
+) {
+  if (!model.reasoning) {
+    return false;
+  }
+  const effort = resolveOpenAICompletionsReasoningEffort(options);
+  if (!effort || !isOpenAICompletionsThinkingEnabled(effort)) {
+    return false;
+  }
+  return true;
+}
+
+function hasOpenAICompletionsReasoningUsageActivity(
+  rawUsage: NonNullable<ChatCompletionChunk["usage"]>,
+) {
+  const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
+  return (
+    typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens) && reasoningTokens > 0
+  );
+}

@@ -7,13 +7,15 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { satisfiesPluginApiRange } from "../infra/clawhub.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
-import { resolveSourceCheckoutDependencyDiagnostic } from "./bundled-dir.js";
+import {
+  hasUsableBundledPluginTree,
+  resolveSourceCheckoutDependencyDiagnostic,
+} from "./bundled-dir.js";
 import { buildLegacyBundledRootPath } from "./bundled-load-path-aliases.js";
 import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
@@ -29,6 +31,7 @@ import {
   type PackageExtensionResolution,
   type PackageManifest,
 } from "./manifest.js";
+import { satisfiesPluginApiRange } from "./package-compat.js";
 import { resolvePackagePluginApiRange } from "./package-compat.js";
 import {
   resolvePackageRuntimeExtensionSources,
@@ -72,6 +75,8 @@ registerPluginMetadataProcessMemoLifecycleClear(() => {
 /** One potential plugin root discovered before manifest validation and registry normalization. */
 export type PluginCandidate = {
   idHint: string;
+  /** Discovery-owned identity for one entry in a multi-entry package pack. */
+  effectivePluginId?: string;
   diagnosticIdHint?: string;
   source: string;
   setupSource?: string;
@@ -731,6 +736,7 @@ function addCandidate(params: {
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
   idHint: string;
+  effectivePluginId?: string;
   diagnosticIdHint?: string;
   source: string;
   setupSource?: string;
@@ -778,6 +784,7 @@ function addCandidate(params: {
   });
   params.candidates.push({
     idHint: params.idHint,
+    ...(params.effectivePluginId ? { effectivePluginId: params.effectivePluginId } : {}),
     ...(params.diagnosticIdHint && params.diagnosticIdHint !== params.idHint
       ? { diagnosticIdHint: params.diagnosticIdHint }
       : {}),
@@ -1005,12 +1012,17 @@ function discoverPluginDirectory(params: PluginDirectoryDiscoveryParams): boolea
     diagnostics: params.diagnostics,
     rejectHardlinks,
   });
-  const addPackageCandidate = (source: string, idHint: string): void => {
+  const addPackageCandidate = (
+    source: string,
+    idHint: string,
+    effectivePluginId?: string,
+  ): void => {
     addCandidate({
       candidates: params.candidates,
       diagnostics: params.diagnostics,
       seen: params.seen,
       idHint,
+      ...(effectivePluginId ? { effectivePluginId } : {}),
       diagnosticIdHint: pluginIdHint,
       source,
       ...(setupSource ? { setupSource } : {}),
@@ -1039,17 +1051,41 @@ function discoverPluginDirectory(params: PluginDirectoryDiscoveryParams): boolea
       diagnostics: params.diagnostics,
       rejectHardlinks,
     });
+    // Entry ids derive from basenames, so ./a/index.js and ./b/index.js would
+    // both become <pack>/index and one entry would silently vanish in the
+    // registry's same-id dedupe. Reject the colliding entries loudly instead.
+    const entryIdSources = new Map<string, string[]>();
     for (const source of resolvedRuntimeSources) {
-      addPackageCandidate(
-        source,
-        deriveIdHint({
-          filePath: source,
-          manifestId: manifestId ?? normalizeOptionalString(packageMetadata?.plugin?.id),
-          packageName: manifest?.name,
-          fallbackId: path.basename(dir),
-          hasMultipleExtensions: extensions.length > 1,
-        }),
-      );
+      const idHint = deriveIdHint({
+        filePath: source,
+        manifestId: manifestId ?? normalizeOptionalString(packageMetadata?.plugin?.id),
+        packageName: manifest?.name,
+        fallbackId: path.basename(dir),
+        hasMultipleExtensions: extensions.length > 1,
+      });
+      const sources = entryIdSources.get(idHint);
+      if (sources) {
+        sources.push(source);
+      } else {
+        entryIdSources.set(idHint, [source]);
+      }
+    }
+    for (const [idHint, sources] of entryIdSources) {
+      if (extensions.length > 1 && sources.length > 1) {
+        params.diagnostics.push({
+          level: "error",
+          pluginId: idHint,
+          source: dir,
+          message:
+            `plugin package entries collide on derived id "${idHint}" ` +
+            `(${sources.map((s) => path.relative(dir, s)).join(", ")}); ` +
+            "rename the entry files to unique basenames",
+        });
+        continue;
+      }
+      for (const source of sources) {
+        addPackageCandidate(source, idHint, extensions.length > 1 ? idHint : undefined);
+      }
     }
     return true;
   }
@@ -1181,31 +1217,13 @@ function discoverInDirectory(params: {
   }
 }
 
-function hasDiscoverablePluginTree(pluginsDir: string): boolean {
-  try {
-    return fs.readdirSync(pluginsDir, { withFileTypes: true }).some((entry) => {
-      if (!entry.isDirectory()) {
-        return false;
-      }
-      const pluginDir = path.join(pluginsDir, entry.name);
-      return (
-        fs.existsSync(path.join(pluginDir, "package.json")) ||
-        fs.existsSync(path.join(pluginDir, "openclaw.plugin.json"))
-      );
-    });
-  } catch {
-    return false;
-  }
-}
-
 function isSourceCheckoutExtensionsDir(extensionsDir: string): boolean {
   const packageRoot = path.dirname(extensionsDir);
   return (
     fs.existsSync(path.join(packageRoot, ".git")) &&
     fs.existsSync(path.join(packageRoot, "pnpm-workspace.yaml")) &&
     fs.existsSync(path.join(packageRoot, "src")) &&
-    fs.existsSync(extensionsDir) &&
-    hasDiscoverablePluginTree(extensionsDir)
+    hasUsableBundledPluginTree(extensionsDir)
   );
 }
 

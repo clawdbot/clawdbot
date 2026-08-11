@@ -5,6 +5,7 @@ import type { ChannelApprovalNativeRuntimeAdapter } from "./approval-handler-run
 // Shared approval-runtime stubs keep channel approval tests focused on route
 // behavior instead of rebuilding the native adapter shape.
 export type ApprovalNativeRuntimeAdapterStubParams = {
+  eventKinds?: ChannelApprovalNativeRuntimeAdapter["eventKinds"];
   resolveApprovalKind?: ChannelApprovalNativeRuntimeAdapter["resolveApprovalKind"];
   shouldHandle?: ChannelApprovalNativeRuntimeAdapter["availability"]["shouldHandle"];
   buildResolvedResult?: ChannelApprovalNativeRuntimeAdapter["presentation"]["buildResolvedResult"];
@@ -22,6 +23,7 @@ export function createApprovalNativeRuntimeAdapterStubs(
   params: ApprovalNativeRuntimeAdapterStubParams = {},
 ): ChannelApprovalNativeRuntimeAdapter {
   return {
+    ...(params.eventKinds ? { eventKinds: params.eventKinds } : {}),
     ...(params.resolveApprovalKind ? { resolveApprovalKind: params.resolveApprovalKind } : {}),
     availability: {
       isConfigured: vi.fn().mockReturnValue(true),

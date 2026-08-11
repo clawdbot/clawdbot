@@ -9,6 +9,10 @@ const gatewayCalls: Array<{
   method: string;
   params: Record<string, unknown>;
   mode?: string;
+  url?: string;
+  token?: string;
+  useStoredDeviceAuth?: boolean;
+  requiredStoredDeviceAuthScopes?: string[];
   hasDeviceIdentityKey: boolean;
 }> = [];
 
@@ -21,13 +25,31 @@ function gatewayParams(params: unknown): Record<string, unknown> {
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(
-    async (p: { method: string; params: Record<string, unknown>; mode?: string }) => {
+    async (p: {
+      method: string;
+      params: Record<string, unknown>;
+      mode?: string;
+      url?: string;
+      token?: string;
+      useStoredDeviceAuth?: boolean;
+      requiredStoredDeviceAuthScopes?: string[];
+    }) => {
       gatewayCalls.push({
         method: p.method,
         params: gatewayParams(p.params),
         mode: p.mode,
+        url: p.url,
+        token: p.token,
+        useStoredDeviceAuth: p.useStoredDeviceAuth,
+        requiredStoredDeviceAuthScopes: p.requiredStoredDeviceAuthScopes,
         hasDeviceIdentityKey: "deviceIdentity" in p,
       });
+      if (p.method === "sessions.resolve") {
+        return { ok: true, key: "agent:ops:thread:resolved" };
+      }
+      if (p.method === "agents.list") {
+        return { defaultId: "main", mainKey: "main", scope: "global", agents: [] };
+      }
       if (p.method === "attach.grant") {
         const sessionKey = (p.params.sessionKey as string) ?? "agent:main:main";
         return {
@@ -49,6 +71,8 @@ vi.mock("../gateway/call.js", () => ({
       return {};
     },
   ),
+  GatewayStoredDeviceAuthUnavailableError: class extends Error {},
+  GatewayTransportError: class extends Error {},
 }));
 
 const logs: string[] = [];
@@ -109,6 +133,55 @@ describe("openclaw attach (action)", () => {
     const grant = gatewayCalls.find((c) => c.method === "attach.grant");
     expect(grant?.mode).toBe("cli");
     expect(grant?.hasDeviceIdentityKey).toBe(false);
+  });
+
+  it("resolves a URL target before granting on the same origin", async () => {
+    await runAttach(
+      "https://gateway.example/base/dashboard/ops/movies-a1166b81",
+      "--token",
+      "explicit-token",
+      "--print-config",
+    );
+
+    const resolve = gatewayCalls.find((call) => call.method === "sessions.resolve");
+    expect(resolve).toMatchObject({
+      url: "wss://gateway.example/base",
+      token: "explicit-token",
+      useStoredDeviceAuth: true,
+      requiredStoredDeviceAuthScopes: ["operator.read"],
+      params: { shortId: "a1166b81", slugHint: "movies" },
+    });
+    expect(gatewayCalls.find((call) => call.method === "attach.grant")).toMatchObject({
+      url: "wss://gateway.example/base",
+      token: "explicit-token",
+      useStoredDeviceAuth: true,
+      requiredStoredDeviceAuthScopes: ["operator.admin"],
+      params: { sessionKey: "agent:ops:thread:resolved" },
+    });
+  });
+
+  it("preserves a global-scope URL main session when granting attach access", async () => {
+    await runAttach(
+      "https://gateway.example/base/dashboard/ops",
+      "--token",
+      "explicit-token",
+      "--print-config",
+    );
+
+    expect(gatewayCalls.find((call) => call.method === "agents.list")).toMatchObject({
+      url: "wss://gateway.example/base",
+      token: "explicit-token",
+      useStoredDeviceAuth: true,
+      requiredStoredDeviceAuthScopes: ["operator.read"],
+      params: {},
+    });
+    expect(gatewayCalls.find((call) => call.method === "attach.grant")).toMatchObject({
+      url: "wss://gateway.example/base",
+      token: "explicit-token",
+      useStoredDeviceAuth: true,
+      requiredStoredDeviceAuthScopes: ["operator.admin"],
+      params: { sessionKey: "global", agentId: "ops" },
+    });
   });
 
   it("rejects a non-positive --ttl before minting", async () => {

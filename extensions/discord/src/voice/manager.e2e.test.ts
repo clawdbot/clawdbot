@@ -286,7 +286,48 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async () => {
       return {
         ...harness,
         createBridge: (bridgeParams: Parameters<typeof harness.createBridge>[0]) =>
-          createRealtimeVoiceBridgeSessionMock(bridgeParams),
+          harness.createBridge({
+            ...bridgeParams,
+            provider: {
+              ...bridgeParams.provider,
+              label: bridgeParams.provider.label ?? "Test realtime provider",
+              isConfigured: bridgeParams.provider.isConfigured ?? (() => true),
+              createBridge: (request) => {
+                createRealtimeVoiceBridgeSessionMock({
+                  ...bridgeParams,
+                  audioSink: {
+                    ...bridgeParams.audioSink,
+                    sendAudio: request.onAudio,
+                    clearAudio: request.onClearAudio,
+                  },
+                  onEvent: request.onEvent,
+                  onReady: request.onReady,
+                  onResponseDone: request.onResponseDone,
+                  onToolCall: bridgeParams.onToolCall,
+                  onTranscript: request.onTranscript,
+                });
+                return {
+                  supportsToolResultContinuation:
+                    realtimeSessionMock.bridge.supportsToolResultContinuation,
+                  supportsToolResultSuppression:
+                    realtimeSessionMock.bridge.supportsToolResultSuppression,
+                  acknowledgeMark: realtimeSessionMock.acknowledgeMark,
+                  close: realtimeSessionMock.close,
+                  connect: realtimeSessionMock.connect,
+                  handleBargeIn: realtimeSessionMock.handleBargeIn,
+                  isConnected: () => true,
+                  sendAudio: realtimeSessionMock.sendAudio,
+                  sendUserMessage: realtimeSessionMock.sendUserMessage,
+                  setMediaTimestamp: realtimeSessionMock.setMediaTimestamp,
+                  submitToolResult: (callId, result, options) =>
+                    options === undefined
+                      ? realtimeSessionMock.submitToolResult(callId, result)
+                      : realtimeSessionMock.submitToolResult(callId, result, options),
+                  triggerGreeting: realtimeSessionMock.triggerGreeting,
+                };
+              },
+            },
+          }),
         flushOutput: (flush: () => void) => flush(),
         handleBargeIn: (
           options: Parameters<typeof harness.handleBargeIn>[0],
@@ -433,16 +474,59 @@ describe("DiscordVoiceManager", () => {
       runtime: createRuntime(),
     });
 
-  const createAgentProxyManager = (clientOverride?: ReturnType<typeof createClient>) =>
-    createManager(
+  type DiscordConfig = ConstructorParameters<
+    typeof managerModule.DiscordVoiceManager
+  >[0]["discordConfig"];
+  type VoiceConfig = NonNullable<DiscordConfig["voice"]>;
+  type AgentProxyConfigOverrides = Omit<Partial<DiscordConfig>, "voice"> & {
+    voice?: Partial<VoiceConfig>;
+  };
+
+  const makeVoiceConfig = (
+    voice: Partial<VoiceConfig> = {},
+    overrides: Omit<Partial<DiscordConfig>, "voice"> = {},
+  ): DiscordConfig => ({
+    ...overrides,
+    voice: { enabled: true, mode: "stt-tts", ...voice },
+  });
+
+  const makeAgentProxyConfig = (overrides: AgentProxyConfigOverrides = {}): DiscordConfig => {
+    const { voice, ...discord } = overrides;
+    return makeVoiceConfig(
       {
-        groupPolicy: "open",
-        voice: {
-          enabled: true,
-          mode: "agent-proxy",
-          realtime: { provider: "openai" },
-        },
+        mode: "agent-proxy",
+        ...voice,
+        realtime: { provider: "openai", ...voice?.realtime },
       },
+      { groupPolicy: "open", ...discord },
+    );
+  };
+
+  const makeBidiConfig = (overrides: AgentProxyConfigOverrides = {}): DiscordConfig => {
+    const { voice, ...discord } = overrides;
+    return makeVoiceConfig(
+      {
+        mode: "bidi",
+        ...voice,
+        realtime: { provider: "openai", ...voice?.realtime },
+      },
+      { groupPolicy: "open", ...discord },
+    );
+  };
+
+  const createAgentProxyManager = (
+    clientOverride?: ReturnType<typeof createClient>,
+    overrides?: AgentProxyConfigOverrides,
+    cfgOverride?: ConstructorParameters<typeof managerModule.DiscordVoiceManager>[0]["cfg"],
+  ) => createManager(makeAgentProxyConfig(overrides), clientOverride, cfgOverride);
+
+  const createFollowManager = (
+    voice: Partial<VoiceConfig> = {},
+    clientOverride?: ReturnType<typeof createClient>,
+    overrides: Omit<Partial<DiscordConfig>, "voice"> = {},
+  ) =>
+    createManager(
+      makeVoiceConfig({ followUsers: ["u-owner"], ...voice }, overrides),
       clientOverride,
     );
 
@@ -496,16 +580,9 @@ describe("DiscordVoiceManager", () => {
   };
 
   const createWakeNameFixture = async (agentName = "Molty") => {
-    const manager = createManager(
-      {
-        groupPolicy: "open",
-        voice: {
-          enabled: true,
-          mode: "agent-proxy",
-          realtime: { provider: "openai", consultPolicy: "auto", requireWakeName: true },
-        },
-      },
+    const manager = createAgentProxyManager(
       undefined,
+      { voice: { realtime: { consultPolicy: "auto", requireWakeName: true } } },
       { agents: { list: [{ id: "agent-1", identity: { name: agentName } }] } },
     );
     await manager.join({ guildId: "g1", channelId: "1001" });
@@ -573,6 +650,30 @@ describe("DiscordVoiceManager", () => {
       )[0],
       "realtime bridge params",
     ) as TestRealtimeBridgeParams;
+
+  const joinManagerFixture = async (
+    manager: InstanceType<typeof managerModule.DiscordVoiceManager>,
+  ) => {
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    return {
+      bridgeParams: lastRealtimeBridgeParams(),
+      entry: getSessionEntry(manager),
+      manager,
+      player: getLastAudioPlayer(),
+    };
+  };
+
+  const createJoinedAgentProxyFixture = async (
+    overrides: {
+      client?: ReturnType<typeof createClient>;
+      config?: AgentProxyConfigOverrides;
+      cfg?: ConstructorParameters<typeof managerModule.DiscordVoiceManager>[0]["cfg"];
+    } = {},
+  ) =>
+    joinManagerFixture(createAgentProxyManager(overrides.client, overrides.config, overrides.cfg));
+
+  const createJoinedBidiFixture = async (config: AgentProxyConfigOverrides = {}) =>
+    joinManagerFixture(createManager(makeBidiConfig(config)));
 
   const lastAudioResourceInput = () =>
     lastMockCall(createAudioResourceMock as unknown as MockCallSource, "audio resource")[0];
@@ -690,6 +791,20 @@ describe("DiscordVoiceManager", () => {
     return { dave, gateway };
   };
 
+  const makePoisonedDaveConnections = (additionalConnections = 0) => {
+    const firstConnection = createConnectionMock();
+    const secondConnection = createConnectionMock();
+    installFailingDaveSession(firstConnection, "native");
+    installFailingDaveSession(secondConnection, "key-package");
+    const connections = [
+      firstConnection,
+      secondConnection,
+      ...Array.from({ length: additionalConnections }, createConnectionMock),
+    ];
+    connections.forEach((connection) => joinVoiceChannelMock.mockReturnValueOnce(connection));
+    return { firstConnection, secondConnection };
+  };
+
   it("rejects joins when Discord voice config is absent", async () => {
     const manager = createManager({});
 
@@ -745,6 +860,17 @@ describe("DiscordVoiceManager", () => {
       ...(member ? { member } : {}),
     } as never);
   };
+
+  const handleSpeakingStart = async (
+    manager: InstanceType<typeof managerModule.DiscordVoiceManager>,
+    entry: unknown,
+    userId: string,
+  ) =>
+    await (
+      manager as unknown as {
+        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
+      }
+    ).handleSpeakingStart(entry, userId);
 
   it("keeps the new session when an old disconnected handler fires", async () => {
     const oldConnection = createConnectionMock();
@@ -1021,19 +1147,9 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("keeps realtime playback alive when transcripts attaches to an existing voice session", async () => {
-    const manager = createManager({
-      groupPolicy: "open",
-      voice: {
-        enabled: true,
-        mode: "agent-proxy",
-        realtime: { provider: "openai", consultPolicy: "auto" },
-      },
+    const { bridgeParams, entry, manager, player } = await createJoinedAgentProxyFixture({
+      config: { voice: { realtime: { consultPolicy: "auto" } } },
     });
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const player = getLastAudioPlayer();
-    const entry = getSessionEntry(manager);
-    const bridgeParams = lastRealtimeBridgeParams();
 
     bridgeParams?.audioSink?.sendAudio(Buffer.alloc(24_000));
     const stopCallsBeforeTranscripts = player.stop.mock.calls.length;
@@ -1138,13 +1254,12 @@ describe("DiscordVoiceManager", () => {
 
   it("suppresses repeated autoJoin attempts after fatal realtime startup failures", async () => {
     realtimeSessionMock.connect.mockRejectedValueOnce(new Error("Incorrect API key provided"));
-    const manager = createManager({
-      voice: {
-        enabled: true,
+    const manager = createManager(
+      makeVoiceConfig({
         mode: "agent-proxy",
         autoJoin: [{ guildId: "g1", channelId: "1001" }],
-      },
-    });
+      }),
+    );
 
     await manager.autoJoin();
     await manager.autoJoin();
@@ -1155,13 +1270,9 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("rejects joins outside configured allowed voice channels", async () => {
-    const manager = createManager({
-      voice: {
-        enabled: true,
-        mode: "stt-tts",
-        allowedChannels: [{ guildId: "g1", channelId: "1001" }],
-      },
-    });
+    const manager = createManager(
+      makeVoiceConfig({ allowedChannels: [{ guildId: "g1", channelId: "1001" }] }),
+    );
 
     const result = await manager.join({ guildId: "g1", channelId: "1002" });
 
@@ -1173,13 +1284,9 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("allows joins inside configured allowed voice channels", async () => {
-    const manager = createManager({
-      voice: {
-        enabled: true,
-        mode: "stt-tts",
-        allowedChannels: [{ guildId: "g1", channelId: "1001" }],
-      },
-    });
+    const manager = createManager(
+      makeVoiceConfig({ allowedChannels: [{ guildId: "g1", channelId: "1001" }] }),
+    );
 
     const result = await manager.join({ guildId: "g1", channelId: "1001" });
 
@@ -1448,16 +1555,8 @@ describe("DiscordVoiceManager", () => {
     enqueueSystemEventMock.mockClear();
     const entry = getSessionEntry(manager);
 
-    await (
-      manager as unknown as {
-        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
-      }
-    ).handleSpeakingStart(entry, "u-raced-first");
-    await (
-      manager as unknown as {
-        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
-      }
-    ).handleSpeakingStart(entry, "u-raced-second");
+    await handleSpeakingStart(manager, entry, "u-raced-first");
+    await handleSpeakingStart(manager, entry, "u-raced-second");
     await manager.handleVoiceStateUpdate({
       guild_id: "g1",
       user_id: "u-raced-second",
@@ -1538,17 +1637,12 @@ describe("DiscordVoiceManager", () => {
           resolveMember = resolve;
         }),
     );
-    const manager = createManager(
+    const manager = createFollowManager(
       {
-        voice: {
-          enabled: true,
-          mode: "stt-tts",
-          allowedChannels: [
-            { guildId: "g1", channelId: "1001" },
-            { guildId: "g1", channelId: "1002" },
-          ],
-          followUsers: ["u-owner"],
-        },
+        allowedChannels: [
+          { guildId: "g1", channelId: "1001" },
+          { guildId: "g1", channelId: "1002" },
+        ],
       },
       client,
     );
@@ -1605,13 +1699,7 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("follows configured users into voice channels", async () => {
-    const manager = createManager({
-      voice: {
-        enabled: true,
-        mode: "stt-tts",
-        followUsers: ["discord:u-owner"],
-      },
-    });
+    const manager = createFollowManager({ followUsers: ["discord:u-owner"] });
 
     await updateVoiceState(manager, "u-owner", "1001");
 
@@ -1620,14 +1708,7 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("does not follow configured users when followUsersEnabled is false", async () => {
-    const manager = createManager({
-      voice: {
-        enabled: true,
-        mode: "stt-tts",
-        followUsersEnabled: false,
-        followUsers: ["u-owner"],
-      },
-    });
+    const manager = createFollowManager({ followUsersEnabled: false });
 
     await updateVoiceState(manager, "u-owner", "1001");
 
@@ -1642,17 +1723,7 @@ describe("DiscordVoiceManager", () => {
       user_id: "bot-user",
       channel_id: "1001",
     });
-    const manager = createManager(
-      {
-        guilds: { g1: {} },
-        voice: {
-          enabled: true,
-          mode: "stt-tts",
-          followUsers: ["u-owner"],
-        },
-      },
-      client,
-    );
+    const manager = createFollowManager({}, client, { guilds: { g1: {} } });
     manager.setBotUserId("bot-user");
 
     await manager.autoJoin();
@@ -1667,13 +1738,7 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("moves with configured followed users", async () => {
-    const manager = createManager({
-      voice: {
-        enabled: true,
-        mode: "stt-tts",
-        followUsers: ["u-owner"],
-      },
-    });
+    const manager = createFollowManager();
 
     await updateVoiceState(manager, "u-owner", "1001");
     await updateVoiceState(manager, "u-owner", "1002");
@@ -1683,13 +1748,7 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("preserves follow ownership when a bot voice move rebuilds the session", async () => {
-    const manager = createManager({
-      voice: {
-        enabled: true,
-        mode: "stt-tts",
-        followUsers: ["u-owner"],
-      },
-    });
+    const manager = createFollowManager();
     manager.setBotUserId("bot-user");
 
     await updateVoiceState(manager, "u-owner", "1001");
@@ -1701,13 +1760,7 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("leaves when a followed user disconnects", async () => {
-    const manager = createManager({
-      voice: {
-        enabled: true,
-        mode: "stt-tts",
-        followUsers: ["u-owner"],
-      },
-    });
+    const manager = createFollowManager();
 
     await updateVoiceState(manager, "u-owner", "1001");
     await updateVoiceState(manager, "u-owner", null);
@@ -1716,16 +1769,12 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("hands off to another followed user when the active followed user disconnects", async () => {
-    const manager = createManager({
-      voice: {
-        enabled: true,
-        mode: "stt-tts",
-        allowedChannels: [
-          { guildId: "g1", channelId: "1001" },
-          { guildId: "g1", channelId: "1002" },
-        ],
-        followUsers: ["u-owner", "u-backup"],
-      },
+    const manager = createFollowManager({
+      allowedChannels: [
+        { guildId: "g1", channelId: "1001" },
+        { guildId: "g1", channelId: "1002" },
+      ],
+      followUsers: ["u-owner", "u-backup"],
     });
 
     await updateVoiceState(manager, "u-backup", "1002");
@@ -1753,17 +1802,13 @@ describe("DiscordVoiceManager", () => {
         type: ChannelType.GuildVoice,
       };
     });
-    const manager = createManager(
+    const manager = createFollowManager(
       {
-        voice: {
-          enabled: true,
-          mode: "stt-tts",
-          allowedChannels: [
-            { guildId: "g1", channelId: "1001" },
-            { guildId: "g1", channelId: "1002" },
-          ],
-          followUsers: ["u-owner", "u-backup"],
-        },
+        allowedChannels: [
+          { guildId: "g1", channelId: "1001" },
+          { guildId: "g1", channelId: "1002" },
+        ],
+        followUsers: ["u-owner", "u-backup"],
       },
       client,
     );
@@ -1776,13 +1821,8 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("does not follow configured users into disallowed channels", async () => {
-    const manager = createManager({
-      voice: {
-        enabled: true,
-        mode: "stt-tts",
-        followUsers: ["u-owner"],
-        allowedChannels: [{ guildId: "g1", channelId: "1001" }],
-      },
+    const manager = createFollowManager({
+      allowedChannels: [{ guildId: "g1", channelId: "1001" }],
     });
 
     await updateVoiceState(manager, "u-owner", "1002");
@@ -1797,17 +1837,9 @@ describe("DiscordVoiceManager", () => {
     const guilds = Object.fromEntries(
       Array.from({ length: 10 }, (_, index) => [`g${index + 1}`, {}]),
     );
-    const manager = createManager(
-      {
-        guilds,
-        voice: {
-          enabled: true,
-          mode: "stt-tts",
-          followUsers: ["u1", "u2", "u3", "u4", "u5"],
-        },
-      },
-      client,
-    );
+    const manager = createFollowManager({ followUsers: ["u1", "u2", "u3", "u4", "u5"] }, client, {
+      guilds,
+    });
     manager.setBotUserId("bot-user");
 
     await manager.autoJoin();
@@ -1818,17 +1850,7 @@ describe("DiscordVoiceManager", () => {
 
   it("keeps followed voice state when reconciliation hits a transient REST failure", async () => {
     const client = createClient();
-    const manager = createManager(
-      {
-        guilds: { g1: {} },
-        voice: {
-          enabled: true,
-          mode: "stt-tts",
-          followUsers: ["u-owner"],
-        },
-      },
-      client,
-    );
+    const manager = createFollowManager({}, client, { guilds: { g1: {} } });
 
     await updateVoiceState(manager, "u-owner", "1001");
     client.rest.get.mockRejectedValue(new Error("Discord API failed (500): fetch failed"));
@@ -1849,17 +1871,7 @@ describe("DiscordVoiceManager", () => {
           resolveVoiceState = resolve;
         }),
     );
-    const manager = createManager(
-      {
-        guilds: { g1: {} },
-        voice: {
-          enabled: true,
-          mode: "stt-tts",
-          followUsers: ["u-owner"],
-        },
-      },
-      client,
-    );
+    const manager = createFollowManager({}, client, { guilds: { g1: {} } });
 
     const autoJoinPromise = manager.autoJoin();
     await vi.waitFor(() => {
@@ -1881,16 +1893,10 @@ describe("DiscordVoiceManager", () => {
       }
       throw new Error("Unknown Voice State");
     });
-    const manager = createManager(
-      {
-        guilds: { g1: {} },
-        voice: {
-          enabled: true,
-          mode: "stt-tts",
-          followUsers: Array.from({ length: 40 }, (_, index) => `u${index + 1}`),
-        },
-      },
+    const manager = createFollowManager(
+      { followUsers: Array.from({ length: 40 }, (_, index) => `u${index + 1}`) },
       client,
+      { guilds: { g1: {} } },
     );
     manager.setBotUserId("bot-user");
 
@@ -1921,16 +1927,10 @@ describe("DiscordVoiceManager", () => {
       }
       throw new Error("Unknown Voice State");
     });
-    const manager = createManager(
-      {
-        guilds: { g1: {}, g2: {} },
-        voice: {
-          enabled: true,
-          mode: "stt-tts",
-          followUsers: Array.from({ length: 40 }, (_, index) => `u${index + 1}`),
-        },
-      },
+    const manager = createFollowManager(
+      { followUsers: Array.from({ length: 40 }, (_, index) => `u${index + 1}`) },
       client,
+      { guilds: { g1: {}, g2: {} } },
     );
     manager.setBotUserId("bot-user");
 
@@ -1961,16 +1961,10 @@ describe("DiscordVoiceManager", () => {
       }
       throw new Error("Unknown Voice State");
     });
-    const manager = createManager(
-      {
-        guilds: { g1: {}, g2: {}, g3: {} },
-        voice: {
-          enabled: true,
-          mode: "stt-tts",
-          followUsers: Array.from({ length: 10 }, (_, index) => `u${index + 1}`),
-        },
-      },
+    const manager = createFollowManager(
+      { followUsers: Array.from({ length: 10 }, (_, index) => `u${index + 1}`) },
       client,
+      { guilds: { g1: {}, g2: {}, g3: {} } },
     );
     manager.setBotUserId("bot-user");
 
@@ -1991,13 +1985,7 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("treats an empty allowed voice channel list as deny-all", async () => {
-    const manager = createManager({
-      voice: {
-        enabled: true,
-        mode: "stt-tts",
-        allowedChannels: [],
-      },
-    });
+    const manager = createManager(makeVoiceConfig({ allowedChannels: [] }));
 
     const result = await manager.join({ guildId: "g1", channelId: "1001" });
 
@@ -2006,14 +1994,12 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("leaves and rejoins the configured target when Discord moves the bot outside allowed voice channels", async () => {
-    const manager = createManager({
-      voice: {
-        enabled: true,
-        mode: "stt-tts",
+    const manager = createManager(
+      makeVoiceConfig({
         autoJoin: [{ guildId: "g1", channelId: "1001" }],
         allowedChannels: [{ guildId: "g1", channelId: "1001" }],
-      },
-    });
+      }),
+    );
     manager.setBotUserId("bot-user");
     await manager.join({ guildId: "g1", channelId: "1001" });
 
@@ -2082,11 +2068,7 @@ describe("DiscordVoiceManager", () => {
     const entry = getSessionEntry(manager);
     player.state.status = "playing";
 
-    await (
-      manager as unknown as {
-        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
-      }
-    ).handleSpeakingStart(entry, "u1");
+    await handleSpeakingStart(manager, entry, "u1");
 
     expect(player.stop).not.toHaveBeenCalled();
     expect(connection.receiver.subscribe).not.toHaveBeenCalled();
@@ -2095,14 +2077,10 @@ describe("DiscordVoiceManager", () => {
   it("allows configured realtime barge-in when provider input interruption is disabled", async () => {
     const connection = createConnectionMock();
     joinVoiceChannelMock.mockReturnValueOnce(connection);
-    const manager = createManager({
-      groupPolicy: "open",
+    const { bridgeParams, entry, manager, player } = await createJoinedBidiFixture({
       allowFrom: ["discord:u1"],
       voice: {
-        enabled: true,
-        mode: "bidi",
         realtime: {
-          provider: "openai",
           bargeIn: true,
           providers: {
             openai: {
@@ -2112,20 +2090,10 @@ describe("DiscordVoiceManager", () => {
         },
       },
     });
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-
-    const player = getLastAudioPlayer();
-    const entry = getSessionEntry(manager);
-    const bridgeParams = lastRealtimeBridgeParams();
     player.state.status = "playing";
     bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
 
-    await (
-      manager as unknown as {
-        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
-      }
-    ).handleSpeakingStart(entry, "u1");
+    await handleSpeakingStart(manager, entry, "u1");
 
     expect(realtimeSessionMock.handleBargeIn).toHaveBeenCalled();
     expect(player.stop).not.toHaveBeenCalled();
@@ -2141,14 +2109,10 @@ describe("DiscordVoiceManager", () => {
   it("interrupts realtime playback when an already-active speaker keeps talking", async () => {
     const connection = createConnectionMock();
     joinVoiceChannelMock.mockReturnValueOnce(connection);
-    const manager = createManager({
-      groupPolicy: "open",
+    const { bridgeParams, entry, player } = await createJoinedBidiFixture({
       allowFrom: ["discord:u1"],
       voice: {
-        enabled: true,
-        mode: "bidi",
         realtime: {
-          provider: "openai",
           bargeIn: true,
           providers: {
             openai: {
@@ -2158,12 +2122,6 @@ describe("DiscordVoiceManager", () => {
         },
       },
     });
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-
-    const entry = getSessionEntry(manager);
-    const bridgeParams = lastRealtimeBridgeParams();
-    const player = getLastAudioPlayer();
     const turn = entry.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
       "u1",
@@ -2186,14 +2144,10 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("does not interrupt realtime provider state when local playback is already idle", async () => {
-    const manager = createManager({
-      groupPolicy: "open",
+    const { entry, player } = await createJoinedBidiFixture({
       allowFrom: ["discord:u1"],
       voice: {
-        enabled: true,
-        mode: "bidi",
         realtime: {
-          provider: "openai",
           bargeIn: true,
           providers: {
             openai: {
@@ -2203,11 +2157,6 @@ describe("DiscordVoiceManager", () => {
         },
       },
     });
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-
-    const entry = getSessionEntry(manager);
-    const player = getLastAudioPlayer();
     const turn = entry.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
       "u1",
@@ -2221,14 +2170,10 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("sends trailing realtime silence when a speaker turn closes", async () => {
-    const manager = createManager({
-      groupPolicy: "open",
+    const { entry } = await createJoinedBidiFixture({
       allowFrom: ["discord:u1"],
       voice: {
-        enabled: true,
-        mode: "bidi",
         realtime: {
-          provider: "openai",
           providers: {
             openai: {
               silenceDurationMs: 450,
@@ -2237,10 +2182,6 @@ describe("DiscordVoiceManager", () => {
         },
       },
     });
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-
-    const entry = getSessionEntry(manager);
     const turn = entry.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
       "u1",
@@ -2259,14 +2200,10 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("clamps configured realtime trailing silence before allocating audio", async () => {
-    const manager = createManager({
-      groupPolicy: "open",
+    const { entry } = await createJoinedBidiFixture({
       allowFrom: ["discord:u1"],
       voice: {
-        enabled: true,
-        mode: "bidi",
         realtime: {
-          provider: "openai",
           providers: {
             openai: {
               silenceDurationMs: 60_000,
@@ -2275,10 +2212,6 @@ describe("DiscordVoiceManager", () => {
         },
       },
     });
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-
-    const entry = getSessionEntry(manager);
     const turn = entry.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
       "u1",
@@ -2298,30 +2231,13 @@ describe("DiscordVoiceManager", () => {
   it("ignores realtime capture during playback when barge-in is disabled", async () => {
     const connection = createConnectionMock();
     joinVoiceChannelMock.mockReturnValueOnce(connection);
-    const manager = createManager({
-      groupPolicy: "open",
+    const { entry, manager, player } = await createJoinedBidiFixture({
       allowFrom: ["discord:u1"],
-      voice: {
-        enabled: true,
-        mode: "bidi",
-        realtime: {
-          provider: "openai",
-          bargeIn: false,
-        },
-      },
+      voice: { realtime: { bargeIn: false } },
     });
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-
-    const player = getLastAudioPlayer();
-    const entry = getSessionEntry(manager);
     player.state.status = "playing";
 
-    await (
-      manager as unknown as {
-        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
-      }
-    ).handleSpeakingStart(entry, "u1");
+    await handleSpeakingStart(manager, entry, "u1");
 
     expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
     expect(player.stop).not.toHaveBeenCalled();
@@ -2576,9 +2492,7 @@ describe("DiscordVoiceManager", () => {
   it("closes realtime sessions when disconnected recovery destroys the connection", async () => {
     const connection = createConnectionMock();
     joinVoiceChannelMock.mockReturnValueOnce(connection);
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
+    const { manager } = await createJoinedAgentProxyFixture();
 
     entersStateMock.mockClear();
     entersStateMock.mockRejectedValueOnce(new Error("still disconnected"));
@@ -2596,9 +2510,7 @@ describe("DiscordVoiceManager", () => {
   it("closes realtime sessions when Discord destroys the connection", async () => {
     const connection = createConnectionMock();
     joinVoiceChannelMock.mockReturnValueOnce(connection);
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
+    const { manager } = await createJoinedAgentProxyFixture();
 
     const destroyed = connection.handlers.get("destroyed");
     expect(destroyed).toBeTypeOf("function");
@@ -2701,10 +2613,7 @@ describe("DiscordVoiceManager", () => {
       show: true,
       suppress: false,
     });
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const bridgeParams = lastRealtimeBridgeParams();
+    const { bridgeParams } = await createJoinedAgentProxyFixture();
 
     void bridgeParams?.onToolCall?.(
       {
@@ -2737,10 +2646,7 @@ describe("DiscordVoiceManager", () => {
       acceptResult = resolve;
     });
     realtimeSessionMock.submitToolResult.mockImplementationOnce(() => accepted);
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const bridgeParams = lastRealtimeBridgeParams();
+    const { bridgeParams } = await createJoinedAgentProxyFixture();
 
     const handled = bridgeParams?.onToolCall?.(
       {
@@ -2769,10 +2675,7 @@ describe("DiscordVoiceManager", () => {
 
   it("does not retry a rejected control result submission as a tool error", async () => {
     realtimeSessionMock.submitToolResult.mockRejectedValueOnce(new Error("result delivery failed"));
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const bridgeParams = lastRealtimeBridgeParams();
+    const { bridgeParams } = await createJoinedAgentProxyFixture();
 
     const handled = bridgeParams?.onToolCall?.(
       {
@@ -2792,10 +2695,7 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("rejects malformed realtime consult tool calls without crashing Discord voice", async () => {
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const bridgeParams = lastRealtimeBridgeParams();
+    const { bridgeParams } = await createJoinedAgentProxyFixture();
 
     expect(() =>
       bridgeParams?.onToolCall?.(
@@ -2816,10 +2716,7 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("does not require speaker context for internal exact-speech consults", async () => {
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const bridgeParams = lastRealtimeBridgeParams();
+    const { bridgeParams } = await createJoinedAgentProxyFixture();
 
     void bridgeParams?.onToolCall?.(
       {
@@ -2989,19 +2886,7 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("prebuffers realtime output before starting Discord playback", async () => {
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-
-    const player = getLastAudioPlayer();
-    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
-      | {
-          audioSink?: {
-            sendAudio: (audio: Buffer) => void;
-          };
-          onEvent?: (event: { direction: "server"; type: string }) => void;
-        }
-      | undefined;
+    const { bridgeParams, player } = await createJoinedAgentProxyFixture();
 
     for (let index = 0; index < 49; index += 1) {
       bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
@@ -3018,13 +2903,7 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("cancels realtime output when Discord playback backpressures", async () => {
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-
-    const player = getLastAudioPlayer();
-    const entry = getSessionEntry(manager);
-    const bridgeParams = lastRealtimeBridgeParams();
+    const { bridgeParams, entry, player } = await createJoinedAgentProxyFixture();
 
     for (let index = 0; index < 50; index += 1) {
       bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
@@ -3071,13 +2950,7 @@ describe("DiscordVoiceManager", () => {
       },
     ],
   ] as const)("does not let a deferred backpressure cancel cross %s", async (_label, terminal) => {
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-
-    const player = getLastAudioPlayer();
-    const entry = getSessionEntry(manager);
-    const bridgeParams = lastRealtimeBridgeParams();
+    const { bridgeParams, entry, player } = await createJoinedAgentProxyFixture();
 
     for (let index = 0; index < 50; index += 1) {
       bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
@@ -3112,20 +2985,73 @@ describe("DiscordVoiceManager", () => {
     expect(player.play).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    [
+      { status: "failed" as const, responseId: "response-1", message: "provider failed" },
+      "turn.ended",
+    ],
+    [
+      {
+        status: "incomplete" as const,
+        responseId: "response-1",
+        reason: "max_output_tokens",
+        message: "provider response incomplete",
+      },
+      "turn.ended",
+    ],
+    [
+      { status: "cancelled" as const, responseId: "response-1", reason: "client_cancelled" },
+      "turn.cancelled",
+    ],
+  ])("retires each response once and plays a later response", async (outcome, terminalType) => {
+    const { bridgeParams, entry, manager, player } = await createJoinedAgentProxyFixture();
+    const realtime = entry.realtime as unknown as { harness: RealtimeVoiceSessionHarness };
+
+    bridgeParams.onEvent?.({
+      direction: "server",
+      type: "response.created",
+      responseId: outcome.responseId,
+    });
+    bridgeParams.audioSink.sendAudio(Buffer.alloc(480));
+    bridgeParams.onResponseDone?.(outcome);
+    bridgeParams.onEvent?.({
+      direction: "server",
+      responseId: outcome.responseId,
+      type: "response.done",
+    });
+
+    expect(
+      realtime.harness.talk.recentEvents.filter((event) => event.type === terminalType),
+    ).toHaveLength(1);
+    expect(manager.status()).toHaveLength(1);
+    expect(realtimeSessionMock.close).not.toHaveBeenCalled();
+    expect(player.stop).toHaveBeenCalledTimes(1);
+
+    bridgeParams.onEvent?.({
+      direction: "server",
+      type: "response.created",
+      responseId: "response-2",
+    });
+    bridgeParams.audioSink.sendAudio(Buffer.alloc(480));
+    bridgeParams.onResponseDone?.({ status: "completed", responseId: "response-2" });
+    bridgeParams.onEvent?.({
+      direction: "server",
+      responseId: "response-2",
+      type: "response.done",
+    });
+
+    expect(
+      realtime.harness.talk.recentEvents.filter(
+        (event) => event.type === "turn.ended" || event.type === "turn.cancelled",
+      ),
+    ).toHaveLength(2);
+    expect(createAudioResourceMock).toHaveBeenCalledOnce();
+    expect(player.play).toHaveBeenCalledOnce();
+    expect(manager.status()).toHaveLength(1);
+  });
+
   it("discards prebuffered realtime output when the response is cancelled", async () => {
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-
-    const player = getLastAudioPlayer();
-    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
-      | {
-          audioSink?: {
-            sendAudio: (audio: Buffer) => void;
-          };
-          onEvent?: (event: { detail?: string; direction: "server"; type: string }) => void;
-        }
-      | undefined;
+    const { bridgeParams, player } = await createJoinedAgentProxyFixture();
 
     bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
     bridgeParams?.onEvent?.({ direction: "server", type: "response.cancelled" });
@@ -3135,10 +3061,9 @@ describe("DiscordVoiceManager", () => {
     expect(player.stop).toHaveBeenCalledWith(true);
 
     bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
-    bridgeParams?.onEvent?.({
-      detail: "response completed with status=cancelled",
-      direction: "server",
-      type: "response.done",
+    bridgeParams?.onResponseDone?.({
+      status: "cancelled",
+      reason: "client_cancelled",
     });
 
     expect(createAudioResourceMock).not.toHaveBeenCalled();
@@ -3147,21 +3072,22 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("applies Discord realtime model and voice overrides during provider auto-selection", async () => {
-    const manager = createManager({
-      groupPolicy: "open",
-      voice: {
-        enabled: true,
-        mode: "agent-proxy",
-        realtime: {
-          model: "gpt-realtime-2",
-          speakerVoiceId: "cedar",
-          minBargeInAudioEndMs: 500,
-          providers: {
-            openai: { model: "provider-default", voice: "marin" },
+    const manager = createManager(
+      makeVoiceConfig(
+        {
+          mode: "agent-proxy",
+          realtime: {
+            model: "gpt-realtime-2",
+            speakerVoiceId: "cedar",
+            minBargeInAudioEndMs: 500,
+            providers: {
+              openai: { model: "provider-default", voice: "marin" },
+            },
           },
         },
-      },
-    });
+        { groupPolicy: "open" },
+      ),
+    );
 
     const result = await manager.join({ guildId: "g1", channelId: "1001" });
 
@@ -3188,24 +3114,15 @@ describe("DiscordVoiceManager", () => {
 
   it("keeps agent-proxy realtime transcripts on the audio turn speaker context", async () => {
     agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "non-owner answer" }] });
-    const manager = createManager({
-      groupPolicy: "open",
-      voice: {
-        enabled: true,
-        mode: "agent-proxy",
-        realtime: { provider: "openai", debounceMs: 1 },
-      },
+    const { bridgeParams, entry } = await createJoinedAgentProxyFixture({
+      config: { voice: { realtime: { debounceMs: 1 } } },
     });
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
     const nonOwnerTurn = entry?.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: false, speakerLabel: "Guest" },
       "u-guest",
     );
     nonOwnerTurn?.sendInputAudio(Buffer.alloc(8));
 
-    const bridgeParams = lastRealtimeBridgeParams();
     await flushRealtimeForcedConsultTimers(() => {
       bridgeParams?.onTranscript?.("user", "non-owner question", true);
       const ownerTurn = entry?.realtime?.beginSpeakerTurn(
@@ -3232,11 +3149,7 @@ describe("DiscordVoiceManager", () => {
       show: true,
       suppress: false,
     });
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const player = getLastAudioPlayer();
-    const bridgeParams = lastRealtimeBridgeParams();
+    const { bridgeParams, player } = await createJoinedAgentProxyFixture();
 
     bridgeParams?.onTranscript?.("user", "cancel that", true);
 
@@ -3286,10 +3199,7 @@ describe("DiscordVoiceManager", () => {
         show: true,
         suppress: false,
       });
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const bridgeParams = lastRealtimeBridgeParams();
+    const { bridgeParams } = await createJoinedAgentProxyFixture();
     bridgeParams?.onTranscript?.("user", "cancel that", true);
     await vi.waitFor(() => expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledTimes(1));
 
@@ -3328,18 +3238,9 @@ describe("DiscordVoiceManager", () => {
         }),
       )
       .mockResolvedValueOnce({ payloads: [{ text: "fresh talkback" }] });
-    const manager = createManager({
-      groupPolicy: "open",
-      voice: {
-        enabled: true,
-        mode: "agent-proxy",
-        realtime: { provider: "openai", debounceMs: 1, toolPolicy: "none" },
-      },
+    const { bridgeParams, entry } = await createJoinedAgentProxyFixture({
+      config: { voice: { realtime: { debounceMs: 1, toolPolicy: "none" } } },
     });
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
-    const bridgeParams = lastRealtimeBridgeParams();
     beginSpeakerTurn(entry);
     await emitFinalRealtimeUserTranscript(bridgeParams, "old question");
     await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
@@ -3360,12 +3261,8 @@ describe("DiscordVoiceManager", () => {
 
   it("preserves realtime forced consults when no active run accepts steering", async () => {
     agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "normal answer" }] });
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
+    const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
     beginSpeakerTurn(entry);
-    const bridgeParams = lastRealtimeBridgeParams();
 
     await emitFinalRealtimeUserTranscript(bridgeParams, "normal question");
 
@@ -3395,16 +3292,9 @@ describe("DiscordVoiceManager", () => {
     };
     let voiceStates: Array<Record<string, unknown>> = [ownerState, agentState, helperBotState];
     configureVoiceStateGateway(client, () => voiceStates);
-    const manager = createManager(
-      {
-        groupPolicy: "open",
-        voice: {
-          enabled: true,
-          mode: "agent-proxy",
-          realtime: { provider: "openai", consultPolicy: "auto" },
-        },
-      },
+    const manager = createAgentProxyManager(
       client,
+      { voice: { realtime: { consultPolicy: "auto" } } },
       {
         agents: {
           list: [{ id: "agent-1", identity: { name: "Molty" } }],
@@ -3412,14 +3302,9 @@ describe("DiscordVoiceManager", () => {
       },
     );
     manager.setBotUserId("bot-user");
-
     await manager.join({ guildId: "g1", channelId: "1001" });
     const entry = getSessionEntry(manager);
-    const bridgeParams = lastRealtimeBridgeParams() as {
-      autoRespondToAudio?: boolean;
-      interruptResponseOnInputAudio?: boolean;
-      onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
-    };
+    const bridgeParams = lastRealtimeBridgeParams();
     const beginOwnerTurn = () => {
       beginSpeakerTurn(entry);
     };
@@ -3560,12 +3445,7 @@ describe("DiscordVoiceManager", () => {
     agentCommandMock
       .mockResolvedValueOnce({ payloads: [{ text: "first answer" }] })
       .mockResolvedValueOnce({ payloads: [{ text: "second answer" }] });
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
-    const player = getLastAudioPlayer();
-    const bridgeParams = lastRealtimeBridgeParams();
+    const { bridgeParams, entry, player } = await createJoinedAgentProxyFixture();
 
     beginSpeakerTurn(entry);
     await emitFinalRealtimeUserTranscript(bridgeParams, "first question");
@@ -3597,12 +3477,7 @@ describe("DiscordVoiceManager", () => {
     agentCommandMock
       .mockResolvedValueOnce({ payloads: [{ text: "first answer" }] })
       .mockResolvedValueOnce({ payloads: [{ text: "second answer" }] });
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
-    const player = getLastAudioPlayer();
-    const bridgeParams = lastRealtimeBridgeParams();
+    const { bridgeParams, entry, player } = await createJoinedAgentProxyFixture();
 
     beginSpeakerTurn(entry);
     await emitFinalRealtimeUserTranscript(bridgeParams, "first question");
@@ -3631,12 +3506,7 @@ describe("DiscordVoiceManager", () => {
     agentCommandMock
       .mockResolvedValueOnce({ payloads: [{ text: "first answer" }] })
       .mockResolvedValueOnce({ payloads: [{ text: "second answer" }] });
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
-    const player = getLastAudioPlayer();
-    const bridgeParams = lastRealtimeBridgeParams();
+    const { bridgeParams, entry, player } = await createJoinedAgentProxyFixture();
 
     beginSpeakerTurn(entry);
     await emitFinalRealtimeUserTranscript(bridgeParams, "first question");
@@ -3670,11 +3540,7 @@ describe("DiscordVoiceManager", () => {
         }),
       )
       .mockResolvedValueOnce({ payloads: [{ text: "fresh answer" }] });
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
-    const bridgeParams = lastRealtimeBridgeParams();
+    const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
     beginSpeakerTurn(entry);
     const oldSubmission = bridgeParams?.onToolCall?.(
       {
@@ -3713,16 +3579,9 @@ describe("DiscordVoiceManager", () => {
   it("treats a bare wake name as an activation for the next realtime transcript", async () => {
     agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "follow-up answer" }] });
     const onUtterance = vi.fn();
-    const manager = createManager(
-      {
-        groupPolicy: "open",
-        voice: {
-          enabled: true,
-          mode: "agent-proxy",
-          realtime: { provider: "openai", consultPolicy: "auto", requireWakeName: true },
-        },
-      },
+    const manager = createAgentProxyManager(
       undefined,
+      { voice: { realtime: { consultPolicy: "auto", requireWakeName: true } } },
       {
         agents: {
           list: [{ id: "agent-1", identity: { name: "Molty" } }],
@@ -3859,17 +3718,13 @@ describe("DiscordVoiceManager", () => {
       provider: { id: "google" },
       providerConfig: { model: "gemini-live", voice: "default" },
     });
-    const manager = createManager({
-      groupPolicy: "open",
-      voice: {
-        enabled: true,
-        mode: "agent-proxy",
-        realtime: { provider: "google", consultPolicy: "auto", requireWakeName: true },
+    const { bridgeParams } = await createJoinedAgentProxyFixture({
+      config: {
+        voice: {
+          realtime: { provider: "google", consultPolicy: "auto", requireWakeName: true },
+        },
       },
     });
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const bridgeParams = lastRealtimeBridgeParams();
 
     expect(bridgeParams?.autoRespondToAudio).toBe(true);
     expect(bridgeParams?.interruptResponseOnInputAudio).toBe(true);
@@ -3877,24 +3732,18 @@ describe("DiscordVoiceManager", () => {
 
   it("uses configured wake names before realtime agent-proxy consults", async () => {
     agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "configured wake answer" }] });
-    const manager = createManager({
-      groupPolicy: "open",
-      voice: {
-        enabled: true,
-        mode: "agent-proxy",
-        realtime: {
-          provider: "openai",
-          consultPolicy: "auto",
-          requireWakeName: true,
-          wakeNames: ["Claw", "Claw Bot", "Okay Google"],
+    const { bridgeParams, entry } = await createJoinedAgentProxyFixture({
+      config: {
+        voice: {
+          realtime: {
+            consultPolicy: "auto",
+            requireWakeName: true,
+            wakeNames: ["Claw", "Claw Bot", "Okay Google"],
+          },
         },
       },
     });
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
     beginSpeakerTurn(entry);
-    const bridgeParams = lastRealtimeBridgeParams();
 
     await emitFinalRealtimeUserTranscript(bridgeParams, "Claw Bot, ship it");
 
@@ -3913,24 +3762,18 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("does not accept configured realtime wake names longer than two words", async () => {
-    const manager = createManager({
-      groupPolicy: "open",
-      voice: {
-        enabled: true,
-        mode: "agent-proxy",
-        realtime: {
-          provider: "openai",
-          consultPolicy: "auto",
-          requireWakeName: true,
-          wakeNames: ["Claw Bot Helper"],
+    const { bridgeParams, entry } = await createJoinedAgentProxyFixture({
+      config: {
+        voice: {
+          realtime: {
+            consultPolicy: "auto",
+            requireWakeName: true,
+            wakeNames: ["Claw Bot Helper"],
+          },
         },
       },
     });
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
     beginSpeakerTurn(entry);
-    const bridgeParams = lastRealtimeBridgeParams();
 
     await emitFinalRealtimeUserTranscript(bridgeParams, "Claw Bot Helper, ship it");
 
@@ -3952,12 +3795,8 @@ describe("DiscordVoiceManager", () => {
       show: true,
       suppress: false,
     });
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
+    const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
     beginSpeakerTurn(entry);
-    const bridgeParams = lastRealtimeBridgeParams();
 
     await emitFinalRealtimeUserTranscript(bridgeParams, "how is it going");
 
@@ -3973,11 +3812,7 @@ describe("DiscordVoiceManager", () => {
     agentCommandMock
       .mockResolvedValueOnce({ payloads: [{ text: "guest answer" }] })
       .mockResolvedValueOnce({ payloads: [{ text: "owner answer" }] });
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
-    const bridgeParams = lastRealtimeBridgeParams();
+    const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
 
     beginSpeakerTurn(entry, { senderIsOwner: false });
 
@@ -3998,11 +3833,7 @@ describe("DiscordVoiceManager", () => {
 
   it("skips incomplete and non-actionable forced agent-proxy transcripts", async () => {
     agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "valid answer" }] });
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
-    const bridgeParams = lastRealtimeBridgeParams();
+    const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
 
     beginSpeakerTurn(entry);
 
@@ -4021,11 +3852,7 @@ describe("DiscordVoiceManager", () => {
 
   it("keeps forced agent-proxy fallback diagnostics out of agent prompts", async () => {
     agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "Could you repeat that?" }] });
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
-    const bridgeParams = lastRealtimeBridgeParams();
+    const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
 
     beginSpeakerTurn(entry);
     await emitFinalRealtimeUserTranscript(bridgeParams, "What?");
@@ -4059,14 +3886,10 @@ describe("DiscordVoiceManager", () => {
             resolveThird = resolve;
           }),
       );
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
-    const player = getLastAudioPlayer() as {
+    const { bridgeParams, entry, player: rawPlayer } = await createJoinedAgentProxyFixture();
+    const player = rawPlayer as {
       on: ReturnType<typeof vi.fn>;
     };
-    const bridgeParams = lastRealtimeBridgeParams();
 
     beginSpeakerTurn(entry);
     beginSpeakerTurn(entry);
@@ -4128,16 +3951,12 @@ describe("DiscordVoiceManager", () => {
         type: ChannelType.GuildVoice,
       };
     });
-    const manager = createAgentProxyManager(client);
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
+    const { bridgeParams, entry, manager } = await createJoinedAgentProxyFixture({ client });
     const realtime = entry.realtime as unknown as {
       enqueueExactSpeechMessage: (text: string) => void;
     };
     const connection = (entry as unknown as { connection: { destroy: ReturnType<typeof vi.fn> } })
       .connection;
-    const bridgeParams = lastRealtimeBridgeParams();
     const accepted = "😀".repeat(8 * 1024);
     expect(accepted.length).toBe(16 * 1024);
     expect(Buffer.byteLength(accepted, "utf8")).toBe(32 * 1024);
@@ -4174,10 +3993,7 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("terminates realtime voice when retained exact speech exceeds the message budget", async () => {
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
+    const { entry, manager } = await createJoinedAgentProxyFixture();
     const realtime = entry.realtime as unknown as {
       enqueueExactSpeechMessage: (text: string) => void;
     };
@@ -4203,12 +4019,7 @@ describe("DiscordVoiceManager", () => {
     agentCommandMock
       .mockResolvedValueOnce({ payloads: [{ text: "first answer" }] })
       .mockResolvedValueOnce({ payloads: [{ text: "second answer" }] });
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
-    const player = getLastAudioPlayer();
-    const bridgeParams = lastRealtimeBridgeParams();
+    const { bridgeParams, entry, player } = await createJoinedAgentProxyFixture();
 
     beginSpeakerTurn(entry);
     await emitFinalRealtimeUserTranscript(bridgeParams, "first question");
@@ -4244,18 +4055,7 @@ describe("DiscordVoiceManager", () => {
     agentCommandMock
       .mockResolvedValueOnce({ payloads: [{ text: "first answer" }] })
       .mockResolvedValueOnce({ payloads: [{ text: "second answer" }] });
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
-    const player = getLastAudioPlayer();
-    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
-      | {
-          audioSink?: { sendAudio: (audio: Buffer) => void };
-          onEvent?: (event: { detail?: string; direction: "server"; type: string }) => void;
-          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
-        }
-      | undefined;
+    const { bridgeParams, entry, player } = await createJoinedAgentProxyFixture();
 
     beginSpeakerTurn(entry);
     await emitFinalRealtimeUserTranscript(bridgeParams, "first question");
@@ -4278,11 +4078,7 @@ describe("DiscordVoiceManager", () => {
     agentCommandMock
       .mockResolvedValueOnce({ payloads: [{ text: "owner answer" }] })
       .mockResolvedValueOnce({ payloads: [{ text: "guest fallback answer" }] });
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
-    const bridgeParams = lastRealtimeBridgeParams();
+    const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
 
     beginSpeakerTurn(entry, { senderIsOwner: false });
 
@@ -4315,11 +4111,7 @@ describe("DiscordVoiceManager", () => {
 
   it("reuses forced agent-proxy answers for late matching consult tool calls", async () => {
     agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "forced answer" }] });
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
-    const bridgeParams = lastRealtimeBridgeParams();
+    const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
 
     beginSpeakerTurn(entry);
     await emitFinalRealtimeUserTranscript(bridgeParams, "late question");
@@ -4372,10 +4164,7 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("terminally satisfies a late native call for a cancelled forced consult", async () => {
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
+    const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
     const realtime = entry.realtime as unknown as {
       harness: RealtimeVoiceSessionHarness;
     };
@@ -4385,7 +4174,6 @@ describe("DiscordVoiceManager", () => {
     }
     realtime.harness.forcedConsults.markStarted(cancelled);
     realtime.harness.forcedConsults.markCancelled(cancelled);
-    const bridgeParams = lastRealtimeBridgeParams();
 
     await bridgeParams?.onToolCall?.(
       {
@@ -4415,11 +4203,7 @@ describe("DiscordVoiceManager", () => {
         resolveAgentTurn = resolve;
       }),
     );
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
-    const bridgeParams = lastRealtimeBridgeParams();
+    const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
     beginSpeakerTurn(entry);
     await emitFinalRealtimeUserTranscript(bridgeParams, "late question");
     realtimeSessionMock.bridge.supportsToolResultSuppression = false;
@@ -4475,11 +4259,7 @@ describe("DiscordVoiceManager", () => {
         rejectAgentTurn = reject;
       }),
     );
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
-    const bridgeParams = lastRealtimeBridgeParams();
+    const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
 
     beginSpeakerTurn(entry);
     await emitFinalRealtimeUserTranscript(bridgeParams, "late question");
@@ -4513,11 +4293,7 @@ describe("DiscordVoiceManager", () => {
     agentCommandMock
       .mockResolvedValueOnce({ payloads: [{ text: "forced answer" }] })
       .mockResolvedValueOnce({ payloads: [{ text: "guest answer" }] });
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
-    const bridgeParams = lastRealtimeBridgeParams();
+    const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
 
     beginSpeakerTurn(entry);
     await emitFinalRealtimeUserTranscript(bridgeParams, "late question");
@@ -4555,11 +4331,7 @@ describe("DiscordVoiceManager", () => {
     agentCommandMock
       .mockResolvedValueOnce({ payloads: [{ text: "old direct answer" }] })
       .mockResolvedValueOnce({ payloads: [{ text: "new forced answer" }] });
-    const manager = createAgentProxyManager();
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
-    const bridgeParams = lastRealtimeBridgeParams();
+    const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
 
     beginSpeakerTurn(entry);
     void bridgeParams?.onToolCall?.(
@@ -4609,22 +4381,13 @@ describe("DiscordVoiceManager", () => {
 
   it("expires closed agent-proxy turns before later speaker audio", async () => {
     agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "guest answer" }] });
-    const manager = createManager({
-      groupPolicy: "open",
-      voice: {
-        enabled: true,
-        mode: "agent-proxy",
-        realtime: { provider: "openai", debounceMs: 1 },
-      },
+    const { bridgeParams, entry } = await createJoinedAgentProxyFixture({
+      config: { voice: { realtime: { debounceMs: 1 } } },
     });
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
     const ownerTurn = beginSpeakerTurn(entry);
     ownerTurn?.close();
     beginSpeakerTurn(entry, { senderIsOwner: false });
 
-    const bridgeParams = lastRealtimeBridgeParams();
     await emitFinalRealtimeUserTranscript(bridgeParams, "guest question");
 
     expectUserMessageIncludes("guest answer");
@@ -4632,14 +4395,10 @@ describe("DiscordVoiceManager", () => {
 
   it("starts Discord realtime voice in bidi mode with the consult tool", async () => {
     agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "consult answer" }] });
-    const manager = createManager({
-      groupPolicy: "open",
+    const { bridgeParams, entry } = await createJoinedBidiFixture({
       voice: {
-        enabled: true,
-        mode: "bidi",
         model: "openai/gpt-5.5",
         realtime: {
-          provider: "openai",
           model: "gpt-realtime-2",
           speakerVoice: "cedar",
           toolPolicy: "safe-read-only",
@@ -4653,16 +4412,12 @@ describe("DiscordVoiceManager", () => {
         },
       },
     });
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
     const ownerTurn = entry?.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
       "u-owner",
     );
     ownerTurn?.sendInputAudio(Buffer.alloc(8));
 
-    const bridgeParams = lastRealtimeBridgeParams();
     expect(bridgeParams?.autoRespondToAudio).toBe(true);
     expect(bridgeParams?.interruptResponseOnInputAudio).toBe(false);
     expect(bridgeParams?.instructions).toContain("Call openclaw_agent_consult");
@@ -4703,19 +4458,9 @@ describe("DiscordVoiceManager", () => {
     resolveRealtimeBootstrapContextInstructionsMock.mockResolvedValue(
       "OpenClaw realtime voice profile context:\n\n### IDENTITY.md\nName: Wilfred",
     );
-    const manager = createManager({
-      groupPolicy: "open",
-      voice: {
-        enabled: true,
-        mode: "bidi",
-        realtime: {
-          provider: "openai",
-          consultPolicy: "always",
-        },
-      },
+    const { bridgeParams } = await createJoinedBidiFixture({
+      voice: { realtime: { consultPolicy: "always" } },
     });
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
 
     expect(resolveRealtimeBootstrapContextInstructionsMock).toHaveBeenCalledWith({
       config: {},
@@ -4724,7 +4469,6 @@ describe("DiscordVoiceManager", () => {
       files: undefined,
       warn: expect.any(Function),
     });
-    const bridgeParams = lastRealtimeBridgeParams();
     expect(bridgeParams?.instructions).toContain("OpenClaw realtime voice profile context");
     expect(bridgeParams?.instructions).toContain("Name: Wilfred");
     expect(bridgeParams?.instructions).toContain("short natural backchannel");
@@ -4745,30 +4489,20 @@ describe("DiscordVoiceManager", () => {
       };
     });
     agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "maintainer answer" }] });
-    const manager = createManager({
-      groupPolicy: "open",
+    const { bridgeParams, entry } = await createJoinedBidiFixture({
       voice: {
-        enabled: true,
-        mode: "bidi",
         agentSession: {
           mode: "target",
           target: "channel:maintainers",
         },
-        realtime: {
-          provider: "openai",
-          consultPolicy: "always",
-        },
+        realtime: { consultPolicy: "always" },
       },
     });
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
     expect(entry.voiceSessionKey).toBe("agent:main:discord:channel:1001");
     expect(entry.route?.sessionKey).toBe("agent:main:discord:channel:maintainers");
 
     beginSpeakerTurn(entry);
 
-    const bridgeParams = lastRealtimeBridgeParams();
     void bridgeParams?.onToolCall?.(
       {
         itemId: "item-1",
@@ -4789,21 +4523,14 @@ describe("DiscordVoiceManager", () => {
 
   it("keeps bidi realtime consults on the audio turn speaker context", async () => {
     agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "guest consult answer" }] });
-    const manager = createManager({
-      groupPolicy: "open",
+    const { bridgeParams, entry } = await createJoinedBidiFixture({
       voice: {
-        enabled: true,
-        mode: "bidi",
         realtime: {
-          provider: "openai",
           toolPolicy: "safe-read-only",
           consultPolicy: "always",
         },
       },
     });
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
     const nonOwnerTurn = entry?.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: false, speakerLabel: "Guest" },
       "u-guest",
@@ -4815,7 +4542,6 @@ describe("DiscordVoiceManager", () => {
     );
     ownerTurn?.sendInputAudio(Buffer.alloc(8));
 
-    const bridgeParams = lastRealtimeBridgeParams();
     void bridgeParams?.onToolCall?.(
       {
         itemId: "item-guest",
@@ -4841,26 +4567,18 @@ describe("DiscordVoiceManager", () => {
 
   it("expires closed bidi turns before later speaker consults", async () => {
     agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "guest consult answer" }] });
-    const manager = createManager({
-      groupPolicy: "open",
+    const { bridgeParams, entry } = await createJoinedBidiFixture({
       voice: {
-        enabled: true,
-        mode: "bidi",
         realtime: {
-          provider: "openai",
           toolPolicy: "safe-read-only",
           consultPolicy: "always",
         },
       },
     });
-
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    const entry = getSessionEntry(manager);
     const ownerTurn = beginSpeakerTurn(entry);
     ownerTurn?.close();
     beginSpeakerTurn(entry, { senderIsOwner: false });
 
-    const bridgeParams = lastRealtimeBridgeParams();
     void bridgeParams?.onToolCall?.(
       {
         itemId: "item-guest",
@@ -4930,11 +4648,7 @@ describe("DiscordVoiceManager", () => {
     expect(entry.player.state.status).toBe("idle");
     entry.player.state.status = "playing";
 
-    await (
-      manager as unknown as {
-        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
-      }
-    ).handleSpeakingStart(entry, "u-denied");
+    await handleSpeakingStart(manager, entry, "u-denied");
 
     expect(connection.receiver.subscribe).not.toHaveBeenCalled();
     expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
@@ -5195,11 +4909,7 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("disconnects after repeated poisoned DAVE sessions without a reconnect loop", async () => {
-    const firstConnection = createConnectionMock();
-    const secondConnection = createConnectionMock();
-    installFailingDaveSession(firstConnection, "native");
-    installFailingDaveSession(secondConnection, "key-package");
-    joinVoiceChannelMock.mockReturnValueOnce(firstConnection).mockReturnValueOnce(secondConnection);
+    const { firstConnection, secondConnection } = makePoisonedDaveConnections();
     const manager = createManager();
 
     await manager.join({ guildId: "g1", channelId: "1001" });
@@ -5219,31 +4929,14 @@ describe("DiscordVoiceManager", () => {
   it("suppresses followed-user reconciliation until the poisoned-DAVE cooldown expires", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
-    const firstConnection = createConnectionMock();
-    const secondConnection = createConnectionMock();
-    installFailingDaveSession(firstConnection, "native");
-    installFailingDaveSession(secondConnection, "key-package");
-    joinVoiceChannelMock
-      .mockReturnValueOnce(firstConnection)
-      .mockReturnValueOnce(secondConnection)
-      .mockReturnValueOnce(createConnectionMock());
+    makePoisonedDaveConnections(1);
     const client = createClient();
     client.rest.get.mockResolvedValue({
       guild_id: "g1",
       user_id: "u-owner",
       channel_id: "1001",
     });
-    const manager = createManager(
-      {
-        guilds: { g1: {} },
-        voice: {
-          enabled: true,
-          mode: "stt-tts",
-          followUsers: ["u-owner"],
-        },
-      },
-      client,
-    );
+    const manager = createFollowManager({}, client, { guilds: { g1: {} } });
 
     try {
       await manager.autoJoin();
@@ -5271,18 +4964,8 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("suppresses repeated same-channel voice-state updates during a DAVE cooldown", async () => {
-    const firstConnection = createConnectionMock();
-    const secondConnection = createConnectionMock();
-    installFailingDaveSession(firstConnection, "native");
-    installFailingDaveSession(secondConnection, "key-package");
-    joinVoiceChannelMock.mockReturnValueOnce(firstConnection).mockReturnValueOnce(secondConnection);
-    const manager = createManager({
-      voice: {
-        enabled: true,
-        mode: "stt-tts",
-        followUsers: ["u-owner"],
-      },
-    });
+    makePoisonedDaveConnections();
+    const manager = createFollowManager();
 
     await updateVoiceState(manager, "u-owner", "1001");
     emitDecryptFailure(manager);
@@ -5308,21 +4991,8 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("still follows real user movement to another channel during a DAVE cooldown", async () => {
-    const firstConnection = createConnectionMock();
-    const secondConnection = createConnectionMock();
-    installFailingDaveSession(firstConnection, "native");
-    installFailingDaveSession(secondConnection, "key-package");
-    joinVoiceChannelMock
-      .mockReturnValueOnce(firstConnection)
-      .mockReturnValueOnce(secondConnection)
-      .mockReturnValueOnce(createConnectionMock());
-    const manager = createManager({
-      voice: {
-        enabled: true,
-        mode: "stt-tts",
-        followUsers: ["u-owner"],
-      },
-    });
+    makePoisonedDaveConnections(1);
+    const manager = createFollowManager();
 
     await updateVoiceState(manager, "u-owner", "1001");
     emitDecryptFailure(manager);
@@ -5337,21 +5007,8 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("follows a user who leaves and rejoins the same channel during a DAVE cooldown", async () => {
-    const firstConnection = createConnectionMock();
-    const secondConnection = createConnectionMock();
-    installFailingDaveSession(firstConnection, "native");
-    installFailingDaveSession(secondConnection, "key-package");
-    joinVoiceChannelMock
-      .mockReturnValueOnce(firstConnection)
-      .mockReturnValueOnce(secondConnection)
-      .mockReturnValueOnce(createConnectionMock());
-    const manager = createManager({
-      voice: {
-        enabled: true,
-        mode: "stt-tts",
-        followUsers: ["u-owner"],
-      },
-    });
+    makePoisonedDaveConnections(1);
+    const manager = createFollowManager();
 
     await updateVoiceState(manager, "u-owner", "1001");
     emitDecryptFailure(manager);
@@ -5368,31 +5025,14 @@ describe("DiscordVoiceManager", () => {
   it("reconciles a followed-user move to another channel during a DAVE cooldown", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
-    const firstConnection = createConnectionMock();
-    const secondConnection = createConnectionMock();
-    installFailingDaveSession(firstConnection, "native");
-    installFailingDaveSession(secondConnection, "key-package");
-    joinVoiceChannelMock
-      .mockReturnValueOnce(firstConnection)
-      .mockReturnValueOnce(secondConnection)
-      .mockReturnValueOnce(createConnectionMock());
+    makePoisonedDaveConnections(1);
     const client = createClient();
     client.rest.get.mockResolvedValue({
       guild_id: "g1",
       user_id: "u-owner",
       channel_id: "1001",
     });
-    const manager = createManager(
-      {
-        guilds: { g1: {} },
-        voice: {
-          enabled: true,
-          mode: "stt-tts",
-          followUsers: ["u-owner"],
-        },
-      },
-      client,
-    );
+    const manager = createFollowManager({}, client, { guilds: { g1: {} } });
 
     try {
       await manager.autoJoin();
@@ -5416,14 +5056,7 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("allows explicit manual joins during a poisoned-DAVE cooldown", async () => {
-    const firstConnection = createConnectionMock();
-    const secondConnection = createConnectionMock();
-    installFailingDaveSession(firstConnection, "native");
-    installFailingDaveSession(secondConnection, "key-package");
-    joinVoiceChannelMock
-      .mockReturnValueOnce(firstConnection)
-      .mockReturnValueOnce(secondConnection)
-      .mockReturnValueOnce(createConnectionMock());
+    makePoisonedDaveConnections(1);
     const manager = createManager();
 
     await manager.join({ guildId: "g1", channelId: "1001" });
@@ -5555,13 +5188,7 @@ describe("DiscordVoiceManager", () => {
     joinVoiceChannelMock
       .mockReturnValueOnce(connection)
       .mockReturnValueOnce(createConnectionMock());
-    const manager = createManager({
-      voice: {
-        enabled: true,
-        mode: "stt-tts",
-        followUsers: ["u-owner"],
-      },
-    });
+    const manager = createFollowManager();
 
     await updateVoiceState(manager, "u-owner", "1001");
 
@@ -5590,14 +5217,8 @@ describe("DiscordVoiceManager", () => {
         params.onChunk(Buffer.alloc(8));
       },
     );
-    const manager = createManager({
-      groupPolicy: "open",
+    const manager = createAgentProxyManager(undefined, {
       allowFrom: ["discord:u-speaker"],
-      voice: {
-        enabled: true,
-        mode: "agent-proxy",
-        realtime: { provider: "openai" },
-      },
     });
 
     await manager.join({ guildId: "g1", channelId: "1001" });
@@ -5615,11 +5236,7 @@ describe("DiscordVoiceManager", () => {
     };
     connection.receiver.subscribe.mockReturnValueOnce(stream);
 
-    await (
-      manager as unknown as {
-        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
-      }
-    ).handleSpeakingStart(entry, "u-speaker");
+    await handleSpeakingStart(manager, entry, "u-speaker");
 
     expect(decodeOpusStreamChunksMock).toHaveBeenCalledTimes(1);
     expect(entry.receiveRecovery.decryptFailureCount).toBe(0);
@@ -5650,14 +5267,8 @@ describe("DiscordVoiceManager", () => {
         errorListener?.(err);
       },
     );
-    const manager = createManager({
-      groupPolicy: "open",
+    const manager = createAgentProxyManager(undefined, {
       allowFrom: ["discord:u-speaker"],
-      voice: {
-        enabled: true,
-        mode: "agent-proxy",
-        realtime: { provider: "openai" },
-      },
     });
 
     await manager.join({ guildId: "g1", channelId: "1001" });
@@ -5671,11 +5282,7 @@ describe("DiscordVoiceManager", () => {
     };
     connection.receiver.subscribe.mockReturnValueOnce(stream);
 
-    await (
-      manager as unknown as {
-        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
-      }
-    ).handleSpeakingStart(entry, "u-speaker");
+    await handleSpeakingStart(manager, entry, "u-speaker");
 
     const errorListener = stream.on.mock.calls.find(([event]) => event === "error")?.[1];
     expect(errorListener).toBeTypeOf("function");
@@ -5700,11 +5307,9 @@ describe("DiscordVoiceManager", () => {
         return Buffer.alloc(8);
       },
     );
-    const manager = createManager({
-      groupPolicy: "open",
-      allowFrom: ["discord:u-speaker"],
-      voice: { enabled: true, mode: "stt-tts" },
-    });
+    const manager = createManager(
+      makeVoiceConfig({}, { groupPolicy: "open", allowFrom: ["discord:u-speaker"] }),
+    );
 
     await manager.join({ guildId: "g1", channelId: "1001" });
     const entry = getSessionEntry(manager);
@@ -5717,11 +5322,7 @@ describe("DiscordVoiceManager", () => {
     };
     connection.receiver.subscribe.mockReturnValueOnce(stream);
 
-    await (
-      manager as unknown as {
-        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
-      }
-    ).handleSpeakingStart(entry, "u-speaker");
+    await handleSpeakingStart(manager, entry, "u-speaker");
 
     expect(transcribeAudioFileMock).not.toHaveBeenCalled();
     expect(entry.receiveRecovery.decryptFailureCount).toBe(1);
@@ -5745,11 +5346,9 @@ describe("DiscordVoiceManager", () => {
         return Buffer.alloc(48_000);
       },
     );
-    const manager = createManager({
-      groupPolicy: "open",
-      allowFrom: ["discord:u-speaker"],
-      voice: { enabled: true, mode: "stt-tts" },
-    });
+    const manager = createManager(
+      makeVoiceConfig({}, { groupPolicy: "open", allowFrom: ["discord:u-speaker"] }),
+    );
 
     await manager.join({ guildId: "g1", channelId: "1001" });
     const entry = getSessionEntry(manager);
@@ -5762,11 +5361,7 @@ describe("DiscordVoiceManager", () => {
     };
     connection.receiver.subscribe.mockReturnValueOnce(stream);
 
-    await (
-      manager as unknown as {
-        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
-      }
-    ).handleSpeakingStart(entry, "u-speaker");
+    await handleSpeakingStart(manager, entry, "u-speaker");
     await entry.processingQueue;
 
     expect(transcribeAudioFileMock).toHaveBeenCalledTimes(1);
@@ -5808,11 +5403,7 @@ describe("DiscordVoiceManager", () => {
       };
       connection.receiver.subscribe.mockReturnValueOnce(secondStream);
 
-      await (
-        manager as unknown as {
-          handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
-        }
-      ).handleSpeakingStart(entry, "u1");
+      await handleSpeakingStart(manager, entry, "u1");
 
       const subscribeCall = lastMockCall(
         connection.receiver.subscribe as unknown as MockCallSource,

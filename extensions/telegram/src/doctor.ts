@@ -9,7 +9,10 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { asObjectRecord, collectChannelAccountScopes } from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  asObjectRecord,
+  collectChannelAccountScopes,
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {

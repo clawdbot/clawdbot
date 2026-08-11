@@ -1,6 +1,5 @@
 /** Detects when secrets runtime preparation can safely use a fast path. */
 import { existsSync } from "node:fs";
-import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   listAgentIds,
@@ -8,9 +7,9 @@ import {
   resolveDefaultAgentDir,
 } from "../agents/agent-scope-config.js";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
+import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
@@ -106,14 +105,7 @@ function hasCandidateAuthProfileStoreSources(params: {
   agentDirs?: string[];
 }): boolean {
   const candidateDirs = resolveCandidateAgentDirs(params);
-  // The shipped no-argument auth store is fixed at agents/main/agent even when
-  // another roster entry is default, so the fast path must probe it separately.
-  const mainAgentDir = path.join(
-    resolveStateDir(params.env as NodeJS.ProcessEnv),
-    "agents",
-    "main",
-    "agent",
-  );
+  const mainAgentDir = resolveSharedMainAuthAgentDir(params.env as NodeJS.ProcessEnv);
   return (
     candidateDirs.some((agentDir) => hasCandidateAuthProfileStoreSource(agentDir)) ||
     hasCandidateAuthProfileStoreSource(mainAgentDir)

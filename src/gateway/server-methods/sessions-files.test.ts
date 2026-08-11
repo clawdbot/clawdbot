@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveOpenPathCommand } from "./open-path.js";
-import { sessionsFilesHandlers } from "./sessions-files.js";
+import { resolveLocalSessionWorkspaceRoot, sessionsFilesHandlers } from "./sessions-files.js";
 import {
   assistantToolCall,
   createSessionEntryFixture,
@@ -24,7 +24,7 @@ const hoisted = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
-  readSessionTranscriptVisibleMessageDelta: vi.fn(),
+  readSessionTranscriptVisibleMessageDeltaCore: vi.fn(),
 }));
 
 vi.mock("./open-path.js", async () => {
@@ -52,13 +52,14 @@ vi.mock("../session-transcript-readers.js", async () => {
   );
   return {
     ...actual,
-    readSessionTranscriptVisibleMessageDelta: hoisted.readSessionTranscriptVisibleMessageDelta,
+    readSessionTranscriptVisibleMessageDeltaCore:
+      hoisted.readSessionTranscriptVisibleMessageDeltaCore,
   };
 });
 
 const invokeSessionFilesHandler = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
 const mockVisibleMessages = createVisibleMessagesMock(
-  hoisted.readSessionTranscriptVisibleMessageDelta,
+  hoisted.readSessionTranscriptVisibleMessageDeltaCore,
 );
 
 describe("sessions.files RPC handlers", () => {
@@ -66,7 +67,7 @@ describe("sessions.files RPC handlers", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    hoisted.readSessionTranscriptVisibleMessageDelta.mockReset();
+    hoisted.readSessionTranscriptVisibleMessageDeltaCore.mockReset();
     workspaceRoot = createWorkspaceFixture("openclaw-session-files-test-");
     hoisted.resolveDefaultAgentId.mockReturnValue("main");
     hoisted.resolveAgentWorkspaceDir.mockReturnValue(workspaceRoot);
@@ -143,6 +144,27 @@ describe("sessions.files RPC handlers", () => {
     expect(payload).toMatchObject({ ok: false, path: workspaceRoot });
     expect(payload.error).toContain("exec node");
     expect(hoisted.execOpenPath).not.toHaveBeenCalled();
+  });
+
+  it("withholds the workspace root of an exec-node session", () => {
+    // Workspace identity surfaces read this root. An exec-node session's
+    // directory lives on another host, while the precedence below it falls back
+    // to the local agent workspace — handing that back would name this machine.
+    hoisted.loadSessionEntry.mockReturnValue({
+      canonicalKey: "agent:main:main",
+      cfg: {},
+      storePath: path.join(workspaceRoot, ".sessions.json"),
+      entry: { sessionId: "sess-main", sessionFile: "sess-main.jsonl", execNode: "build-mac" },
+    });
+    expect(resolveLocalSessionWorkspaceRoot({ sessionKey: "agent:main:main" })).toBeUndefined();
+
+    hoisted.loadSessionEntry.mockReturnValue({
+      canonicalKey: "agent:main:main",
+      cfg: {},
+      storePath: path.join(workspaceRoot, ".sessions.json"),
+      entry: { sessionId: "sess-main", sessionFile: "sess-main.jsonl", spawnedCwd: workspaceRoot },
+    });
+    expect(resolveLocalSessionWorkspaceRoot({ sessionKey: "agent:main:main" })).toBe(workspaceRoot);
   });
 
   it("refuses to reveal when the session has no workspace root", async () => {
@@ -918,7 +940,7 @@ describe("sessions.files RPC handlers", () => {
 
   it.each([
     { format: "RTF", mimeType: "application/rtf", content: "{\\rtf1\\ansi hello}" },
-    { format: "XML", mimeType: "application/xml", content: '<?xml version="1.0"?><root/>' },
+    { format: "XML", mimeType: "text/xml", content: '<?xml version="1.0"?><root/>' },
     { format: "WebVTT", mimeType: "text/vtt", content: "WEBVTT\n\n00:00.000 --> 00:01.000\nHi" },
     { format: "vCard", mimeType: "text/vcard", content: "BEGIN:VCARD\nVERSION:4.0\nEND:VCARD\n" },
     {

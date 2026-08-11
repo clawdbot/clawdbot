@@ -5,13 +5,13 @@ import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   sqliteSessionStateDeleteSnapshotsEqual,
-  type SqliteSessionStateDeleteSnapshot,
-  type SqliteTranscriptArchiveWorkerMessage,
-  type SqliteTranscriptArchiveWorkerPlan,
-  type SqliteTranscriptArchiveWorkerResult,
-  writeSqliteTranscriptArchive,
+  type SessionStateDeleteSnapshot,
+  type TranscriptArchiveWorkerMessage,
+  type TranscriptArchiveWorkerPlan,
+  type TranscriptArchiveWorkerResult,
+  writeTranscriptArchive,
 } from "./session-accessor.sqlite-archive.js";
-import { readSqliteSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
+import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import { serializeJsonlLines } from "./transcript-jsonl.js";
 
 type TranscriptArchiveDatabase = Pick<OpenClawAgentKyselyDatabase, "transcript_events">;
@@ -25,7 +25,7 @@ function isSqliteTranscriptArchiveWorkerData(value: unknown): boolean {
   );
 }
 
-function parseSessionStateDeleteSnapshot(value: unknown): SqliteSessionStateDeleteSnapshot | null {
+function parseSessionStateDeleteSnapshot(value: unknown): SessionStateDeleteSnapshot | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
@@ -50,7 +50,7 @@ function parseSessionStateDeleteSnapshot(value: unknown): SqliteSessionStateDele
   };
 }
 
-function parseWorkerPlans(value: unknown): SqliteTranscriptArchiveWorkerPlan[] | undefined {
+function parseWorkerPlans(value: unknown): TranscriptArchiveWorkerPlan[] | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
@@ -58,7 +58,7 @@ function parseWorkerPlans(value: unknown): SqliteTranscriptArchiveWorkerPlan[] |
   if (!Array.isArray(plans)) {
     return undefined;
   }
-  const parsed: SqliteTranscriptArchiveWorkerPlan[] = [];
+  const parsed: TranscriptArchiveWorkerPlan[] = [];
   for (const planValue of plans) {
     if (!planValue || typeof planValue !== "object" || Array.isArray(planValue)) {
       return undefined;
@@ -103,9 +103,9 @@ function readTranscriptArchiveContent(
   return serializeJsonlLines(lines);
 }
 
-export function materializeSqliteTranscriptArchiveInWorker(
-  plan: SqliteTranscriptArchiveWorkerPlan,
-): SqliteTranscriptArchiveWorkerResult {
+export function materializeTranscriptArchiveInWorker(
+  plan: TranscriptArchiveWorkerPlan,
+): TranscriptArchiveWorkerResult {
   const opened = withOpenClawAgentDatabaseReadOnly(
     (database) => {
       let transactionOpen = false;
@@ -113,7 +113,7 @@ export function materializeSqliteTranscriptArchiveInWorker(
         // sqlite-allow-raw: metadata and transcript rows must come from one read snapshot.
         database.db.exec("BEGIN");
         transactionOpen = true;
-        const snapshot = readSqliteSessionStateDeleteSnapshot(database.db, plan.sessionId);
+        const snapshot = readSessionStateDeleteSnapshot(database.db, plan.sessionId);
         if (!sqliteSessionStateDeleteSnapshotsEqual(snapshot, plan.snapshot)) {
           throw new Error(
             `SQLite session state changed before archive materialization for ${plan.sessionId}`,
@@ -140,7 +140,7 @@ export function materializeSqliteTranscriptArchiveInWorker(
   const { content } = opened.value;
   const archivedPath =
     content.length > 0
-      ? writeSqliteTranscriptArchive({
+      ? writeTranscriptArchive({
           archiveDirectory: plan.archiveDirectory,
           content,
           reason: plan.reason,
@@ -152,10 +152,10 @@ export function materializeSqliteTranscriptArchiveInWorker(
 
 function runWorkerPort(
   port: NonNullable<typeof parentPort>,
-  plans: readonly SqliteTranscriptArchiveWorkerPlan[],
+  plans: readonly TranscriptArchiveWorkerPlan[],
 ): void {
-  const results = plans.map((plan) => materializeSqliteTranscriptArchiveInWorker(plan));
-  port.postMessage({ type: "done", results } satisfies SqliteTranscriptArchiveWorkerMessage);
+  const results = plans.map((plan) => materializeTranscriptArchiveInWorker(plan));
+  port.postMessage({ type: "done", results } satisfies TranscriptArchiveWorkerMessage);
   port.close();
 }
 

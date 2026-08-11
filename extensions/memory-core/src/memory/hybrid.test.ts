@@ -6,7 +6,6 @@ import {
   mergeHybridResults,
   scoreExactPathTieForTemporalDecay,
 } from "./hybrid.js";
-import { applyProjectRanking } from "./project-ranking.js";
 
 describe("memory hybrid helpers", () => {
   it("buildFtsQuery tokenizes and AND-joins", () => {
@@ -113,50 +112,110 @@ describe("memory hybrid helpers", () => {
   });
 
   it("boosts active-project results, demotes foreign results, and leaves global results neutral", async () => {
-    const merged = applyProjectRanking(
-      await mergeHybridResults({
-        vectorWeight: 1,
-        textWeight: 0,
-        keyword: [],
-        vector: [
-          {
-            id: "same",
-            path: "MEMORY.md",
-            startLine: 1,
-            endLine: 1,
-            source: "memory",
-            snippet: "same",
-            vectorScore: 0.8,
-            projectKey: "github.com/openclaw/openclaw",
-          },
-          {
-            id: "global",
-            path: "MEMORY.md",
-            startLine: 2,
-            endLine: 2,
-            source: "memory",
-            snippet: "global",
-            vectorScore: 0.8,
-          },
-          {
-            id: "foreign",
-            path: "MEMORY.md",
-            startLine: 3,
-            endLine: 3,
-            source: "memory",
-            snippet: "foreign",
-            vectorScore: 0.8,
-            projectKey: "github.com/example/other",
-          },
-        ],
-      }),
-      ["github.com/openclaw/openclaw"],
-    );
+    const merged = await mergeHybridResults({
+      vectorWeight: 1,
+      textWeight: 0,
+      activeProjectKeys: ["github.com/openclaw/openclaw"],
+      keyword: [],
+      vector: [
+        {
+          id: "same",
+          path: "MEMORY.md",
+          startLine: 1,
+          endLine: 1,
+          source: "memory",
+          snippet: "same",
+          vectorScore: 0.8,
+          projectKey: "github.com/openclaw/openclaw",
+        },
+        {
+          id: "global",
+          path: "MEMORY.md",
+          startLine: 2,
+          endLine: 2,
+          source: "memory",
+          snippet: "global",
+          vectorScore: 0.8,
+        },
+        {
+          id: "foreign",
+          path: "MEMORY.md",
+          startLine: 3,
+          endLine: 3,
+          source: "memory",
+          snippet: "foreign",
+          vectorScore: 0.8,
+          projectKey: "github.com/example/other",
+        },
+      ],
+    });
     expect(merged.map((entry) => [entry.snippet, entry.score])).toEqual([
       ["same", 0.9199999999999999],
       ["global", 0.8],
       ["foreign", 0.7200000000000001],
     ]);
+  });
+
+  it.each([
+    {
+      label: "without project affinity",
+      activeProjectKeys: undefined,
+      expected: ["memory/primary.md", "memory/diverse.md"],
+    },
+    {
+      label: "with project affinity",
+      activeProjectKeys: ["active-project"],
+      expected: ["memory/duplicate.md", "memory/diverse.md"],
+    },
+  ])("keeps a diverse hit in the selected set $label", async ({ activeProjectKeys, expected }) => {
+    const merged = await mergeHybridResults({
+      vectorWeight: 1,
+      textWeight: 0,
+      mmr: { enabled: true, lambda: 0.7 },
+      activeProjectKeys,
+      keyword: [],
+      vector: [
+        {
+          id: "primary",
+          path: "memory/primary.md",
+          startLine: 1,
+          endLine: 1,
+          source: "memory",
+          snippet: "alpha beta gamma",
+          vectorScore: 0.9,
+        },
+        {
+          id: "duplicate",
+          path: "memory/duplicate.md",
+          startLine: 1,
+          endLine: 1,
+          source: "memory",
+          snippet: "alpha beta gamma delta",
+          vectorScore: 0.8,
+          projectKey: "active-project",
+        },
+        {
+          id: "diverse",
+          path: "memory/diverse.md",
+          startLine: 1,
+          endLine: 1,
+          source: "memory",
+          snippet: "whiskey tango",
+          vectorScore: 0.75,
+        },
+        {
+          id: "floor",
+          path: "memory/floor.md",
+          startLine: 1,
+          endLine: 1,
+          source: "memory",
+          snippet: "alpha",
+          vectorScore: 0.2,
+        },
+      ],
+    });
+
+    expect(merged.slice(0, 2).map((entry) => entry.path)).toEqual(expected);
   });
 
   it("uses path BM25 only for partial path-only hybrid hits", async () => {

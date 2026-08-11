@@ -77,6 +77,7 @@ async function resumePostCoreUpdateUnlocked(params: ResumePostCoreUpdateParams):
   });
   await createUpdateConfigSnapshot();
   await runUpdateFinalizationDoctorInFreshProcess({
+    phase: "pre-plugin",
     root: params.root,
     yes: params.opts.yes === true,
     json: params.opts.json === true,
@@ -126,8 +127,7 @@ async function resumePostCoreUpdateUnlocked(params: ResumePostCoreUpdateParams):
   const { pluginUpdate } = await completePostCorePluginUpdate({
     root: params.root,
     pluginUpdate: initialPluginUpdate,
-    // Only package/channel sync can replace the migration owner loaded by this process.
-    freshDoctorRequired: initialPluginUpdate.sync.changed || initialPluginUpdate.npm.changed,
+    freshDoctorRequired: initialPluginUpdate.changed,
     yes: params.opts.yes === true,
     json: params.opts.json === true,
     timeoutMs: params.timeoutMs,

@@ -19,8 +19,11 @@ import {
 import { readBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "./channel-presence-policy.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
-import { normalizePluginsConfigWithResolver } from "./config-normalization-shared.js";
-import { resolveEffectivePluginActivationState } from "./config-state.js";
+import { normalizePluginsConfigWithResolverCore } from "./config-normalization-shared.js";
+import {
+  resolveEffectivePluginActivationState,
+  resolveSelectedContextEnginePluginIdFromConfig,
+} from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type {
   ManifestRegistryLookup,
@@ -60,7 +63,7 @@ export function normalizePluginsConfigForInstalledIndex(
   config: OpenClawConfig["plugins"] | undefined,
   lookup: InstalledPluginIndexScopeLookup,
 ) {
-  return normalizePluginsConfigWithResolver(config, lookup.normalizePluginId);
+  return normalizePluginsConfigWithResolverCore(config, lookup.normalizePluginId);
 }
 
 function isConfigActivationValueEnabled(value: unknown): boolean {
@@ -211,18 +214,10 @@ export function resolveContextEngineSlotStartupPluginId(params: {
   if (!configuredSlot) {
     return undefined;
   }
-  const normalized = normalizePluginId(configuredSlot);
-  // "legacy" is the built-in default engine — no plugin startup needed.
-  if (normalized === "legacy") {
-    return undefined;
-  }
-  if (activationSourcePlugins.deny.includes(normalized)) {
-    return undefined;
-  }
-  if (activationSourcePlugins.entries[normalized]?.enabled === false) {
-    return undefined;
-  }
-  return normalized;
+  return resolveSelectedContextEnginePluginIdFromConfig(
+    activationSourcePlugins,
+    normalizePluginId(configuredSlot),
+  );
 }
 
 export function shouldConsiderForGatewayStartup(params: {
@@ -385,7 +380,7 @@ function collectValidationHeartbeatTargetChannelIds(config: OpenClawConfig): str
       return;
     }
     const normalized = normalizeOptionalLowercaseString(target);
-    if (!normalized || normalized === "last" || normalized === "none") {
+    if (!normalized || normalized === "owner" || normalized === "last" || normalized === "none") {
       return;
     }
     channelIds.push(normalized);

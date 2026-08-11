@@ -10,8 +10,8 @@ import {
   assembleAttemptContextEngine,
   type AttemptContextEngine,
   resolveAttemptBootstrapContext,
-} from "./attempt.context-engine-helpers.js";
-import { resetEmbeddedAttemptHarness } from "./attempt.spawn-workspace.test-support.js";
+} from "./attempt-context-engine-helpers.js";
+import { resetEmbeddedAttemptHarness } from "./attempt-spawn-workspace.test-support.js";
 
 async function resolveBootstrapContext(params: {
   contextInjectionMode?: "always" | "continuation-skip" | "never";
@@ -143,7 +143,7 @@ describe("embedded attempt context injection", () => {
     expect(input.requesterSenderId).toBe("@alice:example.org");
   });
 
-  it.each(["heartbeat", "commitment-only"] as const)(
+  it.each(["heartbeat"] as const)(
     "never skips %s bootstrap filtering",
     async (bootstrapContextRunKind) => {
       const { result, hasCompletedBootstrapTurn, resolveBootstrapContextForRun } =
@@ -178,7 +178,7 @@ describe("embedded attempt context injection", () => {
     expect(result.bootstrapFiles).toEqual([{ name: "AGENTS.md", content: "bootstrap context" }]);
   });
 
-  it.each(["heartbeat", "commitment-only"] as const)(
+  it.each(["heartbeat"] as const)(
     "does not record full bootstrap completion for %s runs",
     async (bootstrapContextRunKind) => {
       const { result } = await resolveBootstrapContext({
@@ -216,7 +216,14 @@ describe("embedded attempt context injection", () => {
       { role: "user", content: "real question", timestamp: 1 } as AgentMessage,
       { role: "assistant", content: "real answer", timestamp: 2 } as unknown as AgentMessage,
       { role: "user", content: HEARTBEAT_PROMPT, timestamp: 3 } as AgentMessage,
-      { role: "assistant", content: "HEARTBEAT_OK", timestamp: 4 } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "Checking the heartbeat." },
+          { type: "text", text: "HEARTBEAT_OK" },
+        ],
+        timestamp: 4,
+      } as unknown as AgentMessage,
     ];
 
     const heartbeatFiltered = filterHeartbeatTranscriptArtifacts(

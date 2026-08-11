@@ -18,7 +18,7 @@ import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capabili
 import { appendReplyMediaFailureWarning, copyReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 
-const FILE_URL_RE = /^file:\/\//i;
+const FILE_URL_RE = /^file:/i;
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
 const SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
 const HAS_FILE_EXT_RE = /\.\w{1,10}$/;

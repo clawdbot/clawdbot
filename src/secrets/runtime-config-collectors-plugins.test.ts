@@ -1,6 +1,7 @@
 /** Tests plugin-specific runtime config secret collectors. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/types.js";
 import { collectPluginConfigAssignments } from "./runtime-config-collectors-plugins.js";
 import { createResolverContext, type ResolverContext } from "./runtime-shared.js";
@@ -25,10 +26,14 @@ function asConfig(value: unknown): OpenClawConfig {
   };
 }
 
-function makeContext(sourceConfig: OpenClawConfig): ResolverContext {
+function makeContext(
+  sourceConfig: OpenClawConfig,
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">,
+): ResolverContext {
   return createResolverContext({
     sourceConfig,
     env: {},
+    ...(manifestRegistry ? { manifestRegistry } : {}),
   });
 }
 
@@ -153,6 +158,37 @@ describe("collectPluginConfigAssignments", () => {
     const assignment = requireAssignment(context, 0);
     expect(assignment.path).toBe("plugins.entries.acpx.config.mcpServers.github.env.GITHUB_TOKEN");
     expect(assignment.expected).toBe("string");
+  });
+
+  it("collects from a supplied manifest registry without cold registry loading", () => {
+    const config = createPluginConfig("prepared-plugin", {
+      credentials: { token: envRef("PREPARED_TOKEN") },
+    });
+    const context = makeContext(config, {
+      plugins: [
+        {
+          id: "prepared-plugin",
+          origin: "config",
+          configContracts: {
+            secretInputs: {
+              paths: [{ path: "credentials.token", expected: "string" }],
+            },
+          },
+        } as never,
+      ],
+    });
+
+    collectPluginConfigAssignments({
+      config,
+      defaults: undefined,
+      context,
+      loadablePluginOrigins: loadablePluginOrigins([["prepared-plugin", "config"]]),
+    });
+
+    expect(context.assignments.map((assignment) => assignment.path)).toEqual([
+      "plugins.entries.prepared-plugin.config.credentials.token",
+    ]);
+    expect(loadPluginManifestRegistryForPluginRegistryMock).not.toHaveBeenCalled();
   });
 
   it("resolves assignments via apply callback", () => {

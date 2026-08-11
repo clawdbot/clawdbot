@@ -4,6 +4,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import { projectGatewayUrlForDiagnostics } from "../../gateway/connection-details.js";
 import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
 import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
 import {
@@ -27,6 +28,10 @@ type StatusGatewayConnection = {
   url: string;
   urlSource?: string;
 };
+
+function resolveStatusGatewayDisplayUrl(connection: StatusGatewayConnection): string {
+  return projectGatewayUrlForDiagnostics(connection.url);
+}
 
 type StatusGatewayProbe = {
   connectLatencyMs?: number | null;
@@ -376,9 +381,8 @@ export function buildGatewayStatusSummaryParts(params: {
   authText: string;
   modeLabel: string;
 } {
-  const targetText = params.remoteUrlMissing
-    ? `fallback ${params.gatewayConnection.url}`
-    : params.gatewayConnection.url;
+  const displayUrl = resolveStatusGatewayDisplayUrl(params.gatewayConnection);
+  const targetText = params.remoteUrlMissing ? `fallback ${displayUrl}` : displayUrl;
   const targetTextWithSource = params.gatewayConnection.urlSource
     ? `${targetText} (${params.gatewayConnection.urlSource})`
     : targetText;
@@ -504,7 +508,7 @@ export function buildGatewayStatusJsonPayload(params: {
 }) {
   return {
     mode: params.gatewayMode,
-    url: params.gatewayConnection.url,
+    url: resolveStatusGatewayDisplayUrl(params.gatewayConnection),
     urlSource: params.gatewayConnection.urlSource,
     misconfigured: params.remoteUrlMissing,
     reachable: params.gatewayReachable,
@@ -516,7 +520,7 @@ export function buildGatewayStatusJsonPayload(params: {
 }
 
 /** Redacts common credential shapes before text is printed in status diagnostics. */
-export function redactSecrets(text: string): string {
+export function redactStatusSecrets(text: string): string {
   if (!text) {
     return text;
   }

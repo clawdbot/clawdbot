@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as videoGenerationRuntime from "../../video-generation/runtime.js";
 import { recordRecentMediaGenerationTaskStartForSession } from "../media-generation-task-status-shared.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
-import { VIDEO_GENERATION_TASK_KIND } from "../video-generation-task-status.js";
+import { VIDEO_GENERATION_TASK_KIND } from "../media-generation-task-status.js";
 import {
   createVideoGenerateDuplicateGuardResult,
   createVideoGenerateStatusActionResult,

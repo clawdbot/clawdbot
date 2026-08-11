@@ -49,6 +49,7 @@ type QaTestFileScenarioRunParams = {
   commandTimeoutMs?: number;
   evidenceMode?: QaScorecardEvidenceMode;
   env?: NodeJS.ProcessEnv;
+  envMode?: "replace";
   failFast?: boolean;
   outputDir: string;
   primaryModel: string;
@@ -143,7 +144,7 @@ function playwrightSteps(
   return [
     {
       command: process.execPath,
-      args: ["scripts/ensure-playwright-chromium.mjs"],
+      args: ["--import", "tsx", "scripts/ensure-playwright-chromium.mts"],
     },
     {
       command: process.execPath,
@@ -570,10 +571,7 @@ export async function runQaTestFileScenarios(
     params.commandTimeoutMs,
     DEFAULT_QA_TEST_FILE_COMMAND_TIMEOUT_MS,
   );
-  const env = {
-    ...process.env,
-    ...params.env,
-  };
+  const env = params.envMode === "replace" ? (params.env ?? {}) : { ...process.env, ...params.env };
   const results: QaTestFileScenarioResult[] = [];
   const dockerBatchScenarios =
     kind === "script" && !params.failFast ? scenarios.filter(isDockerE2eScenario) : [];

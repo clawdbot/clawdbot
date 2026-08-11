@@ -27,6 +27,7 @@ scenario:
     summary: Force one OpenClaw context overflow, verify persisted pruning evidence, and prove exactly-once mutation after compaction.
     retryCount: 0
     config:
+      requiredProviderMode: mock-openai
       outputFile: compaction-retry-summary.txt
       promptSnippet: Compaction retry mutating tool check
       durableMarker: QA-COMPACTION-DURABLE-MARKER
@@ -102,7 +103,7 @@ flow:
             expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)"
         - set: requestEvidence
           value:
-            expr: "scenarioRequests.map((request) => ({ cursor: request.cursor, kind: request.requestKind, outcome: request.outcome, code: request.errorCode ?? null, bytes: request.rawByteLength, inputChars: String(request.allInputText ?? '').length, tailBlocks: [...new Set(Array.from({ length: 16 }, (_, index) => String(index).padStart(2, '0')).filter((id) => String(request.allInputText ?? '').includes(`post-marker historical user block ${id}`)))].sort().slice(0, 16), prompt: String(request.allInputText ?? '').includes(config.promptSnippet), durable: String(request.allInputText ?? '').includes(config.durableMarker), bulky: String(request.allInputText ?? '').includes(config.bulkyMarker), tool: request.plannedToolName ?? null, resolvedWireTool: request.plannedWireToolName ?? request.plannedToolName ?? null, callId: request.plannedToolCallId ?? null, itemId: request.plannedToolItemId ?? null, transcriptId: typeof request.plannedToolItemId === 'string' && request.plannedToolItemId.length > 0 ? `${request.plannedToolCallId}|${request.plannedToolItemId}` : request.plannedToolCallId ?? null }))"
+            expr: "scenarioRequests.map((request) => ({ cursor: request.cursor, kind: request.requestKind, outcome: request.outcome, code: request.errorCode ?? null, bytes: request.rawByteLength, inputChars: String(request.allInputText ?? '').length, tailBlocks: [...new Set(Array.from({ length: 16 }, (_, index) => String(index).padStart(2, '0')).filter((id) => String(request.allInputText ?? '').includes(`post-marker historical user block ${id}`)))].sort().slice(0, 16), prompt: String(request.allInputText ?? '').includes(config.promptSnippet), durable: String(request.allInputText ?? '').includes(config.durableMarker), bulky: String(request.allInputText ?? '').includes(config.bulkyMarker), qualityRetry: String(request.allInputText ?? '').includes('Previous summary failed quality checks'), tool: request.plannedToolName ?? null, resolvedWireTool: request.plannedWireToolName ?? request.plannedToolName ?? null, callId: request.plannedToolCallId ?? null, itemId: request.plannedToolItemId ?? null, transcriptId: typeof request.plannedToolItemId === 'string' && request.plannedToolItemId.length > 0 ? `${request.plannedToolCallId}|${request.plannedToolItemId}` : request.plannedToolCallId ?? null }))"
         - set: overflowRequests
           value:
             expr: "scenarioRequests.filter((request) => request.requestKind === 'agent-initial' && request.outcome === 'error' && request.errorCode === 'context_length_exceeded' && String(request.allInputText ?? '').includes(sessionId) && String(request.allInputText ?? '').includes(config.promptSnippet) && String(request.allInputText ?? '').includes(config.durableMarker))"
@@ -228,9 +229,13 @@ flow:
           value:
             expr: "scenarioRequests.filter((request) => request.requestKind === 'compaction-summary')"
         - assert:
-            expr: "compactionSummaryRequests.length === 1 && compactionSummaryRequests[0].outcome === 'success' && compactionSummaryRequests[0].plannedToolName === undefined && compactionSummaryRequests[0].toolOutputStructuredError !== true"
+            expr: "compactionSummaryRequests.length > 0 && compactionSummaryRequests.every((request) => request.cursor > overflowRequest.cursor && request.cursor < writeRequest.cursor && request.outcome === 'success' && request.plannedToolName === undefined && request.toolOutputStructuredError !== true)"
             message:
-              expr: "`expected exactly one successful OpenClaw compaction summary request: ${JSON.stringify(requestEvidence.filter((request) => request.kind === 'compaction-summary'))}`"
+              expr: "`expected successful OpenClaw compaction summary requests causally between overflow and retry: ${JSON.stringify(requestEvidence.filter((request) => request.kind === 'compaction-summary'))}`"
+        - assert:
+            expr: "compactionSummaryRequests.every((request) => !String(request.allInputText ?? '').includes('Previous summary failed quality checks'))"
+            message:
+              expr: "`compaction summary unexpectedly required quality-feedback regeneration: ${JSON.stringify(requestEvidence.filter((request) => request.kind === 'compaction-summary'))}`"
         - call: readRawQaSessionStore
           saveAs: store
           args:

@@ -87,14 +87,6 @@ async function attachDocumentText<T extends { docsDestination?: Record<string, u
   }
 }
 
-function parseGoogleMeetTimestamp(value: string | undefined): number | undefined {
-  if (!value?.trim()) {
-    return undefined;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
 function isoFromMs(value: number | undefined): string | undefined {
   return typeof value === "number" && Number.isFinite(value)
     ? new Date(value).toISOString()
@@ -414,3 +406,4 @@ export function buildGoogleMeetPreflightReport(params: {
     blockers,
   };
 }
+import { parseDateStringTimestampMs as parseGoogleMeetTimestamp } from "openclaw/plugin-sdk/number-runtime";

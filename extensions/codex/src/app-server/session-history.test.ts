@@ -56,6 +56,30 @@ function messageEntry(params: {
   };
 }
 
+function bashEntry(params: {
+  id: string;
+  parentId: string;
+  output: string;
+  excludeFromContext: boolean;
+}) {
+  return {
+    type: "message",
+    id: params.id,
+    parentId: params.parentId,
+    timestamp: "2026-06-15T00:00:00.000Z",
+    message: {
+      role: "bashExecution",
+      command: `print ${params.output}`,
+      output: params.output,
+      exitCode: 0,
+      cancelled: false,
+      truncated: false,
+      timestamp: 1,
+      excludeFromContext: params.excludeFromContext,
+    },
+  };
+}
+
 function mirroredTarget(sessionFile: string) {
   return {
     sessionFile,
@@ -157,6 +181,24 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     await expect(
       readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
     ).resolves.toBeUndefined();
+  });
+
+  it("rejects a legacy transcript whose session header belongs to another session", async () => {
+    const sessionFile = await writeSession([
+      messageEntry({
+        id: "foreign",
+        parentId: null,
+        role: "assistant",
+        content: "foreign answer",
+      }),
+    ]);
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages({
+        sessionFile,
+        sessionId: "another-session",
+      }),
+    ).resolves.toEqual([]);
   });
 
   it("replays SQLite marker history by session identity", async () => {
@@ -275,6 +317,47 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     ]);
   });
 
+  it("applies the admission fence when session metadata still points to a legacy file", async () => {
+    const sessionFile = await writeSession([
+      messageEntry({ id: "prior", parentId: null, role: "user", content: "legacy prior prompt" }),
+      messageEntry({
+        id: "current",
+        parentId: "prior",
+        role: "user",
+        content: "legacy current prompt",
+      }),
+    ]);
+    const { sessionKey, sessionTarget } = await writeSqliteSession({
+      storedSessionFile: sessionFile,
+    });
+    const admitted = await appendSessionTranscriptMessageByIdentity({
+      ...sessionTarget,
+      message: { role: "user", content: "sqlite current prompt", timestamp: 3 },
+    });
+    if (!admitted?.anchor) {
+      throw new Error("expected current-turn admission anchor");
+    }
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages(
+        {
+          agentId: sessionTarget.agentId,
+          sessionFile,
+          sessionId: sessionTarget.sessionId,
+          sessionKey,
+        },
+        {
+          ...admitted.anchor,
+          logicalTurnId: "codex-legacy-file-turn",
+          role: "user",
+        },
+      ),
+    ).resolves.toMatchObject([
+      { role: "user", content: "sqlite prompt" },
+      { role: "assistant", content: "sqlite answer" },
+    ]);
+  });
+
   it("replays only the branch selected by a leaf control", async () => {
     const sessionFile = await writeSession([
       messageEntry({ id: "root", parentId: null, role: "user", content: "root prompt" }),
@@ -304,6 +387,42 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       { role: "user", content: "root prompt" },
       { role: "assistant", content: [{ type: "text", text: "active answer" }] },
     ]);
+  });
+
+  it("projects private shell rows out of mirrored history without rewriting persisted bytes", async () => {
+    const sessionFile = await writeSession([
+      messageEntry({ id: "root", parentId: null, role: "user", content: "root prompt" }),
+      bashEntry({
+        id: "private-shell",
+        parentId: "root",
+        output: "private shell output",
+        excludeFromContext: true,
+      }),
+      bashEntry({
+        id: "visible-shell",
+        parentId: "private-shell",
+        output: "visible shell output",
+        excludeFromContext: false,
+      }),
+      messageEntry({
+        id: "continued",
+        parentId: "visible-shell",
+        role: "user",
+        content: "continue prompt",
+      }),
+    ]);
+    const persistedBefore = await fs.readFile(sessionFile, "utf8");
+
+    const messages = await readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile));
+
+    expect(messages).toMatchObject([
+      { role: "user", content: "root prompt" },
+      { role: "bashExecution", output: "visible shell output" },
+      { role: "user", content: "continue prompt" },
+    ]);
+    expect(JSON.stringify(messages)).not.toContain("private shell output");
+    expect(await fs.readFile(sessionFile, "utf8")).toBe(persistedBefore);
+    expect(persistedBefore).toContain("private shell output");
   });
 
   it("honors explicit navigation to an empty branch", async () => {

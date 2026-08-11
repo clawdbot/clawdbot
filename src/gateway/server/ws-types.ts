@@ -42,18 +42,20 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   authenticatedUserProfile?: {
     profileId: string;
     displayName: string | null;
+    avatarRevision: string;
     hasAvatar: boolean;
     updatedAt: number;
   };
   clientIp?: string;
   internal?: {
+    /** Handshake-attested direct-local transport; never accepted from wire params. */
+    isLocalClient?: true;
     approvalRuntime?: boolean;
     agentRuntimeIdentity?: AgentRuntimeIdentity;
   };
   canvasHostUrl?: string;
   canvasCapability?: string;
   canvasCapabilityExpiresAtMs?: number;
-  invalidated?: boolean;
   invalidatedReason?: string;
 };
 

@@ -129,7 +129,11 @@ export default function register(api) {
       id: "my-engine",
       name: "My Context Engine",
       ownsCompaction: true,
-      acceptedHostParams: ["sessionKey"],
+      acceptedHostParams: ["sessionKey", "runtimeContext"],
+      transcriptSemantics: {
+        currentTurnFence: "before-current-turn-entry-v1",
+        turnAdvancementIdempotency: "atomic-idempotent-v1",
+      },
     },
 
     async ingest({ sessionId, message, isHeartbeat }) {
@@ -160,6 +164,15 @@ export default function register(api) {
     async compact({ sessionId, force }) {
       // Summarize older context
       return { ok: true, compacted: true };
+    },
+
+    async commitTurn({ advancementKey, messages }) {
+      // Atomically store the accepted turn and advancementKey. Return
+      // "duplicate" when that exact key was committed by an earlier retry.
+      return await commitAcceptedTurn({
+        advancementKey,
+        messages,
+      });
     },
   }));
 }
@@ -207,6 +220,30 @@ the fields available for each lifecycle method, so undeclared or unknown keys
 are never injected. Engines without this declaration receive the pre-host-field
 legacy parameter set through 2026-08-12; after that date, undeclared engines
 receive every current host field.
+
+For durable admitted turns, declare both transcript semantics:
+
+- `currentTurnFence: "before-current-turn-entry-v1"`
+- `turnAdvancementIdempotency: "atomic-idempotent-v1"`
+
+and implement `commitTurn(...)` as one atomic, idempotent write keyed by
+`advancementKey`. Return `{ status: "committed" }` for the first write and
+`{ status: "duplicate" }` when a host retry presents an already-committed key.
+The `messages` payload contains only the inclusive range from the admitted user
+entry through the accepted terminal entry. Engines that need the earlier
+transcript during bootstrap or rebuild should read it through the transcript
+cursor API, `readSessionTranscriptVisibleMessageDelta(...)`.
+Pre-turn transcript reads during bootstrap, maintenance, assembly, and retries
+then see the exact transcript prefix before the admitted user message. The host
+calls `commitTurn` only for the accepted successful turn; failed or aborted
+turns do not advance context-engine state.
+
+Without the full declaration and method, OpenClaw uses the legacy context path
+for the whole logical turn, including retries. The configured context-engine
+slot is not changed, and OpenClaw tries the configured engine again on the next
+logical turn. The same turn-local degradation applies if a declared fence
+cannot be honored because its exact admitted message is missing, rewritten, or
+already crossed by a transcript cursor.
 
 `assemble` returns an `AssembleResult` with:
 

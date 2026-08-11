@@ -3,6 +3,7 @@
  */
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const { spawnMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
 }));
+const tempRootDirs = new Set<string>();
 const FAST_WAIT_OPTS = { interval: 1 } as const;
 
 function createSpawnMock() {
@@ -45,6 +47,8 @@ afterEach(async () => {
     return scriptPath ? [path.dirname(scriptPath)] : [];
   });
   await Promise.all(handoffDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  await Promise.all([...tempRootDirs].map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  tempRootDirs.clear();
   vi.resetModules();
 });
 
@@ -146,5 +150,41 @@ describe("managed service update handoff single-flight", () => {
     expect(child.listenerCount("exit")).toBe(1);
     expect(child.listenerCount("error")).toBe(0);
     expect(child.stdout.destroyed).toBe(true);
+  });
+
+  it("joins canonical aliases but rejects a distinct active install root", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-root-"));
+    tempRootDirs.add(tempDir);
+    const installRoot = path.join(tempDir, "install");
+    const installAlias = path.join(tempDir, "install-alias");
+    const otherRoot = path.join(tempDir, "other");
+    await fs.mkdir(installRoot);
+    await fs.mkdir(otherRoot);
+    await fs.symlink(installRoot, installAlias, "dir");
+    const child = createSpawnMock();
+    spawnMock.mockReturnValue(child);
+    const { startManagedServiceUpdateHandoff } =
+      await import("./update-managed-service-handoff.js");
+    const baseParams = {
+      restartDrainTimeoutMs: 300_000,
+      parentPid: 12345,
+      execPath: "/usr/local/bin/node",
+      argv1: "/opt/openclaw/openclaw.mjs",
+      meta: {},
+    };
+
+    const first = startManagedServiceUpdateHandoff({ ...baseParams, root: installRoot });
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1), FAST_WAIT_OPTS);
+    signalHandoffReady(child);
+    await expect(first).resolves.toMatchObject({ status: "started" });
+    await expect(
+      startManagedServiceUpdateHandoff({ ...baseParams, root: installAlias }),
+    ).resolves.toMatchObject({ status: "joined" });
+    await expect(
+      startManagedServiceUpdateHandoff({ ...baseParams, root: otherRoot }),
+    ).rejects.toThrow("managed update handoff root mismatch");
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+
+    child.emit("exit", 0, null);
   });
 });

@@ -4,7 +4,7 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
-import { resolveStorePath } from "../../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 // Drains queued follow-up runs while preserving route and session identity.
 import {
@@ -166,6 +166,7 @@ function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string {
   return JSON.stringify([
     run.senderId ?? "",
     JSON.stringify(run.channelContext ?? null),
+    stableStringify(run.conversationToolPolicy ?? null),
     run.senderE164 ?? "",
     run.senderIsOwner === true,
     run.execOverrides?.host ?? "",
@@ -347,7 +348,7 @@ function buildCollectTranscriptPrompt(items: FollowupRun[]): string {
 
 function resolveFollowupTranscriptTarget(source: FollowupRun) {
   const sessionKey = normalizeOptionalString(source.run.sessionKey) ?? source.run.sessionId;
-  const storePath = resolveStorePath(source.run.config.session?.store, {
+  const storePath = resolveSessionStorePathCore(source.run.config.session?.store, {
     agentId: source.run.agentId,
   });
   const sessionEntry = loadSessionEntryReadOnly({
@@ -570,6 +571,17 @@ function collectRuntimeMetadata(
           }
         : undefined,
   };
+}
+
+function resolveQueuedCronCreatorAuthorityUnavailable(
+  items: readonly FollowupRun[],
+): "queued-local-operator" | undefined {
+  return items.some(
+    (item) =>
+      item.turnAdoptionLifecycle?.cronCreatorAuthorityUnavailable === "queued-local-operator",
+  )
+    ? "queued-local-operator"
+    : undefined;
 }
 
 type FollowupQueueSummaryState = {
@@ -983,6 +995,9 @@ async function runSyntheticOverflowSummary(params: {
           turnAdoptionLifecycle: {
             // Synthetic aggregate owner — not a durable exclusive ingress identity.
             admission: "cancel-only" as const,
+            ...(resolveQueuedCronCreatorAuthorityUnavailable(params.sources)
+              ? { cronCreatorAuthorityUnavailable: "queued-local-operator" as const }
+              : {}),
             onAdopted: async () => {
               await params.onAdmitted?.();
               admitted = true;
@@ -1163,6 +1178,7 @@ export function scheduleFollowupDrain(
   // Give the detached chain its own root so inherited request admission cannot go stale.
   void runWithGatewayIndependentRootWorkContinuation(async () => {
     let retryDeferred = false;
+    let waitingForSteer = false;
     try {
       const collectState = { forceIndividualCollect: false };
       while (queue.items.length > 0 || queue.droppedCount > 0) {
@@ -1170,12 +1186,26 @@ export function scheduleFollowupDrain(
         if (queue.items.length === 0 && queue.droppedCount === 0) {
           break;
         }
+        if (queue.items.some((item) => item.steerPending)) {
+          waitingForSteer = true;
+          break;
+        }
         await waitForQueueDebounce(queue, queue.abortController.signal);
         await dropAbortedFollowups(queue.items, effectiveRunFollowup);
         if (queue.items.length === 0 && queue.droppedCount === 0) {
           break;
         }
+        if (queue.items.some((item) => item.steerPending)) {
+          waitingForSteer = true;
+          break;
+        }
         if (await drainProtectedPriorityFollowup(queue.items, effectiveRunFollowup)) {
+          continue;
+        }
+        if (queue.droppedCount > 0 && queue.items.some((item) => item.steerAnchor)) {
+          if (!(await drainNextQueueItem(queue.items, effectiveRunFollowup, reserveOptions))) {
+            break;
+          }
           continue;
         }
         if (
@@ -1305,6 +1335,9 @@ export function scheduleFollowupDrain(
                       turnAdoptionLifecycle: {
                         // Synthetic aggregate owner — sources keep their own admission.
                         admission: "cancel-only" as const,
+                        ...(resolveQueuedCronCreatorAuthorityUnavailable(activeGroupItems)
+                          ? { cronCreatorAuthorityUnavailable: "queued-local-operator" as const }
+                          : {}),
                         onAdopted: admitGroupSources,
                         onSettled: () => {
                           if (admitted) {
@@ -1386,7 +1419,11 @@ export function scheduleFollowupDrain(
     } finally {
       queue.draining = false;
       const hasPendingQueueWork = queue.items.length > 0 || queue.droppedCount > 0;
-      if (retryDeferred && hasPendingQueueWork) {
+      if (waitingForSteer && hasPendingQueueWork) {
+        if (!queue.items.some((item) => item.steerPending)) {
+          scheduleFollowupDrain(key, effectiveRunFollowup);
+        }
+      } else if (retryDeferred && hasPendingQueueWork) {
         scheduleFollowupDrain(key, effectiveRunFollowup);
       } else if (!hasPendingQueueWork) {
         // Only remove the map entry if it still points to this queue instance.

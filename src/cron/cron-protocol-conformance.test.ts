@@ -1,13 +1,13 @@
 // Cron protocol conformance tests cover schema compatibility for cron messages.
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
+import { FAILOVER_REASONS } from "../../packages/gateway-protocol/src/failover-reasons.js";
 import {
   CronDeliverySchema,
   CronJobStateSchema,
   CronRunLogEntrySchema,
 } from "../../packages/gateway-protocol/src/schema.js";
 import type { CronJob } from "../../packages/gateway-protocol/src/schema/cron.types.js";
-import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 
 type CronDelivery = NonNullable<CronJob["delivery"]>;
 
@@ -22,25 +22,6 @@ const DELIVERY_FIXTURES = {
   },
   webhook: { mode: "webhook", to: "https://example.test/result" },
 } satisfies Record<CronDelivery["mode"], CronDelivery>;
-
-const FAILOVER_REASONS = Object.keys({
-  auth: true,
-  auth_permanent: true,
-  format: true,
-  rate_limit: true,
-  overloaded: true,
-  billing: true,
-  server_error: true,
-  timeout: true,
-  tls_certificate: true,
-  context_overflow: true,
-  model_not_found: true,
-  session_expired: true,
-  empty_response: true,
-  no_error_details: true,
-  unclassified: true,
-  unknown: true,
-} satisfies Record<FailoverReason, true>) as FailoverReason[];
 
 describe("cron protocol conformance", () => {
   it("accepts every typed delivery mode and rejects unknown modes", () => {

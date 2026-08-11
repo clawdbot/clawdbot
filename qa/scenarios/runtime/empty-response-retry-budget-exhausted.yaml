@@ -24,6 +24,7 @@ scenario:
     kind: flow
     summary: Verify empty-response retry exhaustion still surfaces a visible failure.
     config:
+      requiredProviderMode: mock-openai
       requiredProvider: mock-openai
       promptSnippet: Empty response exhaustion QA check
       prompt: "Empty response exhaustion QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-EXHAUSTED-OK."

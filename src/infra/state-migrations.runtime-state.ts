@@ -13,7 +13,7 @@ import {
 } from "./kysely-sync.js";
 import { normalizeConversationRef } from "./outbound/session-binding-normalization.js";
 import type { SessionBindingRecord } from "./outbound/session-binding.types.js";
-import { fileExists } from "./state-migrations.fs.js";
+import { migrationFileExists } from "./state-migrations.fs.js";
 import { archiveLegacyImportSource } from "./state-migrations.storage.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 import { normalizeVoiceWakeRoutingConfig } from "./voicewake-routing.js";
@@ -64,7 +64,7 @@ export function migrateLegacyJsonState<Value>(params: {
 }): MigrationMessages {
   const changes: string[] = [];
   const warnings: string[] = [];
-  if (!fileExists(params.sourcePath)) {
+  if (!migrationFileExists(params.sourcePath)) {
     return { changes, warnings };
   }
 
@@ -413,7 +413,7 @@ function retireLegacyConfigHealthSource(params: {
   warnings: string[];
 }): void {
   const archivedPath = `${params.sourcePath}.migrated`;
-  if (!fileExists(archivedPath)) {
+  if (!migrationFileExists(archivedPath)) {
     archiveLegacyImportSource({
       sourcePath: params.sourcePath,
       label: "config health state",
@@ -621,7 +621,7 @@ export function migrateLegacyPluginBindingApprovals(params: {
   detected: LegacyStateDetection["pluginBindingApprovals"];
   stateDir: string;
 }): MigrationMessages {
-  // Detection requires the source to belong to this state root; fileExists
+  // Detection requires the source to belong to this state root; migrationFileExists
   // re-checks for races before the import mutates the same trust scope.
   if (!params.detected.hasLegacy) {
     return { changes: [], warnings: [] };

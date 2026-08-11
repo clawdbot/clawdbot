@@ -1,7 +1,8 @@
 // Executes validated plugin, marketplace, ClawHub, and hook-pack install requests.
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../config/config.js";
-import { parseClawHubPluginSpec, reportClawHubPluginInstallTelemetry } from "../infra/clawhub.js";
+import { reportClawHubPluginInstallTelemetry } from "../infra/clawhub-packages.js";
+import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";

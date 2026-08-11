@@ -3,6 +3,7 @@ import type { StatusReactionController } from "openclaw/plugin-sdk/channel-feedb
 import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
+  readAgentRunTerminalOutcome,
   type ChannelInboundTurnPlan,
   toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -873,13 +874,16 @@ export function createWhatsAppReplyPlan(params: {
             if (toolName) {
               await statusReactionController.setTool(toolName);
             }
+            return false;
           },
           onCompactionStart: async () => {
             await statusReactionController.setCompacting();
+            return false;
           },
           onCompactionEnd: async () => {
             statusReactionController.cancelPending();
             await statusReactionController.setThinking();
+            return false;
           },
         }
       : {}),
@@ -919,7 +923,10 @@ export function createWhatsAppReplyPlan(params: {
       if (statusReactionController) {
         void finalizeWhatsAppStatusReaction({
           controller: statusReactionController,
-          outcome: didDeliverVisibleReply ? "done" : "error",
+          outcome:
+            readAgentRunTerminalOutcome(dispatchResult) === "failed" || !didDeliverVisibleReply
+              ? "error"
+              : "done",
         });
       }
       if (params.shouldClearGroupHistory) {

@@ -4,7 +4,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import {
+  onInternalSessionTranscriptUpdate,
+  onSessionTranscriptUpdate,
+} from "../../sessions/transcript-events.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "./session-accessor.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
@@ -27,6 +30,8 @@ vi.mock("../../logging/config.js", async (importOriginal) => {
 const EMAIL_PATTERN = String.raw`([\w]|[-.])+@([\w]|[-.])+\.\w+`;
 const IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAARcnVOZAAAAKIDABCDEFGHIJKLMNOP8JJRuAAAAABJRU5ErkJggg==";
+const OPAQUE_COMPACTION =
+  "gAAAAABpQnQrXzzZqcAfo3unbAY-ku84xgsvB0fpLkbDvSh3WS5qzfSCmcgwr8_abcdefghijvK2RyV2GQ4ohzcfYwhRwTvY76TvR7Tvr_";
 
 function readMessages(sessionFile: string) {
   return fs
@@ -450,6 +455,79 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
       { sessionId: params.sessionId, updatedAt: Date.now() },
     );
   }
+
+  it("retains validated opaque provider replay state exactly", async () => {
+    const sessionsDir = fixture.sessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionId = "test-session-provider-replay";
+    const sessionKey = "test-channel:test-provider-replay";
+    await seedSessionEntry({ sessionId, sessionKey, storePath });
+
+    const publicUpdates: Array<{ message?: unknown }> = [];
+    const internalUpdates: Array<{ message?: unknown }> = [];
+    const unsubscribe = onSessionTranscriptUpdate((update) => publicUpdates.push(update));
+    const unsubscribeInternal = onInternalSessionTranscriptUpdate((update) =>
+      internalUpdates.push(update),
+    );
+    const message: Parameters<typeof appendExactAssistantMessageToSessionTranscript>[0]["message"] =
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "visible" }],
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        providerReplay: {
+          v: 1,
+          type: "openai-responses-compaction",
+          id: "cmp_persisted",
+          data: OPAQUE_COMPACTION,
+          replayIndex: 0,
+          provider: "openai",
+          api: "openai-responses",
+          model: "gpt-5.6-luna",
+          baseUrlHash: "ozhevd1smnk8s",
+          sessionHash: "171dzdv17gum5g",
+          authProfileHash: "oe8bkr3r8947",
+        },
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      };
+    let result: Awaited<ReturnType<typeof appendExactAssistantMessageToSessionTranscript>>;
+    try {
+      result = await appendExactAssistantMessageToSessionTranscript({
+        sessionKey,
+        storePath,
+        config: {},
+        message,
+      });
+    } finally {
+      unsubscribe();
+      unsubscribeInternal();
+    }
+
+    expect(result.ok).toBe(true);
+    const [stored] = (await readStoredMessages({ sessionId, sessionKey, storePath })) as Array<{
+      providerReplay?: { data?: string; sessionHash?: string; authProfileHash?: string };
+    }>;
+    expect(stored?.providerReplay).toMatchObject({
+      data: OPAQUE_COMPACTION,
+      sessionHash: "171dzdv17gum5g",
+      authProfileHash: "oe8bkr3r8947",
+    });
+    expect(publicUpdates).toHaveLength(1);
+    expect(publicUpdates[0]?.message).not.toHaveProperty("providerReplay");
+    expect(internalUpdates).toHaveLength(1);
+    expect(internalUpdates[0]?.message).toEqual(stored);
+    expect(internalUpdates[0]?.message).toHaveProperty("providerReplay.data", OPAQUE_COMPACTION);
+  });
 
   it("always redacts exact assistant transcript appends", async () => {
     const sessionsDir = fixture.sessionsDir();

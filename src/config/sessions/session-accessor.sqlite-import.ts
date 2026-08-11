@@ -1,7 +1,7 @@
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
-import { publishSqliteSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
+import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { readTranscriptEventJsonSetInTransaction } from "./session-accessor.sqlite-read.js";
 import {
@@ -111,7 +111,7 @@ export async function importSqliteSessionRows(
           }
         });
         reconcileSessionTranscriptIndexInTransaction(database.db, params.entry.sessionId);
-        publishSqliteSessionEntryCacheInvalidation(database);
+        publishSessionEntryCacheInvalidation(database);
       }
       if (params.transcriptMtimeMs !== undefined) {
         advanceTranscriptMutationAtInTransaction(

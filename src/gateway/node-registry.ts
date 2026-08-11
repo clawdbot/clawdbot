@@ -7,6 +7,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 // NodeSession is plugin-SDK-reachable; importing these types from the
 // gateway-protocol index would retain the whole ProtocolSchemas registry in
@@ -16,10 +17,9 @@ import type {
   NodeSkillDescriptor,
 } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import { setActiveNodeContext } from "../infra/active-node-context.js";
+import type { PairedDeviceNodeBinding } from "../infra/device-pairing-node-state.js";
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
-import type { NodePairingBinding } from "../infra/node-pairing-state.js";
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
-import { normalizeString } from "./node-normalize.js";
 import {
   createRegisteredNodePluginToolDescriptorMap,
   normalizeNodePluginToolDescriptors,
@@ -82,7 +82,7 @@ type PairingBoundNodeSessionLease = {
   session: PairingBoundNodeSession;
   nodeId: string;
   connId: string;
-  binding: NodePairingBinding;
+  binding: PairedDeviceNodeBinding;
 };
 
 type PairingLeaseResolution =
@@ -106,12 +106,12 @@ function resolvePendingSystemRunEvent(params: {
     return undefined;
   }
   const obj = params.params as Record<string, unknown>;
-  const runId = normalizeString(obj.runId);
+  const runId = normalizeOptionalString(obj.runId) ?? "";
   if (!runId) {
     return undefined;
   }
   const timeoutMs = normalizeSystemRunTimeoutMs(obj.timeoutMs);
-  const sessionKey = normalizeString(obj.sessionKey);
+  const sessionKey = normalizeOptionalString(obj.sessionKey) ?? "";
   return {
     runId,
     ...(sessionKey ? { sessionKey } : {}),
@@ -132,7 +132,7 @@ function normalizeSystemRunInvokeParams(params: { command: string; params?: unkn
   const obj = params.params as Record<string, unknown>;
   const normalized: Record<string, unknown> = {
     ...obj,
-    runId: normalizeString(obj.runId) || randomUUID(),
+    runId: normalizeOptionalString(obj.runId) || randomUUID(),
   };
   const timeoutMs = normalizeSystemRunTimeoutMs(obj.timeoutMs);
   if (timeoutMs === undefined) {
@@ -183,7 +183,7 @@ export type NodeEventTransport = {
   checkConnectivity?: (timeoutMs: number) => Promise<NodeConnectivityResult>;
 };
 
-type NodePairingStateSnapshot = NodePairingBinding;
+type PairedDeviceNodeBindingSnapshot = PairedDeviceNodeBinding;
 
 type NodeSessionRegistrationOptions = {
   remoteIp?: string | undefined;
@@ -191,7 +191,7 @@ type NodeSessionRegistrationOptions = {
   pairingGeneration?: string | undefined;
 };
 
-function pairingBindingForSession(node: PairingBoundNodeSession): NodePairingBinding {
+function pairingBindingForSession(node: PairingBoundNodeSession): PairedDeviceNodeBinding {
   return {
     identity: node.pairingIdentity,
     ...(node.pairingGeneration ? { generation: node.pairingGeneration } : {}),
@@ -199,8 +199,8 @@ function pairingBindingForSession(node: PairingBoundNodeSession): NodePairingBin
 }
 
 function pairingStateMatchesBinding(
-  binding: NodePairingBinding,
-  current: NodePairingStateSnapshot | undefined,
+  binding: PairedDeviceNodeBinding,
+  current: PairedDeviceNodeBindingSnapshot | undefined,
 ): boolean {
   if (!current) {
     return false;
@@ -217,8 +217,10 @@ export type NodeRegistryOptions = {
     | undefined;
   nodePluginToolsEnabled?: boolean;
   nodeSkillsEnabled?: boolean;
-  resolveCurrentPairingState?: (nodeId: string) => Promise<NodePairingStateSnapshot | undefined>;
-  isPairingStateCurrent?: (nodeId: string, expected: NodePairingBinding) => boolean;
+  resolveCurrentPairingState?: (
+    nodeId: string,
+  ) => Promise<PairedDeviceNodeBindingSnapshot | undefined>;
+  isPairingStateCurrent?: (nodeId: string, expected: PairedDeviceNodeBinding) => boolean;
   onPairingGenerationChanged?: (params: {
     nodeId: string;
     previousPairingGeneration: string;
@@ -372,7 +374,7 @@ export class NodeRegistry {
         ? { status: "current", session: current }
         : { status: "stale", presenceInvalidated: false };
     }
-    let currentPairingState: NodePairingStateSnapshot | undefined;
+    let currentPairingState: PairedDeviceNodeBindingSnapshot | undefined;
     try {
       currentPairingState = await resolveCurrentPairingState(lease.nodeId);
     } catch {
@@ -589,7 +591,7 @@ export class NodeRegistry {
 
   /** Filter connected sessions against an already-loaded pairing-state snapshot. */
   listConnectedForPairingStates(
-    currentPairingStates: ReadonlyMap<string, NodePairingStateSnapshot>,
+    currentPairingStates: ReadonlyMap<string, PairedDeviceNodeBindingSnapshot>,
   ): NodeSession[] {
     return this.listConnectedSessions().filter((node) => {
       const current = currentPairingStates.get(node.nodeId);
@@ -1075,6 +1077,8 @@ export class NodeRegistry {
     sessionKey?: string;
     /** Receives the id after pairing validation and a successful dispatch. */
     onDispatchReady?: (invokeId: string) => void;
+    /** Revalidates caller authority at the registry-owned transport handoff. */
+    isDispatchAuthorized?: () => boolean;
   }): Promise<NodeInvokeResult> {
     if (params.signal?.aborted) {
       return { ok: false, error: { code: "ABORTED", message: "node invoke cancelled" } };
@@ -1138,6 +1142,17 @@ export class NodeRegistry {
         };
       }
     }
+    // Pairing resolution may yield after the caller's last authority check. The
+    // registry owns the raw send, so closure must win before pending state is armed.
+    if (params.isDispatchAuthorized?.() === false) {
+      return {
+        ok: false,
+        error: {
+          code: "APPROVAL_AUTHORITY_CLOSED",
+          message: "runtime authority closed before node dispatch",
+        },
+      };
+    }
     const requestId = randomUUID();
     const invokeParams = normalizeSystemRunInvokeParams({
       command: params.command,
@@ -1153,7 +1168,7 @@ export class NodeRegistry {
         "params" in params && invokeParams !== undefined ? JSON.stringify(invokeParams) : null,
       timeoutMs,
       idempotencyKey: params.idempotencyKey,
-      sessionKey: normalizeString(params.sessionKey) || undefined,
+      sessionKey: normalizeOptionalString(params.sessionKey),
     };
     const systemRunEvent = resolvePendingSystemRunEvent({
       command: params.command,

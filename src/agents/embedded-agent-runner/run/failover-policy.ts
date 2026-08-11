@@ -151,7 +151,7 @@ export function mergeRetryFailoverReason(params: {
   failoverReason: FailoverReason | null;
   timedOut?: boolean;
 }): FailoverReason | null {
-  return params.failoverReason ?? (params.timedOut ? "timeout" : null) ?? params.previous;
+  return params.failoverReason ?? params.previous ?? (params.timedOut ? "timeout" : null);
 }
 
 export function resolveRunFailoverDecision(
@@ -182,8 +182,8 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
 
   if (params.stage === "prompt") {
     if (params.failoverCode === "cli_max_turns") {
-      // A CLI may have completed tool actions before reaching this terminal
-      // limit. Replaying against another profile/model could repeat effects.
+      // Plugin-harness errors can propagate arbitrary string codes through failover-error normalization;
+      // normal CLI paths are protected in model-fallback-runner instead.
       return {
         action: "surface_error",
         reason: params.failoverReason,

@@ -31,7 +31,9 @@ import {
 import {
   CONTROL_UI_CATALOG_ICON_PATH_PREFIX,
   CONTROL_UI_PLUGIN_ICON_PATH_PREFIX,
+  CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX,
 } from "./control-ui-contract.js";
+import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
 import {
   isControlUiApprovalDocumentPath,
   isControlUiPluginManagerRequest,
@@ -72,6 +74,7 @@ import {
 } from "./server/ws-types.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 import { canonicalizeUserProfileAvatarPath } from "./user-profiles-http-path.js";
+import type { WorkerDesktopTunnels } from "./worker-environments/desktop-tunnel.js";
 
 type PluginGatewayDispatchContext = {
   gatewayAuthSatisfied?: boolean;
@@ -88,6 +91,7 @@ type PluginHttpRequestHandler = (
 ) => Promise<boolean>;
 
 type WatchNodeHttpRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+type McpOAuthCallbackHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
 type PluginHttpUpgradeHandler = (
   req: IncomingMessage,
@@ -110,6 +114,9 @@ const getManagedMediaAttachmentsModule = createLazyRuntimeModule(
 );
 const getMcpAppStandaloneModule = createLazyRuntimeModule(() => import("./mcp-app-standalone.js"));
 const getPluginIconHttpModule = createLazyRuntimeModule(() => import("./plugin-icon-http.js"));
+const getWorkspaceIconHttpModule = createLazyRuntimeModule(
+  () => import("./workspace-icon-http.js"),
+);
 const getModelsHttpModule = createLazyRuntimeModule(() => import("./models-http.js"));
 const getOpenAiHttpModule = createLazyRuntimeModule(() => import("./openai-http.js"));
 const getOpenResponsesHttpModule = createLazyRuntimeModule(() => import("./openresponses-http.js"));
@@ -236,6 +243,9 @@ async function handleGatewayProbeRequest(
     body = JSON.stringify({ ok: true, status });
   }
   res.statusCode = statusCode;
+  // Node suppresses the HEAD body but never synthesizes Content-Length; set it
+  // explicitly so probes keep GET/HEAD header parity (RFC 9110 §8.6).
+  res.setHeader("Content-Length", String(Buffer.byteLength(body)));
   res.end(method === "HEAD" ? undefined : body);
   return true;
 }
@@ -322,6 +332,7 @@ export function createGatewayHttpServer(opts: {
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
   strictTransportSecurityHeader?: string;
   handleHooksRequest: HooksRequestHandler;
+  handleMcpOAuthCallbackRequest?: McpOAuthCallbackHandler;
   handleWatchNodeRequest?: WatchNodeHttpRequestHandler;
   handlePluginRequest?: PluginHttpRequestHandler;
   shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
@@ -458,10 +469,6 @@ export function createGatewayHttpServer(opts: {
               getReadiness,
             ),
         },
-        {
-          name: "hooks",
-          run: () => handleHooksRequest(req, res),
-        },
       ];
       const addRequestStage = (
         name: string,
@@ -482,6 +489,17 @@ export function createGatewayHttpServer(opts: {
         run: GatewayHttpRequestStage["run"],
       ) => addRequestStage(name, enabled, run, true);
 
+      // Before hooks: an operator hooks.path of "/oauth" would otherwise claim
+      // this exact GET and 405 every provider redirect. The claim is exact-path
+      // and config-gated, so preceding hooks cannot shadow any hook route.
+      addAdmittedStage(
+        "mcp-oauth-callback",
+        req.method === "GET" &&
+          scopedRequestPath === "/oauth/mcp/callback" &&
+          Boolean(opts.handleMcpOAuthCallbackRequest),
+        () => opts.handleMcpOAuthCallbackRequest?.(req, res) ?? false,
+      );
+      addRequestStage("hooks", true, () => handleHooksRequest(req, res));
       addAdmittedStage(
         "watch-node",
         Boolean(opts.handleWatchNodeRequest) && scopedRequestPath.startsWith("/api/nodes/watch/"),
@@ -561,18 +579,14 @@ export function createGatewayHttpServer(opts: {
         }),
         async () => {
           if (!controlUiEnabled) {
-            res.statusCode = 404;
-            res.setHeader("Content-Type", "text/plain; charset=utf-8");
-            res.end("Not Found");
+            respondNotFound(res);
             return true;
           }
           const handled = await handleControlUiRequest();
           if (handled) {
             return true;
           }
-          res.statusCode = 404;
-          res.setHeader("Content-Type", "text/plain; charset=utf-8");
-          res.end("Not Found");
+          respondNotFound(res);
           return true;
         },
       );
@@ -710,6 +724,19 @@ export function createGatewayHttpServer(opts: {
             controlUiRouteOptions,
           ),
       );
+      addRequestStage(
+        "control-ui-workspace-icon",
+        controlUiEnabled &&
+          scopedRequestPath.startsWith(
+            `${controlUiRouteBasePath}${CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX}/`,
+          ),
+        async () =>
+          (await getWorkspaceIconHttpModule()).handleWorkspaceIconHttpRequest(
+            req,
+            res,
+            controlUiRouteOptions,
+          ),
+      );
       addRequestStage("control-ui-assistant-media", controlUiEnabled, async () =>
         (await getControlUiModule()).handleControlUiAssistantMediaRequest(req, res, {
           ...controlUiRouteOptions,
@@ -728,17 +755,13 @@ export function createGatewayHttpServer(opts: {
       // Startup owns sidecar readiness. The plugin registry is still empty here, so an
       // unclaimed path may be a plugin route that would otherwise dead-end as a transient 404.
       if (opts.isStartupPluginRuntimeReady?.() === false) {
-        res.statusCode = 503;
         res.setHeader("Cache-Control", "no-store");
         res.setHeader("Retry-After", "1");
-        res.setHeader("Content-Type", "text/plain; charset=utf-8");
-        res.end("Plugin runtime is starting");
+        respondPlainText(res, 503, "Plugin runtime is starting");
         return;
       }
 
-      res.statusCode = 404;
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end("Not Found");
+      respondNotFound(res);
     } catch (err) {
       console.error("[gateway-http] unhandled error in request handler:", err);
       finishFailedGatewayHttpResponse(res);
@@ -817,6 +840,7 @@ export function attachGatewayUpgradeHandler(opts: {
   rateLimiter?: AuthRateLimiter;
   /** Optional logger for error diagnostics. */
   log?: { warn: (msg: string) => void };
+  workerDesktopTunnels?: WorkerDesktopTunnels;
 }) {
   const {
     httpServer,
@@ -915,6 +939,27 @@ export function attachGatewayUpgradeHandler(opts: {
         ) {
           return;
         }
+      }
+      if (requestPath === "/worker-desktop/observe") {
+        if (!opts.workerDesktopTunnels) {
+          writeGatewayUpgradeServiceUnavailable(socket, "desktop observe unavailable");
+          socket.destroy();
+          return;
+        }
+        // Desktop observers are long-lived Gateway sockets, so they obey the same
+        // suspension/restart admission boundary as core upgrades. Without this a
+        // drained Gateway would keep accepting new desktop streams.
+        if (isGatewayWorkAdmissionClosed()) {
+          writeGatewayUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
+          socket.destroy();
+          return;
+        }
+        const { handleWorkerDesktopUpgrade } =
+          await import("./worker-environments/desktop-observe.js");
+        handleWorkerDesktopUpgrade(req, socket, head, {
+          tunnels: opts.workerDesktopTunnels,
+        });
+        return;
       }
       // Plugin-owned upgrade routes have already had the opportunity to claim the socket.
       // Core Gateway upgrades must stop at the HTTP boundary so a client cannot hold an

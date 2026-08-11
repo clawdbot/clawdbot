@@ -24,6 +24,7 @@ import type {
   BundledChannelLegacyStateMigrationDetector,
   BundledEntryModuleLoadOptions,
 } from "./channel-entry-contract.types.js";
+import { createCachedLazyValueGetter } from "./lazy-value.js";
 
 export type AnyAgentTool = import("../plugins/types.js").AnyAgentTool;
 export type OpenClawPluginApi = import("../plugins/types.js").OpenClawPluginApi;
@@ -71,6 +72,10 @@ type DefineBundledChannelSetupEntryOptions = {
   plugin: BundledEntryModuleRef;
   secrets?: BundledEntryModuleRef;
   runtime?: BundledEntryModuleRef;
+  /**
+   * @deprecated Export stateMigrations from the plugin doctor contract instead.
+   * Removal plan: remove the setup-entry adapter after the 2027.1 external-plugin migration window.
+   */
   legacyStateMigrations?: BundledEntryModuleRef;
   legacySessionSurface?: BundledEntryModuleRef;
   registerSetupRuntime?: (api: OpenClawPluginApi) => void;
@@ -79,6 +84,10 @@ type DefineBundledChannelSetupEntryOptions = {
 
 /** Feature flags exposed by bundled setup entries for optional migration/session surfaces. */
 export type BundledChannelSetupEntryFeatures = {
+  /**
+   * @deprecated Declare doctorContract.stateMigrations in openclaw.plugin.json instead.
+   * Removal plan: remove the setup-entry adapter after the 2027.1 external-plugin migration window.
+   */
   legacyStateMigrations?: boolean;
   legacySessionSurfaces?: boolean;
 };
@@ -94,7 +103,7 @@ export type BundledChannelEntryContract<TPlugin = ChannelPlugin> = {
   id: string;
   name: string;
   description: string;
-  configSchema: ChannelEntryConfigSchema<TPlugin>;
+  configSchema: ChannelConfigSchema;
   features?: BundledChannelEntryFeatures;
   register: (api: OpenClawPluginApi) => void;
   loadChannelPlugin: (options?: BundledEntryModuleLoadOptions) => TPlugin;
@@ -134,7 +143,9 @@ const resolvedModulePaths = new Map<string, string>();
 const loadedModuleExports = new Map<string, unknown>();
 const disableBundledEntrySourceFallbackEnv = "OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK";
 
-function isTruthyEnvFlag(value: string | undefined): boolean {
+function isBundledEntrySourceFallbackDisabled(value: string | undefined): boolean {
+  // Presence-based disable is a shipped operator contract; canonical opt-in
+  // truthiness intentionally does not apply to this packaging flag.
   return value !== undefined && !/^(?:0|false)$/iu.test(value.trim());
 }
 
@@ -235,7 +246,7 @@ function resolveBundledEntryModuleCandidates(
   if (!importerPath.startsWith(distExtensionsRoot)) {
     return candidates;
   }
-  if (isTruthyEnvFlag(process.env[disableBundledEntrySourceFallbackEnv])) {
+  if (isBundledEntrySourceFallbackDisabled(process.env[disableBundledEntrySourceFallbackEnv])) {
     return candidates;
   }
 
@@ -297,7 +308,9 @@ function formatBundledEntryModuleOpenFailure(params: {
 }
 
 function createBundledEntryModulePathCacheKey(importMetaUrl: string, specifier: string): string {
-  const sourceFallbackDisabled = isTruthyEnvFlag(process.env[disableBundledEntrySourceFallbackEnv]);
+  const sourceFallbackDisabled = isBundledEntrySourceFallbackDisabled(
+    process.env[disableBundledEntrySourceFallbackEnv],
+  );
   return `${sourceFallbackDisabled ? "1" : "0"}\0${importMetaUrl}\0${specifier}`;
 }
 
@@ -485,10 +498,7 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
   registerFull,
   registerCapabilities,
 }: DefineBundledChannelEntryOptions<TPlugin>): BundledChannelEntryContract<TPlugin> {
-  const resolvedConfigSchema: ChannelEntryConfigSchema<TPlugin> =
-    typeof configSchema === "function"
-      ? configSchema()
-      : ((configSchema ?? emptyChannelConfigSchema()) as ChannelEntryConfigSchema<TPlugin>);
+  const getConfigSchema = createCachedLazyValueGetter(configSchema ?? emptyChannelConfigSchema);
   const loadChannelPlugin = (options?: BundledEntryModuleLoadOptions) =>
     loadBundledEntryExportSync<TPlugin>(importMetaUrl, plugin, options);
   const loadChannelOutbound = outbound
@@ -530,7 +540,9 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
     id,
     name,
     description,
-    configSchema: resolvedConfigSchema,
+    get configSchema() {
+      return getConfigSchema();
+    },
     ...(features || accountInspect
       ? { features: { ...features, ...(accountInspect ? { accountInspect: true } : {}) } }
       : {}),

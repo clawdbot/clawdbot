@@ -7,9 +7,12 @@ import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { normalizeProviderId } from "../model-selection.js";
-import { shouldSuppressBuiltInModel, shouldUnconditionallySuppress } from "../model-suppression.js";
+import {
+  shouldSuppressBuiltInModelCore,
+  shouldUnconditionallySuppress,
+} from "../model-suppression.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
-import { resolveConfiguredFallbackModel } from "./model.configured-fallback.js";
+import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
 import {
   applyConfiguredProviderOverrides,
   findInlineModelMatch,
@@ -142,7 +145,7 @@ export function resolveExplicitModelWithRegistry(params: {
         : undefined;
     const effectiveBaseUrl = configuredBaseUrl ?? discoveredBaseUrl;
     if (
-      shouldSuppressBuiltInModel({
+      shouldSuppressBuiltInModelCore({
         provider,
         id: modelId,
         ...(cfg ? { config: cfg } : {}),
@@ -186,7 +189,7 @@ export function resolveExplicitModelWithRegistry(params: {
     return undefined;
   }
   if (
-    shouldSuppressBuiltInModel({
+    shouldSuppressBuiltInModelCore({
       provider,
       id: modelId,
       ...(cfg ? { config: cfg } : {}),
@@ -463,7 +466,7 @@ export function resolveModelWithPreparedRegistry(
   }
   return params.skipConfiguredFallback
     ? undefined
-    : resolveConfiguredFallbackModel({
+    : buildConfiguredFallbackModel({
         ...params,
         providerMetadataOwners: getRegistryProviderMetadataOwners(params.modelRegistry),
       });

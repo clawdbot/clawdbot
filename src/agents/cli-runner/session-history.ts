@@ -8,7 +8,7 @@ import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coer
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import {
@@ -463,7 +463,7 @@ function resolveSafeCliSessionFile(params: {
     agentId: sessionAgentId ?? defaultAgentId,
     storePath: params.config?.session?.store,
   });
-  const sessionFile = resolveSessionFilePath(
+  const sessionFile = resolveSessionFilePathCore(
     params.sessionId,
     { sessionFile: params.sessionFile },
     pathOptions,

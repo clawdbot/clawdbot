@@ -19,15 +19,15 @@ import {
   resolveAgentIdFromSessionKey,
   resolveExplicitAgentSessionKey,
 } from "../../config/sessions/main-session.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   evaluateSessionFreshness,
   resolveSessionResetPolicy,
 } from "../../config/sessions/reset-policy.js";
 import { resolveChannelResetConfig, resolveSessionResetType } from "../../config/sessions/reset.js";
-import { listSessionEntries } from "../../config/sessions/session-accessor.js";
+import { listSessionEntriesCore } from "../../config/sessions/session-accessor.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   classifySessionKeyShape,
@@ -41,7 +41,7 @@ import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
 import { clearAllCliSessions } from "../cli-session.js";
-import { transitionMainSessionRecovery } from "../main-session-recovery-state.js";
+import { transitionMainSessionRecovery } from "../main-session-recovery/main-session-recovery-state.js";
 
 /** Resolved command session identity plus backing store metadata. */
 type SessionResolution = {
@@ -67,6 +67,7 @@ export function clearRotatedSessionMetadata(entry: SessionEntry): SessionEntry {
     ...entry,
     sessionFile: undefined,
     status: undefined,
+    lifecycleRunId: undefined,
     startedAt: undefined,
     endedAt: undefined,
     runtimeMs: undefined,
@@ -111,7 +112,7 @@ function loadCommandSessionStore(params: {
   storePath: string;
 }): Record<string, SessionEntry> {
   return Object.fromEntries(
-    listSessionEntries({
+    listSessionEntriesCore({
       storePath: params.storePath,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.clone === false ? { clone: false } : {}),
@@ -170,7 +171,7 @@ function collectSessionIdMatchesForRequest(opts: {
     if (agentId === opts.storeAgentId) {
       continue;
     }
-    const candidateStorePath = resolveStorePath(opts.cfg.session?.store, { agentId });
+    const candidateStorePath = resolveSessionStorePathCore(opts.cfg.session?.store, { agentId });
     addMatches(
       loadCommandSessionStore({
         agentId,
@@ -198,7 +199,7 @@ export function resolveStoredSessionKeyForSessionId(opts: {
   const storeAgentId = opts.agentId?.trim()
     ? normalizeAgentId(opts.agentId)
     : resolveDefaultAgentId(opts.cfg);
-  const storePath = resolveStorePath(opts.cfg.session?.store, {
+  const storePath = resolveSessionStorePathCore(opts.cfg.session?.store, {
     agentId: storeAgentId,
   });
   const sessionStore = loadCommandSessionStore({
@@ -221,7 +222,7 @@ export function resolveStoredSessionKeyForSessionId(opts: {
 }
 
 /** Resolves the session key/store targeted by one command request. */
-export function resolveSessionKeyForRequest(opts: {
+export function resolveSessionKeyForRequestCore(opts: {
   cfg: OpenClawConfig;
   to?: string;
   sessionId?: string;
@@ -254,7 +255,7 @@ export function resolveSessionKeyForRequest(opts: {
       ? (requestedAgentId ?? defaultAgentId)
       : resolveAgentIdFromSessionKey(explicitSessionKey, defaultAgentId)
     : (requestedAgentId ?? defaultAgentId);
-  const storePath = resolveStorePath(sessionCfg?.store, {
+  const storePath = resolveSessionStorePathCore(sessionCfg?.store, {
     agentId: storeAgentId,
   });
   const loadOptions = opts.clone === false ? { clone: false as const } : undefined;
@@ -329,7 +330,7 @@ export function resolveSession(opts: {
   clone?: boolean;
 }): SessionResolution {
   const sessionCfg = opts.cfg.session;
-  const { sessionKey, sessionStore, storePath } = resolveSessionKeyForRequest({
+  const { sessionKey, sessionStore, storePath } = resolveSessionKeyForRequestCore({
     cfg: opts.cfg,
     to: opts.to,
     sessionId: opts.sessionId,

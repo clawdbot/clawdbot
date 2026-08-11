@@ -3,7 +3,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { publishTranscriptUpdate } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
@@ -245,17 +245,23 @@ function buildContextEngineMaintenanceRuntimeContext(
     ...(params.allowDeferredCompactionExecution ? { allowDeferredCompactionExecution: true } : {}),
     rewriteTranscriptEntries: async (request) => {
       const runtimeAgentId = params.sessionTarget?.agentId ?? params.agentId;
+      const runtimeSessionKey = normalizeOptionalString(
+        params.sessionTarget?.sessionKey ?? params.sessionKey,
+      );
+      if (!runtimeSessionKey) {
+        throw new Error("Context-engine transcript rewrite requires a session key");
+      }
       const runtimeStorePath =
         params.sessionTarget?.storePath ??
         (runtimeAgentId
-          ? resolveStorePath(params.config?.session?.store, { agentId: runtimeAgentId })
+          ? resolveSessionStorePathCore(params.config?.session?.store, { agentId: runtimeAgentId })
           : undefined);
       let runtimeTarget: Awaited<ReturnType<typeof resolveRuntimeTranscriptReadTarget>> | undefined;
       let sessionManager = params.sessionManager;
       if (!sessionManager) {
         runtimeTarget = await resolveRuntimeTranscriptReadTarget({
           sessionId: params.sessionTarget?.sessionId ?? params.sessionId,
-          sessionKey: params.sessionTarget?.sessionKey ?? params.sessionKey ?? params.sessionId,
+          sessionKey: runtimeSessionKey,
           sessionFile: params.sessionFile,
           ...(runtimeAgentId ? { agentId: runtimeAgentId } : {}),
           ...(runtimeStorePath ? { storePath: runtimeStorePath } : {}),
@@ -463,7 +469,9 @@ function scheduleDeferredTurnMaintenance(
       sessionKey,
     });
   if (!task) {
-    log.warn("[context-engine] failed to create deferred turn maintenance task", { sessionKey });
+    log.warn("[context-engine] failed to create deferred turn maintenance task", {
+      sessionKey,
+    });
     return undefined;
   }
   const lane = `${TURN_MAINTENANCE_LANE_PREFIX}${sessionKey}`;
@@ -549,10 +557,17 @@ export async function runContextEngineMaintenance(
 
   if (shouldDefer) {
     try {
+      const sessionKey = normalizeOptionalString(params.sessionKey);
+      if (!sessionKey) {
+        params.onDeferredMaintenanceFailure?.(
+          new Error("Deferred context-engine maintenance requires a session key"),
+        );
+        return undefined;
+      }
       const deferred = scheduleDeferredTurnMaintenance({
         ...params,
         contextEngine,
-        sessionKey: params.sessionKey ?? params.sessionId,
+        sessionKey,
         disposeContextEngineAfterMaintenance: params.disposeDeferredContextEngineAfterMaintenance,
         onScheduleFailure: params.onDeferredMaintenanceFailure,
       });

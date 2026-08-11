@@ -9,8 +9,8 @@ import {
   formatValidationErrors,
   validateChatSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { isBtwRequestText } from "../../auto-reply/reply/btw-command.js";
-import type { QueueMode } from "../../auto-reply/reply/queue/types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { normalizeInputProvenance } from "../../sessions/input-provenance.js";
 import { isBrowserCopilotClient, isOperatorUiClient } from "../../utils/message-channel.js";
@@ -54,6 +54,7 @@ type ChatSendRequestParams = {
   systemProvenanceReceipt?: string;
   suppressCommandInterpretation?: boolean;
   expectedLeafEntryId?: string | null;
+  expectedRunId?: string;
   expectedSessionRoutingContract?: string;
   idempotencyKey: string;
 };
@@ -78,7 +79,7 @@ export type NormalizedChatSendRequest = {
 
 type NormalizeChatSendRequestResult =
   | { ok: true; value: NormalizedChatSendRequest }
-  | { ok: false; error: string };
+  | { ok: false; error: string; reason?: string };
 
 /** Validate and normalize the wire request before session or lifecycle work begins. */
 export function normalizeChatSendRequest(params: {

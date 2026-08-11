@@ -3,6 +3,7 @@ import type { AgentsListResult } from "../../api/types.ts";
 import { fetchAssistantIdentity } from "../../app/assistant-identity.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
+import { t } from "../../i18n/index.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import {
   canonicalUiSessionKeyForPersistence,
@@ -12,10 +13,12 @@ import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
 import {
+  moveQueuedChatMessage,
   resumeStoredChatOutboxes,
   retryQueuedChatMessage,
   steerQueuedChatMessage,
 } from "./chat-send-actions.ts";
+import { setChatError } from "./chat-send-queue-state.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { retireChatModelSelectionOwnership } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -24,6 +27,7 @@ import {
   handleChatInputHistoryKey,
   resetChatInputHistoryNavigation,
 } from "./input-history.ts";
+import { beginQueuedMessageEdit, cancelQueuedMessageEdit } from "./queued-message-edit.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import { handleAbortChat } from "./run-lifecycle.ts";
 import { handleChatScroll, resetChatScroll, scheduleChatScroll } from "./scroll.ts";
@@ -214,8 +218,6 @@ export function createPageState(
     eventLogBuffer: [],
     basePath: context.basePath,
     chatNewMessagesBelow: false,
-    chatViewMenuOpen: false,
-    chatViewMenuTrigger: null,
     chatLocalInputHistoryBySession: {},
     chatInputHistorySessionKey: null,
     chatInputHistoryItems: null,
@@ -263,7 +265,8 @@ export function createPageState(
   state.handleChatScroll = (event) => handleChatScroll(state, event);
   state.handleChatDraftChange = (next) => handleChatDraftChange(state, next);
   state.handleChatInputHistoryKey = (input) => handleChatInputHistoryKey(state, input);
-  state.applySettings = (next) => {
+  state.applySettings = (patch) => {
+    const next = { ...state.settings, ...patch };
     state.settings = patchSettings({
       chatShowThinking: next.chatShowThinking,
       chatShowToolCalls: next.chatShowToolCalls,
@@ -271,26 +274,6 @@ export function createPageState(
       chatSendShortcut: next.chatSendShortcut,
     });
     renderLifecycle.invalidate();
-  };
-  state.setChatViewMenuOpen = (open, options) => {
-    if (open) {
-      state.chatViewMenuTrigger = options?.trigger ?? state.chatViewMenuTrigger;
-      state.chatViewMenuOpen = true;
-      renderLifecycle.invalidate();
-      return;
-    }
-    const focusTarget = options?.restoreFocus ? state.chatViewMenuTrigger : null;
-    state.chatViewMenuOpen = false;
-    state.chatViewMenuTrigger = null;
-    renderLifecycle.invalidate();
-    if (!(focusTarget instanceof HTMLElement) || !focusTarget.isConnected) {
-      return;
-    }
-    requestAnimationFrame(() => {
-      if (focusTarget.isConnected) {
-        focusTarget.focus();
-      }
-    });
   };
   attachChatRealtimeActions(state);
   state.loadAssistantIdentity = () => loadPageAssistantIdentity(state);
@@ -311,6 +294,20 @@ export function createPageState(
   };
   state.steerQueuedChatMessage = async (id) => {
     await steerQueuedChatMessage(state, id);
+    renderLifecycle.invalidate();
+  };
+  state.moveQueuedChatMessage = (id, toIndex) => {
+    moveQueuedChatMessage(state, id, toIndex);
+    renderLifecycle.invalidate();
+  };
+  state.editQueuedChatMessage = (id) => {
+    if (beginQueuedMessageEdit(state, id) === "composer-busy") {
+      setChatError(state, t("chat.queue.editNeedsEmptyComposer"));
+    }
+    renderLifecycle.invalidate();
+  };
+  state.cancelQueuedChatMessageEdit = () => {
+    cancelQueuedMessageEdit(state);
     renderLifecycle.invalidate();
   };
   state.updateSidebarLayout = (layout) => {

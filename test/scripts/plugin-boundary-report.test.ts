@@ -87,4 +87,34 @@ describe("plugin-boundary-report", () => {
     expect(result.stdout).toMatch(/blocker=.*retain the public/iu);
     expect(result.stdout).toMatch(/readerRefs=\d+ readers=/u);
   });
+
+  it("reports the inbound reply dispatch major-version gate as date-ineligible", () => {
+    const jsonResult = createPluginBoundaryReport(["--json", "--owner", "channel"]);
+    const report = JSON.parse(jsonResult.stdout) as {
+      compat?: {
+        records?: Array<{
+          code?: unknown;
+          removeAfter?: unknown;
+          removalGate?: unknown;
+          eligibleForRemoval?: unknown;
+        }>;
+      };
+    };
+    const record = report.compat?.records?.find(
+      (candidate) => candidate.code === "plugin-sdk-inbound-reply-dispatch-subpath",
+    );
+
+    expect(jsonResult.exitCode).toBe(0);
+    expect(record).toMatchObject({
+      removalGate: "next-plugin-sdk-major",
+      eligibleForRemoval: false,
+    });
+    expect(record?.removeAfter).toBeUndefined();
+
+    const textResult = createPluginBoundaryReport(["--owner", "channel"]);
+    expect(textResult.stdout).toContain(
+      "next-plugin-sdk-major plugin-sdk-inbound-reply-dispatch-subpath",
+    );
+    expect(textResult.stdout).not.toContain("no-date plugin-sdk-inbound-reply-dispatch-subpath");
+  });
 });

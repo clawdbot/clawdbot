@@ -23,7 +23,7 @@ import {
 } from "../../agents/utility-model.js";
 import { resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
-import { resolveAdvertisedLanHost } from "../../infra/advertised-lan-host.js";
+import { resolveAdvertisedLanHostCore } from "../../infra/advertised-lan-host.js";
 import {
   loadOrCreateProcessDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -48,7 +48,7 @@ let advertisedLanHostPromise: Promise<string | null> | null = null;
 function resolveCachedAdvertisedLanHost(): Promise<string | null> {
   // Route discovery may spawn a platform command. Keep the result process-stable
   // so each visible Settings page does not repeat that work every ten seconds.
-  advertisedLanHostPromise ??= resolveAdvertisedLanHost().catch(() => null);
+  advertisedLanHostPromise ??= resolveAdvertisedLanHostCore().catch(() => null);
   return advertisedLanHostPromise;
 }
 

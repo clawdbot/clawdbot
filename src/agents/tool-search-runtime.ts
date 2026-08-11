@@ -216,9 +216,17 @@ export function readToolSearchCallArgs(
   catalog?: ToolSearchCatalogSession,
 ): { id: string; input: unknown } {
   const params = asToolParamsRecord(args);
+  const dottedInput = Object.fromEntries(
+    Object.entries(params)
+      .filter(([key]) => key.startsWith("args.") && key.length > 5)
+      .map(([key, value]) => [key.slice(5), value]),
+  );
   const nestedInput = params.args ?? params.input;
   if (nestedInput != null) {
-    return { id: readToolSearchId(params), input: nestedInput };
+    return {
+      id: readToolSearchId(params),
+      input: isRecord(nestedInput) ? { ...dottedInput, ...nestedInput } : nestedInput,
+    };
   }
 
   const selectorKeys = ["id", "toolId", "name"] as const;
@@ -254,10 +262,11 @@ export function readToolSearchCallArgs(
     ...matchingSelectors.map(({ key }) => key),
     ...(matchingSelector ? [] : [selector ?? "id"]),
   ]);
+  const targetInputEntries = Object.entries(params).filter(([key]) => !wrapperKeys.has(key));
   const flattenedInput = Object.fromEntries(
-    Object.entries(params).filter(([key]) => !wrapperKeys.has(key)),
+    targetInputEntries.filter(([key]) => !(key.startsWith("args.") && key.length > 5)),
   );
-  return { id, input: flattenedInput };
+  return { id, input: { ...dottedInput, ...flattenedInput } };
 }
 
 function getTelemetry(catalog: ToolSearchCatalogSession) {

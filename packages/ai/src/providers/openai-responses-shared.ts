@@ -12,8 +12,27 @@ import type {
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
 import { clampThinkingLevel } from "../model-utils.js";
+import type { BaseOpenAIStreamOptions } from "../provider-options.js";
+import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
+import {
+  buildOpenAIResponsesCompactionReplayPlan,
+  buildOpenAIResponsesReasoningReplayMetadata,
+  buildOpenAIResponsesReplayContext,
+  suppressOpenAIResponsesCompaction,
+  type OpenAIResponsesReplayMode,
+} from "../transports/openai-responses-compaction-replay.js";
+import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
+import {
+  createResponsesStreamWithEncryptedContentRetry,
+  prepareOpenAIResponsesReasoningItemForReplay,
+  readOpenAIResponsesReasoningReplayBlockMetadata,
+} from "../transports/openai-responses-replay-internal.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
-import { transportAbortError } from "../transports/transport-stream-shared.js";
+import { createOpenAIResponseHook } from "../transports/openai-transport-shared.js";
+import {
+  transportAbortError,
+  withProviderResponseHook,
+} from "../transports/transport-stream-shared.js";
 import type {
   Api,
   AssistantMessage,
@@ -26,7 +45,7 @@ import type {
 } from "../types.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
-import { headersToRecord } from "../utils/headers.js";
+import { projectProviderError } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import {
   createFirstStreamEventAbortController,
@@ -46,7 +65,6 @@ import {
   extractToolResultText,
   isImageWithMediaPayload,
 } from "./tool-result-text.js";
-import { transformMessages } from "./transform-messages.js";
 
 // =============================================================================
 // Utilities
@@ -70,19 +88,6 @@ function sanitizeToolResultText(text: string, fallback: string): string {
 
 type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
 type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> & { id?: string };
-function normalizeResponsesReasoningReplayItem(params: {
-  item: ReplayableResponseReasoningItem;
-  replayResponsesItemIds: boolean;
-}): ReplayableResponseReasoningItem {
-  const next = { ...(params.item as ReplayableResponseReasoningItem & Record<string, unknown>) };
-  if (!Array.isArray(next.summary)) {
-    next.summary = [];
-  }
-  if (!params.replayResponsesItemIds) {
-    delete next.id;
-  }
-  return next as ReplayableResponseReasoningItem;
-}
 
 function parseTextSignature(
   signature: string | undefined,
@@ -141,6 +146,9 @@ interface OpenAIResponsesStreamOptions {
 interface ConvertResponsesMessagesOptions {
   includeSystemPrompt?: boolean;
   replayResponsesItemIds?: boolean;
+  sessionId?: string;
+  authProfileId?: string;
+  replayMode?: OpenAIResponsesReplayMode;
 }
 export { convertResponsesToolPayload };
 
@@ -168,8 +176,9 @@ type ResponsesStreamClient = {
 
 type ResponsesLifecycleStreamOptions = Pick<
   StreamOptions,
-  "signal" | "timeoutMs" | "maxRetries" | "onPayload" | "onResponse"
+  "signal" | "timeoutMs" | "maxRetries" | "onPayload" | "onResponse" | "sessionId"
 > &
+  Pick<BaseOpenAIStreamOptions, "authProfileId"> &
   FirstStreamEventInternalOptions;
 
 type OpenAIResponsesProcessStreamOptions = OpenAIResponsesStreamOptions &
@@ -196,6 +205,8 @@ type ResponsesCommonParamsOptions = Pick<StreamOptions, "maxTokens" | "temperatu
   reasoningSummary?: ResponsesReasoningSummary;
 };
 
+type ResponsesLifecycleRequest = OpenAIResponsesRequestParams;
+
 // =============================================================================
 // Message conversion
 // =============================================================================
@@ -208,6 +219,10 @@ export function convertResponsesMessages<TApi extends Api>(
 ): ResponseInput {
   const messages: ResponseInput = [];
   const shouldReplayResponsesItemIds = options?.replayResponsesItemIds ?? true;
+  const replayContext = buildOpenAIResponsesReplayContext(model, {
+    sessionId: options?.sessionId,
+    authProfileId: options?.authProfileId,
+  });
 
   const normalizeIdPart = (part: string): string => {
     const sanitized = part.replace(/[^a-zA-Z0-9_-]/g, "_");
@@ -246,7 +261,12 @@ export function convertResponsesMessages<TApi extends Api>(
     return `${normalizedCallId}|${normalizedItemId}`;
   };
 
-  const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
+  const replayPlan = buildOpenAIResponsesCompactionReplayPlan(context.messages, model, {
+    sessionId: options?.sessionId,
+    authProfileId: options?.authProfileId,
+    mode: options?.replayMode,
+  });
+  const transformedMessages = transformMessages(replayPlan.messages, model, normalizeToolCallId);
 
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
   if (includeSystemPrompt && context.systemPrompt) {
@@ -263,6 +283,9 @@ export function convertResponsesMessages<TApi extends Api>(
         },
       ],
     });
+  }
+  if (replayPlan.compaction) {
+    messages.push(replayPlan.compaction);
   }
 
   let msgIndex = 0;
@@ -310,11 +333,24 @@ export function convertResponsesMessages<TApi extends Api>(
       for (const block of msg.content) {
         if (block.type === "thinking") {
           if (block.thinkingSignature) {
-            const reasoningItem = normalizeResponsesReasoningReplayItem({
-              item: JSON.parse(block.thinkingSignature) as ReplayableResponseReasoningItem,
-              replayResponsesItemIds: shouldReplayResponsesItemIds,
-            });
-            output.push(reasoningItem as ResponseInputItem);
+            const reasoningItem = JSON.parse(
+              block.thinkingSignature,
+            ) as ReplayableResponseReasoningItem;
+            const blockMetadata = readOpenAIResponsesReasoningReplayBlockMetadata(
+              block as unknown as Record<string, unknown>,
+            );
+            // Unannotated items retain the shipped public-provider stateless replay contract.
+            // Once capture provenance exists, ciphertext is fenced to that exact route.
+            const replayableReasoningItem = prepareOpenAIResponsesReasoningItemForReplay(
+              reasoningItem,
+              replayContext,
+              blockMetadata,
+              { preserveUnattributedEncryptedContent: true },
+            );
+            if (!shouldReplayResponsesItemIds) {
+              delete replayableReasoningItem.id;
+            }
+            output.push(replayableReasoningItem as ResponseInputItem);
             previousReplayItemWasReasoning = true;
           }
         } else if (block.type === "text") {
@@ -562,34 +598,55 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
   model: Model<TApi>;
   output: AssistantMessage;
   options?: ResponsesLifecycleStreamOptions;
-  createClient: () => ResponsesStreamClient;
-  buildParams: () => ResponseCreateParamsStreaming;
+  resolveRequestModel?: (model: Model<TApi>) => Model<TApi>;
+  createClient: (model: Model<TApi>) => ResponsesStreamClient;
+  buildParams: (
+    model: Model<TApi>,
+    replayMode: OpenAIResponsesReplayMode,
+  ) => ResponsesLifecycleRequest;
   processStreamOptions?: OpenAIResponsesProcessStreamOptions;
-  formatError: (error: unknown) => string;
 }): Promise<void> {
-  const { stream, model, output, options } = params;
+  const { stream, output, options } = params;
 
   let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
   try {
-    const client = params.createClient();
-    let requestParams = params.buildParams();
-    const nextParams = await options?.onPayload?.(requestParams, model);
-    if (nextParams !== undefined) {
-      requestParams = nextParams as ResponseCreateParamsStreaming;
-    }
+    const model = params.resolveRequestModel?.(params.model) ?? params.model;
+    const client = params.createClient(model);
+    const buildRequest = async (replayMode: OpenAIResponsesReplayMode) => {
+      let request = params.buildParams(model, replayMode);
+      const nextRequest = await options?.onPayload?.(request, model);
+      if (nextRequest !== undefined) {
+        request = nextRequest as ResponsesLifecycleRequest;
+      }
+      return request;
+    };
+    const requestParams = await buildRequest("checkpoint");
 
     firstEventAbort = createFirstStreamEventAbortController(options?.signal);
-    const { data: openaiStream, response } = await client.responses
-      .create(requestParams, {
-        ...buildResponsesRequestOptions(options),
-        signal: firstEventAbort.signal,
-      })
-      .withResponse();
-    await options?.onResponse?.(
-      { status: response.status, headers: headersToRecord(response.headers) },
-      model,
+    const { stream: openaiStream, response } = await createResponsesStreamWithEncryptedContentRetry(
+      {
+        client: client as never,
+        request: requestParams as never,
+        requestOptions: {
+          ...buildResponsesRequestOptions(options),
+          signal: firstEventAbort.signal,
+        },
+        model,
+        buildFullHistoryRequest: () => buildRequest("full-history"),
+        onCompactionRejected: () =>
+          suppressOpenAIResponsesCompaction(output, model, {
+            sessionId: options?.sessionId,
+            authProfileId: options?.authProfileId,
+          }),
+      },
     );
-    stream.push({ type: "start", partial: output });
+    const hookedOpenAIStream = withProviderResponseHook({
+      stream: openaiStream,
+      signal: firstEventAbort.signal,
+      abort: firstEventAbort.abort,
+      hook: createOpenAIResponseHook(options?.onResponse, response, model),
+      onReady: () => stream.push({ type: "start", partial: output }),
+    });
 
     const firstEventTimeoutMs = getFirstStreamEventTimeoutMs(options);
     const onFirstEventTimeout = getFirstStreamEventTimeoutHandler(options);
@@ -608,7 +665,13 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
             signal: params.processStreamOptions?.signal ?? options?.signal,
           }
         : undefined;
-    await processResponsesStream(openaiStream, output, stream, model, processStreamOptions);
+    await processResponsesStream(hookedOpenAIStream, output, stream, model, {
+      ...processStreamOptions,
+      reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
+        sessionId: options?.sessionId,
+        authProfileId: options?.authProfileId,
+      }),
+    });
 
     if (options?.signal?.aborted) {
       throw transportAbortError(options.signal);
@@ -622,9 +685,9 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     stream.end();
   } catch (error) {
     cleanStreamingScratchBuffers(output);
-    output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-    output.errorMessage = params.formatError(error);
-    stream.push({ type: "error", reason: output.stopReason, error: output });
+    const terminal = projectProviderError(error, options?.signal);
+    Object.assign(output, terminal);
+    stream.push({ type: "error", reason: terminal.stopReason, error: output });
     stream.end();
   } finally {
     firstEventAbort?.dispose();

@@ -134,10 +134,6 @@ export function asProviderConfigMap(value: unknown): Record<string, unknown> {
     : {};
 }
 
-export function hasOwnProperty(value: object, key: string): boolean {
-  return Object.hasOwn(value, key);
-}
-
 function normalizeProviderConfigMap(
   value: unknown,
 ): Record<string, SpeechProviderConfig> | undefined {
@@ -281,7 +277,7 @@ function resolveTtsPersonaIdFromPrefs(
   config: ResolvedTtsConfig,
   prefs: TtsUserPrefs,
 ): string | undefined {
-  if (prefs.tts && hasOwnProperty(prefs.tts, "persona")) {
+  if (prefs.tts && Object.hasOwn(prefs.tts, "persona")) {
     return normalizeTtsPersonaId(prefs.tts.persona);
   }
   return normalizeTtsPersonaId(config.persona);
@@ -295,6 +291,11 @@ export function resolveTtsPersonaFromPrefs(
   return personaId ? config.personas[personaId] : undefined;
 }
 
+export type TtsProviderPreference = {
+  provider: TtsProvider;
+  source: "prefs" | "persona" | "config";
+};
+
 type ResolvedTtsSettingsSnapshot = {
   autoMode: TtsAutoMode;
   config: ResolvedTtsConfig;
@@ -302,6 +303,7 @@ type ResolvedTtsSettingsSnapshot = {
   persona?: ResolvedTtsPersona;
   personaId?: string;
   preferredProvider?: TtsProvider;
+  providerPreference?: TtsProviderPreference;
   prefsPath: string;
   summarize: boolean;
 };
@@ -322,12 +324,19 @@ export function resolveTtsSettingsSnapshot(params: {
   const prefs = readTtsPrefs(prefsPath);
   const personaId = resolveTtsPersonaIdFromPrefs(config, prefs);
   const persona = personaId ? config.personas[personaId] : undefined;
-  const preferredProvider =
-    normalizeConfiguredSpeechProviderId(prefs.tts?.provider) ??
-    normalizeConfiguredSpeechProviderId(persona?.provider) ??
-    (config.providerSource === "config"
+  const prefsProvider = normalizeConfiguredSpeechProviderId(prefs.tts?.provider);
+  const personaProvider = normalizeConfiguredSpeechProviderId(persona?.provider);
+  const configuredProvider =
+    config.providerSource === "config"
       ? (normalizeConfiguredSpeechProviderId(config.provider) ?? config.provider)
-      : undefined);
+      : undefined;
+  const providerPreference: TtsProviderPreference | undefined = prefsProvider
+    ? { provider: prefsProvider, source: "prefs" }
+    : personaProvider
+      ? { provider: personaProvider, source: "persona" }
+      : configuredProvider
+        ? { provider: configuredProvider, source: "config" }
+        : undefined;
   return {
     autoMode:
       normalizeTtsAutoMode(params.sessionAuto) ?? resolveTtsAutoModeFromPrefs(prefs) ?? config.auto,
@@ -335,7 +344,9 @@ export function resolveTtsSettingsSnapshot(params: {
     maxLength: prefs.tts?.maxLength ?? DEFAULT_TTS_MAX_LENGTH,
     ...(persona ? { persona } : {}),
     ...(personaId ? { personaId } : {}),
-    ...(preferredProvider ? { preferredProvider } : {}),
+    ...(providerPreference
+      ? { preferredProvider: providerPreference.provider, providerPreference }
+      : {}),
     prefsPath,
     summarize: prefs.tts?.summarize ?? DEFAULT_TTS_SUMMARIZE,
   };

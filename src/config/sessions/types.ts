@@ -6,8 +6,10 @@ import type {
   SessionAcpMeta,
 } from "@openclaw/acp-core/types";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
+import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { CronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
@@ -16,6 +18,10 @@ import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
 import type { MainRestartRecoveryState } from "./main-session-recovery.types.js";
+import type {
+  PendingDeliveryNoticeState,
+  PendingFinalDeliveryState,
+} from "./pending-final-delivery-types.js";
 import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
 import type {
   SessionCreatedActor,
@@ -26,6 +32,7 @@ import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.
 
 export type SessionScope = "per-sender" | "global";
 export type SessionChatType = ChatType;
+export const SESSION_TOTAL_TOKENS_VERSION = 1 as const;
 type SessionVisibility = "shared" | "read-only" | "suggest" | "draft";
 
 export type SessionToolOverrides = {
@@ -58,12 +65,6 @@ export type SessionDeliveryState =
       context: DeliveryContext;
       origin: SessionOrigin;
     };
-
-type PendingFinalDeliveryState = {
-  createdAt: number;
-  context?: DeliveryContext;
-  intentId?: string;
-} & ({ kind: "replayable"; text: string } | { kind: "transport-only" });
 
 /**
  * Durable transcript-repair record: an assistant final that was delivered to
@@ -161,6 +162,7 @@ export type SessionCompactionCheckpoint = {
   reason: SessionCompactionCheckpointReason;
   tokensBefore?: number;
   tokensAfter?: number;
+  tokensVersion?: typeof SESSION_TOTAL_TOKENS_VERSION;
   summary?: string;
   firstKeptEntryId?: string;
   preCompaction: SessionCompactionTranscriptReference;
@@ -291,11 +293,6 @@ export type SessionGoal = {
   budgetLimitedAt?: number;
 };
 
-export type PendingSkillSuggestion = {
-  skillName: string;
-  detectedAt: number;
-};
-
 export type RestartRecoveryRun = {
   runId: string;
   lifecycleGeneration: string;
@@ -345,8 +342,6 @@ type SessionEntryCore = SessionRestartRecoveryState &
     archivedBy?: SessionCreatedActor;
     /** Timestamp (ms) when the session was pinned for quick access. */
     pinnedAt?: number;
-    /** Custom sidebar icon in the format accepted by the gateway protocol session-icon helper. */
-    icon?: string;
     /** Timestamp (ms) when an operator client last marked the session read. */
     lastReadAt?: number;
     /** Agent-declared sidebar presence; projection drops it after expiresAt. */
@@ -374,6 +369,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     worktree?: { id: string; branch: string; repoRoot: string };
     /** Explicit parent session linkage for dashboard-created child sessions. */
     parentSessionKey?: string;
+    /** Exact parent incarnation captured when this child was created. */
+    parentSessionId?: string;
     /** How this session node came to exist; written once and retained across sessionId rotations. */
     createdVia?: SessionCreatedVia;
     /** Actor that caused node creation, with an optional profile, session, or sender id; written once. */
@@ -410,10 +407,6 @@ type SessionEntryCore = SessionRestartRecoveryState &
     quotaSuspension?: QuotaSuspension;
     /** Core-owned durable goal state for this thread/session. */
     goal?: SessionGoal;
-    /** Durable one-shot Skill Workshop suggestion for the next interactive turn. */
-    pendingSkillSuggestion?: PendingSkillSuggestion;
-    /** Recent durable-instruction fingerprints already processed by Skill Workshop capture. */
-    skillCaptureSignalHashes?: string[];
     /** Timestamp (ms) when the current sessionId first became active. */
     sessionStartedAt?: number;
     /** Stable usage lineage key for transcript-backed rollups across sessionId rotations. */
@@ -429,7 +422,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Accumulated runtime across subagent follow-up runs, persisted after completion. */
     runtimeMs?: number;
     /** Final persisted subagent run status, used after in-memory run archival. */
-    status?: "running" | "done" | "failed" | "killed" | "timeout";
+    status?: SessionRunStatus;
     /** Compact user-facing reason for the latest failed or timed-out run. */
     lastRunError?: string;
     /**
@@ -521,7 +514,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
     groupActivation?: "mention" | "always";
     groupActivationNeedsSystemIntro?: boolean;
     sendPolicy?: "allow" | "deny";
-    queueMode?: "steer" | "followup" | "collect" | "interrupt";
+    queueMode?: QueueMode;
     queueDebounceMs?: number;
     queueCap?: number;
     queueDrop?: "old" | "new" | "summarize";
@@ -529,6 +522,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
     outputTokens?: number;
     totalTokens?: number;
     pendingFinalDelivery?: PendingFinalDeliveryState;
+    pendingDeliveryNotice?: PendingDeliveryNoticeState;
     /**
      * Ordered durable backlog of delivered assistant finals that failed to
      * reach the canonical transcript. Session admission restores each item
@@ -542,6 +536,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
      * totalTokens as stale/unknown for context-utilization displays.
      */
     totalTokensFresh?: boolean;
+    /** Version 1 records totalTokens as the current prompt/context snapshot only. */
+    totalTokensVersion?: typeof SESSION_TOTAL_TOKENS_VERSION;
     estimatedCostUsd?: number;
     cacheRead?: number;
     cacheWrite?: number;
@@ -597,6 +593,10 @@ export interface SessionEntry extends SessionEntryCore {}
 
 /** Internal durable fields excluded from public/plugin session projections. */
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Run that owns the current non-terminal Gateway lifecycle projection. */
+  lifecycleRunId?: string;
+  /** Run admitted by the session lane; overwritten at admission and checked by transcript writes. */
+  activeWriterRunId?: string;
   mainRestartRecovery?: MainRestartRecoveryState;
 };
 
@@ -801,9 +801,7 @@ export function mergeSessionEntryPreserveActivity(
   });
 }
 
-export function resolveSessionTotalTokens(
-  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
-): number | undefined {
+export function resolveSessionTotalTokens(entry?: Pick<SessionEntry, "totalTokens"> | null) {
   const total = entry?.totalTokens;
   if (typeof total !== "number" || !Number.isFinite(total) || total < 0) {
     return undefined;
@@ -812,13 +810,16 @@ export function resolveSessionTotalTokens(
 }
 
 export function resolveFreshSessionTotalTokens(
-  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
+  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion"> | null,
 ): number | undefined {
   const total = resolveSessionTotalTokens(entry);
   if (total === undefined) {
     return undefined;
   }
-  if (entry?.totalTokensFresh === false) {
+  if (
+    entry?.totalTokensFresh !== true ||
+    entry.totalTokensVersion !== SESSION_TOTAL_TOKENS_VERSION
+  ) {
     return undefined;
   }
   return total;

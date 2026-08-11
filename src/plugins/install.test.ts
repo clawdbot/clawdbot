@@ -1,7 +1,8 @@
-// Covers plugin install flows, manifests, and install records.
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
+// Covers plugin install flows, manifests, and install records.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -30,7 +31,7 @@ import {
 } from "./install.js";
 import { markRetainedManagedNpmInstall } from "./managed-npm-retention.js";
 import { packToArchive } from "./test-helpers/archive-fixtures.js";
-import { createSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
+import { createSyncSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
 import {
   createBundleInstallFixtureFactory,
   createDualFormatInstallFixtureFactory,
@@ -76,7 +77,7 @@ const archiveFixturePathCache = new Map<string, string>();
 const dynamicArchiveTemplatePathCache = new Map<string, string>();
 let installPluginFromDirTemplateDir = "";
 let manifestInstallTemplateDir = "";
-const suiteTempRootTracker = createSuiteTempRootTracker("openclaw-plugin-install");
+const suiteTempRootTracker = createSyncSuiteTempRootTracker("openclaw-plugin-install");
 const setupBundleInstallFixture = createBundleInstallFixtureFactory(
   suiteTempRootTracker.makeTempDir,
 );
@@ -642,12 +643,7 @@ function expectWarningExcludes(warnings: readonly string[], fragment: string) {
   expect(warnings.join("\n")).not.toContain(fragment);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function firstMockCall(mock: { mock: { calls: unknown[][] } }): unknown[] | undefined {
   return mock.mock.calls[0];
@@ -1722,13 +1718,13 @@ describe("installPluginFromArchive", () => {
     expect(warnings).toStrictEqual([]);
   });
 
-  it("blocks package manifests that mention denied dependencies", async () => {
+  it("allows package manifests that mention formerly denied dependencies", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
 
     fs.writeFileSync(
       path.join(pluginDir, "package.json"),
       JSON.stringify({
-        name: "blocked-dependency-plugin",
+        name: "allowed-dependency-plugin",
         version: "1.0.0",
         openclaw: { extensions: ["index.js"] },
         dependencies: {
@@ -1740,15 +1736,8 @@ describe("installPluginFromArchive", () => {
 
     const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-      expect(result.error).toContain('blocked dependencies "plain-crypto-js" in dependencies');
-      expect(result.error).toContain("declared in blocked-dependency-plugin (package.json)");
-    }
-    expect(warnings).toContain(
-      'WARNING: Plugin "blocked-dependency-plugin" installation blocked: blocked dependencies "plain-crypto-js" in dependencies declared in blocked-dependency-plugin (package.json).',
-    );
+    expect(result.ok).toBe(true);
+    expectWarningExcludes(warnings, "plain-crypto-js");
   });
 
   it("treats dangerouslyForceUnsafeInstall as a no-op for package installs", async () => {
@@ -1834,10 +1823,10 @@ describe("installPluginFromArchive", () => {
     expectWarningExcludes(warnings, "dangerous code pattern");
   });
 
-  it("blocks bundle installs with denied vendored dependency names", async () => {
+  it("allows bundle installs with formerly denied vendored dependency names", async () => {
     const { pluginDir, extensionsDir } = setupBundleInstallFixture({
       bundleFormat: "codex",
-      name: "Denied Dependency Bundle",
+      name: "Vendored Dependency Bundle",
     });
     fs.mkdirSync(path.join(pluginDir, "vendor", "plain-crypto-js"), { recursive: true });
     fs.writeFileSync(
@@ -1845,36 +1834,10 @@ describe("installPluginFromArchive", () => {
       JSON.stringify({ name: "plain-crypto-js", version: "4.2.1" }),
       "utf-8",
     );
-    const captured = captureSecurityEvents();
+    const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
 
-    let installed: Awaited<ReturnType<typeof installFromDirWithWarnings>>;
-    try {
-      installed = await installFromDirWithWarnings({ pluginDir, extensionsDir });
-    } finally {
-      captured.stop();
-    }
-    const { result, warnings } = installed!;
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-      expect(result.error).toContain('Bundle "denied-dependency-bundle" installation blocked');
-      expect(result.error).toContain('"plain-crypto-js" as package name');
-      expect(result.error.replaceAll("\\", "/")).toContain("vendor/plain-crypto-js/package.json");
-    }
-    expect(warnings.some((warning) => warning.includes('"plain-crypto-js" as package name'))).toBe(
-      true,
-    );
-    expect(captured.events).toHaveLength(1);
-    expect(captured.events[0]).toMatchObject({
-      action: "plugin.audit.failed",
-      outcome: "denied",
-      target: { kind: "plugin", name: "denied-dependency-bundle" },
-      attributes: {
-        source_family: "directory",
-        mode: "install",
-      },
-    });
+    expect(result.ok).toBe(true);
+    expectWarningExcludes(warnings, "plain-crypto-js");
   });
 
   it("surfaces plugin lifecycle findings from before_install", async () => {
@@ -2998,13 +2961,13 @@ describe("installPluginFromDir", () => {
     expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
   });
 
-  it("blocks local installs when vendored dependencies include denied packages", async () => {
+  it("allows local installs when vendored dependencies include formerly denied packages", async () => {
     const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
 
-    const blockedPkgDir = path.join(pluginDir, "node_modules", "plain-crypto-js");
-    fs.mkdirSync(blockedPkgDir, { recursive: true });
+    const vendoredPackageDir = path.join(pluginDir, "node_modules", "plain-crypto-js");
+    fs.mkdirSync(vendoredPackageDir, { recursive: true });
     fs.writeFileSync(
-      path.join(blockedPkgDir, "package.json"),
+      path.join(vendoredPackageDir, "package.json"),
       JSON.stringify({
         name: "plain-crypto-js",
         version: "4.2.1",
@@ -3012,49 +2975,12 @@ describe("installPluginFromDir", () => {
       "utf-8",
     );
 
-    const captured = captureSecurityEvents();
-    let result: Awaited<ReturnType<typeof installPluginFromDir>>;
-    try {
-      result = await installPluginFromDir({
-        dirPath: pluginDir,
-        extensionsDir,
-      });
-    } finally {
-      captured.stop();
-    }
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-      expect(result.error).toContain('blocked dependencies "plain-crypto-js" as package name');
-      expect(result.error.replaceAll("\\", "/")).toContain(
-        "node_modules/plain-crypto-js/package.json",
-      );
-    }
-    expect(captured.events).toHaveLength(1);
-    expect(captured.events[0]).toMatchObject({
-      category: "plugin",
-      action: "plugin.audit.failed",
-      outcome: "denied",
-      severity: "medium",
-      reason: "security_scan_blocked",
-      target: { kind: "plugin", name: "@openclaw/test-plugin" },
-      policy: {
-        id: "plugin.install",
-        decision: "deny",
-        reason: "security_scan_blocked",
-      },
-      control: { id: "plugin.install.audit", family: "supply_chain" },
-      attributes: {
-        source_family: "directory",
-        mode: "install",
-      },
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
     });
-    const serialized = JSON.stringify(captured.events);
-    expect(serialized).not.toContain(pluginDir);
-    expect(serialized).not.toContain(extensionsDir);
-    expect(serialized).not.toContain("plain-crypto-js");
-    expect(serialized).not.toContain("package.json");
+
+    expect(result.ok).toBe(true);
     expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
   });
 
@@ -3757,6 +3683,16 @@ describe("installPluginFromDir", () => {
   });
 
   it.each([
+    {
+      name: "installs Agent Plugins bundles from a local directory",
+      setup: () =>
+        setupBundleInstallFixture({
+          bundleFormat: "agent",
+          name: "Portable Sample",
+        }),
+      expectedPluginId: "portable-sample",
+      expectedFiles: ["plugin.json", "skills/fixture/SKILL.md"],
+    },
     {
       name: "installs Codex bundles from a local directory",
       setup: () =>

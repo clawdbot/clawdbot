@@ -12,7 +12,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { parseMergeForwardContent } from "./bot-content.js";
 import type { FeishuMessageEvent } from "./bot.js";
-import { handleFeishuMessage } from "./bot.js";
+import { handleFeishuMessage, parseFeishuMessageEvent } from "./bot.js";
 import {
   createFeishuTestConfig,
   createFeishuTestEvent,
@@ -2386,6 +2386,28 @@ describe("handleFeishuMessage command authorization", () => {
     expect(context.BodyForAgent).toBe("[message_id: msg-message-id-line]\nou-msgid: hello");
   });
 
+  it("parses direct interactive webhook content through the canonical card parser", () => {
+    const event = createFeishuTestEvent({
+      messageId: "msg-direct-card",
+      messageType: "interactive",
+      content: JSON.stringify({
+        schema: "2.0",
+        header: { title: { tag: "plain_text", content: "Direct task" } },
+        body: {
+          elements: [
+            {
+              tag: "table",
+              columns: [{ name: "status", display_name: "Status" }],
+              rows: [{ status: "Open" }],
+            },
+          ],
+        },
+      }),
+    });
+
+    expect(parseFeishuMessageEvent(event).content).toBe("Direct task\nStatus\nOpen");
+  });
+
   it("expands merge_forward content from API sub-messages", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     const mockGetMerged = vi.fn().mockResolvedValue({
@@ -2403,6 +2425,29 @@ describe("handleFeishuMessage command authorization", () => {
             msg_type: "file",
             body: { content: JSON.stringify({ file_name: "report.pdf" }) },
             create_time: "2000",
+          },
+          {
+            message_id: "sub-card",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                schema: "2.0",
+                header: { title: { tag: "plain_text", content: "Task summary" } },
+                body: {
+                  elements: [
+                    {
+                      tag: "table",
+                      columns: [
+                        { name: "task", display_name: "Task" },
+                        { name: "owner", display_name: "Owner" },
+                      ],
+                      rows: [{ task: "Investigate", owner: { name: "Alice" } }],
+                    },
+                  ],
+                },
+              }),
+            },
+            create_time: "1500",
           },
           {
             message_id: "sub-1",
@@ -2438,12 +2483,19 @@ describe("handleFeishuMessage command authorization", () => {
     await dispatchMessage({ cfg, event });
 
     expect(mockGetMerged).toHaveBeenCalledWith({
+      params: { card_msg_content_type: "user_card_content" },
       path: { message_id: "msg-merge-forward" },
     });
     const context = mockCallArg<{ BodyForAgent?: string }>(mockFinalizeInboundContext, 0, 0);
     expect(context.BodyForAgent).toContain(
-      "[Merged and Forwarded Messages]\n- alpha\n- [File: report.pdf]",
+      "[Merged and Forwarded Messages]\n" +
+        "- alpha\n" +
+        "- Task summary\n" +
+        "Task | Owner\n" +
+        "Investigate | Alice\n" +
+        "- [File: report.pdf]",
     );
+    expect(context.BodyForAgent).not.toContain("[interactive]");
   });
 
   it("does not partially parse malformed merge_forward create_time values", () => {

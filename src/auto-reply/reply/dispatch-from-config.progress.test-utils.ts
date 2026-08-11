@@ -726,6 +726,7 @@ describe("dispatchReplyFromConfig", () => {
       cfg,
       dispatcher,
       replyResolver: async () => notice,
+      replyOptions: { suppressToolProgressMessages: true },
     });
 
     expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
@@ -1358,8 +1359,8 @@ describe("dispatchReplyFromConfig", () => {
       SessionKey: "agent:main:discord:direct:U1",
     });
     let receivedOptions: GetReplyOptions | undefined;
-    let commandOutputResult: false | void = undefined;
-    let itemEventResult: false | void = undefined;
+    let commandOutputResult: boolean | void = undefined;
+    let itemEventResult: boolean | void = undefined;
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       receivedOptions = opts;
       commandOutputResult = await opts?.onCommandOutput?.({
@@ -1592,6 +1593,53 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(dispatcher.sendToolResult).toHaveBeenCalledWith({ text: "🔧 exec: ls" });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+  });
+
+  it("keeps channel-hidden tool progress suppressed when verbose is enabled", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "on",
+    };
+    const dispatcher = createDispatcher();
+    const onToolResult = vi.fn(() => false);
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onItemEvent?.({
+        kind: "preamble",
+        itemId: "preamble-1",
+        progressText: "Checking the workspace",
+      });
+      await opts?.onToolResult?.({ text: "🔧 exec: ls" });
+      await opts?.onToolResult?.({
+        text: "💨Fast: auto-off(75s>=60s)",
+        channelData: { openclawProgressKind: "fast-mode-auto" },
+      });
+      await opts?.onToolResult?.({ text: "Command failed", isError: true });
+      await opts?.onPlanUpdate?.({
+        phase: "update",
+        steps: [{ step: "Inspect files", status: "in_progress" }],
+      });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        ChatType: "direct",
+        SessionKey: "agent:main:main",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { suppressToolProgressMessages: true, onToolResult },
+    });
+
+    expect(onToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 });

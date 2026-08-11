@@ -72,6 +72,7 @@ describe("gateway suspend handlers", () => {
     expect(coordinator.prepare).toHaveBeenCalledWith(
       expect.objectContaining({
         requestId: "request-1",
+        terminalPolicy: "preserve",
         pauseScheduling: expect.any(Function),
         resumeScheduling: expect.any(Function),
       }),

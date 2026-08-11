@@ -1,9 +1,10 @@
 // Transcript persistence and source-reply rewrites shared by chat send and abort.
+import { asOptionalRecord as transcriptEventRecord } from "@openclaw/normalization-core/record-coerce";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import {
   findTranscriptEvent,
   loadTranscriptEventRowsAfterSeqSync,
-  patchSessionEntry,
+  patchSessionEntryCore,
   publishTranscriptUpdate,
   readSessionTranscriptWatermark,
   rewriteTranscriptEventRowsExact,
@@ -65,12 +66,6 @@ export function assistantTranscriptScope(
     ...(params.storePath ? { storePath: params.storePath } : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
   };
-}
-
-function transcriptEventRecord(event: TranscriptEvent): Record<string, unknown> | undefined {
-  return event && typeof event === "object" && !Array.isArray(event)
-    ? (event as Record<string, unknown>)
-    : undefined;
 }
 
 function transcriptEventId(event: TranscriptEvent): string | undefined {
@@ -310,7 +305,7 @@ async function touchAssistantTranscriptSessionEntry(
     return;
   }
   const transcriptMarkerUpdatedAt = Date.now();
-  await patchSessionEntry(
+  await patchSessionEntryCore(
     {
       storePath: scope.storePath,
       sessionKey: scope.sessionKey,

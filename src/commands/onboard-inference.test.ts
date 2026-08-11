@@ -8,7 +8,6 @@ import {
   OPENAI_API_DEFAULT_MODEL_REF,
   detectInferenceBackends,
 } from "./onboard-inference.js";
-import { detectNativeCodexAppServer } from "./onboard-inference.test-support.js";
 
 function probeDeps(found: Record<string, boolean>) {
   return async (command: string): Promise<LocalCommandProbe> => ({
@@ -18,8 +17,8 @@ function probeDeps(found: Record<string, boolean>) {
 }
 
 describe("detectInferenceBackends", () => {
-  it("uses route-specific GPT-5.6 defaults for direct API and Codex", () => {
-    expect(OPENAI_API_DEFAULT_MODEL_REF).toBe("openai/gpt-5.6");
+  it("uses canonical GPT-5.6 Sol defaults for direct API and Codex", () => {
+    expect(OPENAI_API_DEFAULT_MODEL_REF).toBe("openai/gpt-5.6-sol");
     expect(CODEX_APP_SERVER_DEFAULT_MODEL_REF).toBe("openai/gpt-5.6-sol");
   });
 
@@ -413,18 +412,6 @@ describe("detectInferenceBackends", () => {
     expect(candidates[0]?.kind).toBe("claude-cli");
     expect(candidates[0]?.credentials).toBeUndefined();
     expect(candidates[0]?.detail).toBe("installed");
-  });
-
-  it("detects a native Codex App Server independently of inference ranking", async () => {
-    const command = "/Applications/ChatGPT.app/Contents/Resources/codex";
-
-    await expect(
-      detectNativeCodexAppServer({
-        env: { HOME: "/Users/tester" },
-        platform: "darwin",
-        probeLocalCommand: probeDeps({ [command]: true }),
-      }),
-    ).resolves.toEqual({ command, found: true });
   });
 
   it("checks login status with the Codex executable discovered in a macOS app", async () => {
