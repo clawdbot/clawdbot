@@ -458,6 +458,43 @@ describe("pr-convergence-audit", () => {
     expect(result.nextAction).toContain("stabilizes");
   });
 
+  it("re-reads PR identity after all evidence collection finishes", async () => {
+    const passBody = `<!-- clawsweeper-verdict:pass item=${pr} sha=${headSha} confidence=high -->`;
+    const movedHead = "bbbbccccddddeeeeffffaaaabbbbccccddddeeee";
+    const { provider } = createProvider({
+      issueComments: [clawsweeperComment({ id: 9501, body: passBody })],
+    });
+    const fetchPullRequest = provider.fetchPullRequest;
+    const fetchIssueComments = provider.fetchIssueComments;
+    let currentHead = headSha;
+    let identityReads = 0;
+    provider.fetchPullRequest = async () => {
+      identityReads += 1;
+      const pull = await fetchPullRequest();
+      return { ...pull, head: { ...pull.head, sha: currentHead } };
+    };
+    let releaseIssueComments!: () => void;
+    const issueCommentsBarrier = new Promise<void>((resolve) => {
+      releaseIssueComments = resolve;
+    });
+    provider.fetchIssueComments = async () => {
+      await issueCommentsBarrier;
+      return fetchIssueComments();
+    };
+
+    const audit = auditPrConvergence({ repo, pr, provider });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const identityReadsBeforeEvidence = identityReads;
+    currentHead = movedHead;
+    releaseIssueComments();
+    const result = await audit;
+
+    expect(identityReadsBeforeEvidence).toBe(1);
+    expect(identityReads).toBe(2);
+    expect(result.decision).toBe(CONVERGENCE_DECISIONS.UNKNOWN);
+    expect(result.reason).toContain("head changed");
+  });
+
   it("never yields READY from formal review state alone", () => {
     const evidence = {
       repo,

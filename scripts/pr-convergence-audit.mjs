@@ -867,15 +867,14 @@ export async function auditPrConvergence({ repo, pr, provider }) {
       issueCommentsResult,
       requestedReviewersResult,
       checkRunsResult,
-      finalPull,
     ] = await Promise.all([
       provider.fetchFormalReviews({ repo, pr }),
       provider.fetchInlineReviewComments({ repo, pr }),
       provider.fetchIssueComments({ repo, pr }),
       provider.fetchRequestedReviewers({ repo, pr }),
       provider.fetchCheckRuns({ repo, pr, headSha: initialHeadSha }),
-      provider.fetchPullRequest({ repo, pr }),
     ]);
+    finalPull = await provider.fetchPullRequest({ repo, pr });
   } catch (error) {
     return buildProviderFailureAuditResult({
       repo,
