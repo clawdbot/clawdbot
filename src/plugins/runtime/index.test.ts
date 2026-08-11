@@ -24,7 +24,7 @@ const sandboxContextMocks = vi.hoisted(() => ({
 vi.mock("./runtime-model-auth.runtime.js", () => ({
   getApiKeyForModel: runtimeModelAuthMocks.getApiKeyForModel,
   getRuntimeAuthForModelCore: runtimeModelAuthMocks.getRuntimeAuthForModelCore,
-  resolveProviderRuntimeApiKey: runtimeModelAuthMocks.resolveApiKeyForProvider,
+  resolveProviderRuntimeApiKey: runtimeModelAuthMocks.resolveProviderRuntimeApiKey,
 }));
 vi.mock("../../agents/sandbox/context.js", () => sandboxContextMocks);
 

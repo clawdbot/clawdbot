@@ -46,10 +46,8 @@ const loadImageGenerationCoreAuthRuntime = createLazyRuntimeModule(
 
 /** Resolve image-generation provider API keys through the lazy auth runtime helper. */
 export async function resolveApiKeyForProvider(
-  ...args: Parameters<ImageGenerationCoreAuthRuntimeModule["resolveApiKeyForProviderCore"]>
-): Promise<
-  Awaited<ReturnType<ImageGenerationCoreAuthRuntimeModule["resolveApiKeyForProviderCore"]>>
-> {
+  ...args: Parameters<ImageGenerationCoreAuthRuntimeModule["resolveApiKeyForProvider"]>
+): Promise<Awaited<ReturnType<ImageGenerationCoreAuthRuntimeModule["resolveApiKeyForProvider"]>>> {
   const runtime = await loadImageGenerationCoreAuthRuntime();
-  return runtime.resolveApiKeyForProviderCore(...args);
+  return runtime.resolveApiKeyForProvider(...args);
 }

@@ -3,7 +3,7 @@ import { resolveAgentConfig, resolveAgentDir } from "../../agents/agent-scope.js
 import { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
 import { isEmbeddedAgentRunActive } from "../../agents/embedded-agent-runner/runs.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
-import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
+import { resolveHeartbeatPromptCore } from "../../auto-reply/heartbeat.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { toErrorObject } from "../../infra/errors.js";
 import {
@@ -234,7 +234,7 @@ async function runSkillHistoryScanCore(
     Math.max(1, maxTranscriptChars - HISTORY_SCAN_SESSION_OVERHEAD_CHARS),
   );
   // The configured prompt is only an extra legacy match; the stable marker is authoritative.
-  const heartbeatPrompt = resolveHeartbeatPrompt(
+  const heartbeatPrompt = resolveHeartbeatPromptCore(
     resolveAgentConfig(params.config, params.agentId)?.heartbeat?.prompt ??
       params.config.agents?.defaults?.heartbeat?.prompt,
   );

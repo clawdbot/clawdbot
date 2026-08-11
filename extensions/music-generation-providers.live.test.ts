@@ -1,6 +1,6 @@
 // Music Generation Providers.Live.Test.Ts tests cover music generation providers plugin behavior.
 import {
-  resolveApiKeyForProviderCore,
+  resolveApiKeyForProvider,
   resolveDefaultAgentDir,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -222,7 +222,7 @@ describeLive("music generation provider live", () => {
         });
         let authLabel;
         try {
-          const auth = await resolveApiKeyForProviderCore({
+          const auth = await resolveApiKeyForProvider({
             provider: testCase.providerId,
             cfg,
             agentDir,
