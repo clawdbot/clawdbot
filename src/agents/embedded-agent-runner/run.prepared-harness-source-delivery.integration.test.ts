@@ -50,7 +50,7 @@ describe("prepared harness source delivery", () => {
   it.each([
     {
       name: "delivers one streamed answer when preparation changes tool ownership to automatic",
-      failsCliPrimary: true,
+      candidatePath: "cli-failure-embedded" as const,
       preliminaryVisibleReplies: "message_tool" as const,
       preparedVisibleReplies: "automatic" as const,
       expectedTransitions: ["message_tool_only", "automatic"],
@@ -61,7 +61,7 @@ describe("prepared harness source delivery", () => {
     },
     {
       name: "suppresses live output when preparation changes automatic ownership to tool",
-      failsCliPrimary: false,
+      candidatePath: "embedded" as const,
       preliminaryVisibleReplies: "automatic" as const,
       preparedVisibleReplies: "message_tool" as const,
       expectedTransitions: ["message_tool_only"],
@@ -72,7 +72,7 @@ describe("prepared harness source delivery", () => {
     },
     {
       name: "lets implicit built-in automatic ownership yield to a prepared tool owner",
-      failsCliPrimary: false,
+      candidatePath: "embedded" as const,
       preliminaryVisibleReplies: undefined,
       preparedVisibleReplies: "message_tool" as const,
       expectedTransitions: ["message_tool_only"],
@@ -83,14 +83,36 @@ describe("prepared harness source delivery", () => {
     },
     {
       name: "keeps prepared tool ownership after a failed CLI primary",
-      failsCliPrimary: true,
+      candidatePath: "cli-failure-embedded" as const,
       preliminaryVisibleReplies: "automatic" as const,
       preparedVisibleReplies: "message_tool" as const,
-      expectedTransitions: ["message_tool_only", "message_tool_only"],
+      expectedTransitions: ["automatic", "message_tool_only"],
       expectedDeliveries: 0,
       expectedPartials: 0,
       expectedBlocks: 0,
       expectedFinals: 0,
+    },
+    {
+      name: "delivers a successful direct CLI reply with its session-stable ownership",
+      candidatePath: "cli" as const,
+      preliminaryVisibleReplies: undefined,
+      preparedVisibleReplies: "automatic" as const,
+      expectedTransitions: ["automatic"],
+      expectedDeliveries: 1,
+      expectedPartials: 0,
+      expectedBlocks: 0,
+      expectedFinals: 1,
+    },
+    {
+      name: "delivers a successful API-to-CLI fallback with its session-stable ownership",
+      candidatePath: "embedded-failure-cli" as const,
+      preliminaryVisibleReplies: undefined,
+      preparedVisibleReplies: "automatic" as const,
+      expectedTransitions: ["automatic", "automatic"],
+      expectedDeliveries: 1,
+      expectedPartials: 0,
+      expectedBlocks: 0,
+      expectedFinals: 1,
     },
   ])("$name", async (testCase) => {
     await useProductionEmbeddedRunExecutionParamsForTest();
@@ -146,6 +168,9 @@ describe("prepared harness source delivery", () => {
       await attemptParams.onBlockReply?.({ text: "Streaming progress" });
       return makeAttemptResult({ assistantTexts: ["Short fallback final"] });
     });
+    if (testCase.candidatePath === "embedded-failure-cli") {
+      mockedRunEmbeddedAttempt.mockRejectedValueOnce(new Error("api primary failed"));
+    }
     useOpenAIPlatformAuthFixture();
     let embeddedError: unknown;
     let embeddedParams: unknown;
@@ -161,11 +186,35 @@ describe("prepared harness source delivery", () => {
     runnerState.isCliProviderMock.mockImplementation(
       (provider: unknown) => provider === "anthropic",
     );
-    runnerState.runCliAgentMock.mockRejectedValueOnce(new Error("cli failed"));
+    if (testCase.candidatePath === "cli-failure-embedded") {
+      runnerState.runCliAgentMock.mockRejectedValueOnce(new Error("cli failed"));
+    } else {
+      runnerState.runCliAgentMock.mockResolvedValue({
+        payloads: [{ text: "Short fallback final" }],
+        meta: {},
+      });
+    }
     runnerState.runWithModelFallbackMock.mockImplementationOnce(
       async (params: FallbackRunnerParams) => {
-        if (testCase.failsCliPrimary) {
-          await params.run("anthropic", "primary").catch(() => undefined);
+        if (testCase.candidatePath === "cli-failure-embedded") {
+          await params.run("anthropic", "cli-primary").catch(() => undefined);
+        }
+        if (testCase.candidatePath === "cli") {
+          return {
+            result: await params.run("anthropic", "cli-primary"),
+            provider: "anthropic",
+            model: "cli-primary",
+            attempts: [],
+          };
+        }
+        if (testCase.candidatePath === "embedded-failure-cli") {
+          await params.run("custom", "api-primary").catch(() => undefined);
+          return {
+            result: await params.run("anthropic", "cli-fallback"),
+            provider: "anthropic",
+            model: "cli-fallback",
+            attempts: [],
+          };
         }
         return {
           result: await params.run("custom", "plugin-fallback"),
@@ -249,6 +298,15 @@ describe("prepared harness source delivery", () => {
         extraSystemPromptBySourceReplyDeliveryMode[
           runtimeOpts.sourceReplyDeliveryMode ?? "automatic"
         ];
+      const sessionStableDeliveryMode =
+        runtimeOpts.sessionPromptSourceReplyDeliveryMode ??
+        runtimeOpts.sourceReplyDeliveryMode ??
+        "automatic";
+      followupRun.run.cliSessionBindingFacts = {
+        extraSystemPromptStatic:
+          extraSystemPromptBySourceReplyDeliveryMode[sessionStableDeliveryMode],
+        sourceReplyDeliveryMode: sessionStableDeliveryMode,
+      };
       const sourceReplyDeliveryRuntime = createSourceReplyDeliveryRuntime({
         origin: runtimeOpts.sourceReplyDeliveryModeOrigin ?? "stable_policy",
         initialMode: runtimeOpts.sourceReplyDeliveryMode ?? "automatic",
@@ -311,11 +369,17 @@ describe("prepared harness source delivery", () => {
     });
     await settleReplyDispatcher({ dispatcher });
 
-    expect(mockedGlobalHookRunner.runBeforeModelResolve).toHaveBeenCalledWith(
-      { prompt: "hello" },
-      expect.any(Object),
-    );
-    expect(emittedStreamingCallbacks).toEqual(["partial", "block"]);
+    if (testCase.candidatePath === "cli") {
+      expect(mockedGlobalHookRunner.runBeforeModelResolve).not.toHaveBeenCalled();
+    } else {
+      expect(mockedGlobalHookRunner.runBeforeModelResolve).toHaveBeenCalledWith(
+        { prompt: "hello" },
+        expect.any(Object),
+      );
+    }
+    const cliSucceeded =
+      testCase.candidatePath === "cli" || testCase.candidatePath === "embedded-failure-cli";
+    expect(emittedStreamingCallbacks).toEqual(cliSucceeded ? [] : ["partial", "block"]);
     expect(onPartialReply).toHaveBeenCalledTimes(testCase.expectedPartials);
     expect(result.queuedFinal).toBe(testCase.expectedDeliveries === 1);
     expect(deliver).toHaveBeenCalledTimes(testCase.expectedDeliveries + testCase.expectedBlocks);
@@ -342,7 +406,14 @@ describe("prepared harness source delivery", () => {
     });
     expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
     expect(modeTransitions).toEqual(testCase.expectedTransitions);
-    if (testCase.preparedVisibleReplies === "automatic") {
+    if (cliSucceeded) {
+      const cliParams = runnerState.runCliAgentMock.mock.calls.at(-1)?.[0] as {
+        cliSessionBindingFacts?: { sourceReplyDeliveryMode?: string };
+        sourceReplyDeliveryMode?: string;
+      };
+      expect(cliParams.cliSessionBindingFacts?.sourceReplyDeliveryMode).toBe("automatic");
+      expect(cliParams.sourceReplyDeliveryMode).toBe("automatic");
+    } else if (testCase.preparedVisibleReplies === "automatic") {
       expect(modelVisiblePrompt).toContain("Current-session final text normally routes to source");
       expect(modelVisiblePrompt).toContain(
         "Your replies are automatically sent to this conversation",

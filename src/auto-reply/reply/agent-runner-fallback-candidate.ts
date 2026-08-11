@@ -194,9 +194,11 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         );
         const candidateRun = runtime.candidateRun;
         bindSourceReplyDeliveryRuntime(candidateRun, sourceReplyDeliveryRuntime);
+        // CLI prompts are fixed to their session binding, so dispatch must publish that
+        // same stable mode or a valid assistant reply can be silently suppressed.
         const candidateSourceReplyDeliveryMode =
           sourceReplyDeliveryModeOrigin === "runtime_default" && runtime.useCliExecution
-            ? "message_tool_only"
+            ? (candidateRun.cliSessionBindingFacts?.sourceReplyDeliveryMode ?? "automatic")
             : sourceReplyDeliveryRuntime.currentMode;
         const applySourceReplyDeliveryModeBeforeInvocation =
           sourceReplyDeliveryModeOrigin !== "runtime_default" || runtime.useCliExecution;
