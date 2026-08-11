@@ -29,7 +29,6 @@ import {
   GatewayHotReloadCancelledError,
   GatewayHotReloadRecoveryError,
   isCurrentGatewayReloadGeneration,
-  isGatewayReloadGenerationAborted,
   nextGatewayReloadGeneration,
   type GatewayHotReloadPublication,
   type GatewayPluginReloadResult,
@@ -49,7 +48,8 @@ import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
 const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
 
 export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) {
-  const myGeneration = nextGatewayReloadGeneration();
+  const reloadGeneration = nextGatewayReloadGeneration();
+  const myGeneration = reloadGeneration.generation;
   const restartRecoveryAvailable =
     params.restartRecoveryAvailable !== false && params.requestRecoveryRestart !== undefined;
 
@@ -59,7 +59,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     formatTaskBlockers,
     getActiveCounts,
     waitForActiveWorkBeforeChannelReload,
-  } = createGatewayActiveWorkTracker({ params, myGeneration });
+  } = createGatewayActiveWorkTracker({
+    params,
+    lifecycleAbortSignal: reloadGeneration.abortSignal,
+  });
 
   const {
     acceptRestartConfig,
@@ -131,7 +134,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const channelsStoppedBeforePluginReload = new Set<ChannelKind>();
     let activePluginChannelsAfterReload: ReadonlySet<ChannelKind> | null = null;
     let pluginReloadAborted = false;
-    const isLifecycleReloadAborted = () => isGatewayReloadGenerationAborted(myGeneration);
+    const isLifecycleReloadAborted = () => reloadGeneration.abortSignal.aborted;
     const isPluginReloadAborted = () =>
       pluginReloadAborted || !isTransactionCurrent() || isLifecycleReloadAborted();
     let runtimeCommitted = false;
@@ -163,7 +166,13 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       if (runtimeCommitted) {
         return;
       }
+      if (isPluginReloadAborted()) {
+        throw new GatewayHotReloadCancelledError();
+      }
       const commit = async () => {
+        if (isPluginReloadAborted()) {
+          throw new GatewayHotReloadCancelledError();
+        }
         if (plan.restartHeartbeat) {
           nextState.heartbeatRunner.updateConfig(nextConfig);
           // Heartbeat cadence lives in system-owned cron monitor jobs;
@@ -335,7 +344,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           channels: [...channelsStoppedBeforePluginReload],
           run: async (channel) => {
             params.logChannels.info(`restarting ${channel} channel after ${reason}`);
-            await runOutsideGatewayRootWorkAdmission(() => params.startChannel(channel));
+            await runOutsideGatewayRootWorkAdmission(() =>
+              params.startChannel(channel, undefined, {
+                lifecycleAbortSignal: reloadGeneration.abortSignal,
+              }),
+            );
             channelsStoppedBeforePluginReload.delete(channel);
           },
           onFailure: (channel, err) => {
@@ -570,6 +583,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       skipChannelRestartLogMessage:
         "skipping channel reload (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
       pluginReloadAborted,
+      lifecycleAbortSignal: reloadGeneration.abortSignal,
       isLifecycleReloadAborted,
       getChannelAutostartSuppression,
       channelReloadTargets,

@@ -17,23 +17,24 @@ import type { ActivateRuntimeSecrets } from "./server-startup-config.js";
 import type { HookClientIpConfig } from "./server/hooks-request-handler.js";
 
 let currentReloadGeneration = 0;
-let abortGeneration: number | undefined;
+let currentReloadAbortController: AbortController | undefined;
 
-export function nextGatewayReloadGeneration(): number {
-  return ++currentReloadGeneration;
+export function nextGatewayReloadGeneration() {
+  currentReloadAbortController?.abort();
+  currentReloadAbortController = new AbortController();
+  return {
+    generation: ++currentReloadGeneration,
+    abortSignal: currentReloadAbortController.signal,
+  };
 }
 
 export function isCurrentGatewayReloadGeneration(generation: number): boolean {
   return generation === currentReloadGeneration;
 }
 
-export function isGatewayReloadGenerationAborted(generation: number): boolean {
-  return abortGeneration !== undefined && generation <= abortGeneration;
-}
-
 /** Signal any in-progress deferred channel reload to abort immediately. */
 export function abortPendingChannelReloads(): void {
-  abortGeneration = currentReloadGeneration;
+  currentReloadAbortController?.abort();
 }
 
 export type RuntimeSecretsPreflightParams = Omit<

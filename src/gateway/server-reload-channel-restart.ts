@@ -18,6 +18,7 @@ export async function restartGatewayChannels(options: {
   shouldSkipChannelRestart: boolean;
   skipChannelRestartLogMessage: string;
   pluginReloadAborted: boolean;
+  lifecycleAbortSignal: AbortSignal;
   isLifecycleReloadAborted: () => boolean;
   getChannelAutostartSuppression: () => unknown;
   channelReloadTargets: () => Set<ChannelKind>;
@@ -35,6 +36,7 @@ export async function restartGatewayChannels(options: {
     shouldSkipChannelRestart,
     skipChannelRestartLogMessage,
     pluginReloadAborted,
+    lifecycleAbortSignal,
     isLifecycleReloadAborted,
     getChannelAutostartSuppression,
     channelReloadTargets,
@@ -145,7 +147,9 @@ export async function restartGatewayChannels(options: {
             if (isLifecycleReloadAborted()) {
               continue;
             }
-            await runOutsideGatewayRootWorkAdmission(() => params.startChannel(channel, accountId));
+            await runOutsideGatewayRootWorkAdmission(() =>
+              params.startChannel(channel, accountId, { lifecycleAbortSignal }),
+            );
           } catch (err) {
             accountRestartFailures.push(`${channel}[${accountId}]`);
             params.logChannels.error(
@@ -164,7 +168,9 @@ export async function restartGatewayChannels(options: {
           if (isLifecycleReloadAborted()) {
             return;
           }
-          await runOutsideGatewayRootWorkAdmission(() => params.startChannel(name));
+          await runOutsideGatewayRootWorkAdmission(() =>
+            params.startChannel(name, undefined, { lifecycleAbortSignal }),
+          );
         };
         const restartFailures = await collectChannelOperationFailures({
           channels: channelsToRestart,

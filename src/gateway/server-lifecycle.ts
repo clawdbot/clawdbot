@@ -404,7 +404,7 @@ export async function prepareGatewayLifecycle(params: {
       tailscaleCleanup: runtimeState.tailscaleCleanup,
       clearSecretsRuntimeSnapshot,
       channelIds,
-      stopChannel,
+      stopChannel: channelManager.stopChannelForShutdown,
       pluginServices: runtimeState.pluginServices,
       postReadySidecars: runtimeState.postReadySidecars,
       cron: runtimeState.cronState.cron,

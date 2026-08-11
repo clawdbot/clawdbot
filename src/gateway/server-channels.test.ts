@@ -1,6 +1,7 @@
 /**
  * Server channel lifecycle tests.
  */
+import { getEventListeners } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { ChannelIngressUnavailableError } from "../channels/message/ingress-unavailable.js";
@@ -426,16 +427,24 @@ describe("server-channels auto restart", () => {
     expect(manager.isAutoRestartScheduled("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
   });
 
-  it("aborts the crashed task's signal before starting its replacement", async () => {
+  it("keeps automatic replacement owned by the original lifecycle generation", async () => {
     const signals: AbortSignal[] = [];
     const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
       signals.push(ctx.abortSignal);
-      throw new Error("crash");
+      if (signals.length === 1) {
+        throw new Error("crash");
+      }
+      await new Promise<void>((resolve) => {
+        ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
     });
     installTestRegistry(createTestPlugin({ startAccount }));
     const manager = createManager();
+    const lifecycleAbort = new AbortController();
 
-    await manager.startChannels();
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, {
+      lifecycleAbortSignal: lifecycleAbort.signal,
+    });
     await advanceTimersUntil(
       () => startAccount.mock.calls.length >= 2,
       "expected a crash-loop restart",
@@ -446,6 +455,12 @@ describe("server-channels auto restart", () => {
     // (e.g. a reconnect loop). The replacement must never overlap that lifetime.
     expect(signals[0]?.aborted).toBe(true);
     expect(signals[1]?.aborted).toBe(false);
+
+    lifecycleAbort.abort();
+    await waitForMicrotaskCondition(
+      () => signals[1]?.aborted === true,
+      "expected the replacement to retain lifecycle generation ownership",
+    );
   });
 
   it.each(["resolve", "reject"] as const)(
@@ -741,11 +756,13 @@ describe("server-channels auto restart", () => {
 
     releaseTask.resolve();
     await flushMicrotasks();
-    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    const replacementStart = manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await flushMicrotasks();
     expect(startAccount).toHaveBeenCalledTimes(1);
 
     releaseStopHook.resolve();
     await stopFailure;
+    await replacementStart;
     await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
     expect(startAccount).toHaveBeenCalledTimes(1);
     expect(
@@ -757,7 +774,300 @@ describe("server-channels auto restart", () => {
     });
   });
 
-  it("serializes overlapping stops until the last teardown settles", async () => {
+  it("allows replacement after the latest stop succeeds following a rejection", async () => {
+    const stopGates = [createDeferred(), createDeferred()];
+    const startAccount = vi.fn(
+      async ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    const stopAccount = vi.fn(async () => {
+      const callIndex = stopAccount.mock.calls.length - 1;
+      await stopGates[callIndex]?.promise;
+      if (callIndex === 0) {
+        throw new Error("first stop failed");
+      }
+    });
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    const firstStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
+    const secondStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
+    const firstFailure = expect(firstStop).rejects.toThrow("first stop failed");
+    await flushMicrotasks();
+    expect(stopAccount).toHaveBeenCalledOnce();
+
+    stopGates[0]?.resolve();
+    await firstFailure;
+    await waitForMicrotaskCondition(
+      () => stopAccount.mock.calls.length === 2,
+      "expected the replacement stop to follow the rejected attempt",
+    );
+    stopGates[1]?.resolve();
+    await expect(secondStop).resolves.toBeUndefined();
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    expect(startAccount).toHaveBeenCalledTimes(2);
+  });
+
+  it("follows a pending latest failure and settles sibling accounts before throwing", async () => {
+    const accountIds = ["broken", "healthy"];
+    const firstBrokenStop = createDeferred();
+    const latestBrokenStop = createDeferred();
+    const healthyTask = createDeferred();
+    let brokenStopCount = 0;
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId }: ChannelGatewayContext<TestAccount>) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener(
+            "abort",
+            () => {
+              if (accountId === "healthy") {
+                void healthyTask.promise.then(resolve);
+              } else {
+                resolve();
+              }
+            },
+            { once: true },
+          );
+        }),
+    );
+    const stopAccount = vi.fn(async ({ accountId }: ChannelGatewayContext<TestAccount>) => {
+      if (accountId !== "broken") {
+        return;
+      }
+      brokenStopCount += 1;
+      if (brokenStopCount === 1) {
+        await firstBrokenStop.promise;
+        throw new Error("first broken stop failed");
+      }
+      await latestBrokenStop.promise;
+      throw new Error("latest broken stop failed");
+    });
+    installTestRegistry(
+      createTestPlugin({
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+        startAccount,
+        stopAccount,
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+    const firstStop = manager.stopChannel("discord", "broken", { manual: false });
+    const firstFailure = expect(firstStop).rejects.toThrow("first broken stop failed");
+    await waitForMicrotaskCondition(
+      () => brokenStopCount === 1,
+      "expected the first broken stop to begin",
+    );
+    const shutdown = manager.stopChannelForShutdown("discord");
+    const secondStop = manager.stopChannel("discord", "broken", { manual: false });
+    const secondFailure = expect(secondStop).rejects.toThrow("latest broken stop failed");
+    let shutdownSettled = false;
+    void shutdown.then(
+      () => {
+        shutdownSettled = true;
+      },
+      () => {
+        shutdownSettled = true;
+      },
+    );
+    await waitForMicrotaskCondition(
+      () => stopAccount.mock.calls.some(([ctx]) => ctx.accountId === "healthy"),
+      "expected shutdown to stop the healthy sibling",
+    );
+
+    firstBrokenStop.resolve();
+    await firstFailure;
+    await waitForMicrotaskCondition(
+      () => brokenStopCount === 2,
+      "expected the replacement broken stop to begin",
+    );
+    latestBrokenStop.resolve();
+    await secondFailure;
+    await flushMicrotasks();
+    expect(shutdownSettled).toBe(false);
+
+    healthyTask.resolve();
+    await expect(shutdown).rejects.toThrow("latest broken stop failed");
+    expect(stopAccount.mock.calls.filter(([ctx]) => ctx.accountId === "broken")).toHaveLength(2);
+    expect(stopAccount.mock.calls.filter(([ctx]) => ctx.accountId === "healthy")).toHaveLength(1);
+  });
+
+  it("follows a successful retry queued behind a timed-out stop", async () => {
+    const releaseTask = createDeferred();
+    const releaseSecondStop = createDeferred();
+    const startAccount = vi.fn(async () => await releaseTask.promise);
+    const stopAccount = vi.fn(async () => {
+      if (stopAccount.mock.calls.length === 2) {
+        await releaseSecondStop.promise;
+      }
+    });
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    const firstStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
+    const secondStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await firstStop;
+    await waitForMicrotaskCondition(
+      () => stopAccount.mock.calls.length === 2,
+      "expected the queued retry to begin after the timeout",
+    );
+
+    const shutdown = manager.stopChannelForShutdown("discord");
+    await flushMicrotasks();
+    expect(stopAccount).toHaveBeenCalledTimes(2);
+    expect(
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID],
+    ).toMatchObject({
+      lifecycle: "recovering",
+      lastError: "channel stop timed out after 5000ms",
+    });
+
+    releaseTask.resolve();
+    releaseSecondStop.resolve();
+    await expect(secondStop).resolves.toBeUndefined();
+    await expect(shutdown).resolves.toBeUndefined();
+    expect(stopAccount).toHaveBeenCalledTimes(2);
+  });
+
+  it("joins a settled lifecycle stop during shutdown without stopping twice", async () => {
+    const startAccount = vi.fn(
+      async ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    const stopAccount = vi.fn(async () => {});
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+    const lifecycleAbort = new AbortController();
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, {
+      lifecycleAbortSignal: lifecycleAbort.signal,
+    });
+    await flushMicrotasks();
+    lifecycleAbort.abort();
+    await waitForMicrotaskCondition(
+      () =>
+        manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]?.lifecycle ===
+        "stopped",
+      "expected lifecycle stop to settle",
+    );
+
+    await manager.stopChannelForShutdown("discord");
+
+    expect(stopAccount).toHaveBeenCalledOnce();
+  });
+
+  it("rethrows a settled lifecycle stop failure from the shutdown join", async () => {
+    const startAccount = vi.fn(
+      async ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    const stopAccount = vi.fn(async () => {
+      throw new Error("lifecycle stop failed");
+    });
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+    const lifecycleAbort = new AbortController();
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, {
+      lifecycleAbortSignal: lifecycleAbort.signal,
+    });
+    await flushMicrotasks();
+    lifecycleAbort.abort();
+    await waitForMicrotaskCondition(
+      () =>
+        manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]?.lastError ===
+        "lifecycle stop failed",
+      "expected lifecycle stop failure to settle",
+    );
+    await flushMicrotasks();
+
+    await expect(manager.stopChannelForShutdown("discord")).rejects.toThrow(
+      "lifecycle stop failed",
+    );
+    expect(stopAccount).toHaveBeenCalledOnce();
+  });
+
+  it("joins a timed-out lifecycle stop without replacing its timeout state", async () => {
+    const startAccount = vi.fn(async () => await new Promise<void>(() => {}));
+    const stopAccount = vi.fn(async () => {});
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+    const lifecycleAbort = new AbortController();
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, {
+      lifecycleAbortSignal: lifecycleAbort.signal,
+    });
+    await flushMicrotasks();
+    lifecycleAbort.abort();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await manager.stopChannelForShutdown("discord");
+
+    expect(stopAccount).toHaveBeenCalledOnce();
+    expect(
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID],
+    ).toMatchObject({
+      running: false,
+      lifecycle: "recovering",
+      restartPending: true,
+      lastError: "channel stop timed out after 5000ms",
+    });
+  });
+
+  it("stops a successor while it is reserved before task handoff", async () => {
+    const successorGate = createDeferred();
+    const isConfigured = vi.fn(async () => {
+      if (isConfigured.mock.calls.length === 2) {
+        await successorGate.promise;
+      }
+      return true;
+    });
+    const startAccount = vi.fn(
+      async ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    const stopAccount = vi.fn(async () => {});
+    installTestRegistry(createTestPlugin({ isConfigured, startAccount, stopAccount }));
+    const manager = createManager();
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    const successor = manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await waitForMicrotaskCondition(
+      () => isConfigured.mock.calls.length === 2,
+      "expected the successor to reach its pre-handoff gate",
+    );
+    const shutdown = manager.stopChannelForShutdown("discord");
+    let shutdownSettled = false;
+    void shutdown.then(() => {
+      shutdownSettled = true;
+    });
+    await waitForMicrotaskCondition(
+      () => stopAccount.mock.calls.length === 2,
+      "expected shutdown to stop the reserved successor",
+    );
+
+    expect(shutdownSettled).toBe(false);
+    expect(startAccount).toHaveBeenCalledOnce();
+    successorGate.resolve();
+    await Promise.all([successor, shutdown]);
+    expect(stopAccount).toHaveBeenCalledTimes(2);
+    expect(startAccount).toHaveBeenCalledOnce();
+  });
+
+  it("returns each overlapping explicit stop's own teardown result", async () => {
     const releaseTask = createDeferred();
     const stopHooks = [createDeferred(), createDeferred()];
     const startAccount = vi.fn(async () => await releaseTask.promise);
@@ -782,11 +1092,13 @@ describe("server-channels auto restart", () => {
     await flushMicrotasks();
     expect(stopAccount).toHaveBeenCalledTimes(2);
 
-    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    const replacementStart = manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await flushMicrotasks();
     expect(startAccount).toHaveBeenCalledTimes(1);
 
     stopHooks[1]?.resolve();
     await secondFailure;
+    await replacementStart;
     await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
     expect(startAccount).toHaveBeenCalledTimes(1);
     expect(
@@ -1194,21 +1506,29 @@ describe("server-channels auto restart", () => {
 
   it("does not poison auto-restart state when recovery stop times out", async () => {
     const releaseFirstTask = createDeferred();
-    const startAccount = vi.fn(
-      async ({ abortSignal }: { abortSignal: AbortSignal }) =>
+    const signals: AbortSignal[] = [];
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      signals.push(abortSignal);
+      abortSignal.addEventListener("abort", () => {}, { once: true });
+      if (signals.length === 1) {
+        await releaseFirstTask.promise;
+      } else {
         await new Promise<void>((resolve) => {
-          abortSignal.addEventListener("abort", () => {}, { once: true });
-          void releaseFirstTask.promise.then(resolve);
-        }),
-    );
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      }
+    });
     installTestRegistry(
       createTestPlugin({
         startAccount,
       }),
     );
     const manager = createManager();
+    const lifecycleAbort = new AbortController();
 
-    await manager.startChannels();
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, {
+      lifecycleAbortSignal: lifecycleAbort.signal,
+    });
     const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
     await vi.advanceTimersByTimeAsync(5_000);
     await stopTask;
@@ -1231,6 +1551,39 @@ describe("server-channels auto restart", () => {
 
     expect(startAccount).toHaveBeenCalledTimes(2);
     expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
+
+    lifecycleAbort.abort();
+    await waitForMicrotaskCondition(
+      () => signals[1]?.aborted === true,
+      "expected timed-out-stop replacement to retain lifecycle generation ownership",
+    );
+  });
+
+  it("releases a timed-out predecessor generation listener before forced replacement", async () => {
+    const signals: AbortSignal[] = [];
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      signals.push(abortSignal);
+      await new Promise<void>(() => {});
+    });
+    const stopAccount = vi.fn(async () => {});
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+    const lifecycleAbort = new AbortController();
+    const startOptions = { lifecycleAbortSignal: lifecycleAbort.signal };
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, startOptions);
+    const predecessorStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await predecessorStop;
+    expect(getEventListeners(lifecycleAbort.signal, "abort")).toHaveLength(0);
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, startOptions);
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID, startOptions);
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    expect(getEventListeners(lifecycleAbort.signal, "abort")).toHaveLength(1);
+    lifecycleAbort.abort();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(signals[1]?.aborted).toBe(true);
+    expect(stopAccount).toHaveBeenCalledTimes(2);
   });
 
   it("does not restart when a timed-out recovery stop settles as terminal", async () => {
@@ -2080,6 +2433,35 @@ describe("server-channels auto restart", () => {
     expect(startAccount).not.toHaveBeenCalled();
   });
 
+  it("starts a successor after an aborted predecessor hands off no task", async () => {
+    const startupGate = createDeferred();
+    const isConfigured = vi.fn(async () => {
+      if (isConfigured.mock.calls.length === 1) {
+        await startupGate.promise;
+      }
+      return true;
+    });
+    const startAccount = vi.fn(async () => await new Promise(() => {}));
+
+    installTestRegistry(createTestPlugin({ startAccount, isConfigured }));
+    const manager = createManager();
+    const predecessorLifecycle = new AbortController();
+
+    const predecessor = manager.startChannel("discord", DEFAULT_ACCOUNT_ID, {
+      lifecycleAbortSignal: predecessorLifecycle.signal,
+    });
+    await Promise.resolve();
+    const successor = manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+
+    predecessorLifecycle.abort();
+    startupGate.resolve();
+    await Promise.all([predecessor, successor]);
+
+    expect(isConfigured).toHaveBeenCalledTimes(2);
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    expect(firstStartAccountContext(startAccount)?.abortSignal.aborted).toBe(false);
+  });
+
   it("does not resolve channelRuntime until a channel starts", async () => {
     const channelRuntime = {
       ...createRuntimeChannel(),
@@ -2595,7 +2977,7 @@ describe("server-channels auto restart", () => {
     await Promise.all(channelIds.map((id) => manager.stopChannel(id)));
   });
 
-  it("evicts stale account lifecycle state during whole-channel reload", async () => {
+  it("evicts stale account state and its fulfilled stop receipt during reload", async () => {
     let accountIds = [DEFAULT_ACCOUNT_ID];
     const startAccount = vi.fn(
       async ({ abortSignal }: { abortSignal: AbortSignal }) =>

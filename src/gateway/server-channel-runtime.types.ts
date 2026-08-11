@@ -12,5 +12,6 @@ export type StartChannelOptions = {
   preserveRestartAttempts?: boolean;
   preserveManualStop?: boolean;
   deferAccountStartUntil?: Promise<void>;
+  lifecycleAbortSignal?: AbortSignal;
   manual?: boolean;
 };
