@@ -27,7 +27,8 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { stripTrailingHeartbeatNotifyFalse } from "./heartbeat-delivery-normalization.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import { claimHeartbeatOutcomeForRun } from "./heartbeat-outcome-store.js";
-import { runHeartbeatOnce, testing, type HeartbeatDeps } from "./heartbeat-runner.js";
+import { truncateHeartbeatPreview } from "./heartbeat-runner-prompt.js";
+import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
   readSessionStoreForTest,
@@ -45,8 +46,8 @@ installHeartbeatRunnerTestRuntime();
 
 describe("heartbeat event previews", () => {
   it("keeps the 200-code-unit preview UTF-16 well-formed", () => {
-    expect(testing.truncateHeartbeatPreview(`${"x".repeat(199)}🚀tail`)).toBe("x".repeat(199));
-    expect(testing.truncateHeartbeatPreview(undefined)).toBeUndefined();
+    expect(truncateHeartbeatPreview(`${"x".repeat(199)}🚀tail`)).toBe("x".repeat(199));
+    expect(truncateHeartbeatPreview(undefined)).toBeUndefined();
   });
 });
 
