@@ -506,7 +506,6 @@ src/auto-reply/reply/model-selection.test.ts
 src/auto-reply/reply/queue.collect.test.ts
 src/auto-reply/reply/queue/drain.ts
 src/auto-reply/reply/reply-run-registry.test.ts
-src/auto-reply/reply/reply-run-registry.ts
 src/auto-reply/reply/reply-turn-admission.test.ts
 src/auto-reply/reply/reply-utils.test.ts
 src/auto-reply/reply/session.test.ts
