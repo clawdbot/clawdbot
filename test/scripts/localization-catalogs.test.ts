@@ -1,0 +1,422 @@
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  catalogSourceRevision,
+  catalogWorkflowPaths,
+  checkCatalogs,
+  detectChangedCatalogAreas,
+  detectCatalogDrift,
+  refreshCatalogs,
+} from "../../scripts/localization-catalogs.js";
+
+const SOURCE_PATH = "owner/i18n/catalogs/en.json";
+const TARGET_PATH = "owner/i18n/catalogs/generated/zh-CN.json";
+const SOURCE_MESSAGES = { "wizard.completion.title": "Shell completion" };
+
+let root: string;
+
+async function writeJson(relativePath: string, value: unknown, fixtureRoot = root) {
+  const filePath = path.join(fixtureRoot, relativePath);
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+async function writeFixture(fixtureRoot = root) {
+  await writeJson(
+    "registry.json",
+    {
+      schemaVersion: 1,
+      areas: [
+        {
+          id: "wizard-core",
+          owner: "wizard",
+          namespace: "wizard",
+          source: SOURCE_PATH,
+          targets: [{ locale: "zh-CN", path: TARGET_PATH }],
+          protectedLiterals: ["Shell"],
+        },
+      ],
+    },
+    fixtureRoot,
+  );
+  await writeJson(
+    SOURCE_PATH,
+    {
+      schemaVersion: 1,
+      area: "wizard-core",
+      messages: SOURCE_MESSAGES,
+    },
+    fixtureRoot,
+  );
+  await writeJson(
+    TARGET_PATH,
+    {
+      schemaVersion: 1,
+      area: "wizard-core",
+      locale: "zh-CN",
+      sourceRevision: catalogSourceRevision(SOURCE_MESSAGES),
+      sourceMessages: SOURCE_MESSAGES,
+      generation: {
+        workflow: "test",
+        provider: "fixture",
+        model: "fixture",
+        sourceCommit: "a".repeat(40),
+        glossaryRevision: "none",
+        validation: "passed",
+      },
+      messages: { "wizard.completion.title": "Shell 补全" },
+    },
+    fixtureRoot,
+  );
+}
+
+beforeEach(async () => {
+  root = await mkdtemp(path.join(os.tmpdir(), "openclaw-localization-catalogs-"));
+  await writeFixture();
+});
+
+afterEach(async () => {
+  vi.unstubAllEnvs();
+  await rm(root, { recursive: true, force: true });
+});
+
+describe("localization catalog authoring", () => {
+  it("hashes source messages in locale-independent code-point order", () => {
+    const canonical = JSON.stringify({ "wizard.B": "upper", "wizard.a": "lower" });
+    const expected = `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
+
+    expect(catalogSourceRevision({ "wizard.a": "lower", "wizard.B": "upper" })).toBe(expected);
+  });
+
+  it("accepts a current generated catalog", async () => {
+    await expect(checkCatalogs({ root, registryPath: "registry.json" })).resolves.toBeUndefined();
+  });
+
+  it("reports English source drift without provider credentials", async () => {
+    await writeJson(SOURCE_PATH, {
+      schemaVersion: 1,
+      area: "wizard-core",
+      messages: { "wizard.completion.title": "Shell completion setup" },
+    });
+    await expect(detectCatalogDrift({ root, registryPath: "registry.json" })).resolves.toEqual([
+      expect.stringContaining("is stale"),
+    ]);
+  });
+
+  it("exits nonzero when the ready-PR gate finds source drift", async () => {
+    await writeJson(SOURCE_PATH, {
+      schemaVersion: 1,
+      area: "wizard-core",
+      messages: { "wizard.completion.title": "Shell completion setup" },
+    });
+    await writeJson(
+      "localization/catalogs.json",
+      JSON.parse(await readFile(path.join(root, "registry.json"), "utf8")),
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "scripts/localization-catalogs.ts",
+        "detect",
+        "--root",
+        root,
+        "--fail-on-drift",
+      ],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout, result.stderr).toContain("::error::zh-CN/wizard-core is stale");
+    expect(result.stderr).toContain("must run Localization Catalog Refresh before merge");
+  });
+
+  it("reports a missing generated target so a new area can bootstrap asynchronously", async () => {
+    await rm(path.join(root, TARGET_PATH));
+
+    await expect(detectCatalogDrift({ root, registryPath: "registry.json" })).resolves.toEqual([
+      expect.stringContaining("is missing generated target"),
+    ]);
+  });
+
+  it("blocks an invalid English source even when its generated target is missing", async () => {
+    await rm(path.join(root, TARGET_PATH));
+    await writeJson(SOURCE_PATH, {
+      schemaVersion: 1,
+      area: "wizard-core",
+      messages: { "other.completion.title": "Shell completion" },
+    });
+
+    await expect(detectCatalogDrift({ root, registryPath: "registry.json" })).rejects.toThrow(
+      "English source failed catalog validation",
+    );
+  });
+
+  it("blocks English source drift before translated output is refreshed", async () => {
+    await writeJson(SOURCE_PATH, {
+      schemaVersion: 1,
+      area: "wizard-core",
+      messages: { "wizard.completion.title": "Shell completion setup" },
+    });
+
+    await expect(checkCatalogs({ root, registryPath: "registry.json" })).rejects.toThrow(
+      "is stale",
+    );
+  });
+
+  it("blocks generated output with placeholder drift", async () => {
+    const messages = { "wizard.completion.title": "Shell completion for {shell}" };
+    await writeJson(SOURCE_PATH, { schemaVersion: 1, area: "wizard-core", messages });
+    const generated = JSON.parse(await readFile(path.join(root, TARGET_PATH), "utf8"));
+    generated.sourceRevision = catalogSourceRevision(messages);
+    generated.sourceMessages = messages;
+    generated.messages["wizard.completion.title"] = "Shell 补全";
+    await writeJson(TARGET_PATH, generated);
+
+    await expect(checkCatalogs({ root, registryPath: "registry.json" })).rejects.toThrow(
+      "placeholder-mismatch",
+    );
+  });
+
+  it("validates malformed generated output even when the English source has moved", async () => {
+    await writeJson(SOURCE_PATH, {
+      schemaVersion: 1,
+      area: "wizard-core",
+      messages: { "wizard.completion.title": "Shell completion setup" },
+    });
+    const generated = JSON.parse(await readFile(path.join(root, TARGET_PATH), "utf8"));
+    generated.messages["wizard.completion.title"] = "命令行补全";
+    await writeJson(TARGET_PATH, generated);
+
+    await expect(detectCatalogDrift({ root, registryPath: "registry.json" })).rejects.toThrow(
+      'changed protected literal "Shell"',
+    );
+  });
+
+  it("blocks generated output that changes a protected literal", async () => {
+    const generated = JSON.parse(await readFile(path.join(root, TARGET_PATH), "utf8"));
+    generated.messages["wizard.completion.title"] = "命令行补全";
+    await writeJson(TARGET_PATH, generated);
+
+    await expect(checkCatalogs({ root, registryPath: "registry.json" })).rejects.toThrow(
+      'changed protected literal "Shell"',
+    );
+  });
+
+  it("refreshes stale output with source-pinned generation evidence", async () => {
+    vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_MODEL", "reviewed-translation-model");
+    await writeJson(SOURCE_PATH, {
+      schemaVersion: 1,
+      area: "wizard-core",
+      messages: { "wizard.completion.title": "Shell completion setup" },
+    });
+    const translator = vi.fn(async () => new Map([["wizard.completion.title", "Shell 补全设置"]]));
+
+    await expect(
+      refreshCatalogs({
+        root,
+        registryPath: "registry.json",
+        sourceCommit: "b".repeat(40),
+        translator,
+        write: true,
+      }),
+    ).resolves.toBe(1);
+    await expect(checkCatalogs({ root, registryPath: "registry.json" })).resolves.toBeUndefined();
+
+    const generated = JSON.parse(await readFile(path.join(root, TARGET_PATH), "utf8"));
+    expect(generated.generation.sourceCommit).toBe("b".repeat(40));
+    expect(generated.generation.model).toBe("reviewed-translation-model");
+    expect(generated.messages["wizard.completion.title"]).toBe("Shell 补全设置");
+    expect(translator).toHaveBeenCalledOnce();
+  });
+
+  it("creates a missing generated target directory during first refresh", async () => {
+    await rm(path.join(root, "owner/i18n/catalogs/generated"), {
+      recursive: true,
+      force: true,
+    });
+    const translator = vi.fn(async () => new Map([["wizard.completion.title", "Shell 补全"]]));
+
+    await expect(
+      refreshCatalogs({
+        root,
+        registryPath: "registry.json",
+        sourceCommit: "c".repeat(40),
+        translator,
+        write: true,
+      }),
+    ).resolves.toBe(1);
+    await expect(checkCatalogs({ root, registryPath: "registry.json" })).resolves.toBeUndefined();
+  });
+
+  it("returns sorted registry-owned workflow paths", async () => {
+    await expect(catalogWorkflowPaths({ root, registryPath: "registry.json" })).resolves.toEqual({
+      sources: [SOURCE_PATH],
+      targets: [TARGET_PATH],
+    });
+  });
+
+  it("selects only the catalog area changed from an exact comparison base", async () => {
+    const baseRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-localization-base-"));
+    const updaterSource = "updater/i18n/catalogs/en.json";
+    const updaterTarget = "updater/i18n/catalogs/generated/zh-CN.json";
+    const registry = {
+      schemaVersion: 1,
+      areas: [
+        {
+          id: "wizard-core",
+          owner: "wizard",
+          namespace: "wizard",
+          source: SOURCE_PATH,
+          targets: [{ locale: "zh-CN", path: TARGET_PATH }],
+          protectedLiterals: ["Shell"],
+        },
+        {
+          id: "updater",
+          owner: "updater",
+          namespace: "updater",
+          source: updaterSource,
+          targets: [{ locale: "zh-CN", path: updaterTarget }],
+          protectedLiterals: [],
+        },
+      ],
+    };
+    try {
+      await writeJson("registry.json", registry);
+      await writeJson("registry.json", registry, baseRoot);
+      await writeJson(SOURCE_PATH, {
+        schemaVersion: 1,
+        area: "wizard-core",
+        messages: { "wizard.completion.title": "Shell completion changed" },
+      });
+      await writeJson(
+        SOURCE_PATH,
+        {
+          schemaVersion: 1,
+          area: "wizard-core",
+          messages: SOURCE_MESSAGES,
+        },
+        baseRoot,
+      );
+      for (const fixtureRoot of [root, baseRoot]) {
+        await writeJson(
+          updaterSource,
+          {
+            schemaVersion: 1,
+            area: "updater",
+            messages: { "updater.status": "Checking for updates" },
+          },
+          fixtureRoot,
+        );
+      }
+
+      await expect(
+        detectChangedCatalogAreas({ root, baseRoot, registryPath: "registry.json" }),
+      ).resolves.toEqual(["wizard-core"]);
+      await expect(
+        catalogWorkflowPaths({
+          root,
+          registryPath: "registry.json",
+          areas: ["wizard-core"],
+        }),
+      ).resolves.toEqual({ sources: [SOURCE_PATH], targets: [TARGET_PATH] });
+    } finally {
+      await rm(baseRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a target redirected into another owner's catalog directory", async () => {
+    const registry = JSON.parse(await readFile(path.join(root, "registry.json"), "utf8"));
+    registry.areas[0].targets[0].path = "other/i18n/catalogs/generated/zh-CN.json";
+    await writeJson("registry.json", registry);
+
+    await expect(catalogWorkflowPaths({ root, registryPath: "registry.json" })).rejects.toThrow(
+      "owner-local generated target",
+    );
+  });
+
+  it("rejects an oversized refresh plan before calling the translation provider", async () => {
+    await writeJson(SOURCE_PATH, {
+      schemaVersion: 1,
+      area: "wizard-core",
+      messages: { "wizard.completion.title": "Shell completion setup" },
+    });
+    const translator = vi.fn();
+
+    await expect(
+      refreshCatalogs({
+        root,
+        registryPath: "registry.json",
+        sourceCommit: "d".repeat(40),
+        translator,
+        limits: { maxCharactersPerMessage: 10 },
+        write: true,
+      }),
+    ).rejects.toThrow("characters; limit is 10");
+    expect(translator).not.toHaveBeenCalled();
+  });
+
+  it("rejects registry paths outside the adopted owner convention", async () => {
+    await writeJson("registry.json", {
+      schemaVersion: 1,
+      areas: [
+        {
+          id: "wizard-core",
+          owner: "wizard",
+          namespace: "wizard",
+          source: "../outside.json",
+          targets: [{ locale: "zh-CN", path: TARGET_PATH }],
+          protectedLiterals: [],
+        },
+      ],
+    });
+
+    await expect(catalogWorkflowPaths({ root, registryPath: "registry.json" })).rejects.toThrow(
+      "normalized repository-relative path",
+    );
+  });
+
+  it("rejects Windows drive paths on every host platform", async () => {
+    await writeJson("registry.json", {
+      schemaVersion: 1,
+      areas: [
+        {
+          id: "wizard-core",
+          owner: "wizard",
+          namespace: "wizard",
+          source: "C:/outside/i18n/catalogs/en.json",
+          targets: [{ locale: "zh-CN", path: TARGET_PATH }],
+          protectedLiterals: [],
+        },
+      ],
+    });
+
+    await expect(catalogWorkflowPaths({ root, registryPath: "registry.json" })).rejects.toThrow(
+      "normalized repository-relative path",
+    );
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a source symlink before catalog contents can reach a provider",
+    async () => {
+      const outside = path.join(path.dirname(root), `${path.basename(root)}-outside.json`);
+      await writeFile(outside, `${JSON.stringify({ secret: "not catalog data" })}\n`, "utf8");
+      await rm(path.join(root, SOURCE_PATH));
+      await symlink(outside, path.join(root, SOURCE_PATH));
+
+      try {
+        await expect(detectCatalogDrift({ root, registryPath: "registry.json" })).rejects.toThrow(
+          "must not traverse a symbolic link",
+        );
+      } finally {
+        await rm(outside, { force: true });
+      }
+    },
+  );
+});

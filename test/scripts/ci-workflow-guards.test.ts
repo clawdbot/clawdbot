@@ -2831,6 +2831,16 @@ NODE
     });
   });
 
+  it("runs the shared localization job only for its preflight-selected scope", () => {
+    const workflow = readCiWorkflow();
+    expect(workflow.jobs.preflight.outputs.run_localization).toContain(
+      "steps.changed_scope.outputs.run_localization",
+    );
+    expect(workflow.jobs["localization-catalogs"].if).toBe(
+      "needs.preflight.outputs.run_localization == 'true'",
+    );
+  });
+
   it("keeps sticky dependency snapshots on trusted Blacksmith Node shards", () => {
     const workflow = readCiWorkflow();
     const blacksmithJobs = Object.entries(workflow.jobs).filter(([, job]) => {
@@ -2864,6 +2874,7 @@ NODE
       "checks-ui-e2e",
       "checks-ui-e2e-real-gateway",
       "control-ui-i18n",
+      "localization-catalogs",
       "native-i18n",
       "qa-smoke-ci-profile",
     ]);
@@ -6059,6 +6070,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "pnpm-store-warmup",
       "build-artifacts",
       "native-i18n",
+      "localization-catalogs",
       "checks-ui",
       "checks-ui-e2e",
       "checks-ui-e2e-real-gateway",

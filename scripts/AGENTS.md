@@ -29,6 +29,18 @@ This directory owns local tooling, script wrappers, and generated-artifact helpe
 - If a script writes generated artifacts, keep the source-of-truth generator, the package script, and the matching verification/check command aligned.
 - Prefer additive generator/check pairs like `*:gen` and `*:check` over one-off undocumented scripts.
 
+## Localization Catalog Adoption
+
+- Extend the shared `localization/catalogs.json` registry, `localization-catalogs` CI lane, and Localization Catalog Refresh workflow. Do not add a gate or refresh workflow per product surface.
+- Adopted English sources use `<owner>/i18n/catalogs/en.json`; generated targets use `<owner>/i18n/catalogs/generated/<locale>.json`. The convention triggers the shared workflow, and the registry supplies its exact source and publication paths.
+- Draft source PRs do not run the lane. Once ready, fork and non-default-base PRs run credential-free advisory detection. Same-repository PRs targeting the default branch fail on missing or stale targets, then a maintainer-authorized trusted workflow updates that same branch under an exact-head lease. Fork/cross-repository merges use one generated follow-up PR. Generated changes and manual/release runs use strict source/generated parity.
+- Trusted refresh compares exact base and head revisions, translates only changed catalog areas, and may publish only those areas' owner-local generated targets. Keep source and target catalogs in the same `i18n/catalogs` directory; never redirect one owner's generated output into another owner root.
+- Keep refresh budgets atomic and bounded before provider calls: at most 5 areas, 110 stale targets, 500 messages per area, 4,000 characters per message, 100,000 source characters per area, and 2,000,000 source-character translations per run. Split larger work into reviewed owner slices instead of raising limits casually.
+- Keep auto-merge disabled. Generation provenance and structural validation do not count as linguistic, product, or safety approval.
+- A new area must include the owner runtime import and focused rendering tests in the same adoption slice. Do not register speculative or unconsumed catalogs.
+- Extend `localization/surfaces.json` progressively with owner-scoped adapters. Adapters enumerate product-facing source resources; they do not scan arbitrary literals or prove repository-wide coverage.
+- Every source discovered by an adapter needs the matching semantic owner and one strict disposition: an owner/namespace/source-matched adopted catalog area, a registered conforming pipeline, an enumerated English-only reason, a native platform constraint, or a deferred issue plus review owner. Generated targets are derived from the catalog registry; adapters cannot declare exclusions.
+
 ## Scope
 
 - Keep script-runner behavior, wrapper expectations, and generated-artifact guidance here.

@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "area": "wizard-core",
+  "locale": "zh-CN",
+  "sourceRevision": "sha256:4c4e7314141ebed1fae058c7803a4cc05bf9748b80f93945c04d639830ac22af",
+  "sourceMessages": {
+    "wizard.completion.cacheFailed": "Failed to generate completion cache. Run `{command}` later.",
+    "wizard.completion.enable": "Enable {shell} shell completion for {cli}?",
+    "wizard.completion.installed": "Shell completion installed. {reloadHint}",
+    "wizard.completion.reloadPowerShell": "Restart your shell or run: {command}",
+    "wizard.completion.reloadShell": "Restart your shell or run: source {profile}",
+    "wizard.completion.title": "Shell completion"
+  },
+  "generation": {
+    "workflow": "bootstrap-reviewed",
+    "provider": "human",
+    "model": "n/a",
+    "sourceCommit": "bootstrap-reviewed-in-source-pr",
+    "glossaryRevision": "none",
+    "validation": "passed"
+  },
+  "messages": {
+    "wizard.completion.cacheFailed": "生成 completion 缓存失败。稍后运行 `{command}`。",
+    "wizard.completion.enable": "为 {cli} 启用 {shell} shell completion？",
+    "wizard.completion.installed": "Shell completion 已安装。{reloadHint}",
+    "wizard.completion.reloadPowerShell": "重启 shell 或运行：{command}",
+    "wizard.completion.reloadShell": "重启 shell 或运行：source {profile}",
+    "wizard.completion.title": "Shell completion"
+  }
+}

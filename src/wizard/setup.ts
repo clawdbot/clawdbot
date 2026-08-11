@@ -19,7 +19,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveUserPath } from "../utils.js";
-import { t } from "./i18n/index.js";
+import { runWithWizardLocalization, t } from "./i18n/index.js";
 import { runWizardWithPromptNavigation } from "./navigation-prompter.js";
 import type { WizardPrompter } from "./prompts.js";
 import { offerLiveModelVerification } from "./setup.inference-verification.js";
@@ -66,9 +66,13 @@ export async function runSetupWizard(
   runtimeInput: RuntimeEnv | undefined,
   prompter: WizardPrompter,
 ) {
-  await runWizardWithPromptNavigation(
-    prompter,
-    async (navigationPrompter) => await runSetupWizardOnce(opts, runtimeInput, navigationPrompter),
+  await runWithWizardLocalization(
+    async () =>
+      await runWizardWithPromptNavigation(
+        prompter,
+        async (navigationPrompter) =>
+          await runSetupWizardOnce(opts, runtimeInput, navigationPrompter),
+      ),
   );
 }
 

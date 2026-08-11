@@ -474,6 +474,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/check-workflows.test.ts",
         "test/scripts/plugin-contract-test-plan.test.ts",
         "test/scripts/plugin-prerelease-test-plan.test.ts",
+        "test/scripts/localization-catalog-workflow.test.ts",
         "test/scripts/verify-pr-hosted-gates.test.ts",
       ],
     );
@@ -489,6 +490,18 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/ci-workflow-guards.test.ts",
       ],
     );
+  });
+
+  it("keeps localization refresh workflow edits on its focused contract test", () => {
+    expect(
+      resolveChangedTestTargetPlan([".github/workflows/localization-catalog-refresh.yml"]),
+    ).toEqual({
+      mode: "targets",
+      targets: [
+        "test/scripts/localization-catalog-workflow.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
+      ],
+    });
   });
 
   it("keeps generated locale publisher and inventory edits on workflow guards", () => {
