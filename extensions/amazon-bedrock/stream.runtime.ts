@@ -83,7 +83,11 @@ function usesClaudeFable5BedrockContract(model: Model<"bedrock-converse-stream">
 }
 
 function usesClaudeOpus5BedrockContract(model: Model<"bedrock-converse-stream">): boolean {
-  return resolveClaudeOpus5ModelIdentity(model) !== undefined;
+  return (
+    resolveClaudeOpus5ModelIdentity(model) !== undefined ||
+    resolveClaudeOpus5ModelIdentity({ id: resolveClaudeProfileNameModelId(model.name) }) !==
+      undefined
+  );
 }
 
 function usesClaudeSonnet5BedrockContract(model: Model<"bedrock-converse-stream">): boolean {
@@ -465,7 +469,13 @@ function resolveSimpleBedrockOptions(
   }
 
   if (options.reasoning === "off") {
-    return { ...base, reasoning: "off" } satisfies BedrockOptions;
+    return {
+      ...base,
+      maxTokens: usesClaudeOpus5BedrockContract(model)
+        ? resolveAdaptiveBedrockMaxTokens(model, base.maxTokens)
+        : base.maxTokens,
+      reasoning: "off",
+    } satisfies BedrockOptions;
   }
 
   if (isAnthropicClaudeModel(model)) {

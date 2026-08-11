@@ -460,8 +460,8 @@ describe("Bedrock stop reasons", () => {
 
 describe("Bedrock thinking effort mapping", () => {
   it.each([
-    { reasoning: undefined, expected: "high", maxTokens: 128_000, fields: true },
-    { reasoning: "off" as const, expected: "off", maxTokens: undefined, fields: false },
+    { reasoning: undefined, expected: "high", maxTokens: 32_000, fields: true },
+    { reasoning: "off" as const, expected: "off", maxTokens: 32_000, fields: false },
   ])(
     "uses the Opus 5 default for reasoning=$reasoning",
     ({ reasoning, expected, maxTokens, fields }) => {
@@ -470,7 +470,7 @@ describe("Bedrock thinking effort mapping", () => {
         name: "Claude Opus 5",
         reasoning: true,
         contextWindow: 1_000_000,
-        maxTokens: 128_000,
+        maxTokens: 32_000,
         thinkingLevelMap: { xhigh: "xhigh", max: "max" },
       });
       const options = testing.resolveSimpleBedrockOptions(model, { reasoning });
@@ -484,6 +484,82 @@ describe("Bedrock thinking effort mapping", () => {
             }
           : undefined,
       );
+    },
+  );
+
+  it("preserves an explicit maxTokens cap when Opus 5 reasoning is off", () => {
+    const model = bedrockModel({
+      id: "global.anthropic.claude-opus-5",
+      name: "Claude Opus 5",
+      reasoning: true,
+      maxTokens: 32_000,
+    });
+    const options = testing.resolveSimpleBedrockOptions(model, {
+      reasoning: "off",
+      maxTokens: 24_000,
+    });
+
+    expect(options).toMatchObject({ maxTokens: 24_000, reasoning: "off" });
+  });
+
+  it("does not forward a non-Opus model cap when reasoning is off", () => {
+    const model = bedrockModel({ maxTokens: 32_000 });
+    const options = testing.resolveSimpleBedrockOptions(model, { reasoning: "off" });
+
+    expect(options).toMatchObject({ maxTokens: undefined, reasoning: "off" });
+  });
+
+  it.each([
+    {
+      label: "Opus 5",
+      model: { id: "global.anthropic.claude-opus-5", name: "Claude Opus 5", maxTokens: 32_000 },
+      inferenceConfig: { maxTokens: 32_000 },
+    },
+    {
+      label: "an Opus 5 application inference profile",
+      model: {
+        id: "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/profile-abc",
+        name: "Claude Opus 5",
+        maxTokens: 32_000,
+      },
+      inferenceConfig: { maxTokens: 32_000 },
+    },
+    {
+      label: "a non-Opus model",
+      model: { id: "amazon.nova-pro-v1:0", name: "Nova Pro", maxTokens: 32_000 },
+      inferenceConfig: {},
+    },
+  ])("sends $label's reasoning-off output cap", async ({ model, inferenceConfig }) => {
+    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: streamEvents([
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        { messageStop: { stopReason: BedrockStopReason.END_TURN } },
+      ]),
+    } as never);
+
+    await streamBedrockForTest(
+      bedrockModel(model),
+      { messages: [{ role: "user", content: "Hello", timestamp: 0 }] } as never,
+      { reasoning: "off" },
+    ).result();
+
+    const command = send.mock.calls[0]?.[0] as { input?: Record<string, unknown> };
+    expect(command.input?.inferenceConfig).toEqual(inferenceConfig);
+  });
+
+  it.each([4096, 8192, 16_384])(
+    "does not turn fallback maxTokens %s into an Opus 5 reasoning-off cap",
+    (maxTokens) => {
+      const model = bedrockModel({
+        id: "global.anthropic.claude-opus-5",
+        name: "Claude Opus 5",
+        reasoning: true,
+        maxTokens,
+      });
+      const options = testing.resolveSimpleBedrockOptions(model, { reasoning: "off" });
+
+      expect(options).toMatchObject({ maxTokens: undefined, reasoning: "off" });
     },
   );
 
