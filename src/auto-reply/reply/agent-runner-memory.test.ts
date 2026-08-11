@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
-import { resolvePreflightRequiredCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -1804,10 +1803,8 @@ describe("runMemoryFlushIfNeeded", () => {
       systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
       relativePath: "memory/2023-11-14.md",
     }));
-    const unresolvedOverflowReason = resolvePreflightRequiredCompactionReason({
-      reason: "Already compacted",
-      preflightRequired: true,
-    });
+    const unresolvedOverflowReason =
+      "Context still exceeds target budget after the latest compaction; nothing new to compact (overflow is driven by fixed per-turn overhead)";
     compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
       ok: false,
       compacted: false,

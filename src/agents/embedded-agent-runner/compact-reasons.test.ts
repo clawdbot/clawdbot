@@ -6,7 +6,6 @@ import {
   isBenignCompactionSkipResult,
   isBenignCompactionSkipReason,
   resolveCompactionFailureReason,
-  resolvePreflightRequiredCompactionReason,
 } from "./compact-reasons.js";
 
 describe("resolveCompactionFailureReason", () => {
@@ -129,41 +128,24 @@ describe("isBenignCompactionSkipReason", () => {
   );
 });
 
-describe("resolvePreflightRequiredCompactionReason", () => {
-  it("rewrites already-compacted into an unresolved-overflow failure for required preflights", () => {
-    // The budget gate only requires preflight after measuring the session over
-    // budget, so "nothing new to compact" means fixed overhead, not a fine session.
-    const rewritten = resolvePreflightRequiredCompactionReason({
-      reason: "Already compacted",
-      preflightRequired: true,
-    });
-    expect(rewritten).not.toBe("Already compacted");
-    expect(rewritten).toContain("still exceeds target");
-    expect(classifyCompactionReason(rewritten)).toBe("live_context_still_exceeds_target");
-    expect(isBenignCompactionSkipResult({ ok: false, compacted: false, reason: rewritten })).toBe(
-      false,
-    );
-  });
+describe("unresolved-overflow preflight reason classification", () => {
+  // The token-preflight producer in compaction-session-execution.ts emits this
+  // message when nothing new compacts over budget; it must stay non-benign so
+  // the mandatory gate rejects instead of skipping (openclaw#121617).
+  const unresolvedOverflowReason =
+    "Context still exceeds target budget after the latest compaction; nothing new to compact (overflow is driven by fixed per-turn overhead)";
 
-  it("keeps the benign already-compacted skip for non-required compaction", () => {
-    expect(
-      resolvePreflightRequiredCompactionReason({
-        reason: "Already compacted",
-        preflightRequired: false,
-      }),
-    ).toBe("Already compacted");
-    expect(resolvePreflightRequiredCompactionReason({ reason: "Already compacted" })).toBe(
-      "Already compacted",
+  it("classifies the unresolved-overflow reason as a hard failure, not a benign skip", () => {
+    expect(classifyCompactionReason(unresolvedOverflowReason)).toBe(
+      "live_context_still_exceeds_target",
     );
-  });
-
-  it("leaves other failure reasons untouched for required preflights", () => {
     expect(
-      resolvePreflightRequiredCompactionReason({
-        reason: "Compaction timed out",
-        preflightRequired: true,
+      isBenignCompactionSkipResult({
+        ok: false,
+        compacted: false,
+        reason: unresolvedOverflowReason,
       }),
-    ).toBe("Compaction timed out");
+    ).toBe(false);
   });
 });
 

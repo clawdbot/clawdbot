@@ -12,7 +12,6 @@ import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { resolvePreflightRequiredCompactionReason } from "./compact-reasons.js";
 import {
   acquireAgentRunPreparedModelRuntimeMock,
   attemptServerEndpointCompactionMock,
@@ -4479,9 +4478,9 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
   });
 
-  it("rewrites an already-compacted verdict as unresolved overflow for required preflights", async () => {
+  it("rewrites an already-compacted verdict as unresolved overflow for required token preflights", async () => {
     // Regression for #121617: when the session owner reports nothing new to
-    // compact on a required budget preflight, the result must classify as
+    // compact on a required token-budget preflight, the result must classify as
     // unresolved overflow instead of the benign already_compacted skip.
     sessionCompactImpl.mockImplementationOnce(async () => {
       throw new Error("Already compacted");
@@ -4499,16 +4498,41 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       trigger: "budget",
       forcePreflight: true,
       preflightRequired: true,
+      preflightCompactionTrigger: "tokens",
     });
 
     expect(result.ok).toBe(false);
     expect(result.compacted).toBe(false);
     expect(result.reason).toBe(
-      resolvePreflightRequiredCompactionReason({
-        reason: "Already compacted",
-        preflightRequired: true,
-      }),
+      "Context still exceeds target budget after the latest compaction; nothing new to compact (overflow is driven by fixed per-turn overhead)",
     );
+  });
+
+  it("keeps the benign already-compacted skip for transcript-byte preflights", async () => {
+    // The transcript-byte guard shares preflightRequired but its model context
+    // may still fit, so the benign skip contract must survive (review #122023).
+    sessionCompactImpl.mockImplementationOnce(async () => {
+      throw new Error("Already compacted");
+    });
+
+    const result = await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: TEST_SESSION_KEY,
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-5.5",
+      agentHarnessId: "openclaw",
+      modelSelectionLocked: true,
+      trigger: "budget",
+      forcePreflight: true,
+      preflightRequired: true,
+      preflightCompactionTrigger: "transcript_bytes",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe("Already compacted");
   });
 
   it("keeps the benign already-compacted reason for non-required compaction", async () => {

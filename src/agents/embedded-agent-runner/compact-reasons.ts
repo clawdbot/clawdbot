@@ -79,30 +79,6 @@ export function isBenignCompactionSkipReason(reason?: string): boolean {
   return classification === "below_threshold" || classification === "already_compacted";
 }
 
-/**
- * Reason emitted when a required preflight compaction finds nothing new to
- * compact even though the budget gate measured the session over budget: the
- * overflow is fixed per-turn overhead, not compactable history. Worded so it
- * classifies as live_context_still_exceeds_target — a mandatory preflight must
- * reject this instead of treating it as a benign already_compacted skip.
- */
-const PREFLIGHT_UNRESOLVED_OVERFLOW_REASON =
-  "Context still exceeds target budget after the latest compaction; nothing new to compact (overflow is driven by fixed per-turn overhead)";
-
-/** Rewrite a benign already-compacted verdict into an unresolved-overflow failure for required preflights. */
-export function resolvePreflightRequiredCompactionReason(params: {
-  reason: string;
-  preflightRequired?: boolean;
-}): string {
-  if (params.preflightRequired !== true) {
-    return params.reason;
-  }
-  if (classifyCompactionReason(params.reason) !== "already_compacted") {
-    return params.reason;
-  }
-  return PREFLIGHT_UNRESOLVED_OVERFLOW_REASON;
-}
-
 /** Return whether a compaction result is an intentional no-op rather than a failure. */
 export function isBenignCompactionSkipResult(result: {
   ok: boolean;
