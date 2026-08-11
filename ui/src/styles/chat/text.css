@@ -57,12 +57,20 @@
   outline-offset: 2px;
 }
 
-.chat-text :where(p, ul, ol, pre, blockquote, table) {
+.chat-text :where(p, ul, ol, pre, blockquote, table, details) {
   margin: 0;
 }
 
-/* Tables always carry top margin (not just after paragraphs); see the sibling
-   :where(p + ...) spacing rule below which intentionally omits table. */
+/* Keep every adjacent top-level Markdown block on the same rhythm, including
+   special blocks that otherwise read as part of the preceding block. */
+.chat-text
+  :where(p, ul, ol, pre, blockquote, table, details)
+  + :where(p, ul, ol, pre, blockquote, table, details) {
+  margin-top: 0.75em;
+}
+
+/* Tables retain top margin even when first; the adjacent-block rule above gives
+   tables the same rhythm when they follow another Markdown block. */
 .chat-text :where(table) {
   margin-top: 0.75em;
   border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
@@ -377,12 +385,6 @@
 
 .chat-text :where(blockquote blockquote blockquote) {
   background: rgba(255, 255, 255, 0.04);
-}
-
-/* Order contract: stays below the nested-blockquote margin rule so a nested
-   quote that follows a paragraph gets paragraph rhythm, not the 8px gap. */
-.chat-text :where(p + p, p + ul, p + ol, p + pre, p + blockquote, ul + p, ol + p) {
-  margin-top: 0.75em;
 }
 
 :root[data-theme-mode="light"] .chat-text :where(blockquote) {
