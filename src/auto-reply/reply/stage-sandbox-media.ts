@@ -88,6 +88,9 @@ export async function stageSandboxMedia(params: {
     !sandbox && !ctx.MediaRemoteHost
       ? path.join("media", "inbound", `openclaw-staged-${crypto.randomUUID()}`)
       : undefined;
+  if (hostWorkspaceStagingDir) {
+    await pruneEmptyStagedMediaDirs(path.join(effectiveWorkspaceDir, "media", "inbound"));
+  }
 
   for (const entry of pathEntries) {
     const source = await resolveStageableMediaSource(entry.path);
@@ -229,6 +232,40 @@ function applyStagedMediaContext(ctx: MsgContext, media: MediaFact[]): void {
 
 function toPosixRelativePath(filePath: string): string {
   return filePath.split(path.sep).join(path.posix.sep);
+}
+
+// Host-mode staging dirs are one-shot temp artifacts: their files are consumed
+// during the run, but the UUID directory can outlive them. Prune empty leftovers
+// old enough that no in-flight run is still populating them.
+const STAGED_MEDIA_PRUNE_MIN_AGE_MS = 60 * 60 * 1000;
+// Canonical shape emitted by stageSandboxMedia: `openclaw-staged-` + UUID.
+const STAGED_MEDIA_DIR_PATTERN =
+  /^openclaw-staged-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+async function pruneEmptyStagedMediaDirs(inboundMediaDir: string): Promise<void> {
+  const entries = await fs.readdir(inboundMediaDir, { withFileTypes: true }).catch(() => []);
+  const cutoffMs = Date.now() - STAGED_MEDIA_PRUNE_MIN_AGE_MS;
+  await Promise.all(
+    entries.map(async (entry) => {
+      if (!entry.isDirectory() || !STAGED_MEDIA_DIR_PATTERN.test(entry.name)) {
+        return;
+      }
+      const dirPath = path.join(inboundMediaDir, entry.name);
+      const stat = await fs.lstat(dirPath).catch(() => null);
+      if (!stat?.isDirectory() || stat.mtimeMs > cutoffMs) {
+        return;
+      }
+      // Remove the directory itself only if it is still empty. Non-recursive
+      // removal tolerates ENOTEMPTY (a concurrent staging run wrote a file
+      // after our check) and ENOENT (someone else removed it first), so a
+      // late-arriving staged file is never deleted.
+      await fs.rmdir(dirPath).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOTEMPTY" && error.code !== "ENOENT") {
+          throw error;
+        }
+      });
+    }),
+  );
 }
 
 async function resolveStageableMediaSource(value: string): Promise<StageableMediaSource | null> {

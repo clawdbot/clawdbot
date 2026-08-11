@@ -278,6 +278,72 @@ describe("stageSandboxMedia", () => {
     });
   });
 
+  it("prunes stale empty openclaw-staged-* leftovers in host mode", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const { cfg, workspaceDir } = await setupSandboxWorkspace(home);
+      sandboxMocks.ensureSandboxWorkspaceForSession.mockResolvedValue(null);
+      const inboundMediaDir = join(workspaceDir, "media", "inbound");
+      await fs.mkdir(inboundMediaDir, { recursive: true });
+
+      const staleEmpty = join(
+        inboundMediaDir,
+        "openclaw-staged-8a4ba094-a431-423d-acd3-cd2cc4e3cf50",
+      );
+      await fs.mkdir(staleEmpty, { recursive: true });
+      const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      await fs.utimes(staleEmpty, old, old);
+
+      const freshEmpty = join(
+        inboundMediaDir,
+        "openclaw-staged-ae9365fe-fa63-4aec-8687-07a2f9bbc1d8",
+      );
+      await fs.mkdir(freshEmpty, { recursive: true });
+
+      const nonEmptyLeftover = join(
+        inboundMediaDir,
+        "openclaw-staged-1b2c3d4e-5f6a-7b8c-9d0e-1f2a3b4c5d6e",
+      );
+      await fs.mkdir(nonEmptyLeftover, { recursive: true });
+      await fs.writeFile(join(nonEmptyLeftover, "still-used.jpg"), "keep");
+      // Age the directory after writing its file: the write refreshes the
+      // parent mtime, so the age must be applied last for the fixture to
+      // represent a stale nonempty directory.
+      await fs.utimes(nonEmptyLeftover, old, old);
+
+      const lookalike = join(inboundMediaDir, "openclaw-staged-not-a-uuid");
+      await fs.mkdir(lookalike, { recursive: true });
+      await fs.utimes(lookalike, old, old);
+
+      const projectFile = join(inboundMediaDir, "notes.txt");
+      await fs.writeFile(projectFile, "user file");
+
+      const fileName = "host-prune.png";
+      await writeInboundMedia(home, fileName, "host-image-bytes");
+      const mediaUri = `media://inbound/${fileName}`;
+      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaUri);
+
+      await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      await expect(fs.stat(staleEmpty)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(freshEmpty)).resolves.toBeDefined();
+      await expect(fs.readFile(join(nonEmptyLeftover, "still-used.jpg"), "utf8")).resolves.toBe(
+        "keep",
+      );
+      // Lookalike directory names outside the canonical UUID shape are kept.
+      await expect(fs.stat(lookalike)).resolves.toBeDefined();
+      await expect(fs.readFile(projectFile, "utf8")).resolves.toBe("user file");
+      await expect(fs.readFile(ctx.media?.[0]?.path ?? "", "utf8")).resolves.toBe(
+        "host-image-bytes",
+      );
+    });
+  });
+
   it("stages allowed media and blocks unsafe paths", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
       const { cfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);
