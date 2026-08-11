@@ -383,7 +383,7 @@ Typical workflow:
 4. Add, enable, disable, or remove servers directly on the MCP page. Choose Streamable HTTP, SSE, or stdio explicitly; stdio command lines accept quoted arguments such as paths with spaces. Use the **Plugins** page for one-click connectors and discovery.
 5. Edit the scoped `mcp` config section for advanced server fields such as environment variables, working directories, headers, TLS/mTLS paths, OAuth metadata, tool filters, and Codex projection metadata.
 6. Use **Save** for a config write, or **Save & Publish** when the running Gateway should apply the changed config.
-7. Run `openclaw mcp status --verbose`, `openclaw mcp doctor --probe`, `openclaw mcp probe`, `openclaw mcp call`, or `openclaw mcp reload` from a terminal for static diagnostics, live proof, one-tool verification, or cached-runtime disposal.
+7. Run `openclaw mcp status --verbose`, `openclaw mcp doctor --probe`, `openclaw mcp probe`, `openclaw mcp call <server> <tool>`, or `openclaw mcp reload` from a terminal for static diagnostics, live proof, one-tool verification, or cached-runtime disposal.
 
 The page redacts credential-bearing URL-like values before rendering and quotes server names in command snippets so copied commands still work with spaces or shell metacharacters. Full CLI and config reference: [MCP](/cli/mcp).
 

@@ -824,10 +824,10 @@ export function registerMcpCli(program: Command) {
   mcp
     .command("call")
     .description(
-      "Invoke one configured MCP tool (stdout JSON); use probe for connection/catalog diagnosis",
+      "Invoke one configured model-visible MCP tool (stdout JSON); use probe for diagnostics",
     )
     .argument("<server>", "MCP server name")
-    .argument("<tool>", "MCP tool name as advertised by the server")
+    .argument("<tool>", "MCP tool name from the filtered model-visible catalog")
     .option("--input <json>", "JSON object tool arguments (default: {})")
     .option("--input-file <path>", "Read one JSON object from a file, or - for stdin")
     .action(
