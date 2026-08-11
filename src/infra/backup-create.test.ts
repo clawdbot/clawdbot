@@ -2515,6 +2515,15 @@ describe("createBackupArchive", () => {
         await fs.mkdir(path.join(stateDir, "npm", "projects", "demo", "node_modules", "dep"), {
           recursive: true,
         });
+        await fs.mkdir(path.join(stateDir, "dev", "openclaw", ".git", "objects", "pack"), {
+          recursive: true,
+        });
+        await fs.mkdir(path.join(stateDir, "dev", "openclaw", "node_modules", "dep"), {
+          recursive: true,
+        });
+        await fs.mkdir(path.join(stateDir, "dev", "openclaw", "dist"), { recursive: true });
+        await fs.mkdir(path.join(stateDir, "developer"), { recursive: true });
+        await fs.mkdir(path.join(stateDir, "dev-backup"), { recursive: true });
         for (const managedRoot of ["dev", "git", "npm-runtime", "tools"]) {
           await fs.mkdir(path.join(stateDir, managedRoot, "runtime"), { recursive: true });
           await fs.writeFile(
@@ -2558,6 +2567,28 @@ describe("createBackupArchive", () => {
           "managed-package sqlite-named asset\n",
           "utf8",
         );
+        await fs.writeFile(
+          path.join(stateDir, "dev", "openclaw", ".git", "objects", "pack", "pack-fixture.pack"),
+          "reinstallable git pack\n",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(stateDir, "dev", "openclaw", "node_modules", "dep", "index.js"),
+          "module.exports = {}\n",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(stateDir, "dev", "openclaw", "dist", "entry.js"),
+          "export {};\n",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(stateDir, "dev", "openclaw", "invalid.sqlite"),
+          "reinstallable sqlite-named artifact\n",
+          "utf8",
+        );
+        await fs.writeFile(path.join(stateDir, "developer", "keep.txt"), "keep\n", "utf8");
+        await fs.writeFile(path.join(stateDir, "dev-backup", "keep.txt"), "keep\n", "utf8");
         await fs.mkdir(outputDir, { recursive: true });
 
         const result = await createBackupArchive({
@@ -2581,6 +2612,8 @@ describe("createBackupArchive", () => {
             managedRoot,
           ).toBe(false);
         }
+        expect(entrySuffixes).toContain("/state/developer/keep.txt");
+        expect(entrySuffixes).toContain("/state/dev-backup/keep.txt");
         const pluginNodeModuleEntries = entries.filter((entry) =>
           entry.includes("/state/extensions/demo/node_modules/"),
         );
