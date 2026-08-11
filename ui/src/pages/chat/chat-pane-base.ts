@@ -55,7 +55,7 @@ import {
 import { ChatStateController } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
-import type { SessionRailMode } from "./components/chat-session-rail.ts";
+import type { SessionRailCommand, SessionRailMode } from "./components/chat-session-rail.ts";
 import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
 import { ChatTranscriptController } from "./components/chat-thread.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
@@ -174,11 +174,10 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @litState() protected sessionRailMode: SessionRailMode = "hidden";
   protected sessionRailModeSessionKey = "";
   protected sessionRailLoad: Promise<void> | null = null;
-  protected sessionRailOpenRequest = 0;
-  protected sessionRailOpenSessionKey = "";
+  protected sessionRailCommand: (SessionRailCommand & { sessionKey: string }) | null = null;
   // The rail can unmount while catalog or lazy state is shown. Keep the consumed
-  // generation on the pane so a retained request cannot replay after remount.
-  protected sessionRailConsumedOpenRequest = 0;
+  // generation on the pane so a retained command cannot replay after remount.
+  protected sessionRailConsumedCommandGeneration = 0;
   protected deferredSessionHydrationRequestVersion = 0;
   protected sessionCompanionHydrationKey = "";
   protected readonly sessionCompanionThreads = new ChatSessionCompanionThreads(() => {
@@ -207,25 +206,36 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       });
   }
 
-  protected openSessionRail(): void {
-    this.sessionRailOpenSessionKey = this.state?.sessionKey ?? "";
+  /** The mirrored mode belongs to one session; every other session reads hidden. */
+  protected selectedSessionRailMode(sessionKey: string): SessionRailMode {
+    return this.sessionRailModeSessionKey === sessionKey ? this.sessionRailMode : "hidden";
+  }
+
+  protected requestSessionRail(intent: SessionRailCommand["intent"]): void {
     this.ensureSessionRail();
-    this.sessionRailOpenRequest += 1;
+    this.sessionRailCommand = {
+      sessionKey: this.state?.sessionKey ?? "",
+      generation: (this.sessionRailCommand?.generation ?? 0) + 1,
+      intent,
+    };
     this.requestUpdate();
   }
 
-  protected readonly consumeSessionRailOpenRequest = (openRequest: number) => {
-    if (openRequest > this.sessionRailConsumedOpenRequest) {
-      this.sessionRailConsumedOpenRequest = openRequest;
+  protected readonly consumeSessionRailCommand = (generation: number) => {
+    if (generation > this.sessionRailConsumedCommandGeneration) {
+      this.sessionRailConsumedCommandGeneration = generation;
     }
   };
 
-  protected sessionRailOpenRequestProps(sessionKey: string) {
+  protected sessionRailCommandProps(sessionKey: string) {
+    const command = this.sessionRailCommand;
     return {
-      sessionRailOpenRequest:
-        this.sessionRailOpenSessionKey === sessionKey ? this.sessionRailOpenRequest : 0,
-      sessionRailConsumedOpenRequest: this.sessionRailConsumedOpenRequest,
-      onSessionRailOpenRequestConsumed: this.consumeSessionRailOpenRequest,
+      sessionRailCommand:
+        command && command.sessionKey === sessionKey
+          ? { generation: command.generation, intent: command.intent }
+          : null,
+      sessionRailConsumedCommandGeneration: this.sessionRailConsumedCommandGeneration,
+      onSessionRailCommandConsumed: this.consumeSessionRailCommand,
     };
   }
 
@@ -235,7 +245,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       return;
     }
     const sessionKey = state.sessionKey;
-    this.openSessionRail();
+    this.requestSessionRail("open");
     if (!state.connected || !state.client) {
       this.sessionCompanionThreads.setDraft(sessionKey, question);
       return;
@@ -251,7 +261,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       return;
     }
     this.sessionCompanionThreads.setDraft(sessionKey, question);
-    this.openSessionRail();
+    this.requestSessionRail("open");
   };
 
   protected hydrateSessionCompanion(sessionKey: string): void {

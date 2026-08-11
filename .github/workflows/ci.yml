@@ -1546,9 +1546,9 @@ jobs:
           --configLoader runner
           --shard ${{ matrix.shard }}/3
 
-      - name: Test browser copilot end-to-end
+      - name: Test browser extension bootstrap end-to-end
         if: matrix.shard == 4
-        run: pnpm test:e2e:browser-copilot
+        run: pnpm test:e2e:browser-extension
 
   checks-ui-e2e-real-gateway:
     permissions:

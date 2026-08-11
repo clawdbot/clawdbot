@@ -10,7 +10,11 @@ import {
   ensureDeliveryState,
   getDeliveryLastError,
 } from "./subagent-delivery-state.js";
-import { logAnnounceGiveUp, MIN_ANNOUNCE_RETRY_DELAY_MS } from "./subagent-registry-helpers.js";
+import {
+  logAnnounceGiveUp,
+  MIN_ANNOUNCE_RETRY_DELAY_MS,
+  resolveAnnounceRetryDelayMs,
+} from "./subagent-registry-helpers.js";
 import type { createSubagentRegistryLifecycleCommon } from "./subagent-registry-lifecycle-common.js";
 import type {
   SubagentRegistryLifecycleParams,
@@ -20,6 +24,8 @@ import type { createSubagentRegistryLifecycleDelivery } from "./subagent-registr
 import type { createSubagentRegistryLifecycleRequesterWake } from "./subagent-registry-lifecycle-requester-wake.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+const MAX_DETACHED_CLEANUP_RETRIES = 3;
+
 export function createSubagentRegistryLifecycleCleanupBase(
   params: SubagentRegistryLifecycleParams,
   state: SubagentRegistryLifecycleState,
@@ -28,6 +34,9 @@ export function createSubagentRegistryLifecycleCleanupBase(
   requesterWake: ReturnType<typeof createSubagentRegistryLifecycleRequesterWake>,
 ) {
   const { scheduledResumeTimers, cleanupGenerations, terminalGenerations } = state;
+  // Exhaustion intentionally leaves the durable row unlocked; only a process
+  // restart gets a fresh retry budget after this process stops scheduling it.
+  const cleanupFailureCounts = new WeakMap<SubagentRunRecord, number>();
   const { buildSafeLifecycleErrorMeta, maskRunId, maskSessionKey, newerGenerationOwnsSession } =
     common;
   const {
@@ -36,6 +45,16 @@ export function createSubagentRegistryLifecycleCleanupBase(
     safeSetSubagentTaskDeliveryStatus,
   } = deliveryHelpers;
   const { markRequesterSettleWakePending, scheduleRequesterSettleWake } = requesterWake;
+
+  const isCleanupGenerationCurrent = (
+    runId: string,
+    entry: SubagentRunRecord,
+    generation: number,
+  ): boolean =>
+    params.runs.get(runId) === entry &&
+    entry.pauseReason !== "sessions_yield" &&
+    cleanupGenerations.get(entry) === generation &&
+    !newerGenerationOwnsSession(entry);
 
   const scheduleResumeSubagentRun = (
     runId: string,
@@ -50,11 +69,13 @@ export function createSubagentRegistryLifecycleCleanupBase(
           return;
         }
         if (cleanupGeneration !== undefined) {
-          if (!isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
+          if (!isCleanupGenerationCurrent(runId, entry, cleanupGeneration)) {
             return;
           }
-          entry.cleanupHandled = false;
-          params.persist(runId);
+          if (entry.cleanupHandled) {
+            entry.cleanupHandled = false;
+            params.persist(runId);
+          }
         }
         params.resumedRuns.delete(runId);
         params.resumeSubagentRun(runId);
@@ -94,6 +115,7 @@ export function createSubagentRegistryLifecycleCleanupBase(
       void runWithGatewayIndependentRootWorkAdmission(async () => {
         try {
           await args.run();
+          cleanupFailureCounts.delete(args.entry);
         } catch (err) {
           defaultRuntime.log(
             `[warn] subagent cleanup finalize failed (${args.runId}): ${String(err)}`,
@@ -109,6 +131,16 @@ export function createSubagentRegistryLifecycleCleanupBase(
           current.cleanupHandled = false;
           params.resumedRuns.delete(args.runId);
           params.persist(args.runId);
+          const failureCount = (cleanupFailureCounts.get(current) ?? 0) + 1;
+          cleanupFailureCounts.set(current, failureCount);
+          if (failureCount <= MAX_DETACHED_CLEANUP_RETRIES) {
+            scheduleResumeSubagentRun(
+              args.runId,
+              current,
+              resolveAnnounceRetryDelayMs(failureCount),
+              args.cleanupGeneration,
+            );
+          }
         }
       }).catch((err: unknown) => {
         defaultRuntime.log(
@@ -193,11 +225,7 @@ export function createSubagentRegistryLifecycleCleanupBase(
     entry: SubagentRunRecord,
     generation: number,
   ): boolean =>
-    params.runs.get(runId) === entry &&
-    entry.cleanupHandled === true &&
-    entry.pauseReason !== "sessions_yield" &&
-    cleanupGenerations.get(entry) === generation &&
-    !newerGenerationOwnsSession(entry);
+    entry.cleanupHandled === true && isCleanupGenerationCurrent(runId, entry, generation);
 
   const retireSupersededCleanupIfNeeded = async (
     runId: string,

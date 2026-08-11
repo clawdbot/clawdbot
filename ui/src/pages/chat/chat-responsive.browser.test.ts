@@ -390,13 +390,16 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                         <article class="chat-session-rail__exchange">
                           <div class="chat-session-rail__question">What should I check next?</div>
                           <div class="chat-session-rail__answer">${opts.sessionRailBody}</div>
+                          <span class="chat-session-rail__pr-checks">2 passed</span>
+                          <time class="chat-session-rail__timestamp">as of 4:12 PM</time>
+                          <div class="chat-session-rail__hint">The companion is already answering a question.</div>
                         </article>
                       </div>
                       <footer class="chat-session-rail__composer">
                         <label class="chat-session-rail__prompt">
                           <input class="chat-session-rail__input" type="text" placeholder="What should I know?" />
                         </label>
-                        <button class="btn btn--ghost btn--icon chat-icon-btn chat-session-rail__submit">${iconSvg()}</button>
+                        <button class="chat-send-btn">${iconSvg()}</button>
                       </footer>
                     </section>
                   </openclaw-chat-session-rail>`
@@ -657,16 +660,16 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             draft: string;
           };
           connected: boolean;
-          consumedOpenRequest: number;
-          onOpenRequestConsumed: (openRequest: number) => void;
+          command: { generation: number; intent: "open" | "toggle" } | null;
+          consumedCommandGeneration: number;
+          onCommandConsumed: (generation: number) => void;
           onVisibilityChange: (visible: boolean) => void;
-          openRequest: number;
           sessionKey: string;
           updateComplete: Promise<boolean>;
         };
         const createRail = () => document.createElement("openclaw-chat-session-rail") as Rail;
         let rail = createRail();
-        let consumedOpenRequest = 0;
+        let consumedGeneration = 0;
         let visibleReports = 0;
         const configureRail = (nextRail: Rail) => {
           nextRail.companion = {
@@ -677,9 +680,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             draft: "What changed?",
           };
           nextRail.connected = true;
-          nextRail.consumedOpenRequest = consumedOpenRequest;
-          nextRail.onOpenRequestConsumed = (openRequest) => {
-            consumedOpenRequest = openRequest;
+          nextRail.consumedCommandGeneration = consumedGeneration;
+          nextRail.onCommandConsumed = (generation) => {
+            consumedGeneration = generation;
           };
           nextRail.onVisibilityChange = (visible) => {
             if (visible) {
@@ -693,10 +696,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await rail.updateComplete;
         const mode = () =>
           rail.querySelector(".chat-session-rail--expanded") ? "expanded" : "pill";
-        const update = async (sessionKey: string, openRequest: number) => {
+        const update = async (sessionKey: string, generation: number) => {
           rail.sessionKey = sessionKey;
-          rail.openRequest = openRequest;
-          rail.consumedOpenRequest = consumedOpenRequest;
+          rail.command = generation > 0 ? { generation, intent: "open" } : null;
+          rail.consumedCommandGeneration = consumedGeneration;
           await rail.updateComplete;
           return mode();
         };
@@ -711,7 +714,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         rail = createRail();
         configureRail(rail);
         rail.sessionKey = "agent:main:a";
-        rail.openRequest = 2;
+        rail.command = { generation: 2, intent: "open" };
         document.body.append(rail);
         await rail.updateComplete;
         const remountMode = mode();
@@ -2802,15 +2805,20 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         sessionRailBody: LONG_SESSION_RAIL_BODY,
       });
       try {
-        const panel = await page.locator(".chat-session-rail").evaluate((node) => {
-          const element = node as HTMLElement;
+        const panel = await page.evaluate(() => {
+          const element = document.querySelector(".chat-session-rail") as HTMLElement;
+          const pane = document.querySelector(".chat-main") as HTMLElement;
           return {
             clientHeight: element.clientHeight,
+            paneHeight: pane.clientHeight,
             position: getComputedStyle(element).position,
           };
         });
         expect(panel.position).toBe("absolute");
-        expect(panel.clientHeight).toBeLessThanOrEqual(680);
+        // The rail fills its pane and no more; growth past the container is what
+        // the old floating card was capped against, and the sheet must not
+        // reintroduce it. Long threads scroll internally instead — asserted below.
+        expect(panel.clientHeight).toBeLessThanOrEqual(panel.paneHeight);
 
         const body = await page.locator(".chat-session-rail__thread").evaluate((node) => {
           const style = getComputedStyle(node as HTMLElement);
@@ -2849,7 +2857,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         };
       });
       expect(panel.position).toBe("fixed");
-      expect(panel.clientHeight).toBeLessThanOrEqual(460);
+      // Full-screen sheet at this width: bounded by the viewport, never beyond.
+      expect(panel.clientHeight).toBeLessThanOrEqual(568);
 
       const scroll = await page.locator(".chat-session-rail__thread").evaluate((node) => {
         const element = node as HTMLElement;
@@ -2889,6 +2898,77 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       }));
       expect(rail.position).toBe("static");
       expect(rail.width).toBeCloseTo(400, 0);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("keeps rail metadata out of the scrolling thread's layout", async () => {
+    const page = await openFixture(1024, 768, { sessionRailBody: LONG_SESSION_RAIL_BODY });
+    try {
+      const styles = await page.evaluate(() => {
+        const read = (selector: string) => {
+          const style = getComputedStyle(document.querySelector(selector) as HTMLElement);
+          return {
+            minHeight: style.minHeight,
+            overflowY: style.overflowY,
+            borderTopWidth: style.borderTopWidth,
+          };
+        };
+        return {
+          thread: read(".chat-session-rail__thread"),
+          prChecks: read(".chat-session-rail__pr-checks"),
+          timestamp: read(".chat-session-rail__timestamp"),
+          hint: read(".chat-session-rail__hint"),
+        };
+      });
+
+      // PR checks, timestamps and hints are metadata inside an exchange. Sharing the
+      // thread's rule would give each one a 96px scrolling bordered box; the
+      // selector list has silently merged before.
+      expect(styles.thread.minHeight).toBe("96px");
+      expect(styles.thread.overflowY).toBe("auto");
+      for (const metadata of [styles.prChecks, styles.timestamp, styles.hint]) {
+        // Relational, not a literal: the point is that these nodes do not share
+        // the thread's rule, whatever the thread's own numbers become.
+        expect(metadata.minHeight).not.toBe(styles.thread.minHeight);
+        expect(metadata.overflowY).toBe("visible");
+        expect(metadata.borderTopWidth).toBe("0px");
+      }
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("degrades an undocked session rail to a full-height edge sheet, never a floating card", async () => {
+    const page = await openFixture(900, 800, {
+      sessionRailBody: LONG_SESSION_RAIL_BODY,
+      sessionRailDocked: false,
+    });
+    try {
+      const geometry = await page.evaluate(() => {
+        const rail = document.querySelector(".chat-session-rail") as HTMLElement;
+        const main = document.querySelector(".chat-main") as HTMLElement;
+        const railBox = rail.getBoundingClientRect();
+        const mainBox = main.getBoundingClientRect();
+        const style = getComputedStyle(rail);
+        return {
+          topGap: Math.round(railBox.top - mainBox.top),
+          bottomGap: Math.round(mainBox.bottom - railBox.bottom),
+          rightGap: Math.round(mainBox.right - railBox.right),
+          borderRadius: style.borderTopLeftRadius,
+          boxShadow: style.boxShadow,
+          backdropFilter: style.backdropFilter,
+          animationName: style.animationName,
+        };
+      });
+
+      // Flush to the pane on three sides with square corners: a surface that
+      // took the pane over, not a card hovering above the conversation.
+      expect(geometry.topGap).toBe(0);
+      expect(geometry.bottomGap).toBe(0);
+      expect(geometry.rightGap).toBe(0);
+      expect(geometry.borderRadius).toBe("0px");
     } finally {
       await closeBrowserPage(page);
     }

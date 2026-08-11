@@ -48,6 +48,7 @@ type ChatPaneHeaderProps = {
   discussionAction: TemplateResult | typeof nothing;
   diffAction: TemplateResult | typeof nothing;
   backgroundTasksAction: TemplateResult | typeof nothing;
+  sessionRailAction: TemplateResult | typeof nothing;
   workspaceAction: TemplateResult | typeof nothing;
   presence?: TemplateResult | typeof nothing;
   faceControl?: TemplateResult | typeof nothing;
@@ -434,7 +435,8 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         ${props.panelActions} ${props.discussionAction}
         ${props.catalog
           ? nothing
-          : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}`}
+          : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}
+            ${props.sessionRailAction}`}
         ${props.onOpenSplitView
           ? html`<openclaw-tooltip .content=${t("chat.splitView.open")}>
               <button

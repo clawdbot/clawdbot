@@ -64,7 +64,7 @@ beforeEach(async () => {
     layout: "state-only",
     prefix: "openclaw-skill-collection-state-",
   });
-  workspaceDir = await tempDirs.make("openclaw-skill-collection-workspace-");
+  workspaceDir = await fs.realpath(await tempDirs.make("openclaw-skill-collection-workspace-"));
 });
 
 afterEach(async () => {
@@ -470,8 +470,7 @@ describe("skill collection reconciliation", () => {
         },
       ],
     });
-    const canonicalWorkspaceDir = await fs.realpath(workspaceDir);
-    const skillDir = path.join(canonicalWorkspaceDir, "skills", "procedure");
+    const skillDir = path.join(workspaceDir, "skills", "procedure");
     const skillFile = path.join(skillDir, "SKILL.md");
     const backupRoot = path.join(
       await fs.realpath(testState.stateDir),
@@ -521,7 +520,7 @@ describe("skill collection reconciliation", () => {
         },
       ],
     });
-    const skillDir = path.join(await fs.realpath(workspaceDir), "skills", "procedure");
+    const skillDir = path.join(workspaceDir, "skills", "procedure");
     const beforeVersion = getSkillsSnapshotVersion();
     copyDirectoryBefore.mockImplementation(async (source, destination) => {
       if (path.resolve(String(destination)) === path.resolve(skillDir)) {

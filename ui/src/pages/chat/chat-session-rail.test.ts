@@ -13,6 +13,7 @@ import {
 } from "./chat-session-companion.ts";
 import { renderBackgroundTasksToggle } from "./components/chat-background-tasks-render.ts";
 import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
+import { renderSessionRailToggle } from "./components/chat-session-rail-toggle.ts";
 import {
   ChatSessionRailElement,
   ChatSessionRailState,
@@ -78,11 +79,11 @@ describe("ChatSessionRailState", () => {
     vi.unstubAllGlobals();
   });
 
-  it("moves between restore-icon, pill, and expanded modes", () => {
+  it("moves between hidden, pill, and expanded modes", () => {
     const state = new ChatSessionRailState("pill");
-    // Idle with nothing to show keeps the restore icon: the companion must
-    // stay one click away at any point, never fully hidden.
-    expect(state.mode(input({ running: false, digest: null }))).toBe("restore-icon");
+    // Idle with nothing to show renders nothing over the thread; the pane
+    // header toggle is the always-present way back in.
+    expect(state.mode(input({ running: false, digest: null }))).toBe("hidden");
     expect(state.mode(input())).toBe("pill");
     state.expand();
     expect(state.mode(input())).toBe("expanded");
@@ -91,20 +92,44 @@ describe("ChatSessionRailState", () => {
     expect(state.mode(input())).toBe("pill");
     expect(localStorage.getItem(displayPreferenceKey)).toBe("pill");
     state.hide();
-    expect(state.mode(input())).toBe("restore-icon");
+    expect(state.mode(input())).toBe("hidden");
     expect(localStorage.getItem(displayPreferenceKey)).toBe("off");
-    state.show();
-    expect(state.mode(input())).toBe("pill");
-    expect(localStorage.getItem(displayPreferenceKey)).toBe("pill");
   });
 
-  it("opens digest-less from the restore icon and resets per session", () => {
+  it("opens the panel from a hidden rail without persisting card", () => {
+    const state = new ChatSessionRailState("pill");
+    state.hide();
+
+    state.openExplicitly();
+
+    expect(state.mode(input())).toBe("expanded");
+    expect(localStorage.getItem(displayPreferenceKey)).toBe("pill");
+    // A fresh state reads the stored preference: the next session gets the
+    // ambient pill, not a sticky panel.
+    expect(new ChatSessionRailState().mode(input())).toBe("pill");
+  });
+
+  it("opens digest-less on an idle session and resets per session", () => {
     const state = new ChatSessionRailState("pill");
     const idle = { running: false, activeRunId: null, digest: null } as const;
-    state.show();
-    expect(state.mode(input(idle))).toBe("pill");
+    state.openExplicitly();
+    expect(state.mode(input(idle))).toBe("expanded");
     state.resetTransientState();
-    expect(state.mode(input(idle))).toBe("restore-icon");
+    expect(state.mode(input(idle))).toBe("hidden");
+  });
+
+  it("closes an idle panel to nothing and a running panel to its digest pill", () => {
+    const idleState = new ChatSessionRailState("pill");
+    idleState.openExplicitly();
+    idleState.collapse();
+    expect(idleState.mode(input({ running: false, activeRunId: null, digest: null }))).toBe(
+      "hidden",
+    );
+
+    const runningState = new ChatSessionRailState("pill");
+    runningState.openExplicitly();
+    runningState.collapse();
+    expect(runningState.mode(input())).toBe("pill");
   });
 
   it("auto-opens pill transiently without changing the persisted preference", () => {
@@ -122,9 +147,9 @@ describe("ChatSessionRailState", () => {
     const state = new ChatSessionRailState();
 
     expect(state.tryAutoOpen()).toBe(false);
-    expect(state.mode(input())).toBe("restore-icon");
+    expect(state.mode(input())).toBe("hidden");
     expect(localStorage.getItem(displayPreferenceKey)).toBe("off");
-    expect(new ChatSessionRailState().mode(input())).toBe("restore-icon");
+    expect(new ChatSessionRailState().mode(input())).toBe("hidden");
   });
 
   it("persists explicit collapse and hide after transient auto-open", () => {
@@ -138,7 +163,7 @@ describe("ChatSessionRailState", () => {
 
     expect(state.tryAutoOpen()).toBe(true);
     state.hide();
-    expect(state.mode(input())).toBe("restore-icon");
+    expect(state.mode(input())).toBe("hidden");
     expect(localStorage.getItem(displayPreferenceKey)).toBe("off");
     expect(state.tryAutoOpen()).toBe(false);
   });
@@ -369,54 +394,171 @@ describe("ChatSessionRailElement", () => {
     expect(element.querySelector(".chat-session-rail--pill")).not.toBeNull();
   });
 
-  it("does not reopen or report visible after hide when an open request arrives", async () => {
+  it("does not reopen or report visible after hide when an automatic open arrives", async () => {
     const onVisibilityChange = vi.fn();
-    const onOpenRequestConsumed = vi.fn();
-    const element = await mount({ onOpenRequestConsumed, onVisibilityChange });
+    const onCommandConsumed = vi.fn();
+    const element = await mount({ onCommandConsumed, onVisibilityChange });
 
     (element.querySelector(".chat-session-rail__hide") as HTMLButtonElement | null)?.click();
     await element.updateComplete;
-    expect(element.querySelector(".chat-session-rail--restore")).not.toBeNull();
+    expect(element.querySelector(".chat-session-rail")).toBeNull();
     expect(localStorage.getItem(displayPreferenceKey)).toBe("off");
 
     onVisibilityChange.mockClear();
-    element.openRequest = 1;
+    element.command = { generation: 1, intent: "open" };
     await element.updateComplete;
 
-    expect(element.querySelector(".chat-session-rail--restore")).not.toBeNull();
+    expect(element.querySelector(".chat-session-rail")).toBeNull();
     expect(localStorage.getItem(displayPreferenceKey)).toBe("off");
-    expect(onOpenRequestConsumed).toHaveBeenCalledWith(1);
+    expect(onCommandConsumed).toHaveBeenCalledWith(1);
     expect(onVisibilityChange).not.toHaveBeenCalled();
   });
 
-  it("restores with its own glyph instead of the background-tasks one", async () => {
-    const element = await mount();
+  it("opens a hidden rail straight to the panel when the header toggle asks", async () => {
+    const onVisibilityChange = vi.fn();
+    const element = await mount({ onVisibilityChange });
     (element.querySelector(".chat-session-rail__hide") as HTMLButtonElement | null)?.click();
     await element.updateComplete;
+    expect(element.querySelector(".chat-session-rail")).toBeNull();
+    onVisibilityChange.mockClear();
 
-    const railGlyph = element.querySelector(".chat-session-rail--restore svg")?.innerHTML;
+    element.command = { generation: 1, intent: "toggle" };
+    await element.updateComplete;
+
+    // One command, panel open: no pill step, and no persisted card.
+    expect(element.querySelector(".chat-session-rail--expanded")).not.toBeNull();
+    expect(localStorage.getItem(displayPreferenceKey)).toBe("pill");
+    expect(onVisibilityChange).toHaveBeenCalledExactlyOnceWith(true);
+  });
+
+  it("closes the panel when the header toggle asks again", async () => {
+    const onVisibilityChange = vi.fn();
+    const element = await mount({ onVisibilityChange });
+    expect(element.querySelector(".chat-session-rail--expanded")).not.toBeNull();
+    onVisibilityChange.mockClear();
+
+    element.command = { generation: 1, intent: "toggle" };
+    await element.updateComplete;
+
+    // A running session keeps its digest pill; observer visibility stays true
+    // so the gateway keeps producing the digest the pill is showing.
+    expect(element.querySelector(".chat-session-rail--pill")).not.toBeNull();
+    expect(onVisibilityChange).not.toHaveBeenCalled();
+  });
+
+  it("offers starter questions instead of an empty thread, and asks the tapped one", async () => {
+    const onSubmit = vi.fn();
+    const element = await mount({ onSubmit });
+
+    const starters = [...element.querySelectorAll(".chat-session-rail__starter")];
+    expect(starters.map((starter) => starter.textContent?.trim())).toEqual([
+      "What changed?",
+      "Why did it stop?",
+      "What's left?",
+    ]);
+
+    (starters[1] as HTMLButtonElement).click();
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith("Why did it stop?");
+  });
+
+  it("replaces the starters once the thread has an exchange", async () => {
+    const element = await mount({
+      companion: {
+        exchanges: [{ question: "What changed?", answer: "The rail toggle.", ts: 300_000 }],
+        pendingQuestion: null,
+        failedQuestion: null,
+        hint: null,
+        draft: "",
+      },
+    });
+
+    expect(element.querySelector(".chat-session-rail__starter")).toBeNull();
+    expect(element.querySelector(".chat-session-rail__exchange")).not.toBeNull();
+  });
+
+  it("keeps the destructive clear behind the overflow menu", async () => {
+    const onClear = vi.fn();
+    const element = await mount({ onClear });
+
+    const actions = element.querySelector(".chat-session-rail__actions");
+    expect(
+      actions?.querySelector("wa-dropdown .chat-session-rail__menu, .chat-session-rail__menu"),
+    ).not.toBeNull();
+    // Nothing in the always-visible row destroys the thread: only hide and
+    // collapse sit next to the menu trigger.
+    expect(actions?.querySelectorAll(":scope > button")).toHaveLength(2);
+
+    const clearItem = element.querySelector("wa-dropdown-item[value='clear']");
+    expect(clearItem).not.toBeNull();
+    element
+      .querySelector(".chat-session-rail__menu")
+      ?.dispatchEvent(
+        new CustomEvent("wa-select", { detail: { item: { value: "clear" } }, bubbles: false }),
+      );
+    expect(onClear).toHaveBeenCalledOnce();
+  });
+
+  it("drops the digest band when there is no digest to show", async () => {
+    const withDigest = await mount({ digest: { ...digest(), assessment: "Steady progress." } });
+    expect(withDigest.querySelector(".chat-session-rail__digest")).not.toBeNull();
+
+    const withoutDigest = await mount({
+      digest: null,
+      running: false,
+      activeRunId: null,
+      companion: {
+        exchanges: [],
+        pendingQuestion: null,
+        failedQuestion: null,
+        hint: null,
+        draft: "What changed?",
+      },
+    });
+    expect(withoutDigest.querySelector(".chat-session-rail--expanded")).not.toBeNull();
+    expect(withoutDigest.querySelector(".chat-session-rail__digest")).toBeNull();
+  });
+
+  it("gives the header toggle a glyph of its own, not the background-tasks one", () => {
     const host = document.createElement("div");
     document.body.append(host);
-    render(renderBackgroundTasksToggle(backgroundTasksToggleProps()), host);
-    const tasksGlyph = host.querySelector(".chat-tasks-toggle svg")?.innerHTML;
+    render(renderSessionRailToggle({ mode: "hidden", onToggle: () => {} }), host);
+    const railGlyph = host.querySelector(".chat-session-rail-toggle svg")?.innerHTML;
+    const tasksHost = document.createElement("div");
+    document.body.append(tasksHost);
+    render(renderBackgroundTasksToggle(backgroundTasksToggleProps()), tasksHost);
+    const tasksGlyph = tasksHost.querySelector(".chat-tasks-toggle svg")?.innerHTML;
 
     expect(railGlyph?.trim()).toBeTruthy();
     expect(tasksGlyph?.trim()).toBeTruthy();
     expect(railGlyph).not.toBe(tasksGlyph);
   });
 
+  it("reports the open panel to assistive technology", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    render(renderSessionRailToggle({ mode: "expanded", onToggle: () => {} }), host);
+    expect(host.querySelector(".chat-session-rail-toggle")?.getAttribute("aria-expanded")).toBe(
+      "true",
+    );
+
+    render(renderSessionRailToggle({ mode: "pill", onToggle: () => {} }), host);
+    expect(host.querySelector(".chat-session-rail-toggle")?.getAttribute("aria-expanded")).toBe(
+      "false",
+    );
+  });
+
   it("auto-opens from pill without persisting card, then collapses persistently", async () => {
     localStorage.setItem(displayPreferenceKey, "pill");
-    const onOpenRequestConsumed = vi.fn();
+    const onCommandConsumed = vi.fn();
     const onVisibilityChange = vi.fn();
-    const element = await mount({ onOpenRequestConsumed, onVisibilityChange });
+    const element = await mount({ onCommandConsumed, onVisibilityChange });
     expect(element.querySelector(".chat-session-rail--pill")).not.toBeNull();
 
-    element.openRequest = 1;
+    element.command = { generation: 1, intent: "open" };
     await element.updateComplete;
     expect(element.querySelector(".chat-session-rail--expanded")).not.toBeNull();
     expect(localStorage.getItem(displayPreferenceKey)).toBe("pill");
-    expect(onOpenRequestConsumed).toHaveBeenCalledWith(1);
+    expect(onCommandConsumed).toHaveBeenCalledWith(1);
     expect(onVisibilityChange).toHaveBeenCalledOnce();
     expect(onVisibilityChange).toHaveBeenLastCalledWith(true);
 
@@ -428,37 +570,37 @@ describe("ChatSessionRailElement", () => {
     expect(localStorage.getItem(displayPreferenceKey)).toBe("pill");
   });
 
-  it("does not replay a retained auto-open request after a session round trip", async () => {
+  it("does not replay a retained command after a session round trip", async () => {
     localStorage.setItem(displayPreferenceKey, "pill");
-    let consumedOpenRequest = 0;
-    const onOpenRequestConsumed = vi.fn((openRequest: number) => {
-      consumedOpenRequest = openRequest;
+    let consumedGeneration = 0;
+    const onCommandConsumed = vi.fn((generation: number) => {
+      consumedGeneration = generation;
     });
     const onVisibilityChange = vi.fn();
-    const element = await mount({ onOpenRequestConsumed, onVisibilityChange });
+    const element = await mount({ onCommandConsumed, onVisibilityChange });
 
-    element.openRequest = 1;
+    element.command = { generation: 1, intent: "open" };
     await element.updateComplete;
     expect(element.querySelector(".chat-session-rail--expanded")).not.toBeNull();
-    expect(consumedOpenRequest).toBe(1);
+    expect(consumedGeneration).toBe(1);
     expect(onVisibilityChange).toHaveBeenCalledOnce();
 
     element.sessionKey = "agent:main:other";
-    element.openRequest = 0;
-    element.consumedOpenRequest = consumedOpenRequest;
+    element.command = null;
+    element.consumedCommandGeneration = consumedGeneration;
     await element.updateComplete;
     expect(element.querySelector(".chat-session-rail--pill")).not.toBeNull();
 
     element.sessionKey = "agent:main:run";
-    element.openRequest = 1;
+    element.command = { generation: 1, intent: "open" };
     await element.updateComplete;
     expect(element.querySelector(".chat-session-rail--pill")).not.toBeNull();
     expect(onVisibilityChange).toHaveBeenCalledOnce();
 
-    element.openRequest = 2;
+    element.command = { generation: 2, intent: "open" };
     await element.updateComplete;
     expect(element.querySelector(".chat-session-rail--expanded")).not.toBeNull();
-    expect(onOpenRequestConsumed).toHaveBeenCalledTimes(2);
+    expect(onCommandConsumed).toHaveBeenCalledTimes(2);
     expect(onVisibilityChange).toHaveBeenCalledTimes(2);
     expect(localStorage.getItem(displayPreferenceKey)).toBe("pill");
   });

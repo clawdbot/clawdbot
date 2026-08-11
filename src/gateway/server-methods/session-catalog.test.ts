@@ -39,6 +39,7 @@ const conversationBindingMocks = vi.hoisted(() => ({
 
 vi.mock("../../plugins/runtime.js", () => ({
   getActivePluginRegistry: () => hoisted.activeRegistry,
+  requireActivePluginRegistry: () => hoisted.activeRegistry,
 }));
 
 vi.mock("../../sessions/session-state-events.js", () => ({

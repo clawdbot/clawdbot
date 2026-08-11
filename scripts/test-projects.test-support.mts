@@ -390,9 +390,12 @@ const RUNTIME_CONFIG_VITEST_CONFIG = "test/vitest/vitest.runtime-config.config.t
 const SECRETS_VITEST_CONFIG = "test/vitest/vitest.secrets.config.ts";
 const SHARED_CORE_VITEST_CONFIG = "test/vitest/vitest.shared-core.config.ts";
 const TASKS_VITEST_CONFIG = "test/vitest/vitest.tasks.config.ts";
+const PACKAGE_DOCKER_VITEST_CONFIG = "test/vitest/vitest.package-docker.config.ts";
 const TOOLING_DOCKER_VITEST_CONFIG = "test/vitest/vitest.tooling-docker.config.ts";
 const TOOLING_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.tooling-isolated.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
+const PACKAGE_DOCKER_TEST_TARGET =
+  "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts";
 const TOOLING_DOCKER_TEST_TARGET = "test/scripts/docker-build-helper.test.ts";
 const BROAD_TOOLING_SCRIPT_TEST_PATTERNS = new Set([
   "test/scripts/**/*.test.ts",
@@ -439,6 +442,7 @@ const VITEST_CONFIG_BY_KIND: Record<string, string> = {
   daemon: DAEMON_VITEST_CONFIG,
   media: MEDIA_VITEST_CONFIG,
   logging: LOGGING_VITEST_CONFIG,
+  packageDocker: PACKAGE_DOCKER_VITEST_CONFIG,
   pluginSdkLight: PLUGIN_SDK_LIGHT_VITEST_CONFIG,
   pluginSdk: PLUGIN_SDK_VITEST_CONFIG,
   process: PROCESS_VITEST_CONFIG,
@@ -2490,11 +2494,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [
     /^scripts\/lib\/generated-text-asset\.mts$/u,
-    [
-      "extensions/browser/scripts/build-copilot-runtime.test.ts",
-      "build-diffs-viewer-runtime",
-      "bundled-plugin-assets",
-    ],
+    ["build-diffs-viewer-runtime", "bundled-plugin-assets"],
   ],
   [/^scripts\/check-plugin-npm-runtime-builds\.mts$/u, ["plugin-npm-runtime-build-args"]],
   [
@@ -3123,6 +3123,9 @@ function classifyTarget(arg: string, cwd: string) {
   if (isControlUiE2eTarget(relative)) {
     return "uiE2e";
   }
+  if (relative === PACKAGE_DOCKER_TEST_TARGET) {
+    return "packageDocker";
+  }
   if (isUiIsolatedTestFile(relative)) {
     return "uiIsolated";
   }
@@ -3646,6 +3649,7 @@ export function buildVitestRunPlans(
     const config = VITEST_CONFIG_BY_KIND[kind] ?? DEFAULT_VITEST_CONFIG;
     const useCliTargetArgs =
       kind === "e2e" ||
+      kind === "packageDocker" ||
       (kind === "default" &&
         grouped.every((targetArg) => isFileLikeTarget(toRepoRelativeTarget(targetArg, cwd))));
     const useWholeConfigTarget = grouped.some((targetArg) =>

@@ -527,12 +527,6 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 1.30.0
         version: 1.30.0(supports-color@10.2.2)(zod@4.4.3)
-      '@noble/ed25519':
-        specifier: 3.1.0
-        version: 3.1.0
-      esbuild:
-        specifier: 0.28.1
-        version: 0.28.1
       express:
         specifier: 5.2.1
         version: 5.2.1(supports-color@10.2.2)
@@ -546,9 +540,6 @@ importers:
         specifier: 8.21.1
         version: 8.21.1
     devDependencies:
-      '@openclaw/gateway-client':
-        specifier: workspace:*
-        version: link:../../packages/gateway-client
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
