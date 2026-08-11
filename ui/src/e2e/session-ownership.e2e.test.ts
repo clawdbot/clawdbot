@@ -468,7 +468,7 @@ suite.define(() => {
     expect(await gateway.getRequests("session.members.add")).toHaveLength(0);
   });
 
-  it("keeps long member lists compact while visibility stays pinned", async () => {
+  it("keeps high-volume member lists compact while visibility stays pinned", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1280 } });
     const currentPage = await context.newPage();
     page = currentPage;
@@ -481,7 +481,7 @@ suite.define(() => {
     sessions.count = 1;
     sessions.creators = [{ id: "profile-ada", label: "Ada" }];
     sessions.sessions = [activeSession];
-    const humanIdentities = Array.from({ length: 10 }, (_, index) => ({
+    const humanIdentities = Array.from({ length: 30 }, (_, index) => ({
       type: "human" as const,
       id: `profile-member-${index}`,
       label: `Member ${index + 1}`,
@@ -530,6 +530,7 @@ suite.define(() => {
     const beforeScroll = await dropdown.evaluate((element) => {
       const menu = element.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
       const visibility = element.querySelector<HTMLElement>(".chat-pane__sharing-visibility-item");
+      const membersTitle = element.querySelector<HTMLElement>(".chat-pane__sharing-members-title");
       const firstMember = element.querySelector<HTMLElement>(".chat-pane__sharing-member");
       return {
         menuHeight: menu?.getBoundingClientRect().height ?? 0,
@@ -537,6 +538,12 @@ suite.define(() => {
         clientHeight: menu?.clientHeight ?? 0,
         visibilityTop: visibility?.getBoundingClientRect().top ?? 0,
         firstMemberTop: firstMember?.getBoundingClientRect().top ?? 0,
+        membersTitleInset: Number.parseFloat(
+          membersTitle ? getComputedStyle(membersTitle).paddingInlineStart : "0",
+        ),
+        firstMemberInset: Number.parseFloat(
+          firstMember ? getComputedStyle(firstMember).paddingInlineStart : "0",
+        ),
       };
     });
     const afterScroll = await dropdown.evaluate(async (element) => {
@@ -560,6 +567,7 @@ suite.define(() => {
 
     expect(beforeScroll.menuHeight).toBeLessThanOrEqual(421);
     expect(beforeScroll.scrollHeight).toBeGreaterThan(beforeScroll.clientHeight);
+    expect(beforeScroll.membersTitleInset).toBe(beforeScroll.firstMemberInset);
     expect(afterScroll.scrollTop).toBeGreaterThan(0);
     expect(Math.abs(afterScroll.visibilityTop - beforeScroll.visibilityTop)).toBeLessThan(1);
     expect(afterScroll.membersTitleTop).toBeGreaterThan(afterScroll.visibilityTop);
@@ -567,7 +575,7 @@ suite.define(() => {
     expect(afterScroll.firstMemberTop).toBeLessThan(beforeScroll.firstMemberTop);
     await expectBrowser(
       dropdown.locator(".chat-pane__sharing-member openclaw-session-owner-chip"),
-    ).toHaveCount(10);
+    ).toHaveCount(30);
     await expectBrowser(dropdown.locator(".chat-pane__sharing-channel-icon")).toHaveCount(2);
   });
 

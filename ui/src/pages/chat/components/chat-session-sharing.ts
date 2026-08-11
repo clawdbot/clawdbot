@@ -154,7 +154,6 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps) {
       )}
       ${membersAvailable
         ? html`
-            <div class="session-menu__separator" role="separator"></div>
             <div class="chat-pane__sharing-title chat-pane__sharing-members-title">
               ${t("chat.sessionSharing.members")}
             </div>

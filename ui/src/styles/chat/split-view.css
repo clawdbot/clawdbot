@@ -505,7 +505,7 @@ openclaw-chat-pane {
 }
 
 .chat-pane__sharing-menu {
-  --sharing-title-height: 24px;
+  --sharing-title-height: 28px;
   flex: 0 0 auto;
 }
 
@@ -524,10 +524,17 @@ openclaw-chat-pane {
 
 .chat-pane__sharing-title,
 .chat-pane__sharing-status {
-  padding: 6px 12px;
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
+}
+
+.chat-pane__sharing-title {
+  padding: 5px 8px 7px;
+}
+
+.chat-pane__sharing-status {
+  padding: 6px 12px;
 }
 
 .chat-pane__sharing-visibility-title,
@@ -541,7 +548,6 @@ openclaw-chat-pane {
   top: 0;
   box-sizing: border-box;
   height: var(--sharing-title-height);
-  padding-block: 5px;
 }
 
 .chat-pane__sharing-visibility-item {
@@ -566,9 +572,7 @@ openclaw-chat-pane {
   );
   box-sizing: border-box;
   height: var(--sharing-title-height);
-  padding-block: 5px;
   background: var(--bg-elevated);
-  box-shadow: 0 8px 8px -10px color-mix(in srgb, var(--text) 32%, transparent);
 }
 
 .chat-pane__sharing-member {

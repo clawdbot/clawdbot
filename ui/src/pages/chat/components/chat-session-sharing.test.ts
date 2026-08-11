@@ -55,6 +55,7 @@ describe("chat session sharing menu", () => {
     expect(root.textContent).not.toContain("Suggest");
     expect(root.textContent).toContain("Alice");
     expect(root.querySelector('wa-dropdown-item[value="member:owner"]')).toBeNull();
+    expect(root.querySelector(".session-menu__separator")).toBeNull();
 
     dropdown?.dispatchEvent(
       new CustomEvent("wa-select", {
