@@ -865,6 +865,48 @@ BEGIN
   SELECT RAISE(ABORT, 'memory run exposures cannot be deleted');
 END;
 
+-- Selected-plugin content is never returned until this content-free ledger row commits.
+-- It is lazy/additive so current-version databases remain compatible until first scoped read.
+CREATE TABLE IF NOT EXISTS memory_preoutput_exposure_ledger (
+  agent_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  revision_number INTEGER NOT NULL CHECK (revision_number > 0),
+  exposure_set_id TEXT NOT NULL UNIQUE,
+  previous_exposure_set_id TEXT,
+  session_key TEXT NOT NULL,
+  context_fingerprint TEXT NOT NULL,
+  plan_id TEXT NOT NULL,
+  memory_policy_revision TEXT NOT NULL,
+  source_policy_set_ids_json TEXT NOT NULL,
+  exposed_resource_revisions_json TEXT NOT NULL,
+  exposure_receipt_ids_json TEXT NOT NULL,
+  egress_receipt_ids_json TEXT NOT NULL,
+  delivery_audiences_json TEXT NOT NULL,
+  delivery_revision TEXT NOT NULL,
+  egress_registry_revision TEXT NOT NULL,
+  session_identity_revision TEXT NOT NULL,
+  subject_revision TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (agent_id, session_id, run_id, revision_number),
+  FOREIGN KEY (previous_exposure_set_id) REFERENCES memory_preoutput_exposure_ledger(exposure_set_id) ON DELETE RESTRICT
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_memory_preoutput_exposure_ledger_session_run
+  ON memory_preoutput_exposure_ledger(agent_id, session_id, run_id, revision_number DESC);
+
+CREATE TRIGGER IF NOT EXISTS memory_preoutput_exposure_ledger_no_update
+BEFORE UPDATE ON memory_preoutput_exposure_ledger
+BEGIN
+  SELECT RAISE(ABORT, 'pre-output memory exposure ledger is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_preoutput_exposure_ledger_no_delete
+BEFORE DELETE ON memory_preoutput_exposure_ledger
+BEGIN
+  SELECT RAISE(ABORT, 'pre-output memory exposure ledger cannot be deleted');
+END;
+
 CREATE TABLE IF NOT EXISTS transcript_event_memory_policies (
   session_id TEXT NOT NULL,
   event_seq INTEGER NOT NULL,

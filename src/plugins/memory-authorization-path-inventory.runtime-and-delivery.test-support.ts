@@ -108,7 +108,7 @@ export const MEMORY_AUTHORIZATION_RUNTIME_AND_DELIVERY_PATH_ENTRIES = Object.fre
     "core-agent-runtime",
     "blocked-in-enforced-mode",
     "src/agents/embedded-agent-runner/compaction-checkpoint.ts",
-    "src/agents/main-session-restart-recovery-checkpoint.ts",
+    "src/agents/main-session-recovery/main-session-restart-recovery-checkpoint.ts",
     "src/gateway/session-compaction-checkpoints.ts",
   ),
   entry(
@@ -193,7 +193,7 @@ export const MEMORY_AUTHORIZATION_RUNTIME_AND_DELIVERY_PATH_ENTRIES = Object.fre
     "egress",
     "core-agent-runtime",
     "blocked-in-enforced-mode",
-    "src/agents/subagent-registry.ts",
+    "src/agents/subagents/registry/subagent-registry.ts",
     "src/agents/openclaw-tools.ts",
   ),
   entry(
@@ -201,7 +201,7 @@ export const MEMORY_AUTHORIZATION_RUNTIME_AND_DELIVERY_PATH_ENTRIES = Object.fre
     "egress",
     "core-agent-runtime",
     "blocked-in-enforced-mode",
-    "src/agents/subagent-announce-delivery.ts",
+    "src/agents/subagents/announce/subagent-announce-delivery.ts",
   ),
   entry(
     "cron-triggered-run",
@@ -243,7 +243,7 @@ export const MEMORY_AUTHORIZATION_RUNTIME_AND_DELIVERY_PATH_ENTRIES = Object.fre
     "egress",
     "transport-egress-host",
     "blocked-in-enforced-mode",
-    "src/agents/tools/message-tool.ts",
+    "src/agents/tools/message-tool-execution.ts",
   ),
   entry(
     "session-send-delivery",

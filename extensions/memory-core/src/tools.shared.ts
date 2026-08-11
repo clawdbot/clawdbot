@@ -169,8 +169,15 @@ export async function searchMemoryCorpusSupplements(params: {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  memoryReadEnforced?: OpenClawPluginToolContext["memoryReadEnforced"];
+  authorizedMemoryRead?: OpenClawPluginToolContext["authorizedMemoryRead"];
   corpus?: "memory" | "wiki" | "all" | "sessions";
 }): Promise<MemoryCorpusSearchResult[]> {
+  if (params.memoryReadEnforced) {
+    // Supplemental corpora have no selected-runtime source contract yet. A
+    // host handle is intentionally not reinterpreted as authority for them.
+    return [];
+  }
   if (params.corpus === "memory" || params.corpus === "sessions") {
     return [];
   }
@@ -200,8 +207,14 @@ export async function getMemoryCorpusSupplementResult(params: {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  memoryReadEnforced?: OpenClawPluginToolContext["memoryReadEnforced"];
+  authorizedMemoryRead?: OpenClawPluginToolContext["authorizedMemoryRead"];
   corpus?: "memory" | "wiki" | "all" | "sessions";
 }) {
+  if (params.memoryReadEnforced) {
+    // See search: enforce the same unavailable result before any plugin call.
+    return null;
+  }
   if (params.corpus === "memory" || params.corpus === "sessions") {
     return null;
   }

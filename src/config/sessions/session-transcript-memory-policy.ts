@@ -6,10 +6,8 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { isMemoryIsolationTranscriptPolicyEnforcedInDatabase } from "../../plugins/memory-cutover.js";
-import {
-  readMemoryRunExposure,
-  type MemoryRunExposureSnapshot,
-} from "../../plugins/memory-run-exposure.js";
+import { readDurableMemoryRunExposure } from "../../plugins/memory-run-exposure-ledger.js";
+import { type MemoryRunExposureSnapshot } from "../../plugins/memory-run-exposure.js";
 import type { DB as OpenClawAgentDatabaseSchema } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { getOwnedSessionTranscriptWriterFence } from "./transcript-write-context.js";
@@ -147,7 +145,7 @@ function persistExposureLineageInTransaction(params: {
         .values({
           exposure_set_id: snapshot.exposureSetId,
           agent_id: snapshot.agentId,
-          run_id: snapshot.runId,
+          run_id: snapshot.durableRunScopeId,
           context_fingerprint: snapshot.contextFingerprint,
           plan_id: snapshot.planId,
           revision_number: snapshot.revisionNumber,
@@ -217,8 +215,8 @@ export function recordTranscriptMemoryPolicyInTransaction(params: {
   }
   const runId = getOwnedSessionTranscriptWriterFence()?.expectedWriterRunId;
   const exposure = runId
-    ? readMemoryRunExposure({
-        agentId: params.database.agentId,
+    ? readDurableMemoryRunExposure({
+        database: params.database,
         sessionId: params.sessionId,
         runId,
       })
@@ -243,7 +241,7 @@ export function recordTranscriptMemoryPolicyInTransaction(params: {
             delivery_audiences_json: persisted.deliveryAudiencesJson,
             session_identity_revision: exposure.sessionIdentityRevision,
             subject_revision: exposure.subjectRevision,
-            run_id: exposure.runId,
+            run_id: exposure.durableRunScopeId,
             context_fingerprint: exposure.contextFingerprint,
             created_at: params.createdAt,
           }

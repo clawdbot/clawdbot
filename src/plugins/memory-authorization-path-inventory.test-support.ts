@@ -1,6 +1,6 @@
 import { MEMORY_AUTHORIZATION_RUNTIME_AND_DELIVERY_PATH_ENTRIES } from "./memory-authorization-path-inventory.runtime-and-delivery.test-support.js";
 
-/** Test-only Phase-0 inventory of every known path that can ingest, expose, or derive memory. */
+/** Test-only inventory of every known path that can ingest, expose, or derive memory. */
 export const MEMORY_AUTHORIZATION_PATH_DISPOSITIONS = [
   "authorized",
   "blocked-in-enforced-mode",
@@ -40,9 +40,9 @@ function entry(
 }
 
 /**
- * `authorized` is intentionally absent in Phase 0: the rollout is shadow-only. Every path keeps
- * its current legacy behavior until its owning phase converts it, and enforced mode then blocks
- * the explicitly listed bypasses rather than silently falling through to context-free access.
+ * Phase 1C routes only the selected memory search/get/session lanes through the opaque host.
+ * Other legacy paths remain explicitly blocked in enforced mode or legacy-only until their owner
+ * converts them; none may silently fall through to context-free access.
  */
 export const MEMORY_AUTHORIZATION_PATH_INVENTORY = Object.freeze([
   entry(
@@ -75,7 +75,7 @@ export const MEMORY_AUTHORIZATION_PATH_INVENTORY = Object.freeze([
     "bootstrap-memory-and-user-files",
     "egress",
     "core-agent-runtime",
-    "legacy-only",
+    "blocked-in-enforced-mode",
     "src/agents/bootstrap-files.ts",
     "src/agents/workspace-bootstrap-read.ts",
   ),
@@ -83,31 +83,37 @@ export const MEMORY_AUTHORIZATION_PATH_INVENTORY = Object.freeze([
     "startup-recent-memory-context",
     "egress",
     "core-agent-runtime",
-    "legacy-only",
+    "blocked-in-enforced-mode",
     "src/auto-reply/reply/startup-context.ts",
   ),
   entry(
     "memory-search-tool",
     "egress",
-    "selected-memory-plugin",
-    "legacy-only",
+    "core-access-host",
+    "authorized",
     "extensions/memory-core/src/tools.ts",
     "extensions/memory-core/src/tools.shared.ts",
+    "src/agents/memory-authorized-read-host.ts",
+    "src/plugins/memory-invocation.ts",
   ),
   entry(
     "memory-get-tool",
     "egress",
-    "selected-memory-plugin",
-    "legacy-only",
+    "core-access-host",
+    "authorized",
     "extensions/memory-core/src/tools.ts",
+    "src/agents/memory-authorized-read-host.ts",
+    "src/plugins/memory-invocation.ts",
   ),
   entry(
     "session-transcript-search",
     "egress",
-    "selected-memory-plugin",
-    "legacy-only",
+    "core-access-host",
+    "authorized",
     "extensions/memory-core/src/session-search-visibility.ts",
     "extensions/memory-core/src/tools.ts",
+    "src/agents/memory-authorized-read-host.ts",
+    "src/plugins/memory-invocation.ts",
   ),
   entry(
     "active-memory-trigger-recall",

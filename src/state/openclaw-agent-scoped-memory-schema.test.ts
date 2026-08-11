@@ -144,4 +144,10 @@ describe("scoped memory additive agent schema", () => {
       ]),
     );
   });
+
+  it("keeps the pre-output exposure ledger in the canonical scoped schema payload", () => {
+    expect(AGENT_SCOPED_MEMORY_SCHEMA_SQL).toContain(
+      "CREATE TABLE IF NOT EXISTS memory_preoutput_exposure_ledger (",
+    );
+  });
 });

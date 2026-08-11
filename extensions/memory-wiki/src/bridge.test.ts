@@ -76,7 +76,9 @@ describe("syncMemoryWikiBridgeSources", () => {
     });
     const stat = vi.spyOn(fs, "stat");
     const mkdir = vi.spyOn(fs, "mkdir");
-    isLegacyMemorySurfaceDisabledMock.mockImplementation((agentId: string) => agentId === "cutover");
+    isLegacyMemorySurfaceDisabledMock.mockImplementation(
+      (agentId: string) => agentId === "cutover",
+    );
 
     await expect(
       syncMemoryWikiBridgeSources({

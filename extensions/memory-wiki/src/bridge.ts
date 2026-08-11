@@ -10,6 +10,7 @@ import {
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { OpenClawConfig } from "../api.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
+import { assertLegacyMemoryWikiAccessAvailable } from "./legacy-memory-access.js";
 import { appendMemoryWikiLog } from "./log.js";
 import {
   createWikiPageFilename,
@@ -25,7 +26,6 @@ import {
   readMemoryWikiSourceSyncState,
   writeMemoryWikiSourceSyncState,
 } from "./source-sync-state.js";
-import { assertLegacyMemoryWikiAccessAvailable } from "./legacy-memory-access.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 type BridgeArtifact = {

@@ -16,6 +16,7 @@ export const AGENT_SCOPED_MEMORY_TABLES = [
   "memory_migrations",
   "memory_policy_sets",
   "memory_run_exposures",
+  "memory_preoutput_exposure_ledger",
   "transcript_event_memory_policies",
 ] as const;
 

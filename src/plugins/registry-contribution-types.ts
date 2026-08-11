@@ -17,6 +17,7 @@ import type {
   EmbeddingProviderIndexIdentity,
   EmbeddingProviderRuntime,
 } from "./embedding-provider-types.js";
+import type { AuthorizedMemoryReadHost } from "./tool-types.js";
 
 export type ContextEngineFactoryContext = {
   config?: OpenClawConfig;
@@ -150,6 +151,12 @@ export type MemoryPromptSectionParams = {
   sandboxed?: boolean;
   /** True when supplemental legacy memory reads are unavailable for this agent. */
   memoryReadEnforced?: true;
+  /**
+   * Host-minted invocation for this run's selected authorized memory runtime.
+   * In enforced mode, prompt contributors must not derive access from agent or
+   * session strings; an absent handle means their content path is unavailable.
+   */
+  authorizedMemoryRead?: AuthorizedMemoryReadHost;
 };
 
 export type MemoryPromptSectionBuilder = (params: MemoryPromptSectionParams) => string[];
@@ -166,6 +173,7 @@ export type PreparedMemoryPromptSection = Readonly<{
     agentSessionKey?: string;
     sandboxed: boolean;
     memoryReadEnforced: boolean;
+    authorizedMemoryRead?: AuthorizedMemoryReadHost;
   }>;
   lines: readonly string[];
 }>;
@@ -211,6 +219,8 @@ export type MemoryCorpusSupplement = {
     agentSessionKey?: string;
     sandboxed?: boolean;
     memoryReadEnforced?: true;
+    /** Host-minted invocation for this run; required for enforced content access. */
+    authorizedMemoryRead?: AuthorizedMemoryReadHost;
   }): Promise<MemoryCorpusSearchResult[]>;
   get(params: {
     lookup: string;
@@ -220,6 +230,8 @@ export type MemoryCorpusSupplement = {
     agentSessionKey?: string;
     sandboxed?: boolean;
     memoryReadEnforced?: true;
+    /** Host-minted invocation for this run; required for enforced content access. */
+    authorizedMemoryRead?: AuthorizedMemoryReadHost;
   }): Promise<MemoryCorpusGetResult | null>;
 };
 

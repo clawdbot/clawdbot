@@ -185,16 +185,15 @@ describe("memory plugin state", () => {
     registerMemoryCapability("memory-core", {
       publicArtifacts: { listArtifacts },
     });
-    isMemoryIsolationCutoverAgentMock.mockImplementation((agentId: string) => agentId === "cutover");
+    isMemoryIsolationCutoverAgentMock.mockImplementation(
+      (agentId: string) => agentId === "cutover",
+    );
 
     await expect(
       listActiveMemoryPublicArtifacts({
         cfg: {
           agents: {
-            list: [
-              { id: "legacy", default: true },
-              { id: "cutover" },
-            ],
+            list: [{ id: "legacy", default: true }, { id: "cutover" }],
           },
         } as never,
       }),
@@ -501,6 +500,56 @@ describe("memory plugin state", () => {
     };
     expect(primary).toHaveBeenCalledWith(expectedContext);
     expect(supplemental).toHaveBeenCalledWith(expectedContext);
+  });
+
+  it("fails closed for unbound cut-over prompt contributors", async () => {
+    isMemoryIsolationCutoverAgentMock.mockReturnValue(true);
+    const primary = vi.fn(() => ["selected runtime"]);
+    const supplemental = vi.fn(() => ["legacy supplement"]);
+    const prepare = vi.fn(async () => ["legacy prepared supplement"]);
+    registerTestMemoryPromptBuilder(primary);
+    registerMemoryPromptSupplement("memory-wiki", supplemental);
+    registerMemoryPromptPreparation("memory-wiki", prepare);
+
+    const params = {
+      availableTools: new Set<string>(),
+      agentId: "cut-over",
+      agentSessionKey: "agent:cut-over:main",
+    };
+    expect(buildMemoryPromptSection(params)).toEqual([]);
+    await expect(prepareMemoryPromptSection(params)).resolves.toMatchObject({ lines: [] });
+    expect(primary).not.toHaveBeenCalled();
+    expect(supplemental).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
+  it("binds selected-runtime prompt state to the host invocation and blocks supplements", async () => {
+    isMemoryIsolationCutoverAgentMock.mockReturnValue(true);
+    const host = {
+      search: vi.fn(async () => ({ results: [] })),
+      read: vi.fn(async () => ({ text: "", path: "" })),
+    };
+    const primary = vi.fn(() => ["selected runtime"]);
+    const supplemental = vi.fn(() => ["legacy supplement"]);
+    const prepare = vi.fn(async () => ["legacy prepared supplement"]);
+    registerTestMemoryPromptBuilder(primary);
+    registerMemoryPromptSupplement("memory-wiki", supplemental);
+    registerMemoryPromptPreparation("memory-wiki", prepare);
+
+    const params = {
+      availableTools: new Set<string>(),
+      agentId: "cut-over",
+      agentSessionKey: "agent:cut-over:main",
+      authorizedMemoryRead: host,
+    };
+    const prepared = await prepareMemoryPromptSection(params);
+    expect(buildMemoryPromptSection(params, prepared)).toEqual(["selected runtime"]);
+    expect(primary).toHaveBeenCalledWith(expect.objectContaining({ authorizedMemoryRead: host }));
+    expect(supplemental).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
+    expect(() =>
+      buildMemoryPromptSection({ ...params, authorizedMemoryRead: { ...host } }, prepared),
+    ).toThrow("prepared memory prompt section does not match the current run");
   });
 
   it("appends prompt supplements in plugin-id order", () => {

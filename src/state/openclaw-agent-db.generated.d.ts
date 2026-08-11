@@ -251,6 +251,29 @@ export interface MemoryPolicySets {
   policy_set_id: string;
 }
 
+export interface MemoryPreoutputExposureLedger {
+  agent_id: string;
+  context_fingerprint: string;
+  created_at: number;
+  delivery_audiences_json: string;
+  delivery_revision: string;
+  egress_receipt_ids_json: string;
+  egress_registry_revision: string;
+  exposed_resource_revisions_json: string;
+  exposure_receipt_ids_json: string;
+  exposure_set_id: string;
+  memory_policy_revision: string;
+  plan_id: string;
+  previous_exposure_set_id: string | null;
+  revision_number: number;
+  run_id: string;
+  session_id: string;
+  session_identity_revision: string;
+  session_key: string;
+  source_policy_set_ids_json: string;
+  subject_revision: string;
+}
+
 export interface MemoryResourceRevisions {
   activated_at: number | null;
   actor_id: string | null;
@@ -680,6 +703,7 @@ export interface DB {
   memory_policy_entries: MemoryPolicyEntries;
   memory_policy_revisions: MemoryPolicyRevisions;
   memory_policy_sets: MemoryPolicySets;
+  memory_preoutput_exposure_ledger: MemoryPreoutputExposureLedger;
   memory_resource_revisions: MemoryResourceRevisions;
   memory_resource_subjects: MemoryResourceSubjects;
   memory_resources: MemoryResources;

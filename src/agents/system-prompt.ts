@@ -338,6 +338,8 @@ function buildMemorySection(params: {
       agentId: params.agentId,
       agentSessionKey: params.agentSessionKey,
       sandboxed: params.sandboxed,
+      memoryReadEnforced: params.prepared?.context.memoryReadEnforced ? true : undefined,
+      authorizedMemoryRead: params.prepared?.context.authorizedMemoryRead,
     },
     params.prepared,
   );

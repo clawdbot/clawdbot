@@ -5,11 +5,9 @@ import {
   MEMORY_INVOCATION_UNAVAILABLE,
   createAuthorizedMemoryReadInvocation,
   readAuthorizedMemoryForInvocation,
-  readAuthorizedMemoryTranscriptExposure,
   searchAuthorizedMemoryForInvocation,
   type AuthorizedMemoryReadInvocation,
 } from "../plugins/memory-invocation.js";
-import { recordMemoryRunExposure } from "../plugins/memory-run-exposure.js";
 import type { AuthorizedMemoryReadHost } from "../plugins/tool-types.js";
 import {
   captureTrustedMemoryAccessFacts,
@@ -206,18 +204,6 @@ export function createAuthorizedMemoryReadHost(params: {
     | undefined;
   const getInvocation = () =>
     (invocation ??= createAuthorizedMemoryReadInvocation({ context: trusted.context }));
-  const recordExposure = (active: AuthorizedMemoryReadInvocation): boolean => {
-    const exposure = readAuthorizedMemoryTranscriptExposure(active);
-    if (
-      !exposure ||
-      exposure.agentId !== context.agentId ||
-      exposure.sessionId !== context.sessionId
-    ) {
-      return false;
-    }
-    recordMemoryRunExposure(exposure);
-    return true;
-  };
   return Object.freeze({
     async search(search) {
       const active = await getInvocation();
@@ -225,9 +211,7 @@ export function createAuthorizedMemoryReadHost(params: {
         return active;
       }
       const result = await searchAuthorizedMemoryForInvocation({ invocation: active, ...search });
-      return "unavailable" in result || !recordExposure(active)
-        ? MEMORY_INVOCATION_UNAVAILABLE
-        : result;
+      return "unavailable" in result ? MEMORY_INVOCATION_UNAVAILABLE : result;
     },
     async read(read) {
       const active = await getInvocation();
@@ -235,9 +219,7 @@ export function createAuthorizedMemoryReadHost(params: {
         return active;
       }
       const result = await readAuthorizedMemoryForInvocation({ invocation: active, ...read });
-      return "unavailable" in result || !recordExposure(active)
-        ? MEMORY_INVOCATION_UNAVAILABLE
-        : result;
+      return "unavailable" in result ? MEMORY_INVOCATION_UNAVAILABLE : result;
     },
   });
 }

@@ -1,6 +1,6 @@
 import type { MemoryAuthorizationCapabilities } from "openclaw/plugin-sdk/memory-authorization";
 
-/** Phase 1C admits only scoped candidate search and exact opaque-handle reads. */
+/** Phase 1C admits scoped reads with authenticated exposure and egress receipts. */
 export const MEMORY_CORE_AUTHORIZATION_CAPABILITIES = Object.freeze({
   version: 1,
   scopedCandidates: true,
@@ -10,6 +10,6 @@ export const MEMORY_CORE_AUTHORIZATION_CAPABILITIES = Object.freeze({
   scopedImport: false,
   scopedExport: false,
   scopedStatus: false,
-  exposureReceipts: false,
-  egressReceipts: false,
+  exposureReceipts: true,
+  egressReceipts: true,
 }) satisfies MemoryAuthorizationCapabilities;

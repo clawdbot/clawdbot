@@ -76,14 +76,27 @@ function authorizedMemoryUnavailableResult() {
   return jsonResult(buildMemorySearchUnavailableResult("memory unavailable"));
 }
 
+function authorizedMemoryCorpusUnavailableResult(corpus: "wiki") {
+  return jsonResult(
+    buildMemorySearchUnavailableResult(`The ${corpus} corpus is unavailable for scoped memory.`, {
+      warning:
+        "Compiled wiki memory is unavailable because scoped memory admits only authorized memory and session sources.",
+      action: "Use corpus=memory or corpus=sessions, or request an authorized memory source.",
+    }),
+  );
+}
+
 function resolveAuthorizedMemorySources(
   requestedCorpus: "memory" | "wiki" | "all" | "sessions" | undefined,
-): readonly MemorySource[] {
+): readonly MemorySource[] | undefined {
   if (requestedCorpus === "memory") {
     return ["memory"];
   }
   if (requestedCorpus === "sessions") {
     return ["sessions"];
+  }
+  if (requestedCorpus === "wiki") {
+    return undefined;
   }
   // `all` has no supplemental-plugin escape hatch in enforced mode. It means
   // all stores admitted by the selected runtime, across its content sources.
@@ -331,6 +344,8 @@ async function getSupplementMemoryReadResult(params: {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  memoryReadEnforced?: OpenClawPluginToolContext["memoryReadEnforced"];
+  authorizedMemoryRead?: OpenClawPluginToolContext["authorizedMemoryRead"];
   corpus?: "memory" | "wiki" | "all";
 }) {
   const supplement = await getMemoryCorpusSupplementResult({
@@ -340,6 +355,8 @@ async function getSupplementMemoryReadResult(params: {
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
     sandboxed: params.sandboxed,
+    memoryReadEnforced: params.memoryReadEnforced,
+    authorizedMemoryRead: params.authorizedMemoryRead,
     corpus: params.corpus,
   });
   if (!supplement) {
@@ -448,7 +465,7 @@ export function createMemorySearchTool(options: {
     label: "Memory Search",
     name: "memory_search",
     description:
-      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional `corpus=wiki` or `corpus=all` also searches registered compiled-wiki supplements. `corpus=memory` restricts hits to indexed memory files (excludes session transcript chunks from ranking). `corpus=sessions` restricts hits to indexed session transcripts (same visibility rules as session history tools). If response has disabled=true or stale=true, you must tell the user and include the warning/action guidance.",
+      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos. In legacy mode, `corpus=wiki` or `corpus=all` also searches registered compiled-wiki supplements; scoped memory makes `corpus=wiki` unavailable and admits only authorized memory/session sources. `corpus=memory` restricts hits to indexed memory files (excludes session transcript chunks from ranking). `corpus=sessions` restricts hits to indexed session transcripts (same visibility rules as session history tools). If response has disabled=true or stale=true, you must tell the user and include the warning/action guidance.",
     parameters: MemorySearchSchema,
     execute:
       ({ cfg, agentId }) =>
@@ -470,13 +487,17 @@ export function createMemorySearchTool(options: {
         const requestedCorpus =
           options.conversationRecall?.corpus === "sessions" ? "sessions" : modelRequestedCorpus;
         if (options.memoryReadEnforced) {
+          const sources = resolveAuthorizedMemorySources(requestedCorpus);
+          if (!sources) {
+            return authorizedMemoryCorpusUnavailableResult("wiki");
+          }
           const host = options.authorizedMemoryRead;
           if (!host) {
             return authorizedMemoryUnavailableResult();
           }
           const authorized = await host.search({
             query,
-            sources: resolveAuthorizedMemorySources(requestedCorpus),
+            sources,
             limit: maxResults,
             signal: callerSignal,
           });
@@ -767,6 +788,8 @@ export function createMemorySearchTool(options: {
                           agentId,
                           agentSessionKey: options.agentSessionKey,
                           sandboxed: options.sandboxed,
+                          memoryReadEnforced: options.memoryReadEnforced,
+                          authorizedMemoryRead: options.authorizedMemoryRead,
                           corpus: requestedCorpus,
                         }),
                     ),
@@ -877,6 +900,8 @@ export function createMemoryGetTool(options: {
             agentId,
             agentSessionKey: options.agentSessionKey,
             sandboxed: options.sandboxed,
+            memoryReadEnforced: options.memoryReadEnforced,
+            authorizedMemoryRead: options.authorizedMemoryRead,
             corpus: requestedCorpus,
           });
           return jsonResult(

@@ -96,6 +96,14 @@ const REQUIRED_PHASE_0_PATH_IDS = [
   "plugin-and-mcp-outbound-actions",
 ] as const;
 
+const PHASE_1C_SELECTED_READ_PATHS = {
+  "bootstrap-memory-and-user-files": "blocked-in-enforced-mode",
+  "startup-recent-memory-context": "blocked-in-enforced-mode",
+  "memory-search-tool": "authorized",
+  "memory-get-tool": "authorized",
+  "session-transcript-search": "authorized",
+} as const;
+
 const MEMORY_MANAGER_CALL_NAMES = new Set([
   "getActiveMemorySearchManager",
   "getMemorySearchManager",
@@ -481,13 +489,30 @@ describe("memory authorization path inventory", () => {
     }
   });
 
-  it("keeps Phase 0 shadow-only and explicitly fails enforced bypasses closed", () => {
-    expect(inventory.filter((item) => item.disposition === "authorized")).toEqual([]);
+  it("keeps Phase 1C selected reads host-authorized and explicitly fails bypasses closed", () => {
+    expect(inventory.some((item) => item.disposition === "authorized")).toBe(true);
     expect(inventory.filter((item) => item.disposition === "operator-only-authenticated")).toEqual(
       [],
     );
     expect(inventory.some((item) => item.disposition === "legacy-only")).toBe(true);
     expect(inventory.some((item) => item.disposition === "blocked-in-enforced-mode")).toBe(true);
+  });
+
+  it("records the exact Phase 1C selected-read and legacy-bypass dispositions", () => {
+    const entriesById = new Map(inventory.map((item) => [item.id, item]));
+
+    for (const [id, disposition] of Object.entries(PHASE_1C_SELECTED_READ_PATHS)) {
+      expect(entriesById.get(id)).toMatchObject({ disposition });
+    }
+    for (const id of ["memory-search-tool", "memory-get-tool", "session-transcript-search"]) {
+      expect(entriesById.get(id)).toMatchObject({
+        owner: "core-access-host",
+        surfaces: expect.arrayContaining([
+          "src/agents/memory-authorized-read-host.ts",
+          "src/plugins/memory-invocation.ts",
+        ]),
+      });
+    }
   });
 
   it("keeps supplemental reads and mutations as distinct enforced-mode paths", () => {

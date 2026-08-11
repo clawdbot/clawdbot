@@ -256,6 +256,7 @@ export function buildMemorySystemPromptAddition(
     // its synchronous view, or an omitted flag would reopen those supplements.
     memoryReadEnforced:
       params.memoryReadEnforced ?? (prepared.context.memoryReadEnforced ? true : undefined),
+    authorizedMemoryRead: params.authorizedMemoryRead ?? prepared.context.authorizedMemoryRead,
   };
   return renderMemorySystemPromptAddition(contextParams, prepared);
 }

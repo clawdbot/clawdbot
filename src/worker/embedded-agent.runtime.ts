@@ -14,7 +14,6 @@ import { isApplyPatchAllowedForModel } from "../agents/apply-patch-model-policy.
 import { buildBootstrapContextForFiles } from "../agents/bootstrap-files.js";
 import { createCoreCodingTools } from "../agents/core-coding-tools.js";
 import { createNativeModelOwnedRuntimeModel } from "../agents/embedded-agent-runner/run/setup.js";
-import { createMemoryFileMutationGuard } from "../agents/memory-file-mutation-guard.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { AuthStorage } from "../agents/sessions/auth-storage.js";
 import { ModelRegistry } from "../agents/sessions/model-registry.js";
@@ -27,7 +26,6 @@ import { wrapToolWithGatewayCallerIdentity } from "../agents/tools/gateway-calle
 import { DEFAULT_AGENTS_FILENAME, loadWorkspaceBootstrapFiles } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AssistantMessage, AssistantMessageEventStreamLike } from "../llm/types.js";
-import { isMemoryIsolationCutoverAgent } from "../plugins/memory-cutover.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { createWorkerBrowserToolRuntime } from "./browser-runtime.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
@@ -94,6 +92,7 @@ type RunWorkerEmbeddedTurnParams = {
   inferenceOptions?: WorkerInferenceOptions;
   allowedToolNames: readonly WorkerToolName[];
   browser?: WorkerBrowserLaunchDescriptor;
+  memoryIsolationCutover: boolean;
   signal?: AbortSignal;
 };
 
@@ -147,22 +146,28 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
   });
 
   const allowedToolNameSet = new Set<string>(params.allowedToolNames);
-  const activeToolNames = WORKER_TOOL_NAMES.filter((name) => allowedToolNameSet.has(name));
-  const localToolNameSet = new Set<string>(WORKER_LOCAL_TOOL_NAMES);
+  // P1C's selected-memory pilot exposes no mutation or execution path. The worker builds core
+  // tools directly, so it must apply the primary agent's final read-only surface itself.
+  const availableToolNames = params.memoryIsolationCutover
+    ? (["read", "browser"] as const)
+    : WORKER_TOOL_NAMES;
+  const activeToolNames = availableToolNames.filter((name) => allowedToolNameSet.has(name));
+  const localToolNameSet = new Set<string>(
+    params.memoryIsolationCutover ? availableToolNames : WORKER_LOCAL_TOOL_NAMES,
+  );
   const coreTools = createCoreCodingTools({
     codingRoot: params.cwd,
     includeBaseCodingTools: true,
-    includeShellTools: true,
+    includeShellTools: !params.memoryIsolationCutover,
     workspaceOnly: false,
     modelContextWindowTokens: model.contextWindow,
     imageSanitization: {},
-    memoryFileMutationGuard: isMemoryIsolationCutoverAgent(DEFAULT_AGENT_ID)
-      ? createMemoryFileMutationGuard({ mutationRoot: params.cwd })
-      : undefined,
-    applyPatchEnabled: isApplyPatchAllowedForModel({
-      modelProvider: params.modelRef.provider,
-      modelId: params.modelRef.model,
-    }),
+    applyPatchEnabled:
+      !params.memoryIsolationCutover &&
+      isApplyPatchAllowedForModel({
+        modelProvider: params.modelRef.provider,
+        modelId: params.modelRef.model,
+      }),
     applyPatchWorkspaceOnly: true,
     execDefaults: {
       host: "gateway",
@@ -220,7 +225,11 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
         }),
       );
       const discoveredToolNames = new Set(localTools.map((tool) => tool.name));
-      for (const toolName of WORKER_REQUIRED_LOCAL_TOOL_NAMES) {
+      const requiredToolNames = [
+        ...(params.memoryIsolationCutover ? ["read"] : WORKER_REQUIRED_LOCAL_TOOL_NAMES),
+        ...(browserRuntime ? ["browser"] : []),
+      ];
+      for (const toolName of requiredToolNames) {
         if (!discoveredToolNames.has(toolName)) {
           throw new Error(`Worker coding tool unavailable: ${toolName}`);
         }

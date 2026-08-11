@@ -9,6 +9,7 @@ import { createInternalHookEvent } from "../../internal-hooks.js";
 
 const memoryIsolationMocks = vi.hoisted(() => ({
   isMemoryIsolationCutoverAgent: vi.fn(() => false),
+  isMemoryIsolationTranscriptPolicyEnforcedInDatabase: vi.fn(() => false),
 }));
 
 vi.mock("../../../plugins/memory-cutover.js", () => memoryIsolationMocks);
@@ -25,6 +26,9 @@ describe("session-memory automatic reset", () => {
 
   afterEach(async () => {
     memoryIsolationMocks.isMemoryIsolationCutoverAgent.mockReset().mockReturnValue(false);
+    memoryIsolationMocks.isMemoryIsolationTranscriptPolicyEnforcedInDatabase
+      .mockReset()
+      .mockReturnValue(false);
     await flushSessionMemoryWritesForTest();
   });
 

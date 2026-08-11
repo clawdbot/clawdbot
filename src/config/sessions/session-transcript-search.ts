@@ -6,6 +6,7 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { listSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
+import { isTranscriptMemoryPolicyEnforcedInDatabase } from "./session-transcript-memory-policy.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
   startSessionTranscriptIndexReconcile,
@@ -78,6 +79,31 @@ export function searchSessionTranscripts(params: {
     sessionKeys.length > 0
       ? ` AND session_windows.session_key IN (${sessionKeys.map(() => "?").join(", ")})`
       : "";
+  // FTS has its own raw query, but it shares replay and projection's P1C companion boundary.
+  const whereAuthorizedTranscript = isTranscriptMemoryPolicyEnforcedInDatabase(database.db)
+    ? `
+      AND EXISTS (
+        SELECT 1
+        FROM transcript_event_memory_policies AS policy
+        JOIN session_memory_subject_snapshots AS subject
+          ON subject.session_id = policy.session_id
+        JOIN memory_run_exposures AS exposure
+          ON exposure.exposure_set_id = policy.run_exposure_set_id
+        JOIN memory_policy_sets AS policy_set
+          ON policy_set.policy_set_id = policy.source_policy_set_id
+        WHERE policy.session_id = session_transcript_fts.session_id
+          AND policy.event_seq = identity.seq
+          AND policy.authorization_status = 'authorized'
+          AND subject.session_identity_revision = policy.session_identity_revision
+          AND subject.subject_revision = policy.subject_revision
+          AND exposure.run_id = policy.run_id
+          AND exposure.context_fingerprint = policy.context_fingerprint
+          AND exposure.revision_number = policy.run_exposure_revision
+          AND exposure.effective_source_policy_set_id = policy.source_policy_set_id
+          AND exposure.delivery_audiences_json = policy.delivery_audiences_json
+          AND policy_set.policy_set_id = exposure.effective_source_policy_set_id
+      )`
+    : "";
   // MATCH, snippet(), and bm25() are FTS5 primitives without a Kysely
   // representation. session_key lives on the window row so key renames
   // never leave stale keys inside the index. Sessions flagged needs_rebuild
@@ -94,37 +120,7 @@ export function searchSessionTranscripts(params: {
     JOIN transcript_event_identities AS identity
       ON identity.session_id = session_transcript_fts.session_id
       AND identity.event_id = session_transcript_fts.message_id
-    WHERE session_transcript_fts MATCH ?${whereSession}
-      AND (
-        NOT EXISTS (
-          SELECT 1
-          FROM memory_migrations AS migration
-          WHERE migration.phase = 'cutover'
-            AND migration.verified_at IS NOT NULL
-            AND migration.cutover_at IS NOT NULL
-        )
-        OR EXISTS (
-          SELECT 1
-          FROM transcript_event_memory_policies AS policy
-          JOIN session_memory_subject_snapshots AS subject
-            ON subject.session_id = policy.session_id
-          JOIN memory_run_exposures AS exposure
-            ON exposure.exposure_set_id = policy.run_exposure_set_id
-          JOIN memory_policy_sets AS policy_set
-            ON policy_set.policy_set_id = policy.source_policy_set_id
-          WHERE policy.session_id = session_transcript_fts.session_id
-            AND policy.event_seq = identity.seq
-            AND policy.authorization_status = 'authorized'
-            AND subject.session_identity_revision = policy.session_identity_revision
-            AND subject.subject_revision = policy.subject_revision
-            AND exposure.run_id = policy.run_id
-            AND exposure.context_fingerprint = policy.context_fingerprint
-            AND exposure.revision_number = policy.run_exposure_revision
-            AND exposure.effective_source_policy_set_id = policy.source_policy_set_id
-            AND exposure.delivery_audiences_json = policy.delivery_audiences_json
-            AND policy_set.policy_set_id = exposure.effective_source_policy_set_id
-        )
-      )
+    WHERE session_transcript_fts MATCH ?${whereSession}${whereAuthorizedTranscript}
     AND session_transcript_fts.session_id NOT IN (
         SELECT session_id FROM session_transcript_index_state WHERE needs_rebuild != 0
       )

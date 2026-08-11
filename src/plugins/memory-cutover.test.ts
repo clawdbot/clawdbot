@@ -41,6 +41,11 @@ describe("memory isolation lifecycle", () => {
       .run(params.sessionKey ?? "agent:main:pilot", params.principalId, randomUUID());
   }
 
+  it("does not borrow an agent cutover state when the caller has no agent scope", () => {
+    expect(isMemoryIsolationCutoverAgent("")).toBe(false);
+    expect(isMemoryIsolationCutoverAgent("   ")).toBe(false);
+  });
+
   it("persists a verified shadow-read-only marker and activates it only after a cache reset", () => {
     insertPilotSubject({ principalId: "principal-alice" });
     expect(resolveMemoryIsolationMode("main")).toBe("legacy");

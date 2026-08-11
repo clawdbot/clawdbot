@@ -1,3 +1,4 @@
+import { logWarn } from "../logger.js";
 import type {
   AuthorizedMemoryPlan,
   AuthorizedMemoryResultEnvelope,
@@ -18,6 +19,11 @@ import {
   admitMemoryAuthorizationReadRuntime,
   type AdmittedAuthorizedMemoryReadRuntime,
 } from "./memory-authorization-runtime.js";
+import {
+  hydrateMemoryRunExposureFromLedger,
+  persistMemoryRunExposureBeforeContent,
+} from "./memory-run-exposure-ledger.js";
+import { prepareMemoryRunExposure, publishMemoryRunExposure } from "./memory-run-exposure.js";
 import { resolveSelectedMemoryCapabilityRegistration } from "./memory-state.js";
 import type { MemoryPluginCapability } from "./registry-contribution-types.js";
 import { requireActivePluginRegistry } from "./runtime.js";
@@ -55,6 +61,19 @@ type InvocationState = Readonly<{
 }>;
 
 const invocationStates = new WeakMap<object, InvocationState>();
+
+type MemoryInvocationDiagnostic =
+  | "admission-rejected"
+  | "authorization-failed"
+  | "invalid-plan"
+  | "materialization-rejected"
+  | "search-failed";
+
+function logMemoryInvocationDiagnostic(diagnostic: MemoryInvocationDiagnostic): void {
+  // Memory content, access facts, capability metadata, plans, and backend errors are all sensitive.
+  // Keep the emitted diagnostic low-cardinality and content-free; the unavailable result is intentional.
+  logWarn(`memory invocation unavailable: ${diagnostic}`);
+}
 
 function sameAudiences(left: readonly AudienceRef[], right: readonly AudienceRef[]): boolean {
   const key = (audience: AudienceRef) => `${audience.kind}\u0000${audience.id}`;
@@ -112,7 +131,7 @@ function readCurrentContext(
   return readContext;
 }
 
-function mergeAndValidateEnvelope<T>(params: {
+function validateEnvelope<T>(params: {
   state: InvocationState;
   context: MemoryContentAccessContext<"read">;
   expectedRevisionHandles: readonly string[];
@@ -124,6 +143,7 @@ function mergeAndValidateEnvelope<T>(params: {
   const exposureRecordedAt = Date.parse(exposureReceipt.recordedAt);
   const egressExpiry = Date.parse(egressReceipt.expiresAt);
   if (
+    envelope.version !== 1 ||
     exposureReceipt.version !== 1 ||
     egressReceipt.version !== 1 ||
     exposureReceipt.contextFingerprint !== context.contextFingerprint ||
@@ -161,6 +181,14 @@ function mergeAndValidateEnvelope<T>(params: {
   ) {
     return false;
   }
+  return true;
+}
+
+function mergeEnvelope(
+  state: InvocationState,
+  envelope: AuthorizedMemoryResultEnvelope<unknown>,
+): void {
+  const { exposureReceipt, egressReceipt } = envelope;
   state.sourcePolicySetIds.add(exposureReceipt.sourcePolicySetId);
   for (const revision of exposureReceipt.exposedRevisionHandles) {
     state.exposedRevisionHandles.add(revision);
@@ -168,7 +196,76 @@ function mergeAndValidateEnvelope<T>(params: {
   state.exposureReceiptIds.add(exposureReceipt.receiptId);
   state.egressReceiptIds.add(egressReceipt.receiptId);
   state.runExposureRevisions.add(exposureReceipt.runExposureRevision);
-  return true;
+}
+
+function readTranscriptExposure(params: {
+  state: InvocationState;
+  context: MemoryContentAccessContext<"read">;
+  pendingEnvelope?: AuthorizedMemoryResultEnvelope<unknown>;
+}) {
+  const { state, context, pendingEnvelope } = params;
+  const sourcePolicySetIds = new Set(state.sourcePolicySetIds);
+  const exposedResourceRevisions = new Set(state.exposedRevisionHandles);
+  const exposureReceiptIds = new Set(state.exposureReceiptIds);
+  const egressReceiptIds = new Set(state.egressReceiptIds);
+  if (pendingEnvelope) {
+    const { exposureReceipt, egressReceipt } = pendingEnvelope;
+    sourcePolicySetIds.add(exposureReceipt.sourcePolicySetId);
+    for (const revision of exposureReceipt.exposedRevisionHandles) {
+      exposedResourceRevisions.add(revision);
+    }
+    exposureReceiptIds.add(exposureReceipt.receiptId);
+    egressReceiptIds.add(egressReceipt.receiptId);
+  }
+  return Object.freeze({
+    agentId: context.agentId,
+    sessionId: context.sessionId,
+    sessionKey: context.sessionKey,
+    runId: context.runId,
+    contextFingerprint: context.contextFingerprint,
+    planId: state.plan.planId,
+    memoryPolicyRevision: state.plan.memoryPolicyRevision,
+    sourcePolicySetIds: Object.freeze([...sourcePolicySetIds].toSorted()),
+    exposedResourceRevisions: Object.freeze([...exposedResourceRevisions].toSorted()),
+    exposureReceiptIds: Object.freeze([...exposureReceiptIds].toSorted()),
+    egressReceiptIds: Object.freeze([...egressReceiptIds].toSorted()),
+    deliveryAudiences: Object.freeze([...context.delivery.audiences]),
+    deliveryRevision: context.delivery.deliveryRevision,
+    egressRegistryRevision: context.delivery.egressRegistryRevision,
+    sessionIdentityRevision: context.sessionIdentityRevision,
+    subjectRevision: context.subjectRevision,
+  });
+}
+
+/**
+ * Records the next immutable exposure revision before the selected plugin's content can leave
+ * this broker. A recording failure leaves the invocation state unchanged and fails the read closed.
+ */
+function recordEnvelopeExposure(params: {
+  state: InvocationState;
+  context: MemoryContentAccessContext<"read">;
+  envelope: AuthorizedMemoryResultEnvelope<unknown>;
+}): void {
+  if (
+    !hydrateMemoryRunExposureFromLedger({
+      agentId: params.context.agentId,
+      sessionId: params.context.sessionId,
+      runId: params.context.runId,
+    })
+  ) {
+    throw new Error("memory exposure ledger could not restore its durable tail");
+  }
+  const snapshot = prepareMemoryRunExposure(
+    readTranscriptExposure({
+      state: params.state,
+      context: params.context,
+      pendingEnvelope: params.envelope,
+    }),
+  );
+  if (!persistMemoryRunExposureBeforeContent(snapshot) || !publishMemoryRunExposure(snapshot)) {
+    throw new Error("memory exposure ledger did not commit before content release");
+  }
+  mergeEnvelope(params.state, params.envelope);
 }
 
 function readState(invocation: AuthorizedMemoryReadInvocation): InvocationState | undefined {
@@ -185,6 +282,7 @@ export async function createAuthorizedMemoryReadInvocation(params: {
 }): Promise<AuthorizedMemoryReadInvocation | MemoryInvocationUnavailable> {
   const materialized = materializeTrustedMemoryAccessContext(params.context);
   if (!materialized || materialized.operation !== "read") {
+    logMemoryInvocationDiagnostic("materialization-rejected");
     return MEMORY_INVOCATION_UNAVAILABLE;
   }
   const context = materialized as MemoryContentAccessContext<"read">;
@@ -193,6 +291,7 @@ export async function createAuthorizedMemoryReadInvocation(params: {
     resolveSelectedMemoryCapabilityRegistration(requireActivePluginRegistry())?.capability;
   const admission = await admitMemoryAuthorizationReadRuntime(capability);
   if (!admission.ok) {
+    logMemoryInvocationDiagnostic("admission-rejected");
     return MEMORY_INVOCATION_UNAVAILABLE;
   }
   try {
@@ -200,6 +299,7 @@ export async function createAuthorizedMemoryReadInvocation(params: {
     const plan = (await admission.runtime.authorize(context)) as AuthorizedMemoryPlan &
       Readonly<{ operation: "read" }>;
     if (!isCurrentPlan({ context, plan, nowMs: Date.now() })) {
+      logMemoryInvocationDiagnostic("invalid-plan");
       return MEMORY_INVOCATION_UNAVAILABLE;
     }
     const invocation = Object.freeze({}) as AuthorizedMemoryReadInvocation;
@@ -221,6 +321,7 @@ export async function createAuthorizedMemoryReadInvocation(params: {
     );
     return invocation;
   } catch {
+    logMemoryInvocationDiagnostic("authorization-failed");
     return MEMORY_INVOCATION_UNAVAILABLE;
   }
 }
@@ -253,7 +354,7 @@ export async function searchAuthorizedMemoryForInvocation(params: {
     });
     const revisionHandles = envelope.value.map((result) => result.resourceHandle.resourceRevision);
     if (
-      !mergeAndValidateEnvelope({
+      !validateEnvelope({
         state,
         context,
         expectedRevisionHandles: revisionHandles,
@@ -262,6 +363,7 @@ export async function searchAuthorizedMemoryForInvocation(params: {
     ) {
       return MEMORY_INVOCATION_UNAVAILABLE;
     }
+    recordEnvelopeExposure({ state, context, envelope });
     const results = envelope.value.map((result) => {
       state.handles.set(result.resourceHandle.handleId, result.resourceHandle);
       const { resourceHandle: _resourceHandle, ...safe } = result;
@@ -269,6 +371,7 @@ export async function searchAuthorizedMemoryForInvocation(params: {
     });
     return Object.freeze({ results: Object.freeze(results) });
   } catch {
+    logMemoryInvocationDiagnostic("search-failed");
     return MEMORY_INVOCATION_UNAVAILABLE;
   }
 }
@@ -299,7 +402,7 @@ export async function readAuthorizedMemoryForInvocation(params: {
       ...(params.lines !== undefined ? { lines: params.lines } : {}),
     });
     if (
-      !mergeAndValidateEnvelope({
+      !validateEnvelope({
         state,
         context,
         expectedRevisionHandles: [handle.resourceRevision],
@@ -308,6 +411,7 @@ export async function readAuthorizedMemoryForInvocation(params: {
     ) {
       return MEMORY_INVOCATION_UNAVAILABLE;
     }
+    recordEnvelopeExposure({ state, context, envelope });
     return Object.freeze({ ...envelope.value });
   } catch {
     return MEMORY_INVOCATION_UNAVAILABLE;
@@ -361,22 +465,5 @@ export function readAuthorizedMemoryTranscriptExposure(invocation: AuthorizedMem
   if (!state || !context || !isCurrentPlan({ context, plan: state.plan, nowMs: Date.now() })) {
     return undefined;
   }
-  return Object.freeze({
-    agentId: context.agentId,
-    sessionId: context.sessionId,
-    sessionKey: context.sessionKey,
-    runId: context.runId,
-    contextFingerprint: context.contextFingerprint,
-    planId: state.plan.planId,
-    memoryPolicyRevision: state.plan.memoryPolicyRevision,
-    sourcePolicySetIds: Object.freeze([...state.sourcePolicySetIds].toSorted()),
-    exposedResourceRevisions: Object.freeze([...state.exposedRevisionHandles].toSorted()),
-    exposureReceiptIds: Object.freeze([...state.exposureReceiptIds].toSorted()),
-    egressReceiptIds: Object.freeze([...state.egressReceiptIds].toSorted()),
-    deliveryAudiences: Object.freeze([...context.delivery.audiences]),
-    deliveryRevision: context.delivery.deliveryRevision,
-    egressRegistryRevision: context.delivery.egressRegistryRevision,
-    sessionIdentityRevision: context.sessionIdentityRevision,
-    subjectRevision: context.subjectRevision,
-  });
+  return readTranscriptExposure({ state, context });
 }

@@ -1,6 +1,9 @@
 import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 // Memory Core tests cover tools plugin behavior.
-import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-host-core";
+import {
+  clearMemoryPluginState,
+  registerMemoryCorpusSupplement,
+} from "openclaw/plugin-sdk/memory-host-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getMemoryCloseMockCalls,
@@ -23,8 +26,10 @@ import {
 } from "./tools.js";
 import {
   buildMemorySearchUnavailableResult,
+  getMemoryCorpusSupplementResult,
   MemoryGetSchema,
   MemorySearchSchema,
+  searchMemoryCorpusSupplements,
 } from "./tools.shared.js";
 import {
   asOpenClawConfig,
@@ -780,6 +785,93 @@ describe("enforced memory tools", () => {
       results: [],
     });
     expect(getMemorySearchManagerMockCalls()).toBe(0);
+  });
+
+  it("blocks the wiki corpus instead of remapping it to authorized memory sources", async () => {
+    const host = {
+      search: vi.fn(async () => ({ results: [] })),
+      read: vi.fn(async () => ({ text: "unused", path: "memory/MEMORY.md" })),
+    };
+    const search = createMemorySearchToolOrThrow({
+      memoryReadEnforced: true,
+      authorizedMemoryRead: host,
+    });
+
+    const result = await search.execute("scoped-wiki", { query: "private wiki", corpus: "wiki" });
+
+    expect(result.details).toMatchObject({
+      disabled: true,
+      unavailable: true,
+      results: [],
+      error: "The wiki corpus is unavailable for scoped memory.",
+    });
+    expect(host.search).not.toHaveBeenCalled();
+    expect(getMemorySearchManagerMockCalls()).toBe(0);
+  });
+
+  it("routes enforced conversation recall only through the authorized sessions source", async () => {
+    const host = {
+      search: vi.fn(async () => ({ results: [] })),
+      read: vi.fn(async () => ({ text: "unused", path: "sessions/unused.jsonl" })),
+    };
+    const search = createMemorySearchToolOrThrow({
+      memoryReadEnforced: true,
+      authorizedMemoryRead: host,
+      conversationRecall: {
+        anchorSessionKey: "agent:main:main",
+        scope: "same-agent-private",
+        corpus: "sessions",
+      },
+    });
+
+    await search.execute("scoped-conversation-recall", { query: "prior turn", corpus: "memory" });
+
+    expect(host.search).toHaveBeenCalledWith({
+      query: "prior turn",
+      sources: ["sessions"],
+      limit: undefined,
+      signal: undefined,
+    });
+    expect(getMemorySearchManagerMockCalls()).toBe(0);
+  });
+
+  it("does not invoke registered corpus supplements after cutover", async () => {
+    const supplement = {
+      search: vi.fn(async () => [
+        { corpus: "wiki", path: "private.md", score: 1, snippet: "private" },
+      ]),
+      get: vi.fn(async () => ({
+        corpus: "wiki",
+        path: "private.md",
+        content: "private",
+        fromLine: 1,
+        lineCount: 1,
+      })),
+    };
+    registerMemoryCorpusSupplement("memory-wiki", supplement);
+    const host = {
+      search: vi.fn(async () => ({ results: [] })),
+      read: vi.fn(async () => ({ text: "", path: "" })),
+    };
+
+    await expect(
+      searchMemoryCorpusSupplements({
+        query: "private",
+        corpus: "all",
+        memoryReadEnforced: true,
+        authorizedMemoryRead: host,
+      }),
+    ).resolves.toEqual([]);
+    await expect(
+      getMemoryCorpusSupplementResult({
+        lookup: "private.md",
+        corpus: "wiki",
+        memoryReadEnforced: true,
+        authorizedMemoryRead: host,
+      }),
+    ).resolves.toBeNull();
+    expect(supplement.search).not.toHaveBeenCalled();
+    expect(supplement.get).not.toHaveBeenCalled();
   });
 });
 
