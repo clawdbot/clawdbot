@@ -96,10 +96,10 @@ const buildChatItemsMock = vi.fn(
       (message) =>
         typeof message === "object" &&
         message !== null &&
-        typeof (message as { __testDivider?: unknown })["__testDivider"] === "string",
-    ) as { __testDivider: string } | undefined;
+        typeof (message as { testDividerMarker?: unknown }).testDividerMarker === "string",
+    ) as { testDividerMarker: string } | undefined;
     if (testDivider) {
-      if (testDivider.__testDivider === "reset") {
+      if (testDivider.testDividerMarker === "reset") {
         return [
           {
             kind: "divider",
@@ -905,7 +905,7 @@ describe("chat compaction divider", () => {
   it("renders checkpoint recovery copy and action", () => {
     const onOpenSessionCheckpoints = vi.fn();
     const container = renderChatView({
-      messages: [{ __testDivider: "compaction" }],
+      messages: [{ testDividerMarker: "compaction" }],
       onOpenSessionCheckpoints,
     });
 
@@ -925,7 +925,7 @@ describe("chat compaction divider", () => {
 
   it("renders the session reset divider title", () => {
     const container = renderChatView({
-      messages: [{ __testDivider: "reset" }],
+      messages: [{ testDividerMarker: "reset" }],
     });
 
     expect(container.querySelector(".chat-divider__title")?.textContent).toBe("Session reset");

@@ -1,7 +1,5 @@
-import {
-  readSessionTranscriptHistoryAnchorPage,
-  type SessionTranscriptReadScope,
-} from "../config/sessions/session-accessor.js";
+import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.js";
+import { readSessionTranscriptHistoryAnchorPage } from "../config/sessions/session-accessor.sqlite-history-events.js";
 import { projectTranscriptEntryMessage } from "./session-transcript-message.js";
 import {
   resolveTranscriptReadTarget,

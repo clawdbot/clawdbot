@@ -1,13 +1,8 @@
 import path from "node:path";
 import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
-  readRecentSessionTranscriptHistoryEvents,
   isSessionTranscriptProjectionUnavailableError,
   readRecentSessionTranscriptMessageEvents,
-  readSessionTranscriptHistoryEventById,
-  readSessionTranscriptHistoryEventCount,
-  readSessionTranscriptHistoryEventPage,
-  readSessionTranscriptHistoryEvents,
   readSessionTranscriptMessageEvents,
   resolveConcreteSessionStorePath,
   resolveSessionTranscriptReadTarget,
@@ -16,6 +11,13 @@ import {
   type SessionTranscriptReadScope,
   type TranscriptEvent,
 } from "../config/sessions/session-accessor.js";
+import {
+  readRecentSessionTranscriptHistoryEvents,
+  readSessionTranscriptHistoryEventById,
+  readSessionTranscriptHistoryEventCount,
+  readSessionTranscriptHistoryEventPage,
+  readSessionTranscriptHistoryEvents,
+} from "../config/sessions/session-accessor.sqlite-history-events.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { aggregateSqliteUsageSnapshots } from "./session-transcript-derived-readers.js";
 import {
