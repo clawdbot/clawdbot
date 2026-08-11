@@ -1,4 +1,9 @@
-import type { AgentWaitParams, ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  type AgentWaitParams,
+  type ErrorShape,
+  validateAgentParams,
+  validateAgentWaitParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewayMethodRegistry } from "../methods/registry.js";
 import {
   type GatewayMethodDispatchResponse,
@@ -12,6 +17,7 @@ import {
 } from "../server-methods.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { GatewayRequestOptions } from "../server-methods/types.js";
+import { validateGatewayMethodParams } from "../server-methods/validation.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 import { createAgentTurnService } from "./agent-turn-service.js";
 import { captureAgentTurnPrincipal } from "./principal.js";
@@ -60,6 +66,10 @@ export function createInternalAgentTurnFacade(options: InternalAgentTurnFacadeOp
     });
     if (authorization.error) {
       return { ok: false, error: authorization.error };
+    }
+    const validationError = validateGatewayMethodParams(request, validateAgentParams, method);
+    if (validationError) {
+      return { ok: false, error: validationError };
     }
     let acceptance: GatewayMethodDispatchResponse | undefined;
     let final: GatewayMethodDispatchResponse | undefined;
@@ -202,6 +212,10 @@ export function createInternalAgentTurnFacade(options: InternalAgentTurnFacadeOp
     });
     if (authorization.error) {
       return throwEnvelopeRejection(method, authorization.error);
+    }
+    const validationError = validateGatewayMethodParams(params, validateAgentWaitParams, method);
+    if (validationError) {
+      return throwEnvelopeRejection(method, validationError);
     }
     const result = runWithGatewayRequestEnvelope(
       method,

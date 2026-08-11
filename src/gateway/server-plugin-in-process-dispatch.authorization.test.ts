@@ -11,11 +11,12 @@ import type { GatewayRequestContext, GatewayRequestOptions } from "./server-meth
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 
 const startTurn = vi.hoisted(() => vi.fn());
+const waitForTurn = vi.hoisted(() => vi.fn());
 
 vi.mock("./agent-turn/agent-turn-service.js", () => ({
   createAgentTurnService: () => ({
     startTurn,
-    waitForTurn: vi.fn(),
+    waitForTurn,
   }),
 }));
 
@@ -60,6 +61,24 @@ async function dispatchScopedAgent(params: {
   context: GatewayRequestContext;
   sessionKey?: string;
 }) {
+  return await dispatchScopedMethod({
+    client: params.client,
+    context: params.context,
+    method: "agent",
+    params: {
+      message: "authorization probe",
+      idempotencyKey: "authorization-probe",
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    },
+  });
+}
+
+async function dispatchScopedMethod(params: {
+  client: NonNullable<GatewayRequestOptions["client"]>;
+  context: GatewayRequestContext;
+  method: "agent" | "agent.wait";
+  params: Record<string, unknown>;
+}) {
   return await withPluginRuntimeGatewayRequestScope(
     {
       client: params.client,
@@ -67,21 +86,17 @@ async function dispatchScopedAgent(params: {
       isWebchatConnect: () => false,
     },
     async () =>
-      await dispatchGatewayMethodInProcess(
-        "agent",
-        {
-          message: "authorization probe",
-          idempotencyKey: "authorization-probe",
-          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-        },
-        { disableSyntheticClient: true, requireScopedClient: true },
-      ),
+      await dispatchGatewayMethodInProcess(params.method, params.params, {
+        disableSyntheticClient: true,
+        requireScopedClient: true,
+      }),
   );
 }
 
 describe("typed in-process agent authorization", () => {
   beforeEach(() => {
     startTurn.mockReset();
+    waitForTurn.mockReset();
   });
 
   it("rejects a scoped agent turn without operator.write", async () => {
@@ -116,5 +131,33 @@ describe("typed in-process agent authorization", () => {
       ).rejects.toThrow("session is draft for this connection");
       expect(startTurn).not.toHaveBeenCalled();
     });
+  });
+
+  it("rejects invalid agent params before preflight", async () => {
+    await expect(
+      dispatchScopedMethod({
+        client: createOperatorClient({ profileId: "writer", scopes: ["operator.write"] }),
+        context: createContext(),
+        method: "agent",
+        params: {
+          message: "validation probe",
+          idempotencyKey: "validation-probe",
+          sessionKey: 42,
+        },
+      }),
+    ).rejects.toThrow("invalid agent params:");
+    expect(startTurn).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid agent.wait params before lifecycle lookup", async () => {
+    await expect(
+      dispatchScopedMethod({
+        client: createOperatorClient({ profileId: "writer", scopes: ["operator.write"] }),
+        context: createContext(),
+        method: "agent.wait",
+        params: { runId: 42 },
+      }),
+    ).rejects.toThrow("invalid agent.wait params:");
+    expect(waitForTurn).not.toHaveBeenCalled();
   });
 });
