@@ -1323,54 +1323,6 @@ CREATE INDEX IF NOT EXISTS idx_sandbox_registry_last_used
   ON sandbox_registry_entries(registry_kind, last_used_at_ms DESC, container_name)
   WHERE last_used_at_ms IS NOT NULL;
 
-CREATE TABLE IF NOT EXISTS commitments (
-  id TEXT NOT NULL PRIMARY KEY,
-  agent_id TEXT NOT NULL,
-  session_key TEXT NOT NULL,
-  channel TEXT NOT NULL,
-  account_id TEXT,
-  recipient_id TEXT,
-  thread_id TEXT,
-  sender_id TEXT,
-  kind TEXT NOT NULL,
-  sensitivity TEXT NOT NULL,
-  source TEXT NOT NULL,
-  status TEXT NOT NULL,
-  reason TEXT NOT NULL,
-  suggested_text TEXT NOT NULL,
-  dedupe_key TEXT NOT NULL,
-  confidence REAL NOT NULL,
-  due_earliest_ms INTEGER NOT NULL,
-  due_latest_ms INTEGER NOT NULL,
-  due_timezone TEXT NOT NULL,
-  source_message_id TEXT,
-  source_run_id TEXT,
-  created_at_ms INTEGER NOT NULL,
-  updated_at_ms INTEGER NOT NULL,
-  attempts INTEGER NOT NULL,
-  last_attempt_at_ms INTEGER,
-  sent_at_ms INTEGER,
-  dismissed_at_ms INTEGER,
-  snoozed_until_ms INTEGER,
-  expired_at_ms INTEGER,
-  record_json TEXT NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_commitments_scope_due
-  ON commitments(agent_id, session_key, status, due_earliest_ms, due_latest_ms);
-
-CREATE INDEX IF NOT EXISTS idx_commitments_status_due
-  ON commitments(status, due_earliest_ms, due_latest_ms);
-
-CREATE INDEX IF NOT EXISTS idx_commitments_scope_dedupe
-  ON commitments(agent_id, session_key, channel, dedupe_key, status);
-
-CREATE INDEX IF NOT EXISTS idx_commitments_agent_due
-  ON commitments(agent_id, status, due_earliest_ms, due_latest_ms, session_key);
-
-CREATE INDEX IF NOT EXISTS idx_commitments_agent_sent
-  ON commitments(agent_id, status, sent_at_ms, session_key);
-
 CREATE TABLE IF NOT EXISTS cron_jobs (
   store_key TEXT NOT NULL,
   job_id TEXT NOT NULL,

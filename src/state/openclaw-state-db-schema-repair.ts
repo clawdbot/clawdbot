@@ -30,6 +30,22 @@ export function dropLegacyStateTables(db: DatabaseSync): void {
   db.exec("DROP TABLE IF EXISTS node_pairing_pending; DROP TABLE IF EXISTS node_pairing_paired;");
 }
 
+export function migrateRetiredCommitmentsSchema(db: DatabaseSync, previousVersion: number): void {
+  if (previousVersion >= 7) {
+    return;
+  }
+  // The commitments runtime was removed before v7; retained rows are inert
+  // migration debt and have no remaining product owner or export contract.
+  db.exec(`
+    DROP INDEX IF EXISTS idx_commitments_scope_due;
+    DROP INDEX IF EXISTS idx_commitments_status_due;
+    DROP INDEX IF EXISTS idx_commitments_scope_dedupe;
+    DROP INDEX IF EXISTS idx_commitments_agent_due;
+    DROP INDEX IF EXISTS idx_commitments_agent_sent;
+    DROP TABLE IF EXISTS commitments;
+  `);
+}
+
 function hasCanonicalAgentDatabasesPrimaryKey(db: DatabaseSync): boolean {
   if (!tableExists(db, "agent_databases")) {
     return true;

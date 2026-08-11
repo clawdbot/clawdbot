@@ -194,6 +194,82 @@ function markStateDatabaseAsV5(database: DatabaseSync): void {
   `);
 }
 
+function markStateDatabaseAsV6(database: DatabaseSync): void {
+  database.exec(`
+    PRAGMA user_version = 6;
+    UPDATE schema_meta SET schema_version = 6 WHERE meta_key = 'primary';
+  `);
+}
+
+const RETIRED_COMMITMENT_SCHEMA_OBJECTS = [
+  "commitments",
+  "idx_commitments_scope_due",
+  "idx_commitments_status_due",
+  "idx_commitments_scope_dedupe",
+  "idx_commitments_agent_due",
+  "idx_commitments_agent_sent",
+] as const;
+
+function seedV6CommitmentSchema(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS commitments (
+      id TEXT NOT NULL PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      session_key TEXT NOT NULL,
+      channel TEXT NOT NULL,
+      account_id TEXT,
+      recipient_id TEXT,
+      thread_id TEXT,
+      sender_id TEXT,
+      kind TEXT NOT NULL,
+      sensitivity TEXT NOT NULL,
+      source TEXT NOT NULL,
+      status TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      suggested_text TEXT NOT NULL,
+      dedupe_key TEXT NOT NULL,
+      confidence REAL NOT NULL,
+      due_earliest_ms INTEGER NOT NULL,
+      due_latest_ms INTEGER NOT NULL,
+      due_timezone TEXT NOT NULL,
+      source_message_id TEXT,
+      source_run_id TEXT,
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL,
+      attempts INTEGER NOT NULL,
+      last_attempt_at_ms INTEGER,
+      sent_at_ms INTEGER,
+      dismissed_at_ms INTEGER,
+      snoozed_until_ms INTEGER,
+      expired_at_ms INTEGER,
+      record_json TEXT NOT NULL
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS idx_commitments_scope_due
+      ON commitments(agent_id, session_key, status, due_earliest_ms, due_latest_ms);
+    CREATE INDEX IF NOT EXISTS idx_commitments_status_due
+      ON commitments(status, due_earliest_ms, due_latest_ms);
+    CREATE INDEX IF NOT EXISTS idx_commitments_scope_dedupe
+      ON commitments(agent_id, session_key, channel, dedupe_key, status);
+    CREATE INDEX IF NOT EXISTS idx_commitments_agent_due
+      ON commitments(agent_id, status, due_earliest_ms, due_latest_ms, session_key);
+    CREATE INDEX IF NOT EXISTS idx_commitments_agent_sent
+      ON commitments(agent_id, status, sent_at_ms, session_key);
+    INSERT INTO commitments (
+      id, agent_id, session_key, channel, kind, sensitivity, source, status,
+      reason, suggested_text, dedupe_key, confidence, due_earliest_ms,
+      due_latest_ms, due_timezone, created_at_ms, updated_at_ms, attempts, record_json
+    ) VALUES (
+      'retired-commitment', 'main', 'agent:main:main', 'telegram', 'followup',
+      'normal', 'message', 'pending', 'inert', 'follow up', 'retired-dedupe',
+      1.0, 10, 20, 'UTC', 1, 1, 0, '{}'
+    );
+    INSERT INTO state_leases (
+      scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at
+    ) VALUES ('test', 'preserved-lease', 'migration-test', 100, 50, '{}', 1, 2);
+  `);
+  markStateDatabaseAsV6(database);
+}
+
 function seedLegacySessionWatchCursorSchema(stateDir: string): {
   ambientTarget: string;
   bomTarget: string;
@@ -1219,6 +1295,11 @@ describe("openclaw state database", () => {
         .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
         .get("execution_identity_contexts"),
     ).toBeUndefined();
+    expect(
+      database.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("commitments"),
+    ).toBeUndefined();
     expect(database.path).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
     expect(
       database.db
@@ -1242,6 +1323,55 @@ describe("openclaw state database", () => {
         .run("not-an-integer"),
     ).toThrow();
   });
+
+  it.each(["runtime open", "doctor repair"] as const)(
+    "retires v6 commitments through %s while preserving shared leases",
+    (migrationPath) => {
+      const stateDir = createTempStateDir();
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      const databasePath = materializeCurrentStateDatabase(stateDir);
+      const { DatabaseSync } = requireNodeSqlite();
+      const legacy = new DatabaseSync(databasePath);
+      seedV6CommitmentSchema(legacy);
+      legacy.close();
+
+      if (migrationPath === "doctor repair") {
+        expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+      }
+      const migrated = openOpenClawStateDatabase(options);
+
+      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(7);
+      expect(
+        migrated.db
+          .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+          .get(),
+      ).toEqual({ schema_version: 7 });
+      for (const name of RETIRED_COMMITMENT_SCHEMA_OBJECTS) {
+        expect(
+          migrated.db.prepare("SELECT name FROM sqlite_schema WHERE name = ?").get(name),
+        ).toBeUndefined();
+      }
+      expect(
+        migrated.db
+          .prepare(
+            `SELECT scope, lease_key, owner, expires_at, heartbeat_at, payload_json,
+                    created_at, updated_at
+               FROM state_leases
+              WHERE scope = 'test' AND lease_key = 'preserved-lease'`,
+          )
+          .get(),
+      ).toEqual({
+        scope: "test",
+        lease_key: "preserved-lease",
+        owner: "migration-test",
+        expires_at: 100,
+        heartbeat_at: 50,
+        payload_json: "{}",
+        created_at: 1,
+        updated_at: 2,
+      });
+    },
+  );
 
   it("keeps the additive worker SSH fallback table compatible with older v6 containment", () => {
     const database = openMaterializedCurrentStateDatabase();
@@ -2249,6 +2379,63 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
           )
           .get(),
       ).toBeUndefined();
+    } finally {
+      after.close();
+    }
+  });
+
+  it("upgrades v5 databases that predate startup worker tool tables", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`
+      DROP TABLE worker_session_tool_operations;
+      DROP TABLE worker_turn_tool_authorities;
+    `);
+    markStateDatabaseAsV5(legacy);
+    legacy.close();
+
+    const migrated = openOpenClawStateDatabase(options);
+    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+    const tables = migrated.db
+      .prepare(
+        `SELECT name FROM sqlite_schema
+         WHERE type = 'table' AND name IN (?, ?)
+         ORDER BY name`,
+      )
+      .all("worker_session_tool_operations", "worker_turn_tool_authorities");
+    expect(tables).toEqual([
+      { name: "worker_session_tool_operations" },
+      { name: "worker_turn_tool_authorities" },
+    ]);
+  });
+
+  it("rejects a missing stable v6 table before the v7 migration", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const damaged = new DatabaseSync(databasePath);
+    damaged.exec("DROP TABLE auth_profile_stores;");
+    markStateDatabaseAsV6(damaged);
+    damaged.close();
+
+    expect(() => openOpenClawStateDatabase(options)).toThrow(/missing table auth_profile_stores/iu);
+
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        after
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'auth_profile_stores'",
+          )
+          .get(),
+      ).toBeUndefined();
+      expect(readSqliteNumberPragma(after, "user_version")).toBe(6);
     } finally {
       after.close();
     }
@@ -4305,7 +4492,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ).toEqual([{ source_id: "legacy-job", ended_at: 12345 }]);
   });
 
-  it("opens databases with early queue and commitment tables before creating newer indexes", () => {
+  it("opens databases with early queue tables before creating newer indexes", () => {
     const stateDir = createTempStateDir();
     const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
@@ -4328,17 +4515,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         updated_at INTEGER NOT NULL,
         failed_at INTEGER,
         PRIMARY KEY (queue_name, id)
-      );
-      CREATE TABLE commitments (
-        id TEXT NOT NULL PRIMARY KEY,
-        agent_id TEXT NOT NULL,
-        session_key TEXT NOT NULL,
-        channel TEXT NOT NULL,
-        status TEXT NOT NULL,
-        due_earliest_ms INTEGER NOT NULL,
-        due_latest_ms INTEGER NOT NULL,
-        updated_at_ms INTEGER NOT NULL,
-        record_json TEXT NOT NULL
       );
     `);
     db.prepare(
@@ -4394,9 +4570,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       session_key: "agent:main:main",
       target: "chat-1",
     });
-    expect(() =>
-      database.db.prepare("SELECT dedupe_key FROM commitments LIMIT 1").all(),
-    ).not.toThrow();
   });
 
   it("configures durable SQLite connection pragmas", () => {

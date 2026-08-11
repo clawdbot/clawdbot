@@ -354,27 +354,6 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "delivery_queue_entries", "recovery_state TEXT");
   ensureColumn(db, "delivery_queue_entries", "platform_send_started_at INTEGER");
   backfillDeliveryQueueEntriesFromEntryJson(db);
-  ensureColumn(db, "commitments", "account_id TEXT");
-  ensureColumn(db, "commitments", "recipient_id TEXT");
-  ensureColumn(db, "commitments", "thread_id TEXT");
-  ensureColumn(db, "commitments", "sender_id TEXT");
-  ensureColumn(db, "commitments", "kind TEXT NOT NULL DEFAULT 'followup'");
-  ensureColumn(db, "commitments", "sensitivity TEXT NOT NULL DEFAULT 'normal'");
-  ensureColumn(db, "commitments", "source TEXT NOT NULL DEFAULT 'unknown'");
-  ensureColumn(db, "commitments", "reason TEXT NOT NULL DEFAULT ''");
-  ensureColumn(db, "commitments", "suggested_text TEXT NOT NULL DEFAULT ''");
-  ensureColumn(db, "commitments", "dedupe_key TEXT NOT NULL DEFAULT ''");
-  ensureColumn(db, "commitments", "confidence REAL NOT NULL DEFAULT 0");
-  ensureColumn(db, "commitments", "due_timezone TEXT NOT NULL DEFAULT 'UTC'");
-  ensureColumn(db, "commitments", "source_message_id TEXT");
-  ensureColumn(db, "commitments", "source_run_id TEXT");
-  ensureColumn(db, "commitments", "created_at_ms INTEGER NOT NULL DEFAULT 0");
-  ensureColumn(db, "commitments", "attempts INTEGER NOT NULL DEFAULT 0");
-  ensureColumn(db, "commitments", "last_attempt_at_ms INTEGER");
-  ensureColumn(db, "commitments", "sent_at_ms INTEGER");
-  ensureColumn(db, "commitments", "dismissed_at_ms INTEGER");
-  ensureColumn(db, "commitments", "snoozed_until_ms INTEGER");
-  ensureColumn(db, "commitments", "expired_at_ms INTEGER");
   // The shipped JSON runtime predeclared this table but never populated it.
   // The transitional default makes ADD COLUMN portable; schema-v2 tables are
   // rebuilt from canonical STRICT SQL immediately afterward, removing it.
