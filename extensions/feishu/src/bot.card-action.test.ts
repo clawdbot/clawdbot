@@ -30,6 +30,19 @@ vi.mock("./bot.js", () => ({
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const sendCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
+const resolveQuestionOverGatewayMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/question-gateway-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/question-gateway-runtime")>();
+  return {
+    ...actual,
+    questionGatewayRuntime: {
+      ...actual.questionGatewayRuntime,
+      resolveOption: resolveQuestionOverGatewayMock,
+    },
+  };
+});
 
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
@@ -51,6 +64,7 @@ describe("Feishu Card Action Handler", () => {
     vi.doUnmock("./bot.js");
     vi.doUnmock("./client.js");
     vi.doUnmock("./send.js");
+    vi.doUnmock("openclaw/plugin-sdk/question-gateway-runtime");
     vi.resetModules();
   });
 
@@ -118,6 +132,11 @@ describe("Feishu Card Action Handler", () => {
     vi.mocked(handleFeishuMessage)
       .mockReset()
       .mockResolvedValue(undefined as never);
+    resolveQuestionOverGatewayMock.mockResolvedValue({
+      status: "answered",
+      questionId: "question",
+      optionValue: "Production",
+    });
     processedCardActions.clear();
     resolvedCardActionChatTypes.clear();
   });
@@ -135,6 +154,42 @@ describe("Feishu Card Action Handler", () => {
   }
 
   const requireRecord = createRequireRecord("object", "expected-label-capitalized");
+
+  it("resolves guarded question callbacks through the Gateway", async () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const event = createCardActionEvent({
+      token: "question-token",
+      openId: "ou_user",
+      chatId: "oc_chat",
+      actionValue: createFeishuCardInteractionEnvelope({
+        k: "button",
+        a: "feishu.payload.question",
+        m: { questionId, optionValue: "Production" },
+        c: {
+          u: "ou_user",
+          h: "oc_chat",
+          e: Date.now() + 60_000,
+        },
+      }),
+    });
+
+    await handleFeishuCardAction({ cfg, event, runtime, accountId: "main" });
+
+    expect(resolveQuestionOverGatewayMock).toHaveBeenCalledWith({
+      cfg,
+      questionId,
+      optionValue: "Production",
+      senderId: "ou_user",
+      clientDisplayName: "Feishu question (mock-account)",
+    });
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith({
+      cfg,
+      to: "chat:oc_chat",
+      text: "Answer submitted.",
+      accountId: "main",
+    });
+    expect(handleFeishuMessage).not.toHaveBeenCalled();
+  });
 
   function handleMessageEvent(callIndex = 0) {
     const arg = requireRecord(

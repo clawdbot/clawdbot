@@ -16,6 +16,7 @@ export type FeishuCardInteractionEnvelope = {
   m?: FeishuCardInteractionMetadata;
   c?: {
     u?: string;
+    i?: string;
     h?: string;
     s?: string;
     e?: number;
@@ -26,6 +27,7 @@ export type FeishuCardInteractionEnvelope = {
 type FeishuCardActionEventLike = {
   operator: {
     open_id?: string;
+    user_id?: string;
   };
   action: {
     value: unknown;
@@ -125,6 +127,9 @@ export function decodeFeishuCardAction(params: {
     if (actionValue.c.u !== undefined && typeof actionValue.c.u !== "string") {
       return { kind: "invalid", reason: "malformed" };
     }
+    if (actionValue.c.i !== undefined && typeof actionValue.c.i !== "string") {
+      return { kind: "invalid", reason: "malformed" };
+    }
     if (actionValue.c.h !== undefined && typeof actionValue.c.h !== "string") {
       return { kind: "invalid", reason: "malformed" };
     }
@@ -144,6 +149,11 @@ export function decodeFeishuCardAction(params: {
 
     const expectedUser = actionValue.c.u?.trim();
     if (expectedUser && expectedUser !== (event.operator.open_id ?? "").trim()) {
+      return { kind: "invalid", reason: "wrong_user" };
+    }
+
+    const expectedUserId = actionValue.c.i?.trim();
+    if (expectedUserId && expectedUserId !== (event.operator.user_id ?? "").trim()) {
       return { kind: "invalid", reason: "wrong_user" };
     }
 

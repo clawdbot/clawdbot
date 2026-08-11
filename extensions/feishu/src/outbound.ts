@@ -15,6 +15,7 @@ import {
   resolveLegacyInteractiveTextFallback,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import {
   getReplyPayloadTtsSupplement,
@@ -57,6 +58,11 @@ import {
   buildFeishuPresentationCardElements,
   isFeishuCardWithinEnvelope,
 } from "./presentation-card.js";
+import {
+  buildFeishuQuestionTargetContext,
+  type FeishuQuestionInteractionContext,
+} from "./question-actions.js";
+import { registerFeishuQuestionDelivery } from "./question-delivery.js";
 import {
   sendCardFeishu,
   sendMarkdownCardFeishu,
@@ -189,6 +195,7 @@ function buildFeishuPayloadCard(params: {
   payload: Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0]["payload"];
   text?: string;
   identity?: Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0]["identity"];
+  questionContext?: FeishuQuestionInteractionContext;
 }): Record<string, unknown> | undefined {
   const nativeCard = readNativeFeishuCard(params.payload);
   if (nativeCard) {
@@ -217,7 +224,11 @@ function buildFeishuPayloadCard(params: {
         interactive,
       });
   const elements = presentation
-    ? buildFeishuPresentationCardElements({ presentation, fallbackText: text })
+    ? buildFeishuPresentationCardElements({
+        presentation,
+        fallbackText: text,
+        questionContext: params.questionContext,
+      })
     : [
         {
           tag: "markdown",
@@ -288,6 +299,7 @@ function renderFeishuPresentationPayload({
     payload,
     text: payload.text,
     identity: ctx.identity,
+    questionContext: buildFeishuQuestionTargetContext(ctx.to),
   });
   const existingFeishuData = isRecord(payload.channelData?.feishu)
     ? payload.channelData.feishu
@@ -662,6 +674,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       payload,
       text: ctx.text,
       identity: ctx.identity,
+      questionContext: buildFeishuQuestionTargetContext(ctx.to),
     });
     if (!card) {
       if (ttsSupplement) {
@@ -772,6 +785,24 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         },
       }),
     );
+  },
+  afterDeliverPayload: ({ cfg, target, payload, results }) => {
+    const questionId = questionGatewayRuntime.readAskUserQuestionId(payload);
+    const card = questionId ? readNativeFeishuCard(payload) : undefined;
+    const result = results.find(
+      (candidate) => candidate.channel === "feishu" && candidate.messageId,
+    );
+    if (!questionId || !card || !result?.messageId) {
+      return;
+    }
+    registerFeishuQuestionDelivery({
+      cfg,
+      accountId: target.accountId ?? undefined,
+      questionId,
+      messageId: result.messageId,
+      deliveryScope: result.channelId ?? target.to,
+      card,
+    });
   },
   ...createAttachedChannelResultAdapter({
     channel: "feishu",

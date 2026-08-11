@@ -18,6 +18,7 @@ import {
 } from "./card-ux-approval.js";
 import { normalizeFeishuChatType, resolveFeishuChatType } from "./chat-type.js";
 import { createFeishuClient } from "./client.js";
+import { FEISHU_QUESTION_ACTION, resolveFeishuQuestionAction } from "./question-actions.js";
 import { sendCardFeishu, sendMessageFeishu } from "./send.js";
 
 export type FeishuCardActionEvent = {
@@ -365,6 +366,40 @@ export async function handleFeishuCardAction(params: {
       log(
         `feishu[${account.accountId}]: handling structured card action ${envelope.a} from ${event.operator.open_id}`,
       );
+
+      if (envelope.a === FEISHU_QUESTION_ACTION) {
+        const questionId =
+          typeof envelope.m?.questionId === "string" ? envelope.m.questionId.trim() : "";
+        const optionValue =
+          typeof envelope.m?.optionValue === "string" ? envelope.m.optionValue.trim() : "";
+        if (!questionId || !optionValue) {
+          await sendInvalidInteractionNotice({
+            cfg,
+            event,
+            reason: "malformed",
+            accountId,
+          });
+          completeFeishuCardAction(event.token, account.accountId);
+          return;
+        }
+        await resolveFeishuQuestionAction({
+          questionId,
+          optionValue,
+          cfg,
+          accountId: account.accountId,
+          userId: event.operator.open_id,
+          respond: async (text) => {
+            await sendMessageFeishu({
+              cfg,
+              to: resolveCallbackTarget(event),
+              text,
+              accountId,
+            });
+          },
+        });
+        completeFeishuCardAction(event.token, account.accountId);
+        return;
+      }
 
       if (envelope.a === FEISHU_APPROVAL_REQUEST_ACTION) {
         const command = typeof envelope.m?.command === "string" ? envelope.m.command.trim() : "";
