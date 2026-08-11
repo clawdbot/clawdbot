@@ -585,6 +585,8 @@ async function waitForApiMiddleware(
 type TestTelegramUpdate = {
   update_id: number;
   message: {
+    message_id: number;
+    date: number;
     text: string;
     chat: { id: number; type: "private" | "supergroup"; is_forum?: boolean };
     message_thread_id?: number;
@@ -596,6 +598,8 @@ function topicUpdate(updateId: number, threadId: number, text: string): TestTele
   return {
     update_id: updateId,
     message: {
+      message_id: updateId,
+      date: 1_700_000_000 + updateId,
       text,
       message_thread_id: threadId,
       is_topic_message: true,
@@ -608,6 +612,8 @@ function directUpdate(updateId: number, chatId: number, text: string): TestTeleg
   return {
     update_id: updateId,
     message: {
+      message_id: updateId,
+      date: 1_700_000_000 + updateId,
       text,
       chat: { id: chatId, type: chatId < 0 ? "supergroup" : "private" },
     },
@@ -1291,9 +1297,10 @@ describe("TelegramPollingSession", () => {
       const abort = new AbortController();
       const handleUpdate = vi.fn(async () => undefined);
       const init = vi.fn(async () => undefined);
+      const update = directUpdate(42, 123, "hello");
       await writeTelegramSpooledUpdate({
         spoolDir: tempDir,
-        update: { update_id: 42, message: { text: "hello" } },
+        update,
       });
 
       const { createWorker, runPromise } = startIsolatedIngressSession({
@@ -1331,7 +1338,7 @@ describe("TelegramPollingSession", () => {
         persistenceFloorUpdateId: null,
       });
       expect(init).toHaveBeenCalledBefore(handleUpdate);
-      expect(handleUpdate).toHaveBeenCalledWith({ update_id: 42, message: { text: "hello" } });
+      expect(handleUpdate).toHaveBeenCalledWith(update);
     });
   });
 
@@ -1346,12 +1353,13 @@ describe("TelegramPollingSession", () => {
         handleUpdate,
         createWorker: worker.createWorker,
       });
+      const update = directUpdate(42, 123, "hello");
       try {
         await waitForTelegramTestState(() => expect(worker.hasListener()).toBe(true));
         worker.emit({
           type: "update",
           requestId: "write-1",
-          update: { update_id: 42, message: { text: "hello" } },
+          update,
           queued: 1,
         });
         await waitForTelegramTestState(() =>
@@ -1360,9 +1368,7 @@ describe("TelegramPollingSession", () => {
             updateId: 42,
           }),
         );
-        await waitForTelegramTestState(() =>
-          expect(handleUpdate).toHaveBeenCalledWith({ update_id: 42, message: { text: "hello" } }),
-        );
+        await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledWith(update));
         await waitForTelegramTestState(async () =>
           expect(await pendingUpdateIds(tempDir, "all")).toEqual([]),
         );
@@ -1424,19 +1430,14 @@ describe("TelegramPollingSession", () => {
           },
         });
         const runPromise = session.runUntilAbort();
+        const update = directUpdate(143, 1234, "installed bot capability snapshot");
+        update.message.message_thread_id = 42;
         try {
           await waitForTelegramTestState(() => expect(worker.hasListener()).toBe(true));
           worker.emit({
             type: "update",
             requestId: "topic-capability-1",
-            update: {
-              update_id: 143,
-              message: {
-                chat: { id: 1234, type: "private" },
-                message_thread_id: 42,
-                text: "installed bot capability snapshot",
-              },
-            },
+            update,
             queued: 1,
           });
           await waitForTelegramTestState(() =>
@@ -1488,7 +1489,7 @@ describe("TelegramPollingSession", () => {
         worker.emit({
           type: "update",
           requestId: "offset-gap",
-          update: { update_id: 42, message: { text: "hello" } },
+          update: directUpdate(42, 123, "hello"),
           queued: 1,
         });
         await waitForTelegramTestState(() =>
@@ -1529,7 +1530,7 @@ describe("TelegramPollingSession", () => {
         worker.emit({
           type: "update",
           requestId: "offset-failure",
-          update: { update_id: 43, message: { text: "hello" } },
+          update: directUpdate(43, 123, "hello"),
           queued: 1,
         });
         await waitForTelegramTestState(() =>
@@ -1567,7 +1568,7 @@ describe("TelegramPollingSession", () => {
         worker.emit({
           type: "update",
           requestId: "offset-catching-up",
-          update: { update_id: 44, message: { text: "hello" } },
+          update: directUpdate(44, 123, "hello"),
           queued: 1,
         });
         await waitForTelegramTestState(() =>
@@ -1615,7 +1616,7 @@ describe("TelegramPollingSession", () => {
         firstWorker.emit({
           type: "update",
           requestId: "first-delivery",
-          update: { update_id: 42, message: { text: "hello" } },
+          update: directUpdate(42, 123, "hello"),
           queued: 1,
         });
         await waitForTelegramTestState(() =>
@@ -1662,7 +1663,7 @@ describe("TelegramPollingSession", () => {
         restartWorker.emit({
           type: "update",
           requestId: "restart-replay",
-          update: { update_id: 42, message: { text: "hello" } },
+          update: directUpdate(42, 123, "hello"),
           queued: 1,
         });
         await waitForTelegramTestState(() =>
@@ -1727,12 +1728,13 @@ describe("TelegramPollingSession", () => {
         createWorker: worker.createWorker,
         drainIntervalMs: 60_000,
       });
+      const update = directUpdate(42, 123, "hello");
       try {
         await waitForTelegramTestState(() => expect(worker.hasListener()).toBe(true));
         worker.emit({
           type: "update",
           requestId: "write-1",
-          update: { update_id: 42, message: { text: "hello" } },
+          update,
           queued: 1,
         });
         await waitForTelegramTestState(() =>
@@ -1742,9 +1744,7 @@ describe("TelegramPollingSession", () => {
           }),
         );
         worker.emit({ type: "spooled", updateId: 42, queued: 1 });
-        await waitForTelegramTestState(() =>
-          expect(handleUpdate).toHaveBeenCalledWith({ update_id: 42, message: { text: "hello" } }),
-        );
+        await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledWith(update));
         await waitForTelegramTestState(async () =>
           expect(await pendingUpdateIds(tempDir, "all")).toEqual([]),
         );
@@ -1789,9 +1789,11 @@ describe("TelegramPollingSession", () => {
         },
       } as TelegramRuntime);
 
+      const preSeededUpdate = directUpdate(1, 123, "pre-seeded");
+      const duringDrainUpdate = directUpdate(2, 123, "during-drain");
       await writeTelegramSpooledUpdate({
         spoolDir: tempDir,
-        update: { update_id: 1, message: { text: "pre-seeded" } },
+        update: preSeededUpdate,
       });
       const handleUpdate = vi.fn(async () => undefined);
       const worker = createListeningIngressWorker();
@@ -1810,7 +1812,7 @@ describe("TelegramPollingSession", () => {
         worker.emit({
           type: "update",
           requestId: "write-2",
-          update: { update_id: 2, message: { text: "during-drain" } },
+          update: duringDrainUpdate,
           queued: 1,
         });
         expect(worker.ackSpooledUpdate).not.toHaveBeenCalledWith("write-2", expect.anything());
@@ -1825,16 +1827,10 @@ describe("TelegramPollingSession", () => {
         worker.emit({ type: "spooled", updateId: 2, queued: 1 });
 
         await waitForTelegramTestState(() =>
-          expect(handleUpdate).toHaveBeenCalledWith({
-            update_id: 1,
-            message: { text: "pre-seeded" },
-          }),
+          expect(handleUpdate).toHaveBeenCalledWith(preSeededUpdate),
         );
         await waitForTelegramTestState(() =>
-          expect(handleUpdate).toHaveBeenCalledWith({
-            update_id: 2,
-            message: { text: "during-drain" },
-          }),
+          expect(handleUpdate).toHaveBeenCalledWith(duringDrainUpdate),
         );
         await waitForTelegramTestState(async () =>
           expect(await pendingUpdateIds(tempDir, "all")).toEqual([]),
@@ -1851,9 +1847,10 @@ describe("TelegramPollingSession", () => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
       const handleUpdate = vi.fn(async () => undefined);
+      const update = directUpdate(42, 123, "pre-upgrade pending");
       await writeTelegramSpooledUpdate({
         spoolDir: tempDir,
-        update: { update_id: 42, message: { text: "pre-upgrade pending" } },
+        update,
       });
 
       const { createWorker, runPromise } = startIsolatedIngressSession({
@@ -1884,10 +1881,7 @@ describe("TelegramPollingSession", () => {
         lastUpdateId: null,
         persistenceFloorUpdateId: 42,
       });
-      expect(handleUpdate).toHaveBeenCalledWith({
-        update_id: 42,
-        message: { text: "pre-upgrade pending" },
-      });
+      expect(handleUpdate).toHaveBeenCalledWith(update);
     });
   });
 

@@ -67,7 +67,7 @@ const baseRequest: ExecApprovalRequest = {
 };
 
 describe("native approval account selection", () => {
-  it("does not let a conflicting turn-source channel fall through to the sole account", () => {
+  it("allows the sole eligible out-of-band approval account across channels", () => {
     const discordRequest = buildRequest({
       turnSourceChannel: "discord",
       turnSourceAccountId: "default",
@@ -81,7 +81,7 @@ describe("native approval account selection", () => {
         defaultAccountId: "default",
         eligibleAccountIds: ["default"],
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("selects only the sole eligible account when no owner is recorded", () => {

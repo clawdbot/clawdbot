@@ -311,11 +311,17 @@ describe("memory-lancedb provider lifecycle", () => {
         },
         ...Object.values(agentDirs).map((agentDir) => ({
           agentDir,
-          store: { version: 1, profiles: {} },
+          store: {
+            version: 1,
+            profiles: {
+              [profileId]: { type: "api_key" as const, provider: "openai", key: credential },
+            },
+            runtimeLocalProfileIds: [],
+          },
         })),
       ]);
     };
-    const closeProvider = vi.fn(async () => {});
+    const closedProviderKeys: string[] = [];
     const createProvider = vi.fn(async (options: { agentDir?: string }) => {
       const agentDir = expectDefined(options.agentDir, "inherited agent owner");
       const profile = ensureAuthProfileStore(agentDir, {
@@ -336,7 +342,9 @@ describe("memory-lancedb provider lifecycle", () => {
             return [0.1, 0.2, 0.3];
           }),
           embedBatch: vi.fn(async () => [[0.1, 0.2, 0.3]]),
-          close: closeProvider,
+          close: vi.fn(async () => {
+            closedProviderKeys.push(`${agentDir}:${credential}`);
+          }),
         },
       };
     });
@@ -369,7 +377,19 @@ describe("memory-lancedb provider lifecycle", () => {
       ]);
 
       expect(createProvider).toHaveBeenCalledTimes(4);
-      expect(closeProvider).toHaveBeenCalledTimes(2);
+      expect(closedProviderKeys).toHaveLength(2);
+      expect(closedProviderKeys).toEqual(
+        expect.arrayContaining([
+          `${agentDirs.private}:fixture-inherited-old`,
+          `${agentDirs.secondary}:fixture-inherited-old`,
+        ]),
+      );
+      expect(closedProviderKeys).not.toEqual(
+        expect.arrayContaining([
+          `${agentDirs.private}:fixture-inherited-new`,
+          `${agentDirs.secondary}:fixture-inherited-new`,
+        ]),
+      );
       expect(requests).toEqual(
         expect.arrayContaining([
           {
@@ -398,6 +418,15 @@ describe("memory-lancedb provider lifecycle", () => {
       await embeddings.close?.();
       clearRuntimeAuthProfileStoreSnapshots();
     }
+
+    expect(closedProviderKeys.toSorted()).toEqual(
+      [
+        `${agentDirs.private}:fixture-inherited-old`,
+        `${agentDirs.private}:fixture-inherited-new`,
+        `${agentDirs.secondary}:fixture-inherited-old`,
+        `${agentDirs.secondary}:fixture-inherited-new`,
+      ].toSorted(),
+    );
   });
 
   it("retires cached agent providers and fails closed after runtime config replacement", async () => {

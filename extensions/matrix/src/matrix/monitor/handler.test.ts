@@ -3414,7 +3414,10 @@ describe("matrix monitor handler draft streaming", () => {
       streaming: "progress",
       previewToolProgressEnabled: true,
       accountConfig: {
-        streaming: { mode: "progress", progress: { label: "Working" } },
+        streaming: {
+          mode: "progress",
+          progress: { label: "Working", commandText: "raw" },
+        },
       } as never,
     });
     const { opts, finish } = await dispatch();
