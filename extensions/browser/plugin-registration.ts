@@ -14,7 +14,7 @@ import type {
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { createSubsystemLogger, isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { isBrowserMachineOutput } from "./cli-output-mode.js";
 import {
   BROWSER_REQUEST_GATEWAY_METHOD,
@@ -32,8 +32,8 @@ import {
   configureSystemProfileImportStateStore,
   type SystemProfileImportState,
 } from "./src/browser/system-profile-import-state.js";
+import { resolveBrowserControlStartupMode } from "./src/plugin-start-policy.js";
 
-const EAGER_BROWSER_CONTROL_SERVICE_ENV = "OPENCLAW_EAGER_BROWSER_CONTROL_SERVER";
 const logger = createSubsystemLogger("browser");
 
 const loadBrowserRegistrationRuntimeModule = createLazyRuntimeModule(
@@ -213,7 +213,11 @@ function createLazyBrowserPluginService(): OpenClawPluginService {
   return {
     id: "browser-control",
     start: async (ctx) => {
-      if (!isTruthyEnvValue(process.env[EAGER_BROWSER_CONTROL_SERVICE_ENV])) {
+      const startupMode = resolveBrowserControlStartupMode(
+        ctx.config,
+        process.env.OPENCLAW_EAGER_BROWSER_CONTROL_SERVER,
+      );
+      if (!startupMode) {
         return;
       }
       const loaded = await loadService();

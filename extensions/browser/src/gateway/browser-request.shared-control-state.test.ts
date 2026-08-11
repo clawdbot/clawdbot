@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   resolveBrowserControlAuth: vi.fn(() => ({})),
   shouldAutoGenerateBrowserAuth: vi.fn(() => false),
   stopKnownBrowserProfiles: vi.fn(async () => {}),
+  startControlStateExtensionRelays: vi.fn(async () => {}),
   isChromeReachable: vi.fn(async () => false),
   isChromeCdpReady: vi.fn(async () => false),
 }));
@@ -33,6 +34,10 @@ vi.mock("../browser/control-auth.js", () => ({
 
 vi.mock("../browser/server-lifecycle.js", () => ({
   stopKnownBrowserProfiles: mocks.stopKnownBrowserProfiles,
+}));
+
+vi.mock("../browser/extension-relay/control-startup.js", () => ({
+  startControlStateExtensionRelays: mocks.startControlStateExtensionRelays,
 }));
 
 vi.mock("../browser/chrome.js", () => ({
@@ -147,6 +152,28 @@ describe("browser.request local control state", () => {
     expect(status.executablePath).toBe("/usr/bin/google-chrome");
     expect(status.headless).toBe(true);
     expect(status.noSandbox).toBe(true);
+  });
+
+  it("starts configured extension relays with the standalone HTTP server", async () => {
+    const controlPort = await getFreePort();
+    mocks.runtimeConfig = {
+      gateway: { port: controlPort - 2 },
+      browser: {
+        enabled: true,
+        profiles: {
+          chrome: { driver: "extension" },
+        },
+      },
+    };
+    mocks.runtimeSourceConfig = mocks.runtimeConfig;
+
+    const state = await startBrowserControlServerFromConfig();
+
+    expect(state).toBeTruthy();
+    expect(mocks.startControlStateExtensionRelays).toHaveBeenCalledWith(
+      state,
+      expect.any(Function),
+    );
   });
 
   it("retains port auth until a failed stop is retried successfully", async () => {

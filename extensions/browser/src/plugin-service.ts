@@ -1,7 +1,7 @@
 /**
  * Browser plugin service factory that lazily starts the control server.
  */
-import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
+import { resolveBrowserControlStartupMode } from "./plugin-start-policy.js";
 import {
   startLazyPluginServiceModule,
   type LazyPluginServiceHandle,
@@ -9,7 +9,6 @@ import {
 } from "./sdk-node-runtime.js";
 
 type BrowserControlHandle = LazyPluginServiceHandle | null;
-const EAGER_BROWSER_CONTROL_SERVICE_ENV = "OPENCLAW_EAGER_BROWSER_CONTROL_SERVER";
 const UNSAFE_BROWSER_CONTROL_OVERRIDE_SPECIFIER = /^(?:data|http|https|node):/i;
 
 function validateBrowserControlOverrideSpecifier(specifier: string): string {
@@ -26,12 +25,16 @@ export function createBrowserPluginService(): OpenClawPluginService {
 
   return {
     id: "browser-control",
-    start: async () => {
+    start: async (ctx) => {
       const pageShare = await import("./browser/extension-relay/page-share.js");
       // Plugin services start only in the Gateway process. The sink marks this
       // process as able to deliver page shares to the main session.
       pageShare.setPageShareSink(pageShare.createGatewayPageShareSink());
-      if (!isTruthyEnvValue(process.env[EAGER_BROWSER_CONTROL_SERVICE_ENV])) {
+      const startupMode = resolveBrowserControlStartupMode(
+        ctx.config,
+        process.env.OPENCLAW_EAGER_BROWSER_CONTROL_SERVER,
+      );
+      if (!startupMode) {
         return;
       }
       if (handle) {
@@ -42,12 +45,18 @@ export function createBrowserPluginService(): OpenClawPluginService {
         overrideEnvVar: "OPENCLAW_BROWSER_CONTROL_MODULE",
         validateOverrideSpecifier: validateBrowserControlOverrideSpecifier,
         // Keep the default module import static so compiled builds still bundle it.
-        loadDefaultModule: async () => await import("./server.js"),
-        startExportNames: [
-          "startBrowserControlServiceFromConfig",
-          "startBrowserControlServerFromConfig",
-        ],
-        stopExportNames: ["stopBrowserControlService", "stopBrowserControlServer"],
+        loadDefaultModule: async () =>
+          startupMode === "server"
+            ? await import("./server.js")
+            : await import("./control-service.js"),
+        startExportNames:
+          startupMode === "server"
+            ? ["startBrowserControlServerFromConfig", "startBrowserControlServiceFromConfig"]
+            : ["startBrowserControlServiceFromConfig", "startBrowserControlServerFromConfig"],
+        stopExportNames:
+          startupMode === "server"
+            ? ["stopBrowserControlServer", "stopBrowserControlService"]
+            : ["stopBrowserControlService", "stopBrowserControlServer"],
       });
     },
     stop: async () => {

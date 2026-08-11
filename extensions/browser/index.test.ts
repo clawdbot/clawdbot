@@ -441,6 +441,30 @@ describe("browser plugin", () => {
     expect(runtimeApiMocks.createBrowserPluginService).toHaveBeenCalledOnce();
   });
 
+  it("loads the browser control service for a configured extension-driver profile", async () => {
+    const { api, registerService } = createApi();
+    registerBrowserPlugin(api);
+
+    const service = mockCallArg(registerService) as {
+      id: string;
+      start: (...args: unknown[]) => unknown;
+    };
+
+    await service.start({
+      config: {
+        browser: {
+          profiles: {
+            chrome: { driver: "extension" },
+          },
+        },
+      },
+      stateDir: "/tmp/openclaw",
+      logger: { warn: vi.fn() },
+    });
+
+    expect(runtimeApiMocks.createBrowserPluginService).toHaveBeenCalledOnce();
+  });
+
   for (const value of ["false", "", "disabled"]) {
     it(`keeps browser control service env value ${JSON.stringify(value)} lazy`, async () => {
       vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", value);
