@@ -9,15 +9,7 @@ export type ClawHubSearchResult = {
   icon?: string | null;
   version?: string;
   updatedAt?: number;
-  trustState?: "not-scanned-by-clawhub";
 };
-
-export const CLAWHUB_NOT_SCANNED_LABEL = "Not scanned by ClawHub";
-
-/** Results ClawHub has not scanned say so before the operator acts on them. */
-export function clawHubTrustLabel(result: ClawHubSearchResult): string | undefined {
-  return result.trustState === "not-scanned-by-clawhub" ? CLAWHUB_NOT_SCANNED_LABEL : undefined;
-}
 
 /**
  * Reference the operator actually picked. Several publishers can share one slug, and ClawHub

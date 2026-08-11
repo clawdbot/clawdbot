@@ -1,6 +1,5 @@
 package ai.openclaw.app.ui
 
-import ai.openclaw.app.CLAWHUB_NOT_SCANNED_STATE
 import ai.openclaw.app.CLAWHUB_SKILL_GATEWAY_UNAVAILABLE
 import ai.openclaw.app.GatewayClawHubInstallReview
 import ai.openclaw.app.GatewayClawHubSkillSearchState
@@ -602,12 +601,8 @@ private fun ClawHubSkillSearchPanel(
       val installed =
         skill.version?.let { version -> isClawHubSkillInstalled(installedSkills, skill.reference, version) }
           ?: isClawHubSkillInstalled(installedSkills, skill.reference)
-      // Unscanned external sources must be visible in the row, before the install action.
-      val trustLabel =
-        if (skill.trustState == CLAWHUB_NOT_SCANNED_STATE) nativeString("Not scanned by ClawHub") else null
       val subtitleParts =
         listOfNotNull(
-          trustLabel,
           skill.summary,
           skill.reference,
           skill.version?.let { nativeString("Version \$it", it) },

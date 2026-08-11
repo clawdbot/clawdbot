@@ -32,7 +32,6 @@ data class GatewayClawHubSkillSummary(
   val displayName: String,
   val summary: String?,
   val version: String?,
-  val trustState: String? = null,
 ) {
   /**
    * Several publishers can share one slug, so the Gateway-supplied reference is what identifies a
@@ -40,15 +39,7 @@ data class GatewayClawHubSkillSummary(
    */
   val reference: String
     get() = installRef?.trim()?.takeIf(String::isNotEmpty) ?: slug
-
-  /** Results from sources ClawHub has not scanned must say so before install is offered. */
-  val trustLabel: String?
-    get() = if (trustState == CLAWHUB_NOT_SCANNED_STATE) CLAWHUB_NOT_SCANNED_LABEL else null
 }
-
-/** Mirrors the Gateway `trustState` contract and the CLI wording. */
-const val CLAWHUB_NOT_SCANNED_STATE = "not-scanned-by-clawhub"
-const val CLAWHUB_NOT_SCANNED_LABEL = "Not scanned by ClawHub"
 
 data class GatewayClawHubInstallReview(
   val slug: String,
@@ -81,7 +72,6 @@ internal fun parseClawHubSearchResults(
         displayName = displayName,
         summary = value.string("summary"),
         version = value.string("version"),
-        trustState = value.string("trustState"),
       )
     }.orEmpty()
 }

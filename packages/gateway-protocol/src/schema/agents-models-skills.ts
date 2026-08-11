@@ -433,12 +433,6 @@ export const SkillsSearchResultSchema = closedObject({
       icon: Type.Optional(Type.Union([Type.String(), Type.Null()])),
       version: Type.Optional(NonEmptyString),
       updatedAt: Type.Optional(Type.Integer()),
-      trustState: Type.Optional(
-        Type.Union([Type.Literal("not-scanned-by-clawhub")], {
-          description:
-            "Present when the result comes from an external source ClawHub has not scanned. Clients must show it before offering install.",
-        }),
-      ),
     }),
   ),
 });
