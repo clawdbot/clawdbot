@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 /** Exercises provider runtime loading, ordering, and manifest-backed discovery paths. */
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -52,6 +53,7 @@ const resolveBundledProviderPolicySurfaceMock = vi.fn<ResolveBundledProviderPoli
 const providerRuntimeWarnMock = vi.fn();
 
 let getAiTransportHost: typeof import("@openclaw/ai").getAiTransportHost;
+let attachModelProviderRuntimePluginHandle: typeof import("./provider-hook-runtime.js").attachModelProviderRuntimePluginHandle;
 let augmentModelCatalogWithProviderPlugins: typeof import("./provider-runtime.js").augmentModelCatalogWithProviderPlugins;
 let buildProviderAuthDoctorHintWithPlugin: typeof import("./provider-runtime.js").buildProviderAuthDoctorHintWithPlugin;
 let buildProviderMissingAuthMessageWithPlugin: typeof import("./provider-runtime.js").buildProviderMissingAuthMessageWithPlugin;
@@ -60,8 +62,7 @@ let applyProviderNativeStreamingUsageCompatWithPlugin: typeof import("./provider
 let applyProviderConfigDefaultsWithPlugin: typeof import("./provider-runtime.js").applyProviderConfigDefaultsWithPlugin;
 let formatProviderAuthProfileApiKeyWithPlugin: typeof import("./provider-runtime.js").formatProviderAuthProfileApiKeyWithPlugin;
 let loginProviderOAuthWithPlugin: typeof import("./provider-runtime.js").loginProviderOAuthWithPlugin;
-let classifyProviderFailoverReasonWithPlugin: typeof import("./provider-runtime.js").classifyProviderFailoverReasonWithPlugin;
-let matchesProviderContextOverflowWithPlugin: typeof import("./provider-runtime.js").matchesProviderContextOverflowWithPlugin;
+let classifyProviderFailoverSignalWithPlugin: typeof import("./provider-runtime.js").classifyProviderFailoverSignalWithPlugin;
 let normalizeProviderConfigWithPlugin: typeof import("./provider-runtime.js").normalizeProviderConfigWithPlugin;
 let normalizeProviderModelIdWithPlugin: typeof import("./provider-runtime.js").normalizeProviderModelIdWithPlugin;
 let applyProviderResolvedTransportWithPlugin: typeof import("./provider-runtime.js").applyProviderResolvedTransportWithPlugin;
@@ -161,10 +162,6 @@ function createOpenAiCatalogProviderPlugin(
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
 
 function firstMockArg(mock: { mock: { calls: unknown[][] } }): unknown {
@@ -196,7 +193,6 @@ function expectProviderRuntimePluginLoad(params: { provider: string; expectedPlu
   expect(plugin?.id).toBe(params.expectedPluginId);
   expectRecordFields(getLastResolvePluginProvidersParams(), {
     providerRefs: [params.provider],
-    bundledProviderVitestCompat: true,
   });
 }
 
@@ -316,10 +312,9 @@ describe("provider-runtime", () => {
       applyProviderNativeStreamingUsageCompatWithPlugin,
       applyProviderConfigDefaultsWithPlugin,
       applyProviderResolvedTransportWithPlugin,
-      classifyProviderFailoverReasonWithPlugin,
+      classifyProviderFailoverSignalWithPlugin,
       formatProviderAuthProfileApiKeyWithPlugin,
       loginProviderOAuthWithPlugin,
-      matchesProviderContextOverflowWithPlugin,
       normalizeProviderConfigWithPlugin,
       normalizeProviderModelIdWithPlugin,
       normalizeProviderTransportWithPlugin,
@@ -358,6 +353,7 @@ describe("provider-runtime", () => {
       wrapProviderSimpleCompletionStreamFn,
       wrapProviderStreamFn,
     } = await import("./provider-runtime.js"));
+    ({ attachModelProviderRuntimePluginHandle } = await import("./provider-hook-runtime.js"));
     await import("../agents/ai-transport-runtime-host.js");
     ({ getAiTransportHost } = await import("@openclaw/ai"));
     ({ createEmptyPluginRegistry } = await import("./registry.js"));
@@ -766,15 +762,21 @@ describe("provider-runtime", () => {
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 
-  it("uses loaded transport turn-state hooks without loading runtime plugins when requested", () => {
+  it("adapts loaded legacy websocket policy without loading runtime plugins", () => {
     const resolveTransportTurnState = vi.fn(() => ({
       headers: { "x-demo-turn": "turn-1" },
+      websocket: { degradeCooldownMs: 5_000 },
+    }));
+    const resolveWebSocketSessionPolicy = vi.fn(() => ({
+      headers: { "x-demo-session": "session-1" },
+      degradeCooldownMs: 60_000,
     }));
     const provider: ProviderPlugin = {
       id: DEMO_PROVIDER_ID,
       label: "Demo",
       auth: [],
       resolveTransportTurnState,
+      resolveWebSocketSessionPolicy,
     };
     const registry = createEmptyPluginRegistry();
     registry.providers.push({
@@ -796,12 +798,57 @@ describe("provider-runtime", () => {
           sessionId: "session-1",
           turnId: "turn-1",
           attempt: 1,
+          transport: "websocket",
+        },
+      }),
+    ).toEqual({
+      headers: { "x-demo-turn": "turn-1" },
+      websocket: {
+        headers: { "x-demo-session": "session-1" },
+        degradeCooldownMs: 5_000,
+      },
+    });
+    expect(resolveTransportTurnState).toHaveBeenCalledOnce();
+    expect(resolveWebSocketSessionPolicy).toHaveBeenCalledOnce();
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("reuses the attempt-prepared provider handle at the model transport boundary", () => {
+    const resolveTransportTurnState = vi.fn(() => ({
+      headers: { "x-demo-turn": "turn-1" },
+    }));
+    const provider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo",
+      auth: [],
+      resolveTransportTurnState,
+    };
+    const model = attachModelProviderRuntimePluginHandle(MODEL, {
+      provider: DEMO_PROVIDER_ID,
+      modelId: MODEL.id,
+      workspaceDir: "/tmp/workspace",
+      plugin: provider,
+    });
+
+    expect(
+      getAiTransportHost().plugin.resolveTransportTurnState({
+        provider: DEMO_PROVIDER_ID,
+        modelId: MODEL.id,
+        allowRuntimePluginLoad: true,
+        context: {
+          provider: DEMO_PROVIDER_ID,
+          modelId: MODEL.id,
+          model,
+          sessionId: "session-1",
+          turnId: "turn-1",
+          attempt: 1,
           transport: "stream",
         },
       }),
     ).toEqual({ headers: { "x-demo-turn": "turn-1" } });
     expect(resolveTransportTurnState).toHaveBeenCalledOnce();
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+    expect(isPluginProvidersLoadInFlightMock).not.toHaveBeenCalled();
   });
 
   it("does not load runtime plugins for transport turn-state hooks when loading is disabled", () => {
@@ -875,7 +922,7 @@ describe("provider-runtime", () => {
       plugins: {
         entries: {
           demo: { enabled: true, config: { endpoint: "https://demo.example" } },
-          "active-memory": { enabled: true, config: { qmd: { searchMode: "fast" } } },
+          "active-memory": { enabled: true, config: { queryMode: "recent" } },
         },
       },
     } as OpenClawConfig;
@@ -1017,9 +1064,7 @@ describe("provider-runtime", () => {
       }),
     };
     resolvePluginProvidersMock.mockImplementation((params) =>
-      params.applyAutoEnable === false && params.bundledProviderVitestCompat === false
-        ? []
-        : [runtimeProvider],
+      params.applyAutoEnable === false ? [] : [runtimeProvider],
     );
 
     expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toBe(runtimeProvider);
@@ -1171,7 +1216,7 @@ describe("provider-runtime", () => {
       plugins: {
         entries: {
           demo: { enabled: true, config: { endpoint: "https://demo.example" } },
-          "active-memory": { enabled: true, config: { qmd: { searchMode: "fast" } } },
+          "active-memory": { enabled: true, config: { queryMode: "recent" } },
         },
       },
     } as OpenClawConfig;
@@ -1734,16 +1779,16 @@ describe("provider-runtime", () => {
     ]);
 
     expect(
-      matchesProviderContextOverflowWithPlugin({
+      classifyProviderFailoverSignalWithPlugin({
         provider: "azure-openai-responses",
         context: {
           provider: "azure-openai-responses",
           errorMessage: "content_filter prompt too long",
         },
       }),
-    ).toBe(true);
+    ).toBe("context_overflow");
     expect(
-      classifyProviderFailoverReasonWithPlugin({
+      classifyProviderFailoverSignalWithPlugin({
         provider: "azure-openai-responses",
         context: {
           provider: "azure-openai-responses",
@@ -1752,7 +1797,7 @@ describe("provider-runtime", () => {
       }),
     ).toBe("rate_limit");
     expect(
-      classifyProviderFailoverReasonWithPlugin({
+      classifyProviderFailoverSignalWithPlugin({
         provider: "azure-openai-responses",
         context: {
           provider: "azure-openai-responses",
@@ -1778,7 +1823,7 @@ describe("provider-runtime", () => {
     ]);
 
     expect(
-      classifyProviderFailoverReasonWithPlugin({
+      classifyProviderFailoverSignalWithPlugin({
         provider: "my-together",
         context: {
           provider: "my-together",
@@ -1804,7 +1849,7 @@ describe("provider-runtime", () => {
     ]);
 
     expect(
-      classifyProviderFailoverReasonWithPlugin({
+      classifyProviderFailoverSignalWithPlugin({
         provider: "my-openai-compatible",
         context: {
           provider: "my-openai-compatible",

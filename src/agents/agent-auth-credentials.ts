@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
+import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 // Converts auth-profile credentials into the compact credential map consumed by
 // agent runtimes. Secret refs can be represented by markers without reading
@@ -21,6 +22,7 @@ type AgentOAuthCredential = {
 /** Credential value shape consumed by agent runtimes after auth-profile normalization. */
 type AgentCredential = AgentApiKeyCredential | AgentOAuthCredential;
 export type AgentCredentialMap = Record<string, AgentCredential>;
+export type PreparedAgentCredentialModes = Readonly<Record<string, "api_key" | "oauth" | "token">>;
 
 type ResolveAgentCredentialMapOptions = {
   includeSecretRefPlaceholders?: boolean;
@@ -28,6 +30,40 @@ type ResolveAgentCredentialMapOptions = {
 };
 
 const AGENT_SECRET_REF_CONFIGURED_MARKER = "openclaw-secret-ref-configured";
+
+/** Records only credential modes whose secret material is usable by a prepared runtime owner. */
+export function resolveUsableAgentCredentialModes(
+  credentials: Readonly<AuthStorageData>,
+): PreparedAgentCredentialModes {
+  const modes: Record<string, "api_key" | "oauth" | "token"> = {};
+  for (const [rawProvider, credential] of Object.entries(credentials)) {
+    const provider = normalizeProviderId(rawProvider);
+    if (!provider) {
+      continue;
+    }
+    if (
+      credential.type === "api_key" &&
+      credential.key &&
+      credential.key !== AGENT_SECRET_REF_CONFIGURED_MARKER
+    ) {
+      modes[provider] = "api_key";
+    } else if (
+      credential.type === "token" &&
+      credential.token &&
+      (credential.expires === undefined || credential.expires > Date.now())
+    ) {
+      modes[provider] = "token";
+    } else if (
+      credential.type === "oauth" &&
+      credential.access &&
+      credential.refresh &&
+      credential.expires > 0
+    ) {
+      modes[provider] = "oauth";
+    }
+  }
+  return Object.freeze(modes);
+}
 
 function hasConfiguredSecretRef(value: unknown): boolean {
   return coerceSecretRef(value) !== null;

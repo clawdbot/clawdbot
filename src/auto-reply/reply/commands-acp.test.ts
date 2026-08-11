@@ -98,7 +98,7 @@ vi.mock("../../acp/runtime/session-meta.js", () => ({
   resolveSessionStorePathForAcp: (args: unknown) => hoisted.resolveSessionStorePathForAcpMock(args),
 }));
 
-vi.mock("../../agents/acp-spawn.js", () => ({
+vi.mock("../../agents/subagents/spawn/acp-spawn.js", () => ({
   resolveAcpSpawnRuntimePolicyError: (params: { cfg?: OpenClawConfig }) =>
     params.cfg?.agents?.defaults?.sandbox?.mode === "all"
       ? 'Sandboxed sessions cannot spawn ACP sessions because runtime="acp" runs on the host. Use runtime="subagent" from sandboxed sessions.'
@@ -162,7 +162,7 @@ const { testing: acpResetTargetTesting } = await import("./acp-reset-target.test
 const { createTaskRecord } = await import("../../tasks/task-registry.js");
 const { resetTaskRegistryForTests } = await import("../../tasks/task-runtime.test-helpers.js");
 const { configureTaskRegistryRuntime } = await import("../../tasks/task-registry.store.js");
-const { failTaskRunByRunId } = await import("../../tasks/task-executor.js");
+const { failTaskRunByRunIdCore } = await import("../../tasks/task-executor.js");
 
 function configureInMemoryTaskRegistryStoreForTests(): void {
   configureTaskRegistryRuntime({
@@ -2126,7 +2126,7 @@ describe("/acp command", () => {
       task: "Inspect ACP backlog",
       status: "running",
     });
-    failTaskRunByRunId({
+    failTaskRunByRunIdCore({
       runId: "acp-run-1",
       endedAt: Date.now(),
       error: [

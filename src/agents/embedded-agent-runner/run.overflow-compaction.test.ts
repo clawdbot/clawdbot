@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
 import {
   compactEmbeddedRunForRecovery,
@@ -14,6 +15,7 @@ import type { EmbeddedRunAttemptResult } from "./run/types.js";
 // Keep this dedicated leaf on the compaction composition boundary. Runtime/auth/lane policy is
 // covered at its direct owners so this shard never reloads the complete public runner graph.
 const baseRunParams = {
+  admittedRunContext: createTestAdmittedRunContext("run-1"),
   agentId: "main",
   sessionId: "session-1",
   sessionKey: "agent:main:session-1",

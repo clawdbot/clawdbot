@@ -287,7 +287,11 @@ describe("registerQrCli", () => {
 
     await runQr([]);
 
-    expect(renderTerminal).toHaveBeenCalledTimes(1);
+    const expected = encodePairingSetupCode({
+      url: "ws://127.0.0.1:18789",
+      bootstrapToken: "bootstrap-123",
+    });
+    expect(renderTerminal).toHaveBeenCalledWith(expected, { small: true });
     const output = runtimeLog.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
     expect(output).toContain("Pairing QR");
     expect(output).toContain("ASCII-QR");

@@ -48,9 +48,8 @@ function listHeartbeatDoctorAgents(cfg: OpenClawConfig) {
 /**
  * Detect heartbeat configs that pin a non-existent session. The runtime
  * resolves `heartbeat.session` to a sessionKey via `resolveHeartbeatSession`;
- * if the entry is missing, `resolveHeartbeatDeliveryTarget` falls back to
- * `{channel:"none", reason:"no-target"}` and the heartbeat fires a model
- * call whose reply has nowhere to land. Common cause: the configured Slack
+ * a missing last route skips before the model, while a missing explicit target
+ * runs and drops its reply. Common cause: the configured Slack
  * channel ID does not match any channel the agent has ever joined (e.g.,
  * heartbeat pins channel `c0b2eddpw95` but the agent only has sessions in
  * `c0ag7jag35g`, or the agent has no Slack bot at all).
@@ -91,7 +90,7 @@ export function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): strin
       continue;
     }
     const target = normalizeOptionalString(heartbeatConfig.target);
-    if (!target || target === "none") {
+    if (target === "none") {
       continue;
     }
     const deliveryWithoutSession = resolveHeartbeatDeliveryTarget({
@@ -133,10 +132,14 @@ export function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): strin
     if (entry) {
       continue;
     }
+    const missingRouteOutcome =
+      deliveryWithoutSession.reason === "no-route"
+        ? `  Heartbeats will skip with reason="no-route" until that session has a delivery route.`
+        : `  Heartbeats will run but resolve delivery to channel="none"/reason="no-target", so replies are dropped.`;
     warnings.push(
       [
         `- Agent ${agentId} heartbeat.session pins ${configuredSession} (resolved to ${canonicalSession}) but that session has no entry in ${storePath}.`,
-        `  Heartbeats will run but resolve delivery to channel="none"/reason="no-target", so replies are dropped silently.`,
+        missingRouteOutcome,
         `  Fix: point heartbeat.session at a session the agent actually owns, set heartbeat.target="none" to suppress delivery, or remove the heartbeat.session field to fall back to the agent main session.`,
       ].join("\n"),
     );

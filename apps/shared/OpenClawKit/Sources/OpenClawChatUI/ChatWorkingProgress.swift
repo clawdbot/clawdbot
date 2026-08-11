@@ -10,17 +10,25 @@ enum ChatWorkingClawStance: CaseIterable, Equatable, Sendable {
     case zen
     case drummer
     case peekaboo
+    case nodOff
+    case curious
+    case omNom
+    case fakeOut
 
     static let weightedStances: [(stance: Self, weight: Double)] = [
-        (.standard, 63),
-        (.southpaw, 19),
+        (.standard, 55),
+        (.southpaw, 18),
         (.flurry, 5),
         (.spin, 4),
         (.shadowbox, 3),
         (.backflip, 2),
         (.zen, 2),
-        (.drummer, 1),
-        (.peekaboo, 1),
+        (.drummer, 2),
+        (.peekaboo, 2),
+        (.nodOff, 2),
+        (.curious, 2),
+        (.omNom, 2),
+        (.fakeOut, 1),
     ]
 
     static func seeded(_ key: String, salt: UInt32) -> Self {

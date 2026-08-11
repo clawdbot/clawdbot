@@ -11,8 +11,9 @@ Restarting the gateway does not lose agent state. Conversations, transcripts,
 scheduled jobs, background task records, and queued outbound messages all live
 on disk, and work that was interrupted mid-turn is detected and resumed
 automatically after the gateway comes back up. Recovery is always on and
-normally needs no manual intervention. Repeatedly failing recovery is bounded
-and may quarantine one session until you inspect or replace it.
+normally needs no manual intervention. Exhausted infrastructure retries, or a
+missing durable message-action authority claim, may quarantine one session
+until you inspect or replace it.
 
 This page describes what survives a restart, how interrupted work is detected,
 and what the automatic resume looks like.
@@ -54,19 +55,12 @@ Three complementary mechanisms mark sessions whose turn did not finish:
   Commands, attachments, per-turn overrides, pending deliveries, prior abort
   hints, plugin-owned sessions, and turns with execution hooks keep their
   specialized admission paths.
-  If a `before_agent_reply` hook is installed, admission also records its phase.
-  Recovery never replays a hook interrupted mid-call. Once an unhandled hook
-  finishes, its checkpoint records that result, but recovery still fails closed
-  while that hook remains active: a checkpoint cannot prove that the same
-  plugin code and configuration loaded after the restart. A
-  `before_agent_reply` hook may declare a host-enforced
-  `eligibleTriggers` scope; a hook limited to scheduled `heartbeat` or `cron`
-  turns is not active for a recovered user turn and therefore does not block
-  it. Unscoped or invalid registrations remain active for this safety check.
-  Handled text and silent results are checkpointed separately for deterministic
-  settlement.
-  Durable recovery claims written by older versions have no source-ownership
-  marker, so they receive the same fail-closed hook check during an upgrade.
+  If a `before_agent_reply` hook is installed, admission records enough phase
+  state to distinguish a completed silent result from an ambiguous side-effect
+  window. Recovery dispatches an ordinary user-triggered agent turn, so the
+  currently loaded `before_agent_reply` hooks run under their normal trigger
+  rules. Ambiguous prior hook outcomes resume with restart-safe tools rather
+  than replaying unrestricted side effects.
 - **At shutdown:** during the restart drain, every session with an active run
   is stamped with a recovery marker in the session store before the run is
   aborted.
@@ -98,17 +92,18 @@ replacement. `openclaw doctor --fix` can repair a stale aborted flag that
 conflicts with a tombstone, but it does not re-enable that recovery cycle.
 
 Every retry reuses one durable dispatch identifier, so an ambiguous connection
-failure cannot start the same recovery twice. Completed and unresumable Control
-UI turns also retain bounded durable idempotency tombstones, allowing a
-reconnecting outbox to retire them without re-executing the request.
+failure cannot start the same recovery twice. Completed Control UI turns also
+retain bounded durable idempotency tombstones, allowing a reconnecting outbox
+to retire them without re-executing the request.
 
 Message-tool-only replies use a second durable correlation. Before a terminal
 same-conversation send reaches the channel, the gateway records an unresolved
 delivery intent on the exact session and source turn. A confirmed provider
 success resolves it to a durable delivered receipt; a confirmed failure clears
 it. Recovery completes a delivered receipt without rerunning tools. If a crash
-leaves the provider outcome unknown, recovery fails closed instead of replaying
-an external effect.
+leaves the provider outcome unknown, recovery resumes with restart-safe tools
+so the model can inspect and report the ambiguity without replaying the
+external effect.
 
 The delivered reply is also mirrored into the transcript with its source
 message ID. Terminal mirrors use a distinct receipt key, so a progress send with
@@ -118,20 +113,21 @@ durable channel-ingress claims can restore message-action authority. A resumed
 run keeps the original source-delivery mode and source correlation, including
 requester identity and any same-channel/thread restriction, so the same receipt
 remains authoritative even if another restart happens during recovery. A
-message-tool-only turn without reconstructable channel authority is failed
-closed and receives the one-time resend notice.
+message-tool-only turn without reconstructable channel authority is tombstoned
+because OpenClaw cannot safely mint message-action authority without the
+original channel-ingress claim. The terminal notice directs the user to start a
+replacement with `/new` or `/reset`.
 
-Before resuming, the gateway checks that the transcript tail is safe to
-continue from. An aborted turn is the interruption itself, so it resumes on a
-best-effort basis whatever abort detail the provider or worker recorded with it:
+Before resuming, the gateway classifies the transcript tail to choose the tool
+restriction for the continuation. An aborted turn is the interruption itself,
+so it resumes on a best-effort basis whatever abort detail the provider or worker recorded with it:
 partial streamed text stays in the transcript and the continuation picks up from
 the message beneath it, while a tool call left dangling is dropped from the next
 provider payload and restricted to restart-safe tools unless it is audited
-replay-safe. If the tail is genuinely unsafe (for example a provider failure, or
-a turn that ended on a stale pending approval), the session is not blindly
-re-run; the agent instead posts a short notice asking the user to resend the
-last request. For WebChat, that notice is written directly to the session
-history so it remains visible after reconnect.
+replay-safe. Provider failures, completed assistant tails, empty transcripts,
+and stale pending approvals also continue from the existing transcript. States
+with ambiguous side effects use restart-safe tools; otherwise the model decides
+what completed and what remains and can report any uncertainty to the user.
 
 OpenClaw can also reconstruct interrupted read-only [Code Mode](/tools/code-mode)
 work. Code Mode marks these runs as restart-safe and rejects side-effecting
@@ -140,8 +136,9 @@ the `wait` control, the new gateway reconstructs the turn from its transcript
 and forces the reconstructed execution to remain restart-safe even if the
 model omits or clears that flag. The host filters the entire reconstructed
 turn to audited read-only core tools and explicitly replay-safe plugin tools,
-including when Code Mode is disabled after the restart. Side-effecting work
-remains guarded by the resend notice rather than risking a duplicate write.
+including when Code Mode is disabled after the restart. A non-replay-safe or
+unmatched Code Mode checkpoint still resumes for model reconciliation, but
+without Code Mode controls and with the restart-safe tool restriction.
 
 ### Subagents
 
@@ -234,8 +231,9 @@ channels.start --params '{"channel":"<id>"}'`
 - **Logs:** recovery decisions are logged under the
   `main-session-restart-recovery` and `subagent-interrupted-resume`
   subsystems.
-- **Reply hooks:** automatically delivered replies from resumed main-session
-  turns run the normal `reply_payload_sending` hook before channel delivery,
+- **Reply hooks:** resumed turns run currently loaded `before_agent_reply`
+  hooks under the normal user-trigger rules. Automatically delivered replies
+  also run the normal `reply_payload_sending` hook before channel delivery,
   with the recovered session, run, account, and conversation context.
 
 ## What is not resumed
@@ -244,8 +242,6 @@ channels.start --params '{"channel":"<id>"}'`
   handles them: subagent sessions (subagent recovery), cron sessions (the
   scheduler re-runs on schedule), and ACP-managed sessions (the connected IDE
   or client owns the resume).
-- Sessions whose transcript tail cannot be safely continued; these get the
-  resend notice described above instead of a silent re-run.
 - Work that was never admitted: messages arriving during the drain window are
   rejected with an explicit restart error rather than silently queued into a
   dying process.

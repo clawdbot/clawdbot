@@ -9,7 +9,9 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { runSecretsAudit } from "./audit.js";
+import { writeSecretStoreEntry } from "./store/secret-store.js";
 
 type AuditFixture = {
   rootDir: string;
@@ -221,6 +223,7 @@ describe("secrets audit", () => {
       await runSecretsAudit({ env: warmFixture.env });
     } finally {
       closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
       await fs.rm(warmFixture.rootDir, { recursive: true, force: true });
     }
   });
@@ -266,6 +269,7 @@ describe("secrets audit", () => {
 
   afterEach(async () => {
     closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
     await fs.rm(fixture.rootDir, { recursive: true, force: true });
   });
 
@@ -277,6 +281,51 @@ describe("secrets audit", () => {
     expect(report.summary.shadowedRefCount).toBeGreaterThan(0);
     expectFindingCode(report, "REF_SHADOWED");
     expectFindingCode(report, "PLAINTEXT_FOUND");
+  });
+
+  it("reports plaintext that duplicates the store while resolving store refs", async () => {
+    writeSecretStoreEntry({
+      scope: { kind: "team" },
+      name: "STORED_API_KEY",
+      value: "shared-store-value",
+      kind: "secret",
+      updatedBy: "test",
+      database: { env: fixture.env },
+    });
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          plaintext: {
+            baseUrl: "https://plaintext.example.test/v1",
+            api: "openai-completions",
+            apiKey: "shared-store-value",
+            models: [{ id: "fixture", name: "fixture" }],
+          },
+          referenced: {
+            baseUrl: "https://referenced.example.test/v1",
+            api: "openai-completions",
+            apiKey: { source: "store", provider: "default", id: "STORED_API_KEY" },
+            models: [{ id: "fixture", name: "fixture" }],
+          },
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(report.summary.storeResidueCount).toBe(1);
+    expect(report.findings.find((entry) => entry.code === "STORE_PLAINTEXT_RESIDUE")).toMatchObject(
+      {
+        jsonPath: "models.providers.plaintext.apiKey",
+        message: expect.stringContaining("STORED_API_KEY"),
+      },
+    );
+    expect(
+      report.findings.some(
+        (entry) =>
+          entry.code === "REF_UNRESOLVED" &&
+          entry.jsonPath === "models.providers.referenced.apiKey",
+      ),
+    ).toBe(false);
   });
 
   it("does not inspect or mutate legacy auth.json during audit", async () => {

@@ -295,7 +295,7 @@ export type AgentDefaultsConfig = {
     model?: string;
     /** Session key for heartbeat runs ("main" or explicit session key). */
     session?: string;
-    /** Delivery target ("last", "none", or a channel id). */
+    /** Delivery target ("last", "none", or a channel id). Default: "last". */
     target?: string;
     /** Direct/DM delivery policy. Default: "allow". */
     directPolicy?: "allow" | "block";

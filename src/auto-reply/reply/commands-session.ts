@@ -58,7 +58,7 @@ import {
 } from "./command-gates.js";
 import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
 import {
-  persistSessionEntry,
+  persistCommandSession,
   sessionEntryPersistenceConflictReply,
 } from "./commands-session-store.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
@@ -237,7 +237,7 @@ export const handleActivationCommand: CommandHandler = async (params, allowTextC
     params.sessionEntry.groupActivation = activationCommand.mode;
     params.sessionEntry.groupActivationNeedsSystemIntro = true;
     if (
-      !(await persistSessionEntry({
+      !(await persistCommandSession({
         ...params,
         touchedFields: ["groupActivation", "groupActivationNeedsSystemIntro"],
       }))
@@ -267,7 +267,7 @@ export const handleSendPolicyCommand: CommandHandler = defineAuthorizedTextComma
       } else {
         params.sessionEntry.sendPolicy = sendPolicyCommand.mode;
       }
-      if (!(await persistSessionEntry({ ...params, touchedFields: ["sendPolicy"] }))) {
+      if (!(await persistCommandSession({ ...params, touchedFields: ["sendPolicy"] }))) {
         return sessionEntryPersistenceConflictReply();
       }
     }
@@ -366,7 +366,7 @@ export const handleUsageCommand: CommandHandler = defineAuthorizedTextCommand(
         delete targetSessionEntry.responseUsage;
         params.sessionStore[params.sessionKey] = targetSessionEntry;
         if (
-          !(await persistSessionEntry({
+          !(await persistCommandSession({
             ...params,
             sessionEntry: targetSessionEntry,
             touchedFields: ["responseUsage"],
@@ -392,7 +392,7 @@ export const handleUsageCommand: CommandHandler = defineAuthorizedTextCommand(
       targetSessionEntry.responseUsage = next;
       params.sessionStore[params.sessionKey] = targetSessionEntry;
       if (
-        !(await persistSessionEntry({
+        !(await persistCommandSession({
           ...params,
           sessionEntry: targetSessionEntry,
           touchedFields: ["responseUsage"],
@@ -440,7 +440,7 @@ export const handleFastCommand: CommandHandler = defineAuthorizedTextCommand(
         if (targetSessionEntry && params.sessionStore && params.sessionKey) {
           delete targetSessionEntry.fastMode;
           if (
-            !(await persistSessionEntry({
+            !(await persistCommandSession({
               ...params,
               sessionEntry: targetSessionEntry,
               touchedFields: ["fastMode"],
@@ -457,7 +457,7 @@ export const handleFastCommand: CommandHandler = defineAuthorizedTextCommand(
     if (targetSessionEntry && params.sessionStore && params.sessionKey) {
       targetSessionEntry.fastMode = nextMode;
       if (
-        !(await persistSessionEntry({
+        !(await persistCommandSession({
           ...params,
           sessionEntry: targetSessionEntry,
           touchedFields: ["fastMode"],

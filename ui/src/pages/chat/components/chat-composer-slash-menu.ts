@@ -294,13 +294,6 @@ function renderSlashIcon(name: string) {
   return icons[name as IconName] ?? icons.terminal;
 }
 
-export function tokenEstimate(draft: string): string | null {
-  if (draft.length < 100) {
-    return null;
-  }
-  return `~${Math.ceil(draft.length / 4)} tokens`;
-}
-
 export function exportMarkdown(props: Pick<ChatComposerProps, "messages" | "assistantName">): void {
   exportChatMarkdown(props.messages, props.assistantName);
 }
@@ -371,25 +364,23 @@ export function renderSlashMenu(
     return nothing;
   }
 
-  const grouped = new Map<
-    SlashCommandCategory,
-    Array<{ cmd: SlashCommandDef; globalIdx: number }>
-  >();
-  for (const [i, cmd] of state.slashMenuItems.entries()) {
-    const cat = cmd.category ?? "session";
-    let list = grouped.get(cat);
-    if (!list) {
-      list = [];
-      grouped.set(cat, list);
+  const groups: Array<[SlashCommandCategory, Array<{ cmd: SlashCommandDef; globalIdx: number }>]> =
+    [];
+  for (const [globalIdx, cmd] of state.slashMenuItems.entries()) {
+    const category = cmd.category ?? "session";
+    const group =
+      draft === "/" ? groups.find(([groupCategory]) => groupCategory === category) : groups.at(-1);
+    if (group?.[0] === category) {
+      group[1].push({ cmd, globalIdx });
+    } else {
+      groups.push([category, [{ cmd, globalIdx }]]);
     }
-    list.push({ cmd, globalIdx: i });
   }
 
-  const sections: TemplateResult[] = [];
-  for (const [cat, entries] of grouped) {
-    sections.push(html`
+  const sections = groups.map(
+    ([category, entries]) => html`
       <div class="slash-menu-group">
-        <div class="slash-menu-group__label">${getSlashCommandCategoryLabel(cat)}</div>
+        <div class="slash-menu-group__label">${getSlashCommandCategoryLabel(category)}</div>
         ${entries.map(
           ({ cmd, globalIdx }) => html`
             <div
@@ -424,8 +415,8 @@ export function renderSlashMenu(
           `,
         )}
       </div>
-    `);
-  }
+    `,
+  );
 
   const hiddenCount = state.slashMenuExpanded ? 0 : getHiddenCommandCount();
 

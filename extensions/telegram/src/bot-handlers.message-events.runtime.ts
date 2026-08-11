@@ -136,7 +136,6 @@ export function registerTelegramMessageHandlers(
       chatId: normalizedMsg.chat.id,
       isGroup,
       isForum,
-      messageThreadId: normalizedMsg.message_thread_id,
       senderId: normalizedMsg.from?.id != null ? String(normalizedMsg.from.id) : "",
       senderUsername: normalizedMsg.from?.username ?? "",
       requireConfiguredGroup: params.requireConfiguredGroup,
@@ -145,12 +144,7 @@ export function registerTelegramMessageHandlers(
     if (!gate.allowed) {
       return;
     }
-    const { resolvedThreadId, dmThreadId } = gate.context;
-    await recordMessageForReplyChain(
-      normalizedMsg,
-      resolvedThreadId ?? dmThreadId,
-      params.botUserId,
-    );
+    await recordMessageForReplyChain(normalizedMsg, gate.context.threadSpec, params.botUserId);
   };
 
   const handleInboundMessageLike = async (event: InboundTelegramEvent) => {
@@ -164,7 +158,6 @@ export function registerTelegramMessageHandlers(
         chatId: event.chatId,
         isGroup: event.isGroup,
         isForum: event.isForum,
-        messageThreadId: event.messageThreadId,
         senderId: event.senderId,
         senderUsername: event.senderUsername,
         requireConfiguredGroup: event.requireConfiguredGroup,
@@ -210,7 +203,7 @@ export function registerTelegramMessageHandlers(
         return;
       }
       dispatchDedupeClaims = dispatchDedupe.claims;
-      await recordMessageForReplyChain(event.msg, resolvedThreadId ?? dmThreadId, event.botUserId);
+      await recordMessageForReplyChain(event.msg, gate.context.threadSpec, event.botUserId);
       await processInboundMessage({
         authorizationCfg: gate.context.cfg,
         ctx: event.ctx,

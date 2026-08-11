@@ -1,5 +1,6 @@
 // Gateway plugin tests cover plugin loading, auto-enable, runtime registry setup,
 // request-scope injection, diagnostics, and handler dispatch integration.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import {
@@ -66,10 +67,10 @@ vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime,
 }));
 
-vi.mock("../channels/plugins/binding-registry.js", async () => {
-  const actual = await vi.importActual<typeof import("../channels/plugins/binding-registry.js")>(
-    "../channels/plugins/binding-registry.js",
-  );
+vi.mock("../channels/plugins/configured-binding-registry.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../channels/plugins/configured-binding-registry.js")
+  >("../channels/plugins/configured-binding-registry.js");
   return {
     ...actual,
     primeConfiguredBindingRegistry,
@@ -78,6 +79,43 @@ vi.mock("../channels/plugins/binding-registry.js", async () => {
 
 vi.mock("./server-methods.js", () => ({
   handleGatewayRequest,
+}));
+
+vi.mock("./agent-turn/internal-facade.js", () => ({
+  createInternalAgentTurnFacade: (options: {
+    client: GatewayRequestOptions["client"];
+    getContext: () => GatewayRequestContext;
+    isWebchatConnect?: GatewayRequestOptions["isWebchatConnect"];
+  }) => ({
+    dispatch: async (
+      request: Record<string, unknown>,
+      dispatchOptions?: {
+        expectFinal?: boolean;
+        onAccepted?: (payload: unknown) => void;
+        onSignalAbort?: () => Promise<void> | void;
+        signal?: AbortSignal;
+        timeoutMs?: number;
+      },
+    ) => {
+      const { dispatchGatewayRequestInProcess } = await import("./server-in-process-dispatch.js");
+      return await dispatchGatewayRequestInProcess("agent", request, {
+        client: options.client,
+        context: options.getContext(),
+        isWebchatConnect: options.isWebchatConnect,
+        ...dispatchOptions,
+      });
+    },
+    wait: async (params: Record<string, unknown>, timeoutMs?: number, signal?: AbortSignal) => {
+      const { dispatchGatewayRequestInProcess } = await import("./server-in-process-dispatch.js");
+      return await dispatchGatewayRequestInProcess("agent.wait", params, {
+        client: options.client,
+        context: options.getContext(),
+        isWebchatConnect: options.isWebchatConnect,
+        signal,
+        timeoutMs,
+      });
+    },
+  }),
 }));
 
 vi.mock("../channels/registry.js", () => ({
@@ -201,10 +239,6 @@ function createTestLog() {
 
 function createTestContext(label: string): GatewayRequestContext {
   return { label } as unknown as GatewayRequestContext;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
@@ -900,6 +934,45 @@ describe("loadGatewayPlugins", () => {
         { timeoutMs: 5 },
       ),
     ).rejects.toThrow("gateway request timeout for sessions.delete");
+  });
+
+  test("does not dispatch or clean up a pre-aborted in-process request", async () => {
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("pre-aborted-request"));
+    const controller = new AbortController();
+    const onSignalAbort = vi.fn();
+    controller.abort();
+
+    await expect(
+      serverPluginsModule.dispatchGatewayMethodInProcess(
+        "conversations.turn",
+        { turnId: "turn-pre-aborted" },
+        { signal: controller.signal, onSignalAbort },
+      ),
+    ).rejects.toThrow();
+    expect(handleGatewayRequest).not.toHaveBeenCalled();
+    expect(onSignalAbort).not.toHaveBeenCalled();
+  });
+
+  test("runs in-process abort cleanup once without replacing the abort error", async () => {
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("aborted-request-cleanup"));
+    const controller = new AbortController();
+    const onSignalAbort = vi.fn(async () => {
+      throw new Error("cleanup failed");
+    });
+    handleGatewayRequest.mockImplementationOnce(async () => {
+      await new Promise(() => {});
+    });
+
+    const result = serverPluginsModule.dispatchGatewayMethodInProcess(
+      "conversations.turn",
+      { turnId: "turn-aborted" },
+      { signal: controller.signal, onSignalAbort },
+    );
+    await vi.waitFor(() => expect(handleGatewayRequest).toHaveBeenCalledTimes(1));
+    controller.abort(new Error("primary aborted"));
+
+    await expect(result).rejects.toThrow("primary aborted");
+    expect(onSignalAbort).toHaveBeenCalledTimes(1);
   });
 
   test("returns an accepted in-process response without waiting for handler completion", async () => {

@@ -1,4 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeNullableString as migratedText } from "@openclaw/normalization-core/string-coerce";
 import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import {
   ensureMemoryChunkProvenance,
@@ -96,6 +98,29 @@ function dropLegacyMemoryIndexSchema(db: DatabaseSync): void {
     DROP TABLE IF EXISTS memory_index_chunks;
     DROP TABLE IF EXISTS memory_index_sources;
   `);
+}
+
+function dropLegacyRuntimeJournalSchemas(db: DatabaseSync): void {
+  const acpParentStreamColumns = readSqliteTableColumns(db, "acp_parent_stream_events");
+  if (acpParentStreamColumns && !acpParentStreamColumns.has("session_id")) {
+    // The reverted f91de52 journal keyed events only by run_id. It is derived runtime
+    // state, so discard that incompatible shape and let the canonical schema recreate it.
+    db.exec(`
+      DROP INDEX IF EXISTS idx_agent_acp_parent_stream_events_created;
+      DROP TABLE acp_parent_stream_events;
+    `);
+  }
+
+  const trajectoryColumns = readSqliteTableColumns(db, "trajectory_runtime_events");
+  if (trajectoryColumns?.has("event_id")) {
+    // The reverted f91de52 journal used event_id instead of the canonical session/seq key.
+    // Trajectory runtime events are derived, so rebuild rather than preserving stale rows.
+    db.exec(`
+      DROP INDEX IF EXISTS idx_agent_trajectory_runtime_events_session;
+      DROP INDEX IF EXISTS idx_agent_trajectory_runtime_events_run;
+      DROP TABLE trajectory_runtime_events;
+    `);
+  }
 }
 
 function hasLegacyMemoryChunkProvenanceTrigger(db: DatabaseSync): boolean {
@@ -267,6 +292,23 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
   backfillTranscriptMutationWatermarks(db);
 }
 
+function migrateRetiredAgentStateLeaseSchema(
+  db: DatabaseSync,
+  previousVersion: number,
+  targetVersion: number,
+): void {
+  if (previousVersion >= 17 || targetVersion < 17) {
+    return;
+  }
+  // The 2026-08-10 tenant audit found no agent-DB lease writers after #121113;
+  // #121615 removed the unreachable routing arm, so v17 retires this table.
+  db.exec(`
+    DROP INDEX IF EXISTS idx_agent_state_leases_owner;
+    DROP INDEX IF EXISTS idx_agent_state_leases_expiry;
+    DROP TABLE IF EXISTS state_leases;
+  `);
+}
+
 /** Backfill one generation token without copying or rewriting transcript rows. */
 function migrateSessionTranscriptGenerations(db: DatabaseSync, previousVersion: number): void {
   // Remove after 2026-10-01: drop the generation backfill once the minimum supported agent schema is 13.
@@ -332,12 +374,8 @@ function migratedObjectField(
     : null;
 }
 
-function migratedText(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
 function migratedNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+  return asFiniteNumber(value) ?? null;
 }
 
 function migratedChatType(value: unknown): "direct" | "group" | "channel" | null {
@@ -599,8 +637,10 @@ function ensureAgentSchema(
       // v1/v2 and pre-merge flip v1/v4 — without version-number coupling.
       dropLegacyMemoryIndexSchema(db);
       dropLegacySessionTranscriptSearchSchema(db);
+      dropLegacyRuntimeJournalSchemas(db);
       migrateMemoryIndexSourcesIdentity(db);
       migrateOpenClawAgentSchema(db);
+      migrateRetiredAgentStateLeaseSchema(db, previousVersion, targetVersion);
       migrateConversationDeliveryTargetColumn(db);
       backfillOpenClawAgentSchema(db, previousVersion);
       // Remove after 2026-10-01: drop the pre-v11 conversation backfill once schema 11 is the support floor.

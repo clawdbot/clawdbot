@@ -201,6 +201,11 @@ export const OpenClawSchemaShape = {
           enabled: z.boolean().optional(),
         })
         .optional(),
+      extensionRelay: z
+        .strictObject({
+          allowLegacyAuth: z.boolean().optional(),
+        })
+        .optional(),
     })
     .optional(),
   ui: z

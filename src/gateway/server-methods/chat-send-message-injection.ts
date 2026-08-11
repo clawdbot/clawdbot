@@ -18,40 +18,86 @@ import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { logMessageProcessed, logMessageReceived } from "../../logging/diagnostic.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { setGatewayDedupeEntry } from "./agent-job.js";
+import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { broadcastChatFinal } from "./chat-broadcast.js";
 import { buildChatSendReplyInjectionText } from "./chat-send-reply-context.js";
+import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
+import type { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import type { GatewayRequestContext } from "./types.js";
 
-/** Starts injection with the exact admission-captured target and prepared turn data. */
-export function beginChatSendMessageInjection(params: {
-  target: ReplyMessageInjectionTarget;
-  text: string;
-  replyContext?: Parameters<typeof buildChatSendReplyInjectionText>[0];
-  images: ReplyBackendQueueMessageOptions["images"];
+/** Captures the prepared request data used by both pre-ACK and detached injection attempts. */
+export function createChatSendMessageInjectionStarter(params: {
+  target: ReplyMessageInjectionTarget | undefined;
+  request: Pick<NormalizedChatSendRequest, "p" | "rawMessage" | "supportsTaskSuggestions">;
+  session: Pick<PreparedChatSendSession, "cfg" | "entry">;
+  turn: ReturnType<typeof prepareChatSendUserTurn>;
   imageOrder: ReplyBackendQueueMessageOptions["imageOrder"];
-  media: ReplyBackendQueueMessageOptions["media"];
-  queueSettings: Parameters<typeof resolveQueueSettings>[0];
-  taskSuggestionDeliveryMode: ReplyBackendQueueMessageOptions["taskSuggestionDeliveryMode"];
   userTurnTranscriptRecorder: ReplyBackendQueueMessageOptions["userTurnTranscriptRecorder"];
-}): ReplyMessageInjectionAttempt {
-  const { debounceMs } = resolveQueueSettings(params.queueSettings);
-  return beginReplyMessageInjectionTarget(
-    params.target,
-    params.replyContext ? buildChatSendReplyInjectionText(params.replyContext) : params.text,
-    {
-      steeringMode: "all",
-      isInboundUserMessage: true,
-      ...(params.images?.length ? { images: params.images } : {}),
-      ...(params.imageOrder?.length ? { imageOrder: params.imageOrder } : {}),
-      ...(params.media?.length ? { media: params.media } : {}),
-      waitForTranscriptCommit: true,
-      ...(debounceMs !== undefined ? { debounceMs } : {}),
-      taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
-      userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
-    },
-  );
+}) {
+  const { p, rawMessage, supportsTaskSuggestions } = params.request;
+  const { cfg, entry } = params.session;
+  const { ctx, isInternalTextSlashCommandTurn, replyOptionImages, replyOptionMedia } = params.turn;
+  return (): ReplyMessageInjectionAttempt | undefined => {
+    if (!params.target || isInternalTextSlashCommandTurn) {
+      return undefined;
+    }
+    const { debounceMs } = resolveQueueSettings({
+      cfg,
+      channel: ctx.Provider,
+      sessionEntry: entry,
+      inlineMode: p.queueMode,
+    });
+    const text = ctx.BodyForAgent ?? ctx.Body ?? rawMessage;
+    return beginReplyMessageInjectionTarget(
+      params.target,
+      p.replyToId
+        ? buildChatSendReplyInjectionText({ body: text, cfg, ctx, sessionEntry: entry })
+        : text,
+      {
+        steeringMode: "all",
+        isInboundUserMessage: true,
+        ...(replyOptionImages?.length ? { images: replyOptionImages } : {}),
+        ...(params.imageOrder?.length ? { imageOrder: params.imageOrder } : {}),
+        ...(replyOptionMedia?.length ? { media: replyOptionMedia } : {}),
+        waitForTranscriptCommit: true,
+        ...(debounceMs !== undefined ? { debounceMs } : {}),
+        taskSuggestionDeliveryMode: supportsTaskSuggestions ? "gateway" : undefined,
+        userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+      },
+    );
+  };
+}
+
+type PreAckMessageInjectionResult =
+  | { status: "continue"; attempt: ReplyMessageInjectionAttempt | undefined }
+  | { status: "handled" };
+
+/** Wait for runtime ownership before ACK without waiting for transcript commitment. */
+export async function settleChatSendPreAckMessageInjection(params: {
+  attempt: ReplyMessageInjectionAttempt | undefined;
+  isAborted: () => boolean;
+  sessionRoutingChanged: () => boolean;
+  onActiveLeafChanged: () => Promise<void>;
+  onAborted: () => void;
+  onSessionRoutingChanged: () => void;
+}): Promise<PreAckMessageInjectionResult> {
+  if (params.attempt?.rejectBeforeAck) {
+    await params.onActiveLeafChanged();
+    return { status: "handled" };
+  }
+  if (!params.attempt || (await params.attempt.acceptance)) {
+    return { status: "continue", attempt: params.attempt };
+  }
+  if (params.isAborted()) {
+    params.onAborted();
+    return { status: "handled" };
+  }
+  if (params.sessionRoutingChanged()) {
+    params.onSessionRoutingChanged();
+    return { status: "handled" };
+  }
+  return { status: "continue", attempt: undefined };
 }
 
 /** Finish an irrevocably accepted steer without entering reply dispatch. */

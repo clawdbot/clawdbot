@@ -4,11 +4,9 @@ import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-ru
 import { describe, expect, it, vi } from "vitest";
 
 const managerDebug = {
-  backend: "qmd" as const,
+  backend: "builtin" as const,
   purpose: "default" as const,
   managerMs: 7,
-  managerCacheState: "cached-full-hit" as const,
-  qmdIdentityHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 };
 
 const getMemorySearchManagerMock = vi.hoisted(() =>
@@ -78,34 +76,6 @@ describe("memoryRuntime", () => {
       cfg,
       agentId: "second",
       acquireLocalService: secondAcquire,
-    });
-  });
-
-  it("keeps SQLite lease coordination scoped to each runtime instance", async () => {
-    const cfg = {} as OpenClawConfig;
-    const firstLease = vi.fn();
-    const secondLease = vi.fn();
-
-    await Promise.all([
-      createMemoryRuntime({ withLease: firstLease }).getMemorySearchManager({
-        cfg,
-        agentId: "first",
-      }),
-      createMemoryRuntime({ withLease: secondLease }).getMemorySearchManager({
-        cfg,
-        agentId: "second",
-      }),
-    ]);
-
-    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({
-      cfg,
-      agentId: "first",
-      withLease: firstLease,
-    });
-    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({
-      cfg,
-      agentId: "second",
-      withLease: secondLease,
     });
   });
 

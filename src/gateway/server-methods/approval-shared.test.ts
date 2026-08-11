@@ -19,9 +19,14 @@ import {
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const hasApprovalTurnSourceRouteMock = vi.hoisted(() => vi.fn(() => true));
+const prepareApprovalChannelCustodyMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../infra/approval-turn-source.js", () => ({
   hasApprovalTurnSourceRoute: hasApprovalTurnSourceRouteMock,
+}));
+
+vi.mock("../approval-channel-custody.js", () => ({
+  prepareApprovalChannelCustody: prepareApprovalChannelCustodyMock,
 }));
 
 type ApprovalClientLookup = NonNullable<GatewayRequestContext["getApprovalClientConnIds"]>;
@@ -1522,6 +1527,40 @@ describe("handlePendingApprovalRequest", () => {
 
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     expect(manager.getSnapshot(record.id)?.decision).toBe("allow-once");
+  });
+
+  it("filters legacy prefix candidates by channel custody before resolving", async () => {
+    const manager = new ExecApprovalManager();
+    const owned = manager.create({ command: "owned" }, 60_000, "approval-prefix-owned");
+    const foreign = manager.create({ command: "foreign" }, 60_000, "approval-prefix-foreign");
+    void manager.register(owned, 60_000);
+    void manager.register(foreign, 60_000);
+    prepareApprovalChannelCustodyMock.mockReturnValueOnce({
+      resolverId: "telegram:ops",
+      authorizes: (request: { request: { command: string } }) =>
+        request.request.command === "owned",
+    });
+    const respond = vi.fn();
+
+    await handleApprovalResolve({
+      approvalKind: "exec",
+      manager,
+      inputId: "approval-prefix",
+      decision: "deny",
+      reviewer: { channel: "telegram", accountId: "ops", senderId: "owner" },
+      respond,
+      context: {
+        broadcast: vi.fn(),
+        broadcastToConnIds: vi.fn(),
+        getRuntimeConfig: () => ({}),
+      } as unknown as GatewayRequestContext,
+      client: null,
+      exposeAmbiguousPrefixError: true,
+    });
+
+    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot(owned.id)?.decision).toBe("deny");
+    expect(manager.getSnapshot(foreign.id)?.decision).toBeUndefined();
   });
 
   it("targets resolved approval events to visible approval clients when available", async () => {

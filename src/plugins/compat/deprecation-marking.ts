@@ -119,7 +119,6 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "openclaw/plugin-sdk/provider-auth DEFAULT_COPILOT_API_BASE_URL",
       "openclaw/plugin-sdk/provider-auth deriveCopilotApiBaseUrlFromToken",
       "openclaw/plugin-sdk/provider-auth resolveCopilotApiToken",
-      "openclaw/plugin-sdk/provider-auth-login.runtime loginChutes",
       "openclaw/plugin-sdk/provider-auth-login.runtime loginOpenAICodexOAuth",
       "openclaw/plugin-sdk/provider-auth-login.runtime githubCopilotLoginCommand",
       "openclaw/plugin-sdk/provider-auth-copilot-cache CachedCopilotToken",

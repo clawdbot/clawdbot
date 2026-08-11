@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { getChildLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { getActiveWebListener } from "./active-listener.js";
@@ -252,7 +253,7 @@ describe("web auto-reply connection", () => {
       },
     };
     const listenerFactory = vi.fn(async () => {
-      throw toLintErrorObject(boom428, "Non-Error thrown");
+      throw toErrorObject(boom428, "Non-Error thrown");
     });
 
     const sleep = vi.fn(async () => {});
@@ -1068,17 +1069,3 @@ describe("web auto-reply connection", () => {
     expect(content).toMatch(/auto/);
   });
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

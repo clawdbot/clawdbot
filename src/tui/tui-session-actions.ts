@@ -14,7 +14,7 @@ import type { ChatLog } from "./components/chat-log.js";
 import { refreshTuiAgentList } from "./tui-agent-list-refresh.js";
 import type { TuiAgentsList, TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
 import {
-  asString,
+  formatPrimitiveString,
   extractTextFromMessage,
   formatTuiErrorMessage,
   isCommandMessage,
@@ -528,8 +528,8 @@ export function createSessionActions(context: SessionActionContext) {
           continue;
         }
         if (message.role === "toolResult") {
-          const toolCallId = asString(message.toolCallId, "");
-          const toolName = asString(message.toolName, "tool");
+          const toolCallId = formatPrimitiveString(message.toolCallId, "");
+          const toolName = formatPrimitiveString(message.toolName, "tool");
           const component = chatLog.startTool(toolCallId, toolName, {});
           component.setResult(
             {
@@ -561,8 +561,8 @@ export function createSessionActions(context: SessionActionContext) {
       // we stopped watching after switching away, so the persisted history above
       // does not contain it; render the partial and re-adopt the run so further
       // deltas (now that this session is active again) continue it.
-      const inFlightRunId = asString(record.inFlightRun?.runId, "");
-      const inFlightText = asString(record.inFlightRun?.text, "");
+      const inFlightRunId = formatPrimitiveString(record.inFlightRun?.runId, "");
+      const inFlightText = formatPrimitiveString(record.inFlightRun?.text, "");
       if (inFlightRunId) {
         // Render any buffered partial (embedded runtimes); Codex has none mid-run.
         if (inFlightText) {

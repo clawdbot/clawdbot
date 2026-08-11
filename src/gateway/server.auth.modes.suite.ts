@@ -11,7 +11,7 @@ import {
   originForPort,
   rpcReq,
   restoreGatewayToken,
-  startGatewayServer,
+  startTestGatewayServer,
   testState,
   testTailscaleWhois,
 } from "./server.auth.test-helpers.js";
@@ -26,13 +26,13 @@ async function requestModels(port: number, secret: string): Promise<Response> {
 
 export function registerAuthModesSuite(): void {
   describe("password auth", () => {
-    let server: Awaited<ReturnType<typeof startGatewayServer>>;
+    let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
     let port: number;
 
     beforeAll(async () => {
       testState.gatewayAuth = { mode: "password", password: "secret" }; // pragma: allowlist secret
       port = await getFreePort();
-      server = await startGatewayServer(port, { openAiChatCompletionsEnabled: true });
+      server = await startTestGatewayServer(port, { openAiChatCompletionsEnabled: true });
     });
 
     beforeEach(() => {
@@ -81,7 +81,7 @@ export function registerAuthModesSuite(): void {
   });
 
   describe("token auth", () => {
-    let server: Awaited<ReturnType<typeof startGatewayServer>>;
+    let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
     let port: number;
     let prevToken: string | undefined;
 
@@ -90,7 +90,7 @@ export function registerAuthModesSuite(): void {
       process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
       testState.gatewayAuth = { mode: "token", token: "secret" };
       port = await getFreePort();
-      server = await startGatewayServer(port, { openAiChatCompletionsEnabled: true });
+      server = await startTestGatewayServer(port, { openAiChatCompletionsEnabled: true });
     });
 
     beforeEach(() => {
@@ -171,7 +171,7 @@ export function registerAuthModesSuite(): void {
   });
 
   describe("explicit none auth", () => {
-    let server: Awaited<ReturnType<typeof startGatewayServer>>;
+    let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
     let port: number;
     let prevToken: string | undefined;
 
@@ -180,7 +180,7 @@ export function registerAuthModesSuite(): void {
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
       testState.gatewayAuth = { mode: "none" };
       port = await getFreePort();
-      server = await startGatewayServer(port);
+      server = await startTestGatewayServer(port);
     });
 
     beforeEach(() => {
@@ -227,7 +227,7 @@ export function registerAuthModesSuite(): void {
       const port = await getFreePort();
 
       try {
-        await expect(startGatewayServer(port, { auth })).rejects.toThrow(testCase.expected);
+        await expect(startTestGatewayServer(port, { auth })).rejects.toThrow(testCase.expected);
       } finally {
         if (previous === undefined) {
           delete process.env[testCase.envKey];
@@ -242,7 +242,7 @@ export function registerAuthModesSuite(): void {
       const port = await getFreePort();
 
       await expect(
-        startGatewayServer(port, {
+        startTestGatewayServer(port, {
           bind: "lan",
           host: "0.0.0.0",
           auth: { mode: "none" },
@@ -255,7 +255,7 @@ export function registerAuthModesSuite(): void {
   });
 
   describe("tailscale auth", () => {
-    let server: Awaited<ReturnType<typeof startGatewayServer>>;
+    let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
     let port: number;
     const tailscaleOrigin = "https://gateway.tailnet.ts.net";
 
@@ -273,7 +273,7 @@ export function registerAuthModesSuite(): void {
         afterWrite: { mode: "auto" },
       });
       port = await getFreePort();
-      server = await startGatewayServer(port);
+      server = await startTestGatewayServer(port);
     });
 
     afterAll(async () => {

@@ -14,10 +14,6 @@ import {
   mergeDeliveryContext,
 } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
-import type {
-  DeliverableMessageChannel,
-  GatewayMessageChannel,
-} from "../../utils/message-channel.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -34,28 +30,22 @@ import {
   type OutboundTargetResolution,
 } from "./targets-resolve-shared.js";
 
-/** Deliverable channel id accepted by outbound target resolution. */
-export type OutboundChannel = DeliverableMessageChannel;
-
-/** Heartbeat target channel id from agent/default heartbeat config. */
-type HeartbeatTarget = OutboundChannel;
-
 /** Resolved outbound delivery destination and routing hints. */
 type OutboundTarget = {
-  channel: OutboundChannel;
+  channel: string;
   to?: string;
   chatType?: ChatType;
   reason?: string;
   accountId?: string;
   threadId?: string | number;
-  lastChannel?: DeliverableMessageChannel;
+  lastChannel?: string;
   lastAccountId?: string;
 };
 
 /** Sender identity context used when a heartbeat needs channel-compatible metadata. */
 type HeartbeatSenderContext = {
   sender: string;
-  provider?: DeliverableMessageChannel;
+  provider?: string;
   allowFrom: string[];
 };
 
@@ -66,7 +56,8 @@ import { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targ
 
 /** Resolves a user-supplied outbound destination through the channel plugin. */
 export function resolveOutboundTarget(params: {
-  channel: GatewayMessageChannel;
+  channel: string;
+  plugin?: ChannelPlugin;
   to?: string;
   allowFrom?: string[];
   allowBootstrap?: boolean;
@@ -76,11 +67,13 @@ export function resolveOutboundTarget(params: {
 }): OutboundTargetResolution {
   return (
     resolveOutboundTargetWithPlugin({
-      plugin: resolveOutboundChannelPlugin({
-        channel: params.channel,
-        cfg: params.cfg,
-        allowBootstrap: params.allowBootstrap,
-      }),
+      plugin:
+        params.plugin ??
+        resolveOutboundChannelPlugin({
+          channel: params.channel,
+          cfg: params.cfg,
+          allowBootstrap: params.allowBootstrap,
+        }),
       target: params,
       onMissingPlugin: () =>
         params.channel === INTERNAL_MESSAGE_CHANNEL
@@ -106,7 +99,8 @@ export function resolveHeartbeatDeliveryTarget(params: {
   const { cfg, entry } = params;
   const heartbeat = params.heartbeat ?? cfg.agents?.defaults?.heartbeat;
   const rawTarget = heartbeat?.target;
-  let target: HeartbeatTarget = "none";
+  // Unset delivers to the last conversation; only explicit "none" opts out.
+  let target = rawTarget === undefined ? "last" : "none";
   let preparedExplicitPlugin: ChannelPlugin | undefined;
   let preparedExplicitTo: string | undefined;
   if (rawTarget === "none" || rawTarget === "last") {
@@ -124,23 +118,11 @@ export function resolveHeartbeatDeliveryTarget(params: {
           allowBootstrap: true,
         });
         if (preparedExplicitPlugin) {
-          target = preparedExplicitPlugin.id as HeartbeatTarget;
+          target = preparedExplicitPlugin.id;
           preparedExplicitTo = explicitTo;
         }
       }
     }
-  } else if (
-    rawTarget === undefined &&
-    params.turnSource?.to &&
-    params.turnSource.channel &&
-    isDeliverableMessageChannel(params.turnSource.channel)
-  ) {
-    // No heartbeat target configured, but this run drains an event that
-    // explicitly carried its origin delivery context (e.g. a cron wake from a
-    // channel thread/topic). The event named its destination, so deliver to it
-    // instead of silently dropping the reply. An explicit `target: "none"`
-    // still suppresses delivery (operator opt-out above takes precedence).
-    target = "last";
   }
 
   if (target === "none") {
@@ -190,7 +172,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
 
   if (!resolvedTarget.channel || !resolvedTarget.to) {
     return buildNoHeartbeatDeliveryTarget({
-      reason: "no-target",
+      reason: target === "last" ? "no-route" : "no-target",
       accountId: effectiveAccountId,
       lastChannel: resolvedTarget.lastChannel,
       lastAccountId: resolvedTarget.lastAccountId,
@@ -309,7 +291,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
 function buildNoHeartbeatDeliveryTarget(params: {
   reason: string;
   accountId?: string;
-  lastChannel?: DeliverableMessageChannel;
+  lastChannel?: string;
   lastAccountId?: string;
 }): OutboundTarget {
   return {
@@ -419,7 +401,7 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
 }
 
 function inferChatTypeFromTarget(params: {
-  channel: DeliverableMessageChannel;
+  channel: string;
   to: string;
   plugin?: ChannelPlugin;
 }): ChatType | undefined {
@@ -446,7 +428,7 @@ function inferChatTypeFromTarget(params: {
 }
 
 function resolveHeartbeatDeliveryChatType(params: {
-  channel: DeliverableMessageChannel;
+  channel: string;
   to: string;
   sessionChatType?: ChatType;
   plugin?: ChannelPlugin;
@@ -463,7 +445,7 @@ function resolveHeartbeatDeliveryChatType(params: {
 
 function shouldReuseHeartbeatRouteThreadId(params: {
   cfg: OpenClawConfig;
-  target: HeartbeatTarget;
+  target: string;
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   turnSource?: DeliveryContext;
   entry?: SessionEntry;
@@ -473,7 +455,9 @@ function shouldReuseHeartbeatRouteThreadId(params: {
   const channel = params.resolvedTarget.channel;
   const messaging = params.plugin
     ? params.plugin.messaging
-    : channel && resolveOutboundChannelPlugin({ channel, cfg: params.cfg })?.messaging;
+    : channel
+      ? resolveOutboundChannelPlugin({ channel, cfg: params.cfg })?.messaging
+      : undefined;
   return (
     messaging?.preserveHeartbeatThreadIdForGroupRoute === true &&
     params.resolvedTarget.threadId == null &&

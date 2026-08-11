@@ -8,16 +8,22 @@ import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar.ts";
 import * as localStorageModule from "../../../local-storage.ts";
 import * as chatAvatar from "../chat-avatar.ts";
 import { renderChatNotice } from "./chat-divider.ts";
+import { isTextyDocumentAttachment } from "./chat-message-document-preview.ts";
 import {
-  getAssistantAttachmentAvailabilityRenderVersion,
+  getChatMediaRenderVersion,
+  releaseChatMediaResourceSubscriber,
+} from "./chat-message-media.ts";
+import {
   dismissConfirmedActionPopovers,
   renderActivityGroup,
   renderMessageGroup,
   renderStreamGroup,
 } from "./chat-message.ts";
+import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
 const localStorageValues = new Map<string, string>();
+const documentPreviewSubscribers = new Set<() => void>();
 const renderMarkdownHtml = markdown.toSanitizedMarkdownHtml;
 const markdownRenderMock = vi.fn(
   (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) => value,
@@ -160,8 +166,12 @@ function createAttachmentBlock(
   kind: "audio" | "video" | "document",
   label: string,
   mimeType: string,
+  attachmentOverrides: TestMessage = {},
 ) {
-  return { type: "attachment", attachment: { url, kind, label, mimeType } };
+  return {
+    type: "attachment",
+    attachment: { url, kind, label, mimeType, ...attachmentOverrides },
+  };
 }
 
 function expectElement<T extends Element>(
@@ -402,8 +412,8 @@ function renderMessageGroups(
   render(html`${groups.map((group) => renderTestMessageGroup(group, opts))}`, container);
 }
 
-function clearDeleteConfirmSkip() {
-  localStorageValues.delete("openclaw:skipDeleteConfirm");
+function clearConfirmedActionSkip() {
+  localStorageValues.delete("openclaw:skip-rewind-confirm");
 }
 
 function stubAnimationFrameQueue() {
@@ -480,33 +490,33 @@ function countCaptureKeydownListenerRemovals(calls: readonly unknown[][], listen
   ).length;
 }
 
-function renderDeleteConfirmFixture() {
+function renderConfirmedActionFixture() {
   const container = document.createElement("div");
-  container.dataset.deleteConfirmFixture = "true";
+  container.dataset.confirmedActionFixture = "true";
   document.body.appendChild(container);
-  const onDelete = vi.fn();
-  clearDeleteConfirmSkip();
+  const onAction = vi.fn();
+  clearConfirmedActionSkip();
   renderMessageGroups(
     container,
     [
       createMessageGroup(
         {
-          role: "assistant",
-          content: "hello from assistant",
+          role: "user",
+          content: "hello from user",
           timestamp: 1000,
         },
-        "assistant",
+        "user",
       ),
     ],
-    { onDelete },
+    { onRewind: onAction },
   );
-  const deleteButton = container.querySelector<HTMLButtonElement>(".chat-group-delete");
-  expect(deleteButton).toBeInstanceOf(HTMLButtonElement);
-  return { container, deleteButton: deleteButton!, onDelete };
+  const actionButton = container.querySelector<HTMLButtonElement>(".chat-group-rewind");
+  expect(actionButton).toBeInstanceOf(HTMLButtonElement);
+  return { actionButton: actionButton!, container, onAction };
 }
 
-function openDeleteConfirm(deleteButton: HTMLButtonElement) {
-  deleteButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+function openConfirmedAction(actionButton: HTMLButtonElement) {
+  actionButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 }
 
 function domRect(params: {
@@ -533,7 +543,7 @@ function domRect(params: {
   return rect as DOMRect;
 }
 
-function stubDeleteConfirmGeometry(params: {
+function stubConfirmedActionGeometry(params: {
   trigger: { left: number; top: number; width: number; height: number };
   popover: { width: number; height: number };
   viewport: { left?: number; top?: number; width: number; height: number };
@@ -548,10 +558,10 @@ function stubDeleteConfirmGeometry(params: {
   });
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
     function (this: HTMLElement) {
-      if (this.classList.contains("chat-group-delete")) {
+      if (this.classList.contains("chat-group-rewind")) {
         return domRect(params.trigger);
       }
-      if (this.classList.contains("chat-delete-confirm")) {
+      if (this.classList.contains("chat-confirm-popover")) {
         return domRect(params.popover);
       }
       return domRect({});
@@ -559,29 +569,29 @@ function stubDeleteConfirmGeometry(params: {
   );
 }
 
-function clickDeleteButtonIconPath(deleteButton: HTMLButtonElement) {
+function clickConfirmedActionIconPath(actionButton: HTMLButtonElement) {
   const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
   icon.appendChild(path);
-  deleteButton.appendChild(icon);
+  actionButton.appendChild(icon);
   path.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 }
 
-function setupArmedDeleteConfirm() {
+function setupArmedConfirmedAction() {
   const flushAnimationFrames = stubAnimationFrameQueue();
   const addListenerSpy = vi.spyOn(document, "addEventListener");
   const removeListenerSpy = vi.spyOn(document, "removeEventListener");
   const addKeyListenerSpy = vi.spyOn(window, "addEventListener");
   const removeKeyListenerSpy = vi.spyOn(window, "removeEventListener");
-  const fixture = renderDeleteConfirmFixture();
+  const fixture = renderConfirmedActionFixture();
 
-  openDeleteConfirm(fixture.deleteButton);
+  openConfirmedAction(fixture.actionButton);
   flushAnimationFrames();
 
   const outsideClickListener = expectLastCaptureClickListener(addListenerSpy.mock.calls);
   const outsideContextMenuListener = getLastCaptureContextMenuListener(addListenerSpy.mock.calls);
   const escapeListener = getLastCaptureKeydownListener(addKeyListenerSpy.mock.calls);
-  const popover = expectElement(document.body, ".chat-delete-confirm", HTMLElement);
+  const popover = expectElement(document.body, ".chat-confirm-popover", HTMLElement);
   expect(typeof outsideContextMenuListener).toBe("function");
   expect(typeof escapeListener).toBe("function");
 
@@ -596,7 +606,7 @@ function setupArmedDeleteConfirm() {
   };
 }
 
-function expectDeleteConfirmDismissed(params: {
+function expectConfirmedActionDismissed(params: {
   escapeListener: unknown;
   outsideClickListener: unknown;
   outsideContextMenuListener: unknown;
@@ -660,15 +670,19 @@ async function requireVideoPlayer(container: HTMLElement) {
 }
 
 afterEach(() => {
+  for (const subscriber of documentPreviewSubscribers) {
+    releaseChatMediaResourceSubscriber(subscriber);
+  }
+  documentPreviewSubscribers.clear();
   markdownRenderMock.mockClear();
   document.querySelectorAll("[data-media-player-test-fixture]").forEach((element) => {
     element.remove();
   });
-  document.querySelectorAll("[data-delete-confirm-fixture]").forEach((element) => {
+  document.querySelectorAll("[data-confirmed-action-fixture]").forEach((element) => {
     dismissConfirmedActionPopovers(element);
     element.remove();
   });
-  clearDeleteConfirmSkip();
+  clearConfirmedActionSkip();
   setAvatarGatewayOrigin(null);
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -676,6 +690,26 @@ afterEach(() => {
 });
 
 describe("grouped chat rendering", () => {
+  it.each([
+    ["text/plain MIME", { label: "note.bin", mimeType: "text/plain" }, true],
+    ["JSON MIME", { label: "data.bin", mimeType: "application/json" }, true],
+    ["NDJSON MIME", { label: "data.bin", mimeType: "application/x-ndjson" }, true],
+    ["XML MIME", { label: "data.bin", mimeType: "application/xml" }, true],
+    ["YAML MIME", { label: "data.bin", mimeType: "application/yaml" }, true],
+    ["x-yaml MIME", { label: "data.bin", mimeType: "application/x-yaml" }, true],
+    ["TOML MIME", { label: "data.bin", mimeType: "application/toml" }, true],
+    ["missing MIME text extension", { label: "README.markdown" }, true],
+    [
+      "octet-stream text extension",
+      { label: "changes.patch", mimeType: "application/octet-stream" },
+      true,
+    ],
+    ["non-text MIME", { label: "renamed.txt", mimeType: "application/pdf" }, false],
+    ["non-text extension", { label: "report.pdf" }, false],
+  ] as const)("detects texty documents from $0", (_name, attachment, expected) => {
+    expect(isTextyDocumentAttachment(attachment)).toBe(expected);
+  });
+
   it("preserves paragraph breaks around assistant attachments in rendered markdown", () => {
     const container = document.createElement("div");
 
@@ -721,11 +755,15 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector('[aria-label="Read aloud"]')).toBeNull();
   });
 
-  it("renders assistant message actions in the footer row", () => {
+  it("renders assistant messages without an avatar and keeps actions in the footer row", () => {
     const container = document.createElement("div");
-    renderAssistantMessage(container, createAssistantMessage("Short reply", { timestamp: 1000 }));
+    renderAssistantMessage(container, createAssistantMessage("Short reply", { timestamp: 1000 }), {
+      showAssistantAvatar: false,
+    });
 
     const assistantGroup = expectElement(container, ".chat-group.assistant", HTMLElement);
+    expect(assistantGroup.classList.contains("chat-group--with-footer")).toBe(true);
+    expect(assistantGroup.querySelector(".chat-avatar")).toBeNull();
     expect(assistantGroup.querySelector(".chat-bubble-actions")).toBeNull();
     expect(
       assistantGroup.querySelector(".chat-group-footer-actions .chat-copy-btn"),
@@ -747,7 +785,7 @@ describe("grouped chat rendering", () => {
         timestamp: 1000,
         __openclaw: { id: "assistant-entry-1" },
       }),
-      { onDelete: vi.fn(), onReply },
+      { onReply },
     );
 
     const actions = container.querySelectorAll<HTMLButtonElement>(
@@ -755,7 +793,6 @@ describe("grouped chat rendering", () => {
     );
     expect([...actions].map((button) => button.getAttribute("aria-label"))).toEqual([
       "Reply to message",
-      "Hide message",
       "Copy as markdown",
     ]);
 
@@ -791,7 +828,6 @@ describe("grouped chat rendering", () => {
   it("orders user footer actions before the sender name and timestamp", () => {
     const container = document.createElement("div");
     renderGroupedMessage(container, createUserMessage("User footer order."), "user", {
-      onDelete: vi.fn(),
       onReply: vi.fn(),
       onRewind: vi.fn(),
       userName: "Jason",
@@ -810,7 +846,7 @@ describe("grouped chat rendering", () => {
       return element.getAttribute("aria-label");
     });
 
-    expect(order).toEqual(["Reply to message", "Hide message", "Rewind", "name", "time"]);
+    expect(order).toEqual(["Reply to message", "Rewind", "name", "time"]);
   });
 
   it("keeps hidden assistant thinking out of inline reply context", () => {
@@ -966,63 +1002,6 @@ describe("grouped chat rendering", () => {
     });
   });
 
-  it("positions delete confirm by message side", () => {
-    const container = document.createElement("div");
-    clearDeleteConfirmSkip();
-    renderMessageGroups(
-      container,
-      [
-        createMessageGroup(
-          {
-            role: "user",
-            content: "hello from user",
-            timestamp: 1000,
-          },
-          "user",
-        ),
-        createMessageGroup(
-          {
-            role: "assistant",
-            content: "hello from assistant",
-            timestamp: 1001,
-          },
-          "assistant",
-        ),
-      ],
-      { onDelete: vi.fn() },
-    );
-
-    try {
-      const userDeleteButton = container.querySelector<HTMLButtonElement>(
-        ".chat-group.user .chat-group-delete",
-      );
-      expect(userDeleteButton).toBeInstanceOf(HTMLButtonElement);
-      userDeleteButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-      const userConfirm = document.querySelector<HTMLElement>(".chat-delete-confirm--left");
-      expect(userConfirm).toBeInstanceOf(HTMLElement);
-      expect([...userConfirm!.classList]).toEqual([
-        "chat-delete-confirm",
-        "chat-delete-confirm--left",
-      ]);
-
-      const assistantDeleteButton = container.querySelector<HTMLButtonElement>(
-        ".chat-group.assistant .chat-group-delete",
-      );
-      expect(assistantDeleteButton).toBeInstanceOf(HTMLButtonElement);
-      assistantDeleteButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-      const assistantConfirm = document.querySelector<HTMLElement>(".chat-delete-confirm--right");
-      expect(assistantConfirm).toBeInstanceOf(HTMLElement);
-      expect([...assistantConfirm!.classList]).toEqual([
-        "chat-delete-confirm",
-        "chat-delete-confirm--right",
-      ]);
-    } finally {
-      dismissConfirmedActionPopovers(container);
-    }
-  });
-
   it("renders a confirmed rewind action only for user groups", () => {
     const container = document.createElement("div");
     const onRewind = vi.fn();
@@ -1039,10 +1018,10 @@ describe("grouped chat rendering", () => {
     const rewindButtons = container.querySelectorAll<HTMLButtonElement>(".chat-group-rewind");
     expect(rewindButtons).toHaveLength(1);
     rewindButtons[0]!.click();
-    expect(document.querySelector(".chat-delete-confirm__text")?.textContent).toBe(
+    expect(document.querySelector(".chat-confirm-popover__text")?.textContent).toBe(
       "Rewind to before this message?",
     );
-    document.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes")!.click();
+    document.querySelector<HTMLButtonElement>(".chat-confirm-popover__yes")!.click();
     expect(onRewind).toHaveBeenCalledTimes(1);
   });
 
@@ -1062,32 +1041,32 @@ describe("grouped chat rendering", () => {
 
   it.each([
     {
-      name: "places the delete confirm below the trigger near the top viewport edge",
+      name: "places the confirmation below the trigger near the top viewport edge",
       trigger: { left: 20, top: 4, width: 24, height: 24 },
       popover: { width: 200, height: 96 },
       viewport: { width: 320, height: 240 },
       placement: "below",
       top: "34px",
-      left: "20px",
+      left: "8px",
     },
     {
-      name: "places the delete confirm above the trigger near the bottom viewport edge",
+      name: "places the confirmation above the trigger near the bottom viewport edge",
       trigger: { left: 20, top: 190, width: 24, height: 24 },
       popover: { width: 200, height: 80 },
       viewport: { width: 320, height: 240 },
       placement: "above",
       top: "104px",
-      left: "20px",
+      left: "8px",
     },
     {
-      name: "clamps the delete confirm horizontally inside narrow viewports",
+      name: "clamps the confirmation horizontally inside narrow viewports",
       trigger: { left: 260, top: 120, width: 24, height: 24 },
       popover: { width: 200, height: 80 },
       viewport: { width: 320, height: 240 },
-      left: "112px",
+      left: "84px",
     },
     {
-      name: "clamps the delete confirm inside shifted visual viewports",
+      name: "clamps the confirmation inside shifted visual viewports",
       trigger: { left: 620, top: 540, width: 24, height: 24 },
       popover: { width: 200, height: 80 },
       viewport: { left: 320, top: 300, width: 320, height: 240 },
@@ -1096,12 +1075,12 @@ describe("grouped chat rendering", () => {
       left: "432px",
     },
   ])("$name", ({ trigger, popover, viewport, placement, top, left }) => {
-    stubDeleteConfirmGeometry({ trigger, popover, viewport });
-    const fixture = renderDeleteConfirmFixture();
+    stubConfirmedActionGeometry({ trigger, popover, viewport });
+    const fixture = renderConfirmedActionFixture();
 
-    openDeleteConfirm(fixture.deleteButton);
+    openConfirmedAction(fixture.actionButton);
 
-    const element = expectElement(document.body, ".chat-delete-confirm", HTMLElement);
+    const element = expectElement(document.body, ".chat-confirm-popover", HTMLElement);
     expect(element.parentElement).toBe(document.body);
     if (placement) {
       expect(element.dataset.placement).toBe(placement);
@@ -1112,19 +1091,23 @@ describe("grouped chat rendering", () => {
     expect(element.style.left).toBe(left);
   });
   it("exposes dialog semantics and keeps keyboard focus inside the confirmation", () => {
-    const fixture = renderDeleteConfirmFixture();
+    const fixture = renderConfirmedActionFixture();
 
-    openDeleteConfirm(fixture.deleteButton);
+    openConfirmedAction(fixture.actionButton);
 
-    const popover = expectElement(document.body, ".chat-delete-confirm", HTMLElement);
-    const check = expectElement(popover, ".chat-delete-confirm__check", HTMLInputElement);
-    const cancel = expectElement(popover, ".chat-delete-confirm__cancel", HTMLButtonElement);
-    const confirm = expectElement(popover, ".chat-delete-confirm__yes", HTMLButtonElement);
+    const popover = expectElement(document.body, ".chat-confirm-popover", HTMLElement);
+    const check = expectElement(popover, ".chat-confirm-popover__check", HTMLInputElement);
+    const cancel = expectElement(popover, ".chat-confirm-popover__cancel", HTMLButtonElement);
+    const confirm = expectElement(popover, ".chat-confirm-popover__yes", HTMLButtonElement);
     expect(popover.getAttribute("role")).toBe("dialog");
     expect(popover.getAttribute("aria-modal")).toBe("true");
     expect(popover.getAttribute("aria-label")).toBe(
-      popover.querySelector(".chat-delete-confirm__text")?.textContent,
+      popover.querySelector(".chat-confirm-popover__text")?.textContent,
     );
+    expect(popover.querySelector(".chat-confirm-popover__remember span")?.textContent).toBe(
+      "Don't ask again",
+    );
+    expect(cancel.textContent).toBe("Cancel");
     expect(document.activeElement).toBe(cancel);
 
     confirm.focus();
@@ -1149,10 +1132,10 @@ describe("grouped chat rendering", () => {
   });
 
   it("dismisses the confirmation with Escape before underlying keyboard handlers run", () => {
-    const fixture = setupArmedDeleteConfirm();
+    const fixture = setupArmedConfirmedAction();
     const cancel = expectElement(
       fixture.popover,
-      ".chat-delete-confirm__cancel",
+      ".chat-confirm-popover__cancel",
       HTMLButtonElement,
     );
     const leakedKeydown = vi.fn();
@@ -1168,36 +1151,36 @@ describe("grouped chat rendering", () => {
 
       expect(event.defaultPrevented).toBe(true);
       expect(leakedKeydown).not.toHaveBeenCalled();
-      expectDeleteConfirmDismissed(fixture);
-      expect(fixture.onDelete).not.toHaveBeenCalled();
-      expect(document.activeElement).toBe(fixture.deleteButton);
+      expectConfirmedActionDismissed(fixture);
+      expect(fixture.onAction).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(fixture.actionButton);
     } finally {
       document.removeEventListener("keydown", leakedKeydown);
     }
   });
 
   it("dismisses only confirmations contained by the requested owner", () => {
-    const fixture = setupArmedDeleteConfirm();
-    const sibling = renderDeleteConfirmFixture();
-    openDeleteConfirm(sibling.deleteButton);
-    const siblingPopover = [...document.querySelectorAll<HTMLElement>(".chat-delete-confirm")].find(
-      (popover) => popover !== fixture.popover,
-    );
+    const fixture = setupArmedConfirmedAction();
+    const sibling = renderConfirmedActionFixture();
+    openConfirmedAction(sibling.actionButton);
+    const siblingPopover = [
+      ...document.querySelectorAll<HTMLElement>(".chat-confirm-popover"),
+    ].find((popover) => popover !== fixture.popover);
 
     dismissConfirmedActionPopovers(fixture.container);
 
-    expectDeleteConfirmDismissed(fixture);
+    expectConfirmedActionDismissed(fixture);
     expect(siblingPopover?.isConnected).toBe(true);
     dismissConfirmedActionPopovers(sibling.container);
   });
 
   it("dismisses a portaled confirmation when its owner is detached", async () => {
-    const fixture = setupArmedDeleteConfirm();
+    const fixture = setupArmedConfirmedAction();
 
     fixture.container.remove();
     await Promise.resolve();
 
-    expectDeleteConfirmDismissed(fixture);
+    expectConfirmedActionDismissed(fixture);
   });
 
   it("does not attach an outside-click listener after owner cleanup before the next frame", () => {
@@ -1206,9 +1189,9 @@ describe("grouped chat rendering", () => {
     const removeListenerSpy = vi.spyOn(document, "removeEventListener");
     const addKeyListenerSpy = vi.spyOn(window, "addEventListener");
     const removeKeyListenerSpy = vi.spyOn(window, "removeEventListener");
-    const fixture = renderDeleteConfirmFixture();
+    const fixture = renderConfirmedActionFixture();
 
-    openDeleteConfirm(fixture.deleteButton);
+    openConfirmedAction(fixture.actionButton);
     const contextMenuListener = getLastCaptureContextMenuListener(addListenerSpy.mock.calls);
     const escapeListener = getLastCaptureKeydownListener(addKeyListenerSpy.mock.calls);
     expect(typeof contextMenuListener).toBe("function");
@@ -1216,7 +1199,7 @@ describe("grouped chat rendering", () => {
     dismissConfirmedActionPopovers(fixture.container);
     flushAnimationFrames();
 
-    expect(document.querySelector(".chat-delete-confirm")).toBeNull();
+    expect(document.querySelector(".chat-confirm-popover")).toBeNull();
     expect(getLastCaptureClickListener(addListenerSpy.mock.calls)).toBeNull();
     expect(
       countCaptureContextMenuListenerRemovals(removeListenerSpy.mock.calls, contextMenuListener),
@@ -1226,33 +1209,35 @@ describe("grouped chat rendering", () => {
     ).toBe(1);
   });
 
-  it("removes the delete confirm outside-click listener when Cancel dismisses it", () => {
-    const fixture = setupArmedDeleteConfirm();
-    const cancel = fixture.popover.querySelector<HTMLButtonElement>(".chat-delete-confirm__cancel");
+  it("removes the confirmation outside-click listener when Cancel dismisses it", () => {
+    const fixture = setupArmedConfirmedAction();
+    const cancel = fixture.popover.querySelector<HTMLButtonElement>(
+      ".chat-confirm-popover__cancel",
+    );
 
     expect(cancel).toBeInstanceOf(HTMLButtonElement);
     cancel!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    expectDeleteConfirmDismissed(fixture);
-    expect(fixture.onDelete).not.toHaveBeenCalled();
-    expect(document.activeElement).toBe(fixture.deleteButton);
+    expectConfirmedActionDismissed(fixture);
+    expect(fixture.onAction).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(fixture.actionButton);
   });
 
-  it("removes the delete confirm outside-click listener when Delete dismisses it", () => {
-    const fixture = setupArmedDeleteConfirm();
-    const confirm = fixture.popover.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes");
+  it("removes the confirmation outside-click listener when Rewind dismisses it", () => {
+    const fixture = setupArmedConfirmedAction();
+    const confirm = fixture.popover.querySelector<HTMLButtonElement>(".chat-confirm-popover__yes");
 
     expect(confirm).toBeInstanceOf(HTMLButtonElement);
     confirm!.focus();
     confirm!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    expectDeleteConfirmDismissed(fixture);
-    expect(fixture.onDelete).toHaveBeenCalledTimes(1);
-    expect(document.activeElement).not.toBe(fixture.deleteButton);
+    expectConfirmedActionDismissed(fixture);
+    expect(fixture.onAction).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).not.toBe(fixture.actionButton);
   });
 
-  it("removes the delete confirm outside-click listener when an outside click dismisses it", () => {
-    const fixture = setupArmedDeleteConfirm();
+  it("removes the confirmation outside-click listener when an outside click dismisses it", () => {
+    const fixture = setupArmedConfirmedAction();
     const outsideButton = document.createElement("button");
     document.body.appendChild(outsideButton);
 
@@ -1260,44 +1245,44 @@ describe("grouped chat rendering", () => {
       outsideButton.focus();
       outsideButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-      expectDeleteConfirmDismissed(fixture);
-      expect(fixture.onDelete).not.toHaveBeenCalled();
+      expectConfirmedActionDismissed(fixture);
+      expect(fixture.onAction).not.toHaveBeenCalled();
       expect(document.activeElement).toBe(outsideButton);
     } finally {
       outsideButton.remove();
     }
   });
 
-  it("removes the delete confirm outside-click listener when the delete button toggles it", () => {
-    const fixture = setupArmedDeleteConfirm();
+  it("removes the confirmation outside-click listener when the action button toggles it", () => {
+    const fixture = setupArmedConfirmedAction();
 
-    openDeleteConfirm(fixture.deleteButton);
+    openConfirmedAction(fixture.actionButton);
 
-    expectDeleteConfirmDismissed(fixture);
-    expect(fixture.onDelete).not.toHaveBeenCalled();
+    expectConfirmedActionDismissed(fixture);
+    expect(fixture.onAction).not.toHaveBeenCalled();
   });
 
-  it("removes the delete confirm outside-click listener when the delete button icon toggles it", () => {
-    const fixture = setupArmedDeleteConfirm();
+  it("removes the confirmation outside-click listener when the action icon toggles it", () => {
+    const fixture = setupArmedConfirmedAction();
 
-    clickDeleteButtonIconPath(fixture.deleteButton);
+    clickConfirmedActionIconPath(fixture.actionButton);
 
-    expectDeleteConfirmDismissed(fixture);
-    expect(fixture.onDelete).not.toHaveBeenCalled();
+    expectConfirmedActionDismissed(fixture);
+    expect(fixture.onAction).not.toHaveBeenCalled();
   });
 
-  it("does not attach the delete confirm outside-click listener after an immediate toggle", () => {
+  it("does not attach the confirmation outside-click listener after an immediate toggle", () => {
     const flushAnimationFrames = stubAnimationFrameQueue();
     const addListenerSpy = vi.spyOn(document, "addEventListener");
-    const fixture = renderDeleteConfirmFixture();
+    const fixture = renderConfirmedActionFixture();
 
-    openDeleteConfirm(fixture.deleteButton);
-    openDeleteConfirm(fixture.deleteButton);
+    openConfirmedAction(fixture.actionButton);
+    openConfirmedAction(fixture.actionButton);
     flushAnimationFrames();
 
-    expect(document.querySelector(".chat-delete-confirm")).toBeNull();
+    expect(document.querySelector(".chat-confirm-popover")).toBeNull();
     expect(getLastCaptureClickListener(addListenerSpy.mock.calls)).toBeNull();
-    expect(fixture.onDelete).not.toHaveBeenCalled();
+    expect(fixture.onAction).not.toHaveBeenCalled();
   });
 
   it("renders assistant context usage from input and cache tokens", () => {
@@ -1670,8 +1655,10 @@ describe("grouped chat rendering", () => {
 
     expect(container.querySelector(".chat-working-indicator__elapsed")).not.toBeNull();
     expect(container.querySelector(".chat-working-indicator__tokens")?.textContent?.trim()).toBe(
-      "5.5k output tokens",
+      "5.5k tokens",
     );
+    // Streaming tokens replace the whimsical phrase: one liveness signal at a time.
+    expect(container.querySelector("openclaw-working-phrase")).toBeNull();
   });
 
   it("relabels the working indicator while the run waits for approval", () => {
@@ -1721,20 +1708,30 @@ describe("grouped chat rendering", () => {
     expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(0);
   });
 
-  it("keeps the avatar once a stream part joins the reading indicator", () => {
+  it("keeps streamed assistant content in the guttered group without an avatar", () => {
     const container = document.createElement("div");
 
     render(
-      renderStreamGroup([
-        { kind: "stream", key: "stream:s:live", text: "reply", startedAt: 10, isStreaming: true },
-        { kind: "reading-indicator", key: "reading", startedAt: 10 },
-      ]),
+      renderStreamGroup(
+        [
+          {
+            kind: "stream",
+            key: "stream:s:live",
+            text: "reply",
+            startedAt: 10,
+            isStreaming: true,
+          },
+          { kind: "reading-indicator", key: "reading", startedAt: 10 },
+        ],
+        { showAssistantAvatar: false },
+      ),
       container,
     );
 
     const group = container.querySelector(".chat-group.assistant");
     expect(group?.classList.contains("chat-group--working")).toBe(false);
-    expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(1);
+    expect(group?.classList.contains("chat-group--with-footer")).toBe(true);
+    expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(0);
     expect(container.querySelectorAll(".chat-group-footer")).toHaveLength(1);
     expect(container.querySelectorAll(".chat-working-indicator")).toHaveLength(1);
     expect(container.querySelectorAll(".chat-reading-indicator")).toHaveLength(1);
@@ -1753,20 +1750,10 @@ describe("grouped chat rendering", () => {
     const first = surpriseFor("stream:agent:main:pending");
     // Stable across re-renders: the same key keeps the same surprise decision.
     expect(surpriseFor("stream:agent:main:pending")).toEqual(first);
-    // At most one surprise modifier; plain in-place clawing is the unmarked default.
-    expect(first.length).toBeLessThanOrEqual(1);
-    for (const cls of first) {
-      expect([
-        "chat-reading-indicator--southpaw",
-        "chat-reading-indicator--flurry",
-        "chat-reading-indicator--spin",
-        "chat-reading-indicator--shadowbox",
-        "chat-reading-indicator--backflip",
-        "chat-reading-indicator--zen",
-        "chat-reading-indicator--drummer",
-        "chat-reading-indicator--peekaboo",
-      ]).toContain(cls);
-    }
+    // The render must route exactly the picker's seeded decision — nothing
+    // extra, nothing hand-rolled — so new stances can never drift this test.
+    const decision = selectWorkingClawSurprise("stream:agent:main:pending");
+    expect(first).toEqual(decision ? [decision] : []);
   });
 
   it("keeps the synthetic progress word screen-reader-only across runs", () => {
@@ -1936,6 +1923,7 @@ describe("grouped chat rendering", () => {
       renderChatNotice({
         kind: "notice",
         key: "notice:command",
+        label: "System",
         text: "**first line**\nsecond line\n<img src=x onerror=alert(1)><script>alert(1)</script>",
         timestamp: 1000,
       }),
@@ -1943,6 +1931,10 @@ describe("grouped chat rendering", () => {
     );
 
     const notice = container.querySelector<HTMLElement>(".chat-notice");
+    expect(notice?.querySelector(".chat-notice__label")?.textContent).toBe("System");
+    expect(notice?.querySelector(".chat-avatar")).toBeNull();
+    expect(notice?.querySelector(".chat-author-avatar")).toBeNull();
+    expect(notice?.querySelector(".chat-sender-name")).toBeNull();
     expect(notice?.querySelector("strong")?.textContent).toBe("first line");
     expect(notice?.textContent).not.toContain("**");
     expect(notice?.querySelector("br")).not.toBeNull();
@@ -3619,6 +3611,233 @@ describe("grouped chat rendering", () => {
     ).toBe("clip.mp4");
   });
 
+  it("renders a text document preview with an explicit download action", async () => {
+    const previewText = "A pasted note\nwith a second line.";
+    const fetchMock = vi.fn(async () => new Response(previewText));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+    const message = createAssistantMessage(
+      [
+        createAttachmentBlock(
+          "blob:https://example.com/pasted-text-preview",
+          "document",
+          "pasted-text-1723000000000.txt",
+          "text/plain",
+        ),
+      ],
+      { id: "assistant-text-document-preview" },
+    );
+    const rerender = () =>
+      renderAssistantMessage(container, message, {
+        showToolCalls: false,
+        onRequestUpdate: rerender,
+      });
+    documentPreviewSubscribers.add(rerender);
+
+    rerender();
+
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector(".chat-assistant-attachment-card__preview-text")?.textContent,
+      ).toBe(previewText);
+    });
+    const card = expectElement(container, ".chat-assistant-attachment-card--document", HTMLElement);
+    expect(
+      card
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
+        ?.getAttribute("download"),
+    ).toBe("pasted-text-1723000000000.txt");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders a non-text document card without fetching a preview", () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+
+    renderAssistantMessage(
+      container,
+      createAssistantMessage(
+        [
+          createAttachmentBlock(
+            "https://example.com/report.pdf",
+            "document",
+            "report.pdf",
+            "application/pdf",
+          ),
+        ],
+        { id: "assistant-pdf-document-card" },
+      ),
+      { showToolCalls: false },
+    );
+
+    const card = expectElement(container, ".chat-assistant-attachment-card--document", HTMLElement);
+    expect(
+      card
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
+        ?.getAttribute("download"),
+    ).toBe("report.pdf");
+    expect(card.querySelector(".chat-assistant-attachment-card__preview-text")).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not fetch a preview for an oversized text document", () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+
+    renderAssistantMessage(
+      container,
+      createAssistantMessage(
+        [
+          createAttachmentBlock(
+            "https://example.com/large.txt",
+            "document",
+            "large.txt",
+            "text/plain",
+            { sizeBytes: 256 * 1024 + 1 },
+          ),
+        ],
+        { id: "assistant-oversized-text-document" },
+      ),
+      { showToolCalls: false },
+    );
+
+    expect(container.querySelector(".chat-assistant-attachment-card--document")).not.toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-card__preview-text")).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("truncates text document previews at 16 KiB", async () => {
+    const prefix = "x".repeat(16 * 1024);
+    const fetchMock = vi.fn(async () => new Response(`${prefix}tail`));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+    const message = createAssistantMessage(
+      [
+        createAttachmentBlock(
+          "https://example.com/truncated.txt",
+          "document",
+          "truncated.txt",
+          "text/plain",
+        ),
+      ],
+      { id: "assistant-truncated-text-document" },
+    );
+    const rerender = () =>
+      renderAssistantMessage(container, message, {
+        showToolCalls: false,
+        onRequestUpdate: rerender,
+      });
+    documentPreviewSubscribers.add(rerender);
+
+    rerender();
+
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector(".chat-assistant-attachment-card__preview-text")?.textContent,
+      ).toBe(`${prefix}…`);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels an unknown-size text document stream at the preview budget", async () => {
+    const chunkBytes = new TextEncoder().encode("y".repeat(1024));
+    let pulls = 0;
+    let cancelled = false;
+    const endlessBody = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        controller.enqueue(chunkBytes);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const fetchMock = vi.fn(async () => new Response(endlessBody));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+    const message = createAssistantMessage(
+      [
+        createAttachmentBlock(
+          "https://example.com/endless.txt",
+          "document",
+          "endless.txt",
+          "text/plain",
+        ),
+      ],
+      { id: "assistant-endless-text-document" },
+    );
+    const rerender = () =>
+      renderAssistantMessage(container, message, {
+        showToolCalls: false,
+        onRequestUpdate: rerender,
+      });
+    documentPreviewSubscribers.add(rerender);
+
+    rerender();
+
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector(".chat-assistant-attachment-card__preview-text")?.textContent,
+      ).toBe(`${"y".repeat(16 * 1024)}…`);
+    });
+    expect(cancelled).toBe(true);
+    // The preview budget is ~17 KiB of 1 KiB chunks; an unbounded read would
+    // keep pulling forever. Allow generous readahead slack.
+    expect(pulls).toBeLessThan(64);
+  });
+
+  it("decodes only the preview budget from a single oversized chunk", async () => {
+    const giantChunk = new TextEncoder().encode("z".repeat(1024 * 1024));
+    const giantBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(giantChunk);
+        controller.close();
+      },
+    });
+    const fetchMock = vi.fn(async () => new Response(giantBody));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const decodedByteLengths: number[] = [];
+    class TrackingTextDecoder extends TextDecoder {
+      override decode(input?: AllowSharedBufferSource, options?: TextDecodeOptions): string {
+        if (input) {
+          decodedByteLengths.push(input.byteLength);
+        }
+        return super.decode(input, options);
+      }
+    }
+    vi.stubGlobal("TextDecoder", TrackingTextDecoder);
+    const container = document.createElement("div");
+    const message = createAssistantMessage(
+      [
+        createAttachmentBlock(
+          "https://example.com/one-giant-chunk.txt",
+          "document",
+          "one-giant-chunk.txt",
+          "text/plain",
+        ),
+      ],
+      { id: "assistant-oversized-chunk-text-document" },
+    );
+    const rerender = () =>
+      renderAssistantMessage(container, message, {
+        showToolCalls: false,
+        onRequestUpdate: rerender,
+      });
+    documentPreviewSubscribers.add(rerender);
+
+    rerender();
+
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector(".chat-assistant-attachment-card__preview-text")?.textContent,
+      ).toBe(`${"z".repeat(16 * 1024)}…`);
+    });
+    // The 1 MiB chunk must be sliced to the byte budget before decoding.
+    expect(Math.max(...decodedByteLengths)).toBeLessThanOrEqual((16 * 1024 + 1) * 4);
+  });
+
   it("omits attachment anchors for unsafe transcript URLs", async () => {
     const container = document.body.appendChild(document.createElement("div"));
     container.dataset.mediaPlayerTestFixture = "";
@@ -3776,12 +3995,12 @@ describe("grouped chat rendering", () => {
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toContain("mediaTicket=ticket-old");
-    const renderVersionBeforeRefresh = getAssistantAttachmentAvailabilityRenderVersion();
+    const renderVersionBeforeRefresh = getChatMediaRenderVersion();
 
     await vi.advanceTimersByTimeAsync(1_001);
     await flushAssistantAttachmentAvailabilityChecks();
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(getAssistantAttachmentAvailabilityRenderVersion()).not.toBe(renderVersionBeforeRefresh);
+    expect(getChatMediaRenderVersion()).not.toBe(renderVersionBeforeRefresh);
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toContain("mediaTicket=ticket-new");
@@ -4285,11 +4504,14 @@ describe("grouped chat rendering", () => {
       expect(image?.getAttribute("src")).toBe(objectUrl);
       expect(image?.getAttribute("alt")).toBe("Generated image 1");
     });
-    const [, fetchInit] = requireFetchCallForUrl(fetchMock, managedChatImageUrl);
+    const thumbnailUrl = managedChatImageUrl.replace(/\/full$/u, "/thumbnail");
+    const [, fetchInit] = requireFetchCallForUrl(fetchMock, thumbnailUrl);
     expectSameOriginGet(fetchInit);
     expectElement(container, ".chat-message-image-button", HTMLButtonElement).click();
-    expect(onOpenImage).toHaveBeenCalledWith(
-      expect.objectContaining({ src: objectUrl, title: "Generated image 1" }),
+    await vi.waitFor(() =>
+      expect(onOpenImage).toHaveBeenCalledWith(
+        expect.objectContaining({ src: objectUrl, title: "Generated image 1" }),
+      ),
     );
     const activeItem = onOpenImage.mock.calls[0]?.[0];
     activeItem?.release?.();
@@ -4304,7 +4526,7 @@ describe("grouped chat rendering", () => {
       expiresAt: "2026-07-28T05:00:00.000Z",
     }));
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      expect(url).toBe(ticketedUrl);
+      expect(url).toBe(ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail"));
       const headers = new Headers(init?.headers);
       expect(headers.get("Authorization")).toBeNull();
       expect(headers.get("x-openclaw-requester-session-key")).toBeNull();
@@ -4328,6 +4550,69 @@ describe("grouped chat rendering", () => {
       sessionKey: "agent:main:main",
       artifactId,
     });
+    expect(container.querySelectorAll(".chat-image-action")).toHaveLength(3);
+  });
+
+  it("reuses one full-image fetch for download and copy actions", async () => {
+    const attachmentId = crypto.randomUUID();
+    const artifactId = `artifact_managed_image_${attachmentId}`;
+    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;
+    const ticketedUrl = `${source}?mediaTicket=ticket`;
+    const thumbnailUrl = ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail");
+    const resolveArtifactDownload = vi.fn(async () => ({ url: ticketedUrl }));
+    const objectUrls = ["blob:thumbnail", "blob:full", "blob:download"];
+    const NativeUrl = URL;
+    vi.stubGlobal(
+      "URL",
+      class extends NativeUrl {
+        static override createObjectURL = vi.fn(() => objectUrls.shift() ?? "blob:extra");
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const imageBlob = new Blob(["png"], { type: "image/png" });
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => ({
+      ok: true,
+      blob: async () => imageBlob,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    let copiedBlob: Blob | undefined;
+    class ClipboardItemMock {
+      constructor(readonly values: Record<string, Promise<Blob>>) {}
+    }
+    const write = vi.fn(async (items: ClipboardItemMock[]) => {
+      copiedBlob = await items[0]?.values["image/png"];
+    });
+    vi.stubGlobal("ClipboardItem", ClipboardItemMock);
+    vi.stubGlobal("navigator", { clipboard: { write } });
+    const clickedDownloads: string[] = [];
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        clickedDownloads.push(this.download);
+      });
+    const toastHost = document.body.appendChild(document.createElement("openclaw-toast-host"));
+    const container = document.body.appendChild(document.createElement("div"));
+    renderAssistantMessage(
+      container,
+      createAssistantImageMessage(source, "Ticketed image", { artifactId }),
+      { showToolCalls: false, resolveArtifactDownload },
+    );
+    await vi.waitFor(() => expect(container.querySelector(".chat-message-image")).not.toBeNull());
+    expect(fetchMock).toHaveBeenCalledWith(thumbnailUrl, expect.anything());
+
+    expectElement(container, 'button[aria-label="Download image"]', HTMLButtonElement).click();
+    await vi.waitFor(() => expect(click).toHaveBeenCalledOnce());
+    expect(clickedDownloads[0]).toBe("Ticketed image.png");
+
+    expectElement(container, 'button[aria-label="Copy image"]', HTMLButtonElement).click();
+    await vi.waitFor(() => expect(copiedBlob?.type).toBe("image/png"));
+    await vi.waitFor(() => expect(toastHost.textContent).toContain("Copied!"));
+    expect(fetchMock.mock.calls.filter((call: unknown[]) => call[0] === ticketedUrl)).toHaveLength(
+      1,
+    );
+    expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
+    toastHost.remove();
+    container.remove();
   });
 
   it("aborts a stalled managed outgoing image fetch after the deadline", async () => {
@@ -4359,7 +4644,10 @@ describe("grouped chat rendering", () => {
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [, fetchInit] = requireFetchCallForUrl(fetchMock, managedChatImageUrl);
+    const [, fetchInit] = requireFetchCallForUrl(
+      fetchMock,
+      managedChatImageUrl.replace(/\/full$/u, "/thumbnail"),
+    );
     expect(fetchInit?.signal?.aborted).toBe(false);
     expectSameOriginGet(fetchInit);
 
@@ -4402,7 +4690,10 @@ describe("grouped chat rendering", () => {
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [, fetchInit] = requireFetchCallForUrl(fetchMock, managedChatImageUrl);
+    const [, fetchInit] = requireFetchCallForUrl(
+      fetchMock,
+      managedChatImageUrl.replace(/\/full$/u, "/thumbnail"),
+    );
     expect(fetchInit?.signal?.aborted).toBe(false);
     expectSameOriginGet(fetchInit);
 
@@ -4454,7 +4745,7 @@ describe("grouped chat rendering", () => {
       | undefined;
     const response = { ok: true, blob: async () => new Blob(["png"], { type: "image/png" }) };
     const fetchMock = vi.fn((url: string) => {
-      if (deferEvictedRefetch && url === imageUrls[1]) {
+      if (deferEvictedRefetch && url === imageUrls[1]?.replace(/\/full$/u, "/thumbnail")) {
         return new Promise<typeof response>((resolve) => {
           resolveEvictedRefetch = resolve;
         });
@@ -4464,29 +4755,15 @@ describe("grouped chat rendering", () => {
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     const container = document.createElement("div");
-    let activeRequestVersion = 0;
-    const acceptedImageOpen = vi.fn();
-    const onRequestOpenImage = vi.fn(() => ++activeRequestVersion);
-    const onOpenImage = vi.fn((item: { release?: () => void }, requestVersion?: number) => {
-      if (requestVersion === activeRequestVersion) {
-        acceptedImageOpen(item);
-      } else {
-        item.release?.();
-      }
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: imageUrls.slice(0, 64).map((url, index) => ({
+        type: "image",
+        url,
+        alt: `Generated image ${index + 1}`,
+      })),
+      timestamp: Date.now(),
     });
-    renderAssistantMessage(
-      container,
-      {
-        role: "assistant",
-        content: imageUrls.slice(0, 64).map((url, index) => ({
-          type: "image",
-          url,
-          alt: `Generated image ${index + 1}`,
-        })),
-        timestamp: Date.now(),
-      },
-      { onOpenImage, onRequestOpenImage },
-    );
     await vi.waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(64));
 
     const recentContainer = document.createElement("div");
@@ -4510,26 +4787,20 @@ describe("grouped chat rendering", () => {
     expect(revokeObjectURL).toHaveBeenCalled();
 
     deferEvictedRefetch = true;
-    const evictedImage = container.querySelector<HTMLImageElement>('img[alt="Generated image 2"]');
-    const newestCurrentImage = container.querySelector<HTMLImageElement>(
-      'img[alt="Generated image 3"]',
-    );
-    expect(evictedImage).toBeInstanceOf(HTMLImageElement);
-    expect(newestCurrentImage).toBeInstanceOf(HTMLImageElement);
-    evictedImage!.click();
+    const evictedContainer = document.createElement("div");
+    renderAssistantMessage(evictedContainer, {
+      role: "assistant",
+      content: [{ type: "image", url: imageUrls[1], alt: "Refetched image" }],
+      timestamp: Date.now(),
+    });
     await vi.waitFor(() => expect(resolveEvictedRefetch).toBeTypeOf("function"));
 
-    newestCurrentImage!.click();
-    expect(acceptedImageOpen).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Generated image 3" }),
-    );
-
+    const createsBeforeRefetch = createObjectURL.mock.calls.length;
     resolveEvictedRefetch?.(response);
     await vi.waitFor(() =>
-      expect(createObjectURL.mock.calls.length).toBeGreaterThan(createsBeforeOverflow),
+      expect(createObjectURL.mock.calls.length).toBeGreaterThan(createsBeforeRefetch),
     );
-    expect(acceptedImageOpen).toHaveBeenCalledTimes(1);
-    (acceptedImageOpen.mock.calls[0]?.[0] as { release?: () => void } | undefined)?.release?.();
+    expect(evictedContainer.querySelector(".chat-message-image")).not.toBeNull();
   });
 
   it("bounds managed outgoing image miss retention", async () => {

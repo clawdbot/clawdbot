@@ -1,8 +1,8 @@
 // Covers install-policy checks for packages and plugin installs.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   killPidIfAlive,
@@ -13,14 +13,6 @@ import {
 import { runInstallPolicy, validateInstallPolicyStatic } from "./install-policy.js";
 
 type InstallPolicyRequest = Parameters<typeof runInstallPolicy>[0]["request"];
-
-const tempDirs: string[] = [];
-
-async function makeTempDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-policy-"));
-  tempDirs.push(dir);
-  return dir;
-}
 
 async function writePolicyScript(dir: string): Promise<string> {
   const scriptPath = path.join(dir, "policy.cjs");
@@ -113,18 +105,13 @@ function configWithPolicy(scriptPath: string, env: Record<string, string>): Open
 }
 
 describe("runInstallPolicy", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let sourceDir: string;
   let scriptPath: string;
 
   beforeEach(async () => {
-    sourceDir = await makeTempDir();
+    sourceDir = tempDirs.make("openclaw-install-policy-");
     scriptPath = await writePolicyScript(sourceDir);
-  });
-
-  afterEach(async () => {
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
   });
 
   it("does nothing when install policy is disabled", async () => {
@@ -535,7 +522,7 @@ describe("runInstallPolicy", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-install-policy-");
     const writableDir = path.join(dir, "writable-parent");
     await fs.mkdir(writableDir, { recursive: true });
     await fs.chmod(writableDir, 0o777);
@@ -562,7 +549,7 @@ describe("runInstallPolicy", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-install-policy-");
     const writableDir = path.join(dir, "writable-parent");
     await fs.mkdir(writableDir, { recursive: true });
     await fs.chmod(writableDir, 0o777);
@@ -590,7 +577,7 @@ describe("runInstallPolicy", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-install-policy-");
     const writableDir = path.join(dir, "writable-parent");
     await fs.mkdir(writableDir, { recursive: true });
     await fs.chmod(writableDir, 0o777);
@@ -618,7 +605,7 @@ describe("runInstallPolicy", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-install-policy-");
     const writableDir = path.join(dir, "writable-parent");
     await fs.mkdir(writableDir, { recursive: true });
     await fs.chmod(writableDir, 0o777);
@@ -643,7 +630,7 @@ describe("runInstallPolicy", () => {
   });
 
   it.runIf(process.platform !== "win32")("rejects symlinked interpreter script args", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-install-policy-");
     const realScriptPath = await writePolicyScript(dir);
     const symlinkScriptPath = path.join(dir, "policy-link.cjs");
     await fs.symlink(realScriptPath, symlinkScriptPath);

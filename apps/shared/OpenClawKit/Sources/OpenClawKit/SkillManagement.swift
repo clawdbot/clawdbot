@@ -176,12 +176,6 @@ public struct SkillStatusConfigCheck: Codable, Identifiable, Sendable {
     public var id: String {
         self.path
     }
-
-    public init(path: String, value: OpenClawProtocol.AnyCodable?, satisfied: Bool) {
-        self.path = path
-        self.value = value
-        self.satisfied = satisfied
-    }
 }
 
 public struct SkillInstallOption: Codable, Identifiable, Sendable {

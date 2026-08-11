@@ -1,19 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
 
 const mockState = vi.hoisted(() => ({
   clientOptions: null as Record<string, unknown> | null,
 }));
 
-vi.mock("../gateway/client-bootstrap.js", () => ({
-  resolveGatewayClientBootstrap: vi.fn(async () => ({
+const resolveGatewayClientBootstrapMock = vi.hoisted(() =>
+  vi.fn<typeof resolveGatewayClientBootstrap>(async () => ({
     url: "wss://127.0.0.1:18789",
     urlSource: "local loopback",
+    connectionDetails: {
+      url: "wss://127.0.0.1:18789",
+      urlSource: "local loopback",
+      message: "Gateway target: wss://127.0.0.1:18789",
+    },
     tlsFingerprint: "sha256:local",
     auth: {
       token: undefined,
       password: undefined,
     },
   })),
+);
+
+vi.mock("../gateway/client-bootstrap.js", () => ({
+  resolveGatewayClientBootstrap: resolveGatewayClientBootstrapMock,
 }));
 
 vi.mock("../gateway/client.js", () => ({

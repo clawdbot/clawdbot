@@ -412,6 +412,19 @@ export class TelegramPollingSession {
     const botInfo = bot.botInfo;
     const spoolDir =
       ingress.spoolDir ?? resolveTelegramIngressSpoolDir({ accountId: this.opts.accountId });
+    const drainIntervalMs = Math.max(100, Math.floor(ingress.drainIntervalMs ?? 500));
+    const ingressAbortSignal = cycleAbortController
+      ? this.opts.abortSignal
+        ? AbortSignal.any([cycleAbortController.signal, this.opts.abortSignal])
+        : cycleAbortController.signal
+      : this.opts.abortSignal;
+    const ingressMonitor = this.#getOrCreateSpooledMonitor({
+      bot,
+      botInfo,
+      spoolDir,
+      pollIntervalMs: drainIntervalMs,
+      ...(ingressAbortSignal ? { abortSignal: ingressAbortSignal } : {}),
+    });
     const workerFactory = ingress.createWorker ?? createTelegramIngressWorker;
     const worker = workerFactory({
       token: this.opts.token,
@@ -458,19 +471,6 @@ export class TelegramPollingSession {
     const endCycle = () => {
       abortMedia();
     };
-    const drainIntervalMs = Math.max(100, Math.floor(ingress.drainIntervalMs ?? 500));
-    const ingressAbortSignal = cycleAbortController
-      ? this.opts.abortSignal
-        ? AbortSignal.any([cycleAbortController.signal, this.opts.abortSignal])
-        : cycleAbortController.signal
-      : this.opts.abortSignal;
-    const ingressMonitor = this.#getOrCreateSpooledMonitor({
-      bot,
-      botInfo,
-      spoolDir,
-      pollIntervalMs: drainIntervalMs,
-      ...(ingressAbortSignal ? { abortSignal: ingressAbortSignal } : {}),
-    });
     requestImmediateDrain = ingressMonitor.requestDrain;
     const unsubscribe = worker.onMessage((message) => {
       const ackSpooledUpdate = (
@@ -515,7 +515,14 @@ export class TelegramPollingSession {
       }
       if (message.type === "poll-error") {
         this.#rearmPendingDeliveryDrain();
-        liveness.noteGetUpdatesError(new Error(message.message), message.finishedAt);
+        const retryAfterMs =
+          message.errorCode === 429 &&
+          message.retryAfterMs !== undefined &&
+          Number.isFinite(message.retryAfterMs) &&
+          message.retryAfterMs > 0
+            ? Math.min(message.retryAfterMs, MAX_POLL_STALL_THRESHOLD_MS)
+            : undefined;
+        liveness.noteGetUpdatesError(new Error(message.message), message.finishedAt, retryAfterMs);
         liveness.noteGetUpdatesFinished();
         pollState.outcome = "error";
         pollState.error = message.message;

@@ -9,7 +9,7 @@ import {
   type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
-  asOptionalRecord as asRecord,
+  asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -263,9 +263,9 @@ function parseSingle(family: Family, raw: string): number[] {
       return asNumberArray(Array.isArray(data.embeddings) ? data.embeddings[0]?.embedding : null);
     case "twelvelabs": {
       if (Array.isArray(data.data)) {
-        return asNumberArray(asRecord(data.data[0])?.embedding);
+        return asNumberArray(asOptionalRecord(data.data[0])?.embedding);
       }
-      const dataRecord = asRecord(data.data);
+      const dataRecord = asOptionalRecord(data.data);
       if (dataRecord) {
         return asNumberArray(dataRecord.embedding);
       }
@@ -283,7 +283,7 @@ function parseCohereBatch(family: Family, raw: string): number[][] {
     throw malformedBedrockEmbeddingResponse();
   }
   if (family === "cohere-v4" && !Array.isArray(embeddings)) {
-    const embeddingRecord = asRecord(embeddings);
+    const embeddingRecord = asOptionalRecord(embeddings);
     if (!embeddingRecord) {
       throw malformedBedrockEmbeddingResponse();
     }

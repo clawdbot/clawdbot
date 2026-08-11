@@ -3,6 +3,7 @@ import {
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   formatAuditCounts,
   formatExtraPaths,
@@ -30,7 +31,6 @@ import {
   type DreamingArtifactsAuditSummary,
   type RepairDreamingArtifactsResult,
 } from "./dreaming-repair.js";
-import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import {
@@ -65,7 +65,7 @@ type LlamaCppRuntimeStatus = {
 function readLlamaCppRuntimeStatus(
   status: ReturnType<MemoryManager["status"]>,
 ): LlamaCppRuntimeStatus | null {
-  const runtime = asRecord(asRecord(status.custom)?.llamaCppRuntime);
+  const runtime = asNullableRecord(asNullableRecord(status.custom)?.llamaCppRuntime);
   return runtime?.engine === "llama.cpp" ? (runtime as LlamaCppRuntimeStatus) : null;
 }
 function formatMemoryIndexIdentityWarning(
@@ -75,7 +75,7 @@ function formatMemoryIndexIdentityWarning(
   reason: string;
   fix: string;
 } | null {
-  const indexIdentity = asRecord(asRecord(status.custom)?.indexIdentity);
+  const indexIdentity = asNullableRecord(asNullableRecord(status.custom)?.indexIdentity);
   const reason =
     (indexIdentity?.status === "mismatched" || indexIdentity?.status === "missing") &&
     typeof indexIdentity.reason === "string"
@@ -280,18 +280,7 @@ export async function runMemoryStatus(
         if (opts.fix) {
           repair = await repairShortTermPromotionArtifacts({ workspaceDir });
         }
-        const customQmd = asRecord(asRecord(status.custom)?.qmd);
-        audit = await auditShortTermPromotionArtifacts({
-          workspaceDir,
-          qmd:
-            status.backend === "qmd"
-              ? {
-                  dbPath: status.dbPath,
-                  collections:
-                    typeof customQmd?.collections === "number" ? customQmd.collections : undefined,
-                }
-              : undefined,
-        });
+        audit = await auditShortTermPromotionArtifacts({ workspaceDir });
       }
       allResults.push({
         agentId,
@@ -509,14 +498,6 @@ export async function runMemoryStatus(
       if (audit.updatedAt) {
         lines.push(`${label("Recall updated")} ${info(audit.updatedAt)}`);
       }
-      if (status.backend === "qmd" && audit.qmd) {
-        const qmdBits = [
-          audit.qmd.dbPath ? shortenHomePath(audit.qmd.dbPath) : "<unknown>",
-          typeof audit.qmd.dbBytes === "number" ? `${audit.qmd.dbBytes} bytes` : null,
-          typeof audit.qmd.collections === "number" ? `${audit.qmd.collections} collections` : null,
-        ].filter(Boolean);
-        lines.push(`${label("QMD audit")} ${info(qmdBits.join(" · "))}`);
-      }
     }
     if (dreamingAudit) {
       lines.push(
@@ -561,14 +542,8 @@ export async function runMemoryStatus(
         lines.push(`  ${issue.severity === "error" ? warn(issue.message) : muted(issue.message)}`);
       }
       if (!opts.fix) {
-        // Only a subset of audit issues are repaired by `--fix`; a missing qmd
-        // index needs a reindex instead, so each hint is gated on the matching
-        // issue actually being present.
         if (audit.issues.some((issue) => issue.fixable)) {
           lines.push(`  ${muted(`Fix: openclaw memory status --fix --agent ${agentId}`)}`);
-        }
-        if (audit.issues.some((issue) => issue.code === "qmd-index-missing")) {
-          lines.push(`  ${muted(`Fix: openclaw memory index --agent ${agentId}`)}`);
         }
       }
     }

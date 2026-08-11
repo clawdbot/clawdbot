@@ -174,7 +174,7 @@ function findPendingCodexPluginApprovalRecord(params: {
     }
     const request = asPlainRecord(record.request);
     if (
-      request.pluginId === "openclaw-codex-app-server" &&
+      request.pluginId === "codex" &&
       request.title === expectedTitle &&
       request.toolName === expectedToolName &&
       request.sessionKey === params.sessionKey &&

@@ -14,7 +14,6 @@ import { ZaloWebhookPayloadError } from "./webhook-spool.js";
 
 const {
   clearZaloWebhookSecurityStateForTest,
-  getZaloWebhookRateLimitStateSizeForTest,
   getZaloWebhookStatusCounterSizeForTest,
   handleZaloWebhookRequest: handleZaloWebhookRequestInternal,
   registerZaloWebhookTarget,
@@ -325,7 +324,6 @@ describe("handleZaloWebhookRequest", () => {
         });
 
         expect(saw429).toBe(true);
-        expect(getZaloWebhookRateLimitStateSizeForTest()).toBe(1);
       });
     } finally {
       unregister();
@@ -345,7 +343,6 @@ describe("handleZaloWebhookRequest", () => {
         });
 
         expect(saw429).toBe(true);
-        expect(getZaloWebhookRateLimitStateSizeForTest()).toBe(1);
       });
     } finally {
       unregister();

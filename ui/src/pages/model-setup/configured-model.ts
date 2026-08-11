@@ -86,6 +86,7 @@ export function renderConfiguredModel(props: {
   canVerify: boolean;
   actionsDisabled: boolean;
   onVerify: () => void;
+  onContinue?: () => void;
 }): TemplateResult {
   const configuredRef = props.result.configuredModel!;
   // A successful verify reports the model that actually answered; prefer it over
@@ -136,16 +137,23 @@ export function renderConfiguredModel(props: {
                   : nothing}
           </div>
         </div>
-        ${props.canVerify
-          ? html`<button
-              type="button"
-              class="btn"
-              ?disabled=${props.actionsDisabled}
-              @click=${props.onVerify}
-            >
-              ${verificationButtonLabel(props.verify)}
-            </button>`
-          : nothing}
+        <div class="model-setup__row-actions">
+          ${props.canVerify
+            ? html`<button
+                type="button"
+                class="btn"
+                ?disabled=${props.actionsDisabled}
+                @click=${props.onVerify}
+              >
+                ${verificationButtonLabel(props.verify)}
+              </button>`
+            : nothing}
+          ${props.onContinue
+            ? html`<button type="button" class="btn primary" @click=${props.onContinue}>
+                ${icons.messageSquare} ${t("modelSetup.success.continueSetup")}
+              </button>`
+            : nothing}
+        </div>
       </div>
     </section>
   `;

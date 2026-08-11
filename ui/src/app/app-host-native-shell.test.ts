@@ -3,6 +3,11 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./app-host.ts";
+import {
+  installDialogPolyfill,
+  nextFrame,
+  waitForRenderedModalDialog,
+} from "../test-helpers/modal-dialog.ts";
 import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
 import type { ApplicationContext } from "./context.ts";
 import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./navigation-surface.ts";
@@ -382,8 +387,9 @@ describe("OpenClaw native shell", () => {
 });
 
 describe("OpenClaw shell update affordance", () => {
-  it("renders a floating card only while desktop navigation is collapsed", () => {
+  it("renders a capable floating card only while desktop navigation is collapsed", async () => {
     const container = document.createElement("div");
+    document.body.append(container);
     const shared = {
       onboarding: false,
       updateAvailable: {
@@ -392,6 +398,7 @@ describe("OpenClaw shell update affordance", () => {
         channel: "stable" as const,
       },
       updateRunning: false,
+      canUpdate: true,
       onUpdate: vi.fn(),
       refreshRequired: false,
       onRefresh: vi.fn(),
@@ -405,11 +412,24 @@ describe("OpenClaw shell update affordance", () => {
     render(renderFloatingUpdateCard({ ...shared, navigationSurfaceHidden: collapsed }), container);
     const card = container.querySelector<
       HTMLElement & {
-        refreshRequired: boolean;
+        canUpdate: boolean;
         onRefresh: () => void;
+        refreshRequired: boolean;
+        updateComplete: Promise<boolean>;
       }
     >("openclaw-sidebar-update-card");
     expect(card).not.toBeNull();
+    await card?.updateComplete;
+    expect(card?.canUpdate).toBe(true);
+    const restoreDialogPolyfill = installDialogPolyfill();
+    card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    const { modal } = await waitForRenderedModalDialog(document.body);
+    [...modal.querySelectorAll("button")]
+      .find((button) => button.textContent?.trim() === "Update and restart")
+      ?.click();
+    await nextFrame();
+    restoreDialogPolyfill();
+    expect(shared.onUpdate).toHaveBeenCalledOnce();
 
     render(
       renderFloatingUpdateCard({
@@ -440,6 +460,7 @@ describe("OpenClaw shell update affordance", () => {
       container,
     );
     expect(container.querySelector("openclaw-sidebar-update-card")).toBeNull();
+    container.remove();
   });
 
   it("treats a closed mobile drawer as hidden navigation", () => {

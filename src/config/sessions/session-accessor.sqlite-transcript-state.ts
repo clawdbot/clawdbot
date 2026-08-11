@@ -6,7 +6,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { publishSqliteSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
-import { normalizeSqliteNumber } from "./session-accessor.sqlite-normalize.js";
+import { coerceSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { parseSqliteSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import {
@@ -203,7 +203,7 @@ export function readNextTranscriptSeq(database: OpenClawAgentDatabase, sessionId
       .where("session_id", "=", sessionId),
   );
   const maxSeq =
-    row?.max_seq === null || row?.max_seq === undefined ? -1 : normalizeSqliteNumber(row.max_seq);
+    row?.max_seq === null || row?.max_seq === undefined ? -1 : coerceSqliteNumber(row.max_seq);
   return maxSeq + 1;
 }
 

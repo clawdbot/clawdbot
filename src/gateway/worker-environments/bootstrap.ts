@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   type WorkerAdmissionHandshake,
@@ -18,6 +19,7 @@ import { WORKER_BUNDLE_MANIFEST_VERSION, type WorkerInstallationArtifact } from 
 import {
   prepareWorkerSsh,
   type PreparedWorkerSsh,
+  runWorkerSshCandidates,
   workerSshCommandOptions,
   workerSshOptions,
   workerSshRemoteCommand,
@@ -234,9 +236,18 @@ umask 077
 hash=$1
 expected_receipt=$2
 install=$3
+operation_token=$4
 root=$HOME/${BOOTSTRAP_ROOT}
 install_dir=$root/$hash
 receipt=$install_dir/${BOOTSTRAP_RECEIPT}
+
+case "$operation_token" in
+  *[!a-f0-9]*|'') printf '%s\n' 'invalid worker bootstrap operation token' >&2; exit 2 ;;
+esac
+if [ "${"${"}#operation_token}" -ne 64 ]; then
+  printf '%s\n' 'invalid worker bootstrap operation token' >&2
+  exit 2
+fi
 
 ensure_private_directory() {
   directory=$1
@@ -264,20 +275,30 @@ if ! node -e '${NODE_RUNTIME_CHECK_JS}'; then
   exit ${NODE_UNSUPPORTED_EXIT_CODE}
 fi
 
+incoming=$root/.incoming
+ensure_private_directory "$incoming"
+incoming=$(cd "$incoming" && pwd -P)
+find "$incoming" -type f -name 'openclaw-upload-*.tgz.*' -mmin +60 -exec rm -f -- {} + 2>/dev/null || true
+upload=$incoming/openclaw-upload-$hash.tgz.$operation_token
+
 if [ -d "$install_dir" ] && [ ! -L "$install_dir" ] && [ -f "$receipt" ] &&
   node -e '${RECEIPT_MATCH_JS}' "$receipt" "$expected_receipt" &&
   node -e '${VERIFY_INSTALL_JS}' "$install_dir" "$hash" "$install"; then
+  rm -f -- "$upload"
   printf '%s\t%s\t' '${BOOTSTRAP_OUTPUT_TAG}' current
   cat "$receipt"
   printf '\n'
   exit 0
 fi
 
-incoming=$root/.incoming
-ensure_private_directory "$incoming"
-incoming=$(cd "$incoming" && pwd -P)
-find "$incoming" -type f -name 'openclaw-upload-*.tgz.*' -mmin +60 -exec rm -f -- {} + 2>/dev/null || true
-upload=$(mktemp "$incoming/openclaw-upload-$hash.tgz.XXXXXXXX")
+if [ ! -e "$upload" ] && [ ! -L "$upload" ]; then
+  (set -C; : > "$upload") 2>/dev/null || true
+fi
+if [ ! -f "$upload" ] || [ -L "$upload" ]; then
+  printf '%s\n' 'unsafe worker bootstrap upload' >&2
+  exit 2
+fi
+chmod 600 "$upload"
 printf '%s\t%s\t%s\n' '${BOOTSTRAP_OUTPUT_TAG}' install "$upload"
 `;
 
@@ -323,9 +344,6 @@ cleanup() {
       rm -f "$lock"
     fi
   fi
-  if [ -n "$upload" ]; then
-    rm -f "$upload"
-  fi
 }
 trap cleanup 0
 trap 'exit 1' 1 2 15
@@ -334,6 +352,14 @@ receipt_matches() {
   [ -d "$install_dir" ] && [ ! -L "$install_dir" ] && [ -f "$receipt" ] &&
     node -e '${RECEIPT_MATCH_JS}' "$receipt" "$receipt_json" &&
     node -e '${VERIFY_INSTALL_JS}' "$install_dir" "$hash" "$install"
+}
+
+finish_with_receipt() {
+  # A durable receipt makes retries independent of this operation's upload.
+  rm -f -- "$upload"
+  printf '%s\t%s\t' '${BOOTSTRAP_OUTPUT_TAG}' receipt
+  cat "$receipt"
+  printf '\n'
 }
 
 read_lock_owner() {
@@ -347,9 +373,7 @@ read_lock_owner() {
 attempt=0
 while ! ln -s "$lock_identity" "$lock" 2>/dev/null; do
   if receipt_matches; then
-    printf '%s\t%s\t' '${BOOTSTRAP_OUTPUT_TAG}' receipt
-    cat "$receipt"
-    printf '\n'
+    finish_with_receipt
     exit 0
   fi
   owner=$(read_lock_owner)
@@ -424,9 +448,7 @@ for stale_staging in "$root"/.staging-"$hash"-*; do
 done
 
 if receipt_matches; then
-  printf '%s\t%s\t' '${BOOTSTRAP_OUTPUT_TAG}' receipt
-  cat "$receipt"
-  printf '\n'
+  finish_with_receipt
   exit 0
 fi
 
@@ -488,9 +510,7 @@ printf '%s\n' "$receipt_json" > "$staging/${BOOTSTRAP_RECEIPT}"
 chmod 600 "$staging/${BOOTSTRAP_RECEIPT}"
 rm -rf "$install_dir"
 mv "$staging" "$install_dir"
-printf '%s\t%s\t' '${BOOTSTRAP_OUTPUT_TAG}' receipt
-cat "$receipt"
-printf '\n'
+finish_with_receipt
 `;
 
 type ResolvedWorkerSshIdentity = WorkerSshIdentity;
@@ -503,6 +523,7 @@ type WorkerBootstrapCommandRunner = (
 type WorkerBootstrapRequest = {
   ssh: WorkerSshEndpoint;
   artifact: WorkerInstallationArtifact;
+  operationId: string;
   /** Provider endpoint host key copied by the gateway bootstrap adapter. */
   pinnedHostKey?: string;
 };
@@ -594,6 +615,7 @@ async function runSshScript(params: {
   script: string;
   scriptArgs: readonly string[];
   timeoutMs: number;
+  port?: number;
   signal?: AbortSignal;
 }): Promise<SpawnResult> {
   return await params.runCommand(
@@ -604,7 +626,7 @@ async function runSshScript(params: {
       "-x",
       "-T",
       "-p",
-      String(params.prepared.port),
+      String(params.port ?? params.prepared.port),
       "--",
       params.prepared.sshTarget,
       workerSshRemoteCommand(["sh", "-s", "--", ...params.scriptArgs]),
@@ -617,22 +639,54 @@ async function runSshScript(params: {
   );
 }
 
+function workerUploadFilename(bundleHash: string, operationToken: string): string {
+  return `openclaw-upload-${bundleHash}.tgz.${operationToken}`;
+}
+
 const CLEANUP_UPLOAD_SCRIPT = String.raw`set -eu
-rm -f -- "$1"
+hash=$1
+operation_token=$2
+case "$hash" in
+  *[!a-f0-9]*|'') exit 2 ;;
+esac
+case "$operation_token" in
+  *[!a-f0-9]*|'') exit 2 ;;
+esac
+if [ "${"${"}#hash}" -ne 64 ] || [ "${"${"}#operation_token}" -ne 64 ]; then
+  exit 2
+fi
+root=$HOME/${BOOTSTRAP_ROOT}
+if [ ! -e "$root" ] && [ ! -L "$root" ]; then
+  exit 0
+fi
+if [ ! -d "$root" ] || [ -L "$root" ]; then
+  exit 2
+fi
+incoming=$root/.incoming
+if [ ! -d "$incoming" ] || [ -L "$incoming" ]; then
+  exit 0
+fi
+incoming=$(cd "$incoming" && pwd -P)
+rm -f -- "$incoming/openclaw-upload-$hash.tgz.$operation_token"
 `;
 
 async function cleanupRemoteUpload(params: {
   prepared: PreparedWorkerSsh;
-  remotePath: string;
+  bundleHash: string;
+  operationToken: string;
   runCommand: WorkerBootstrapCommandRunner;
   timeoutMs: number;
 }): Promise<void> {
-  await runSshScript({
-    prepared: params.prepared,
-    runCommand: params.runCommand,
-    script: CLEANUP_UPLOAD_SCRIPT,
-    scriptArgs: [params.remotePath],
-    timeoutMs: Math.min(params.timeoutMs, 10_000),
+  const cleanupTimeoutMs = Math.min(params.timeoutMs, 10_000);
+  await runWorkerSshCandidates(params.prepared, cleanupTimeoutMs, (port, remainingTimeoutMs) => {
+    return runSshScript({
+      prepared: params.prepared,
+      runCommand: params.runCommand,
+      script: CLEANUP_UPLOAD_SCRIPT,
+      scriptArgs: [params.bundleHash, params.operationToken],
+      timeoutMs: remainingTimeoutMs,
+      port,
+    });
   }).catch(() => undefined);
 }
 
@@ -654,6 +708,7 @@ function parseTaggedOutput(stdout: string): { action: string; payload: string } 
 function parsePreflight(
   result: SpawnResult,
   expected: WorkerAdmissionHandshake,
+  expectedUploadFilename: string,
 ): { action: "current"; receipt: WorkerAdmissionHandshake } | { action: "install"; path: string } {
   if (
     result.code === NODE_MISSING_EXIT_CODE ||
@@ -682,7 +737,12 @@ function parsePreflight(
   }
   const remotePath = output?.action === "install" ? output.payload : undefined;
   const normalizedPath = normalizeScpRemotePath(remotePath);
-  if (!normalizedPath) {
+  const expectedSuffix = `/${BOOTSTRAP_ROOT}/.incoming/${expectedUploadFilename}`;
+  const hasCanonicalSegments = normalizedPath
+    ?.split("/")
+    .slice(1)
+    .every((segment) => segment !== "" && segment !== "." && segment !== "..");
+  if (!normalizedPath || !hasCanonicalSegments || !normalizedPath.endsWith(expectedSuffix)) {
     throw new Error("Worker bootstrap preflight returned an invalid upload path");
   }
   return { action: "install", path: normalizedPath };
@@ -693,7 +753,10 @@ export async function bootstrapWorker(
   request: WorkerBootstrapRequest,
   dependencies: WorkerBootstrapDependencies,
 ): Promise<WorkerAdmissionHandshake> {
-  const receipt = normalizeHandshake(request.artifact);
+  const artifact = request.artifact;
+  const receipt = normalizeHandshake(artifact);
+  const operationToken = createHash("sha256").update(request.operationId).digest("hex");
+  const uploadFilename = workerUploadFilename(receipt.bundleHash, operationToken);
   const timeoutMs = dependencies.timeoutMs ?? DEFAULT_BOOTSTRAP_TIMEOUT_MS;
   const runCommand = dependencies.runCommand ?? runCommandWithTimeout;
   const prepared = await prepareWorkerSsh({
@@ -702,84 +765,104 @@ export async function bootstrapWorker(
     resolveIdentity: dependencies.resolveIdentity,
     temporaryDirectoryPrefix: "openclaw-worker-bootstrap-",
   });
+  let needsUploadCleanup = true;
   try {
-    const preflight = parsePreflight(
-      await runSshScript({
-        prepared,
-        runCommand,
-        script: PREFLIGHT_SCRIPT,
-        scriptArgs: [receipt.bundleHash, JSON.stringify(receipt), request.artifact.install],
-        timeoutMs,
-        signal: dependencies.signal,
-      }),
-      receipt,
+    const preflightResult = await runWorkerSshCandidates(
+      prepared,
+      timeoutMs,
+      (port, remainingTimeoutMs) =>
+        runSshScript({
+          prepared,
+          runCommand,
+          script: PREFLIGHT_SCRIPT,
+          scriptArgs: [
+            receipt.bundleHash,
+            JSON.stringify(receipt),
+            artifact.install,
+            operationToken,
+          ],
+          timeoutMs: remainingTimeoutMs,
+          port,
+          signal: dependencies.signal,
+        }),
     );
+    const preflight = parsePreflight(preflightResult, receipt, uploadFilename);
     if (preflight.action === "current") {
+      // A validated current response already removed this operation's upload in preflight.
+      needsUploadCleanup = false;
       return preflight.receipt;
     }
 
-    try {
-      if (request.artifact.install === "bundle") {
-        const transfer = await runCommand(
-          [
-            "scp",
-            ...workerSshOptions(prepared, { forwarding: "disabled" }),
-            "-P",
-            String(prepared.port),
-            "--",
-            request.artifact.tarballPath,
-            `${prepared.scpTarget}:${preflight.path}`,
-          ],
-          workerSshCommandOptions({ timeoutMs, signal: dependencies.signal }),
-        );
-        if (!isSuccess(transfer)) {
-          throw commandFailure("bundle transfer", transfer);
-        }
+    if (artifact.install === "bundle") {
+      const transfer = await runWorkerSshCandidates(
+        prepared,
+        timeoutMs,
+        (port, remainingTimeoutMs) =>
+          runCommand(
+            [
+              "scp",
+              ...workerSshOptions(prepared, { forwarding: "disabled" }),
+              "-P",
+              String(port),
+              "--",
+              artifact.tarballPath,
+              `${prepared.scpTarget}:${preflight.path}`,
+            ],
+            workerSshCommandOptions({ timeoutMs: remainingTimeoutMs, signal: dependencies.signal }),
+          ),
+      );
+      if (!isSuccess(transfer)) {
+        throw commandFailure("bundle transfer", transfer);
       }
+    }
 
-      const install = await runSshScript({
+    const install = await runWorkerSshCandidates(prepared, timeoutMs, (port, remainingTimeoutMs) =>
+      runSshScript({
         prepared,
         runCommand,
         script: INSTALL_SCRIPT,
         scriptArgs: [
-          request.artifact.install,
+          artifact.install,
           receipt.bundleHash,
-          request.artifact.install === "npm" ? request.artifact.packageSpec : "",
-          request.artifact.install === "npm" ? request.artifact.packageIntegrity : "",
+          artifact.install === "npm" ? artifact.packageSpec : "",
+          artifact.install === "npm" ? artifact.packageIntegrity : "",
           JSON.stringify(receipt),
           preflight.path,
-          request.artifact.install === "bundle" ? request.artifact.tarballSha256 : "",
+          artifact.install === "bundle" ? artifact.tarballSha256 : "",
         ],
-        timeoutMs,
+        timeoutMs: remainingTimeoutMs,
+        port,
         signal: dependencies.signal,
-      });
-      if (
-        install.code === NPM_MISSING_EXIT_CODE ||
-        install.stderr.includes(NPM_MISSING_MARKER) ||
-        install.stdout.includes(NPM_MISSING_MARKER)
-      ) {
-        throw new Error(
-          "Worker npm bootstrap requires npm on the leased host; use bundle install or provide npm in the provider setup phase",
-        );
-      }
-      if (!isSuccess(install)) {
-        throw commandFailure("install", install);
-      }
-      const output = parseTaggedOutput(install.stdout);
-      if (output?.action !== "receipt") {
-        throw new Error("Worker bootstrap install returned an invalid receipt");
-      }
-      return parseReceiptJson(output.payload, receipt);
-    } catch (error) {
+      }),
+    );
+    if (
+      install.code === NPM_MISSING_EXIT_CODE ||
+      install.stderr.includes(NPM_MISSING_MARKER) ||
+      install.stdout.includes(NPM_MISSING_MARKER)
+    ) {
+      throw new Error(
+        "Worker npm bootstrap requires npm on the leased host; use bundle install or provide npm in the provider setup phase",
+      );
+    }
+    if (!isSuccess(install)) {
+      throw commandFailure("install", install);
+    }
+    const output = parseTaggedOutput(install.stdout);
+    if (output?.action !== "receipt") {
+      throw new Error("Worker bootstrap install returned an invalid receipt");
+    }
+    return parseReceiptJson(output.payload, receipt);
+  } finally {
+    if (needsUploadCleanup) {
+      // One operation reuses this upload across candidate attempts; only terminal cleanup removes it.
       await cleanupRemoteUpload({
         prepared,
-        remotePath: preflight.path,
+        bundleHash: receipt.bundleHash,
+        operationToken,
         runCommand,
         timeoutMs,
       });
-      throw error;
     }
-  } finally {
     await prepared.dispose();
   }
 }

@@ -1,6 +1,8 @@
+import { readSourceReplyDeliveryRuntime } from "../../../auto-reply/reply/source-reply-delivery-runtime.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { isPluginMetadataSnapshotCompatible } from "../../../plugins/plugin-metadata-snapshot.js";
 import { resolveProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
+import { resolvePreparedRunAdmission } from "../../admitted-run-context.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { isProfileInCooldown } from "../../auth-profiles.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
@@ -488,7 +490,26 @@ export async function prepareEmbeddedRunRuntime(input: {
     prepared: true as const,
   };
 
+  const admittedRunContext = await resolvePreparedRunAdmission({
+    runId: params.runId,
+    runtimeKind: pluginHarnessOwnsTransport ? "plugin-harness" : "embedded",
+    admittedRunContext: params.admittedRunContext,
+    preparedRunAdmission: params.preparedRunAdmission,
+  });
+
+  const sourceReplyDeliveryRuntime = readSourceReplyDeliveryRuntime(params);
+  if (sourceReplyDeliveryRuntime?.origin === "runtime_default") {
+    // Route/auth/transport preparation owns the final harness selection. Publishing
+    // an earlier guess can either suppress a valid final or leak a private one.
+    const visibleReplies =
+      agentHarness.deliveryDefaults?.visibleReplies ??
+      agentHarness.deliveryDefaults?.sourceVisibleReplies;
+    const mode = visibleReplies === "message_tool" ? "message_tool_only" : "automatic";
+    sourceReplyDeliveryRuntime.applyPreparedMode(params, mode);
+    params.forceMessageTool = mode === "message_tool_only";
+  }
   return {
+    admittedRunContext,
     provider,
     modelId,
     requestedModelId,

@@ -51,6 +51,8 @@ export interface PlatformAdapter {
     approvalId: string;
     approvalKind: "exec" | "plugin";
     decision: "allow-once" | "allow-always" | "deny";
+    accountId: string;
+    senderId: string;
   }): Promise<ApprovalResolveResult>;
 }
 

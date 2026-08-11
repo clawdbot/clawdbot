@@ -1,4 +1,6 @@
+import type { Message } from "grammy/types";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
@@ -13,7 +15,7 @@ import {
   type TelegramEditRichMessageTextParams,
 } from "./rich-message.js";
 import {
-  buildTelegramPlainFallbackPlan,
+  withTelegramPlainFallback,
   warnTelegramRichBlocksDegradations,
 } from "./rich-plain-fallback.js";
 import {
@@ -22,13 +24,12 @@ import {
   resolveTelegramApiContext,
   sendLogger,
   withTelegramApiContextLease,
-  withTelegramHtmlParseFallback,
   type TelegramApiContext,
 } from "./send-context.js";
 import type { TelegramApiCallOpts, TelegramSendOpts } from "./send-message-types.js";
 import { prepareTelegramOutbound } from "./send-outbound.js";
 import { resolveMarkdownTableMode } from "./send.runtime.js";
-import { resolveTelegramBotUserIdFromToken } from "./token.js";
+import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
 
 type TelegramEditMessageTextParams = Parameters<TelegramApiContext["api"]["editMessageText"]>[3];
 type TelegramEditMessageCaptionParams = Parameters<
@@ -187,6 +188,16 @@ async function editMessageTelegramWithContext(
     plainCaptionParams.reply_markup = replyMarkup;
   }
 
+  const editPlainText = (plan: { plainText: string }, label: string) =>
+    requestWithEditShouldLog(
+      () =>
+        Object.keys(plainTextParams).length > 0
+          ? api.editMessageText(chatId, messageId, plan.plainText, plainTextParams)
+          : api.editMessageText(chatId, messageId, plan.plainText),
+      label,
+      (plainErr) => !isTelegramMessageNotModifiedError(plainErr),
+    );
+
   const performTextEdit = () => {
     if (richRawApi && richMessagePlan) {
       const richEditParams: Pick<
@@ -201,71 +212,57 @@ async function editMessageTelegramWithContext(
         reasons: richMessagePlan.degradationReasons,
         warn: (message) => sendLogger.warn(message),
       });
-      return requestWithEditShouldLog(
-        () =>
-          richRawApi.editMessageText({
-            chat_id: chatId,
-            message_id: messageId,
-            rich_message: richMessagePlan.richMessage,
-            ...richEditParams,
-          }),
-        "editMessage",
-        (err) => !isTelegramMessageNotModifiedError(err),
-      ).catch((err: unknown) => {
-        const fallbackPlan = buildTelegramPlainFallbackPlan({
-          plainText: richMessagePlan.plainText,
-          err,
-          context: "editMessage",
-          warn: (message) => sendLogger.warn(message),
-        });
-        if (!fallbackPlan) {
-          throw err;
-        }
-        return requestWithEditShouldLog(
-          () =>
-            Object.keys(plainTextParams).length > 0
-              ? api.editMessageText(chatId, messageId, fallbackPlan.plainText, plainTextParams)
-              : api.editMessageText(chatId, messageId, fallbackPlan.plainText),
-          "editMessage-plain",
-          (plainErr) => !isTelegramMessageNotModifiedError(plainErr),
-        );
+      return withTelegramPlainFallback({
+        kind: "rich",
+        context: "editMessage",
+        plainText: richMessagePlan.plainText,
+        warn: (message) => sendLogger.warn(message),
+        sendFormatted: () =>
+          requestWithEditShouldLog(
+            () =>
+              richRawApi.editMessageText({
+                chat_id: chatId,
+                message_id: messageId,
+                rich_message: richMessagePlan.richMessage,
+                ...richEditParams,
+              }),
+            "editMessage",
+            (err) => !isTelegramMessageNotModifiedError(err),
+          ),
+        sendPlain: editPlainText,
       });
     }
-    return withTelegramHtmlParseFallback({
-      label: "editMessage",
-      verbose: opts.verbose,
-      requestHtml: (retryLabel) =>
+    return withTelegramPlainFallback({
+      kind: "html",
+      context: "editMessage",
+      plainText,
+      warn: (message) => sendLogger.warn(message),
+      sendFormatted: () =>
         requestWithEditShouldLog(
           () => api.editMessageText(chatId, messageId, htmlText, textEditParams),
-          retryLabel,
+          "editMessage",
           (err) => !isTelegramMessageNotModifiedError(err),
         ),
-      requestPlain: (retryLabel) =>
-        requestWithEditShouldLog(
-          () =>
-            Object.keys(plainTextParams).length > 0
-              ? api.editMessageText(chatId, messageId, plainText, plainTextParams)
-              : api.editMessageText(chatId, messageId, plainText),
-          retryLabel,
-          (plainErr) => !isTelegramMessageNotModifiedError(plainErr),
-        ),
+      sendPlain: editPlainText,
     });
   };
 
   const performCaptionEdit = () =>
-    withTelegramHtmlParseFallback({
-      label: "editMessageCaption",
-      verbose: opts.verbose,
-      requestHtml: (retryLabel) =>
+    withTelegramPlainFallback({
+      kind: "html",
+      context: "editMessageCaption",
+      plainText,
+      warn: (message) => sendLogger.warn(message),
+      sendFormatted: () =>
         requestWithEditShouldLog(
           () => api.editMessageCaption(chatId, messageId, captionEditParams),
-          retryLabel,
+          "editMessageCaption",
           (err) => !isTelegramMessageNotModifiedError(err),
         ),
-      requestPlain: (retryLabel) =>
+      sendPlain: (_plan, label) =>
         requestWithEditShouldLog(
           () => api.editMessageCaption(chatId, messageId, plainCaptionParams),
-          retryLabel,
+          label,
           (plainErr) => !isTelegramMessageNotModifiedError(plainErr),
         ),
     });
@@ -296,6 +293,7 @@ async function editMessageTelegramWithContext(
 
   if (editedMessage && editedMessage !== true && typeof editedMessage.message_id === "number") {
     const botUserId = resolveTelegramBotUserIdFromToken(opts.token || account.token);
+    const successfulSendThread = resolveTelegramMessageThreadSpec(editedMessage as Message);
     await recordOutboundMessageForPromptContext({
       cfg,
       account,
@@ -303,6 +301,7 @@ async function editMessageTelegramWithContext(
       message: editedMessage,
       messageId: editedMessage.message_id,
       recordGroupHistory: false,
+      successfulSendThread,
       ...(botUserId !== undefined ? { botUserId } : {}),
       ...(editedMessage.message_thread_id !== undefined
         ? { messageThreadId: editedMessage.message_thread_id }

@@ -36,9 +36,6 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
-    "setupFeatures": {
-      "legacyStateMigrations": true
-    },
     "channel": {
       "id": "discord",
       "configuredState": {
@@ -111,7 +108,7 @@
       ]
     },
     "assetScripts": {
-      "build": "node ../../scripts/build-discord-activity-sdk.mjs"
+      "build": "node --import tsx ../../scripts/build-discord-activity-sdk.mts"
     },
     "release": {
       "publishToClawHub": true,

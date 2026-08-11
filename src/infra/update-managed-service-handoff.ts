@@ -18,6 +18,8 @@ import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   type ControlPlaneUpdateSentinelMetaFile,
 } from "./update-control-plane-sentinel.js";
+import { applyDevUpdateTargetEnv, type DevUpdateTarget } from "./update-dev-target.js";
+import { resolveUpdateInstallRoot } from "./update-install-root.js";
 import { MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX } from "./update-managed-service-handoff-cleanup.js";
 import type { UpdateRestartSentinelMeta } from "./update-restart-sentinel-payload.js";
 
@@ -40,6 +42,7 @@ const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { pathToFileURL } = require("node:url");
 
 const params = JSON.parse(fs.readFileSync(process.argv[2], "utf-8"));
 
@@ -117,15 +120,96 @@ function isPendingUpdatePayload(payload) {
   );
 }
 
+// Keep this self-contained helper aligned with resolveImmutableSqliteFileUri;
+// the detached script cannot import the TypeScript runtime after replacement.
+function resolveImmutableStateDatabaseUri(databasePath) {
+  if (process.platform === "win32") {
+    const namespacedPath = path.toNamespacedPath(path.resolve(databasePath));
+    return "file:" + encodeURIComponent(namespacedPath) + "?mode=ro&immutable=1";
+  }
+  return pathToFileURL(path.resolve(databasePath)).href + "?mode=ro&immutable=1";
+}
+
+function assertStateDatabaseWriteAllowed(database) {
+  if (
+    !params.stateDatabasePath ||
+    typeof params.stateDatabasePath !== "string" ||
+    (!database && !fs.existsSync(params.stateDatabasePath))
+  ) {
+    return;
+  }
+  const ownsDatabase = !database;
+  let db = database;
+  if (!db) {
+    const sqlite = require("node:sqlite");
+    db = new sqlite.DatabaseSync(resolveImmutableStateDatabaseUri(params.stateDatabasePath), {
+      readOnly: true,
+    });
+  }
+  try {
+    if (ownsDatabase) {
+      db.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;");
+    }
+    const table = db
+      .prepare("SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name = 'config_machine_state' LIMIT 1")
+      .get();
+    if (!table) return;
+    const row = db
+      .prepare("SELECT value_json FROM config_machine_state WHERE state_key = 'gateway.supervision' LIMIT 1")
+      .get();
+    if (!row) return;
+    let value = null;
+    if (typeof row.value_json === "string") {
+      try {
+        value = JSON.parse(row.value_json);
+      } catch {
+        // The shared owner contract below rejects invalid JSON and shape together.
+      }
+    }
+    const keys = value && typeof value === "object" && !Array.isArray(value)
+      ? Object.keys(value).sort()
+      : [];
+    if (
+      keys.join(",") !== "claimedAt,managerId,mode,version" ||
+      value.version !== 1 ||
+      value.mode !== "external" ||
+      typeof value.managerId !== "string" ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value.managerId) ||
+      !Number.isSafeInteger(value.claimedAt) ||
+      value.claimedAt < 0 ||
+      value.claimedAt > 8640000000000000
+    ) {
+      throw new Error("shared-state ownership metadata is malformed");
+    }
+    if ((process.env.OPENCLAW_SUPERVISOR_MODE || "").trim().toLowerCase() !== "external") {
+      throw new Error(
+        "shared state is externally supervised by " +
+          value.managerId +
+          "; use that external supervisor with OPENCLAW_SUPERVISOR_MODE=external",
+      );
+    }
+  } finally {
+    if (ownsDatabase) {
+      db.close();
+    }
+  }
+}
+
 function openStateDatabase() {
   if (!params.stateDatabasePath || typeof params.stateDatabasePath !== "string") {
     return null;
   }
+  let db = null;
+  let transactionOpen = false;
   try {
+    assertStateDatabaseWriteAllowed();
     const sqlite = require("node:sqlite");
     fs.mkdirSync(path.dirname(params.stateDatabasePath), { recursive: true, mode: 0o700 });
-    const db = new sqlite.DatabaseSync(params.nodeSqliteLocation);
+    db = new sqlite.DatabaseSync(params.nodeSqliteLocation);
     db.exec("PRAGMA busy_timeout = ${HANDOFF_STATE_DATABASE_BUSY_TIMEOUT_MS};");
+    db.exec("BEGIN IMMEDIATE;");
+    transactionOpen = true;
+    assertStateDatabaseWriteAllowed(db);
     db.exec([
       "CREATE TABLE IF NOT EXISTS gateway_restart_sentinel (",
       "sentinel_key TEXT NOT NULL PRIMARY KEY,",
@@ -150,8 +234,18 @@ function openStateDatabase() {
     ].join(" "));
     ensureGatewayRestartSentinelColumns(db);
     hardenStateDatabaseFiles();
+    db.exec("COMMIT;");
+    transactionOpen = false;
     return db;
   } catch (err) {
+    if (transactionOpen) {
+      try {
+        db.exec("ROLLBACK;");
+      } catch {}
+    }
+    try {
+      db?.close();
+    } catch {}
     appendLog("failed to open restart sentinel database: " + (err && err.stack ? err.stack : String(err)));
     return null;
   }
@@ -348,6 +442,7 @@ function buildFallbackFailurePayload(reason) {
     message: typeof meta.note === "string" ? meta.note : null,
     stats: {
       mode: "unknown",
+      ...(typeof meta.root === "string" && meta.root.trim() ? { root: meta.root } : {}),
       ...(typeof meta.handoffId === "string" && meta.handoffId.trim()
         ? { handoffId: meta.handoffId }
         : {}),
@@ -389,6 +484,7 @@ function markUpdateSentinelFailureIfPending(reason) {
   try {
     db.exec("BEGIN IMMEDIATE;");
     transactionOpen = true;
+    assertStateDatabaseWriteAllowed(db);
     const current = readRestartSentinelRecord(db);
     if (
       (snapshot === null && current !== null) ||
@@ -435,7 +531,6 @@ function markUpdateSentinelFailureIfPending(reason) {
     }
     appendLog("failed to write update sentinel failure: " + (err && err.stack ? err.stack : String(err)));
   } finally {
-    hardenStateDatabaseFiles();
     try {
       db.close();
     } catch {}
@@ -579,11 +674,13 @@ type ManagedServiceUpdateHandoffParams = {
   timeoutMs?: number;
   restartDrainTimeoutMs: number | undefined;
   channel?: UpdateChannel;
+  tag?: string;
   restartDelayMs?: number;
   meta: UpdateRestartSentinelMeta;
   handoffId?: string;
   supervisor?: RespawnSupervisor | null;
   env?: NodeJS.ProcessEnv;
+  devTarget?: DevUpdateTarget;
   execPath?: string;
   argv1?: string;
   parentPid?: number;
@@ -604,7 +701,10 @@ type ManagedServiceUpdateHandoffResult = Omit<StartedManagedServiceUpdateHandoff
 // Keep one helper per Gateway process through its lifetime. Readiness only
 // means it loaded its parameters; spawning another helper before it exits races
 // update mutation, service recovery, and restart sentinel ownership.
-let activeManagedServiceUpdateHandoff: Promise<StartedManagedServiceUpdateHandoff> | null = null;
+let activeManagedServiceUpdateHandoff: {
+  root: string;
+  flight: Promise<StartedManagedServiceUpdateHandoff>;
+} | null = null;
 
 function isNodeLikeRuntime(execPath: string | undefined): boolean {
   if (!execPath?.trim()) {
@@ -617,12 +717,16 @@ function isNodeLikeRuntime(execPath: string | undefined): boolean {
 function resolveUpdateCliArgv(params: {
   timeoutMs?: number;
   channel?: UpdateChannel;
+  tag?: string;
   execPath?: string;
   argv1?: string;
 }): string[] {
   const updateArgs = ["update", "--yes", "--json"];
   if (params.channel) {
     updateArgs.push("--channel", params.channel);
+  }
+  if (params.tag) {
+    updateArgs.push("--tag", params.tag);
   }
   if (typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)) {
     updateArgs.push("--timeout", String(Math.max(1, Math.ceil(params.timeoutMs / 1000))));
@@ -642,10 +746,14 @@ function resolveUpdateCliArgv(params: {
 export function formatManagedServiceUpdateCommand(params?: {
   timeoutMs?: number;
   channel?: UpdateChannel;
+  tag?: string;
 }): string {
   const args = ["openclaw", "update", "--yes"];
   if (params?.channel) {
     args.push("--channel", params.channel);
+  }
+  if (params?.tag) {
+    args.push("--tag", params.tag);
   }
   if (typeof params?.timeoutMs === "number" && Number.isFinite(params.timeoutMs)) {
     args.push("--timeout", String(Math.max(1, Math.ceil(params.timeoutMs / 1000))));
@@ -867,6 +975,7 @@ async function resolveHandoffSpawn(params: {
 
 async function spawnManagedServiceUpdateHandoff(
   params: ManagedServiceUpdateHandoffParams,
+  rootIdentity: string,
   onExit: () => void,
 ): Promise<StartedManagedServiceUpdateHandoff> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX));
@@ -877,17 +986,19 @@ async function spawnManagedServiceUpdateHandoff(
   const commandArgv = resolveUpdateCliArgv({
     timeoutMs: params.timeoutMs,
     channel: params.channel,
+    tag: params.tag,
     execPath: params.execPath ?? process.execPath,
     argv1: params.argv1 ?? process.argv[1],
   });
   const commandLabel = formatManagedServiceUpdateCommand({
     timeoutMs: params.timeoutMs,
     channel: params.channel,
+    tag: params.tag,
   });
   const handoffCwd = await resolveManagedServiceHandoffCwd(params.root);
   const metaFile: ControlPlaneUpdateSentinelMetaFile = {
     version: 1,
-    meta: params.meta,
+    meta: { ...params.meta, root: rootIdentity },
   };
   const stateDatabasePath = resolveOpenClawStateSqlitePath(params.env ?? process.env);
   const helperParams = {
@@ -917,11 +1028,12 @@ async function spawnManagedServiceUpdateHandoff(
     await fs.writeFile(paramsPath, `${JSON.stringify(helperParams, null, 2)}\n`, { mode: 0o600 });
     await fs.writeFile(metaPath, `${JSON.stringify(metaFile, null, 2)}\n`, { mode: 0o600 });
 
-    const env = {
+    const childEnv = {
       ...stripSupervisorHintEnv(params.env ?? process.env),
       [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
       OPENCLAW_UPDATE_RUN_HANDOFF: "1",
     };
+    const env = params.devTarget ? applyDevUpdateTargetEnv(childEnv, params.devTarget) : childEnv;
     const spawnTarget = await resolveHandoffSpawn({
       supervisor: params.supervisor,
       env,
@@ -960,21 +1072,27 @@ async function spawnManagedServiceUpdateHandoff(
 export async function startManagedServiceUpdateHandoff(
   params: ManagedServiceUpdateHandoffParams,
 ): Promise<ManagedServiceUpdateHandoffResult> {
+  const root = resolveUpdateInstallRoot(params.root);
   const active = activeManagedServiceUpdateHandoff;
   if (active) {
-    return { ...(await active), status: "joined" };
+    if (active.root !== root) {
+      throw new Error(
+        `managed update handoff root mismatch: active=${active.root} requested=${root}`,
+      );
+    }
+    return { ...(await active.flight), status: "joined" };
   }
 
-  const flight = spawnManagedServiceUpdateHandoff(params, () => {
-    if (activeManagedServiceUpdateHandoff === flight) {
+  const flight = spawnManagedServiceUpdateHandoff(params, root, () => {
+    if (activeManagedServiceUpdateHandoff?.flight === flight) {
       activeManagedServiceUpdateHandoff = null;
     }
   });
-  activeManagedServiceUpdateHandoff = flight;
+  activeManagedServiceUpdateHandoff = { root, flight };
   try {
     return await flight;
   } catch (err) {
-    if (activeManagedServiceUpdateHandoff === flight) {
+    if (activeManagedServiceUpdateHandoff?.flight === flight) {
       activeManagedServiceUpdateHandoff = null;
     }
     throw err;

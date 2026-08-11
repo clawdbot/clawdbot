@@ -1,6 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
-import type { DockPanelSide } from "../dock-panel-layout.ts";
+import type { DockPanelPlacement } from "../dock-panel-layout.ts";
 import type { TerminalPanelSessionTab } from "./terminal-panel-session-types.ts";
 import { renderTerminalPanelTabs } from "./terminal-panel-tabs.ts";
 import {
@@ -9,7 +9,7 @@ import {
   type TerminalPanelUploadController,
 } from "./terminal-panel-upload.ts";
 
-type TerminalDock = Exclude<DockPanelSide, "left">;
+type TerminalDock = Exclude<DockPanelPlacement, "left">;
 
 export function renderTerminalPanelToolbar(
   fullscreen: boolean,
@@ -17,6 +17,7 @@ export function renderTerminalPanelToolbar(
   uploadController: TerminalPanelUploadController,
   sessionPicker: TemplateResult,
   setDock: (dock: TerminalDock) => void,
+  openFullscreen: () => void,
   hidePanel: () => void,
 ): TemplateResult {
   return renderTerminalPanelActions({
@@ -25,6 +26,7 @@ export function renderTerminalPanelToolbar(
     upload: uploadController,
     sessionPicker,
     onDock: setDock,
+    onOpenFullscreen: openFullscreen,
     onHide: hidePanel,
   });
 }

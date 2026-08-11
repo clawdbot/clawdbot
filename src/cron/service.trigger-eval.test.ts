@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
-import { createDeferred, setupCronServiceSuite } from "./service.test-harness.js";
-import { computeJobNextRunAtMs } from "./service/jobs.js";
+import { setupCronServiceSuite } from "./service.test-harness.js";
+import { computeJobNextRunAtMs } from "./service/jobs-scheduling.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
@@ -317,7 +318,7 @@ describe("cron trigger evaluation", () => {
     ["replaced", false],
     ["restored after replacement", true],
   ] as const)("preserves a %s trigger edited during a manual fired run", async (_, restore) => {
-    const started = createDeferred<void>();
+    const started = createDeferred();
     const completion = createDeferred<{ status: "ok"; summary: string }>();
     const evaluateCronTrigger = vi.fn(async () => ({
       kind: "evaluated" as const,
@@ -365,7 +366,7 @@ describe("cron trigger evaluation", () => {
     ["edited", false],
     ["restored after an edit", true],
   ] as const)("preserves trigger state %s during a manual fired run", async (_, restore) => {
-    const started = createDeferred<void>();
+    const started = createDeferred();
     const completion = createDeferred<{ status: "ok"; summary: string }>();
     const harness = await createHarness({
       evaluateCronTrigger: vi.fn(async () => ({
@@ -415,7 +416,7 @@ describe("cron trigger evaluation", () => {
   ] as const)(
     "does not let a %s active payload script overwrite shared state",
     async (_, restore) => {
-      const started = createDeferred<void>();
+      const started = createDeferred();
       const completion = createDeferred<{
         status: "ok";
         stateChanged: true;
@@ -468,7 +469,7 @@ describe("cron trigger evaluation", () => {
     ["trigger definition", true],
     ["trigger state only", false],
   ] as const)("preserves %s edited during its suspended quiet evaluation", async (_, replace) => {
-    const started = createDeferred<void>();
+    const started = createDeferred();
     const evaluation = createDeferred<{
       kind: "evaluated";
       fire: false;

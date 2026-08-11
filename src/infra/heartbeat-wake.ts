@@ -36,6 +36,7 @@ export type {
 export const HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT = "requests-in-flight";
 export const HEARTBEAT_SKIP_CRON_IN_PROGRESS = "cron-in-progress";
 export const HEARTBEAT_SKIP_LANES_BUSY = "lanes-busy";
+export const HEARTBEAT_SKIP_NO_PENDING_EVENT = "no-pending-event";
 const RETRYABLE_BUSY_SKIP_REASONS = new Set([
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,

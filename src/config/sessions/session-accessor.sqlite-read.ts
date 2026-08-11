@@ -19,7 +19,7 @@ import type {
   SessionTranscriptStats,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
-import { normalizeSqliteNumber } from "./session-accessor.sqlite-normalize.js";
+import { coerceSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import {
   getSessionKysely,
   resolveSqliteTranscriptReadScope,
@@ -127,7 +127,7 @@ export function loadSqliteTranscriptEventRowsAfterSeqSync(
   }
   return executeSqliteQuerySync(database.db, query.orderBy("seq", "asc")).rows.map((row) => ({
     event: JSON.parse(row.event_json) as TranscriptEvent,
-    seq: normalizeSqliteNumber(row.seq),
+    seq: coerceSqliteNumber(row.seq),
   }));
 }
 
@@ -150,7 +150,7 @@ export function readSqliteTranscriptEventAtSeqSync(
   return row
     ? {
         event: JSON.parse(row.event_json) as TranscriptEvent,
-        seq: normalizeSqliteNumber(row.seq),
+        seq: coerceSqliteNumber(row.seq),
       }
     : undefined;
 }
@@ -200,7 +200,7 @@ export function readSqliteTranscriptEventRows(
   ).rows;
   return rows.map((row) => ({
     eventJson: row.event_json,
-    seq: normalizeSqliteNumber(row.seq),
+    seq: coerceSqliteNumber(row.seq),
   }));
 }
 
@@ -219,9 +219,9 @@ export function readSqliteTranscriptStorageRows(
       .orderBy("seq", "asc"),
   ).rows;
   return rows.map((row) => ({
-    createdAt: normalizeSqliteNumber(row.created_at),
+    createdAt: coerceSqliteNumber(row.created_at),
     eventJson: row.event_json,
-    seq: normalizeSqliteNumber(row.seq),
+    seq: coerceSqliteNumber(row.seq),
   }));
 }
 

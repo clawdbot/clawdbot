@@ -57,7 +57,7 @@ const SEARCH_TOOL_NAMES = new Set(["grep", "find", "glob", "ls", "list", "codeba
 const FETCH_TOOL_NAMES = new Set(["web_fetch", "webfetch", "fetch"]);
 const PATCH_TOOL_NAMES = new Set(["apply_patch", "applypatch", "patch"]);
 
-function readString(value: unknown): string | undefined {
+function readNonBlankString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
@@ -66,13 +66,13 @@ function resolvePathArg(args: Record<string, unknown> | null): string | undefine
     return undefined;
   }
   return (
-    readString(args.path) ??
-    readString(args.file_path) ??
-    readString(args.filePath) ??
-    readString(args.file) ??
-    readString(args.filepath) ??
-    readString(args.filename) ??
-    readString(args.notebook_path)
+    readNonBlankString(args.path) ??
+    readNonBlankString(args.file_path) ??
+    readNonBlankString(args.filePath) ??
+    readNonBlankString(args.file) ??
+    readNonBlankString(args.filepath) ??
+    readNonBlankString(args.filename) ??
+    readNonBlankString(args.notebook_path)
   );
 }
 
@@ -136,7 +136,7 @@ function readEditPairs(args: Record<string, unknown>): { pairs: EditPair[]; trun
 
 function readDetailsDiff(details: unknown): ResolvedEditDiff | null {
   const record = asRecord(details);
-  const diffText = record ? readString(record.diff) : undefined;
+  const diffText = record ? readNonBlankString(record.diff) : undefined;
   if (!diffText) {
     return null;
   }
@@ -200,7 +200,7 @@ function resolveInsertionDiff(
   if (fromDetails) {
     return fromDetails;
   }
-  const insertText = args ? readString(args.insert_text) : undefined;
+  const insertText = args ? readNonBlankString(args.insert_text) : undefined;
   if (!insertText) {
     return null;
   }
@@ -256,7 +256,7 @@ function normalizeKey(name: string): string {
 type TextEditorCommand = "view" | "str_replace" | "create" | "insert" | "undo_edit";
 
 function resolveTextEditorCommand(args: unknown): TextEditorCommand | undefined {
-  const command = readString(asRecord(args)?.command)?.trim().toLowerCase();
+  const command = readNonBlankString(asRecord(args)?.command)?.trim().toLowerCase();
   switch (command) {
     case "view":
     case "str_replace":
@@ -367,7 +367,7 @@ function buildToolCallView(
     : undefined;
 
   if (kind === "command") {
-    const command = args ? readString(args.command) : undefined;
+    const command = args ? readNonBlankString(args.command) : undefined;
     return { kind, command: command ? unwrapShellWrapperCommand(command) : command };
   }
 
@@ -425,8 +425,8 @@ function buildToolCallView(
     }
     const content = args
       ? editorCommand === "create"
-        ? readString(args.file_text)
-        : readString(args.content)
+        ? readNonBlankString(args.file_text)
+        : readNonBlankString(args.content)
       : undefined;
     if (!content) {
       return { kind, target: base, targetDetail: dir };
@@ -446,9 +446,11 @@ function buildToolCallView(
 
   if (kind === "search") {
     const pattern = args
-      ? (readString(args.pattern) ?? readString(args.query) ?? readString(args.glob))
+      ? (readNonBlankString(args.pattern) ??
+        readNonBlankString(args.query) ??
+        readNonBlankString(args.glob))
       : undefined;
-    const path = resolvePathArg(args) ?? (args ? readString(args.path) : undefined);
+    const path = resolvePathArg(args) ?? (args ? readNonBlankString(args.path) : undefined);
     if (!pattern && !path) {
       return { kind: "generic" };
     }
@@ -456,7 +458,7 @@ function buildToolCallView(
   }
 
   if (kind === "fetch") {
-    const url = args ? readString(args.url) : undefined;
+    const url = args ? readNonBlankString(args.url) : undefined;
     if (!url) {
       return { kind: "generic" };
     }

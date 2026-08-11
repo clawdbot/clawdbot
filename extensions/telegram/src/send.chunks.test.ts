@@ -1,6 +1,6 @@
 // Telegram tests cover plain-text chunk-splitting behavior.
 import { describe, expect, it } from "vitest";
-import { splitTelegramPlainTextChunksForTests } from "./send.js";
+import { splitTelegramPlainTextChunks } from "./rich-plain-fallback.js";
 
 function containsLoneSurrogate(text: string): boolean {
   for (let index = 0; index < text.length; index += 1) {
@@ -24,7 +24,7 @@ describe("splitTelegramPlainTextChunks", () => {
   it("does not split an astral char across the chunk boundary", () => {
     // Emoji surrogate pair straddles index 10 (limit): high at 9, low at 10.
     const input = `${"A".repeat(9)}😀${"B".repeat(20)}`;
-    const chunks = splitTelegramPlainTextChunksForTests(input, 10);
+    const chunks = splitTelegramPlainTextChunks(input, 10);
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.join("")).toBe(input);
     for (const chunk of chunks) {
@@ -37,7 +37,7 @@ describe("splitTelegramPlainTextChunks", () => {
     // causing the while-loop to spin forever. The surrogate pair must be
     // emitted as a unit (2 code units) so the loop always advances.
     const input = "😀X";
-    const chunks = splitTelegramPlainTextChunksForTests(input, 1);
+    const chunks = splitTelegramPlainTextChunks(input, 1);
     expect(chunks.join("")).toBe(input);
     for (const chunk of chunks) {
       expect(containsLoneSurrogate(chunk)).toBe(false);
@@ -48,7 +48,7 @@ describe("splitTelegramPlainTextChunks", () => {
     // 'A' + emoji: with limit=1, second iteration starts at index 1 (high
     // surrogate) — same stall condition as above, now mid-string.
     const input = "A😀B";
-    const chunks = splitTelegramPlainTextChunksForTests(input, 1);
+    const chunks = splitTelegramPlainTextChunks(input, 1);
     expect(chunks.join("")).toBe(input);
     for (const chunk of chunks) {
       expect(containsLoneSurrogate(chunk)).toBe(false);

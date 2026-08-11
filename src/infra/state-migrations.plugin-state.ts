@@ -7,6 +7,7 @@ import {
   registerMigratedPluginStateEntry,
   resolveMaxPluginStateEntriesPerPlugin,
 } from "../plugin-state/plugin-state-store.js";
+import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-state.js";
 import {
   readPersistedInstalledPluginIndexSync,
   resolveLegacyInstalledPluginIndexStorePath,
@@ -176,6 +177,17 @@ export async function migrateLegacyInstalledPluginIndex(params: {
 
   const changes: string[] = [];
   const warnings: string[] = [];
+  const persistedState = inspectPersistedInstalledPluginIndexInstallRecordsSync({
+    stateDir: params.stateDir,
+  });
+  if (persistedState.status === "invalid") {
+    return {
+      changes,
+      warnings: [
+        `Left plugin install index in place because persisted install records in ${params.stateDir} are invalid`,
+      ],
+    };
+  }
   const legacy = readLegacyInstalledPluginIndex(sourcePath);
   if (!legacy) {
     return {
@@ -232,6 +244,20 @@ export async function migrateLegacyInstalledPluginIndex(params: {
 
   archiveLegacyInstalledPluginIndex({ sourcePath, changes, warnings });
   return { changes, warnings };
+}
+
+export function preflightLegacyInstalledPluginIndexMigration(params: {
+  stateDir: string;
+}): string | null {
+  const persistedState = inspectPersistedInstalledPluginIndexInstallRecordsSync(params);
+  if (persistedState.status === "invalid") {
+    return `State dir migration skipped because persisted plugin install records in ${params.stateDir} are invalid`;
+  }
+  const sourcePath = resolveLegacyInstalledPluginIndexStorePath(params);
+  if (fileExists(sourcePath) && !readLegacyInstalledPluginIndex(sourcePath)) {
+    return `State dir migration skipped because plugin install index ${sourcePath} is invalid`;
+  }
+  return null;
 }
 
 function resolvePluginStateImportTargetKey(scopeKey: string, key: string): string {

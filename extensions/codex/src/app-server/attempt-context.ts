@@ -12,7 +12,7 @@ import {
   type AgentMessage,
   type ContextEngineProjection,
   type EmbeddedContextFile,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import {

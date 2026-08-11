@@ -6,6 +6,7 @@ import type {
   GatewayRequestOptions,
   OpenClawEvent,
   OpenClawTransport,
+  TaskSummary,
 } from "./types.js";
 
 type RequestCall = {
@@ -561,6 +562,8 @@ describe("OpenClaw SDK", () => {
             title: "Investigate issue",
             runId: "run_123",
             sessionKey: "agent:main:main",
+            lastActivity: "Editing the registry",
+            diffStat: { files: 2, added: 12, removed: 3 },
           },
         ],
       },
@@ -569,6 +572,8 @@ describe("OpenClaw SDK", () => {
           id: "task_123",
           status: "running",
           title: "Investigate issue",
+          lastActivity: "Running focused tests",
+          diffStat: { files: 2, added: 12, removed: 3 },
         },
       },
       "tasks.cancel": {
@@ -592,13 +597,21 @@ describe("OpenClaw SDK", () => {
         title: "Investigate issue",
         runId: "run_123",
         sessionKey: "agent:main:main",
+        lastActivity: "Editing the registry",
+        diffStat: { files: 2, added: 12, removed: 3 },
       },
     ]);
+    const listedTask: TaskSummary | undefined = taskList.tasks[0];
+    expect(listedTask).toBeDefined();
+    expect(listedTask?.lastActivity).toBe("Editing the registry");
+    expect(listedTask?.diffStat).toEqual({ files: 2, added: 12, removed: 3 });
     const taskGet = await oc.tasks.get("task_123");
     expect(taskGet.task).toEqual({
       id: "task_123",
       status: "running",
       title: "Investigate issue",
+      lastActivity: "Running focused tests",
+      diffStat: { files: 2, added: 12, removed: 3 },
     });
     const taskCancel = await oc.tasks.cancel("task_123", { reason: "user stopped task" });
     expect(taskCancel.found).toBe(true);

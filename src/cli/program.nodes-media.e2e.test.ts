@@ -154,10 +154,20 @@ describe("cli program (nodes media)", () => {
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("No cameras reported."));
   });
 
-  it("runs nodes camera snap and prints two MEDIA paths", async () => {
+  it("runs one default snap and two explicitly requested facing snaps", async () => {
     mockNodeGateway("camera.snap", { format: "jpg", base64: "aGk=", width: 1, height: 1 });
 
     await runNodesCommand(["nodes", "camera", "snap", "--node", "ios-node"]);
+
+    const defaultInvokeCalls = nodeInvokeCalls();
+    expect(defaultInvokeCalls).toHaveLength(1);
+    expect(defaultInvokeCalls[0]?.commandParams).not.toHaveProperty("facing");
+    await expectLoggedSingleMediaFile({
+      expectedPathPattern: /openclaw-camera-snap-unknown-.*\.jpg$/,
+    });
+
+    callGateway.mockClear();
+    await runNodesCommand(["nodes", "camera", "snap", "--node", "ios-node", "--facing", "both"]);
 
     const invokeCalls = nodeInvokeCalls();
     const facings = invokeCalls

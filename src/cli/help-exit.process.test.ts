@@ -448,42 +448,47 @@ describe("JSON console style process output", () => {
     SLOW_DOTENV_TEST_TIMEOUT_MS,
   );
 
-  it("loads eligible dotenv before formatting a run-main import failure", async () => {
-    let failure: CliProcessFailure | undefined;
-    try {
-      await runCliProcess({
-        args: ["gateway", "status"],
-        config: {
-          logging: {
-            consoleStyle: "${OPENCLAW_TEST_CONSOLE_STYLE}",
-            level: "silent",
+  it(
+    "loads eligible dotenv before formatting a run-main import failure",
+    async () => {
+      let failure: CliProcessFailure | undefined;
+      try {
+        await runCliProcess({
+          args: ["gateway", "status"],
+          config: {
+            logging: {
+              consoleStyle: "${OPENCLAW_TEST_CONSOLE_STYLE}",
+              level: "silent",
+            },
           },
-        },
-        env: {
-          OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
-          OPENCLAW_TEST_CONSOLE_STYLE: undefined,
-        },
-        failRunMainImport: true,
-        stateEnv: () => ({ OPENCLAW_TEST_CONSOLE_STYLE: "json" }),
-      });
-    } catch (error) {
-      failure = error as CliProcessFailure;
-    }
+          env: {
+            OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
+            OPENCLAW_TEST_CONSOLE_STYLE: undefined,
+          },
+          failRunMainImport: true,
+          stateEnv: () => ({ OPENCLAW_TEST_CONSOLE_STYLE: "json" }),
+          timeoutMs: SLOW_DOTENV_CHILD_PROCESS_TIMEOUT_MS,
+        });
+      } catch (error) {
+        failure = error as CliProcessFailure;
+      }
 
-    expect(failure?.code).toBe(1);
-    expect(parseJsonLines(failure?.stderr ?? "")).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          level: "info",
-          message: expect.stringContaining("startup trace: entry.bootstrap"),
-        }),
-        expect.objectContaining({
-          level: "error",
-          message: expect.stringContaining("forced run-main import failure"),
-        }),
-      ]),
-    );
-  });
+      expect(failure?.code).toBe(1);
+      expect(parseJsonLines(failure?.stderr ?? "")).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            level: "info",
+            message: expect.stringContaining("startup trace: entry.bootstrap"),
+          }),
+          expect.objectContaining({
+            level: "error",
+            message: expect.stringContaining("forced run-main import failure"),
+          }),
+        ]),
+      );
+    },
+    SLOW_DOTENV_TEST_TIMEOUT_MS,
+  );
 
   it("structures unsupported-runtime diagnostics from included named-profile config", async () => {
     let failure: CliProcessFailure | undefined;

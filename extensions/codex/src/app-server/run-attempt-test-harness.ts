@@ -6,7 +6,7 @@ import {
   nativeHookRelayTesting,
   queueAgentHarnessMessage,
   resetAgentEventsForTest,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import { resetDiagnosticEventsForTest } from "openclaw/plugin-sdk/diagnostic-runtime";
@@ -49,6 +49,18 @@ import { codexWorkspaceDirCache } from "./workspace-dir-cache.js";
 const execApprovalsRuntimeMocks = vi.hoisted(() => ({
   loadExecApprovals: vi.fn<() => ExecApprovalsFile>(() => ({ version: 1, agents: {} })),
 }));
+
+function createHarnessHostCapabilities(): EmbeddedRunAttemptParams["hostCapabilities"] {
+  return Object.freeze({
+    kind: "agent-harness-host-capability",
+    version: 1,
+    assertActive: () => {},
+    bindToolSurface: (tools) => tools,
+    runBeforeToolCall: async (request) => ({ blocked: false, params: request.params }),
+    requestApproval: async () => undefined,
+    waitForApproval: async () => undefined,
+  });
+}
 
 vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => {
   const actual =
@@ -224,6 +236,7 @@ export function createParams(
   const provider = identity.provider ?? "codex";
   const model = createCodexTestModel(provider);
   return {
+    hostCapabilities: createHarnessHostCapabilities(),
     prompt: identity.prompt ?? "hello",
     sessionId,
     sessionKey,

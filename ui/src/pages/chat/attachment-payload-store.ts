@@ -62,6 +62,17 @@ export function cloneChatAttachmentsMetadata(
   return attachments.map(cloneChatAttachmentMetadata);
 }
 
+/** Gives another mounted composer payload ownership independent of the source. */
+export function cloneChatAttachmentsForIndependentOwner(
+  attachments: readonly ChatAttachment[],
+): ChatAttachment[] {
+  return attachments.map((attachment) => {
+    const { id: _id, previewUrl: _previewUrl, ...metadata } = attachment;
+    const dataUrl = getChatAttachmentDataUrl(attachment);
+    return { ...metadata, id: generateAttachmentId(), ...(dataUrl ? { dataUrl } : {}) };
+  });
+}
+
 export function releaseChatAttachmentPayload(id: string): void {
   const payload = payloads.get(id);
   if (!payload) {

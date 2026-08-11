@@ -13,6 +13,7 @@ import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
+import { resolveControlUiBasePath } from "./browser.ts";
 import { applicationContext, type ApplicationContext } from "./context.ts";
 import {
   APPROVAL_PAGE_ELEMENT,
@@ -22,15 +23,7 @@ import {
 } from "./lazy-custom-element.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { controlUiPublicAssetPath } from "./public-assets.ts";
-
-/**
- * Terminal-only document mode (`?view=terminal`): the mobile apps embed the
- * terminal as a full-screen WebView page instead of the whole Control UI.
- * Fixed per document load — the apps construct the URL, users never toggle it.
- */
-function isTerminalOnlyView(): boolean {
-  return new URLSearchParams(globalThis.location?.search ?? "").get("view") === "terminal";
-}
+import { isTerminalOnlyView } from "./terminal-document-mode.ts";
 
 export function resolveTerminalThemeMode(): "dark" | "light" {
   return document.documentElement.dataset.themeMode === "light" ? "light" : "dark";
@@ -75,7 +68,10 @@ export class OpenClawApp extends OpenClawLightDomElement {
   @state() private pendingGatewayUrl: string | null = null;
   @state() private onboarding = resolveOnboardingMode(globalThis.location?.search ?? "");
 
-  private readonly terminalOnly = isTerminalOnlyView();
+  private readonly terminalOnly = isTerminalOnlyView(
+    globalThis.location,
+    resolveControlUiBasePath(globalThis.location?.pathname ?? "/"),
+  );
   private runtime: ApplicationRuntime | undefined;
   private readonly contextProvider = new ContextProvider(this, {
     context: applicationContext,
@@ -200,8 +196,8 @@ export class OpenClawApp extends OpenClawLightDomElement {
           ></openclaw-gateway-url-confirmation>
         `
       : nothing;
-    // Embedded mobile terminals own the whole document. Keep the generic login
-    // gate out of this path or a connecting native session exposes Web UI chrome.
+    // Full-screen terminals own the whole document. Keep the generic login gate
+    // out of this path or a connecting native session exposes Web UI chrome.
     if (this.terminalOnly) {
       const terminalAvailable = isTerminalAvailable(
         gatewaySnapshot,

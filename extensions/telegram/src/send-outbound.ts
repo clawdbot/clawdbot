@@ -116,6 +116,7 @@ export async function prepareTelegramOutbound<T extends string | number | undefi
   const threadSpec = params.thread
     ? resolveTelegramSendThreadSpec({
         targetMessageThreadId: target.messageThreadId,
+        targetDirectMessagesTopicId: target.directMessagesTopicId,
         messageThreadId: params.thread.messageThreadId,
         chatType: target.chatType,
       })

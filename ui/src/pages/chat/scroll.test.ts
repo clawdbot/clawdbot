@@ -7,7 +7,6 @@ import {
   getChatSessionScrollPosition,
   handleChatScroll,
   resetChatScroll,
-  restoreChatScroll,
   saveChatSessionScrollPosition,
   scheduleChatScroll,
 } from "./scroll.ts";
@@ -119,9 +118,12 @@ describe("handleChatScroll", () => {
   it("sets chatUserNearBottom=false when scrolled well above threshold", () => {
     const { host } = createScrollHost({});
     // distanceFromBottom = 2000 - 500 - 400 = 1100 → way above threshold
+    host.chatLastScrollTop = 1600;
     const event = createScrollEvent(2000, 500, 400);
     handleChatScroll(host, event);
     expect(host.chatUserNearBottom).toBe(false);
+    expect(host.chatFollowLocked).toBe(true);
+    expect(host.chatHasAutoScrolled).toBe(true);
   });
 
   it("shows the scroll-to-bottom affordance only beyond the shared end boundary", () => {
@@ -265,6 +267,7 @@ describe("scheduleChatScroll", () => {
     });
     // distanceFromBottom = 2000 - 500 - 400 = 1100 → not near bottom
     host.chatUserNearBottom = false;
+    host.chatFollowLocked = true;
     const originalScrollTop = container.scrollTop;
 
     scheduleChatScroll(host);
@@ -279,8 +282,9 @@ describe("scheduleChatScroll", () => {
       scrollTop: 500,
       clientHeight: 400,
     });
-    // User has scrolled up — chatUserNearBottom is false
+    // User has scrolled up, so the authoritative follow lock is set.
     host.chatUserNearBottom = false;
+    host.chatFollowLocked = true;
     host.chatHasAutoScrolled = true; // Already past initial load
     const originalScrollTop = container.scrollTop;
 
@@ -305,54 +309,6 @@ describe("scheduleChatScroll", () => {
 
     // On initial load, force should work regardless
     expect(container.scrollTop).toBe(container.scrollHeight);
-  });
-
-  it("restores a session viewport and does not force-jump when new messages arrive", async () => {
-    const { host, container } = createScrollHost({
-      scrollHeight: 2400,
-      scrollTop: 2000,
-      clientHeight: 400,
-    });
-
-    expect(restoreChatScroll(host, container as unknown as HTMLElement, 1500)).toBe(1500);
-    expect(host.chatHasAutoScrolled).toBe(true);
-    expect(host.chatFollowLocked).toBe(true);
-    expect(host.chatNewMessagesBelow).toBe(true);
-
-    container.scrollHeight = 2600;
-    scheduleChatScroll(host, true);
-    await host.updateComplete;
-
-    expect(container.scrollTop).toBe(1500);
-    expect(host.chatNewMessagesBelow).toBe(true);
-  });
-
-  it("locks a restored virtual viewport before its scroll height is measurable", () => {
-    const { host, container } = createScrollHost({
-      scrollHeight: 0,
-      scrollTop: 0,
-      clientHeight: 400,
-    });
-
-    expect(restoreChatScroll(host, container as unknown as HTMLElement, 600)).toBe(0);
-    expect(host.chatFollowLocked).toBe(true);
-    expect(host.chatNewMessagesBelow).toBe(true);
-
-    saveChatSessionScrollPosition("settled-pane", "settled-session", {
-      scrollTop: 600,
-      anchorToEnd: false,
-    });
-    expect(restoreChatScroll(host, container as unknown as HTMLElement, 0)).toBe(0);
-    saveChatSessionScrollPosition("settled-pane", "settled-session", {
-      scrollTop: 0,
-      anchorToEnd: true,
-    });
-    expect(getChatSessionScrollPosition("settled-pane", "settled-session")).toEqual({
-      scrollTop: 0,
-      anchorToEnd: true,
-    });
-    expect(host.chatFollowLocked).toBe(false);
-    expect(host.chatNewMessagesBelow).toBe(false);
   });
 
   it("keeps only the newest equivalent session-key scroll position", () => {
@@ -396,6 +352,7 @@ describe("scheduleChatScroll", () => {
       clientHeight: 400,
     });
     host.chatUserNearBottom = false;
+    host.chatFollowLocked = true;
     host.chatHasAutoScrolled = true;
     host.chatNewMessagesBelow = false;
 
@@ -405,19 +362,43 @@ describe("scheduleChatScroll", () => {
     expect(host.chatNewMessagesBelow).toBe(true);
   });
 
-  it("does not show new messages for a resize when the thread height did not grow", async () => {
-    const { host } = createScrollHost({
+  it("re-sticks an unlocked resize even when layout moves beyond the near-bottom threshold", async () => {
+    const { host, container } = createScrollHost({
       scrollHeight: 2000,
-      scrollTop: 500,
-      clientHeight: 400,
+      scrollTop: 1100,
+      clientHeight: 900,
     });
-    host.chatUserNearBottom = false;
     host.chatHasAutoScrolled = true;
+    host.chatUserNearBottom = false;
     host.chatLastScrollHeight = 2000;
+    container.clientHeight = 400;
 
     scheduleChatScroll(host, false, false, { source: "resize" });
     await host.updateComplete;
 
+    expect(container.scrollTop).toBe(container.scrollHeight);
+    expect(host.chatFollowLocked).toBe(false);
+    expect(host.chatUserNearBottom).toBe(true);
+    expect(host.chatNewMessagesBelow).toBe(false);
+  });
+
+  it("preserves a locked viewport across the same resize", async () => {
+    const { host, container } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1100,
+      clientHeight: 900,
+    });
+    host.chatHasAutoScrolled = true;
+    host.chatUserNearBottom = false;
+    host.chatFollowLocked = true;
+    host.chatLastScrollHeight = 2000;
+    container.clientHeight = 400;
+
+    scheduleChatScroll(host, false, false, { source: "resize" });
+    await host.updateComplete;
+
+    expect(container.scrollTop).toBe(1100);
+    expect(host.chatFollowLocked).toBe(true);
     expect(host.chatNewMessagesBelow).toBe(false);
   });
 
@@ -428,6 +409,7 @@ describe("scheduleChatScroll", () => {
       clientHeight: 400,
     });
     host.chatUserNearBottom = false;
+    host.chatFollowLocked = true;
     host.chatHasAutoScrolled = true;
     host.chatLastScrollHeight = 2000;
 
@@ -502,6 +484,7 @@ describe("scheduleChatScroll", () => {
       clientHeight: 400,
     });
     host.chatUserNearBottom = false;
+    host.chatFollowLocked = true;
     host.chatHasAutoScrolled = true;
 
     scheduleChatScroll(host, true, false, { source: "manual" });
@@ -553,6 +536,7 @@ describe("streaming scroll behavior", () => {
       clientHeight: 400,
     });
     host.chatUserNearBottom = false;
+    host.chatFollowLocked = true;
     host.chatHasAutoScrolled = true;
     const originalScrollTop = container.scrollTop;
 

@@ -23,7 +23,7 @@ const config: OpenClawConfig = {
   agents: {
     defaults: { model: { primary: "zeta/model" } },
     list: [
-      { id: "requester", model: "zeta/model" },
+      { id: "requester", default: true, model: "zeta/model" },
       { id: "beta", model: "beta/model" },
       { id: "alpha", model: "alpha/model" },
     ],
@@ -31,7 +31,7 @@ const config: OpenClawConfig = {
 };
 
 describe("system-agent inference fallback", () => {
-  it("tries requester first, then authenticated providers by provider id", async () => {
+  it("tries the default route first, then authenticated providers by provider id", async () => {
     const attempts: string[] = [];
     const verify = vi.fn(async ({ agentId }: { agentId: string }) => {
       attempts.push(agentId);
@@ -41,7 +41,6 @@ describe("system-agent inference fallback", () => {
     });
 
     const result = await verifySystemAgentInferenceWithFallback({
-      requestingAgentId: "requester",
       runtime,
       deps: {
         readConfig: async () => config,
@@ -196,6 +195,40 @@ describe("system-agent inference fallback", () => {
     expect(attempts).toEqual(["requester", "alpha-other"]);
   });
 
+  it("tries another route of the same provider after a malformed response", async () => {
+    const attempts: string[] = [];
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { model: { primary: "alpha/model" } },
+        list: [
+          { id: "requester", model: "alpha/model" },
+          { id: "alpha-other", model: "alpha/model" },
+          { id: "beta", model: "beta/model" },
+        ],
+      },
+    };
+
+    const result = await verifySystemAgentInferenceWithFallback({
+      requestingAgentId: "requester",
+      runtime,
+      deps: {
+        readConfig: async () => cfg,
+        resolveRoute: async (_cfg, agentId) =>
+          route(agentId, agentId === "beta" ? "beta" : "alpha"),
+        hasAuth: async () => true,
+        verify: async ({ agentId }) => {
+          attempts.push(agentId);
+          return agentId === "alpha-other"
+            ? ({ ok: true, modelRef: "alpha/model", latencyMs: 1, binding: {} } as never)
+            : ({ ok: false, status: "format", error: "bad response" } as const);
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(attempts).toEqual(["requester", "alpha-other"]);
+  });
+
   it("retires the whole provider after a provider-wide failure", async () => {
     const attempts: string[] = [];
     const cfg: OpenClawConfig = {
@@ -227,16 +260,15 @@ describe("system-agent inference fallback", () => {
     });
 
     expect(result.ok).toBe(true);
-    // alpha-other is skipped: the requester's alpha route failed provider-wide.
     expect(attempts).toEqual(["requester", "beta"]);
   });
 
-  it("does not fail over on bad answers", async () => {
+  it("does not fail over on owner or identity uncertainty", async () => {
     const verify = vi.fn(
-      async () => ({ ok: false, status: "format", error: "bad answer" }) as const,
+      async () => ({ ok: false, status: "unknown", error: "winner identity uncertain" }) as const,
     );
 
-    await verifySystemAgentInferenceWithFallback({
+    const result = await verifySystemAgentInferenceWithFallback({
       requestingAgentId: "requester",
       runtime,
       deps: {
@@ -248,6 +280,11 @@ describe("system-agent inference fallback", () => {
       },
     });
 
+    expect(result).toEqual({
+      ok: false,
+      status: "unknown",
+      error: "winner identity uncertain",
+    });
     expect(verify).toHaveBeenCalledOnce();
   });
 });

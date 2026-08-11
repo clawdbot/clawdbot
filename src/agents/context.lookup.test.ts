@@ -65,6 +65,7 @@ vi.mock("../config/runtime-source-projection.js", () => ({
 }));
 
 vi.mock("./prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalogOwnerSnapshot: contextTestState.loadModelCatalogOwnerSnapshot,
   getPublishedPreparedModelCatalogOwnerSnapshot:
     contextTestState.getPublishedModelCatalogOwnerSnapshot,

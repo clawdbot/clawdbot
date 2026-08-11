@@ -377,9 +377,9 @@ Use `agents.entries.*.runtime` to define ACP defaults once per agent:
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "codex",
+    entries: {
+      codex: {
+        default: true,
         runtime: {
           type: "acp",
           acp: {
@@ -390,14 +390,13 @@ Use `agents.entries.*.runtime` to define ACP defaults once per agent:
           },
         },
       },
-      {
-        id: "claude",
+      claude: {
         runtime: {
           type: "acp",
           acp: { agent: "claude", backend: "acpx", mode: "persistent" },
         },
       },
-    ],
+    },
   },
   bindings: [
     {

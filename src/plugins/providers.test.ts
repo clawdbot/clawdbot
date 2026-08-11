@@ -1012,79 +1012,35 @@ describe("resolvePluginProviders", () => {
     ).toStrictEqual([]);
   });
 
-  it("can enable bundled provider plugins under Vitest when no explicit plugin config exists", () => {
-    resolvePluginProviders({
-      env: { VITEST: "1" } as NodeJS.ProcessEnv,
-      bundledProviderVitestCompat: true,
-    });
-
-    expectLastRuntimeRegistryLoad();
-    expectPluginConfigState(getLastResolvedPluginConfig(), {
-      enabled: true,
-      allow: ["google", "moonshot"],
-      entries: {
-        google: { enabled: true },
-        moonshot: { enabled: true },
-      },
-    });
-  });
-
-  it("uses process env for Vitest compat when no explicit env is passed", () => {
-    const previousVitest = process.env.VITEST;
-    process.env.VITEST = "1";
-    try {
-      resolvePluginProviders({
-        bundledProviderVitestCompat: true,
-        onlyPluginIds: ["google"],
-      });
-
-      expectLastRuntimeRegistryLoad({
-        onlyPluginIds: ["google"],
-      });
-      expectPluginConfigState(getLastResolvedPluginConfig(), {
-        enabled: true,
-        allow: ["google"],
-        entries: {
-          google: { enabled: true },
-        },
-      });
-    } finally {
-      if (previousVitest === undefined) {
-        delete process.env.VITEST;
-      } else {
-        process.env.VITEST = previousVitest;
-      }
-    }
-  });
-
-  it("does not leak host Vitest env into an explicit non-Vitest env", () => {
-    const previousVitest = process.env.VITEST;
-    process.env.VITEST = "1";
-    try {
-      resolvePluginProviders({
-        env: {} as NodeJS.ProcessEnv,
-        bundledProviderVitestCompat: true,
-      });
-
-      expectRecordFields(getLastRuntimeRegistryCall(), {
-        config: undefined,
-        env: {},
-      });
-    } finally {
-      if (previousVitest === undefined) {
-        delete process.env.VITEST;
-      } else {
-        process.env.VITEST = previousVitest;
-      }
-    }
-  });
-
-  it("loads only provider plugins on the provider runtime path", () => {
-    resolvePluginProviders({});
+  it.each([
+    ["ordinary env", {} as NodeJS.ProcessEnv],
+    ["Vitest env", { VITEST: "true" } as NodeJS.ProcessEnv],
+  ])("loads only provider plugins on the provider runtime path with %s", (_name, env) => {
+    resolvePluginProviders({ env });
 
     expectLastRuntimeRegistryLoad({
+      env,
       onlyPluginIds: ["google", "kilocode", "moonshot"],
     });
+    expect(getLastResolvedPluginConfig()).toBeUndefined();
+  });
+
+  it("ignores every bundledProviderVitestCompat value without changing loader input", () => {
+    const env = { VITEST: "true" } as NodeJS.ProcessEnv;
+    const inputs = ([undefined, true, false] as const).map((bundledProviderVitestCompat) => {
+      resolvePluginProviders({
+        env,
+        ...(bundledProviderVitestCompat === undefined ? {} : { bundledProviderVitestCompat }),
+      });
+      const { logger: _logger, ...input } = getLastRuntimeRegistryCall();
+      expect(input.config).toBeUndefined();
+      expect(input.activationSourceConfig).toBeUndefined();
+      expect(input.onlyPluginIds).toEqual(["google", "kilocode", "moonshot"]);
+      return input;
+    });
+
+    expect(inputs[1]).toEqual(inputs[0]);
+    expect(inputs[2]).toEqual(inputs[0]);
   });
 
   it("scopes setup provider plugin discovery to the allowlist by default", () => {

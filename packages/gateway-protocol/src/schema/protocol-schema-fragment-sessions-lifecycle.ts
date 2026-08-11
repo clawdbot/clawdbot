@@ -3,11 +3,9 @@ import * as sessions from "./sessions.js";
 
 export const SessionLifecycleProtocolSchemas = {
   SessionsCompactionListParams: sessions.SessionsCompactionListParamsSchema,
-  SessionsCompactionGetParams: sessions.SessionsCompactionGetParamsSchema,
   SessionsCompactionBranchParams: sessions.SessionsCompactionBranchParamsSchema,
   SessionsCompactionRestoreParams: sessions.SessionsCompactionRestoreParamsSchema,
   SessionsCompactionListResult: sessions.SessionsCompactionListResultSchema,
-  SessionsCompactionGetResult: sessions.SessionsCompactionGetResultSchema,
   SessionsCompactionBranchResult: sessions.SessionsCompactionBranchResultSchema,
   SessionsCompactionRestoreResult: sessions.SessionsCompactionRestoreResultSchema,
   SessionsRewindParams: sessions.SessionsRewindParamsSchema,
@@ -47,6 +45,10 @@ export const SessionLifecycleProtocolSchemas = {
   SessionsViewerPresenceSetResult: viewerPresence.SessionsViewerPresenceSetResultSchema,
   SessionsAbortParams: sessions.SessionsAbortParamsSchema,
   SessionsPatchParams: sessions.SessionsPatchParamsSchema,
+  SessionsPatchMutation: sessions.SessionsPatchMutationSchema,
+  SessionsPatchManyTarget: sessions.SessionsPatchManyTargetSchema,
+  SessionsPatchManyParams: sessions.SessionsPatchManyParamsSchema,
+  SessionsPatchManyResult: sessions.SessionsPatchManyResultSchema,
   SessionsPluginPatchParams: sessions.SessionsPluginPatchParamsSchema,
   SessionsPluginPatchResult: sessions.SessionsPluginPatchResultSchema,
   SessionsResetParams: sessions.SessionsResetParamsSchema,

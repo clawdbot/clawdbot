@@ -8,7 +8,7 @@ import {
   shouldEnsureFfmpegFromArgv,
   shouldInstallPlaywrightSystemDependencies,
   shouldRequirePlaywrightChromiumFromArgv,
-} from "../../scripts/ensure-playwright-chromium.mjs";
+} from "../../scripts/ensure-playwright-chromium.mts";
 
 describe("ensurePlaywrightChromium", () => {
   it("does nothing when the browser binary exists and runs", () => {
@@ -33,7 +33,7 @@ describe("ensurePlaywrightChromium", () => {
       ensurePlaywrightChromium({
         env: { PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: " /snap/bin/chromium " },
         executablePath: "/cache/chromium/chrome",
-        existsSync: (path: string) => path === "/snap/bin/chromium",
+        existsSync: (candidatePath: string) => candidatePath === "/snap/bin/chromium",
         spawnSync,
       }),
     ).toBe(0);
@@ -68,7 +68,7 @@ describe("ensurePlaywrightChromium", () => {
     expect(
       ensurePlaywrightChromium({
         executablePath: "/cache/chromium/chrome",
-        existsSync: (path: string) => path === "/usr/bin/chromium-browser",
+        existsSync: (candidatePath: string) => candidatePath === "/usr/bin/chromium-browser",
         log: (line: string) => logs.push(line),
         spawnSync,
       }),
@@ -100,9 +100,9 @@ describe("ensurePlaywrightChromium", () => {
         cwd: "/repo",
         env: { PATH: "/bin" },
         executablePath: "/cache/chromium/chrome",
-        existsSync: (path: string) =>
-          path === "/usr/bin/chromium-browser" ||
-          (managedChromiumInstalled && path === "/cache/chromium/chrome"),
+        existsSync: (candidatePath: string) =>
+          candidatePath === "/usr/bin/chromium-browser" ||
+          (managedChromiumInstalled && candidatePath === "/cache/chromium/chrome"),
         requirePlaywrightChromium: true,
         spawnSync,
         stdio: "pipe",
@@ -213,7 +213,7 @@ describe("ensurePlaywrightChromium", () => {
         ensureFfmpeg: true,
         env: { PATH: "/bin" },
         executablePath: "/cache/chromium/chrome",
-        existsSync: (path: string) => path === "/usr/bin/chromium-browser",
+        existsSync: (candidatePath: string) => candidatePath === "/usr/bin/chromium-browser",
         log: (line: string) => logs.push(line),
         spawnSync,
         stdio: "pipe",
@@ -238,15 +238,15 @@ describe("ensurePlaywrightChromium", () => {
 
   it("skips a broken system Chromium binary and uses the first runnable candidate", () => {
     const logs: string[] = [];
-    const spawnSync = vi.fn((path: string) => ({
-      status: path === "/usr/bin/google-chrome" ? 0 : 127,
+    const spawnSync = vi.fn((candidatePath: string) => ({
+      status: candidatePath === "/usr/bin/google-chrome" ? 0 : 127,
     }));
 
     expect(
       ensurePlaywrightChromium({
         executablePath: "/cache/chromium/chrome",
-        existsSync: (path: string) =>
-          path === "/snap/bin/chromium" || path === "/usr/bin/google-chrome",
+        existsSync: (candidatePath: string) =>
+          candidatePath === "/snap/bin/chromium" || candidatePath === "/usr/bin/google-chrome",
         log: (line: string) => logs.push(line),
         spawnSync,
       }),
@@ -429,8 +429,8 @@ describe("ensurePlaywrightChromium", () => {
         cwd: "/repo",
         env: { CI: "1", PATH: "/bin" },
         executablePath: "/cache/chromium/chrome",
-        existsSync: (path: string) =>
-          installedSystemChromium && path === "/usr/bin/chromium-browser",
+        existsSync: (candidatePath: string) =>
+          installedSystemChromium && candidatePath === "/usr/bin/chromium-browser",
         getuid: () => 0,
         log: (line: string) => logs.push(line),
         platform: "linux",
@@ -612,13 +612,13 @@ describe("ensurePlaywrightChromium", () => {
   });
 
   it("allows QA scenario runners to skip optional Playwright ffmpeg", () => {
-    expect(shouldEnsureFfmpegFromArgv(["node", "scripts/ensure-playwright-chromium.mjs"])).toBe(
+    expect(shouldEnsureFfmpegFromArgv(["node", "scripts/ensure-playwright-chromium.mts"])).toBe(
       true,
     );
     expect(
       shouldEnsureFfmpegFromArgv([
         "node",
-        "scripts/ensure-playwright-chromium.mjs",
+        "scripts/ensure-playwright-chromium.mts",
         "--skip-ffmpeg",
       ]),
     ).toBe(false);
@@ -628,12 +628,12 @@ describe("ensurePlaywrightChromium", () => {
     expect(
       shouldRequirePlaywrightChromiumFromArgv([
         "node",
-        "scripts/ensure-playwright-chromium.mjs",
+        "scripts/ensure-playwright-chromium.mts",
         "--require-playwright-chromium",
       ]),
     ).toBe(true);
     expect(
-      shouldRequirePlaywrightChromiumFromArgv(["node", "scripts/ensure-playwright-chromium.mjs"]),
+      shouldRequirePlaywrightChromiumFromArgv(["node", "scripts/ensure-playwright-chromium.mts"]),
     ).toBe(false);
   });
 });

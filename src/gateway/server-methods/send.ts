@@ -80,6 +80,7 @@ import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
+import { hasActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import {
   resolveGatewayInflightRequest as resolveIdempotentGatewayRequest,
   runGatewayInflightWork,
@@ -528,12 +529,14 @@ async function withMessageOperationRoute<
   bindingAccountIds: readonly unknown[];
   routeAccountIds: (binding: MessageOperationRouteBinding | undefined) => readonly unknown[];
   conflictMessage: string;
+  authorize?: () => boolean;
   resolveChannel: (requestChannel: unknown) => Promise<T | undefined>;
   work: (
     route: T & {
       accountId: string | undefined;
       idem: string;
       dedupeKey: string;
+      authorize: () => boolean;
     },
   ) => Promise<InflightResult>;
 }): Promise<void> {
@@ -611,6 +614,16 @@ async function withMessageOperationRoute<
       await inflight.done;
       return;
     }
+    // Routing and attachment preparation may yield while the admitted run
+    // closes. Revalidate before any provider-visible message side effect.
+    if (params.authorize && !params.authorize()) {
+      params.respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "agent runtime authority is no longer active"),
+      );
+      return;
+    }
     retainMessageOperationRouteBinding({
       context: params.context,
       binding,
@@ -622,6 +635,7 @@ async function withMessageOperationRoute<
         accountId: accountRoute.accountId,
         idem: inflight.idem,
         dedupeKey: inflight.dedupeKey,
+        authorize: params.authorize ?? (() => true),
       })
       .finally(() => {
         refreshMessageOperationRouteBinding({
@@ -831,6 +845,20 @@ function createGatewayInflightUnavailableFailure(params: {
   });
 }
 
+function createGatewayInflightAuthorityFailure(params: {
+  context: GatewayRequestContext;
+  dedupeKey: string;
+  channel: string;
+}): InflightResult {
+  return createGatewayInflightResult({
+    ...params,
+    result: {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "agent runtime authority is no longer active"),
+    },
+  });
+}
+
 async function mirrorDeliveredSourceReplyToTranscriptBestEffort(params: {
   context: GatewayRequestContext;
   mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0];
@@ -921,6 +949,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         binding?.reservedRoute?.accountId,
       ],
       conflictMessage: "message.action accountId does not match params.accountId",
+      authorize: () => hasActiveAgentRuntimeAuthority(client, context),
       resolveChannel: async (requestChannel) => {
         const resolved = await resolveRequestedChannel({
           requestChannel,
@@ -948,7 +977,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         }
         return { cfg, channel, plugin };
       },
-      work: async ({ cfg, channel, accountId, dedupeKey }) => {
+      work: async ({ cfg, channel, accountId, dedupeKey, authorize }) => {
         try {
           const sessionKey = normalizeOptionalString(request.sessionKey) ?? undefined;
           const agentId =
@@ -1009,10 +1038,25 @@ export const sendHandlers: GatewayRequestHandlers = {
               ? { sourceReplyFinal: trustedContext.sourceReplyFinal }
               : {}),
           };
-          const terminalDeliveryReceipt =
+          const terminalDeliveryStart =
             trustedContext.sourceReplyFinal === true
               ? await beginTerminalSourceReplyDelivery(sourceReplyMirror)
               : undefined;
+          if (terminalDeliveryStart && "outcome" in terminalDeliveryStart) {
+            return createGatewayInflightSuccess({
+              context,
+              dedupeKey,
+              payload: terminalDeliveryStart.result,
+              channel,
+            });
+          }
+          const terminalDeliveryReceipt = terminalDeliveryStart;
+          // Attachment and receipt preparation can outlive the admitted run.
+          // Close the receipt and stop before the provider-owned action boundary.
+          if (!authorize()) {
+            await cancelTerminalSourceReplyDelivery(terminalDeliveryReceipt);
+            return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
+          }
           const gatewayClientScopes = client?.connect?.scopes ?? [];
           const handled = await dispatchChannelMessageAction({
             channel,
@@ -1135,6 +1179,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       bindingAccountIds: [request.accountId],
       routeAccountIds: (binding) => [requestedAccountId, binding?.reservedRoute?.accountId],
       conflictMessage: "send account selections do not match",
+      authorize: () => hasActiveAgentRuntimeAuthority(client, context),
       resolveChannel: async (requestChannel) => {
         const resolved = await resolveInternalDeliveryChannel(requestChannel, context);
         if (resolved.kind !== "ready") {
@@ -1154,7 +1199,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         }
         return { cfg, channel, plugin };
       },
-      work: async ({ cfg, channel, accountId, idem, dedupeKey }) => {
+      work: async ({ cfg, channel, accountId, idem, dedupeKey, authorize }) => {
         try {
           const resolvedTarget = resolveGatewayOutboundTarget({
             channel,
@@ -1287,6 +1332,11 @@ export const sendHandlers: GatewayRequestHandlers = {
             sessionKey: outboundSessionKey,
             conversationType: outboundRoute?.chatType,
           });
+          // Target, attachment, route, and session preparation may all yield.
+          // The durable provider handoff is the final authority commit point.
+          if (!authorize()) {
+            return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
+          }
           const send = await sendDurableMessageBatch({
             cfg,
             channel,
@@ -1362,6 +1412,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       bindingAccountIds: [request.accountId],
       routeAccountIds: (binding) => [request.accountId, binding?.reservedRoute?.accountId],
       conflictMessage: "poll account selections do not match",
+      authorize: () => hasActiveAgentRuntimeAuthority(client, context),
       resolveChannel: async (requestChannel) => {
         const resolved = await resolveRequestedChannel({
           requestChannel,
@@ -1411,7 +1462,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         }
         return { cfg, channel, plugin, outbound, sendPoll: outbound.sendPoll };
       },
-      work: async ({ cfg, channel, accountId, idem, dedupeKey, outbound, sendPoll }) => {
+      work: async ({ cfg, channel, accountId, idem, dedupeKey, authorize, outbound, sendPoll }) => {
         const poll = {
           question: request.question,
           options: request.options,
@@ -1433,6 +1484,9 @@ export const sendHandlers: GatewayRequestHandlers = {
           const normalized = outbound.pollMaxOptions
             ? normalizePollInput(poll, { maxOptions: outbound.pollMaxOptions })
             : normalizePollInput(poll);
+          if (!authorize()) {
+            return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
+          }
           const result = await sendPoll({
             cfg,
             to: resolvedTarget.to,

@@ -6,10 +6,11 @@ import { STATE_DIR } from "../../config/paths.js";
 import { getRuntimeConfigAppliedHash } from "../../config/runtime-snapshot.js";
 import { resolveMainSessionKey } from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
-import { getUpdateAvailable } from "../../infra/update-startup.js";
+import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-startup.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveGatewayAuth } from "../auth.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
+import { projectUpdateAvailable } from "../events.js";
 import { collectGatewayHealthSnapshot } from "../health/collector.js";
 import type { HealthSummary } from "../health/types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
@@ -45,7 +46,10 @@ const healthRefreshStates: Record<HealthAudience, HealthRefreshState> = {
   },
 };
 
-export function buildGatewaySnapshot(opts?: { includeSensitive?: boolean }): Snapshot {
+export function buildGatewaySnapshot(opts?: {
+  includeSensitive?: boolean;
+  includeUpdateDetails?: boolean;
+}): Snapshot {
   const cfg = getRuntimeConfig();
   const defaultAgentId = resolveDefaultAgentId(cfg);
   const mainKey = normalizeMainKey(cfg.session?.mainKey);
@@ -53,7 +57,10 @@ export function buildGatewaySnapshot(opts?: { includeSensitive?: boolean }): Sna
   const scope = cfg.session?.scope ?? "per-sender";
   const presence = listSystemPresence();
   const uptimeMs = Math.round(process.uptime() * 1000);
-  const updateAvailable = getUpdateAvailable() ?? undefined;
+  const includeUpdateDetails = opts?.includeUpdateDetails === true;
+  const updateAvailable =
+    projectUpdateAvailable(getUpdateAvailable(), includeUpdateDetails) ?? undefined;
+  const updateSchedule = includeUpdateDetails ? (getUpdateSchedule() ?? undefined) : undefined;
   // Health is async; the caller replaces this with the collected snapshot.
   const emptyHealth: Snapshot["health"] = {};
   const snapshot: Snapshot = {
@@ -69,6 +76,7 @@ export function buildGatewaySnapshot(opts?: { includeSensitive?: boolean }): Sna
       scope,
     },
     updateAvailable,
+    updateSchedule,
   };
   if (opts?.includeSensitive === true) {
     const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });

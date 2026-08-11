@@ -1,5 +1,6 @@
 // Covers plugin conversation binding persistence and lookup behavior.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type {
   ConversationRef,
@@ -320,14 +321,6 @@ async function flushMicrotasks(): Promise<void> {
   });
 }
 
-function createDeferredVoid(): { promise: Promise<void>; resolve: () => void } {
-  let resolve = () => {};
-  const promise = new Promise<void>((innerResolve) => {
-    resolve = innerResolve;
-  });
-  return { promise, resolve };
-}
-
 function requireMockCallArg(mock: ReturnType<typeof vi.fn>, index = 0): unknown {
   const call = mock.mock.calls[index] as [unknown] | undefined;
   if (!call) {
@@ -389,7 +382,7 @@ async function expectResolutionDoesNotWait(params: {
   decision: PluginBindingDecision;
   expectedStatus: "approved" | "denied";
 }) {
-  const callbackGate = createDeferredVoid();
+  const callbackGate = createDeferred();
   const onResolved = vi.fn(async () => callbackGate.promise);
   createResolvedHandlerRegistry({
     pluginRoot: params.pluginRoot,

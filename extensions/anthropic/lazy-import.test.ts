@@ -24,6 +24,7 @@ describe("anthropic session catalog lazy imports", () => {
           list: async () => [],
           read: async () => ({ hostId: "gateway:local", label: "Local", threadId: "", items: [] }),
           continueSession: async () => ({ sessionKey: "agent:main:test" }),
+          startTerminalSession: async () => ({ kind: "local", argv: ["claude"] }),
           openTerminal: async () => ({ kind: "local", argv: ["claude"] }),
           checkUpstreamActivity: async () => [],
         }),

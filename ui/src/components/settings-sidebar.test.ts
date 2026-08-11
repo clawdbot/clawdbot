@@ -371,7 +371,8 @@ describe("settings sidebar search", () => {
     expect(allLabels).not.toContain("Activity");
     expect(allLabels).not.toContain("Sessions");
     expect(allLabels).toContain("Privacy & Security");
-    expect(allLabels.indexOf("About")).toBe(allLabels.indexOf("Logs") + 1);
+    expect(allLabels.indexOf("Updates")).toBe(allLabels.indexOf("Logs") + 1);
+    expect(allLabels.indexOf("About")).toBe(allLabels.indexOf("Updates") + 1);
 
     enterQuery("  ThEmE  ");
     expect(labels()).toEqual(["Appearance"]);
@@ -453,6 +454,7 @@ describe("settings sidebar search", () => {
           channel: "stable",
         },
         updateRunning: false,
+        canUpdate: true,
         onUpdate,
         refreshRequired: true,
         onRefresh,

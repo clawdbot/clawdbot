@@ -1,10 +1,10 @@
 import type { resolveSkillsInstallPreferences } from "../loading/config.js";
-import type { loadWorkspaceSkillEntries } from "../loading/workspace.js";
+import type { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import "./install.js";
 
 type SkillsInstallDeps = {
   hasBinary(bin: string): boolean;
-  loadWorkspaceSkillEntries: typeof loadWorkspaceSkillEntries;
+  loadWorkspaceSkills: typeof loadWorkspaceSkills;
   resolveNodeInstallStateDir(): string;
   resolveBrewExecutable(): string | undefined;
   isContainerEnvironment(): boolean;
