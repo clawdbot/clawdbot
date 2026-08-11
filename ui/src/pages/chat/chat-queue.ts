@@ -41,6 +41,19 @@ export function isDurableQueuedMessage(host: ChatQueueScopedSessionHost, id: str
   return chatOutboxOwner(host).durable(host, id) !== undefined;
 }
 
+/**
+ * Every pane sharing an outbox also shares its drain, and any of them can own the
+ * drain lane. A fact one pane records about a row — a delivery hold, say — has to
+ * be read across all of them, or the pane that drains will not see it. Panes
+ * registered with an owner are the same kind of chat host as the caller.
+ */
+export function anyChatOutboxPaneMatches<T extends ChatQueueScopedSessionHost>(
+  host: T,
+  matches: (pane: T) => boolean,
+): boolean {
+  return matches(host) || chatOutboxOwner(host).anyPane((pane) => matches(pane as T));
+}
+
 export function keepVolatileQueuedMessage(
   host: ChatQueueScopedSessionHost,
   sessionKey: string,

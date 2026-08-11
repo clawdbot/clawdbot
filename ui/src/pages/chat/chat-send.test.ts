@@ -147,6 +147,7 @@ let flushChatQueueForEvent: typeof import("./chat-send-actions.ts").flushChatQue
 let retryReconnectableQueuedChatSends: typeof import("./chat-send-actions.ts").retryReconnectableQueuedChatSends;
 let retryQueuedChatMessage: typeof import("./chat-send-actions.ts").retryQueuedChatMessage;
 let recordChatSendServerTiming: typeof import("./chat-send-timing.ts").recordChatSendServerTiming;
+let beginQueuedMessageEdit: typeof import("./queued-message-edit.ts").beginQueuedMessageEdit;
 let refreshPageChat: typeof import("./chat-state-refresh.ts").refreshPageChat;
 
 async function loadChatHelpers(): Promise<void> {
@@ -158,6 +159,7 @@ async function loadChatHelpers(): Promise<void> {
   } = await import("./chat-send-actions.ts"));
   ({ handleSendChat } = await import("./chat-send-submit.ts"));
   ({ recordChatSendServerTiming } = await import("./chat-send-timing.ts"));
+  ({ beginQueuedMessageEdit } = await import("./queued-message-edit.ts"));
   ({ handlePageGatewayEvent } = await import("./chat-state-events.ts"));
   ({ refreshPageChat } = await import("./chat-state-refresh.ts"));
   ({ loadChatBranches, loadChatHistory } = await import("./chat-history.ts"));
@@ -4078,6 +4080,37 @@ describe("handleSendChat", () => {
 
     expect(executeSlashCommandMock).toHaveBeenCalledTimes(2);
     expect(listStoredChatOutboxes(visibleHost)).toStrictEqual([]);
+  });
+
+  it("holds a row being edited against a drain owned by another pane", async () => {
+    const request = makeRequestMock({ "chat.history": () => idleChatHistory() });
+    const client = clientWithRequest(request);
+    const item = {
+      id: "edited-across-panes",
+      text: "the text being rewritten",
+      createdAt: 1,
+      sessionKey: "agent:main",
+    };
+    // Two panes on one session: the composer holding the edit is pane-local, but
+    // the outbox and the drain lane are shared, and either pane can own the lane.
+    const editing = makeChatHost({ client, chatQueue: [item] });
+    const peer = makeChatHost({ client, chatQueue: [] });
+    const stopEditing = subscribeChatOutboxProjection(editing);
+    const stopPeer = subscribeChatOutboxProjection(peer);
+    expect(admitQueuedMessageForSession(editing, editing.sessionKey, item)).toBe(true);
+    expect(beginQueuedMessageEdit(editing, item.id)).toBe("started");
+
+    try {
+      await retryReconnectableQueuedChatSends(peer);
+
+      expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
+      expect(listStoredChatOutboxes(peer)[0]?.queue).toEqual([
+        expect.objectContaining({ id: item.id, text: item.text }),
+      ]);
+    } finally {
+      stopPeer();
+      stopEditing();
+    }
   });
 
   it("projects a running local command to panes that subscribe after execution starts", async () => {

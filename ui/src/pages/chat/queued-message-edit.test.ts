@@ -1,7 +1,11 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import {
+  getChatAttachmentDataUrl,
+  registerChatAttachmentPayload,
+} from "./attachment-payload-store.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { admitQueuedMessageForSession, subscribeChatOutboxProjection } from "./chat-queue.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
@@ -61,6 +65,15 @@ function storedOutboxesByAgent(host: unknown): Record<string, string[]> {
   );
 }
 
+/** An image whose bytes live in the payload store, so releasing it is observable. */
+function stageQueuedImage(id: string): ChatAttachment {
+  return registerChatAttachmentPayload({
+    attachment: { id, mimeType: "image/png" },
+    dataUrl: `data:image/png;base64,iVB${id}`,
+    file: new File(["png"], `${id}.png`, { type: "image/png" }),
+  });
+}
+
 /** A full store: any write that would grow it is rejected, exactly as quota does. */
 function rejectStoredGrowth(): void {
   const storage = globalThis.sessionStorage;
@@ -112,6 +125,25 @@ describe("queued message edit round-trip", () => {
 
     expect(storedOrder(host)).toEqual(["message 1", "message 2, corrected", "message 3"]);
     expect(isQueuedMessageBeingEdited(host as never, "queued-2")).toBe(false);
+    unsubscribe();
+  });
+
+  it("releases only the images the replacement dropped", async () => {
+    const kept = stageQueuedImage("att-kept");
+    const dropped = stageQueuedImage("att-dropped");
+    const { host, unsubscribe } = queueHost([{}, { attachments: [kept, dropped] }, {}]);
+    beginQueuedMessageEdit(host as never, "queued-2");
+    expect(host.chatAttachments).toHaveLength(2);
+
+    host.chatAttachments = [kept];
+    host.chatMessage = "message 2, corrected";
+    await handleSendChat(host as never);
+
+    expect(storedOrder(host)).toEqual(["message 1", "message 2, corrected", "message 3"]);
+    // The row that owned the dropped image is gone, so nothing else can free it —
+    // and the row's own copy is already unreachable by the time the send lands.
+    expect(getChatAttachmentDataUrl(dropped)).toBeNull();
+    expect(getChatAttachmentDataUrl(kept)).not.toBeNull();
     unsubscribe();
   });
 
