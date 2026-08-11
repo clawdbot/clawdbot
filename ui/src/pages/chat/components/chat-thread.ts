@@ -107,7 +107,7 @@ type ChatThreadState = {
   searchQuery: string;
   pinnedExpanded: boolean;
   transcriptRenderDependencies: readonly unknown[];
-  transcriptRenderContext: object;
+  transcriptRenderContext: { onSetReply?: ChatThreadProps["onSetReply"] };
 };
 
 type ChatThreadProps = {
@@ -1573,7 +1573,9 @@ function renderChatThreadContents(
       userAvatar: props.userAvatar ?? null,
       showAvatarGutter: !isDirectThread,
       contextWindow: threadContextWindow,
-      onReply: props.onSetReply,
+      onReply: props.onSetReply
+        ? (target) => state.transcriptRenderContext.onSetReply?.(target)
+        : undefined,
       onRewind:
         rewindEntryId && props.onRewindMessage
           ? () => {
@@ -1787,9 +1789,10 @@ function renderChatThreadContents(
     props.embedSandboxMode ?? "scripts",
     props.allowExternalEmbedUrls ?? false,
     threadContextWindow,
-    props.onSetReply,
+    Boolean(props.onSetReply),
     turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,
   ]);
+  state.transcriptRenderContext.onSetReply = props.onSetReply;
   const transcriptContents =
     showLoadingSkeleton || isEmpty
       ? html`
