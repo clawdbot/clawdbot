@@ -46,7 +46,7 @@ describe("toSanitizedMarkdownHtml", () => {
       ].join("\n"),
     );
     expect(html).toBe(
-      '&lt;script&gt;alert(1)&lt;/script&gt;\n\n<p><a>x</a></p>\n<p><a href="https://example.com" rel="noreferrer noopener" target="_blank">ok</a></p>\n',
+      '&lt;script&gt;alert(1)&lt;/script&gt;\n\n<p>x</p>\n<p><a href="https://example.com" rel="noreferrer noopener" target="_blank">ok</a></p>\n',
     );
   });
 
@@ -529,9 +529,16 @@ PY
   });
 
   describe("security", () => {
-    it("blocks javascript: in links via DOMPurify", () => {
-      const html = toSanitizedMarkdownHtml("[click me](javascript:alert(1))");
-      expect(html).toBe("<p><a>click me</a></p>\n");
+    it.each([
+      ["javascript:", "[JavaScript link](javascript:alert(1))", "JavaScript link"],
+      ["data:", "[Data link](data:text/html,test)", "Data link"],
+      ["vbscript:", "[VBScript link](vbscript:msgbox(1))", "VBScript link"],
+      ["file:", "[File link](file:///etc/passwd)", "File link"],
+    ])("renders disallowed %s links as plain text", (_scheme, markdown, label) => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(markdown));
+
+      expect(fragment.querySelector("a")).toBeNull();
+      expect(fragment.querySelector("p")?.textContent).toBe(label);
     });
 
     it("shows alt text for javascript: images", () => {
@@ -547,19 +554,9 @@ PY
       expect(html2).toBe("<p>Alt2</p>\n");
     });
 
-    it("renders non-image data: URIs as inert links (marked.js compat)", () => {
-      const html = toSanitizedMarkdownHtml("[x](data:text/html,<script>alert(1)</script>)");
-      expect(html).toBe("<p><a>x</a></p>\n");
-    });
-
     it("does not auto-link bare file:// URIs", () => {
       const html = toSanitizedMarkdownHtml("Check file:///etc/passwd");
       expect(html).toBe("<p>Check file:///etc/passwd</p>\n");
-    });
-
-    it("strips href from explicit file:// links via DOMPurify", () => {
-      const html = toSanitizedMarkdownHtml("[click](file:///etc/passwd)");
-      expect(html).toBe("<p><a>click</a></p>\n");
     });
 
     it("strips href from host-local absolute file paths", () => {
