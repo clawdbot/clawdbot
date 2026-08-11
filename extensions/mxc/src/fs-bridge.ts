@@ -1,9 +1,6 @@
 import path from "node:path";
-import {
-  ensureDirectoryWithinRoot,
-  removePathWithinRoot,
-  root as fsRoot,
-} from "openclaw/plugin-sdk/file-access-runtime";
+import { ensureDirectoryWithinRoot } from "@openclaw/fs-safe/advanced";
+import { removePathWithinRoot, root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   createWritableRenameTargetResolver,
   type SandboxBackendHandle,

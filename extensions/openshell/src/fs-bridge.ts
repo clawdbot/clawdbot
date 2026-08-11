@@ -1,7 +1,8 @@
 // Openshell plugin module implements fs bridge behavior.
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { ensureDirectoryWithinRoot, root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
+import { ensureDirectoryWithinRoot } from "@openclaw/fs-safe/advanced";
+import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import type {
   SandboxFsBridge,
   SandboxFsStat,

@@ -2,7 +2,6 @@
 
 export {
   canonicalPathFromExistingAncestor,
-  ensureDirectoryWithinRoot,
   readFileWithinRoot,
   readLocalFileFromRoots,
   root,
