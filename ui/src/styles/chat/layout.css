@@ -4617,18 +4617,6 @@ button.chat-reply-preview--message:disabled {
   margin-left: auto;
 }
 
-.chat-controls__model-option-action kbd {
-  min-width: 18px;
-  padding: 1px 4px;
-  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  border-radius: 4px;
-  color: var(--muted);
-  font-family: inherit;
-  font-size: 10px;
-  line-height: 1.35;
-  text-align: center;
-}
-
 .chat-controls__model-option-action kbd::before {
   content: attr(data-chat-model-shortcut-number);
 }
