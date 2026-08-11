@@ -19,10 +19,7 @@ import {
   registerCommandGroups,
   type CommandGroupEntry,
 } from "./register-command-groups.js";
-import {
-  getSubCliEntries as getSubCliEntryDescriptors,
-  type SubCliDescriptor,
-} from "./subcli-descriptors.js";
+import { getSubCliEntriesCore, type SubCliDescriptor } from "./subcli-descriptors.js";
 
 export type SubCliRegistrationContext = {
   purpose?: "runtime" | "completion";
@@ -317,7 +314,7 @@ function resolveSubCliCommandGroups(
   argv: string[],
   context: SubCliRegistrationContext = {},
 ): CommandGroupEntry[] {
-  const descriptors = getSubCliEntryDescriptors();
+  const descriptors = getSubCliEntriesCore();
   const descriptorNames = new Set(descriptors.map((descriptor) => descriptor.name));
   return buildCommandGroupEntries(
     descriptors,
@@ -329,7 +326,7 @@ function resolveSubCliCommandGroups(
 }
 
 export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
-  return getSubCliEntryDescriptors();
+  return getSubCliEntriesCore();
 }
 
 export async function registerSubCliByNameCore(

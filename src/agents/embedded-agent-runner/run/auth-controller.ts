@@ -22,7 +22,7 @@ import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { shouldUseTransientCooldownProbeSlot } from "../../failover-policy.js";
 import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
 import {
-  getApiKeyForModel,
+  getApiKeyForModelCore,
   MissingProviderAuthError,
   type ResolvedProviderAuth,
 } from "../../model-auth.js";
@@ -449,7 +449,7 @@ export function createEmbeddedRunAuthController(params: {
     model = params.getRuntimeModel(),
     allowAuthProfileFallback?: boolean,
   ) => {
-    return getApiKeyForModel({
+    return getApiKeyForModelCore({
       model,
       cfg: params.config,
       profileId: candidate,

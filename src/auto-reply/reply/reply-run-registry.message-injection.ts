@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { createDeferred } from "../../shared/deferred.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   replyMessageInjectionTargetOperation,
   type ReplyBackendHandle,
@@ -151,7 +151,7 @@ export function beginReplyMessageInjectionTarget(
   // sub-10-minute user messages re-arm a wedged run's staleness window forever.
   // Invoke before the first await. The capability owns the final synchronous
   // admission check, matching Codex's active-turn lock boundary.
-  const acceptance = createDeferred<boolean>();
+  const acceptance = createDeferredCore<boolean>();
   let acceptanceSettled = false;
   const settleAcceptance = (accepted: boolean) => {
     if (acceptanceSettled) {

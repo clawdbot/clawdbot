@@ -23,6 +23,10 @@ const DEFAULT_STARTUP_BUDGET_BASELINE_PATH = path.resolve(
 // fixed JS ceiling bounds cumulative creep.
 export const CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES = 1024;
 
+// The startup bundle embeds commit SHA and timestamp identity. Those fixed-length,
+// high-entropy values move Linux gzip output by tens of bytes between identical builds.
+export const CONTROL_UI_STARTUP_JS_GZIP_IDENTITY_VARIANCE_BYTES = 64;
+
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
 const controlUiPerformanceBudgets = {
@@ -146,10 +150,13 @@ export function evaluateControlUiPerformanceBudgets(
   startupBudgetBaseline: Readonly<ControlUiStartupBudgetBaseline> | null = null,
   startupJsTolerance = CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES,
 ) {
+  const startupJsFixedLimit =
+    budgets.startupJsGzipBytes +
+    (startupBudgetBaseline ? CONTROL_UI_STARTUP_JS_GZIP_IDENTITY_VARIANCE_BYTES : 0);
   const checks: Array<[string, number, number, "count" | "bytes"]> = [
     ["startup JS requests", metrics.startup.js.requests, budgets.startupJsRequests, "count"],
     ["startup CSS requests", metrics.startup.css.requests, budgets.startupCssRequests, "count"],
-    ["startup JS gzip", metrics.startup.js.gzipBytes, budgets.startupJsGzipBytes, "bytes"],
+    ["startup JS gzip", metrics.startup.js.gzipBytes, startupJsFixedLimit, "bytes"],
     ["startup CSS gzip", metrics.startup.css.gzipBytes, budgets.startupCssGzipBytes, "bytes"],
     ["largest JS gzip", metrics.largest.js.gzipBytes, budgets.largestJsGzipBytes, "bytes"],
     ["largest CSS gzip", metrics.largest.css.gzipBytes, budgets.largestCssGzipBytes, "bytes"],
@@ -226,7 +233,7 @@ export function formatControlUiPerformanceReport(
   ];
   if (startupBudgetBaseline) {
     lines.push(
-      `  startup JS gzip vs baseline: ${metrics.startup.js.gzipBytes} B (baseline ${startupBudgetBaseline.startupJsGzipBytes} B + tolerance ${startupJsTolerance} B, ceiling ${budgets.startupJsGzipBytes} B)`,
+      `  startup JS gzip vs baseline: ${metrics.startup.js.gzipBytes} B (baseline ${startupBudgetBaseline.startupJsGzipBytes} B + tolerance ${startupJsTolerance} B, ceiling ${budgets.startupJsGzipBytes} B + build-identity variance ${CONTROL_UI_STARTUP_JS_GZIP_IDENTITY_VARIANCE_BYTES} B)`,
     );
   }
   lines.push(
