@@ -35,6 +35,8 @@ openclaw-chat-pane {
 /* One cell = pane header + pane; the header lives in-flow with its pane, so
    split geometry needs no mirrored toolbar layer. */
 .chat-split-view__cell {
+  --chat-surface: var(--bg-content, var(--bg));
+
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -154,8 +156,7 @@ openclaw-chat-pane {
      line up with the sidebar across the top of the shell. */
   min-height: 48px;
   padding: 0 6px 0 12px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
-  background: color-mix(in srgb, var(--panel) 62%, transparent);
+  background: var(--chat-surface);
   /* Chrome row, not content: a selectable title would fight the native
      window drag the macOS app starts from this row. */
   user-select: none;

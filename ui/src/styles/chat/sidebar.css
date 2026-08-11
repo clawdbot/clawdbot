@@ -183,6 +183,16 @@
   overflow: hidden;
 }
 
+.chat-main__conversation::before {
+  content: "";
+  position: absolute;
+  z-index: 2;
+  inset: 0 0 auto;
+  height: 24px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, var(--chat-surface), transparent);
+}
+
 .chat-main--rail-docked {
   flex-direction: row;
 }
