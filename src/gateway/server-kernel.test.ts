@@ -35,6 +35,7 @@ describe("createGatewayKernel", () => {
         OPENCLAW_SKIP_GMAIL_WATCHER: "1",
         OPENCLAW_SKIP_PROVIDERS: "1",
         OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
         VITEST: "1",
       },
     });
@@ -199,7 +200,7 @@ describe("createGatewayKernel", () => {
     expect(prematureCleanupCalls).toBe(0);
     await vi.waitFor(() => expect(capturedRegistryCleanup).toHaveBeenCalledOnce());
     expect(inspectAccount).not.toHaveBeenCalled();
-  }, 240_000);
+  });
 
   it("runs kernel teardown when required TLS material is unavailable", async () => {
     const port = await getFreePort();
@@ -216,6 +217,7 @@ describe("createGatewayKernel", () => {
         OPENCLAW_SKIP_GMAIL_WATCHER: "1",
         OPENCLAW_SKIP_PROVIDERS: "1",
         OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
         VITEST: "1",
       },
     });
@@ -248,5 +250,5 @@ describe("createGatewayKernel", () => {
     } finally {
       await state.cleanup();
     }
-  }, 240_000);
+  });
 });
