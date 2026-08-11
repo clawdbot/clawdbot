@@ -2490,11 +2490,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [
     /^scripts\/lib\/generated-text-asset\.mts$/u,
-    [
-      "extensions/browser/scripts/build-copilot-runtime.test.ts",
-      "build-diffs-viewer-runtime",
-      "bundled-plugin-assets",
-    ],
+    ["build-diffs-viewer-runtime", "bundled-plugin-assets"],
   ],
   [/^scripts\/check-plugin-npm-runtime-builds\.mts$/u, ["plugin-npm-runtime-build-args"]],
   [

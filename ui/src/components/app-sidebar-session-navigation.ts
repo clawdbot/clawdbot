@@ -604,7 +604,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     const rowsByKey = new Map(rows.map((row) => [row.key, row]));
     const rootRows =
       selected === routeAgentId && selected === loadedAgentId
-        ? navigationState.visibleSessions.flatMap((session) => {
+        ? navigationState.visibleSessionRows.flatMap((session) => {
             const row = rowsByKey.get(session.key);
             return row ? [row] : [];
           })
@@ -624,12 +624,12 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     const lineageAgentId = normalizeAgentId(
       parseAgentSessionKey(lineageRoot?.key ?? "")?.agentId ?? "",
     );
-    const selectedFallback =
-      selected === routeAgentId || lineageAgentId === selected
-        ? navigationState.visibleSessions.find(
-            (session) => session.active && !areUiSessionKeysEquivalent(session.key, mainSessionKey),
-          )
-        : undefined;
+    const selectedFallback = navigationState.visibleSessionRows.find(
+      (session) =>
+        (selected === routeAgentId || lineageAgentId === selected) &&
+        session.key === navigationState.activeRowKey &&
+        !areUiSessionKeysEquivalent(session.key, mainSessionKey),
+    );
     const mainSessionKeys = new Set<string>([mainSessionKey]);
     const scopedRootRows = rootRows.filter((row) => {
       if (areUiSessionKeysEquivalent(row.key, mainSessionKey)) {
@@ -706,7 +706,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
         }
       }
       if (!selectedAlreadyProjected) {
-        projected.unshift(selectedFallback);
+        projected.unshift(navigationState.toSidebarSession(selectedFallback));
       }
     }
     const creatorFacet =

@@ -187,7 +187,6 @@ async function runHookInstalledDependencyPolicy(params: {
     scan: async () =>
       await scanInstalledPackageDependencyTree({
         config: params.forward.config,
-        dangerouslyForceUnsafeInstall: params.forward.dangerouslyForceUnsafeInstall,
         trustedSourceLinkedOfficialInstall: params.forward.trustedSourceLinkedOfficialInstall,
         packageDir: params.installedDir,
         pluginId: params.hookPackId,

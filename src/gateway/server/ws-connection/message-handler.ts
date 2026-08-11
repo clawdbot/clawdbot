@@ -45,7 +45,6 @@ import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { createGatewayAuthenticatedRequestDispatcher } from "./authenticated-request-dispatch.js";
 import { authenticateGatewayConnect } from "./connect-auth.js";
-import { resolvePinnedClientMetadata } from "./connect-device-metadata.js";
 import { authorizeGatewayConnectDevice } from "./connect-device-pairing.js";
 import { attachAuthenticatedGatewayConnect } from "./connect-session.js";
 import { resolveHandshakeBrowserSecurityContext } from "./handshake-auth-helpers.js";
@@ -479,8 +478,3 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     );
   });
 }
-
-export const testing = {
-  resolvePinnedClientMetadata,
-};
-export { testing as __testing };

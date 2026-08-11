@@ -37,6 +37,7 @@ import {
   renderChatPaneHeader,
   resolveChatPaneWorkspace,
 } from "./components/chat-pane-header.ts";
+import { renderSessionRailToggle } from "./components/chat-session-rail-toggle.ts";
 import { renderChatSessionSharing } from "./components/chat-session-sharing.ts";
 import {
   renderSessionDiffToggle,
@@ -208,6 +209,10 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
       discussionAction: this.renderSessionDiscussionAction(),
       diffAction: renderSessionDiffToggle(sessionWorkspace),
       backgroundTasksAction: renderBackgroundTasksToggle(backgroundTasks),
+      sessionRailAction: renderSessionRailToggle({
+        mode: this.selectedSessionRailMode(this.state?.sessionKey ?? ""),
+        onToggle: () => this.requestSessionRail("toggle"),
+      }),
       workspaceAction: renderSessionWorkspaceToggle(sessionWorkspace),
       presence:
         !catalog &&

@@ -14,6 +14,7 @@ import {
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { createPluginRegistry } from "./registry.js";
 import { setActivePluginRegistry, withPluginRegistrationContext } from "./runtime.js";
+import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createBundledPluginRecord } from "./status.test-fixtures.js";
 
@@ -421,6 +422,49 @@ describe("registerPluginCommand", () => {
       },
     ]);
     expect(listRegisteredPluginAgentPromptGuidance()).toEqual(["Use /demo_cmd for demo routing."]);
+  });
+
+  it("prefers a request-scoped registry over ambient compatibility state", async () => {
+    const ambientHandler = vi.fn(async () => ({ text: "ambient" }));
+    const scopedHandler = vi.fn(async () => ({ text: "scoped" }));
+    expect(
+      registerPluginCommand("ambient", {
+        name: "same",
+        description: "Ambient command",
+        agentPromptGuidance: ["Ambient guidance"],
+        handler: ambientHandler,
+      }),
+    ).toEqual({ ok: true });
+    const scoped = createEmptyPluginRegistry();
+
+    await withPluginRuntimeRegistryScope(scoped, async () => {
+      expect(
+        registerPluginCommand("scoped", {
+          name: "same",
+          description: "Scoped command",
+          agentPromptGuidance: ["Scoped guidance"],
+          handler: scopedHandler,
+        }),
+      ).toEqual({ ok: true });
+      expect(listProviderPluginCommandSpecs().map((entry) => entry.description)).toEqual([
+        "Scoped command",
+      ]);
+      expect(listRegisteredPluginAgentPromptGuidance()).toEqual(["Scoped guidance"]);
+      const match = matchPluginCommand("/same");
+      expect(match?.command.pluginId).toBe("scoped");
+      await executePluginCommand({
+        command: match!.command,
+        senderId: "user-1",
+        channel: "telegram",
+        isAuthorizedSender: true,
+        commandBody: "/same",
+        config: {},
+      });
+    });
+
+    expect(scopedHandler).toHaveBeenCalledOnce();
+    expect(ambientHandler).not.toHaveBeenCalled();
+    expect(listRegisteredPluginAgentPromptGuidance()).toEqual(["Ambient guidance"]);
   });
 
   it.each([
