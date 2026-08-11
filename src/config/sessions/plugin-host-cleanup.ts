@@ -1,7 +1,7 @@
 /** Shared predicates and mutations for plugin host-owned session-state cleanup. */
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import { normalizeSessionEntrySlotKey } from "../../plugins/session-entry-slot-keys.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../../sessions/session-key-utils.js";
 import type { SessionEntry } from "./types.js";
 
 /** Cleanup variants owned by plugin host lifecycle paths. */
@@ -186,13 +186,13 @@ export function matchesPluginHostCleanupSession(
   entry: SessionEntry,
   sessionKey?: string,
 ): boolean {
-  const normalizedSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
+  const normalizedSessionKey = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
   if (!normalizedSessionKey) {
     return true;
   }
   return (
-    normalizeLowercaseStringOrEmpty(entryKey) === normalizedSessionKey ||
-    normalizeLowercaseStringOrEmpty(entry.sessionId) === normalizedSessionKey
+    normalizeSessionKeyPreservingOpaquePeerIds(entryKey) === normalizedSessionKey ||
+    normalizeSessionKeyPreservingOpaquePeerIds(entry.sessionId) === normalizedSessionKey
   );
 }
 
