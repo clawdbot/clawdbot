@@ -29,14 +29,14 @@ suite.define(() => {
             {
               key: "agent:main:parent",
               kind: "direct",
-              label: "Release prep",
+              label: "Release readiness and production rollout coordination",
               spawnedCwd: "/repo/openclaw",
               updatedAt: 1,
             },
             {
               key: "agent:main:session-a",
               kind: "direct",
-              label: "Implementation",
+              label: "Implement parent breadcrumb navigation and polish overflow behavior",
               parentSessionKey: "agent:main:parent",
               spawnedCwd: "/repo/openclaw",
               updatedAt: 2,
@@ -77,11 +77,29 @@ suite.define(() => {
         }
         expect(await header.locator(".chat-pane__crumb-sep").count()).toBe(2);
         const parent = header.locator(".chat-pane__parent-session");
-        expect((await parent.textContent())?.trim()).toBe("Release prep");
+        const nestedTrail = await header.evaluate((root) => {
+          const parent = root.querySelector<HTMLElement>(".chat-pane__parent-session")!;
+          const child = root.querySelector<HTMLElement>(".chat-pane__session-title")!;
+          const parentText = root.querySelector<HTMLElement>(".chat-pane__parent-session-text")!;
+          const childText = root.querySelector<HTMLElement>(".chat-pane__session-title-text")!;
+          const headerRect = root.getBoundingClientRect();
+          return {
+            childEllipses: childText.scrollWidth > childText.clientWidth,
+            headerWidth: headerRect.width,
+            parentEllipses: parentText.scrollWidth > parentText.clientWidth,
+            width: child.getBoundingClientRect().right - parent.getBoundingClientRect().left,
+          };
+        });
+        expect(nestedTrail.parentEllipses).toBe(true);
+        expect(nestedTrail.childEllipses).toBe(true);
+        expect(nestedTrail.width).toBeLessThanOrEqual(nestedTrail.headerWidth / 2 + 1);
+        expect((await parent.textContent())?.trim()).toBe(
+          "Release readiness and production rollout coordination",
+        );
         await parent.click();
         await expect
           .poll(() => header.locator(".chat-pane__session-title-text").textContent())
-          .toBe("Release prep");
+          .toBe("Release readiness and production rollout coordination");
       } finally {
         await suite.closeBrowserContext(context);
       }

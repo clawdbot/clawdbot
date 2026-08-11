@@ -1115,13 +1115,13 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("keeps the parent and child breadcrumb distinct in a narrow pane", async () => {
-    const page = await openBrowserPage(430, 180);
+  it("caps a nested session trail at half the header while ellipsizing both titles", async () => {
+    const page = await openBrowserPage(720, 180);
     try {
       const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
-          <div class="chat-split-view__cell" style="width: 320px;">
+          <div class="chat-split-view__cell" style="width: 640px;">
             <div class="chat-pane__header">
               <div class="chat-pane__crumbs">
                 <wa-dropdown class="chat-pane__workspace-menu">
@@ -1146,26 +1146,49 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         </body></html>`,
       );
 
-      const state = await page.locator(".chat-pane__header").evaluate((header) => {
-        const separators = [...header.querySelectorAll<HTMLElement>(".chat-pane__crumb-sep")];
-        const parent = header.querySelector<HTMLElement>(".chat-pane__parent-session-text")!;
-        const child = header.querySelector<HTMLElement>(".chat-pane__session-title-text")!;
-        return {
-          firstSeparator: getComputedStyle(separators[0]!).display,
-          secondSeparator: getComputedStyle(separators[1]!).display,
-          parentEllipses: parent.scrollWidth > parent.clientWidth,
-          childEllipses: child.scrollWidth > child.clientWidth,
-          overflow: (header as HTMLElement).scrollWidth - (header as HTMLElement).clientWidth,
-        };
-      });
+      const readState = () =>
+        page.locator(".chat-pane__header").evaluate((header) => {
+          const separators = [...header.querySelectorAll<HTMLElement>(".chat-pane__crumb-sep")];
+          const parentText = header.querySelector<HTMLElement>(".chat-pane__parent-session-text")!;
+          const childText = header.querySelector<HTMLElement>(".chat-pane__session-title-text")!;
+          const parent = header.querySelector<HTMLElement>(".chat-pane__parent-session")!;
+          const child = header.querySelector<HTMLElement>(".chat-pane__session-title")!;
+          const headerRect = header.getBoundingClientRect();
+          const parentRect = parent.getBoundingClientRect();
+          const childRect = child.getBoundingClientRect();
+          return {
+            firstSeparator: getComputedStyle(separators[0]!).display,
+            secondSeparator: getComputedStyle(separators[1]!).display,
+            parentEllipses: parentText.scrollWidth > parentText.clientWidth,
+            childEllipses: childText.scrollWidth > childText.clientWidth,
+            headerWidth: headerRect.width,
+            nestedTrailWidth: childRect.right - parentRect.left,
+            overflow: (header as HTMLElement).scrollWidth - (header as HTMLElement).clientWidth,
+          };
+        });
 
-      expect(state).toEqual({
+      const normal = await readState();
+      expect(normal).toMatchObject({
+        firstSeparator: "block",
+        secondSeparator: "block",
+        parentEllipses: true,
+        childEllipses: true,
+        overflow: 0,
+      });
+      expect(normal.nestedTrailWidth).toBeLessThanOrEqual(normal.headerWidth / 2 + 1);
+
+      await page.locator(".chat-split-view__cell").evaluate((cell) => {
+        (cell as HTMLElement).style.width = "320px";
+      });
+      const narrow = await readState();
+      expect(narrow).toMatchObject({
         firstSeparator: "none",
         secondSeparator: "block",
         parentEllipses: true,
         childEllipses: true,
         overflow: 0,
       });
+      expect(narrow.nestedTrailWidth).toBeLessThanOrEqual(narrow.headerWidth / 2 + 1);
     } finally {
       await closeBrowserPage(page);
     }

@@ -241,6 +241,13 @@ openclaw-chat-pane {
   color: var(--text);
 }
 
+/* Keep nested identity contextual rather than letting it become the header.
+   The two titles share at most half the container after separator spacing. */
+.chat-pane__crumbs:has(.chat-pane__parent-session) .chat-pane__parent-session,
+.chat-pane__crumbs:has(.chat-pane__parent-session) .chat-pane__session-title {
+  max-width: min(18ch, calc((50cqw - 20px) / 2));
+}
+
 .chat-pane__session-title-text,
 .chat-pane__parent-session-text {
   display: block;
