@@ -82,8 +82,7 @@ enum PairingPromptSupport {
 
     static func notificationsAuthorized() async -> Bool {
         let settings = await UNUserNotificationCenter.current().notificationSettings()
-        return settings.authorizationStatus == .authorized ||
-            settings.authorizationStatus == .provisional
+        return PermissionManager.isNotificationAuthorized(status: settings.authorizationStatus)
     }
 
     /// Decisions resolve the card optimistically before the RPC returns; when
