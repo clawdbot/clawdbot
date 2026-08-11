@@ -163,7 +163,10 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
 
     await dispatchWithContext({ context: createContext(), textLimit: 80 });
 
-    expect(answerDraftStream.update).toHaveBeenLastCalledWith(longText.trimEnd());
+    expect(answerDraftStream.update).toHaveBeenLastCalledWith(
+      longText.trimEnd(),
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expectRecordFields(mockCallArg(recordOutboundMessageForPromptContext), {
       messageId: 2001,
       text: longText.trimEnd(),
