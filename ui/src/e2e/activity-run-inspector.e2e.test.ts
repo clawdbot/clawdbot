@@ -363,6 +363,83 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
     }
   });
 
+  it("keeps populated desktop run evidence reachable without taking mobile page scrolling", async () => {
+    const context = await newContext();
+    const page = await context.newPage();
+    const runId = "run:bounded/inspector";
+    await page.setViewportSize({ height: 640, width: 900 });
+    await installMockGateway(page, {
+      featureMethods: ["audit.run.inspect"],
+      methodResponses: { "audit.run.inspect": presentResult(runId) },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}activity?view=run&run=${encodeURIComponent(runId)}`);
+      const inspector = page.locator(".run-inspector");
+      const finalReceiptContent = page.getByText("Additional decision receipts are available", {
+        exact: false,
+      });
+      await finalReceiptContent.waitFor({ state: "attached" });
+
+      const desktopLayout = await inspector.evaluate((element) => ({
+        clientHeight: element.clientHeight,
+        documentScrollHeight: document.documentElement.scrollHeight,
+        overflowY: getComputedStyle(element).overflowY,
+        scrollHeight: element.scrollHeight,
+        viewportHeight: window.innerHeight,
+      }));
+      expect(desktopLayout.overflowY).toBe("auto");
+      expect(desktopLayout.scrollHeight).toBeGreaterThan(desktopLayout.clientHeight);
+      expect(desktopLayout.documentScrollHeight).toBeLessThanOrEqual(
+        desktopLayout.viewportHeight + 1,
+      );
+
+      await inspector.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+      });
+      await expect
+        .poll(() =>
+          inspector.evaluate(
+            (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+          ),
+        )
+        .toBeLessThanOrEqual(1);
+      const finalContentPosition = await Promise.all([
+        inspector.boundingBox(),
+        finalReceiptContent.boundingBox(),
+      ]);
+      expect(finalContentPosition[0]).not.toBeNull();
+      expect(finalContentPosition[1]).not.toBeNull();
+      expect(finalContentPosition[1]!.y).toBeGreaterThanOrEqual(finalContentPosition[0]!.y);
+      expect(finalContentPosition[1]!.y + finalContentPosition[1]!.height).toBeLessThanOrEqual(
+        finalContentPosition[0]!.y + finalContentPosition[0]!.height + 1,
+      );
+      await screenshot(page, "14-bounded-run-inspector.png");
+
+      await page.setViewportSize({ height: 900, width: 720 });
+      const mobileLayout = await page.locator("main.content").evaluate((content) => {
+        const inspectorElement = content.querySelector<HTMLElement>(".run-inspector");
+        if (!inspectorElement) {
+          throw new Error("Mobile run inspector layout is incomplete");
+        }
+        return {
+          contentClientHeight: content.clientHeight,
+          contentOverflowY: getComputedStyle(content).overflowY,
+          contentScrollHeight: content.scrollHeight,
+          inspectorClientHeight: inspectorElement.clientHeight,
+          inspectorScrollHeight: inspectorElement.scrollHeight,
+        };
+      });
+      expect(mobileLayout.contentOverflowY).toBe("auto");
+      expect(mobileLayout.contentScrollHeight).toBeGreaterThan(mobileLayout.contentClientHeight);
+      expect(mobileLayout.inspectorScrollHeight).toBeLessThanOrEqual(
+        mobileLayout.inspectorClientHeight + 1,
+      );
+    } finally {
+      await context.close();
+    }
+  });
+
   it("renders empty, typed unavailable, corrupt, and expired results without guessing", async () => {
     const context = await newContext();
     const page = await context.newPage();

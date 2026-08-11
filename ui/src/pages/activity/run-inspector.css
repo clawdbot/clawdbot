@@ -21,6 +21,16 @@
   min-width: 0;
 }
 
+/* Desktop suppresses document scrolling, so the Run branch must own its
+   overflow. Narrow layouts dismantle the height chain and keep page scroll. */
+@media (min-width: 769px) and (min-height: 501px), (min-width: 933px) {
+  .settings-workspace--fill-height #activity-mode-panel > .run-inspector {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+  }
+}
+
 .run-inspector__intro,
 .run-inspector__panel p,
 .run-inspector__result-state p,
