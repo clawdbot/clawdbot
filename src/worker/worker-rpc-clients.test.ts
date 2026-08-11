@@ -410,16 +410,25 @@ describe("worker live-event client", () => {
     harness.requestLiveEvent
       .mockImplementationOnce(async () => await previewResponse.promise)
       .mockImplementationOnce(async () => await firstTerminalResponse.promise)
-      .mockResolvedValueOnce({
-        type: "res",
-        id: "live-response-resync",
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: "Replay required",
-          details: { reason: "resync-required", ackedSeq: 0, expectedSeq: 1 },
-        },
-      })
+      .mockImplementationOnce(async (request) =>
+        request.lastAckedSeq > 0
+          ? {
+              type: "res",
+              id: "live-response-resync",
+              ok: false,
+              error: {
+                code: "INVALID_REQUEST",
+                message: "Replay required",
+                details: { reason: "resync-required", ackedSeq: 0, expectedSeq: 1 },
+              },
+            }
+          : {
+              type: "res",
+              id: "live-response-gap",
+              ok: true,
+              payload: { ackedSeq: 0 },
+            },
+      )
       .mockResolvedValueOnce({
         type: "res",
         id: "live-response-finishing",
@@ -478,16 +487,25 @@ describe("worker live-event client", () => {
           details: { reason: "invalid-event" },
         },
       })
-      .mockResolvedValueOnce({
-        type: "res",
-        id: "live-response-resync",
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: "Replay required",
-          details: { reason: "resync-required", ackedSeq: 0, expectedSeq: 1 },
-        },
-      })
+      .mockImplementationOnce(async (request) =>
+        request.lastAckedSeq > 0
+          ? {
+              type: "res",
+              id: "live-response-resync",
+              ok: false,
+              error: {
+                code: "INVALID_REQUEST",
+                message: "Replay required",
+                details: { reason: "resync-required", ackedSeq: 0, expectedSeq: 1 },
+              },
+            }
+          : {
+              type: "res",
+              id: "live-response-gap",
+              ok: true,
+              payload: { ackedSeq: 0 },
+            },
+      )
       .mockResolvedValueOnce({
         type: "res",
         id: "live-response-finishing",
