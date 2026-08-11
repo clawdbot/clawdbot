@@ -106,6 +106,13 @@
     ]
   },
   {
+    "name": "clearSubagentRunSteerRestart",
+    "files": [
+      "src/agents/subagents/registry/subagent-registry-runtime.ts",
+      "src/agents/subagents/registry/subagent-registry.ts"
+    ]
+  },
+  {
     "name": "containsConfigIncludeDirective",
     "files": [
       "src/config/io.read-helpers.ts",
@@ -134,11 +141,35 @@
     ]
   },
   {
+    "name": "discoverAllSessions",
+    "files": [
+      "src/infra/session-cost-usage-reporting.ts",
+      "src/infra/session-cost-usage.ts"
+    ]
+  },
+  {
     "name": "doctorCommand",
     "files": [
       "src/commands/doctor.ts",
       "src/flows/doctor-health.ts"
     ]
+  },
+  {
+    "name": "enqueueSystemEvent",
+    "files": [
+      "src/infra/system-events.ts",
+      "src/plugin-sdk/infra-runtime.ts",
+      "src/plugin-sdk/system-event-runtime.ts"
+    ],
+    "sdk": true
+  },
+  {
+    "name": "enqueueSystemEventEntry",
+    "files": [
+      "src/infra/system-events.ts",
+      "src/plugin-sdk/infra-runtime.ts"
+    ],
+    "sdk": true
   },
   {
     "name": "extractAssistantVisibleText",
@@ -180,6 +211,13 @@
     "files": [
       "src/gateway/test-helpers.server.ts",
       "src/test-utils/ports.ts"
+    ]
+  },
+  {
+    "name": "getSubagentRunByRunId",
+    "files": [
+      "src/agents/subagents/registry/subagent-registry-runtime.ts",
+      "src/agents/subagents/registry/subagent-registry.ts"
     ]
   },
   {
@@ -250,6 +288,13 @@
     "files": [
       "src/cli/plugins-cli-test-helpers.ts",
       "src/plugins/install-package.ts"
+    ]
+  },
+  {
+    "name": "isTranscriptOnlyOpenClawAssistantMessage",
+    "files": [
+      "src/agents/embedded-agent-subscribe.handlers.messages.ts",
+      "src/shared/transcript-only-openclaw-assistant.ts"
     ]
   },
   {
@@ -428,7 +473,7 @@
   {
     "name": "mergeSessionEntry",
     "files": [
-      "src/config/sessions/types.ts",
+      "src/config/sessions/session-entry-runtime.ts",
       "src/infra/state-migrations.session-store.ts"
     ]
   },
@@ -621,6 +666,13 @@
     "sdk": true
   },
   {
+    "name": "recordAcceptedSubagentSteerDispatch",
+    "files": [
+      "src/agents/subagents/registry/subagent-registry-runtime.ts",
+      "src/agents/subagents/registry/subagent-registry.ts"
+    ]
+  },
+  {
     "name": "recordHookInstall",
     "files": [
       "src/cli/plugins-cli-test-helpers.ts",
@@ -665,10 +717,25 @@
     ]
   },
   {
+    "name": "requestHeartbeat",
+    "files": [
+      "src/infra/heartbeat-wake.ts",
+      "src/plugin-sdk/heartbeat-runtime.ts"
+    ],
+    "sdk": true
+  },
+  {
     "name": "requestSafeGatewayRestart",
     "files": [
       "src/cli/daemon-cli/lifecycle-safe-restart.ts",
       "src/infra/restart-coordinator.ts"
+    ]
+  },
+  {
+    "name": "requeueAwaitingNextCompactionDelegates",
+    "files": [
+      "src/auto-reply/continuation/delegate-dispatch-recovery.ts",
+      "src/auto-reply/continuation/delegate-store-post-compaction.ts"
     ]
   },
   {
@@ -863,6 +930,13 @@
     ]
   },
   {
+    "name": "runHeartbeatOnce",
+    "files": [
+      "src/infra/heartbeat-runner-run.ts",
+      "src/infra/heartbeat-runner.ts"
+    ]
+  },
+  {
     "name": "runModelsAuthLoginFlow",
     "files": [
       "src/commands/models/auth.ts",
@@ -929,6 +1003,13 @@
       "src/logging/redact-identifier.ts"
     ],
     "sdk": true
+  },
+  {
+    "name": "startHeartbeatRunner",
+    "files": [
+      "src/infra/heartbeat-runner-scheduler.ts",
+      "src/infra/heartbeat-runner.ts"
+    ]
   },
   {
     "name": "stripTargetKindPrefix",
