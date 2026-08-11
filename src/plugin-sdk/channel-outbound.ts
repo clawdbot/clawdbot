@@ -186,7 +186,7 @@ export async function sendDurableMessageBatch(
   params: DurableMessageSendContextParams,
 ): Promise<DurableMessageBatchSendResult> {
   const mod = await loadChannelMessageRuntimeModule();
-  return await mod.sendDurableMessageBatch(params);
+  return await mod.sendDurableMessageBatchCore(params);
 }
 
 /** Runs work inside a durable message send context loaded through the SDK lazy boundary. */
@@ -201,5 +201,5 @@ export async function withDurableMessageSendContext<T>(
   run: (ctx: DurableMessageSendContext) => Promise<T>,
 ): Promise<T> {
   const mod = await loadChannelMessageRuntimeModule();
-  return await mod.withDurableMessageSendContext(params, run);
+  return await mod.withDurableMessageSendContextCore(params, run);
 }

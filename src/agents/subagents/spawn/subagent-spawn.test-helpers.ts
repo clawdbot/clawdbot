@@ -141,6 +141,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
   resolveContextEngineMock?: MockFn;
   resolveParentForkDecisionMock?: MockFn;
   registerSubagentRunMock?: MockFn;
+  releaseSubagentRunMock?: MockFn;
   startQueuedSubagentRunMock?: MockFn;
   settleFailedQueuedSubagentLaunchMock?: MockFn;
   completeCollectorLaunchCleanupMock?: MockFn;
@@ -157,6 +158,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
     sessionKey?: string;
   }) => { sandboxed: boolean };
   resolveSandboxContext?: (...args: unknown[]) => Promise<unknown>;
+  createSandboxWorkspaceIngressFsBridge?: (sandbox: unknown) => unknown;
   getSessionBindingService?: () => {
     getCapabilities?: (params: { channel?: string; accountId?: string }) => {
       adapterAvailable: boolean;
@@ -316,7 +318,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
     // Real scope resolver: spawn's admin-tier pinning depends on params-aware
     // sessions.patch policy, so a stub here would hide policy regressions.
     resolveLeastPrivilegeOperatorScopesForMethod,
-    upsertSessionEntry: async (
+    upsertSessionEntryCore: async (
       scope: { storePath?: string; sessionKey: string },
       patch: Record<string, unknown>,
     ) => {
@@ -382,6 +384,9 @@ export async function loadSubagentSpawnModuleForTest(params: {
     resolveSandboxRuntimeStatus:
       params.resolveSandboxRuntimeStatus ?? (() => ({ sandboxed: false })),
     resolveSandboxContext: params.resolveSandboxContext ?? (async () => null),
+    createSandboxWorkspaceIngressFsBridge:
+      params.createSandboxWorkspaceIngressFsBridge ??
+      ((sandbox: { fsBridge?: unknown }) => sandbox.fsBridge),
     ...createDefaultSessionHelperMocks(),
   }));
 
@@ -395,6 +400,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
     listSwarmRunsForGroup: params.listSwarmRunsForGroup ?? vi.fn(() => []),
     registerSubagentRun:
       params.registerSubagentRunMock ?? vi.fn((_record: Record<string, unknown>) => undefined),
+    releaseSubagentRun: params.releaseSubagentRunMock ?? vi.fn(async () => undefined),
     resetSubagentRegistryForTests,
     settleFailedQueuedSubagentLaunch:
       params.settleFailedQueuedSubagentLaunchMock ?? vi.fn(() => true),

@@ -899,8 +899,11 @@ describe("openshell fs bridges", () => {
         throw new Error("Expected OpenShell remote path mutation boundaries");
       }
 
-      await expect(backend.mkdirpRemotePath("/sandbox/safe/nested")).resolves.toBeUndefined();
+      await expect(
+        backend.mkdirpRemotePath("/sandbox/safe/nested", undefined, 0o700),
+      ).resolves.toBeUndefined();
       await expect(fs.stat(path.join(remoteRoot, "safe", "nested"))).resolves.toBeDefined();
+      expect((await fs.stat(path.join(remoteRoot, "safe", "nested"))).mode & 0o777).toBe(0o700);
 
       await expect(backend.mkdirpRemotePath("/sandbox/..cache/file")).resolves.toBeUndefined();
       await expect(fs.stat(path.join(remoteRoot, "..cache", "file"))).resolves.toBeDefined();
@@ -1041,10 +1044,17 @@ describe("openshell fs bridges", () => {
 
     const { createOpenShellFsBridge } = await import("./fs-bridge.js");
     const bridge = createOpenShellFsBridge({ sandbox, backend });
-    await bridge.mkdirp({ filePath: "nested/dir" });
+    await bridge.mkdirp({ filePath: "nested/dir", mode: 0o700 });
 
     await expect(fs.stat(path.join(workspaceDir, "nested", "dir"))).resolves.toBeDefined();
-    expect(backend["mkdirpRemotePath"]).toHaveBeenCalledWith("/sandbox/nested/dir", undefined);
+    if (process.platform !== "win32") {
+      expect((await fs.stat(path.join(workspaceDir, "nested", "dir"))).mode & 0o777).toBe(0o700);
+    }
+    expect(backend["mkdirpRemotePath"]).toHaveBeenCalledWith(
+      "/sandbox/nested/dir",
+      undefined,
+      0o700,
+    );
     expect(backend["runRemoteShellScript"]).not.toHaveBeenCalled();
   });
 

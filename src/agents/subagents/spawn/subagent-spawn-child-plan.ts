@@ -2,12 +2,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agent-scope-config.js";
+import { resolveAgentDir } from "../../agent-scope-config.js";
 import { findModelCatalogEntry } from "../../model-catalog-lookup.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
-import { resolveSandboxConfigForAgent } from "../../sandbox/config.js";
-import { resolveWritableSandboxHostPath } from "../../sandbox/fs-paths.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
 import { resolveSpawnSandboxError, mintSpawnSessionKey } from "../../spawn-plan.js";
 import { resolveRequesterOriginForChild } from "../../spawn-requester-origin.js";
@@ -92,10 +90,6 @@ type ResolvedSubagentChildPlan = {
   incognito: boolean;
   childSessionKey: string;
   childRuntimeSandboxed: boolean;
-  requesterSandboxAttachmentBoundary?: {
-    workspaceDir: string;
-    targetWorkspaceDir: string;
-  };
   targetAgentDir: string;
   modelPlan: Extract<ReturnType<typeof resolveSubagentModelAndThinkingPlan>, { status: "ok" }>;
   launchAuthorization?: SubagentLaunchAuthorization;
@@ -162,33 +156,6 @@ export async function resolveSubagentChildPlan(params: {
     cfg: params.cfg,
     sessionKey: params.requesterInternalKey,
   });
-  const requesterSandboxConfig = resolveSandboxConfigForAgent(params.cfg, requesterRuntime.agentId);
-  const requesterWorkspaceDir = resolveUserPath(
-    toolSpawnMetadata.workspaceDir ??
-      resolveAgentWorkspaceDir(params.cfg, requesterRuntime.agentId),
-  );
-  const requesterAgentWorkspaceDir = resolveUserPath(
-    resolveAgentWorkspaceDir(params.cfg, requesterRuntime.agentId),
-  );
-  const targetWorkspaceDir = resolveUserPath(
-    spawnedCwd ?? spawnedWorkspaceDir ?? resolveAgentWorkspaceDir(params.cfg, params.targetAgentId),
-  );
-  const sandboxTargetWorkspaceDir = requesterRuntime.sandboxed
-    ? resolveWritableSandboxHostPath({
-        filePath: targetWorkspaceDir,
-        workspaceDir: requesterWorkspaceDir,
-        agentWorkspaceDir: requesterAgentWorkspaceDir,
-        workspaceAccess: requesterSandboxConfig.workspaceAccess,
-        containerWorkdir: requesterSandboxConfig.docker.workdir,
-        binds: requesterSandboxConfig.docker.binds,
-      })
-    : undefined;
-  const requesterSandboxAttachmentBoundary = sandboxTargetWorkspaceDir
-    ? {
-        workspaceDir: requesterWorkspaceDir,
-        targetWorkspaceDir: sandboxTargetWorkspaceDir,
-      }
-    : undefined;
   const childRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: childSessionKey,
@@ -287,7 +254,6 @@ export async function resolveSubagentChildPlan(params: {
       incognito,
       childSessionKey,
       childRuntimeSandboxed: childRuntime.sandboxed,
-      requesterSandboxAttachmentBoundary,
       targetAgentDir,
       modelPlan,
       launchAuthorization,

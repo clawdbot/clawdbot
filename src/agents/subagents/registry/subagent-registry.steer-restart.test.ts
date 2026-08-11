@@ -78,7 +78,7 @@ vi.mock("../../../config/sessions.js", () => {
       return match?.[1] ?? "main";
     },
     resolveMainSessionKey: () => "agent:main:main",
-    resolveStorePath: () => "/tmp/test-store",
+    resolveSessionStorePathCore: () => "/tmp/test-store",
     updateSessionStore: vi.fn(),
   };
 });
@@ -89,7 +89,7 @@ vi.mock("../../../config/sessions/session-accessor.js", async (importOriginal) =
     Object.entries(sessionStore).map(([sessionKey, entry]) => ({ sessionKey, entry })),
   loadSessionEntry: (scope: { sessionKey: string }) => sessionStore[scope.sessionKey],
   loadSessionEntryReadOnly: (scope: { sessionKey: string }) => sessionStore[scope.sessionKey],
-  patchSessionEntry: async () => null,
+  patchSessionEntryCore: async () => null,
 }));
 
 const announceSpy = vi.fn(

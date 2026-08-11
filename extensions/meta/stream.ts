@@ -18,9 +18,14 @@ function ensureMetaResponsesReplayFields(payloadObj: Record<string, unknown>): v
 }
 
 function createMetaResponsesWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  return createPayloadPatchStreamWrapper(baseStreamFn, ({ payload, model }) => {
-    if (model.provider !== "meta" || model.api !== "openai-responses") {
+  return createPayloadPatchStreamWrapper(baseStreamFn, ({ payload, model, options }) => {
+    if (model.provider !== "meta") {
       return;
+    }
+    // Responses treats zero as an unset caller cap. Restore the catalog limit
+    // without changing provider-selected behavior when the caller omits the field.
+    if (options?.maxTokens === 0 && payload.max_output_tokens === undefined) {
+      payload.max_output_tokens = model.maxTokens;
     }
     if (!model.reasoning) {
       return;
@@ -30,7 +35,7 @@ function createMetaResponsesWrapper(baseStreamFn: StreamFn | undefined): StreamF
 }
 
 export function wrapMetaProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
-  if (ctx.provider !== "meta" || ctx.model?.api !== "openai-responses") {
+  if (ctx.provider !== "meta" || (ctx.sourceApi ?? ctx.model?.api) !== "openai-responses") {
     return undefined;
   }
   return createMetaResponsesWrapper(ctx.streamFn);

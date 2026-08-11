@@ -27,6 +27,7 @@ import { readRegisteredSandboxRuntimeIds, updateRegistry } from "./registry.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
+import type { SandboxFsBridge } from "./fs-bridge.types.js";
 import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
@@ -366,6 +367,34 @@ export async function resolveSandboxContext(params: {
   } catch (error) {
     throw toSandboxProvisioningError(error, resolved.cfg.backend);
   }
+}
+
+/**
+ * Builds the host-owned ingress capability for files the sandboxed run must consume.
+ * It exposes only the run's effective workspace and never grants tool-side writes.
+ */
+export function createSandboxWorkspaceIngressFsBridge(
+  sandbox: SandboxContext,
+): SandboxFsBridge {
+  const ingressContext = {
+    workspaceDir: sandbox.workspaceDir,
+    agentWorkspaceDir: sandbox.workspaceDir,
+    workspaceAccess: "rw" as const,
+    containerName: sandbox.containerName,
+    containerWorkdir: sandbox.containerWorkdir,
+    docker: { binds: [] },
+    ...(sandbox.backend
+      ? {
+          backend: {
+            runShellCommand: sandbox.backend.runShellCommand.bind(sandbox.backend),
+          },
+        }
+      : {}),
+  };
+  return (
+    sandbox.backend?.createFsBridge?.({ sandbox: ingressContext }) ??
+    createSandboxFsBridge({ sandbox: ingressContext })
+  );
 }
 
 export async function ensureSandboxWorkspaceForSession(params: {

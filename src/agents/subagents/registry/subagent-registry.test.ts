@@ -122,7 +122,7 @@ const mocks = vi.hoisted(() => ({
     >;
     return store[scope.sessionKey];
   }),
-  listSessionEntries: vi.fn((scope: Omit<SessionAccessScope, "sessionKey">) => {
+  listSessionEntriesCore: vi.fn((scope: Omit<SessionAccessScope, "sessionKey">) => {
     const store = mocks.loadSessionStore(scope.storePath, { clone: false }) as Record<
       string,
       SessionEntry
@@ -130,7 +130,7 @@ const mocks = vi.hoisted(() => ({
     return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
   }),
   loadSessionStore: vi.fn((_storePath?: string, _options?: { clone?: boolean }) => ({})),
-  patchSessionEntry: vi.fn(
+  patchSessionEntryCore: vi.fn(
     async (
       scope: SessionAccessScope,
       update: (
@@ -238,16 +238,16 @@ vi.mock("../../../config/config.js", () => {
 vi.mock("../../../config/sessions.js", () => ({
   loadSessionStore: mocks.loadSessionStore,
   resolveAgentIdFromSessionKey: mocks.resolveAgentIdFromSessionKey,
-  resolveStorePath: mocks.resolveStorePath,
+  resolveSessionStorePathCore: mocks.resolveStorePath,
   updateSessionStore: mocks.updateSessionStore,
 }));
 
 vi.mock("../../../config/sessions/session-accessor.js", () => ({
-  listSessionEntries: mocks.listSessionEntries,
-  listSessionEntriesReadOnly: mocks.listSessionEntries,
+  listSessionEntriesCore: mocks.listSessionEntriesCore,
+  listSessionEntriesReadOnly: mocks.listSessionEntriesCore,
   loadSessionEntry: mocks.loadSessionEntry,
   loadSessionEntryReadOnly: mocks.loadSessionEntry,
-  patchSessionEntry: mocks.patchSessionEntry,
+  patchSessionEntryCore: mocks.patchSessionEntryCore,
 }));
 
 vi.mock("../../../sessions/session-lifecycle-events.js", () => ({
@@ -1062,7 +1062,7 @@ describe("subagent registry seam flow", () => {
 
   it("keeps killed session timing root-admitted after task finalization", async () => {
     let finishTiming: (() => void) | undefined;
-    mocks.patchSessionEntry.mockImplementationOnce(async () => {
+    mocks.patchSessionEntryCore.mockImplementationOnce(async () => {
       await new Promise<void>((resolve) => {
         finishTiming = resolve;
       });
@@ -1133,6 +1133,53 @@ describe("subagent registry seam flow", () => {
       status: "killed",
     });
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("atomically activates a provisional attachment owner under the gateway run id", () => {
+    const provisionalRunId = "attachment-owner-provisional";
+    const attachmentsDir =
+      "/workspace/.openclaw/attachments/00000000-0000-4000-8000-000000000001";
+    mod.addSubagentRunForTests({
+      runId: provisionalRunId,
+      childSessionKey: "agent:main:subagent:attachment-owner",
+      task: "activate attachment owner",
+      createdAt: Date.now(),
+      execution: { status: "queued" },
+      attachmentsDir,
+      attachmentsRootDir: "/workspace",
+    });
+
+    expect(mod.startQueuedSubagentRun(provisionalRunId, "gateway-attachment-run")).toBe(true);
+    expect(mod.getSubagentRunByRunId(provisionalRunId)).toBeUndefined();
+    expect(mod.getSubagentRunByRunId("gateway-attachment-run")).toMatchObject({
+      taskRunId: provisionalRunId,
+      attachmentsDir,
+      execution: { status: "running" },
+    });
+    expect(mod.getSubagentRunByRunId("gateway-attachment-run")?.swarmRunId).toBeUndefined();
+  });
+
+  it("terminalizes a failed provisional attachment owner for immediate sweep retry", () => {
+    const runId = "attachment-owner-failed";
+    mod.addSubagentRunForTests({
+      runId,
+      childSessionKey: "agent:main:subagent:attachment-owner-failed",
+      task: "retain failed attachment owner",
+      createdAt: Date.now(),
+      execution: { status: "queued" },
+      attachmentsDir:
+        "/workspace/.openclaw/attachments/00000000-0000-4000-8000-000000000002",
+      attachmentsRootDir: "/workspace",
+    });
+
+    expect(mod.settleFailedQueuedSubagentLaunch(runId, "materialization failed")).toBe(true);
+    expect(mod.getSubagentRunByRunId(runId)).toMatchObject({
+      archiveAtMs: expect.any(Number),
+      cleanupHandled: false,
+      delivery: { status: "not_required" },
+      execution: { status: "terminal", suppressSessionEffects: true },
+    });
+    expect(mod.getSubagentRunByRunId(runId)?.collectorLaunchCleanupPending).toBeUndefined();
   });
 
   it("records early structured output through the child session identity", () => {
@@ -4808,7 +4855,7 @@ describe("subagent registry seam flow", () => {
       timingWriteStarted = resolve;
     });
     const timingWriteFinished = new Promise<void>((resolveFinished) => {
-      mocks.patchSessionEntry.mockImplementationOnce(async (scope, update) => {
+      mocks.patchSessionEntryCore.mockImplementationOnce(async (scope, update) => {
         timingWriteStarted?.();
         await new Promise<void>((resolve) => {
           releaseTimingWrite = resolve;
@@ -4913,7 +4960,7 @@ describe("subagent registry seam flow", () => {
       ),
     ).toBe(false);
     expect(
-      mocks.patchSessionEntry.mock.calls.some(
+      mocks.patchSessionEntryCore.mock.calls.some(
         ([scope]) => (scope as SessionAccessScope).sessionKey === childSessionKey,
       ),
     ).toBe(false);

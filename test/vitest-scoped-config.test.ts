@@ -610,9 +610,13 @@ describe("scoped vitest configs", () => {
     expect(requireTestConfig(defaultCliConfig).exclude).toEqual(
       expect.arrayContaining(cliProcessTestFiles.map((file) => file.replace("src/cli/", ""))),
     );
-    expect(requireTestConfig(defaultCliProcessConfig).include).toEqual(cliProcessTestFiles);
-    expect(requireTestConfig(defaultCliProcessConfig).fileParallelism).toBe(false);
-    expect(requireTestConfig(defaultCliProcessConfig).env).toMatchObject({
+    const processTestConfig = requireTestConfig(defaultCliProcessConfig);
+    expect(processTestConfig.include).toEqual(cliProcessTestFiles);
+    for (const file of cliProcessTestFiles) {
+      expect(matchingExcludePatterns(processTestConfig.exclude ?? [], file), file).toEqual([]);
+    }
+    expect(processTestConfig.fileParallelism).toBe(false);
+    expect(processTestConfig.env).toMatchObject({
       ESBUILD_WORKER_THREADS: "0",
     });
   });

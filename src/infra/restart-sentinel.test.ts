@@ -35,7 +35,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   executeSqliteQuerySync,
@@ -71,7 +71,7 @@ beforeEach(() => {
 });
 
 async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<void> {
-  await withTempDir({ prefix: "openclaw-sentinel-" }, async (tempDir) => {
+  await withTestDir({ prefix: "openclaw-sentinel-" }, async (tempDir) => {
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, run);
     } finally {
@@ -550,7 +550,7 @@ describe("restart sentinel", () => {
     },
   ] as const)("persists the verified Git install receipt after a $name", async (testCase) => {
     await withRestartSentinelStateDir(async () => {
-      await withTempDir({ prefix: "openclaw-install-root-" }, async (tempDir) => {
+      await withTestDir({ prefix: "openclaw-install-root-" }, async (tempDir) => {
         const installRoot = path.join(tempDir, "checkout");
         const installAlias = path.join(tempDir, "checkout-alias");
         await fs.mkdir(installRoot);
@@ -665,7 +665,7 @@ describe("restart sentinel", () => {
 
   it("rejects the same Git revision when the restarted checkout root differs", async () => {
     await withRestartSentinelStateDir(async () => {
-      await withTempDir({ prefix: "openclaw-install-root-mismatch-" }, async (tempDir) => {
+      await withTestDir({ prefix: "openclaw-install-root-mismatch-" }, async (tempDir) => {
         const expectedRoot = path.join(tempDir, "expected");
         const runningRoot = path.join(tempDir, "running");
         await fs.mkdir(expectedRoot);

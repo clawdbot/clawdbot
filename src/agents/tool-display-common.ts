@@ -40,7 +40,7 @@ type CoerceDisplayValueOptions = {
 };
 
 /** Normalize a tool name for fallback display. */
-export function normalizeToolName(name?: string): string {
+export function normalizeToolDisplayName(name?: string): string {
   return (name ?? "tool").trim();
 }
 

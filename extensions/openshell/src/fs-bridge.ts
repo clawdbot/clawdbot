@@ -1,7 +1,10 @@
 // Openshell plugin module implements fs bridge behavior.
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
+import {
+  ensureDirectoryWithinRoot,
+  root as fsRoot,
+} from "openclaw/plugin-sdk/file-access-runtime";
 import type {
   SandboxFsBridge,
   SandboxFsStat,
@@ -154,7 +157,12 @@ class OpenShellFsBridge implements SandboxFsBridge {
     return "created";
   }
 
-  async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
+  async mkdirp(params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+    mode?: number;
+  }): Promise<void> {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
     this.ensureWritable(target, "create directories");
@@ -164,8 +172,8 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowMissingLeaf: true,
       allowFinalSymlinkForUnlink: false,
     });
-    await this.backend.mkdirpRemotePath(target.containerPath, params.signal);
-    await mkdirLocalRootPath({ hostPath, target });
+    await this.backend.mkdirpRemotePath(target.containerPath, params.signal, params.mode);
+    await mkdirLocalRootPath({ hostPath, target, mode: params.mode });
   }
 
   async remove(params: {
@@ -404,13 +412,21 @@ class OpenShellFsBridge implements SandboxFsBridge {
 async function mkdirLocalRootPath(params: {
   target: ResolvedMountPath;
   hostPath: string;
+  mode?: number;
 }): Promise<void> {
   const relativePath = relativeToRoot(params.target, params.hostPath);
   if (!relativePath) {
     return;
   }
-  const root = await fsRoot(params.target.mountHostRoot);
-  await root.mkdir(relativePath);
+  const result = await ensureDirectoryWithinRoot({
+    rootDir: params.target.mountHostRoot,
+    requestedPath: relativePath,
+    scopeLabel: "OpenShell workspace mirror",
+    mode: params.mode,
+  });
+  if (!result.ok) {
+    throw new Error(result.error);
+  }
 }
 
 async function removeLocalRootPath(params: {

@@ -1,4 +1,5 @@
 // Hermes provider config contract parsing and normalization.
+import { asPositiveFiniteNumber as readPositiveNumber } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   MCP_ENV_REFERENCE_RE,
@@ -163,9 +164,7 @@ export function resolveHermesImplicitBaseUrl(providerId: string | undefined): st
     : undefined;
 }
 
-export function readPositiveNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
+export { readPositiveNumber };
 
 export function resolveProviderApi(
   raw: Record<string, unknown>,

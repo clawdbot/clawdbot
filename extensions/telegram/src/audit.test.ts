@@ -11,17 +11,21 @@ vi.mock("openclaw/plugin-sdk/text-utility-runtime", () => ({
   fetchWithTimeout: fetchWithTimeoutMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
-  isRecord: (value: unknown): value is Record<string, unknown> =>
-    typeof value === "object" && value !== null,
-  normalizeOptionalString: (value: unknown) => {
+vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => {
+  const isMockRecord = (value: unknown): value is Record<string, unknown> =>
+    typeof value === "object" && value !== null;
+  const normalizeMockOptionalString = (value: unknown) => {
     if (typeof value !== "string") {
       return undefined;
     }
     const trimmed = value.trim();
     return trimmed ? trimmed : undefined;
-  },
-}));
+  };
+  return {
+    isRecord: isMockRecord,
+    normalizeOptionalString: normalizeMockOptionalString,
+  };
+});
 
 function mockGetChatMemberStatus(status: string) {
   fetchWithTimeoutMock.mockResolvedValueOnce(

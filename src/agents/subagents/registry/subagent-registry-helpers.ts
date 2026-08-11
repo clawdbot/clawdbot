@@ -6,13 +6,19 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES } from "../../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../../config/config.js";
-import { resolveAgentIdFromSessionKey, resolveStorePath } from "../../../config/sessions.js";
-import { patchSessionEntry } from "../../../config/sessions/session-accessor.js";
+import {
+  resolveAgentIdFromSessionKey,
+  resolveSessionStorePathCore,
+} from "../../../config/sessions.js";
+import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { computeBackoff } from "../../../infra/backoff.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { truncateUtf8Prefix } from "../../../utils/utf8-truncate.js";
-import { resolveSandboxContext } from "../../sandbox/context.js";
+import {
+  createSandboxWorkspaceIngressFsBridge,
+  resolveSandboxContext,
+} from "../../sandbox/context.js";
 import { removeSubagentAttachmentsDir } from "../spawn/subagent-attachments.js";
 import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
@@ -108,7 +114,7 @@ export async function persistSubagentSessionTiming(
 
   const cfg = getRuntimeConfig();
   const agentId = resolveAgentIdFromSessionKey(childSessionKey);
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const startedAt = getSubagentSessionStartedAt(entry);
   const endedAt =
     typeof entry.execution.endedAt === "number" && Number.isFinite(entry.execution.endedAt)
@@ -120,7 +126,7 @@ export async function persistSubagentSessionTiming(
       : getSubagentSessionRuntimeMs(entry);
   const status = resolveSubagentSessionStatus(entry);
 
-  await patchSessionEntry(
+  await patchSessionEntryCore(
     { storePath, sessionKey: childSessionKey },
     (sessionEntry) => {
       // Recheck under the session-store write lock. A completion may have
@@ -187,6 +193,7 @@ export async function safeRemoveAttachmentsDir(
   options?: {
     config?: OpenClawConfig;
     resolveSandbox?: typeof resolveSandboxContext;
+    createIngress?: typeof createSandboxWorkspaceIngressFsBridge;
   },
 ): Promise<boolean> {
   if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
@@ -204,7 +211,9 @@ export async function safeRemoveAttachmentsDir(
         sessionKey: entry.attachmentsSandboxSessionKey,
         workspaceDir: entry.attachmentsSandboxWorkspaceDir,
       });
-      sandboxFsBridge = sandbox?.fsBridge;
+      sandboxFsBridge = sandbox
+        ? (options?.createIngress ?? createSandboxWorkspaceIngressFsBridge)(sandbox)
+        : undefined;
     } catch {
       return false;
     }

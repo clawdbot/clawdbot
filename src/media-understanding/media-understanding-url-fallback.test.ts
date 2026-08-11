@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { MediaAttachmentCache } from "./attachments.js";
 
 const readRemoteMediaBufferMock = vi.hoisted(() => vi.fn());
@@ -39,7 +39,7 @@ async function withBlockedLocalAttachmentFallback(
   prefix: string,
   run: (params: { cache: MediaAttachmentCache; fallbackUrl: string }) => Promise<void>,
 ) {
-  await withTempDir({ prefix }, async (base) => {
+  await withTestDir({ prefix }, async (base) => {
     const attachmentRoot = path.join(base, "attachment");
     const allowedRoot = path.join(base, "allowed");
     const attachmentPath = path.join(attachmentRoot, "voice-note.m4a");
@@ -125,7 +125,7 @@ describe("media understanding attachment URL fallback", () => {
   });
 
   it("keeps HTTP fallback when the supplied local path is missing", async () => {
-    await withTempDir(
+    await withTestDir(
       { prefix: "openclaw-media-cache-missing-path-url-fallback-" },
       async (base) => {
         const fallbackUrl = "https://example.com/fallback.jpg";

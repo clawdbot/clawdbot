@@ -73,7 +73,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import type { ModelRegistry } from "../llm/model-registry.js";
 import { redactSecrets } from "../logging/redact.js";
 import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
-import { resolveProviderThinkingProfile } from "../plugins/provider-runtime.js";
+import { resolveRuntimeThinkingProfile } from "../plugins/provider-runtime.js";
 import { LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
 import { findFinalTagMatches, stripFinalTags } from "../shared/text/final-tags.js";
@@ -4278,7 +4278,7 @@ function resolveGatewayLiveModelThinkingLevel(params: {
   if (!isGatewayLiveThinkingLevel(normalized)) {
     return requestedLevel;
   }
-  const profile = resolveProviderThinkingProfile({
+  const profile = resolveRuntimeThinkingProfile({
     provider: model.provider,
     config: params.cfg,
     context: {

@@ -1,7 +1,6 @@
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import {
-  isGatewayRestartDraining,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
@@ -45,7 +44,6 @@ import {
 } from "./subagent-registry-lifecycle-wake.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
-const MAX_DETACHED_CLEANUP_RETRIES = 3;
 type BrowserCleanup = typeof cleanupBrowserSessionsForLifecycleEnd;
 
 export async function removeSubagentAttachmentsForCleanup(
@@ -86,7 +84,6 @@ export function scheduleResumeSubagentRun(
       defaultRuntime.log(`[warn] subagent cleanup resume failed (${runId}): ${String(err)}`);
       const current = params.runs.get(runId);
       if (
-        isGatewayRestartDraining() &&
         current === entry &&
         typeof current.cleanupCompletedAt !== "number"
       ) {
@@ -140,21 +137,22 @@ export function runDetachedCleanupAttempt(
         params.resumedRuns.delete(args.runId);
         params.persist(args.runId);
         const failureCount = context.incrementCleanupFailureCount(current);
-        if (failureCount <= MAX_DETACHED_CLEANUP_RETRIES) {
-          scheduleResumeSubagentRun(
-            context,
-            args.runId,
-            current,
-            resolveAnnounceRetryDelayMs(failureCount),
-            args.cleanupGeneration,
-          );
-        }
+        scheduleResumeSubagentRun(
+          context,
+          args.runId,
+          current,
+          resolveAnnounceRetryDelayMs(failureCount),
+          args.cleanupGeneration,
+        );
       }
     }).catch((err: unknown) => {
       defaultRuntime.log(
         `[warn] subagent cleanup admission failed (${args.runId}): ${String(err)}`,
       );
-      if (isGatewayRestartDraining()) {
+      if (
+        params.runs.get(args.runId) === args.entry &&
+        typeof args.entry.cleanupCompletedAt !== "number"
+      ) {
         scheduleResumeSubagentRun(
           context,
           args.runId,

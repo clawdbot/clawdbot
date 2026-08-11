@@ -169,6 +169,34 @@ describe("MCP OAuth provider", () => {
 
   afterEach(() => closeOpenClawStateDatabaseForTest());
 
+  it("reuses a valid stored session without persisting an authorization redirect", async () => {
+    await withTempHome(
+      async () => {
+        const provider = createMcpOAuthClientProvider({ identity: REMOTE_IDENTITY });
+        await provider.saveTokens({
+          access_token: "stored-access",
+          refresh_token: "stored-refresh",
+          token_type: "Bearer",
+          expires_in: 3600,
+        });
+        const before = readMcpOAuthStore(REMOTE_IDENTITY.storeKey);
+        authMock.mockImplementationOnce(async (loginProvider) =>
+          (await loginProvider.tokens()) ? "AUTHORIZED" : await persistRedirect(loginProvider),
+        );
+
+        await expect(
+          startMcpOAuthAuthorization(REMOTE_IDENTITY, resolvedOAuthConfig(REMOTE_IDENTITY), {}),
+        ).resolves.toEqual({ status: "authorized" });
+        expect(readMcpOAuthStore(REMOTE_IDENTITY.storeKey)).toEqual(before);
+      },
+      {
+        prefix: "openclaw-mcp-oauth-existing-session-",
+        skipSessionCleanup: true,
+        env: { OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
+      },
+    );
+  });
+
   it("preserves insufficient scope and forces the next login through authorization", async () => {
     await withTempHome(
       async () => {
@@ -231,7 +259,7 @@ describe("MCP OAuth provider", () => {
         });
         await expect(
           startMcpOAuthAuthorization(REMOTE_IDENTITY, resolvedOAuthConfig(REMOTE_IDENTITY), {}),
-        ).resolves.toMatchObject({ state: "state-1234567890" });
+        ).resolves.toMatchObject({ status: "redirect", state: "state-1234567890" });
         expect(provider.tokens()).toMatchObject({ access_token: "decoy-token" });
 
         authMock.mockImplementationOnce(async (loginProvider) => {
@@ -749,6 +777,9 @@ describe("MCP OAuth provider", () => {
           resolvedOAuthConfig(CALENDLY_IDENTITY),
           {},
         );
+        if (session.status !== "redirect") {
+          throw new Error("expected MCP OAuth redirect");
+        }
 
         expect(session.redirectUrl).toBe("http://localhost:8989/oauth/callback");
         expect(authMock.mock.calls[1]?.[0]?.clientMetadata.redirect_uris).toEqual([
@@ -903,6 +934,9 @@ describe("MCP OAuth provider", () => {
         };
         try {
           const first = await startMcpOAuthAuthorization(identity, config, {});
+          if (first.status !== "redirect") {
+            throw new Error("expected first MCP OAuth redirect");
+          }
           expect(readMcpOAuthStore(identity.storeKey)).toMatchObject({
             codeVerifier: expect.any(String),
             lastAuthorizationUrl: first.authorizationUrl,
@@ -918,6 +952,9 @@ describe("MCP OAuth provider", () => {
           expect(readMcpOAuthStore(identity.storeKey)).not.toHaveProperty("codeVerifier");
 
           const second = await startMcpOAuthAuthorization(identity, config, {});
+          if (second.status !== "redirect") {
+            throw new Error("expected second MCP OAuth redirect");
+          }
           await expect(
             completeMcpOAuthAuthorization(identity, config, { code: "wrong-code" }),
           ).rejects.toThrow();
@@ -928,6 +965,9 @@ describe("MCP OAuth provider", () => {
           });
 
           const third = await startMcpOAuthAuthorization(identity, config, {});
+          if (third.status !== "redirect") {
+            throw new Error("expected third MCP OAuth redirect");
+          }
           expect(third.authorizationUrl).not.toBe(second.authorizationUrl);
           await expect(
             completeMcpOAuthAuthorization(identity, config, {

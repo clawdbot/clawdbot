@@ -7,7 +7,7 @@ import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routi
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentMainSessionKey } from "./main-session.js";
-import { resolveStorePath } from "./paths.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import { clearPluginOwnedSessionState } from "./plugin-host-cleanup.js";
 import {
   copySqliteSessionOwnedStateForCanonicalRepair as copySessionOwnedStateForCanonicalRepair,
@@ -28,13 +28,13 @@ import {
   loadExactSessionEntryReadOnly,
   loadSessionEntry,
   loadSessionEntryReadOnly,
-  patchSessionEntry,
+  patchSessionEntryCore,
   patchSessionEntryTarget,
-  readSessionUpdatedAt,
+  readSessionUpdatedAtCore,
   replaceSessionEntry,
   replaceSessionEntrySync,
   resolveSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "./session-accessor.sqlite-entry.js";
 import type {
   SessionAccessScope,
@@ -80,15 +80,15 @@ export {
   loadExactSessionEntryReadOnly,
   loadSessionEntry,
   loadSessionEntryReadOnly,
-  patchSessionEntry,
+  patchSessionEntryCore,
   patchSessionEntryTarget,
-  readSessionUpdatedAt,
+  readSessionUpdatedAtCore,
   replaceSessionEntry,
   // Intentionally unfenced: branching owns session-identity freshness; worker transcript commit
   // fresh-reads and checks sessionId inside its locked commit, and void/entry has no rebound signal.
   replaceSessionEntrySync,
   resolveSessionEntryFromStore,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 };
 
 /** Resolves a session directly through canonical SQLite row and alias ownership. */
@@ -115,7 +115,10 @@ function resolveLogicalSessionStoreCandidates(params: {
   const storeConfig = params.cfg.session?.store;
   const defaultTarget = {
     agentId: params.agentId,
-    storePath: resolveStorePath(storeConfig, { agentId: params.agentId, env: params.env }),
+    storePath: resolveSessionStorePathCore(storeConfig, {
+      agentId: params.agentId,
+      env: params.env,
+    }),
   };
   if (!isStorePathTemplate(storeConfig)) {
     return [defaultTarget];
@@ -212,7 +215,7 @@ export function resolveSessionEntryCandidateTarget(
   const incognitoAgentId = incognitoKey ? resolveAgentIdFromSessionKey(incognitoKey) : undefined;
   const storePath = incognitoAgentId
     ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: incognitoAgentId, env: scope.env })
-    : resolveStorePath(scope.cfg.session?.store, {
+    : resolveSessionStorePathCore(scope.cfg.session?.store, {
         agentId: scope.agentId,
         env: scope.env,
       });
@@ -294,7 +297,7 @@ function resolveSessionEntryStoreTarget(
   });
   const fallback = candidates[0] ?? {
     agentId,
-    storePath: resolveStorePath(scope.cfg.session?.store, { agentId, env: scope.env }),
+    storePath: resolveSessionStorePathCore(scope.cfg.session?.store, { agentId, env: scope.env }),
   };
   let selectedStorePath = fallback.storePath;
   let selectedMatch = findCanonicalSessionEntryMatch(
@@ -345,7 +348,7 @@ export async function updateResolvedSessionEntry<T>(
     return { canonicalKey: target.canonicalKey, found: false };
   }
   let updateResult: T | undefined;
-  const updated = await patchSessionEntry(
+  const updated = await patchSessionEntryCore(
     { sessionKey: target.storeKey, storePath: target.storePath },
     async (entry) => {
       const context: ResolvedSessionEntryUpdateContext = {
@@ -376,7 +379,7 @@ export async function updateResolvedSessionEntry<T>(
 }
 
 /** Lists entries from the resolved store, preserving the persisted key for each row. */
-export function listSessionEntries(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
+export function listSessionEntriesCore(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
   if (scope.clone === false) {
     return openSessionEntryReadView(scope).entries();
   }
@@ -416,7 +419,7 @@ export async function patchSessionEntryWithKey(
   ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
   options: SessionEntryPatchOptions = {},
 ): Promise<SessionEntryPatchResult | null> {
-  const entry = await patchSessionEntry(scope, update, options);
+  const entry = await patchSessionEntryCore(scope, update, options);
   return entry ? { sessionKey: normalizeStoreSessionKey(scope.sessionKey), entry } : null;
 }
 

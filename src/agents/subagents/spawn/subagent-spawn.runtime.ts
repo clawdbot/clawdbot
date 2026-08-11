@@ -6,7 +6,7 @@
 export { getRuntimeConfig } from "../../../config/config.js";
 export {
   loadSessionEntryReadOnly as loadSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 export { forkSessionEntryFromParent } from "../../../auto-reply/reply/session-fork.js";
 export { ensureContextEnginesInitialized } from "../../../context-engine/init.js";
@@ -31,7 +31,10 @@ export {
 export { resolveAgentConfig } from "../../agent-scope.js";
 export { AGENT_LANE_SUBAGENT } from "../../lanes.js";
 export { loadPreparedModelCatalog } from "../../prepared-model-catalog.js";
-export { resolveSandboxContext } from "../../sandbox/context.js";
+export {
+  createSandboxWorkspaceIngressFsBridge,
+  resolveSandboxContext,
+} from "../../sandbox/context.js";
 export { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 export { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
 export {

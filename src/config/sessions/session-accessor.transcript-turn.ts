@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { getRuntimeConfig } from "../io.js";
-import { resolveStorePath } from "./paths.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import { updateSessionEntry } from "./session-accessor.entry-mutation.js";
 import {
   loadSessionEntryReadOnly,
@@ -323,7 +323,7 @@ async function resolveTranscriptTurnTarget(
   }
   const storePath =
     scope.storePath ??
-    resolveStorePath(getRuntimeConfig().session?.store, {
+    resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
       agentId,
       env: scope.env,
     });

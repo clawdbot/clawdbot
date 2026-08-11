@@ -15,10 +15,10 @@ import {
 } from "../../routing/session-key.js";
 import { listOpenIncognitoAgentDatabases } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { resolveStorePath } from "./paths.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import {
   countSessionEntryRowsReadOnly,
-  listSessionEntries,
+  listSessionEntriesCore,
   listSessionEntriesReadOnly,
 } from "./session-accessor.js";
 import type { SessionEntryListScope } from "./session-accessor.types.js";
@@ -72,7 +72,9 @@ function loadGatewayStoreEntries(params: {
   projection: GatewaySessionEntryProjection;
   storePath: string;
 }) {
-  const listEntries = params.includeOpenDatabases ? listSessionEntries : listSessionEntriesReadOnly;
+  const listEntries = params.includeOpenDatabases
+    ? listSessionEntriesCore
+    : listSessionEntriesReadOnly;
   return listEntries({
     agentId: params.agentId,
     clone: false,
@@ -190,7 +192,7 @@ function resolveGatewaySessionStoreTargets(
     const durableTargets = dedupeSessionStoreTargetsBySqliteTarget(
       ownerIds.map((agentId) => ({
         agentId,
-        storePath: resolveStorePath(storeConfig, { agentId }),
+        storePath: resolveSessionStorePathCore(storeConfig, { agentId }),
       })),
       {
         defaultAgentId,
@@ -248,7 +250,7 @@ export function canPrewarmCombinedSessionStoresForGateway(
 }
 
 /** Loads and canonicalizes session entries for gateway views across one or more agent stores. */
-export function loadCombinedSessionStoreForGateway(
+export function loadCombinedSessionStoreForGatewayCore(
   cfg: OpenClawConfig,
   opts: GatewaySessionStoreOptions = {},
 ): {
@@ -302,7 +304,7 @@ export function loadCombinedSessionStoreForGateway(
         });
       }
     }
-    const durableStorePath = resolveStorePath(storeConfig, { agentId: defaultAgentId });
+    const durableStorePath = resolveSessionStorePathCore(storeConfig, { agentId: defaultAgentId });
     const incognitoStorePaths = mergeOpenIncognitoStores({
       cfg,
       combined,

@@ -9,7 +9,7 @@ import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { shouldSuppressBuiltInModel, shouldUnconditionallySuppress } from "../model-suppression.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
-import { resolveConfiguredFallbackModel } from "./model.configured-fallback.js";
+import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
 import {
   applyConfiguredProviderOverrides,
   findInlineModelMatch,
@@ -463,7 +463,7 @@ export function resolveModelWithPreparedRegistry(
   }
   return params.skipConfiguredFallback
     ? undefined
-    : resolveConfiguredFallbackModel({
+    : buildConfiguredFallbackModel({
         ...params,
         providerMetadataOwners: getRegistryProviderMetadataOwners(params.modelRegistry),
       });

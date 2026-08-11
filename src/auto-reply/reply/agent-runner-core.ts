@@ -193,7 +193,7 @@ export function hasSuccessfulTerminalSourceReplyDelivery(params: {
   );
 }
 
-export function resolveConfiguredFallbackModel(params: {
+export function resolveFallbackOriginModel(params: {
   run: FollowupRun["run"];
   fallbackStateEntry?: SessionEntry;
 }): { provider: string; model: string; persistedAutoFallback: boolean } {

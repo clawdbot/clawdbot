@@ -1,10 +1,10 @@
-import { normalizeToolName } from "../agents/tool-policy.js";
+import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import type { RuntimePluginToolGrant } from "./runtime/tool-grant.js";
 
 const RUNTIME_PLUGIN_TOOL_GRANT_PREFIX = "__openclaw_runtime_plugin_tool_grant__";
 
 function runtimePluginToolGrantKey(pluginId: string, toolName: string): string {
-  return `${RUNTIME_PLUGIN_TOOL_GRANT_PREFIX}:${pluginId.trim().toLowerCase()}:${normalizeToolName(toolName)}`;
+  return `${RUNTIME_PLUGIN_TOOL_GRANT_PREFIX}:${pluginId.trim().toLowerCase()}:${normalizeToolPolicyName(toolName)}`;
 }
 
 export function appendRuntimePluginToolGrant(
@@ -24,7 +24,7 @@ export function isPluginToolAllowed(
   pluginId: string,
   toolName: string,
 ): boolean {
-  const normalizedToolName = normalizeToolName(toolName);
+  const normalizedToolName = normalizeToolPolicyName(toolName);
   return (
     allowlist.has(normalizedToolName) ||
     allowlist.has(runtimePluginToolGrantKey(pluginId, normalizedToolName))

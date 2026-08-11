@@ -73,7 +73,7 @@ import {
   getSessionDefaults,
   listAgentsForGateway,
   listSessionsFromStoreAsync,
-  loadCombinedSessionStoreForGateway,
+  loadCombinedSessionStoreForGatewayCore,
   loadSessionEntry,
   loadSessionEntryReadOnly,
   resolveCanonicalGatewaySessionStoreKey,
@@ -732,7 +732,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async listSessions(opts?: Parameters<TuiBackend["listSessions"]>[0]): Promise<TuiSessionList> {
     await this.ready;
     const cfg = getRuntimeConfig();
-    const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
+    const { storePath, store } = loadCombinedSessionStoreForGatewayCore(cfg, {
       agentId: opts?.agentId,
       projection: "list",
     });

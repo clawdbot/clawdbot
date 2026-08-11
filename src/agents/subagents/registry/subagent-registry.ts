@@ -212,7 +212,6 @@ function finalizeResumedAnnounceGiveUpInBackground(
   }).catch((error: unknown) => {
     log.warn("failed to finalize exhausted subagent delivery", { runId, reason, error });
     if (
-      isGatewayRestartDraining() &&
       subagentRuns.get(runId) === entry &&
       typeof entry.cleanupCompletedAt !== "number"
     ) {

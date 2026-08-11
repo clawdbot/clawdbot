@@ -18,7 +18,7 @@ import type {
 import type { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import {
   loadSessionEntryReadOnly,
-  patchSessionEntry,
+  patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -264,7 +264,7 @@ export async function defaultPersistDigest(params: {
   stillCurrent?: () => boolean;
 }): Promise<boolean | null> {
   let missingEntry = false;
-  const result = await patchSessionEntry(
+  const result = await patchSessionEntryCore(
     { sessionKey: params.sessionKey, agentId: params.agentId },
     (entry, context) => {
       if (!context.existingEntry) {

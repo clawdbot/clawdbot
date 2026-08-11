@@ -26,7 +26,7 @@ import {
   truncateLiveExecOutput,
 } from "./embedded-agent-subscribe.tools.js";
 import type { AgentEvent } from "./runtime/index.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 
 type ChannelToolProgress = {
   text: string;
@@ -69,7 +69,7 @@ export function handleToolExecutionUpdate(
     hideFromChannelProgress?: boolean;
   },
 ) {
-  const toolName = normalizeToolName(evt.toolName);
+  const toolName = normalizeToolPolicyName(evt.toolName);
   const toolCallId = evt.toolCallId;
   const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const partial = evt.partialResult;

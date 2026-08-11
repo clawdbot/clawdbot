@@ -1,12 +1,16 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 const legacyAttachmentLog = createSubsystemLogger("state/legacy-attachment-cleanup");
 const GENERATED_SUBAGENT_ATTACHMENT_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+type LegacyAttachmentCleanupDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs">;
 
 function parsePayload(value: string): Record<string, unknown> | null {
   try {
@@ -26,11 +30,11 @@ export function retireLegacySubagentAttachmentCleanup(db: DatabaseSync): void {
   if (!tableExists(db, "subagent_runs")) {
     return;
   }
-  const rows = db.prepare("SELECT run_id, payload_json FROM subagent_runs").all() as Array<{
-    run_id: string;
-    payload_json: string;
-  }>;
-  const update = db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?");
+  const kysely = getNodeSqliteKysely<LegacyAttachmentCleanupDatabase>(db);
+  const rows = executeSqliteQuerySync(
+    db,
+    kysely.selectFrom("subagent_runs").select(["run_id", "payload_json"]),
+  ).rows;
   const warnedRoots = new Set<string>();
   for (const row of rows) {
     const payload = parsePayload(row.payload_json);
@@ -71,6 +75,12 @@ export function retireLegacySubagentAttachmentCleanup(db: DatabaseSync): void {
     delete payload.attachmentsDir;
     delete payload.attachmentsRootDir;
     delete payload.retainAttachmentsOnKeep;
-    update.run(JSON.stringify(payload), row.run_id);
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .updateTable("subagent_runs")
+        .set({ payload_json: JSON.stringify(payload) })
+        .where("run_id", "=", row.run_id),
+    );
   }
 }

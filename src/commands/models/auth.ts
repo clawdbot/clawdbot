@@ -985,7 +985,7 @@ function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: str
   );
 }
 
-export async function runModelsAuthLoginFlow(
+export async function runModelsAuthLoginFlowCore(
   opts: ModelsAuthLoginFlowOptions,
 ): Promise<ModelsAuthLoginFlowResult> {
   const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
@@ -1100,7 +1100,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     );
   }
 
-  await runModelsAuthLoginFlow({
+  await runModelsAuthLoginFlowCore({
     ...opts,
     runtime,
     prompter: createClackPrompter(),

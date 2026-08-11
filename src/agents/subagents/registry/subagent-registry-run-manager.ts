@@ -1378,8 +1378,10 @@ export function createSubagentRunManager(params: {
         params.runs.set(previousRunId, entry);
       }
     };
-    entry.swarmRunId ??= previousRunId;
-    entry.schedulerSlotId ??= entry.swarmRunId;
+    if (entry.collect) {
+      entry.swarmRunId ??= previousRunId;
+      entry.schedulerSlotId ??= entry.swarmRunId;
+    }
     if (previousRunId !== nextRunId) {
       params.runs.delete(previousRunId);
       entry.runId = nextRunId;
@@ -1469,9 +1471,15 @@ export function createSubagentRunManager(params: {
       outcome: { status: "error", error, endedAt },
     };
     entry.queuedLaunch = undefined;
-    entry.collectorLaunchCleanupPending = true;
     entry.completion = { required: false, resultText: error, capturedAt: endedAt };
-    updateSwarmCollectorCompletion(entry, params.getRuntimeConfig());
+    entry.delivery = { status: "not_required" };
+    if (entry.collect) {
+      entry.collectorLaunchCleanupPending = true;
+      updateSwarmCollectorCompletion(entry, params.getRuntimeConfig());
+    } else {
+      entry.archiveAtMs = endedAt;
+      entry.execution.suppressSessionEffects = true;
+    }
     try {
       params.persistOrThrow(entry.runId);
     } catch (persistError) {
@@ -1502,7 +1510,7 @@ export function createSubagentRunManager(params: {
 
   const settleFailedQueuedSubagentLaunch = (runId: string, error: string) => {
     const entry = findRunByIdentity(runId);
-    if (!entry?.collect) {
+    if (!entry) {
       return false;
     }
     if (typeof entry.execution.endedAt !== "number") {
@@ -1510,6 +1518,9 @@ export function createSubagentRunManager(params: {
     }
     if (entry.collectorCompletion) {
       return true;
+    }
+    if (!entry.collect) {
+      return false;
     }
     const snapshot = structuredClone(entry);
     entry.swarmLaunchPending = false;

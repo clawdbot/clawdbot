@@ -136,7 +136,9 @@ export class SubagentLifecycleController {
     void this.cleanupFailureCounts.delete(entry);
 
   incrementCleanupFailureCount(entry: SubagentRunRecord): number {
-    const count = (this.cleanupFailureCounts.get(entry) ?? 0) + 1;
+    // Retry ownership is unbounded, but the exponent is not; backoff is already
+    // at its ceiling well before this cap.
+    const count = Math.min((this.cleanupFailureCounts.get(entry) ?? 0) + 1, 32);
     this.cleanupFailureCounts.set(entry, count);
     return count;
   }

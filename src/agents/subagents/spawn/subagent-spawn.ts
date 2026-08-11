@@ -23,13 +23,15 @@ import {
 } from "../../spawn-pipeline.js";
 import {
   completeCollectorLaunchCleanup,
+  registerSubagentRun,
+  releaseSubagentRun,
   settleFailedQueuedSubagentLaunch,
   startQueuedSubagentRun,
 } from "../registry/subagent-registry.js";
 import { activateSwarmRun, removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import {
   materializeSubagentAttachments,
-  removeSubagentAttachmentsDir,
+  type SubagentAttachmentCleanupClaim,
   type SubagentAttachmentReceiptFile,
 } from "./subagent-attachments.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
@@ -170,7 +172,6 @@ export async function spawnSubagentDirect(
       incognito,
       childSessionKey,
       childRuntimeSandboxed,
-      requesterSandboxAttachmentBoundary,
       targetAgentDir,
       modelPlan: plan,
       launchAuthorization,
@@ -309,20 +310,23 @@ export async function spawnSubagentDirect(
     let attachmentSandboxDir: string | undefined;
     let attachmentSandboxFsBridge: SandboxFsBridge | undefined;
     let attachmentSandboxWorkspaceDir: string | undefined;
-    if (params.attachments?.length && requesterSandboxAttachmentBoundary) {
+    let attachmentWorkspaceDir = spawnedCwd ?? spawnedWorkspaceDir;
+    if (params.attachments?.length && childRuntimeSandboxed) {
       try {
-        const requesterSandbox = await getSubagentSpawnDeps().resolveSandboxContext({
+        const childSandbox = await getSubagentSpawnDeps().resolveSandboxContext({
           config: cfg,
-          agentId: requesterAgentId,
-          sessionKey: requesterInternalKey,
-          // Re-enter the requester's actual writable mount. The target workspace
-          // may be a nested cross-agent workspace addressed through that bridge.
-          workspaceDir: requesterSandboxAttachmentBoundary.workspaceDir,
+          agentId: targetAgentId,
+          sessionKey: childSessionKey,
+          workspaceDir: attachmentWorkspaceDir,
         });
-        attachmentSandboxFsBridge = requesterSandbox?.fsBridge;
-        attachmentSandboxWorkspaceDir = attachmentSandboxFsBridge?.resolvePath({
-          filePath: requesterSandboxAttachmentBoundary.targetWorkspaceDir,
-        }).containerPath;
+        if (!childSandbox) {
+          throw new Error("child sandbox context was unavailable");
+        }
+        attachmentSandboxFsBridge =
+          getSubagentSpawnDeps().createSandboxWorkspaceIngressFsBridge(childSandbox);
+        attachmentWorkspaceDir = childSandbox.workspaceDir ?? attachmentWorkspaceDir;
+        attachmentSandboxWorkspaceDir =
+          childSandbox.agentWorkspaceDir ?? attachmentWorkspaceDir;
       } catch (error) {
         await cleanupCreatedSession(threadBindingReady);
         return {
@@ -341,34 +345,13 @@ export async function spawnSubagentDirect(
       }
     }
 
-    const materializedAttachments = await materializeSubagentAttachments({
-      config: cfg,
-      targetAgentId,
-      workspaceDir: spawnedCwd ?? spawnedWorkspaceDir,
-      attachments: params.attachments,
-      mountPathHint,
-      sandboxFsBridge: attachmentSandboxFsBridge,
-      sandboxWorkspaceDir: attachmentSandboxWorkspaceDir,
-    });
-    if (materializedAttachments && materializedAttachments.status !== "ok") {
-      await cleanupCreatedSession(threadBindingReady);
-      return {
-        status: materializedAttachments.status,
-        error: materializedAttachments.error,
-      };
-    }
-    if (materializedAttachments?.status === "ok") {
-      retainOnSessionKeep = materializedAttachments.retainOnSessionKeep;
-      attachmentsReceipt = materializedAttachments.receipt;
-      attachmentAbsDir = materializedAttachments.absDir;
-      attachmentRootDir = materializedAttachments.rootDir;
-      attachmentSandboxDir = materializedAttachments.sandboxDir;
-      childSystemPrompt = `${childSystemPrompt}\n\n${materializedAttachments.systemPromptSuffix}`;
-    }
+    const attachmentSandboxTargetDir = attachmentSandboxFsBridge?.resolvePath({
+      filePath: attachmentWorkspaceDir ?? attachmentSandboxWorkspaceDir ?? "",
+    }).containerPath;
 
     const deliverInitialChildRunDirectly =
       requestThreadBinding && spawnMode === "session" && hasBoundThreadDeliveryOrigin;
-    const { childLaunch, queuedLaunch, progressOrigin, shouldAnnounceCompletion, spawnedMetadata } =
+    const createLaunchPlan = (systemPrompt: string) =>
       buildSubagentLaunchRequest({
         childDepth,
         maxSpawnDepth,
@@ -383,7 +366,7 @@ export async function spawnSubagentDirect(
         childIdem,
         deliverInitialChildRunDirectly,
         outputSchema: params.outputSchema,
-        childSystemPrompt,
+        childSystemPrompt: systemPrompt,
         thinkingOverride,
         runTimeoutSeconds,
         label: label || undefined,
@@ -397,6 +380,133 @@ export async function spawnSubagentDirect(
         swarmSchedulerGroupKey,
         swarmMaxConcurrent: swarmConfig.maxConcurrent,
       });
+    let launchPlan: ReturnType<typeof buildSubagentLaunchRequest> | undefined;
+    let attachmentCleanupOwnerClaimed = false;
+    const applyAttachmentClaim = (claim: SubagentAttachmentCleanupClaim) => {
+      retainOnSessionKeep = claim.retainOnSessionKeep;
+      attachmentsReceipt = claim.receipt;
+      attachmentAbsDir = claim.absDir;
+      attachmentRootDir = claim.rootDir;
+      attachmentSandboxDir = claim.sandboxDir;
+      childSystemPrompt = `${childSystemPrompt}\n\n${claim.systemPromptSuffix}`;
+      launchPlan = createLaunchPlan(childSystemPrompt);
+      const registration = buildRegistration(childIdem, launchPlan, true);
+      registerSubagentRun(registration);
+      attachmentCleanupOwnerClaimed = true;
+    };
+
+    function buildRegistration(
+      runId: string,
+      plan: ReturnType<typeof buildSubagentLaunchRequest>,
+      queued: boolean,
+    ) {
+      if (params.collect) {
+        const latestAdmission = resolveAdmission();
+        if (!latestAdmission.ok) {
+          throw Object.assign(new Error(latestAdmission.error), {
+            spawnStatus: "forbidden" as const,
+          });
+        }
+      }
+      return {
+        runId,
+        requesterTurnRunId: ctx.requesterTurnRunId,
+        childSessionKey,
+        controllerSessionKey: ownership.controllerSessionKey,
+        requesterSessionKey: ownership.completionRequesterSessionKey,
+        requesterOrigin,
+        progressOrigin: plan.progressOrigin,
+        requesterDisplayKey: ownership.completionRequesterDisplayKey,
+        task,
+        taskName,
+        agentId: targetAgentId,
+        requesterAgentId,
+        cleanup,
+        label: label || undefined,
+        model: resolvedModel,
+        agentDir: targetAgentDir,
+        workspaceDir: plan.spawnedMetadata.workspaceDir,
+        runTimeoutSeconds,
+        expectsCompletionMessage: plan.shouldAnnounceCompletion,
+        spawnMode,
+        collect: params.collect === true,
+        swarmRequesterSessionKey: params.collect ? requesterInternalKey : undefined,
+        swarmLaunchIdempotencyKey: params.collect ? childIdem : undefined,
+        swarmLaunchReplayKey: params.collect ? swarmLaunchReplayKey : undefined,
+        swarmLaunchRequestFingerprint: params.collect
+          ? params.swarmLaunchRequestFingerprint
+          : undefined,
+        outputSchema: params.outputSchema,
+        groupId: swarmGroupId,
+        queuedLaunch: plan.queuedLaunch,
+        queued,
+        attachmentsDir: attachmentAbsDir,
+        attachmentsRootDir: attachmentRootDir,
+        attachmentsSandboxSessionKey: attachmentSandboxFsBridge ? childSessionKey : undefined,
+        attachmentsSandboxAgentId: attachmentSandboxFsBridge ? targetAgentId : undefined,
+        attachmentsSandboxWorkspaceDir: attachmentSandboxFsBridge
+          ? attachmentSandboxWorkspaceDir
+          : undefined,
+        attachmentsSandboxDir: attachmentSandboxFsBridge ? attachmentSandboxDir : undefined,
+        retainAttachmentsOnKeep: retainOnSessionKeep,
+      };
+    }
+
+    const cleanupFailedSpawn = (
+      waitForSessionDeletion?: boolean,
+      emitLifecycleHooks = threadBindingReady,
+    ) =>
+      cleanupFailedSpawnBeforeAgentStart({
+        childSessionKey,
+        attachmentAbsDir,
+        attachmentRootDir,
+        attachmentSandboxFsBridge,
+        attachmentSandboxDir,
+        emitLifecycleHooks,
+        deleteTranscript: true,
+        ...provisionalSessionIdentity,
+        waitForSessionDeletion,
+      });
+
+    const materializedAttachments = await materializeSubagentAttachments({
+      config: cfg,
+      targetAgentId,
+      workspaceDir: attachmentWorkspaceDir,
+      attachments: params.attachments,
+      mountPathHint,
+      sandboxFsBridge: attachmentSandboxFsBridge,
+      sandboxWorkspaceDir: attachmentSandboxTargetDir,
+      claimCleanupOwner: params.attachments?.length ? applyAttachmentClaim : undefined,
+    });
+    if (materializedAttachments && materializedAttachments.status !== "ok") {
+      if (
+        materializedAttachments.status === "error" &&
+        materializedAttachments.ownerClaimed
+      ) {
+        await retrySubagentCleanup(() =>
+          settleFailedQueuedSubagentLaunch(childIdem, materializedAttachments.error),
+        );
+        const cleanupResult = await cleanupFailedSpawn(true);
+        if (cleanupResult.attachmentsRemoved) {
+          await releaseSubagentRun(childIdem);
+        }
+      } else {
+        await cleanupCreatedSession(threadBindingReady);
+      }
+      return {
+        status: materializedAttachments.status,
+        error: materializedAttachments.error,
+      };
+    }
+    if (materializedAttachments?.status === "ok") {
+      retainOnSessionKeep = materializedAttachments.retainOnSessionKeep;
+      attachmentsReceipt = materializedAttachments.receipt;
+      attachmentAbsDir = materializedAttachments.absDir;
+      attachmentRootDir = materializedAttachments.rootDir;
+      attachmentSandboxDir = materializedAttachments.sandboxDir;
+    }
+    const resolvedLaunchPlan = launchPlan ?? createLaunchPlan(childSystemPrompt);
+    const { childLaunch, progressOrigin } = resolvedLaunchPlan;
     if (initialSession.entry) {
       recordSessionCreated({
         sessionKey: childSessionKey,
@@ -432,18 +542,6 @@ export async function spawnSubagentDirect(
       spawnMode,
       resolvedModelMetadata,
     });
-    const cleanupFailedSpawn = (waitForSessionDeletion?: boolean) =>
-      cleanupFailedSpawnBeforeAgentStart({
-        childSessionKey,
-        attachmentAbsDir,
-        attachmentRootDir,
-        attachmentSandboxFsBridge,
-        attachmentSandboxDir,
-        emitLifecycleHooks: threadBindingReady,
-        deleteTranscript: true,
-        ...provisionalSessionIdentity,
-        waitForSessionDeletion,
-      });
     type SubagentBackendState = { contextEnginePreparation?: SubagentSpawnPreparation };
     const adapter: SpawnBackendAdapter<SubagentBackendState> = {
       async initialize() {
@@ -470,18 +568,13 @@ export async function spawnSubagentDirect(
         return { runId: readGatewayRunId(response) ?? childIdem };
       },
       async cleanupOnFailure({ phase, state }) {
-        if (phase === "initialize") {
-          await cleanupFailedSpawn();
-          return;
+        if (attachmentCleanupOwnerClaimed) {
+          await retrySubagentCleanup(() =>
+            settleFailedQueuedSubagentLaunch(childIdem, `subagent ${phase} failed`),
+          );
         }
-        await rollbackPreparedContextEngine(state?.contextEnginePreparation);
-        if (attachmentAbsDir && attachmentRootDir) {
-          await removeSubagentAttachmentsDir({
-            rootDir: attachmentRootDir,
-            absDir: attachmentAbsDir,
-            sandboxFsBridge: attachmentSandboxFsBridge,
-            sandboxDir: attachmentSandboxDir,
-          });
+        if (phase !== "initialize") {
+          await rollbackPreparedContextEngine(state?.contextEnginePreparation);
         }
         let emitLifecycleHooks = threadBindingReady;
         if (phase === "dispatch" && threadBindingReady) {
@@ -512,7 +605,13 @@ export async function spawnSubagentDirect(
           }
           emitLifecycleHooks = !endedHookEmitted;
         }
-        await cleanupCreatedSession(emitLifecycleHooks);
+        const cleanupResult = await cleanupFailedSpawn(
+          attachmentCleanupOwnerClaimed,
+          emitLifecycleHooks,
+        );
+        if (attachmentCleanupOwnerClaimed && cleanupResult.attachmentsRemoved) {
+          await releaseSubagentRun(childIdem);
+        }
       },
     };
     const pipelineResult = await runSpawnPipeline({
@@ -520,60 +619,15 @@ export async function spawnSubagentDirect(
       admissionReservation,
       progressOrigin,
       progressSessionKey: requesterInternalKey,
-      buildRegistration: (_state, runId) => {
-        if (params.collect) {
-          const latestAdmission = resolveAdmission();
-          if (!latestAdmission.ok) {
-            throw Object.assign(new Error(latestAdmission.error), {
-              spawnStatus: "forbidden" as const,
-            });
+      buildRegistration: (_state, runId) =>
+        buildRegistration(runId, resolvedLaunchPlan, params.collect === true),
+      activateClaimedRegistration: attachmentCleanupOwnerClaimed
+        ? (_state, runId) => {
+            if (!params.collect && !startQueuedSubagentRun(childIdem, runId)) {
+              throw new Error("provisional subagent run could not transition to running");
+            }
           }
-        }
-        return {
-          runId,
-          requesterTurnRunId: ctx.requesterTurnRunId,
-          childSessionKey,
-          controllerSessionKey: ownership.controllerSessionKey,
-          requesterSessionKey: ownership.completionRequesterSessionKey,
-          requesterOrigin,
-          progressOrigin,
-          requesterDisplayKey: ownership.completionRequesterDisplayKey,
-          task,
-          taskName,
-          agentId: targetAgentId,
-          requesterAgentId,
-          cleanup,
-          label: label || undefined,
-          model: resolvedModel,
-          agentDir: targetAgentDir,
-          workspaceDir: spawnedMetadata.workspaceDir,
-          runTimeoutSeconds,
-          expectsCompletionMessage: shouldAnnounceCompletion,
-          spawnMode,
-          collect: params.collect === true,
-          swarmRequesterSessionKey: params.collect ? requesterInternalKey : undefined,
-          swarmLaunchIdempotencyKey: params.collect ? childIdem : undefined,
-          swarmLaunchReplayKey: params.collect ? swarmLaunchReplayKey : undefined,
-          swarmLaunchRequestFingerprint: params.collect
-            ? params.swarmLaunchRequestFingerprint
-            : undefined,
-          outputSchema: params.outputSchema,
-          groupId: swarmGroupId,
-          queuedLaunch,
-          queued: params.collect === true,
-          attachmentsDir: attachmentAbsDir,
-          attachmentsRootDir: attachmentRootDir,
-          attachmentsSandboxSessionKey: attachmentSandboxFsBridge
-            ? requesterInternalKey
-            : undefined,
-          attachmentsSandboxAgentId: attachmentSandboxFsBridge ? requesterAgentId : undefined,
-          attachmentsSandboxWorkspaceDir: attachmentSandboxFsBridge
-            ? requesterSandboxAttachmentBoundary?.workspaceDir
-            : undefined,
-          attachmentsSandboxDir: attachmentSandboxFsBridge ? attachmentSandboxDir : undefined,
-          retainAttachmentsOnKeep: retainOnSessionKeep,
-        };
-      },
+        : undefined,
     });
     if (!pipelineResult.ok) {
       const runId = pipelineResult.runId ?? childIdem;

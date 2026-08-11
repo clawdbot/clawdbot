@@ -16,6 +16,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path, { dirname, join, resolve } from "node:path";
 import pMap from "p-map";
+import { toErrorObject } from "./lib/error-format.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
@@ -23,6 +24,10 @@ import {
   installVitestProcessGroupCleanup,
   shouldUseDetachedVitestProcessGroup,
 } from "./vitest-process-group.mts";
+
+function coerceBoundaryError(value: unknown, fallbackMessage: string): Error {
+  return toErrorObject(value, fallbackMessage);
+}
 
 type BoundaryMode = "all" | "compile" | "canary";
 type StepOutputCapture = { text: string; truncatedChars: number };
@@ -562,7 +567,7 @@ export function runNodeStepAsync(
       signalChild("SIGKILL");
       await waitAfterForceKill();
       rejectPromise(
-        toLintErrorObject(
+        coerceBoundaryError(
           attachStepFailureMetadata(new Error(`${label} canceled after sibling failure`), label, {
             kind: "canceled",
             elapsedMs: Date.now() - startedAt,
@@ -621,7 +626,7 @@ export function runNodeStepAsync(
         );
         onFailure?.(error);
         abortSiblingSteps(abortController);
-        rejectPromise(toLintErrorObject(error, "Step timed out"));
+        rejectPromise(coerceBoundaryError(error, "Step timed out"));
       })();
     }, resolvedTimeoutMs);
 
@@ -666,7 +671,7 @@ export function runNodeStepAsync(
       );
       onFailure?.(failure);
       abortSiblingSteps(abortController);
-      rejectPromise(toLintErrorObject(failure, "Step spawn failed"));
+      rejectPromise(coerceBoundaryError(failure, "Step spawn failed"));
     });
     child.on("close", (code) => {
       if (settled) {
@@ -715,7 +720,7 @@ export function runNodeStepAsync(
       );
       onFailure?.(error);
       abortSiblingSteps(abortController);
-      rejectPromise(toLintErrorObject(error, "Step failed"));
+      rejectPromise(coerceBoundaryError(error, "Step failed"));
     });
   });
 }
@@ -750,7 +755,7 @@ export async function runNodeStepsWithConcurrency(steps: BoundaryStep[], concurr
     { concurrency, stopOnError: false },
   );
   if (firstFailure) {
-    throw toLintErrorObject(firstFailure, "Non-Error thrown");
+    throw coerceBoundaryError(firstFailure, "Non-Error thrown");
   }
 }
 
@@ -1107,18 +1112,4 @@ export async function main(argv: string[] = process.argv.slice(2)) {
 
 if (import.meta.main) {
   await main();
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string) {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

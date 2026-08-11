@@ -13,9 +13,9 @@ vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => {
   };
 });
 
-import { withTempDir } from "./install-source-utils.js";
+import { withInstallWorkspace } from "./install-source-utils.js";
 
-describe("withTempDir private root", () => {
+describe("withInstallWorkspace private root", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   it.runIf(process.platform !== "win32")(
@@ -31,7 +31,7 @@ describe("withTempDir private root", () => {
       resolvePreferredOpenClawTmpDirMock.mockReturnValue(mockOpenClawDir);
 
       let observedDir = "";
-      const value = await withTempDir("openclaw-test-", async (tmpDir) => {
+      const value = await withInstallWorkspace("openclaw-test-", async (tmpDir) => {
         observedDir = tmpDir;
         expect(path.dirname(tmpDir)).toBe(canonicalOpenClawDir);
         await fs.writeFile(path.join(tmpDir, "marker.txt"), "ok");

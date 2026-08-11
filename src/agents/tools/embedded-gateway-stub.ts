@@ -79,7 +79,7 @@ interface EmbeddedGatewayRuntime {
     store: unknown;
     opts: SessionsListParams;
   }) => Promise<SessionsListResult>;
-  loadCombinedSessionStoreForGateway: (
+  loadCombinedSessionStoreForGatewayCore: (
     cfg: OpenClawConfig,
     opts?: { agentId?: string; projection?: "full" | "list" },
   ) => {
@@ -199,7 +199,7 @@ async function handleSessionsList(params: Record<string, unknown>) {
   const rt = await getRuntime();
   const cfg = rt.getRuntimeConfig();
   const opts = params as SessionsListParams;
-  const { storePath, store } = rt.loadCombinedSessionStoreForGateway(cfg, {
+  const { storePath, store } = rt.loadCombinedSessionStoreForGatewayCore(cfg, {
     agentId: opts.agentId,
     projection: "list",
   });

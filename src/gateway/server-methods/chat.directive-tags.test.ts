@@ -37,7 +37,7 @@ import {
   replaceSessionEntry,
   type SessionAccessScope,
   type SessionTranscriptReadScope,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
@@ -740,7 +740,7 @@ function sessionEntryScope(): SessionAccessScope {
 }
 
 async function seedSqliteSessionEntry(entry: Record<string, unknown> = {}): Promise<void> {
-  await upsertSessionEntry(sessionEntryScope(), {
+  await upsertSessionEntryCore(sessionEntryScope(), {
     sessionId: mockState.sessionId,
     ...entry,
   });

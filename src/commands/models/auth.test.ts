@@ -272,7 +272,7 @@ const {
   modelsAuthPasteApiKeyCommand,
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
-  runModelsAuthLoginFlow,
+  runModelsAuthLoginFlowCore,
 } = await import("./auth.js");
 
 function createRuntime(): RuntimeEnv {
@@ -863,7 +863,7 @@ describe("modelsAuthLoginCommand", () => {
     const runtime = createRuntime();
     const abortController = new AbortController();
 
-    await runModelsAuthLoginFlow({
+    await runModelsAuthLoginFlowCore({
       provider: "openai",
       method: "oauth",
       config: currentConfig,
@@ -898,7 +898,7 @@ describe("modelsAuthLoginCommand", () => {
     });
 
     await expect(
-      runModelsAuthLoginFlow({
+      runModelsAuthLoginFlowCore({
         provider: "openai",
         method: "oauth",
         config: currentConfig,

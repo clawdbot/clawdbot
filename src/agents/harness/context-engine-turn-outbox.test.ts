@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendTranscriptMessage,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type {
   TranscriptTurnAdmission,
@@ -193,7 +193,7 @@ describe("context-engine turn outbox", () => {
       sessionKey: "agent:main:recovered-turn",
       storePath: path.join(stateDir, "sessions.json"),
     };
-    await upsertSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const admitted = await appendTranscriptMessage(target, {
       message: { role: "user", content: "first" },
       now: 1_000,
@@ -333,7 +333,7 @@ describe("context-engine turn outbox", () => {
       sessionKey: "agent:main:unaccepted-turn",
       storePath: path.join(stateDir, "sessions.json"),
     };
-    await upsertSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const admitted = await appendTranscriptMessage(target, {
       message: { role: "user", content: "first" },
       now: 1_000,

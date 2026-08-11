@@ -1039,7 +1039,7 @@ describe("subagent registry lifecycle hardening", () => {
     }
   });
 
-  it("stops retrying detached cleanup failures and leaves the run durably unlocked", async () => {
+  it("keeps retrying detached cleanup until the durable owner is released", async () => {
     vi.useFakeTimers();
     const entry = createRunEntry({
       endedAt: 4_000,
@@ -1047,7 +1047,14 @@ describe("subagent registry lifecycle hardening", () => {
       retainAttachmentsOnKeep: false,
     });
     const persist = vi.fn();
-    helperMocks.safeRemoveAttachmentsDir.mockRejectedValue(new Error("cleanup failed"));
+    let removalAttempts = 0;
+    helperMocks.safeRemoveAttachmentsDir.mockImplementation(async () => {
+      removalAttempts += 1;
+      if (removalAttempts <= 5) {
+        throw new Error("cleanup failed");
+      }
+      return true;
+    });
     const resumeSubagentRun = vi.fn((runId: string) => {
       controller.startSubagentAnnounceCleanupFlow(runId, entry);
     });
@@ -1058,14 +1065,21 @@ describe("subagent registry lifecycle hardening", () => {
       await waitForLifecycleState(() => expect(entry.cleanupHandled).toBe(false));
       expect(vi.getTimerCount()).toBe(1);
 
-      for (let attempts = 0; attempts < 10 && vi.getTimerCount() > 0; attempts += 1) {
+      for (let attempts = 0; attempts < 4; attempts += 1) {
+        expect(vi.getTimerCount()).toBe(1);
         await vi.runOnlyPendingTimersAsync();
+        await waitForLifecycleState(() => {
+          if (removalAttempts <= 5) {
+            expect(entry.cleanupHandled).toBe(false);
+          }
+        });
       }
 
-      expect(helperMocks.safeRemoveAttachmentsDir.mock.calls.length).toBeGreaterThan(1);
-      expect(helperMocks.safeRemoveAttachmentsDir.mock.calls.length).toBeLessThan(10);
-      expect(entry.cleanupHandled).toBe(false);
-      expect(entry.cleanupCompletedAt).toBeUndefined();
+      expect(removalAttempts).toBe(5);
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.runOnlyPendingTimersAsync();
+      await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+      expect(removalAttempts).toBe(6);
       expect(persist).toHaveBeenLastCalledWith(entry.runId);
       expect(vi.getTimerCount()).toBe(0);
     } finally {

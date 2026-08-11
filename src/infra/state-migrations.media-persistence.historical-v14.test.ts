@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-import { listSessionEntries } from "../config/sessions/session-accessor.js";
+import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -96,7 +96,7 @@ describe("legacy media persistence Doctor migration from historical v14", () => 
     const result = migrateLegacyMediaPersistence({ env });
     expect(result.warnings).toEqual([]);
     expect(
-      listSessionEntries({ agentId: "main", env }).map(({ entry, sessionKey }) => ({
+      listSessionEntriesCore({ agentId: "main", env }).map(({ entry, sessionKey }) => ({
         sessionId: entry.sessionId,
         sessionKey,
       })),

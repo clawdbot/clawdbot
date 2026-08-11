@@ -6,17 +6,17 @@ import {
   mockBrowserHostInspectionFacade,
 } from "./browser-facade-test-helpers.js";
 
-const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
+const loadBundledPluginPublicSurfaceModuleSyncCore = vi.hoisted(() => vi.fn());
 
 vi.mock("./facade-loader.js", () => ({
-  loadBundledPluginPublicSurfaceModuleSync,
+  loadBundledPluginPublicSurfaceModuleSyncCore,
 }));
 
 describe("browser host inspection", () => {
   beforeEach(() => {
     // Facade wrappers cache successful loads; each case needs a clean wrapper module.
     vi.resetModules();
-    loadBundledPluginPublicSurfaceModuleSync.mockReset();
+    loadBundledPluginPublicSurfaceModuleSyncCore.mockReset();
   });
 
   it("delegates browser host inspection helpers through the browser facade", async () => {
@@ -24,18 +24,20 @@ describe("browser host inspection", () => {
       kind: "canary",
       path: "/usr/bin/google-chrome-beta",
     };
-    mockBrowserHostInspectionFacade(loadBundledPluginPublicSurfaceModuleSync, executable);
+    mockBrowserHostInspectionFacade(loadBundledPluginPublicSurfaceModuleSyncCore, executable);
 
     const hostInspection = await import("./browser-host-inspection.js");
 
     expectBrowserHostInspectionDelegation({
       executable,
       hostInspection,
-      loadBundledPluginPublicSurfaceModuleSync,
+      loadBundledPluginPublicSurfaceModuleSync: loadBundledPluginPublicSurfaceModuleSyncCore,
     });
   });
 
   it("hard-fails when browser host inspection facade is unavailable", async () => {
-    await expectBrowserHostInspectionFacadeUnavailable(loadBundledPluginPublicSurfaceModuleSync);
+    await expectBrowserHostInspectionFacadeUnavailable(
+      loadBundledPluginPublicSurfaceModuleSyncCore,
+    );
   });
 });

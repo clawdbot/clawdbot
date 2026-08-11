@@ -14,10 +14,10 @@ import {
   type SessionDiskBudgetSweepResult,
   type SessionUnreferencedArtifactSweepResult,
 } from "./disk-budget.js";
-import { resolveStorePath } from "./paths.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import {
   applySessionEntryLifecycleMutation,
-  listSessionEntries,
+  listSessionEntriesCore,
   loadTranscriptEventsSync,
   purgeDeletedAgentSessionEntries,
   type SessionEntryLifecycleRemoval,
@@ -120,7 +120,7 @@ function loadCleanupSessionStore(
     return {};
   }
   return Object.fromEntries(
-    listSessionEntries({
+    listSessionEntriesCore({
       agentId: target.agentId,
       storePath: target.storePath,
     }).map(({ sessionKey, entry }) => [sessionKey, entry]),
@@ -710,7 +710,9 @@ export async function purgeAgentSessionStoreEntries(
       typeof storeConfig === "string" && !storeConfig.includes("{agentId}")
         ? normalizeAgentId(resolveDefaultAgentId(cfg))
         : normalizedAgentId;
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: normalizedAgentId });
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, {
+      agentId: normalizedAgentId,
+    });
     await purgeDeletedAgentSessionEntries({
       cfg,
       agentId: normalizedAgentId,

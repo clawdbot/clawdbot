@@ -246,6 +246,52 @@ function managedTimeoutError() {
   return Object.assign(new Error("managed timeout"), { code: "ETIMEDOUT" });
 }
 
+function createGatewaySuspensionCliStub(
+  root: string,
+  requestError: { code: string; message: string; retryable: boolean; type: string },
+) {
+  const checkout = path.join(root, "checkout");
+  const entrypoint = path.join(checkout, "dist/index.js");
+  const configPath = path.join(root, "openclaw.json");
+  const capturePath = path.join(root, "gateway-call-stub.mjs");
+  const callsPath = path.join(root, "gateway-call-params.jsonl");
+  mkdirSync(path.dirname(entrypoint), { recursive: true });
+  writeFileSync(entrypoint, "// built\n");
+  writeFileSync(configPath, "{}\n");
+  writeFileSync(
+    capturePath,
+    `import fs from "node:fs";
+const paramsIndex = process.argv.indexOf("--params");
+const params = JSON.parse(process.argv[paramsIndex + 1] ?? "{}");
+fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify(params) + "\\n");
+if (Object.hasOwn(params, "terminalPolicy")) {
+  process.stdout.write(JSON.stringify({ ok: false, error: ${JSON.stringify(requestError)} }) + "\\n");
+  process.exitCode = 1;
+} else {
+  process.stdout.write(JSON.stringify({
+    status: "busy",
+    reason: "active-work",
+    retryAfterMs: 20_000,
+    activeCount: 1,
+    blockers: [{ kind: "terminal-session", count: 1, message: "1 open terminal session" }],
+  }) + "\\n");
+}
+`,
+  );
+  return {
+    callsPath,
+    checkout,
+    deployment: {
+      configPath,
+      entrypoint,
+      executable: process.execPath,
+      invocationPrefix: [capturePath],
+      port: 18789,
+      wrapperPath: null,
+    },
+  };
+}
+
 describe("openclaw live updater", () => {
   let cleanupProbeRoot = "";
 
@@ -1062,18 +1108,28 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
   });
 
   test("parses ready and busy atomic Gateway suspension responses", () => {
-    const deployment = { entrypoint: "/snapshot/dist/index.js" };
+    const deployment = {
+      configPath: "/snapshot/openclaw.json",
+      entrypoint: "/snapshot/dist/index.js",
+      executable: process.execPath,
+      invocationPrefix: ["/snapshot/dist/index.js"],
+      port: 18789,
+      wrapperPath: null,
+    };
     expect(
       prepareGatewaySuspension(
         "/checkout",
         (
           _checkout: string,
           method: string,
-          params: { requestId: string },
+          params: { requestId: string; terminalPolicy?: "terminate" },
           selectedDeployment: unknown,
         ) => {
           expect(method).toBe("gateway.suspend.prepare");
-          expect(params.requestId).toMatch(/^openclaw-live-updater-/u);
+          expect(params).toEqual({
+            requestId: expect.stringMatching(/^openclaw-live-updater-/u),
+            terminalPolicy: "terminate",
+          });
           expect(selectedDeployment).toBe(deployment);
           return JSON.stringify({ status: "ready", suspensionId: "suspension-1" });
         },
@@ -1092,6 +1148,66 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
         }),
       ),
     ).toMatchObject({ status: "busy", activeCount: 1 });
+  });
+
+  test("retries exact legacy suspension params with preserve semantics", () => {
+    const root = realpathSync(tempDirs.make("openclaw-legacy-gateway-suspension-"));
+    const stub = createGatewaySuspensionCliStub(root, {
+      type: "gateway_request_error",
+      code: "INVALID_REQUEST",
+      message: "invalid gateway.suspend.prepare params",
+      retryable: false,
+    });
+
+    expect(
+      prepareGatewaySuspension(stub.checkout, runBuiltGatewayCall, stub.deployment),
+    ).toMatchObject({
+      status: "busy",
+      activeCount: 1,
+      blockers: [{ kind: "terminal-session", count: 1 }],
+    });
+    const calls = readFileSync(stub.callsPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { requestId: string; terminalPolicy?: string });
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toEqual({
+      requestId: expect.stringMatching(/^openclaw-live-updater-/u),
+      terminalPolicy: "terminate",
+    });
+    expect(calls[1]).toEqual({ requestId: calls[0]?.requestId });
+  });
+
+  test("does not downgrade unrelated Gateway suspension failures", () => {
+    const root = realpathSync(tempDirs.make("openclaw-gateway-suspension-failure-"));
+    const stub = createGatewaySuspensionCliStub(root, {
+      type: "gateway_request_error",
+      code: "UNAVAILABLE",
+      message: "gateway scheduler recovery is pending",
+      retryable: true,
+    });
+    let failure: unknown;
+
+    try {
+      prepareGatewaySuspension(stub.checkout, runBuiltGatewayCall, stub.deployment);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(formatUpdateFailure(failure)).toMatchObject({
+      error: {
+        code: "gateway_suspend_prepare_failed",
+        diagnostics: {
+          kind: "invariant",
+          cause: {
+            kind: "command",
+            operation: "gateway.suspend.prepare",
+            status: 1,
+          },
+        },
+      },
+    });
+    expect(readFileSync(stub.callsPath, "utf8").trim().split("\n")).toHaveLength(1);
   });
 
   test("pins managed Gateway calls with a backward-compatible local overlay", () => {
@@ -1568,7 +1684,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     ]);
   });
 
-  test("defers a stale build without stopping Gateway when atomic suspension reports active work", async () => {
+  test("defers a stale build without stopping Gateway for a legacy terminal blocker", async () => {
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
     const commands = fakeCommands(mirror);
@@ -1582,7 +1698,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
           reason: "active-work",
           retryAfterMs: 20_000,
           activeCount: 1,
-          blockers: [{ kind: "cron-run", count: 1, message: "1 active cron run(s)" }],
+          blockers: [{ kind: "terminal-session", count: 1, message: "1 open terminal session" }],
         }),
       },
     );
@@ -1594,7 +1710,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
       gatewaySuspension: {
         status: "busy",
         activeCount: 1,
-        blockers: [{ kind: "cron-run", count: 1 }],
+        blockers: [{ kind: "terminal-session", count: 1 }],
       },
     });
     expect(commands.calls).toEqual([]);

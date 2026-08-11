@@ -3,6 +3,7 @@
  */
 
 import type { MediaKind } from "@openclaw/media-core/constants";
+import type { toolIcons } from "../../components/icons-tools.ts";
 import type { SenderIdentity } from "./sender-label.ts";
 
 export type BrowserAnnotationAttachment = {
@@ -89,6 +90,7 @@ export type ChatItem =
       key: string;
       text: string;
       timestamp: number;
+      icon?: keyof typeof toolIcons;
       label?: string;
       startsTurn?: true;
     }
@@ -96,6 +98,7 @@ export type ChatItem =
       kind: "divider";
       key: string;
       label: string;
+      icon?: keyof typeof toolIcons;
       metric?: string;
       description?: string;
       action?: { kind: "session-checkpoints"; label: string };

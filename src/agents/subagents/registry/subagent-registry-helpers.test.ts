@@ -282,6 +282,7 @@ describe("safeRemoveAttachmentsDir", () => {
       await fs.rm(attachmentsDir, { recursive: true, force: true });
     });
     const resolveSandbox = vi.fn(async () => ({ fsBridge: { remove } }) as never);
+    const createIngress = vi.fn((sandbox: { fsBridge: unknown }) => sandbox.fsBridge) as never;
     try {
       await expect(
         safeRemoveAttachmentsDir(
@@ -296,12 +297,14 @@ describe("safeRemoveAttachmentsDir", () => {
           {
             config: {},
             resolveSandbox,
+            createIngress,
           },
         ),
       ).resolves.toBe(true);
       expect(resolveSandbox).toHaveBeenCalledWith(
         expect.objectContaining({ workspaceDir: sandboxWorkspaceDir }),
       );
+      expect(createIngress).toHaveBeenCalledOnce();
       expect(remove).toHaveBeenCalledWith({
         filePath: sandboxAttachmentsDir,
         recursive: true,

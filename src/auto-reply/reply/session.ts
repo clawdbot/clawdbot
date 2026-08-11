@@ -19,7 +19,7 @@ import {
 } from "../../config/sessions/lifecycle.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
 import {
   evaluateSessionFreshness,
@@ -319,7 +319,7 @@ function resolveInitSessionStateAttemptContext(
     storePath: resolveSessionStorePathForScope({
       agentId,
       sessionKey: sessionCtxForState.SessionKey,
-      storePath: resolveStorePath(cfg.session?.store, { agentId }),
+      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
     }),
   };
 }

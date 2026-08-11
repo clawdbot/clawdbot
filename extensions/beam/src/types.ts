@@ -1,4 +1,7 @@
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeBoundedOptionalString as readBoundedString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const BEAM_HOST_ID = "gateway";
 export const BEAM_MAX_BODY_BYTES = 56 * 1024;
@@ -45,14 +48,6 @@ const ITEM_TYPES = new Set<BeamTranscriptItem["type"]>(["userMessage", "agentMes
 
 function hasOnlyKeys(value: Record<string, unknown>, allowed: Set<string>): boolean {
   return Object.keys(value).every((key) => allowed.has(key));
-}
-
-function readBoundedString(value: unknown, maxLength: number): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed && trimmed.length <= maxLength ? trimmed : undefined;
 }
 
 function isIsoTimestamp(value: string): boolean {

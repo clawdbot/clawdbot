@@ -238,7 +238,7 @@ openclaw-new-session-page {
 }
 
 /* Menu panel anchored under its trigger; item rows reuse the shared
-   .session-menu__* styles so every menu in the app reads the same. */
+   .session-menu__* geometry so its panel and hover pills stay concentric. */
 wa-popover.new-session-page__select {
   --max-width: min(320px, calc(100vw - 24px));
 }
@@ -246,11 +246,11 @@ wa-popover.new-session-page__select {
 wa-popover.new-session-page__select::part(body) {
   min-width: 224px;
   max-width: min(320px, calc(100vw - 24px));
-  padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
-  border-radius: var(--radius-lg);
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
 }
 
 .new-session-page__menu-title {
@@ -316,7 +316,7 @@ wa-popover.new-session-page__place-popover::part(body) {
    root menu needs its own scroll region or long place lists become unreachable. */
 .new-session-page__place-root {
   max-height: min(420px, 60vh);
-  padding: 6px;
+  padding: var(--menu-padding);
   overflow-y: auto;
 }
 
@@ -494,7 +494,8 @@ wa-dropdown.new-session-page__start-menu {
   gap: 8px;
   padding: 6px 8px;
   border: 0;
-  border-radius: var(--radius-sm);
+  min-height: var(--menu-item-height);
+  border-radius: var(--menu-item-radius);
   background: transparent;
   color: var(--text);
   font-size: 13px;
@@ -503,7 +504,7 @@ wa-dropdown.new-session-page__start-menu {
 }
 
 .new-session-page__browser-entry:hover {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  background: var(--bg-hover);
 }
 
 .new-session-page__browser-entry:disabled {

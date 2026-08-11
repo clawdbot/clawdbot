@@ -13,7 +13,7 @@ import {
 } from "../../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { deriveDurableFinalDeliveryRequirements } from "../message/capabilities.js";
-import { sendDurableMessageBatch } from "../message/send.js";
+import { sendDurableMessageBatchCore } from "../message/send.js";
 import { createChannelDeliveryResultFromReceipt } from "./delivery-result.js";
 import type { ChannelDeliveryInfo, ChannelDeliveryResult } from "./types.js";
 
@@ -99,7 +99,7 @@ function toDeliveryIntent(intent: OutboundDeliveryIntent): ChannelDeliveryResult
 }
 
 function resolveDurableSuppression(
-  send: Extract<Awaited<ReturnType<typeof sendDurableMessageBatch>>, { status: "suppressed" }>,
+  send: Extract<Awaited<ReturnType<typeof sendDurableMessageBatchCore>>, { status: "suppressed" }>,
 ): NonNullable<ChannelDeliveryResult["suppression"]> {
   const hookEffect = send.payloadOutcomes?.find(
     (outcome) => outcome.status === "suppressed",
@@ -204,7 +204,7 @@ export async function deliverInboundReplyWithMessageSendContextCore(
     requesterSenderUsername: params.ctxPayload.SenderUsername,
     requesterSenderE164: params.ctxPayload.SenderE164,
   });
-  const send = await sendDurableMessageBatch({
+  const send = await sendDurableMessageBatchCore({
     cfg: params.cfg,
     channel,
     to,
