@@ -15,7 +15,7 @@ import { VERSION } from "../../version.js";
 const runtimeModelAuthMocks = vi.hoisted(() => ({
   getApiKeyForModel: vi.fn(),
   getRuntimeAuthForModelCore: vi.fn(),
-  resolveApiKeyForProvider: vi.fn(),
+  resolveProviderRuntimeApiKey: vi.fn(),
 }));
 const sandboxContextMocks = vi.hoisted(() => ({
   resolveSandboxContext: vi.fn(),
@@ -24,7 +24,7 @@ const sandboxContextMocks = vi.hoisted(() => ({
 vi.mock("./runtime-model-auth.runtime.js", () => ({
   getApiKeyForModel: runtimeModelAuthMocks.getApiKeyForModel,
   getRuntimeAuthForModelCore: runtimeModelAuthMocks.getRuntimeAuthForModelCore,
-  resolveProviderRuntimeApiKey: runtimeModelAuthMocks.resolveApiKeyForProvider,
+  resolveProviderRuntimeApiKey: runtimeModelAuthMocks.resolveProviderRuntimeApiKey,
 }));
 vi.mock("../../agents/sandbox/context.js", () => sandboxContextMocks);
 
@@ -107,7 +107,7 @@ describe("plugin runtime command execution", () => {
     vi.restoreAllMocks();
     runtimeModelAuthMocks.getApiKeyForModel.mockReset();
     runtimeModelAuthMocks.getRuntimeAuthForModelCore.mockReset();
-    runtimeModelAuthMocks.resolveApiKeyForProvider.mockReset();
+    runtimeModelAuthMocks.resolveProviderRuntimeApiKey.mockReset();
     sandboxContextMocks.resolveSandboxContext.mockReset();
     resetConfigRuntimeState();
   });
@@ -429,7 +429,7 @@ describe("plugin runtime command execution", () => {
       source: "workspace cloud credentials",
       mode: "api-key",
     });
-    runtimeModelAuthMocks.resolveApiKeyForProvider.mockResolvedValue({
+    runtimeModelAuthMocks.resolveProviderRuntimeApiKey.mockResolvedValue({
       apiKey: "provider-key",
       source: "workspace cloud credentials",
       mode: "api-key",
@@ -458,7 +458,7 @@ describe("plugin runtime command execution", () => {
       cfg,
       workspaceDir: "/tmp/workspace",
     });
-    expect(runtimeModelAuthMocks.resolveApiKeyForProvider).toHaveBeenCalledWith({
+    expect(runtimeModelAuthMocks.resolveProviderRuntimeApiKey).toHaveBeenCalledWith({
       provider: "workspace-cloud",
       cfg,
       workspaceDir: "/tmp/workspace",

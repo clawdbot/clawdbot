@@ -8,7 +8,7 @@ import {
 import {
   identityNormalizePluginId,
   isBundledChannelEnabledByChannelConfig as isBundledChannelEnabledByChannelConfigShared,
-  normalizePluginsConfigWithResolver as normalizePluginsConfigWithResolverShared,
+  normalizePluginsConfigWithResolverCore as normalizePluginsConfigWithResolverShared,
   type NormalizePluginId,
   type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
 } from "./config-normalization-shared.js";

@@ -1,7 +1,5 @@
-/* Full-page new-session draft: the start-screen welcome centers in the pane
-   with the draft block (clean target row + composer) between the hero and the
-   recent chats, so the draft reads as the start screen plus "where to start"
-   controls. */
+/* Full-page new-session draft: the welcome and draft form one top-anchored
+   composition, with the target row and composer between hero and recents. */
 openclaw-new-session-page {
   display: flex;
   flex: 1 1 0;
@@ -30,16 +28,15 @@ openclaw-new-session-page {
   padding: clamp(44px, 5vh, 52px) clamp(6px, 1vw, 12px) 6px;
 }
 
-/* The shared welcome stretches (flex: 1) and centers via justify-content,
-   which clips overflow above the scroll origin once the draft content is
-   taller than the pane (short window, open folder browser). Content-size it
-   here; its margin: auto still centers whenever there is spare room. */
+/* Content-size the shared welcome and top-anchor it inside the page scroll.
+   Auto vertical margins would re-center the identity as the textarea grows. */
 .new-session-page .agent-chat__welcome {
   flex: 0 0 auto;
   width: 100%;
   max-width: none;
   min-height: auto;
   box-sizing: border-box;
+  margin: 0 auto auto;
 }
 
 /* Draft block inside the centered welcome column; the welcome centers text,

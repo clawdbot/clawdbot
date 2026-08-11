@@ -163,6 +163,14 @@ export async function createGatewayHttpTransport(params: {
     });
   };
 
+  const handleMcpOAuthCallbackRequest = async (req: IncomingMessage, res: ServerResponse) => {
+    const { handleMcpOAuthCallback } = await import("./mcp-oauth-callback.js");
+    return await handleMcpOAuthCallback(req, res, {
+      config: loadRuntimeConfig(),
+      log: params.log,
+    });
+  };
+
   let loadedPluginRequestHandler: GatewayPluginRequestHandler | null = null;
   let loadedPluginUpgradeHandler: GatewayPluginUpgradeHandler | null = null;
   const handlePluginRequest: GatewayPluginRequestHandler = async (
@@ -266,6 +274,7 @@ export async function createGatewayHttpTransport(params: {
       strictTransportSecurityHeader: params.strictTransportSecurityHeader,
       handleWatchNodeRequest: params.handleWatchNodeRequest,
       handleHooksRequest,
+      handleMcpOAuthCallbackRequest,
       handlePluginRequest,
       shouldEnforcePluginGatewayAuth,
       resolvePluginNodeCapabilityRoute,

@@ -693,7 +693,6 @@ export const en: TranslationMap = {
   newSession: {
     title: "New session",
     hint: "Pick where this session works, then say what to do.",
-    draftRow: "New session",
     agent: "Agent",
     where: "Where",
     gateway: "Gateway · local",
@@ -4967,7 +4966,6 @@ export const en: TranslationMap = {
       activity: "Activity",
       copySelection: "Copy",
       forkFromHere: "Fork from here",
-      fullContentLoadFailed: "Could not load the full message.",
       reply: "Reply",
       replyToMessage: "Reply to message",
       replyingTo: "Replying to {name}",

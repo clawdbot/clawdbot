@@ -12,6 +12,7 @@ import {
   normalizeReservedToolNames,
   TOOL_NAME_SEPARATOR,
 } from "./agent-bundle-mcp-names.js";
+import { mergeMcpConnectCatalog } from "./agent-bundle-mcp-requester-connect.js";
 import type {
   BundleMcpToolRuntime,
   McpCatalogTool,
@@ -476,10 +477,17 @@ export async function materializeBundleMcpToolsForRun(params: {
   const reservedToolNames = params.reservedToolNames
     ? Array.from(params.reservedToolNames)
     : undefined;
+  const materializedCatalog = mergeMcpConnectCatalog(catalog, params.runtime.requesterConnect);
   const tools = buildBundleMcpToolsFromCatalog({
-    catalog,
+    catalog: materializedCatalog,
     reservedToolNames,
     createExecute: (tool) => async (toolCallId: string, input: unknown) => {
+      if (!Object.hasOwn(catalog.servers, tool.serverName)) {
+        const connect = params.runtime.requesterConnect?.createExecute(tool.serverName);
+        if (connect) {
+          return await connect(toolCallId, input);
+        }
+      }
       params.runtime.markUsed();
       const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
       const agentResult = toAgentToolResult({
@@ -561,7 +569,7 @@ export async function materializeBundleMcpToolsForRun(params: {
       : undefined,
   });
   const appTools = buildAppToolPolicyProjections({
-    catalog,
+    catalog: materializedCatalog,
     modelTools: tools,
     reservedToolNames,
   });
