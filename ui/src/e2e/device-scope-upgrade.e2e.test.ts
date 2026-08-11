@@ -97,7 +97,10 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     await page.locator("#new-session-place-trigger").click();
     const browse = page.getByRole("button", { name: "Browse folders" });
     await expect.poll(() => browse.isDisabled()).toBe(true);
-    await browse.hover();
+    await browse.focus();
+    await expect
+      .poll(() => browse.evaluate((element) => element === document.activeElement))
+      .toBe(true);
     await page
       .locator(".tooltip-content")
       .getByText(

@@ -306,13 +306,24 @@ export function renderPlaceSelect(params: {
   const nodeIcon = isPhoneFamily(activeNode?.deviceFamily)
     ? icons.monitorSmartphone
     : icons.monitor;
+  const browseNeedsAdmin = !params.browseAvailable && !params.isAdmin;
+  const browseDisabled = params.submitting || params.pendingCloud || !params.browseAvailable;
+  // Native disabled buttons suppress pointer/focus events in some browsers, so the
+  // repair tooltip keeps only this limited-access state focusable and guards activation.
   const browseButton = html`<button
     type="button"
     class="session-menu__item"
     data-value="browse"
     aria-pressed="false"
-    ?disabled=${params.submitting || params.pendingCloud || !params.browseAvailable}
-    @click=${() => params.onBrowse(browseTarget)}
+    aria-disabled=${browseNeedsAdmin ? "true" : nothing}
+    ?disabled=${params.submitting ||
+    params.pendingCloud ||
+    (!params.browseAvailable && !browseNeedsAdmin)}
+    @click=${() => {
+      if (!browseDisabled) {
+        params.onBrowse(browseTarget);
+      }
+    }}
   >
     <span class="session-menu__check" aria-hidden="true"></span>
     <span class="session-menu__text">${t("newSession.browse")}</span>
@@ -527,11 +538,11 @@ export function renderPlaceSelect(params: {
                     })}
                   `
                 : nothing}
-              ${params.browseAvailable || params.isAdmin
-                ? browseButton
-                : html`<openclaw-tooltip .content=${t("newSession.browseRequiresAdmin")}>
+              ${browseNeedsAdmin
+                ? html`<openclaw-tooltip .content=${t("newSession.browseRequiresAdmin")}>
                     ${browseButton}
-                  </openclaw-tooltip>`}
+                  </openclaw-tooltip>`
+                : browseButton}
               ${params.showDestinations
                 ? html`
                     <div class="new-session-page__menu-title">${t("newSession.thisGateway")}</div>
