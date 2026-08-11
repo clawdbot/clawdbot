@@ -805,14 +805,14 @@ export async function writeDiagnosticSupportExport(
     now,
   });
   const artifact = await buildDiagnosticSupportExport({ ...options, env, stateDir, now });
-  const bytes = await writeSupportBundleZip({
+  const published = await writeSupportBundleZip({
     outputPath,
     files: artifact.files,
     compressionLevel: 6,
   });
   return {
-    path: outputPath,
-    bytes,
+    path: published.path,
+    bytes: published.bytes,
     manifest: artifact.manifest,
   };
 }
