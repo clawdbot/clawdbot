@@ -4783,6 +4783,10 @@ export const en: TranslationMap = {
       label: "Session reset",
       description: "The earlier conversation was cleared.",
     },
+    restartRecoveryTitle: "This session ended during a restart.",
+    restartRecoveryDisabled: "Its transcript is safe.",
+    resumeInNewSession: "Resume in new session",
+    resumingSession: "Resuming…",
     systemNotice: {
       restartRecovery: {
         label: "System · restart recovery",

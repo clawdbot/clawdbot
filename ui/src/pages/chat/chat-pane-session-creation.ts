@@ -1,4 +1,8 @@
-import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
+import { t } from "../../i18n/index.ts";
+import {
+  readSessionMethodAccess,
+  type SessionMethodAccess,
+} from "../../lib/session-method-access.ts";
 import { resolveSessionCreateParams } from "../../lib/sessions/create.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import {
@@ -7,6 +11,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-store.ts";
 import { clearChatHistory } from "./chat-history.ts";
+import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { ChatPaneRetainedPresentation } from "./chat-pane-retained-presentation.ts";
 import {
   NEW_SESSION_ACTIVE_RUN_MESSAGE,
@@ -19,7 +24,132 @@ import { canCreateChatSession } from "./chat-state-route.ts";
 
 /** Creates or resets a conversation while guarding its asynchronous ownership. */
 export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentation {
+  protected recoveringSession = false;
+
   protected abstract confirmConversationReset(): Promise<boolean>;
+
+  protected sessionDisabledBanner(params: {
+    catalogDisabledReason: string | null | undefined;
+    modelSetupRequired: boolean;
+    restartRecoveryTombstoned: boolean;
+    selectedSessionArchived: boolean;
+    selectedSessionId: string | undefined;
+    sessionKey: string;
+    unarchiveAccess: SessionMethodAccess;
+  }) {
+    if (params.catalogDisabledReason) {
+      return undefined;
+    }
+    if (params.restartRecoveryTombstoned) {
+      return this.restartRecoveryComposerBanner();
+    }
+    if (params.selectedSessionArchived) {
+      return {
+        kind: "composer-replacement" as const,
+        text: t("chat.archivedSessionDisabled"),
+        actionLabel: t("common.unarchive"),
+        disabledReason: !params.selectedSessionId
+          ? "Session lifecycle action requires a durable session identity."
+          : params.unarchiveAccess.allowed
+            ? undefined
+            : params.unarchiveAccess.reason,
+        onAction: () => {
+          if (params.selectedSessionId && params.unarchiveAccess.allowed) {
+            void this.restoreArchivedSession(params.sessionKey, params.selectedSessionId);
+          }
+        },
+      };
+    }
+    return params.modelSetupRequired
+      ? createChatModelSetupBanner(() => this.context.navigate("model-setup"))
+      : undefined;
+  }
+
+  protected restartRecoveryComposerBanner() {
+    const state = this.state;
+    if (!state) {
+      return undefined;
+    }
+    const agentId =
+      scopedAgentParamsForSession(state, state.sessionKey).agentId ??
+      resolveAgentIdFromSessionKey(state.sessionKey);
+    const params = {
+      ...(agentId ? { agentId } : {}),
+      parentSessionKey: state.sessionKey,
+      recover: true,
+    };
+    const access = readSessionMethodAccess(this.context.gateway.snapshot, {
+      method: "sessions.create",
+      params,
+    });
+    return {
+      kind: "composer-replacement" as const,
+      title: t("chat.restartRecoveryTitle"),
+      text: t("chat.restartRecoveryDisabled"),
+      tone: "neutral" as const,
+      icon: "warning" as const,
+      actionLabel: t("chat.resumeInNewSession"),
+      actionStyle: "primary" as const,
+      busy: this.recoveringSession,
+      busyLabel: t("chat.resumingSession"),
+      disabledReason: access.allowed || this.recoveringSession ? undefined : access.reason,
+      onAction: () => {
+        if (access.allowed && !this.recoveringSession) {
+          void this.recoverSession();
+        }
+      },
+    };
+  }
+
+  protected readonly recoverSession = async (): Promise<boolean> => {
+    const state = this.state;
+    if (!state || !state.client || !state.connected || this.recoveringSession) {
+      return false;
+    }
+    const sourceSessionKey = state.sessionKey;
+    const agentId =
+      scopedAgentParamsForSession(state, sourceSessionKey).agentId ??
+      resolveAgentIdFromSessionKey(sourceSessionKey);
+    const params = {
+      ...(agentId ? { agentId } : {}),
+      parentSessionKey: sourceSessionKey,
+      recover: true,
+    };
+    const access = readSessionMethodAccess(this.context.gateway.snapshot, {
+      method: "sessions.create",
+      params,
+    });
+    if (!access.allowed) {
+      setChatError(state, access.reason);
+      state.requestUpdate?.();
+      return false;
+    }
+
+    this.recoveringSession = true;
+    this.requestUpdate();
+    setChatError(state, null);
+    try {
+      const nextSessionKey = await this.context.sessions.create(params);
+      if (!nextSessionKey || this.state !== state || state.sessionKey !== sourceSessionKey) {
+        if (!nextSessionKey) {
+          setChatError(state, state.sessionsError ?? NEW_SESSION_CREATE_FAILED_MESSAGE);
+          state.requestUpdate?.();
+        }
+        return false;
+      }
+      if (this.onPaneSessionChange?.(this.paneId, nextSessionKey) === false) {
+        return false;
+      }
+      preparePaneSessionHandoff(this.context, this.paneId, nextSessionKey, {
+        attachments: [],
+        draft: "",
+      });
+      return true;
+    } finally {
+      this.recoveringSession = false;
+      this.requestUpdate();
+    }
+  };
 
   protected readonly createSession = async (): Promise<boolean> => {
     const state = this.state;

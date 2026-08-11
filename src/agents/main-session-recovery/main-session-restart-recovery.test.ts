@@ -3360,7 +3360,7 @@ describe("main-session-restart-recovery", () => {
 
     await expectRecovery({ recovered: 0, failed: 0, skipped: 1 });
     expect(sendRecoveryNotice).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringContaining("/new or /reset") }),
+      expect.objectContaining({ text: expect.stringContaining("Resume in new session") }),
     );
     expect(
       loadSessionEntry({ sessionKey: "agent:main:discord:direct:123", storePath }),
@@ -3556,7 +3556,7 @@ describe("main-session-restart-recovery", () => {
       to: "discord:dm:main",
       threadId: undefined,
       idempotencyKey: "main-session-restart-recovery:recovery-main:failed-notice",
-      text: expect.stringContaining("/new or /reset"),
+      text: expect.stringContaining("Resume in new session"),
     });
     const failedEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
     expect(failedEntry).toMatchObject({
@@ -3595,7 +3595,7 @@ describe("main-session-restart-recovery", () => {
         content: [
           {
             type: "text",
-            text: expect.stringContaining("/new or /reset"),
+            text: expect.stringContaining("Resume in new session"),
           },
         ],
       },

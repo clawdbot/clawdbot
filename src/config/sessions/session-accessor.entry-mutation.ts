@@ -128,7 +128,7 @@ export async function createSessionEntryWithTranscript<TError = string>(
     agentId,
     storePath,
     removals: resolved.legacyKeys.map((sessionKey) => ({ sessionKey })),
-    upserts: [{ sessionKey: resolved.normalizedKey, entry }],
+    upserts: [{ sessionKey: resolved.normalizedKey, entry }, ...(created.companionEntries ?? [])],
     skipMaintenance: true,
     ...(options.commitGuard ? { beforeCommitInTransaction: options.commitGuard } : {}),
   });

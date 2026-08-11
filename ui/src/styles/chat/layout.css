@@ -2644,6 +2644,31 @@ button.chat-reply-preview--message:disabled {
   flex: 0 0 auto;
 }
 
+.agent-chat__disabled-banner--neutral {
+  color: var(--text);
+}
+
+.agent-chat__disabled-banner-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--warn) 72%, var(--muted));
+}
+
+.agent-chat__disabled-banner-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.agent-chat__disabled-banner-title {
+  color: var(--text-strong);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.agent-chat__disabled-banner-detail {
+  color: var(--muted);
+}
+
 .agent-chat__composer-footer {
   display: flex;
   align-items: center;

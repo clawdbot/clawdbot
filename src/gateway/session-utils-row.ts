@@ -21,6 +21,7 @@ import {
   resolveFreshSessionTotalTokens,
   resolveSessionGoalDisplayState,
   SESSION_TOTAL_TOKENS_VERSION,
+  type InternalSessionEntry,
   type SessionEntry,
 } from "../config/sessions.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
@@ -462,6 +463,10 @@ export function buildGatewaySessionRow(params: {
     sessionId: entry?.sessionId,
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
+    restartRecoveryStatus: (entry as InternalSessionEntry | undefined)?.mainRestartRecovery
+      ?.tombstone
+      ? "tombstoned"
+      : undefined,
     thinkingLevel: thinkingProjection.thinkingLevel,
     thinkingLevels: thinkingProjection.thinkingLevels,
     thinkingOptions: thinkingProjection.thinkingOptions,

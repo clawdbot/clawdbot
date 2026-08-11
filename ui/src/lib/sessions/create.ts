@@ -16,6 +16,7 @@ export type SessionCreateParams = {
   currentSessionKey?: string;
   parentSessionKey?: string;
   fork?: boolean;
+  recover?: boolean;
   succeedsParent?: boolean;
   label?: string;
   model?: string;

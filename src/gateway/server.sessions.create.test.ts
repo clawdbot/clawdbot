@@ -3636,7 +3636,6 @@ test("sessions.create forks the parent transcript into the new session", async (
       { role: "assistant", content: [{ type: "text", text: "working on it" }] },
     ],
   });
-
   const created = await directSessionReq<{
     key?: string;
     sessionId?: string;
@@ -3836,6 +3835,179 @@ test("sessions.create rejects children of model-selection-locked sessions", asyn
     });
   }
   testState.sessionConfig = undefined;
+});
+
+test("sessions.create recovers a tombstoned locked session into a fresh continuing session", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  testState.sessionConfig = { dmScope: "main", scope: "per-sender" };
+  const parent = await createCheckpointFixture(dir);
+  const parentKey = "agent:main:dashboard:tombstoned";
+  const parentEntry = sessionStoreEntry(parent.sessionId, {
+    sessionFile: parent.sessionFile,
+    status: "failed",
+    abortedLastRun: true,
+    agentHarnessId: "codex",
+    agentRuntimeOverride: "codex",
+    providerOverride: "openai",
+    modelOverride: "gpt-5.6-sol",
+    modelSelectionLocked: true,
+    pluginOwnerId: "codex",
+    pinnedAt: 1,
+    spawnedCwd: "/tmp/recovered-worktree",
+    mainRestartRecovery: {
+      cycleId: "cycle-tombstoned",
+      revision: 4,
+      chargedAttempts: 3,
+      tombstone: { reason: "automatic recovery exhausted" },
+    },
+  });
+  await writeSessionStore({ entries: { [parentKey]: parentEntry } });
+  await seedSessionTranscript({
+    agentId: "main",
+    sessionId: parent.sessionId,
+    sessionKey: parentKey,
+    storePath,
+    messages: [
+      { role: "user", content: "finish the interrupted implementation" },
+      { role: "assistant", content: [{ type: "text", text: "I reached the final check." }] },
+    ],
+  });
+  const persistedParentBefore = loadSessionEntry({
+    agentId: "main",
+    sessionKey: parentKey,
+    storePath,
+  });
+  const persistedParentTranscriptBefore = await loadTranscriptEvents({
+    agentId: "main",
+    sessionId: parent.sessionId,
+    sessionKey: parentKey,
+    storePath,
+  });
+  const { chatHandlers } = await import("./server-methods/chat.js");
+  const chatSend = vi.spyOn(chatHandlers, "chat.send").mockImplementation(async ({ respond }) => {
+    respond(true, { runId: "recovery-run", status: "started" });
+  });
+
+  const created = await directSessionReq<{
+    key: string;
+    sessionId: string;
+    runStarted?: boolean;
+    entry: {
+      abortedLastRun?: boolean;
+      agentHarnessId?: string;
+      agentRuntimeOverride?: string;
+      mainRestartRecovery?: unknown;
+      modelSelectionLocked?: boolean;
+      modelOverride?: string;
+      parentSessionKey?: string;
+      pluginOwnerId?: string;
+      previousSessionId?: string;
+      providerOverride?: string;
+      spawnedCwd?: string;
+    };
+  }>("sessions.create", {
+    agentId: "main",
+    parentSessionKey: parentKey,
+    recover: true,
+  });
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
+  expect(created.payload?.key).not.toBe(parentKey);
+  expect(created.payload?.runStarted).toBe(true);
+  expect(created.payload?.entry).toMatchObject({
+    agentHarnessId: "codex",
+    agentRuntimeOverride: "codex",
+    modelSelectionLocked: true,
+    modelOverride: "gpt-5.6-sol",
+    pluginOwnerId: "codex",
+    previousSessionId: parent.sessionId,
+    providerOverride: "openai",
+    spawnedCwd: "/tmp/recovered-worktree",
+  });
+  expect(created.payload?.entry.abortedLastRun).toBeUndefined();
+  expect(created.payload?.entry.mainRestartRecovery).toBeUndefined();
+  expect(created.payload?.entry.parentSessionKey).toBeUndefined();
+  const archivedParent = loadSessionEntry({ agentId: "main", sessionKey: parentKey, storePath });
+  expect(archivedParent).toMatchObject({
+    sessionId: persistedParentBefore?.sessionId,
+    archivedAt: expect.any(Number),
+    mainRestartRecovery: expect.any(Object),
+  });
+  expect(archivedParent?.pinnedAt).toBeUndefined();
+  const activeSessions = await directSessionReq<{
+    sessions: Array<{ key: string; parentSessionKey?: string }>;
+  }>("sessions.list", { agentId: "main" });
+  expect(activeSessions.ok, JSON.stringify(activeSessions.error)).toBe(true);
+  const recoveredSession = activeSessions.payload?.sessions.find(
+    (session) => session.key === created.payload?.key,
+  );
+  expect(recoveredSession).toBeDefined();
+  expect(recoveredSession?.parentSessionKey).toBeUndefined();
+  expect(activeSessions.payload?.sessions.map((session) => session.key)).not.toContain(parentKey);
+  await expect(
+    loadTranscriptEvents({
+      agentId: "main",
+      sessionId: parent.sessionId,
+      sessionKey: parentKey,
+      storePath,
+    }),
+  ).resolves.toEqual(persistedParentTranscriptBefore);
+  const recoveredEvents = await loadTranscriptEvents({
+    agentId: "main",
+    sessionId: requireNonEmptyString(created.payload?.sessionId, "recovered session id"),
+    sessionKey: requireNonEmptyString(created.payload?.key, "recovered session key"),
+    storePath,
+  });
+  const recoveredText = JSON.stringify(recoveredEvents);
+  expect(recoveredText).toContain("finish the interrupted implementation");
+  expect(chatSend).toHaveBeenCalledWith(
+    expect.objectContaining({
+      params: expect.objectContaining({
+        sessionKey: created.payload?.key,
+        message: expect.stringContaining("Continue from the recovered transcript"),
+      }),
+    }),
+  );
+  chatSend.mockRestore();
+  testState.sessionConfig = undefined;
+});
+
+test("sessions.create recovery rejects a session without a restart tombstone", async () => {
+  await createSessionStoreDir();
+  const parentKey = "agent:main:dashboard:healthy";
+  await writeSessionStore({ entries: { [parentKey]: sessionStoreEntry("healthy-session") } });
+
+  const created = await directSessionReq("sessions.create", {
+    agentId: "main",
+    parentSessionKey: parentKey,
+    recover: true,
+  });
+
+  expect(created).toMatchObject({
+    ok: false,
+    error: {
+      code: "INVALID_REQUEST",
+      message: "Session recovery requires a tombstoned parent session.",
+    },
+  });
+});
+
+test("sessions.create recovery rejects caller-supplied continuation content", async () => {
+  const created = await directSessionReq("sessions.create", {
+    agentId: "main",
+    parentSessionKey: "agent:main:dashboard:tombstoned",
+    recover: true,
+    message: "replace the trusted continuation",
+  });
+
+  expect(created).toMatchObject({
+    ok: false,
+    error: {
+      code: "INVALID_REQUEST",
+      message: "sessions.create recovery only accepts agentId and parentSessionKey",
+    },
+  });
 });
 
 test("sessions.create rejects fork without parentSessionKey", async () => {

@@ -19,7 +19,7 @@ import {
 
 const TOMBSTONED_SESSION_NOTICE =
   "I couldn't continue this session after a gateway restart. " +
-  "Use /new or /reset to start a replacement session.";
+  "Your transcript is safe; use Resume in new session to continue.";
 
 function buildRestartRecoveryTombstoneNoticeKey(entry: SessionEntry): string {
   const interruptedRunId =
