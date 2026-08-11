@@ -51,8 +51,6 @@ export type OpenKeyedStoreOptions = {
   maxEntries: number;
   overflowPolicy?: PluginStateOverflowPolicy;
   defaultTtlMs?: number;
-  /** Remove legacy expirations when opening a bounded, non-expiring namespace. */
-  clearExistingExpiryOnOpen?: boolean;
   env?: NodeJS.ProcessEnv;
 };
 

@@ -2,7 +2,6 @@
 import { createPersistentDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getOptionalSlackRuntime } from "./runtime.js";
-import { SLACK_THREAD_PARTICIPATION_STORE_OPTIONS } from "./thread-participation-state.js";
 
 /**
  * Cache of Slack threads the bot has participated in.
@@ -10,6 +9,8 @@ import { SLACK_THREAD_PARTICIPATION_STORE_OPTIONS } from "./thread-participation
  */
 
 const MAX_ENTRIES = 5000;
+const PERSISTENT_MAX_ENTRIES = 1000;
+const PERSISTENT_NAMESPACE = "slack.thread-participation";
 
 type SlackThreadParticipationRecord = {
   agentId?: string;
@@ -27,15 +28,9 @@ const threadParticipation = createPersistentDedupeCache<SlackThreadParticipation
   ttlMs: 0,
   maxSize: MAX_ENTRIES,
   persistent: {
-    namespace: SLACK_THREAD_PARTICIPATION_STORE_OPTIONS.namespace,
-    maxEntries: SLACK_THREAD_PARTICIPATION_STORE_OPTIONS.maxEntries,
-    openStore: (options) =>
-      getOptionalSlackRuntime()?.state.openKeyedStore({
-        ...options,
-        // Preserve existing thread participation when upgrading its former TTL policy.
-        clearExistingExpiryOnOpen:
-          SLACK_THREAD_PARTICIPATION_STORE_OPTIONS.clearExistingExpiryOnOpen,
-      }),
+    namespace: PERSISTENT_NAMESPACE,
+    maxEntries: PERSISTENT_MAX_ENTRIES,
+    openStore: (options) => getOptionalSlackRuntime()?.state.openKeyedStore(options),
     logError: createPluginStateErrorReporter(
       getOptionalSlackRuntime,
       "slack",

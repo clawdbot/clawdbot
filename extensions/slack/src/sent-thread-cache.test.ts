@@ -2,10 +2,6 @@
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-  openOpenClawStateDatabase,
-  type OpenClawStateKyselyDatabaseForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
@@ -18,7 +14,6 @@ import {
   hasSlackThreadParticipationWithPersistence,
   recordSlackThreadParticipation,
 } from "./sent-thread-cache.js";
-import { SLACK_THREAD_PARTICIPATION_STORE_OPTIONS } from "./thread-participation-state.js";
 
 describe("slack sent-thread-cache", () => {
   afterEach(() => {
@@ -142,7 +137,6 @@ describe("slack sent-thread-cache", () => {
     expect(openKeyedStore).toHaveBeenCalledWith({
       namespace: "slack.thread-participation",
       maxEntries: 1000,
-      clearExistingExpiryOnOpen: true,
     });
 
     now.mockReturnValue(repliedAt + 25 * 60 * 60 * 1000);
@@ -178,7 +172,7 @@ describe("slack sent-thread-cache", () => {
     expect(lookup).not.toHaveBeenCalled();
   });
 
-  it("upgrades expired legacy SQLite participation and recovers it after a process restart", async () => {
+  it("keeps expired legacy participation expired while new participation survives restart", async () => {
     await withOpenClawTestState(
       { label: "slack-thread-participation", layout: "state-only", applyEnv: false },
       async (state) => {
@@ -196,13 +190,6 @@ describe("slack sent-thread-cache", () => {
         await legacyStore.register(legacyKey, { repliedAt });
         const legacyEntry = (await legacyStore.entries()).find((entry) => entry.key === legacyKey);
         expect(legacyEntry?.expiresAt).toBe(repliedAt + 24 * 60 * 60 * 1000);
-        const unrelatedStore = createPluginStateKeyedStoreForTests<{ repliedAt: number }>("slack", {
-          namespace: "slack.unrelated",
-          maxEntries: 1000,
-          defaultTtlMs: 24 * 60 * 60 * 1000,
-          env: state.env,
-        });
-        await unrelatedStore.register("expired", { repliedAt });
         resetPluginStateStoreForTests();
 
         const openKeyedStore = vi.fn((options: OpenKeyedStoreOptions) =>
@@ -217,18 +204,6 @@ describe("slack sent-thread-cache", () => {
         } as never);
 
         now.mockReturnValue(repliedAt + 25 * 60 * 60 * 1000);
-        openKeyedStore(SLACK_THREAD_PARTICIPATION_STORE_OPTIONS);
-        expect(openKeyedStore).toHaveBeenCalledOnce();
-        const database = openOpenClawStateDatabase({ env: state.env });
-        const stateDb = getNodeSqliteKysely<OpenClawStateKyselyDatabaseForTests>(database.db);
-        const sweep = executeSqliteQuerySync(
-          database.db,
-          stateDb
-            .deleteFrom("plugin_state_entries")
-            .where("expires_at", "is not", null)
-            .where("expires_at", "<=", Date.now()),
-        );
-        expect(sweep.numAffectedRows).toBe(1n);
         await expect(
           hasSlackThreadParticipationWithPersistence({
             accountId: "A1",
@@ -236,24 +211,30 @@ describe("slack sent-thread-cache", () => {
             channelId: "C123",
             threadTs: legacyThreadTs,
           }),
-        ).resolves.toBe(true);
-
-        recordSlackThreadParticipation("A1", "C123", "1700000000.000003", { teamId: "T1" });
+        ).resolves.toBe(false);
+        expect(openKeyedStore).toHaveBeenCalledExactlyOnceWith({
+          namespace: "slack.thread-participation",
+          maxEntries: 1000,
+        });
         const store = createPluginStateKeyedStoreForTests<{ repliedAt: number }>("slack", {
           namespace: "slack.thread-participation",
           maxEntries: 1000,
           env: state.env,
         });
+        now.mockReturnValue(repliedAt + 23 * 60 * 60 * 1000);
+        const preservedLegacyEntry = (await store.entries()).find(
+          (candidate) => candidate.key === legacyKey,
+        );
+        expect(preservedLegacyEntry?.expiresAt).toBe(legacyEntry?.expiresAt);
+
+        now.mockReturnValue(repliedAt + 25 * 60 * 60 * 1000);
+        expect(await store.lookup(legacyKey)).toBeUndefined();
+        recordSlackThreadParticipation("A1", "C123", "1700000000.000003", { teamId: "T1" });
         await vi.waitFor(async () => {
           await expect(store.lookup("A1:T1:C123:1700000000.000003")).resolves.toEqual({
             repliedAt: repliedAt + 25 * 60 * 60 * 1000,
           });
         });
-        const migratedLegacyEntry = (await store.entries()).find(
-          (candidate) => candidate.key === legacyKey,
-        );
-        expect(migratedLegacyEntry?.createdAt).toBe(legacyEntry?.createdAt);
-        expect(migratedLegacyEntry).not.toHaveProperty("expiresAt");
         const entry = (await store.entries()).find(
           (candidate) => candidate.key === "A1:T1:C123:1700000000.000003",
         );
@@ -271,7 +252,7 @@ describe("slack sent-thread-cache", () => {
             channelId: "C123",
             threadTs: legacyThreadTs,
           }),
-        ).resolves.toBe(true);
+        ).resolves.toBe(false);
         await expect(
           hasSlackThreadParticipationWithPersistence({
             accountId: "A1",
@@ -280,7 +261,7 @@ describe("slack sent-thread-cache", () => {
             threadTs: "1700000000.000003",
           }),
         ).resolves.toBe(true);
-        expect(openKeyedStore).toHaveBeenCalledTimes(3);
+        expect(openKeyedStore).toHaveBeenCalledTimes(2);
 
         for (const probe of [
           { accountId: "A2", teamId: "T1", channelId: "C123", threadTs: "1700000000.000003" },
@@ -322,7 +303,6 @@ describe("slack sent-thread-cache", () => {
     expect(openKeyedStore).toHaveBeenCalledWith({
       namespace: "slack.thread-participation",
       maxEntries: 1000,
-      clearExistingExpiryOnOpen: true,
     });
     expect(persistedRecords.size).toBe(1000);
     clearSlackThreadParticipationCache();

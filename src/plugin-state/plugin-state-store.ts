@@ -5,7 +5,6 @@ import {
   closePluginStateDatabase,
   MAX_PLUGIN_STATE_VALUE_BYTES,
   pluginStateClear,
-  pluginStateClearExistingExpiry,
   pluginStateConsume,
   pluginStateDelete,
   pluginStateDeleteIf,
@@ -58,7 +57,6 @@ type StoreOptionSignature = {
   maxEntries: number;
   overflowPolicy: PluginStateOverflowPolicy;
   defaultTtlMs?: number;
-  prohibitPerRecordTtl?: boolean;
 };
 
 type PreparedRegisterParams = {
@@ -170,12 +168,12 @@ function assertConsistentOptions(
   pluginId: string,
   namespace: string,
   signature: StoreOptionSignature,
-): StoreOptionSignature {
+): void {
   const key = `${pluginId}\0${namespace}`;
   const existing = namespaceOptionSignatures.get(key);
   if (!existing) {
     namespaceOptionSignatures.set(key, signature);
-    return signature;
+    return;
   }
   if (
     existing.maxEntries !== signature.maxEntries ||
@@ -189,7 +187,6 @@ function assertConsistentOptions(
       "open",
     );
   }
-  return existing;
 }
 
 function createKeyedStoreForPluginId<T>(
@@ -220,43 +217,10 @@ function createSyncKeyedStoreForPluginId<T>(
   const overflowPolicy = validateOverflowPolicy(options.overflowPolicy);
   const defaultTtlMs = validateOptionalTtlMs(options.defaultTtlMs);
   const env = options.env;
-  if (
-    options.clearExistingExpiryOnOpen !== undefined &&
-    typeof options.clearExistingExpiryOnOpen !== "boolean"
-  ) {
-    throw invalidInput("plugin state clearExistingExpiryOnOpen must be a boolean", "open");
-  }
-  if (
-    options.clearExistingExpiryOnOpen &&
-    (defaultTtlMs !== undefined || overflowPolicy !== "evict-oldest")
-  ) {
-    throw invalidInput(
-      "plugin state clearExistingExpiryOnOpen requires a non-expiring evict-oldest namespace",
-      "open",
-    );
-  }
-  const optionSignature = assertConsistentOptions(pluginId, namespace, {
-    maxEntries,
-    overflowPolicy,
-    defaultTtlMs,
-  });
-  if (options.clearExistingExpiryOnOpen) {
-    // This idempotent open-time upgrade does not change the namespace's storage contract.
-    pluginStateClearExistingExpiry({ pluginId, namespace, maxEntries, ...(env ? { env } : {}) });
-    optionSignature.prohibitPerRecordTtl = true;
-  }
-  const validateWriteOptions = (opts?: { ttlMs?: number }) => {
-    if (optionSignature.prohibitPerRecordTtl && opts?.ttlMs !== undefined) {
-      throw invalidInput(
-        "plugin state clearExistingExpiryOnOpen stores do not support per-record ttlMs",
-        "register",
-      );
-    }
-  };
+  assertConsistentOptions(pluginId, namespace, { maxEntries, overflowPolicy, defaultTtlMs });
 
   return {
     register(key, value, opts) {
-      validateWriteOptions(opts);
       const params = prepareRegisterParams(key, value, defaultTtlMs, opts);
       pluginStateRegister({
         pluginId,
@@ -270,7 +234,6 @@ function createSyncKeyedStoreForPluginId<T>(
       });
     },
     registerIfAbsent(key, value, opts) {
-      validateWriteOptions(opts);
       const params = prepareRegisterParams(key, value, defaultTtlMs, opts);
       return pluginStateRegisterIfAbsent({
         pluginId,
@@ -284,7 +247,6 @@ function createSyncKeyedStoreForPluginId<T>(
       });
     },
     update(key, updateValue, opts) {
-      validateWriteOptions(opts);
       const normalizedKey = validateKey(key, "register");
       return pluginStateUpdate({
         pluginId,
