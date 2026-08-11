@@ -12,8 +12,8 @@ import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { readGoogleApiErrorDetail } from "./google-api-errors.js";
 
-const GOOGLE_MEET_DEFAULT_CALLBACK_PORT = 8085;
-function buildGoogleMeetRedirectUri(port: number): string {
+export const GOOGLE_MEET_DEFAULT_CALLBACK_PORT = 8085;
+export function buildGoogleMeetRedirectUri(port: number): string {
   return `http://localhost:${port}/oauth2callback`;
 }
 const GOOGLE_MEET_REDIRECT_URI = buildGoogleMeetRedirectUri(GOOGLE_MEET_DEFAULT_CALLBACK_PORT);

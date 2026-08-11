@@ -30,6 +30,8 @@ import {
 import { resolveGoogleMeetGatewayOperationTimeoutMs, type GoogleMeetConfig } from "./config.js";
 import {
   buildGoogleMeetAuthUrl,
+  buildGoogleMeetRedirectUri,
+  GOOGLE_MEET_DEFAULT_CALLBACK_PORT,
   exchangeGoogleMeetAuthCode,
   waitForGoogleMeetAuthCode,
 } from "./oauth.js";
@@ -132,16 +134,24 @@ export function registerGoogleMeetCli(params: {
       }
       const { verifier, challenge } = generateHexPkceVerifierChallenge();
       const state = generateOAuthState();
+      // One resolved port drives the listener, the auth URL, and the token
+      // exchange. Deriving each independently is how the seam went half-wired:
+      // the listener honoured callbackPort while the redirect URI stayed pinned
+      // to the default, so any non-default port could never complete OAuth.
+      const callbackPort = GOOGLE_MEET_DEFAULT_CALLBACK_PORT;
+      const redirectUri = buildGoogleMeetRedirectUri(callbackPort);
       const authUrl = buildGoogleMeetAuthUrl({
         clientId,
         challenge,
         state,
+        redirectUri,
       });
       const code = await waitForGoogleMeetAuthCode({
         state,
         manual: Boolean(options.manual),
         timeoutMs: resolveGoogleMeetOAuthCallbackTimeoutMs(options.timeoutSec),
         authUrl,
+        callbackPort,
         promptInput,
         writeLine: (message) => writeStdoutLine("%s", message),
       });
@@ -150,6 +160,7 @@ export function registerGoogleMeetCli(params: {
         clientSecret,
         code,
         verifier,
+        redirectUri,
       });
       if (!tokens.refreshToken) {
         throw new Error(
