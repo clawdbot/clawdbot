@@ -20,6 +20,7 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const catalogLabelProofVariant = process.env.OPENCLAW_CATALOG_LABEL_PROOF_VARIANT ?? "after";
 const hiddenSessionCatalogsStorageKey = "openclaw:sidebar:sessions:hidden-catalogs";
 const uiProofArtifactDir = path.join(
   process.cwd(),
@@ -94,6 +95,19 @@ async function holdUiProof(page: Page, durationMs = 600) {
   }
 }
 
+async function setThemeMode(page: Page, mode: "dark" | "light") {
+  await page.emulateMedia({ colorScheme: mode });
+  await page.evaluate((nextMode) => {
+    const root = document.documentElement;
+    root.dataset.themeMode = nextMode;
+    root.dataset.themeResolved = nextMode;
+    root.classList.toggle("wa-light", nextMode === "light");
+    root.classList.toggle("wa-dark", nextMode === "dark");
+    root.style.colorScheme = nextMode;
+  }, mode);
+  await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
+}
+
 async function openSidebarTestPage() {
   const context = await suite.browser.newContext({
     locale: "en-US",
@@ -112,7 +126,7 @@ suite.define(() => {
     const page = await suite.browser.newPage({ viewport: { height: 900, width: 1440 } });
     await page.addInitScript(
       ({ key, value }) => localStorage.setItem(key, JSON.stringify(value)),
-      { key: hiddenSessionCatalogsStorageKey, value: ["claude"] },
+      { key: hiddenSessionCatalogsStorageKey, value: ["claude", "offline-catalog"] },
     );
     const gateway = await installMockGateway(page, {
       featureMethods: ["sessions.catalog.list"],
@@ -132,19 +146,45 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
-      await gateway.waitForRequest("sessions.catalog.list");
+      if (catalogLabelProofVariant !== "before") {
+        await gateway.waitForRequest("sessions.catalog.list");
+      }
       const recovery = page
         .getByRole("heading", { name: "Hidden session sections" })
         .locator("xpath=following-sibling::*[1]");
-      const row = recovery.locator(".settings-row", { hasText: "Claude Code" });
+      const expectedClaudeLabel = catalogLabelProofVariant === "before" ? "claude" : "Claude Code";
+      const row = recovery.locator(".settings-row", { hasText: expectedClaudeLabel });
+      const fallbackRow = recovery.locator(".settings-row", { hasText: "offline-catalog" });
       await expect.poll(() => row.isVisible()).toBe(true);
-      expect(await recovery.getByText("claude", { exact: true }).count()).toBe(0);
+      await expect.poll(() => fallbackRow.isVisible()).toBe(true);
+      expect(
+        await recovery.getByText(
+          catalogLabelProofVariant === "before" ? "Claude Code" : "claude",
+          { exact: true },
+        ).count(),
+      ).toBe(0);
+
+      if (captureUiProofEnabled) {
+        await mkdir(uiProofArtifactDir, { recursive: true });
+        await recovery.scrollIntoViewIfNeeded();
+        for (const theme of ["light", "dark"] as const) {
+          await setThemeMode(page, theme);
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(uiProofArtifactDir, `${catalogLabelProofVariant}-${theme}-context.png`),
+          });
+          await recovery.screenshot({
+            animations: "disabled",
+            path: path.join(uiProofArtifactDir, `${catalogLabelProofVariant}-${theme}-rows.png`),
+          });
+        }
+      }
 
       await row.getByRole("button", { name: "Show" }).click();
       await expect.poll(() => row.count()).toBe(0);
       expect(
         await page.evaluate((key) => localStorage.getItem(key), hiddenSessionCatalogsStorageKey),
-      ).toBe("[]");
+      ).toBe('["offline-catalog"]');
     } finally {
       await page.close();
     }
