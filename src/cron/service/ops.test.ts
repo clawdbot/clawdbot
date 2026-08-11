@@ -29,13 +29,20 @@ import {
 import { list, writeScratch } from "./ops-read.js";
 import { inspectManualRunDisposition } from "./ops-run-preparation.js";
 import { run } from "./ops-run.js";
-import { createCronServiceState, type CronEvent } from "./state.js";
+import { createCronServiceState, type CronAddResult, type CronEvent } from "./state.js";
 import { tryCreateCronTaskRun, tryFinishCronTaskRun } from "./task-runs.js";
 import { runMissedJobs } from "./timer.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-ops-seam",
 });
+
+function requireDeclarativeAddResult(result: CronAddResult) {
+  if (!("job" in result)) {
+    throw new Error("expected declarative cron result");
+  }
+  return result;
+}
 
 describe("scheduled tool policy provenance", () => {
   it("guards scratch and removal at their locked mutation owners", async () => {
@@ -313,41 +320,49 @@ describe("scheduled tool policy provenance", () => {
       wakeMode: "now" as const,
       payload: { kind: "agentTurn" as const, message: "run", toolsAllow: ["*"] },
     };
-    const created = await add(state, input, {
-      captureRuntimeAuthority: () => baseAuthority,
-    });
+    const created = requireDeclarativeAddResult(
+      await add(state, input, {
+        captureRuntimeAuthority: () => baseAuthority,
+      }),
+    );
     expect(created.job.runtimeAuthority).toEqual(baseAuthority);
 
     const commitGuard = vi.fn();
-    const validated = await add(
-      state,
-      {
-        ...input,
-        description: "validated",
-        payload: { kind: "agentTurn", message: "run" },
-      },
-      { commitGuard },
+    const validated = requireDeclarativeAddResult(
+      await add(
+        state,
+        {
+          ...input,
+          description: "validated",
+          payload: { kind: "agentTurn", message: "run" },
+        },
+        { commitGuard },
+      ),
     );
     expect(commitGuard).toHaveBeenCalledOnce();
     expect(validated.job.runtimeAuthority).toEqual(baseAuthority);
 
-    const cleared = await add(state, {
-      ...input,
-      description: "new tool cap",
-      payload: { ...input.payload, toolsAllow: ["read"] },
-    });
+    const cleared = requireDeclarativeAddResult(
+      await add(state, {
+        ...input,
+        description: "new tool cap",
+        payload: { ...input.payload, toolsAllow: ["read"] },
+      }),
+    );
     expect(cleared.job.runtimeAuthority).toBeUndefined();
     expect(cleared.job.runtimeAuthorityRecoveryRequired).toBe(true);
 
     const replacement = { ...baseAuthority, payload: { apps: [{ id: "mail" }] } };
-    const recaptured = await add(
-      state,
-      {
-        ...input,
-        description: "recaptured",
-        payload: { ...input.payload, toolsAllow: ["read"] },
-      },
-      { captureRuntimeAuthority: () => replacement },
+    const recaptured = requireDeclarativeAddResult(
+      await add(
+        state,
+        {
+          ...input,
+          description: "recaptured",
+          payload: { ...input.payload, toolsAllow: ["read"] },
+        },
+        { captureRuntimeAuthority: () => replacement },
+      ),
     );
     expect(recaptured.job.runtimeAuthority).toEqual(replacement);
     expect(recaptured.job.runtimeAuthorityRecoveryRequired).toBeUndefined();
