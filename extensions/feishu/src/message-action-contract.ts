@@ -15,6 +15,7 @@ function createMessageMutationTargetAliases() {
 export const messageActionTargetAliases = {
   read: { aliases: ["messageId"] },
   edit: createMessageMutationTargetAliases(),
+  delete: createMessageMutationTargetAliases(),
   pin: createMessageMutationTargetAliases(),
   unpin: createMessageMutationTargetAliases(),
   "list-pins": { aliases: ["chatId"] },

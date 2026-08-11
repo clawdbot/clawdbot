@@ -455,6 +455,7 @@ function describeFeishuMessageTool({
     "send",
     "read",
     "edit",
+    "delete",
     "thread-reply",
     "pin",
     "list-pins",
@@ -1434,6 +1435,45 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               ok: true,
               channel: "feishu",
               action: "edit",
+              ...result,
+            });
+          }
+
+          if (ctx.action === "delete") {
+            const messageId = resolveFeishuMessageId(ctx.params);
+            if (!messageId) {
+              throw new Error("Feishu delete requires messageId.");
+            }
+            const runtime = await loadFeishuChannelRuntime();
+            const message = await requireAuthorizedFeishuMessage({
+              ctx,
+              account,
+              runtime,
+              messageId,
+            });
+            // Feishu allows group admins to recall others' messages, so the API
+            // contract alone is insufficient. Verify the message was sent by
+            // this configured bot by comparing the sender's open_id to the
+            // bot's open_id obtained from the bot-info endpoint.
+            if (message.senderType !== "app" || !message.senderOpenId) {
+              throw new Error("Feishu delete only allows messages sent by the bot.");
+            }
+            const botOpenId = await runtime.getBotOpenIdFeishu({
+              cfg: ctx.cfg,
+              accountId: ctx.accountId ?? undefined,
+            });
+            if (message.senderOpenId !== botOpenId) {
+              throw new Error("Feishu delete only allows messages sent by the bot.");
+            }
+            const result = await runtime.deleteMessageFeishu({
+              cfg: ctx.cfg,
+              messageId,
+              accountId: ctx.accountId ?? undefined,
+            });
+            return jsonActionResult({
+              ok: true,
+              channel: "feishu",
+              action: "delete",
               ...result,
             });
           }

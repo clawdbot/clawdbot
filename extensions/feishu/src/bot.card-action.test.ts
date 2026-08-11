@@ -36,6 +36,8 @@ vi.mock("./client.js", () => ({
 }));
 
 vi.mock("./send.js", () => ({
+  deleteMessageFeishu: vi.fn(),
+  getBotOpenIdFeishu: vi.fn(),
   sendCardFeishu: sendCardFeishuMock,
   sendMessageFeishu: sendMessageFeishuMock,
 }));
