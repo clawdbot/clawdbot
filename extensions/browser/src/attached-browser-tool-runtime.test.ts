@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
   createBrowserTool: vi.fn(),
   startBrowserBridgeServer: vi.fn(),
   stopBrowserBridgeServer: vi.fn(),
-  retirePlaywrightBrowserConnectionExact: vi.fn(),
+  closePlaywrightBrowserConnection: vi.fn(),
 }));
 
 vi.mock("./browser-tool.js", () => ({
@@ -20,30 +20,21 @@ vi.mock("./browser/bridge-server.js", () => ({
 }));
 
 vi.mock("./browser/pw-session.js", () => ({
-  retirePlaywrightBrowserConnectionExact: mocks.retirePlaywrightBrowserConnectionExact,
+  closePlaywrightBrowserConnection: mocks.closePlaywrightBrowserConnection,
 }));
 
 import { createAttachedBrowserToolRuntime } from "./attached-browser-tool-runtime.js";
 
 describe("attached Browser tool runtime", () => {
-  const closeRetirement = vi.fn();
-  const refreshRetirement = vi.fn();
-
   beforeEach(() => {
     vi.clearAllMocks();
-    closeRetirement.mockResolvedValue(undefined);
-    refreshRetirement.mockReturnValue(true);
+    mocks.closePlaywrightBrowserConnection.mockResolvedValue(undefined);
     mocks.createBrowserTool.mockReturnValue({ name: "browser" });
     mocks.startBrowserBridgeServer.mockResolvedValue({
       baseUrl: "http://127.0.0.1:18443",
       server: { marker: "bridge-server" },
     });
     mocks.stopBrowserBridgeServer.mockResolvedValue(undefined);
-    mocks.retirePlaywrightBrowserConnectionExact.mockReturnValue({
-      retired: true,
-      close: closeRetirement,
-      refresh: refreshRetirement,
-    });
   });
 
   it("exposes only one raw attach-only CDP profile through an authenticated loopback bridge", async () => {
@@ -114,33 +105,35 @@ describe("attached Browser tool runtime", () => {
 
     await runtime.dispose();
     expect(mocks.stopBrowserBridgeServer).toHaveBeenCalledWith({ marker: "bridge-server" });
-    expect(mocks.retirePlaywrightBrowserConnectionExact).toHaveBeenCalledWith({
+    expect(mocks.closePlaywrightBrowserConnection).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:9222",
     });
-    expect(closeRetirement).toHaveBeenCalledOnce();
     expect(ensureAttachTarget).toHaveBeenCalledOnce();
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
-  it("retires the exact Playwright CDP adapter upon disposal and supports repeated retries", async () => {
+  it("retries exact Playwright CDP adapter disposal after a failed disconnect", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "attached-browser-workspace-"));
     const runtime = await createAttachedBrowserToolRuntime({
       cdpUrl: "http://127.0.0.1:9222",
       ensureAttachTarget: async () => {},
       workspaceDir,
     });
+    mocks.closePlaywrightBrowserConnection
+      .mockRejectedValueOnce(new Error("disconnect failed"))
+      .mockResolvedValueOnce(undefined);
 
-    await runtime.dispose();
-    expect(mocks.stopBrowserBridgeServer).toHaveBeenCalledOnce();
-    expect(mocks.retirePlaywrightBrowserConnectionExact).toHaveBeenCalledWith({
+    await expect(runtime.dispose()).rejects.toThrow("disconnect failed");
+    await expect(runtime.dispose()).resolves.toBeUndefined();
+
+    expect(mocks.stopBrowserBridgeServer).toHaveBeenCalledTimes(2);
+    expect(mocks.closePlaywrightBrowserConnection).toHaveBeenCalledTimes(2);
+    expect(mocks.closePlaywrightBrowserConnection).toHaveBeenNthCalledWith(1, {
       cdpUrl: "http://127.0.0.1:9222",
     });
-    expect(closeRetirement).toHaveBeenCalledOnce();
-
-    // Repeated disposal should refresh the retirement and retry close
-    await runtime.dispose();
-    expect(refreshRetirement).toHaveBeenCalledOnce();
-    expect(closeRetirement).toHaveBeenCalledTimes(2);
+    expect(mocks.closePlaywrightBrowserConnection).toHaveBeenNthCalledWith(2, {
+      cdpUrl: "http://127.0.0.1:9222",
+    });
 
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
