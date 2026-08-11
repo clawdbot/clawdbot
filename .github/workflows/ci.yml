@@ -38,6 +38,11 @@ on:
         required: false
         default: ""
         type: string
+      target_context_ref:
+        description: Canonical release branch context authorizing compatibility fallbacks for an exact-SHA target
+        required: false
+        default: ""
+        type: string
   push:
     branches: [main]
     paths-ignore:
@@ -350,6 +355,24 @@ jobs:
           fi
           echo "eligible=true" >> "$GITHUB_OUTPUT"
 
+      - name: Validate target context
+        id: target_context_target
+        if: inputs.target_context_ref != ''
+        env:
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
+          TARGET_REF: ${{ inputs.target_ref }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TARGET_CONTEXT_REF" =~ ^(release/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable/[0-9]{4}\.[0-9]+\.33)$ ]]; then
+            echo "target_context_ref must be a canonical OpenClaw release branch." >&2
+            exit 1
+          fi
+          if [[ ! "$TARGET_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "target_context_ref requires target_ref to be a full commit SHA." >&2
+            exit 1
+          fi
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
+
       - name: Ensure preflight base commit
         if: github.event_name != 'workflow_dispatch'
         uses: ./.github/actions/ensure-base-commit
@@ -419,6 +442,7 @@ jobs:
           OPENCLAW_CI_CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
           OPENCLAW_CI_HISTORICAL_TARGET: ${{ steps.historical_target.outputs.eligible || 'false' }}
           OPENCLAW_CI_RELEASE_CANDIDATE_TARGET: ${{ steps.release_candidate_target.outputs.eligible || 'false' }}
+          OPENCLAW_CI_TARGET_CONTEXT_TARGET: ${{ steps.target_context_target.outputs.eligible || 'false' }}
           OPENCLAW_CI_WORKFLOW_REVISION: ${{ github.sha }}
           OPENCLAW_CI_REPOSITORY: ${{ github.repository }}
           OPENCLAW_CI_EVENT_NAME: ${{ github.event_name }}
@@ -438,7 +462,12 @@ jobs:
             eventName === "workflow_dispatch" &&
             process.env.OPENCLAW_CI_RELEASE_CANDIDATE_TARGET === "true" &&
             checkoutRevision !== workflowRevision;
-          const compatibilityTarget = historicalTarget || releaseCandidateTarget;
+          const targetContextTarget =
+            eventName === "workflow_dispatch" &&
+            process.env.OPENCLAW_CI_TARGET_CONTEXT_TARGET === "true" &&
+            checkoutRevision !== workflowRevision;
+          const compatibilityTarget =
+            historicalTarget || releaseCandidateTarget || targetContextTarget;
           const frozenTarget =
             eventName === "workflow_dispatch" && checkoutRevision !== workflowRevision;
 

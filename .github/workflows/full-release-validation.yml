@@ -843,7 +843,7 @@ jobs:
               elif [[ "$TARGET_CONTEXT_REF" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+(-(alpha|beta)\.[0-9]+)?$ ]]; then
                 args+=(-f historical_target_tag="$TARGET_CONTEXT_REF")
               elif [[ "$TARGET_CONTEXT_REF" =~ ^(release/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable/[0-9]{4}\.[0-9]+\.33)$ ]]; then
-                args+=(-f release_candidate_ref="$TARGET_CONTEXT_REF")
+                args+=(-f target_context_ref="$TARGET_CONTEXT_REF")
               fi
               dispatch_and_wait ci.yml "$dispatch_run_name" "${args[@]}"
               ;;
