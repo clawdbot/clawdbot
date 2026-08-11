@@ -1,5 +1,10 @@
 // Read-only exact-head PR convergence audit for GitHub review evidence.
 
+import {
+  commentHasClawSweeperExactHeadProof,
+  isTrustedClawSweeperComment,
+} from "./github/real-behavior-proof-policy.mjs";
+
 /** @typedef {"READY" | "BLOCKED" | "UNKNOWN"} ConvergenceDecision */
 
 /** @typedef {"formal_review" | "inline_review_comment" | "issue_comment" | "check_run"} EvidenceSurface */
@@ -121,7 +126,6 @@ export const EVIDENCE_SURFACES = Object.freeze({
   CHECK_RUN: "check_run",
 });
 
-const CLAWSWEEPER_BOT_LOGINS = new Set(["clawsweeper[bot]", "openclaw-clawsweeper[bot]"]);
 const TRUSTED_REPOSITORY_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 const SHA_PATTERN = /^[0-9a-f]{40}$/i;
 const FINDING_KIND_PATTERNS = [
@@ -171,18 +175,6 @@ function compareStrings(left, right) {
   return String(left).localeCompare(String(right));
 }
 
-function isTrustedClawSweeperActor(item = {}) {
-  const appSlug = String(
-    item?.performed_via_github_app?.slug ?? item?.performedViaGithubApp?.slug ?? "",
-  ).toLowerCase();
-  if (appSlug === "clawsweeper") {
-    return true;
-  }
-  const login = String(item?.user?.login ?? "").toLowerCase();
-  const userType = String(item?.user?.type ?? "");
-  return CLAWSWEEPER_BOT_LOGINS.has(login) && userType === "Bot";
-}
-
 function isTrustedRepositoryActor(item = {}) {
   const association = String(
     item?.author_association ?? item?.authorAssociation ?? "",
@@ -219,7 +211,7 @@ function isClawSweeperCommandReceipt(body = "") {
 }
 
 function extractClawSweeperReReviewReceipt(comment = {}) {
-  if (!isTrustedClawSweeperActor(comment)) {
+  if (!isTrustedClawSweeperComment(comment)) {
     return null;
   }
   const body = String(comment?.body ?? "");
@@ -257,17 +249,15 @@ function normalizeNullableTimestamp(value) {
 }
 
 function latestClawSweeperPassAt({ pullRequest, comments, newerThan = null }) {
-  const pullNumber = String(pullRequest?.number ?? "");
-  const headSha = normalizeSha(pullRequest?.head?.sha);
   const newerThanMs = newerThan == null ? null : Date.parse(newerThan);
-  if (!pullNumber || !headSha || (newerThan !== null && !Number.isFinite(newerThanMs))) {
+  if (newerThan !== null && !Number.isFinite(newerThanMs)) {
     return null;
   }
 
   let latestPassAt = null;
   let latestPassMs = Number.NEGATIVE_INFINITY;
   for (const comment of comments) {
-    if (!isTrustedClawSweeperActor(comment)) {
+    if (!commentHasClawSweeperExactHeadProof({ pullRequest, comment })) {
       continue;
     }
     const verdictTimestamp = normalizeNullableTimestamp(comment?.updated_at ?? comment?.created_at);
@@ -280,14 +270,7 @@ function latestClawSweeperPassAt({ pullRequest, comments, newerThan = null }) {
     ) {
       continue;
     }
-    const markers =
-      String(comment?.body ?? "").match(/<!--\s*clawsweeper-verdict:pass\b[\s\S]*?-->/gi) ?? [];
-    const matchesExactHead = markers.some(
-      (marker) =>
-        extractMarkerField(marker, "item") === pullNumber &&
-        normalizeSha(extractMarkerField(marker, "sha")) === headSha,
-    );
-    if (matchesExactHead && verdictTimestampMs > latestPassMs) {
+    if (verdictTimestampMs > latestPassMs) {
       latestPassAt = verdictTimestamp;
       latestPassMs = verdictTimestampMs;
     }
@@ -337,7 +320,7 @@ export function normalizeIssueComment(comment, repo, pr) {
   // Marker SHA fields are authoritative only when the trusted bot/app emitted them.
   // Otherwise an ordinary commenter could pin their prose to the live head.
   const reviewedSha =
-    isTrustedClawSweeperActor(comment) || isTrustedRepositoryActor(comment)
+    isTrustedClawSweeperComment(comment) || isTrustedRepositoryActor(comment)
       ? extractClawSweeperMarkerSha(comment?.body)
       : null;
   return {
@@ -393,7 +376,7 @@ export function extractFindingsFromEvidenceItem(item, headSha) {
   const reviewedSha = resolveReviewedSha(item);
   const currentHead = reviewedSha !== null && reviewedSha === headSha;
   const trustedClawSweeper =
-    item.surface === EVIDENCE_SURFACES.ISSUE_COMMENT && isTrustedClawSweeperActor(item);
+    item.surface === EVIDENCE_SURFACES.ISSUE_COMMENT && isTrustedClawSweeperComment(item);
   const trustedRepositoryActor =
     item.surface === EVIDENCE_SURFACES.ISSUE_COMMENT && isTrustedRepositoryActor(item);
   const trustedReReviewRequester =
