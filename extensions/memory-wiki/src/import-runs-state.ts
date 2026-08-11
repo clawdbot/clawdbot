@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
@@ -10,7 +11,6 @@ import {
   asNullableRecord,
   normalizeOptionalString,
   normalizeUniqueTrimmedStringList,
-  resolveNonNegativeIntegerOption,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import pMap, { pMapSkip } from "p-map";
 import { walkMemoryWikiDirectory } from "./bounded-walk.js";

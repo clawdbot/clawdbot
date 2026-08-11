@@ -6,10 +6,12 @@ import type {
   WorkboardWorkspace,
 } from "@openclaw/workboard-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  isFutureDateTimestampMs,
+  resolveNonNegativeIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { canonicalPathFromExistingAncestor } from "openclaw/plugin-sdk/security-runtime";
-import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   assertRestrictedWorkboardTarget,
   managedWorktreeName,

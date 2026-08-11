@@ -1,8 +1,8 @@
 // Imessage plugin module implements catchup behavior.
 import { createHash } from "node:crypto";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { resolveIntegerOption } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getIMessageRuntime } from "../runtime.js";
 
 // iMessage inbound catchup. When the gateway is offline (crash, restart, mac

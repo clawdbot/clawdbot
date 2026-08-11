@@ -27,9 +27,6 @@ export {
   parseStrictInteger,
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
-  resolveIntegerOption,
-  resolveNonNegativeIntegerOption,
-  resolveOptionalIntegerOption,
 } from "../../packages/normalization-core/src/number-coercion.js";
 export { asBoolean, parseBooleanValue } from "../utils/boolean.js";
 export {

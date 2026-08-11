@@ -1,4 +1,4 @@
-import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 /**
  * Runtime dependency barrel for the Browser agent tool.
  *

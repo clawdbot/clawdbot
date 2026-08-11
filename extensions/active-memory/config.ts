@@ -1,13 +1,15 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseStrictPositiveInteger,
+  resolveIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import {
   asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
-  resolveIntegerOption,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW,

@@ -1,9 +1,12 @@
 // Discord plugin module implements rest behavior.
 import { inspect } from "node:util";
 import { gunzipSync } from "node:zlib";
-import { clampTimerTimeoutMs, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  clampTimerTimeoutMs,
+  resolveIntegerOption as normalizeIntegerOption,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { resolveIntegerOption as normalizeIntegerOption } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { serializeRequestBody } from "./rest-body.js";
 import {
   DiscordError,
