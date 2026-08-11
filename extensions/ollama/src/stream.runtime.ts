@@ -526,11 +526,10 @@ function resolveUsageCount(value: number | undefined, fallback: number | undefin
 type InputContentPart =
   | { type: "text"; text: string }
   | { type: "image"; data: string }
-  | { type: "video"; data: string }
   | { type: "toolCall"; id: string; name: string; arguments: unknown }
   | { type: "tool_use"; id: string; name: string; input: unknown };
 
-function extractTextContent(content: unknown, omitUserVideos = false): string {
+function extractTextContent(content: unknown): string {
   if (typeof content === "string") {
     return content;
   }
@@ -538,13 +537,8 @@ function extractTextContent(content: unknown, omitUserVideos = false): string {
     return "";
   }
   return (content as InputContentPart[])
-    .map((part) =>
-      part.type === "text"
-        ? part.text
-        : omitUserVideos && part.type === "video" && part.data.trim()
-          ? "(video omitted: provider does not support video input)"
-          : "",
-    )
+    .filter((part): part is { type: "text"; text: string } => part.type === "text")
+    .map((part) => part.text)
     .join("");
 }
 
@@ -759,7 +753,7 @@ export function convertToOllamaMessages(
 
   for (const msg of messages) {
     if (msg.role === "user") {
-      const text = extractTextContent(msg.content, true);
+      const text = extractTextContent(msg.content);
       const images = extractOllamaImages(msg.content);
       result.push({
         role: "user",

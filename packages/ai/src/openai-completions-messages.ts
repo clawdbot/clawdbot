@@ -12,7 +12,7 @@ import {
   extractToolResultText,
   isImageWithMediaPayload,
 } from "./providers/tool-result-text.js";
-import { transformMessages } from "./transcript-transform.js";
+import { transformProviderMessages as transformMessages } from "./provider-transcript-transform.js";
 import type { ResolvedOpenAICompletionsCompat } from "./transports/openai-completions-compat.js";
 import type { Context, Model, TextContent, ThinkingContent, ToolCall } from "./types.js";
 import { sanitizeSurrogates } from "./utils/sanitize-unicode.js";

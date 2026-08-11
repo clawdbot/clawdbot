@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { transformProviderMessages } from "../provider-transcript-transform.js";
+import type { ProviderMessage, ProviderModel } from "../provider-types.js";
 import type { Message, Model, ToolResultMessage } from "../types.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -43,9 +45,9 @@ describe("transformMessages", () => {
         isError: false,
         timestamp: 3,
       },
-    ] as unknown as Message[];
+    ] as unknown as ProviderMessage[];
 
-    const transformed = transformMessages(messages, model);
+    const transformed = transformProviderMessages(messages, model);
 
     expect(transformed).toHaveLength(3);
     expect(transformed.map((message) => message.content)).toEqual([[], [], []]);
@@ -65,9 +67,9 @@ describe("transformMessages", () => {
         ],
         timestamp: 1,
       },
-    ] as unknown as Message[];
+    ] satisfies ProviderMessage[];
 
-    const transformed = transformMessages(messages, model);
+    const transformed = transformProviderMessages(messages, model);
 
     expect(transformed[0]?.content).toEqual([
       { type: "text", text: "before" },
@@ -78,8 +80,11 @@ describe("transformMessages", () => {
     ]);
     expect(JSON.stringify(transformed)).not.toContain(sentinel);
 
-    const advertisedVideoModel = { ...model, input: ["text", "image", "video"] } as Model;
-    const advertised = transformMessages(messages, advertisedVideoModel);
+    const advertisedVideoModel: ProviderModel<"openai-completions"> = {
+      ...model,
+      input: ["text", "image", "video"],
+    };
+    const advertised = transformProviderMessages(messages, advertisedVideoModel);
     expect(advertised[0]?.content).toEqual([
       { type: "text", text: "before" },
       { type: "image", data: "image-one", mimeType: "image/png" },

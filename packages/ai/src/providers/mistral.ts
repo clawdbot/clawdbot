@@ -40,7 +40,7 @@ import {
   extractToolResultText,
   isImageWithMediaPayload,
 } from "./tool-result-text.js";
-import { transformMessages } from "./transform-messages.js";
+import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 
 const MISTRAL_TOOL_CALL_ID_LENGTH = 9;
 

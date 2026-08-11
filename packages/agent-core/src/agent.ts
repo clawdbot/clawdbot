@@ -4,6 +4,7 @@ import type {
   Message,
   Model,
   SimpleStreamOptions,
+  TextContent,
   ThinkingBudgets,
   Transport,
 } from "@openclaw/llm-core";
@@ -407,17 +408,7 @@ export class Agent {
       );
     }
     this.toolLoopRecoveryState.criticalToolLoopSeen = false;
-    const messages: AgentMessage[] = Array.isArray(input)
-      ? input
-      : typeof input !== "string"
-        ? [input]
-        : [
-            {
-              role: "user",
-              content: [{ type: "text", text: input }, ...(images ?? [])],
-              timestamp: Date.now(),
-            },
-          ];
+    const messages = this.normalizePromptInput(input, images);
     await this.runPromptMessages(messages);
   }
 
@@ -451,6 +442,25 @@ export class Agent {
     }
 
     await this.runContinuation();
+  }
+
+  private normalizePromptInput(
+    input: string | AgentMessage | AgentMessage[],
+    images?: ImageContent[],
+  ): AgentMessage[] {
+    if (Array.isArray(input)) {
+      return input;
+    }
+
+    if (typeof input !== "string") {
+      return [input];
+    }
+
+    const content: Array<TextContent | ImageContent> = [{ type: "text", text: input }];
+    if (images && images.length > 0) {
+      content.push(...images);
+    }
+    return [{ role: "user", content, timestamp: Date.now() }];
   }
 
   private async runPromptMessages(

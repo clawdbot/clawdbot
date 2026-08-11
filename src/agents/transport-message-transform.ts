@@ -1,5 +1,4 @@
 import { resolveModelBoundThinkingReplayMode } from "@openclaw/ai/internal/anthropic";
-import { projectUserMediaForTransport } from "@openclaw/ai/providers";
 /**
  * Normalizes transcript messages before provider transport replay. It drops
  * unsafe failed turns, maps tool-call ids across model boundaries, and fills
@@ -35,6 +34,7 @@ const OPENAI_RESPONSES_ABORTED_OUTPUT_APIS = new Set<string>([
   "openclaw-openai-chatgpt-responses-transport",
   "openclaw-azure-openai-responses-transport",
 ]);
+
 function defaultAllowSyntheticToolResults(modelApi: Api): boolean {
   return SYNTHETIC_TOOL_RESULT_APIS.has(modelApi);
 }
@@ -81,9 +81,7 @@ export function transformTransportMessages(
   const toolCallIdMap = new Map<string, string>();
   const transformed = messages.map((msg) => {
     if (msg.role === "user") {
-      return Array.isArray(msg.content)
-        ? { ...msg, content: projectUserMediaForTransport(msg.content, true) }
-        : msg;
+      return msg;
     }
     if (msg.role === "toolResult") {
       const normalizedId = toolCallIdMap.get(msg.toolCallId);
