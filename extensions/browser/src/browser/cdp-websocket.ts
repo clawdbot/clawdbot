@@ -12,7 +12,7 @@ import { CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
 import { getPlaywrightUserAgent } from "./playwright-core.runtime.js";
 import { normalizeBrowserTimerDelayMs } from "./timer-delay.js";
 
-const CDP_WS_MAX_PAYLOAD_BYTES = 256 * 1024 * 1024;
+const PLAYWRIGHT_CDP_MAX_PAYLOAD_BYTES = 256 * 1024 * 1024;
 const PLAYWRIGHT_CDP_PER_MESSAGE_DEFLATE = {
   clientNoContextTakeover: true,
   zlibDeflateOptions: { level: 3 },
@@ -271,11 +271,13 @@ export function openCdpWebSocket(
   return withManagedProxyForCdpUrl(connectionUrl, () => {
     const ws = new WebSocket(connectionUrl, {
       handshakeTimeout: handshakeTimeoutMs,
-      followRedirects: opts?.playwrightTransportDefaults === true,
-      maxRedirects: PLAYWRIGHT_CDP_MAX_REDIRECTS,
-      maxPayload: CDP_WS_MAX_PAYLOAD_BYTES,
       ...(opts?.playwrightTransportDefaults
-        ? { perMessageDeflate: PLAYWRIGHT_CDP_PER_MESSAGE_DEFLATE }
+        ? {
+            followRedirects: true,
+            maxRedirects: PLAYWRIGHT_CDP_MAX_REDIRECTS,
+            maxPayload: PLAYWRIGHT_CDP_MAX_PAYLOAD_BYTES,
+            perMessageDeflate: PLAYWRIGHT_CDP_PER_MESSAGE_DEFLATE,
+          }
         : {}),
       ...(Object.keys(headers).length ? { headers } : {}),
       ...(agent ? { agent } : {}),

@@ -39,7 +39,6 @@ import {
   normalizeCdpUrl,
   targetKey,
 } from "./pw-session-state.js";
-import { isBrowserRateLimitError } from "./rate-limit-message.js";
 
 const { chromium } = playwrightCore;
 type CdpEndpointPin = NonNullable<Awaited<ReturnType<typeof assertCdpEndpointAllowed>>>;
@@ -421,9 +420,6 @@ export async function connectBrowser(
           endpointDiscoveryError = err;
           return null;
         });
-        if (isBrowserRateLimitError(endpointDiscoveryError)) {
-          throw endpointDiscoveryError;
-        }
         const hasUrlCredentials = stripCdpUrlCredentials(normalized) !== normalized;
         if (!resolvedEndpoint && hasUrlCredentials && !isWebSocketUrl(normalized)) {
           // Playwright preserves explicit headers across HTTP discovery redirects.

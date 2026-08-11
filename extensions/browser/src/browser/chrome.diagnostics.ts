@@ -23,7 +23,6 @@ import {
 } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
-import { isBrowserRateLimitError } from "./rate-limit-message.js";
 
 type ChromeCdpEndpointPin = NonNullable<Awaited<ReturnType<typeof assertCdpEndpointAllowed>>>;
 
@@ -142,23 +141,13 @@ export async function readChromeVersionWithCredentialFallback(
     }
     try {
       return await readChromeVersion(cdpUrl, timeoutMs, ssrfPolicy, "/json/version/");
-    } catch (fallbackError) {
-      if (isBrowserRateLimitError(fallbackError)) {
-        throw fallbackError;
-      }
+    } catch {
       return primaryVersion;
     }
   } catch (primaryError) {
-    // Respect fetchCdpChecked's explicit 429 no-retry contract.
-    if (isBrowserRateLimitError(primaryError)) {
-      throw primaryError;
-    }
     try {
       return await readChromeVersion(cdpUrl, timeoutMs, ssrfPolicy, "/json/version/");
-    } catch (fallbackError) {
-      if (isBrowserRateLimitError(fallbackError)) {
-        throw fallbackError;
-      }
+    } catch {
       throw primaryError;
     }
   }

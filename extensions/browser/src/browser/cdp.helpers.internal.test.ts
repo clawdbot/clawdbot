@@ -303,6 +303,31 @@ describe("cdp.helpers internal", () => {
       }
     });
 
+    it.each([
+      { playwrightTransportDefaults: false, expectedMaxPayload: 100 * 1024 * 1024 },
+      { playwrightTransportDefaults: true, expectedMaxPayload: 256 * 1024 * 1024 },
+    ])(
+      "uses the expected payload limit when Playwright transport defaults are $playwrightTransportDefaults",
+      async ({ playwrightTransportDefaults, expectedMaxPayload }) => {
+        const server = await startWsServer();
+        wss = server.wss;
+        const ws = openCdpWebSocket(server.url, { playwrightTransportDefaults });
+
+        try {
+          await new Promise<void>((resolve, reject) => {
+            ws.once("open", resolve);
+            ws.once("error", reject);
+          });
+          const receiver = Reflect.get(ws, "_receiver") as object | undefined;
+          const maxPayload = receiver ? Reflect.get(receiver, "_maxPayload") : undefined;
+
+          expect(maxPayload).toBe(expectedMaxPayload);
+        } finally {
+          ws.close();
+        }
+      },
+    );
+
     it("preserves IPv6 hostnames in pinned WebSocket agent checks", async () => {
       const server = new WebSocketServer({ port: 0, host: "::1" });
       try {
