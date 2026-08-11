@@ -218,7 +218,7 @@ suite.define(() => {
         await expect.poll(() => host.count()).toBe(1);
         await host.locator(".app-toast__action").click({ trial: true });
 
-        await modal.evaluate((element) => element.hide());
+        await modal.evaluate((element) => (element as HTMLElement & { hide: () => void }).hide());
         const appToast = page.locator(".shell > openclaw-toast-host .app-toast");
         await expect.poll(() => appToast.textContent()).toContain(headline);
         await appToast.getByRole("button", { name: "Dismiss" }).click();

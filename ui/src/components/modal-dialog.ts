@@ -7,7 +7,7 @@ import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
 const modalToastLayers = (document.openClawModalToastLayers ??= new Set<HTMLElement>());
 
-export function setModalToastLayer(modal: HTMLElement, open: boolean) {
+function setModalToastLayer(modal: HTMLElement, open: boolean) {
   modalToastLayers.delete(modal);
   if (open) {
     modalToastLayers.add(modal);

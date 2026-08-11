@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { setModalToastLayer } from "../components/modal-dialog.ts";
+import "../components/modal-dialog.ts";
 import { showToast } from "./toast.ts";
 
 async function mountHost() {
@@ -40,7 +40,7 @@ describe("shared toast", () => {
     const modal = document.createElement("openclaw-modal-dialog");
     modal.open = true;
     document.body.append(modal);
-    setModalToastLayer(modal, true);
+    await modal.updateComplete;
     const moveBefore = vi.spyOn(Element.prototype, "moveBefore");
 
     showToast({ message: "Above overlay" });
@@ -59,7 +59,7 @@ describe("shared toast", () => {
     modal.open = true;
     shadowRoot.append(modal);
     document.body.append(shadowOwner);
-    setModalToastLayer(modal, true);
+    await modal.updateComplete;
     const moveBefore = vi.spyOn(Element.prototype, "moveBefore");
 
     showToast({ message: "Critical session notice" });
