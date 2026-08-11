@@ -9,6 +9,7 @@ export type SpawnBackendAdapter<TState> = {
   cleanupOnFailure(params: {
     phase: SpawnPipelinePhase;
     state?: TState;
+    runId?: string;
     error: unknown;
   }): Promise<void>;
 };
@@ -94,7 +95,7 @@ async function executeSpawnPipeline<TState>(
     // Registry insertion takes ownership synchronously; keeping the slot would double-count it.
     params.admissionReservation?.release();
   } catch (error) {
-    await params.adapter.cleanupOnFailure({ phase: "register", state, error });
+    await params.adapter.cleanupOnFailure({ phase: "register", state, runId, error });
     return { ok: false, phase: "register", state, runId, error };
   }
 

@@ -4,7 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
-import { terminateAcceptedCollectorRun } from "../spawn/subagent-spawn-cleanup.js";
+import { terminateAcceptedSubagentRun } from "../spawn/subagent-spawn-cleanup.js";
 import {
   loadSessionEntryByKey,
   runAnnounceDeliveryWithRetry,
@@ -126,7 +126,7 @@ export async function runDescendantWake(params: {
   // An accepted wake that loses lifecycle ownership must be terminated before
   // it can mutate a replacement session owned by another run.
   const terminateUnownedWake = async () => {
-    await terminateAcceptedCollectorRun({
+    await terminateAcceptedSubagentRun({
       childSessionKey: params.childSessionKey,
       gatewayRunId: wakeRunId,
       expectedSessionId:

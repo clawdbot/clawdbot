@@ -299,6 +299,7 @@ describe("openshell backend manager", () => {
     expect(adoptedPunctuationLegacy.runtimeId).toBe(punctuationLegacyRuntimeId);
     expect(ignoresUnknown.runtimeId).toBe(first.runtimeId);
     expect(prefersCurrent.runtimeId).toBe(first.runtimeId);
+    expect(first.capabilities?.workspaceMutationVisibility).toBe("runtime-local");
   });
 
   it("does not recreate an unreachable registered legacy sandbox name", async () => {
@@ -649,6 +650,7 @@ describe("openshell backend manager", () => {
       agentWorkspaceDir: workspaceDir,
       cfg: createOpenShellBackendSandboxConfig(),
     });
+    expect(backend.capabilities?.workspaceMutationVisibility).toBe("shared-host");
 
     try {
       await backend.finalizeExec?.({

@@ -167,6 +167,7 @@ class SshSandboxBackendImpl {
       env: this.params.createParams.cfg.docker.env,
       configLabel: this.params.target,
       configLabelKind: "Target",
+      capabilities: { workspaceMutationVisibility: "runtime-local" },
       workdirValidation: "backend",
       validateWorkdir: async (workdir) => await this.validateWorkdir(workdir),
       discardPreparedWorkdir: (workdir) => this.discardPreparedWorkdir(workdir),

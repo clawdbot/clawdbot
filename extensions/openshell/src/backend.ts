@@ -288,57 +288,7 @@ async function createOpenShellSandboxBackend(params: {
     remoteAgentWorkspaceDir: params.pluginConfig.remoteAgentWorkspaceDir,
   });
 
-  return {
-    id: "openshell",
-    runtimeId: sandboxName,
-    runtimeLabel: sandboxName,
-    workdir: params.pluginConfig.remoteWorkspaceDir,
-    env: params.createParams.cfg.docker.env,
-    mode: params.pluginConfig.mode,
-    configLabel: params.pluginConfig.from,
-    configLabelKind: "Source",
-    workdirValidation: "backend",
-    validateWorkdir: async (workdir) => await impl.validateWorkdir(workdir),
-    discardPreparedWorkdir: (workdir) => impl.discardPreparedWorkdir(workdir),
-    workdirRoots: [
-      params.pluginConfig.remoteWorkspaceDir,
-      params.pluginConfig.remoteAgentWorkspaceDir,
-    ],
-    buildExecSpec: async ({ command, workdir, env, usePty }) => {
-      const pending = await impl.prepareExec({ command, workdir, env, usePty });
-      return {
-        argv: pending.argv,
-        env: buildOpenShellSshExecEnv(),
-        stdinMode: "pipe-open",
-        finalizeToken: pending.token,
-      };
-    },
-    finalizeExec: async ({ token }) => {
-      await impl.finalizeExec(token as PendingExec | undefined);
-    },
-    runShellCommand: async (command) => await impl.runRemoteShellScript(command),
-    createFsBridge: ({ sandbox }) =>
-      params.pluginConfig.mode === "remote"
-        ? createRemoteShellSandboxFsBridge({
-            sandbox,
-            runtime: impl.asHandle(),
-          })
-        : createOpenShellFsBridge({
-            sandbox,
-            backend: impl.asHandle(),
-          }),
-    remoteWorkspaceDir: params.pluginConfig.remoteWorkspaceDir,
-    remoteAgentWorkspaceDir: params.pluginConfig.remoteAgentWorkspaceDir,
-    runRemoteShellScript: async (command) => await impl.runRemoteShellScript(command),
-    mkdirpRemotePath: async (remotePath, signal, mode) =>
-      await impl.mkdirpRemotePath(remotePath, signal, mode),
-    removeRemotePath: async (remotePath, removeParams) =>
-      await impl.removeRemotePath(remotePath, removeParams),
-    renameRemotePath: async (fromRemotePath, toRemotePath, signal) =>
-      await impl.renameRemotePath(fromRemotePath, toRemotePath, signal),
-    syncLocalPathToRemote: async (localPath, remotePath) =>
-      await impl.syncLocalPathToRemote(localPath, remotePath),
-  };
+  return impl.asHandle();
 }
 
 class OpenShellSandboxBackendImpl {
@@ -369,6 +319,10 @@ class OpenShellSandboxBackendImpl {
       mode: this.params.execContext.config.mode,
       configLabel: this.params.execContext.config.from,
       configLabelKind: "Source",
+      capabilities: {
+        workspaceMutationVisibility:
+          this.params.execContext.config.mode === "remote" ? "runtime-local" : "shared-host",
+      },
       workdirValidation: "backend",
       validateWorkdir: async (workdir) => await this.validateWorkdir(workdir),
       discardPreparedWorkdir: (workdir) => this.discardPreparedWorkdir(workdir),

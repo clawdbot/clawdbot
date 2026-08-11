@@ -42,7 +42,7 @@ import {
   resolveMainSessionAlias,
 } from "../../tools/sessions-helpers.js";
 import { resolveStoredSubagentCapabilities } from "../spawn/subagent-capabilities.js";
-import { terminateAcceptedCollectorRun } from "../spawn/subagent-spawn-cleanup.js";
+import { terminateAcceptedSubagentRun } from "../spawn/subagent-spawn-cleanup.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { resolveSessionEntryForKey } from "./subagent-list.js";
 import {
@@ -1188,7 +1188,7 @@ export async function steerControlledSubagentRun(params: {
       // the fallback when the accepted session row can be resolved.
     }
     const terminateUnownedSteer = () =>
-      terminateAcceptedCollectorRun({
+      terminateAcceptedSubagentRun({
         childSessionKey: params.entry.childSessionKey,
         gatewayRunId: runId,
         expectedSessionId: acceptedSessionEntry?.sessionId,

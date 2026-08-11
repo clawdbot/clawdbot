@@ -212,7 +212,7 @@ export function createMxcSandboxBackendHandle(params: {
         throw err;
       }
     },
-    capabilities: {},
+    capabilities: { workspaceMutationVisibility: "shared-host" },
 
     async buildExecSpec({ command, workdir, env, usePty }): Promise<SandboxBackendExecSpec> {
       const effectiveWorkdir = resolveWorkdirInsideWorkspace(

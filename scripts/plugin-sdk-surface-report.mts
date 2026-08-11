@@ -270,7 +270,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: add the account-aware native approval request selector.
       // +3: add canonical coercion exports while retaining the shipped asString compatibility name.
       // +2: add high-use coercion primitives while retaining shipped object-record exports.
-      4868,
+      // +1: rooted directory creation for plugin sandbox bridges that must preserve private modes.
+      4869,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -333,7 +334,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: add the account-aware native approval request selector.
       // +3: add canonical coercion exports while retaining the shipped asString compatibility name.
       // +2: add high-use callable coercion primitives while retaining shipped object-record exports.
-      2924,
+      // +1: rooted directory creation for plugin sandbox bridges that must preserve private modes.
+      2925,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

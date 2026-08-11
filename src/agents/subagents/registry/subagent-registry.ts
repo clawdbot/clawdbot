@@ -4,12 +4,9 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { callGateway } from "../../../gateway/call.js";
 import { getGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime-context.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import {
-  isGatewayRestartDraining,
-  runWithGatewayIndependentRootWorkAdmission,
-} from "../../../process/gateway-work-admission.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { prependAgentSteeringPrompt } from "../../agent-steering-queue.js";
-import { terminateAcceptedCollectorRun } from "../spawn/subagent-spawn-cleanup.js";
+import { terminateAcceptedSubagentRun } from "../spawn/subagent-spawn-cleanup.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { emitSubagentProgressEndedHook } from "./subagent-registry-completion.js";
@@ -184,7 +181,6 @@ function scheduleSubagentDeliveryResumeRetry(
     }).catch((error: unknown) => {
       log.warn("failed to resume subagent delivery retry", { runId, error });
       if (
-        isGatewayRestartDraining() &&
         subagentRuns.get(runId) === scheduledEntry &&
         typeof scheduledEntry.cleanupCompletedAt !== "number"
       ) {
@@ -379,7 +375,7 @@ const subagentRestorer = createSubagentRegistryRestorer({
     expectedSessionId,
     expectedLifecycleRevision,
   }) =>
-    terminateAcceptedCollectorRun({
+    terminateAcceptedSubagentRun({
       childSessionKey: entry.childSessionKey,
       gatewayRunId,
       expectedSessionId,

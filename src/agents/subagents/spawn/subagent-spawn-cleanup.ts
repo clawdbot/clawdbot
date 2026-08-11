@@ -121,7 +121,7 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
   };
 }
 
-export async function terminateAcceptedCollectorRun(params: {
+export async function terminateAcceptedSubagentRun(params: {
   childSessionKey: string;
   gatewayRunId: string;
   expectedSessionId?: string;

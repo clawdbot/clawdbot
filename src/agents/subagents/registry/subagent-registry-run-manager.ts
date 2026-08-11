@@ -265,6 +265,7 @@ export type RegisterSubagentRunParams = {
   queued?: boolean;
   /** Durable owner from before attachment writes until launch activation or cleanup. */
   launchCleanupPending?: boolean;
+  launchCleanupSessionIdentity?: { sessionId: string; lifecycleRevision: string };
 };
 
 export function createSubagentRunManager(params: {
@@ -1241,6 +1242,7 @@ export function createSubagentRunManager(params: {
       outputSchema: registerParams.outputSchema,
       queuedLaunch: registerParams.queuedLaunch,
       launchCleanupPending: registerParams.launchCleanupPending,
+      launchCleanupSessionIdentity: registerParams.launchCleanupSessionIdentity,
       generation,
       createdAt: now,
       execution: {
@@ -1421,6 +1423,7 @@ export function createSubagentRunManager(params: {
     entry.swarmLaunchPending = false;
     entry.queuedLaunch = undefined;
     entry.launchCleanupPending = undefined;
+    entry.launchCleanupSessionIdentity = undefined;
     let persistedRunning = false;
     try {
       params.persistOrThrow(previousRunId, nextRunId);
@@ -1482,7 +1485,6 @@ export function createSubagentRunManager(params: {
       updateSwarmCollectorCompletion(entry, params.getRuntimeConfig());
     } else {
       entry.archiveAtMs = endedAt;
-      entry.execution.suppressSessionEffects = true;
     }
     try {
       params.persistOrThrow(entry.runId);

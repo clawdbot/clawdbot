@@ -11,7 +11,6 @@ import {
   hasSandboxBindReadonlyHostShadows,
   resolveSandboxFsPathWithMounts,
   resolveWritableSandboxBindHostRoots,
-  resolveWritableSandboxHostPath,
 } from "./fs-paths.js";
 import { createSandboxTestContext } from "./test-fixtures.js";
 import type { SandboxContext } from "./types.js";
@@ -43,9 +42,9 @@ describe("sandbox bind mounts", () => {
     ]);
   });
 
-  it("keeps writable bind roots that contain read-only host shadows", () => {
-    // The writable remainder still needs bridge routing. Mount-aware resolution
-    // selects the narrower read-only child and rejects writes inside that shadow.
+  it("omits writable bind roots that contain read-only host shadows", () => {
+    // A writable parent with a read-only child is unsafe for generic host writes;
+    // callers must route through mount-aware path resolution instead.
     expect(
       resolveWritableSandboxBindHostRoots([
         "/tmp/data:/tmp/data:rw",
@@ -53,7 +52,7 @@ describe("sandbox bind mounts", () => {
         "/tmp/readonly-parent:/tmp/readonly-parent:ro",
         "/tmp/readonly-parent/work:/tmp/readonly-parent/work:rw",
       ]),
-    ).toEqual([path.resolve("/tmp/data"), path.resolve("/tmp/readonly-parent/work")]);
+    ).toEqual([path.resolve("/tmp/readonly-parent/work")]);
   });
 
   it("detects bind mounts whose container path differs from the host path", () => {
@@ -79,34 +78,6 @@ describe("sandbox bind mounts", () => {
     ).toBe(false);
   });
 
-  it("does not select a writable parent route through a read-only bind shadow", () => {
-    expect(
-      resolveWritableSandboxHostPath({
-        filePath: "/tmp/data/readonly/worker",
-        workspaceDir: "/tmp/workspace",
-        agentWorkspaceDir: "/tmp/workspace",
-        workspaceAccess: "rw",
-        containerWorkdir: "/workspace",
-        binds: ["/tmp/data:/mnt/shared:rw", "/tmp/data/readonly:/mnt/shared/readonly:ro"],
-      }),
-    ).toBeUndefined();
-  });
-
-  it.each(["ro", "none"] as const)(
-    "selects an explicit writable bind when workspace access is %s",
-    (workspaceAccess) => {
-      expect(
-        resolveWritableSandboxHostPath({
-          filePath: "/tmp/data/worker",
-          workspaceDir: "/tmp/workspace",
-          agentWorkspaceDir: "/tmp/workspace",
-          workspaceAccess,
-          containerWorkdir: "/workspace",
-          binds: ["/tmp/data:/mnt/shared:rw"],
-        }),
-      ).toBe(path.resolve("/tmp/data/worker"));
-    },
-  );
 });
 
 describe("resolveSandboxFsPathWithMounts", () => {

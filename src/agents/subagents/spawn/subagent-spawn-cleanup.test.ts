@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   cleanupProvisionalSession,
-  terminateAcceptedCollectorRun,
+  terminateAcceptedSubagentRun,
 } from "./subagent-spawn-cleanup.js";
 
 function sessionChangedError(): Error {
@@ -32,7 +32,7 @@ describe("subagent spawn cleanup identity", () => {
       .mockResolvedValueOnce({ ok: true, aborted: false, runIds: [] })
       .mockResolvedValueOnce({ deleted: true });
 
-    await terminateAcceptedCollectorRun({
+    await terminateAcceptedSubagentRun({
       childSessionKey: "agent:main:subagent:child",
       gatewayRunId: "gateway-run",
       expectedSessionId: "session-id",
@@ -60,7 +60,7 @@ describe("subagent spawn cleanup identity", () => {
       runIds: ["gateway-run"],
     }));
 
-    await terminateAcceptedCollectorRun({
+    await terminateAcceptedSubagentRun({
       childSessionKey: "agent:main:subagent:child",
       gatewayRunId: "gateway-run",
       expectedSessionId: "session-id",
@@ -78,7 +78,7 @@ describe("subagent spawn cleanup identity", () => {
       .mockRejectedValueOnce(sessionChangedError());
 
     await expect(
-      terminateAcceptedCollectorRun({
+      terminateAcceptedSubagentRun({
         childSessionKey: "agent:main:subagent:child",
         gatewayRunId: "gateway-run",
         expectedSessionId: "session-id",

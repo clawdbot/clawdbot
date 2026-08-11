@@ -213,18 +213,14 @@ export function createSubagentRegistryRestorer(config: {
           continue;
         }
         if (!entry.collect && entry.execution.status === "queued" && entry.launchCleanupPending) {
-          const cleanupSessionEntry = loadSubagentSessionEntry({
-            childSessionKey: entry.childSessionKey,
-            storeCache: restoredSessionCache,
-          });
           void failAndCleanupRestoredQueuedRun(
             runId,
             entry,
             "subagent launch was interrupted before activation",
             false,
             getAgentEventLifecycleGeneration(),
-            cleanupSessionEntry?.sessionId,
-            cleanupSessionEntry?.lifecycleRevision,
+            entry.launchCleanupSessionIdentity?.sessionId,
+            entry.launchCleanupSessionIdentity?.lifecycleRevision,
           );
           continue;
         }
@@ -233,6 +229,12 @@ export function createSubagentRegistryRestorer(config: {
             childSessionKey: entry.childSessionKey,
             storeCache: restoredSessionCache,
           });
+          const cleanupSessionId = entry.launchCleanupPending
+            ? entry.launchCleanupSessionIdentity?.sessionId
+            : cleanupSessionEntry?.sessionId;
+          const cleanupSessionLifecycleRevision = entry.launchCleanupPending
+            ? entry.launchCleanupSessionIdentity?.lifecycleRevision
+            : cleanupSessionEntry?.lifecycleRevision;
           const launch = entry.queuedLaunch;
           if (!launch) {
             const cleanupLifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -242,8 +244,8 @@ export function createSubagentRegistryRestorer(config: {
               "queued collector launch state was unavailable after restart",
               false,
               cleanupLifecycleGeneration,
-              cleanupSessionEntry?.sessionId,
-              cleanupSessionEntry?.lifecycleRevision,
+              cleanupSessionId,
+              cleanupSessionLifecycleRevision,
             );
             continue;
           }
@@ -297,8 +299,8 @@ export function createSubagentRegistryRestorer(config: {
                     entry,
                     gatewayRunId,
                     timeoutMs: launch.timeoutMs,
-                    expectedSessionId: cleanupSessionEntry?.sessionId,
-                    expectedLifecycleRevision: cleanupSessionEntry?.lifecycleRevision,
+                    expectedSessionId: cleanupSessionId,
+                    expectedLifecycleRevision: cleanupSessionLifecycleRevision,
                   });
                   launchTerminationConfirmed = true;
                   throw error;
@@ -315,8 +317,8 @@ export function createSubagentRegistryRestorer(config: {
                 error instanceof Error ? error.message : String(error),
                 launchTerminationConfirmed,
                 launchLifecycleGeneration ?? getAgentEventLifecycleGeneration(),
-                cleanupSessionEntry?.sessionId,
-                cleanupSessionEntry?.lifecycleRevision,
+                cleanupSessionId,
+                cleanupSessionLifecycleRevision,
               );
             },
           });

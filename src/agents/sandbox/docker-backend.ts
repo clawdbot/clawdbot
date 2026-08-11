@@ -104,6 +104,7 @@ function createContainerSandboxBackendHandle(params: {
     configLabelKind: "Image",
     capabilities: {
       browser: params.engine.id === "docker",
+      workspaceMutationVisibility: "shared-host",
     },
     async buildExecSpec({ command, workdir, env, usePty }) {
       await validateSandboxContainerEngineTarget(params.engine, params.podmanTarget);

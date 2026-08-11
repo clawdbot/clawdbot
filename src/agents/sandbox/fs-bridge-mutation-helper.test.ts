@@ -620,7 +620,7 @@ describe("sandbox pinned mutation helper", () => {
   it.runIf(process.platform !== "win32")(
     "applies the requested private mode to every created mkdirp component",
     async () => {
-      await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+      await withTestDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
         const workspace = path.join(root, "workspace");
         await fs.mkdir(workspace, { recursive: true });
 

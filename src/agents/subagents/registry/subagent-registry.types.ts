@@ -308,6 +308,8 @@ export type SubagentRunRecord = {
   queuedLaunch?: SwarmQueuedLaunch;
   /** Durable owner from pre-write attachment staging through activation or failed-launch cleanup. */
   launchCleanupPending?: boolean;
+  /** Frozen child-session identity owned by a pre-activation cleanup claim. */
+  launchCleanupSessionIdentity?: { sessionId: string; lifecycleRevision: string };
   /** Set after failed-launch context-engine cleanup succeeds, preventing duplicate end hooks. */
   contextEngineCleanupCompletedAt?: number;
   collectorCompletion?: SwarmCollectorCompletion;

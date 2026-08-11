@@ -246,6 +246,7 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
 
   test("buildExecSpec returns a launcher argv with Windows process containment by default", async () => {
     const handle = createMxcSandboxBackendHandle(baseParams);
+    expect(handle.capabilities?.workspaceMutationVisibility).toBe("shared-host");
     const spec = await handle.buildExecSpec({
       command: "echo hello",
       env: {},

@@ -78,6 +78,8 @@ export type SandboxBackendHandle = {
   workdirRoots?: readonly string[];
   capabilities?: {
     browser?: boolean;
+    /** Whether host-workspace mutations are immediately visible to sibling runtimes. */
+    workspaceMutationVisibility?: "shared-host" | "runtime-local";
   };
   buildExecSpec(params: {
     command: string;

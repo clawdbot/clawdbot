@@ -406,7 +406,7 @@ export function createSubagentRegistrySweeper(params: {
           let includeSessionEffects = !shouldSuppressSubagentRecoverySessionEffects(entry);
           let sessionDeleted = false;
           if (includeSessionEffects) {
-            const sessionIdentity = freezeSessionIdentity(entry.childSessionKey, storeCache);
+            const sessionIdentity = entry.launchCleanupSessionIdentity;
             if (!sessionIdentity) {
               includeSessionEffects = false;
               entry.execution = { ...entry.execution, suppressSessionEffects: true };
@@ -446,6 +446,7 @@ export function createSubagentRegistrySweeper(params: {
             });
           }
           entry.launchCleanupPending = undefined;
+          entry.launchCleanupSessionIdentity = undefined;
           entry.cleanupCompletedAt = now;
           mutated = true;
           mutatedRunIds.add(runId);

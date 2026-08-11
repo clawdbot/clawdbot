@@ -78,7 +78,7 @@ describe("docker sandbox backend manager", () => {
     dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-container");
     const scopeKey = `agent:poly:workspace:${"a".repeat(32)}`;
 
-    await createDockerSandboxBackend({
+    const backend = await createDockerSandboxBackend({
       sessionKey: "agent:poly:msteams:channel-1",
       scopeKey,
       workspaceDir: "/tmp/customer/workspace",
@@ -89,6 +89,7 @@ describe("docker sandbox backend manager", () => {
     expect(dockerMocks.ensureSandboxContainer).toHaveBeenCalledWith(
       expect.objectContaining({ scopeKey }),
     );
+    expect(backend.capabilities?.workspaceMutationVisibility).toBe("shared-host");
   });
 
   it("binds Podman provisioning and later execs to the resolved target", async () => {

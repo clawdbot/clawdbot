@@ -18,6 +18,10 @@ describe("createSubagentRegistryRestorer", () => {
       attachmentsRootDir: "/workspace",
       attachmentsDir: "/workspace/.openclaw/attachments/00000000-0000-4000-8000-000000000002",
       launchCleanupPending: true,
+      launchCleanupSessionIdentity: {
+        sessionId: "original-session",
+        lifecycleRevision: "original-revision",
+      },
     };
     const runs = new Map([[run.runId, run]]);
     const resumeRun = vi.fn();
@@ -29,6 +33,7 @@ describe("createSubagentRegistryRestorer", () => {
     const completeFailedLaunchCleanup = vi.fn(() => {
       run.launchCleanupPending = undefined;
     });
+    const callGateway = vi.fn(async () => ({ ok: true }));
     const restorer = createSubagentRegistryRestorer({
       runs,
       resumedRuns: new Set(),
@@ -36,6 +41,7 @@ describe("createSubagentRegistryRestorer", () => {
         ({
           restoreSubagentRunsFromDisk: () => 1,
           getRuntimeConfig: () => ({}),
+          callGateway,
         }) as never,
       persist: vi.fn(),
       persistOrThrow: vi.fn(),
@@ -57,12 +63,21 @@ describe("createSubagentRegistryRestorer", () => {
 
     await vi.waitFor(() => expect(completeFailedLaunchCleanup).toHaveBeenCalledWith(run.runId));
     expect(resumeRun).not.toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.delete",
+        params: expect.objectContaining({
+          expectedSessionId: "original-session",
+          expectedLifecycleRevision: "original-revision",
+        }),
+      }),
+    );
     expect(settleFailedQueuedSubagentLaunch).toHaveBeenCalledWith(
       run.runId,
       "subagent launch was interrupted before activation",
     );
     expect(cleanupFailedLaunchResources).toHaveBeenCalledWith(run, {
-      includeSessionEffects: false,
+      includeSessionEffects: true,
       isCurrent: expect.any(Function),
     });
     expect(run.launchCleanupPending).toBeUndefined();

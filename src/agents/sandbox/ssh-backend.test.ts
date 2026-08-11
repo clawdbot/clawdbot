@@ -446,6 +446,7 @@ describe("ssh sandbox backend", () => {
       env: { TEST_TOKEN: "1" },
       usePty: false,
     });
+    expect(backend.capabilities?.workspaceMutationVisibility).toBe("runtime-local");
 
     expect(execSpec.argv.slice(0, 5)).toEqual([
       "ssh",

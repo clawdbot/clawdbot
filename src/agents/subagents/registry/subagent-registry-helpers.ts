@@ -294,6 +294,7 @@ export function reconcileOrphanedRestoredRuns(params: {
       entry.killReconciliation ||
       entry.killIntent ||
       entry.execution.restartRecovery ||
+      entry.launchCleanupPending ||
       entry.terminalOwner === "interrupted-recovery"
     ) {
       // Provider completion or interrupted recovery still owns these rows.

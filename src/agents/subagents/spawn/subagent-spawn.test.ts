@@ -22,7 +22,7 @@ const hoisted = vi.hoisted(() => ({
   registerSubagentRunMock: vi.fn(),
   startQueuedSubagentRunMock: vi.fn(),
   settleFailedQueuedSubagentLaunchMock: vi.fn(),
-  completeCollectorLaunchCleanupMock: vi.fn(),
+  completeFailedLaunchCleanupMock: vi.fn(),
   emitSessionLifecycleEventMock: vi.fn(),
   dispatchGatewayMethodInProcessMock: vi.fn(),
   hasInProcessGatewayContextMock: vi.fn(),
@@ -165,7 +165,7 @@ describe("spawnSubagentDirect seam flow", () => {
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
       startQueuedSubagentRunMock: hoisted.startQueuedSubagentRunMock,
       settleFailedQueuedSubagentLaunchMock: hoisted.settleFailedQueuedSubagentLaunchMock,
-      completeCollectorLaunchCleanupMock: hoisted.completeCollectorLaunchCleanupMock,
+      completeFailedLaunchCleanupMock: hoisted.completeFailedLaunchCleanupMock,
       emitSessionLifecycleEventMock: hoisted.emitSessionLifecycleEventMock,
       resolveAgentConfig: hoisted.resolveAgentConfigMock,
       resolveContextEngineMock: hoisted.resolveContextEngineMock,
@@ -187,7 +187,7 @@ describe("spawnSubagentDirect seam flow", () => {
     hoisted.registerSubagentRunMock.mockReset();
     hoisted.startQueuedSubagentRunMock.mockReset().mockReturnValue(true);
     hoisted.settleFailedQueuedSubagentLaunchMock.mockReset().mockReturnValue(true);
-    hoisted.completeCollectorLaunchCleanupMock.mockReset();
+    hoisted.completeFailedLaunchCleanupMock.mockReset();
     hoisted.emitSessionLifecycleEventMock.mockReset();
     hoisted.dispatchGatewayMethodInProcessMock.mockReset();
     hoisted.hasInProcessGatewayContextMock.mockReset().mockReturnValue(false);
@@ -526,7 +526,7 @@ describe("spawnSubagentDirect seam flow", () => {
       params: { sessionKey: result.childSessionKey, runId: "run-1" },
     });
     await vi.waitFor(() =>
-      expect(hoisted.completeCollectorLaunchCleanupMock).toHaveBeenCalledWith(result.runId),
+      expect(hoisted.completeFailedLaunchCleanupMock).toHaveBeenCalledWith(result.runId),
     );
   });
 
@@ -684,7 +684,7 @@ describe("spawnSubagentDirect seam flow", () => {
         ),
       ).toBe(true),
     );
-    expect(hoisted.completeCollectorLaunchCleanupMock).not.toHaveBeenCalled();
+    expect(hoisted.completeFailedLaunchCleanupMock).not.toHaveBeenCalled();
   });
 
   it("uses and validates tools.swarm.defaultAgentId for collector children", async () => {

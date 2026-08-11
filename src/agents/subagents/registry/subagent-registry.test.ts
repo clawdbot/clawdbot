@@ -1177,7 +1177,7 @@ describe("subagent registry seam flow", () => {
       archiveAtMs: expect.any(Number),
       cleanupHandled: false,
       delivery: { status: "not_required" },
-      execution: { status: "terminal", suppressSessionEffects: true },
+      execution: { status: "terminal" },
     });
     expect(mod.getSubagentRunByRunId(runId)?.launchCleanupPending).toBe(true);
   });

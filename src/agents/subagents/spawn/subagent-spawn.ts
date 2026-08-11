@@ -40,7 +40,7 @@ import {
   cleanupFailedSpawnBeforeAgentStart,
   cleanupProvisionalSession,
   retrySubagentCleanup,
-  terminateAcceptedCollectorRun,
+  terminateAcceptedSubagentRun,
 } from "./subagent-spawn-cleanup.js";
 import {
   prepareContextEngineSubagentSpawn,
@@ -322,23 +322,19 @@ export async function spawnSubagentDirect(
         if (!childSandbox) {
           throw new Error("child sandbox context was unavailable");
         }
-        attachmentSandboxFsBridge =
-          getSubagentSpawnDeps().createSandboxWorkspaceIngressFsBridge(childSandbox);
         attachmentWorkspaceDir = childSandbox.workspaceDir ?? attachmentWorkspaceDir;
-        attachmentSandboxWorkspaceDir = childSandbox.agentWorkspaceDir ?? attachmentWorkspaceDir;
+        if (
+          childSandbox.backend?.capabilities?.workspaceMutationVisibility !== "shared-host"
+        ) {
+          attachmentSandboxFsBridge =
+            getSubagentSpawnDeps().createSandboxWorkspaceIngressFsBridge(childSandbox);
+          attachmentSandboxWorkspaceDir = childSandbox.agentWorkspaceDir ?? attachmentWorkspaceDir;
+        }
       } catch (error) {
         await cleanupCreatedSession(threadBindingReady);
         return {
           status: "error",
           error: `attachments_sandbox_boundary_unavailable: ${summarizeSpawnError(error)}`,
-          childSessionKey,
-        };
-      }
-      if (!attachmentSandboxFsBridge) {
-        await cleanupCreatedSession(threadBindingReady);
-        return {
-          status: "error",
-          error: "attachments_sandbox_boundary_unavailable",
           childSessionKey,
         };
       }
@@ -441,6 +437,15 @@ export async function spawnSubagentDirect(
         queuedLaunch: plan.queuedLaunch,
         queued,
         launchCleanupPending,
+        launchCleanupSessionIdentity:
+          launchCleanupPending &&
+          provisionalSessionIdentity.expectedSessionId &&
+          provisionalSessionIdentity.expectedLifecycleRevision
+            ? {
+                sessionId: provisionalSessionIdentity.expectedSessionId,
+                lifecycleRevision: provisionalSessionIdentity.expectedLifecycleRevision,
+              }
+            : undefined,
         attachmentsDir: attachmentAbsDir,
         attachmentsRootDir: attachmentRootDir,
         attachmentsSandboxSessionKey: attachmentSandboxFsBridge ? childSessionKey : undefined,
@@ -477,7 +482,7 @@ export async function spawnSubagentDirect(
       mountPathHint,
       sandboxFsBridge: attachmentSandboxFsBridge,
       sandboxWorkspaceDir: attachmentSandboxTargetDir,
-      claimCleanupOwner: params.attachments?.length ? applyAttachmentClaim : undefined,
+      claimCleanupOwner: applyAttachmentClaim,
     });
     if (materializedAttachments && materializedAttachments.status !== "ok") {
       if (materializedAttachments.status === "error" && materializedAttachments.ownerClaimed) {
@@ -495,13 +500,6 @@ export async function spawnSubagentDirect(
         status: materializedAttachments.status,
         error: materializedAttachments.error,
       };
-    }
-    if (materializedAttachments?.status === "ok") {
-      retainOnSessionKeep = materializedAttachments.retainOnSessionKeep;
-      attachmentsReceipt = materializedAttachments.receipt;
-      attachmentAbsDir = materializedAttachments.absDir;
-      attachmentRootDir = materializedAttachments.rootDir;
-      attachmentSandboxDir = materializedAttachments.sandboxDir;
     }
     const resolvedLaunchPlan = launchPlan ?? createLaunchPlan(childSystemPrompt);
     const { childLaunch, progressOrigin } = resolvedLaunchPlan;
@@ -565,7 +563,19 @@ export async function spawnSubagentDirect(
         const response = await launchChildRun();
         return { runId: readGatewayRunId(response) ?? childIdem };
       },
-      async cleanupOnFailure({ phase, state }) {
+      async cleanupOnFailure({ phase, state, runId: acceptedRunId }) {
+        if (
+          phase === "register" &&
+          attachmentCleanupOwnerClaimed &&
+          acceptedRunId &&
+          acceptedRunId !== childIdem
+        ) {
+          await terminateAcceptedSubagentRun({
+            childSessionKey,
+            gatewayRunId: acceptedRunId,
+            ...provisionalSessionIdentity,
+          });
+        }
         if (attachmentCleanupOwnerClaimed) {
           await retrySubagentCleanup(() =>
             settleFailedQueuedSubagentLaunch(childIdem, `subagent ${phase} failed`),
@@ -661,7 +671,7 @@ export async function spawnSubagentDirect(
                 );
               }
             } catch (error) {
-              await terminateAcceptedCollectorRun({
+              await terminateAcceptedSubagentRun({
                 childSessionKey,
                 gatewayRunId,
                 ...provisionalSessionIdentity,

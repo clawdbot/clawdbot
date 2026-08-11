@@ -102,6 +102,7 @@ export function createSubagentRegistryPublicApi(config: {
       return;
     }
     entry.launchCleanupPending = undefined;
+    entry.launchCleanupSessionIdentity = undefined;
     entry.cleanupCompletedAt = Date.now();
     entry.contextEngineCleanupCompletedAt ??= entry.cleanupCompletedAt;
     persist(entry.runId);

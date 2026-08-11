@@ -144,7 +144,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
   releaseSubagentRunMock?: MockFn;
   startQueuedSubagentRunMock?: MockFn;
   settleFailedQueuedSubagentLaunchMock?: MockFn;
-  completeCollectorLaunchCleanupMock?: MockFn;
+  completeFailedLaunchCleanupMock?: MockFn;
   emitSessionLifecycleEventMock?: MockFn;
   hookRunner?: HookRunner;
   resolveAgentConfig?: (cfg: Record<string, unknown>, agentId: string) => unknown;
@@ -395,7 +395,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
   }));
 
   vi.doMock("../registry/subagent-registry.js", () => ({
-    completeCollectorLaunchCleanup: params.completeCollectorLaunchCleanupMock ?? vi.fn(),
+    completeFailedLaunchCleanup: params.completeFailedLaunchCleanupMock ?? vi.fn(),
     countActiveRunsForSession: params.countActiveRunsForSession ?? (() => 0),
     listSwarmRunsForGroup: params.listSwarmRunsForGroup ?? vi.fn(() => []),
     registerSubagentRun:

@@ -269,6 +269,11 @@ describe("spawnSubagentDirect filename validation", () => {
         attachmentsSandboxAgentId: "main",
         attachmentsSandboxWorkspaceDir: workspaceDirOverride,
         attachmentsSandboxDir: expect.stringContaining("/.openclaw/attachments/"),
+        launchCleanupPending: true,
+        launchCleanupSessionIdentity: {
+          sessionId: "forked-session-id",
+          lifecycleRevision: expect.any(String),
+        },
       }),
     );
     expect(callGatewayMock).toHaveBeenCalled();
@@ -679,7 +684,7 @@ describe("spawnSubagentDirect filename validation", () => {
     },
   );
 
-  it("keeps attachments available to a read-only sandbox workspace", async () => {
+  it("stages into the host copy behind a shared read-only sandbox mount", async () => {
     configOverride = createSubagentSpawnTestConfig(workspaceDirOverride, {
       agents: {
         defaults: {
@@ -689,31 +694,11 @@ describe("spawnSubagentDirect filename validation", () => {
       },
     });
     const sandboxWorkspaceDir = path.join(workspaceDirOverride, "sandbox-copy");
-    const bridge = {
-      resolvePath: ({ filePath }: { filePath: string }) => ({
-        hostPath: filePath,
-        relativePath: "",
-        containerPath: filePath,
-      }),
-      mkdirp: async ({ filePath, mode }: { filePath: string; mode?: number }) => {
-        await fs.promises.mkdir(filePath, { recursive: true, mode });
-      },
-      createFileExclusive: async ({
-        filePath,
-        data,
-      }: {
-        filePath: string;
-        data: Buffer | string;
-      }) => {
-        await fs.promises.writeFile(filePath, data, { flag: "wx", mode: 0o600 });
-        return "created" as const;
-      },
-      remove: async ({ filePath }: { filePath: string }) => {
-        await fs.promises.rm(filePath, { recursive: true, force: true });
-      },
-    };
-    const childGatewayMock = vi.fn(async (request: { method?: string }) => {
-      if (request.method === "agent") {
+    const createIngress = vi.fn(() => {
+      throw new Error("shared host workspaces must not stage through a read-only container");
+    });
+    const childGatewayMock = vi.fn(async (request: unknown) => {
+      if ((request as { method?: string }).method === "agent") {
         expect(fs.existsSync(path.join(sandboxWorkspaceDir, ".openclaw", "attachments"))).toBe(
           true,
         );
@@ -727,10 +712,11 @@ describe("spawnSubagentDirect filename validation", () => {
       workspaceDir: workspaceDirOverride,
       resolveSandboxRuntimeStatus: () => ({ sandboxed: true, agentId: "main" }) as never,
       resolveSandboxContext: async () => ({
-        fsBridge: bridge,
+        backend: { capabilities: { workspaceMutationVisibility: "shared-host" } },
         workspaceDir: sandboxWorkspaceDir,
         agentWorkspaceDir: workspaceDirOverride,
       }),
+      createSandboxWorkspaceIngressFsBridge: createIngress,
     });
 
     const result = await sandboxedSpawnModule.spawnSubagentDirect(
@@ -742,6 +728,7 @@ describe("spawnSubagentDirect filename validation", () => {
     );
 
     expect(result.status).toBe("accepted");
+    expect(createIngress).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(sandboxWorkspaceDir, ".openclaw", "attachments"))).toBe(true);
     expect(fs.existsSync(path.join(workspaceDirOverride, ".openclaw", "attachments"))).toBe(false);
   });
@@ -863,6 +850,46 @@ describe("spawnSubagentDirect filename validation", () => {
     );
     expect(settleFailedQueuedSubagentLaunchMock).toHaveBeenCalledTimes(1);
     expect(releaseSubagentRunMock).not.toHaveBeenCalled();
+  });
+
+  it("aborts an accepted child before cleaning a failed attachment-owner activation", async () => {
+    const events: string[] = [];
+    const gateway = vi.fn(async (request: { method?: string }) => {
+      if (request.method === "agent") {
+        events.push("accepted");
+        return { runId: "accepted-child-run" };
+      }
+      if (request.method === "chat.abort") {
+        events.push("aborted");
+        return { aborted: true, runIds: ["accepted-child-run"] };
+      }
+      return { ok: true };
+    });
+    const settleFailedQueuedSubagentLaunchMock = vi.fn(() => {
+      events.push("terminalized");
+      return true;
+    });
+    const module = await loadSubagentSpawnModuleForTest({
+      callGatewayMock: gateway,
+      getRuntimeConfig: () => configOverride,
+      updateSessionStoreMock,
+      workspaceDir: workspaceDirOverride,
+      startQueuedSubagentRunMock: vi.fn(() => {
+        throw new Error("activation persistence failed");
+      }),
+      settleFailedQueuedSubagentLaunchMock,
+    });
+
+    const result = await module.spawnSubagentDirect(
+      {
+        task: "test",
+        attachments: [{ name: "file.txt", content: validContent, encoding: "base64" }],
+      },
+      ctx,
+    );
+
+    expect(result).toMatchObject({ status: "error", runId: "accepted-child-run" });
+    expect(events).toEqual(["accepted", "aborted", "terminalized"]);
   });
 
   it.runIf(process.platform !== "win32").each(["metadata", "attachments"] as const)(
