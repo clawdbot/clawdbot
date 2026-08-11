@@ -119,7 +119,13 @@ function sanitizeContextJsonValue(
       // element's serialized size exactly once below.
       const scratch: ContextJsonBudget = { remaining: budget.remaining };
       const sanitized = sanitizeContextJsonValue(entry, scratch, depth + 1);
-      budget.remaining -= serializedLength(sanitized);
+      const entrySize = serializedLength(sanitized);
+      if (entrySize > budget.remaining) {
+        omitted += 1;
+        budgetExhausted = true;
+        continue;
+      }
+      budget.remaining -= entrySize;
       result.push(sanitized);
     }
     // Keep the head like truncateContextJsonString does, and flag the drop.

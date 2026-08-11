@@ -201,6 +201,24 @@ describe("formatContextJsonBlock", () => {
     expect(parsed).toEqual(payload);
   });
 
+  it("truncates a nested array candidate that exceeds the remaining budget", () => {
+    const payload: string[][] = [
+      Array(20).fill("x".repeat(2_000)),
+      Array(5).fill("y".repeat(2_000)),
+    ];
+    expect(JSON.stringify(payload).length).toBeGreaterThan(50_000);
+
+    const block = formatContextJsonBlock("Context:", payload);
+    const parsed = parseContextJsonBlock(block) as string[][];
+
+    expect(JSON.stringify(parsed).length).toBeLessThanOrEqual(50_000);
+    expect(parsed[0]).toEqual(payload[0]);
+    expect(parsed[1]).toEqual([
+      ...payload[1]!.slice(0, 4),
+      "…[truncated: context budget exhausted]",
+    ]);
+  });
+
   it("bounds nesting depth and flags the cut", () => {
     let payload: unknown = "leaf";
     for (let level = 0; level < 12; level++) {
