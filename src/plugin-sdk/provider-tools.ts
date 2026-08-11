@@ -1,5 +1,7 @@
 import {
   cleanSchemaForGemini,
+  cleanSchemaForLlamacppGbnf,
+  findLlamacppGbnfSchemaViolations,
   findOpenAIStrictSchemaViolations,
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
   normalizeOpenAIStrictCompatSchema,
@@ -15,6 +17,8 @@ import type {
 
 export {
   cleanSchemaForGemini,
+  cleanSchemaForLlamacppGbnf,
+  findLlamacppGbnfSchemaViolations,
   findOpenAIStrictSchemaViolations,
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
   stripUnsupportedSchemaKeywords,
@@ -103,6 +107,34 @@ export function inspectGeminiToolSchemas(
       return [];
     }
     return [{ toolName: tool.name, toolIndex, violations }];
+  });
+}
+
+/** Rewrites tool schemas into the JSON Schema subset accepted by llama.cpp GBNF. */
+export function normalizeLlamacppGbnfToolSchemas(
+  ctx: ProviderNormalizeToolSchemasContext,
+): AnyAgentTool[] {
+  return ctx.tools.map((tool) => {
+    if (!tool.parameters || typeof tool.parameters !== "object") {
+      return tool;
+    }
+    const parameters = cleanSchemaForLlamacppGbnf(tool.parameters);
+    return parameters === tool.parameters
+      ? tool
+      : {
+          ...tool,
+          parameters: parameters as TSchema,
+        };
+  });
+}
+
+/** Reports tool-schema constraints that llama.cpp GBNF cannot compile. */
+export function inspectLlamacppGbnfToolSchemas(
+  ctx: ProviderNormalizeToolSchemasContext,
+): ProviderToolSchemaDiagnostic[] {
+  return ctx.tools.flatMap((tool, toolIndex) => {
+    const violations = findLlamacppGbnfSchemaViolations(tool.parameters, `${tool.name}.parameters`);
+    return violations.length > 0 ? [{ toolName: tool.name, toolIndex, violations }] : [];
   });
 }
 
@@ -327,7 +359,7 @@ export function inspectDeepSeekToolSchemas(
 /**
  * Supported provider tool-schema compatibility families.
  */
-export type ProviderToolCompatFamily = "deepseek" | "gemini" | "openai";
+export type ProviderToolCompatFamily = "deepseek" | "gemini" | "llamacpp-gbnf" | "openai";
 
 /**
  * Returns the normalizer and inspector pair for a provider tool-schema compatibility family.
@@ -351,6 +383,11 @@ export function buildProviderToolCompatFamilyHooks(
       return {
         normalizeToolSchemas: normalizeGeminiToolSchemas,
         inspectToolSchemas: inspectGeminiToolSchemas,
+      };
+    case "llamacpp-gbnf":
+      return {
+        normalizeToolSchemas: normalizeLlamacppGbnfToolSchemas,
+        inspectToolSchemas: inspectLlamacppGbnfToolSchemas,
       };
     case "openai":
       return {

@@ -90,6 +90,17 @@ describe("openclaw-file-preview-modal", () => {
     expect(closeButton?.querySelector(".kbd")?.textContent).toBe("esc");
   });
 
+  it("stacks the file list above its preview on narrow screens", () => {
+    const styles = OpenClawFilePreviewModal.styles.cssText;
+
+    expect(styles).toMatch(
+      /@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?\.body\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);[^}]*grid-template-rows:/u,
+    );
+    expect(styles).toMatch(
+      /@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?\.list\s*\{[^}]*border-right:\s*0;[^}]*border-bottom:/u,
+    );
+  });
+
   it("emits controlled query, select, and close events", async () => {
     const modal = await renderPreview();
     const onQuery = vi.fn();
@@ -257,6 +268,11 @@ describe("openclaw-file-preview-modal", () => {
         filteredFileCount: "{count}/{total} arquivos",
         noMatches: "Nenhum arquivo corresponde.",
         navigate: "navegar",
+        kind: {
+          text: "Texto",
+          shell: "Shell",
+          file: "Arquivo",
+        },
       },
     });
 
@@ -269,5 +285,24 @@ describe("openclaw-file-preview-modal", () => {
     ).toBe("Arquivos de suporte");
     expect(shadowText(modal)).toContain("2 arquivos");
     expect(shadowText(modal)).toContain("Fechar");
+  });
+
+  it("localizes generic file-kind chips", async () => {
+    i18n.registerTranslation("pt-BR", {
+      filePreview: {
+        kind: {
+          text: "Texto",
+          shell: "Shell",
+          file: "Arquivo",
+        },
+      },
+    });
+    await i18n.setLocale("pt-BR");
+
+    const modal = await renderPreview({
+      activePath: "filters/auto-senders.txt",
+    });
+
+    expect(modal.shadowRoot?.querySelector(".chip.accent")?.textContent).toBe("Texto");
   });
 });

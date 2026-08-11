@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
 import { updateMcpAppModelContext } from "../../agents/mcp-app-model-context.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
-import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions } from "../types.js";
@@ -113,6 +112,26 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       "high",
     ]);
     expect(followupRun.run.thinkLevel).toBe("ultra");
+  });
+
+  it("preserves thinking for runtime-discovered Ollama fallback models", async () => {
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "openai";
+    followupRun.run.model = "gpt-5.6-sol";
+    followupRun.run.thinkLevel = "high";
+    followupRun.run.thinkingCatalog = [{ provider: "ollama", id: "qwen3.5:4b", reasoning: true }];
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      const result = await params.run("ollama", "qwen3.5:4b");
+      return { result, provider: "ollama", model: "qwen3.5:4b", attempts: [] };
+    });
+    state.runEmbeddedAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: {} });
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+    });
+
+    expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.thinkLevel).toBe("high");
   });
 
   it("freezes abort ownership only after model fallback settles", async () => {
@@ -530,44 +549,9 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     expect(runtime.pendingMcpAppModelContext).toBeUndefined();
   });
 
-  it("propagates commitment-only bootstrap scope to CLI runs", async () => {
-    state.isCliProviderMock.mockReturnValue(true);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("claude-cli", "sonnet-4.6"),
-      provider: "claude-cli",
-      model: "sonnet-4.6",
-      attempts: [],
-    }));
-    state.runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "final" }],
-      meta: {},
-    });
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "claude-cli";
-    followupRun.run.model = "sonnet-4.6";
-    const params = createMinimalRunAgentTurnParams({
-      followupRun,
-      opts: {
-        isHeartbeat: true,
-        bootstrapContextMode: "lightweight",
-        [HEARTBEAT_RUN_SCOPE]: "commitment-only",
-      },
-    });
-    params.isHeartbeat = true;
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await executeAgentTurn(params);
-
-    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
-      trigger: "heartbeat",
-      bootstrapContextMode: "lightweight",
-      bootstrapContextRunKind: "commitment-only",
-    });
-  });
-
   it("registers run ownership before asynchronous image preflight", async () => {
-    const agentEvents = await import("../../infra/agent-events.js");
-    const registerAgentRunContext = vi.mocked(agentEvents.registerAgentRunContext);
+    const agentRunRegistry = await import("../../infra/agent-run-registry.js");
+    const registerAgentRunContext = vi.mocked(agentRunRegistry.registerAgentRunContext);
     let resolveImages: (() => void) | undefined;
     state.resolveCurrentTurnImagesMock.mockImplementationOnce(
       () =>
@@ -597,8 +581,8 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
   });
 
   it("clears run ownership when image preflight fails", async () => {
-    const agentEvents = await import("../../infra/agent-events.js");
-    const clearAgentRunContext = vi.mocked(agentEvents.clearAgentRunContext);
+    const agentRunRegistry = await import("../../infra/agent-run-registry.js");
+    const clearAgentRunContext = vi.mocked(agentRunRegistry.clearAgentRunContext);
     state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("invalid image metadata"));
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();

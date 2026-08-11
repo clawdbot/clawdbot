@@ -17,10 +17,14 @@ import type {
   TuiSessionList,
   TuiSessionCreateOptions,
 } from "../tui/tui-backend.js";
-import { runTui as defaultRunTui } from "../tui/tui.js";
 import { SYSTEM_AGENT_ID } from "./agent-id.js";
 import type { SystemAgentAssistantPlanner } from "./assistant.js";
-import { SystemAgentChatEngine, type SystemAgentChatEngineOptions } from "./chat-engine.js";
+import {
+  assertLocalGatewaySetupMode,
+  GATEWAY_SETUP_AFTER_WRITE,
+  SystemAgentChatEngine,
+  type SystemAgentChatEngineOptions,
+} from "./chat-engine.js";
 import {
   SystemAgentInferenceUnavailableError,
   isSystemAgentInferenceUnavailableError,
@@ -33,11 +37,11 @@ import {
 } from "./operations.js";
 import { formatSystemAgentStartupMessage, loadSystemAgentOverview } from "./overview.js";
 import {
-  resolveSystemAgentVerifiedInferenceRoute,
+  resolveSystemAgentVerifiedInferenceState,
   type SystemAgentVerifiedInferenceBinding,
 } from "./verified-inference.js";
 
-type RunTui = typeof defaultRunTui;
+type RunTui = typeof import("../tui/tui.js").runTui;
 
 export type SystemAgentTuiOptions = {
   yes?: boolean;
@@ -50,11 +54,22 @@ export type SystemAgentTuiOptions = {
   setupWorkspace?: string;
   /** Test seam for the channel-setup wizard hosted by the chat bridge. */
   runChannelSetupWizard?: SystemAgentChatEngineOptions["runChannelSetupWizard"];
+  runSkillsSetupWizard?: SystemAgentChatEngineOptions["runSkillsSetupWizard"];
+  runSearchSetupWizard?: SystemAgentChatEngineOptions["runSearchSetupWizard"];
+  runGatewaySetupWizard?: SystemAgentChatEngineOptions["runGatewaySetupWizard"];
   runChannelsAdd?: (
     opts: ChannelsAddOptions,
     runtime: RuntimeEnv,
     params?: { hasFlags?: boolean; beforePersistentEffect?: () => Promise<void> },
   ) => Promise<unknown>;
+  runSearchSetupHandoff?: (
+    runtime: RuntimeEnv,
+    beforePersistentEffect: () => Promise<void>,
+  ) => Promise<void>;
+  runGatewaySetupHandoff?: (
+    runtime: RuntimeEnv,
+    beforePersistentEffect: () => Promise<void>,
+  ) => Promise<void>;
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
 };
 
@@ -80,6 +95,9 @@ function createChatEngine(opts: SystemAgentTuiOptions): SystemAgentChatEngine {
     surface: "cli",
     verifiedInference: opts.verifiedInference,
     ...(opts.runChannelSetupWizard ? { runChannelSetupWizard: opts.runChannelSetupWizard } : {}),
+    ...(opts.runSkillsSetupWizard ? { runSkillsSetupWizard: opts.runSkillsSetupWizard } : {}),
+    ...(opts.runSearchSetupWizard ? { runSearchSetupWizard: opts.runSearchSetupWizard } : {}),
+    ...(opts.runGatewaySetupWizard ? { runGatewaySetupWizard: opts.runGatewaySetupWizard } : {}),
   });
 }
 
@@ -380,14 +398,16 @@ async function runSetupHandoff(
   opts: SystemAgentTuiOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  if (handoff.target !== "channels") {
+  if (
+    handoff.target !== "channels" &&
+    handoff.target !== "search" &&
+    handoff.target !== "gateway"
+  ) {
     runtime.error(
       "Setup cannot replace the inference route powering OpenClaw. Exit and run `openclaw onboard`, then start OpenClaw again.",
     );
     return;
   }
-  const runChannelsAdd =
-    opts.runChannelsAdd ?? (await import("../commands/channels/add.js")).channelsAddCommand;
   const beforePersistentEffect = async () => {
     const binding = opts?.verifiedInference;
     if (!binding) {
@@ -411,6 +431,86 @@ async function runSetupHandoff(
     }
     throw new SystemAgentInferenceUnavailableError("conversation");
   };
+  if (handoff.target === "gateway") {
+    if (opts.runGatewaySetupHandoff) {
+      await opts.runGatewaySetupHandoff(runtime, beforePersistentEffect);
+      runtime.log("Done — gateway settings saved. Run `openclaw gateway restart` to apply them.");
+      return;
+    }
+    const [
+      { resolveGatewayPort },
+      { createClackPrompter },
+      { configureGatewayForSetup },
+      { readSetupConfigFileSnapshot, resolveQuickstartGatewayDefaults, writeWizardConfigFile },
+    ] = await Promise.all([
+      import("../config/config.js"),
+      import("../wizard/clack-prompter.js"),
+      import("../wizard/setup.gateway-config.js"),
+      import("../wizard/setup.shared.js"),
+    ]);
+    const snapshot = await readSetupConfigFileSnapshot();
+    if (!snapshot.exists || !snapshot.valid || !snapshot.hash) {
+      throw new Error(
+        "Gateway setup requires a valid saved config snapshot. Run `openclaw doctor --fix`, then retry.",
+      );
+    }
+    const baseConfig = snapshot.sourceConfig ?? snapshot.config;
+    assertLocalGatewaySetupMode(baseConfig);
+    const result = await configureGatewayForSetup({
+      flow: "advanced",
+      baseConfig,
+      nextConfig: baseConfig,
+      localPort: resolveGatewayPort(baseConfig),
+      quickstartGateway: resolveQuickstartGatewayDefaults(baseConfig),
+      prompter: createClackPrompter(),
+      runtime,
+    });
+    await beforePersistentEffect();
+    await writeWizardConfigFile(result.nextConfig, {
+      allowConfigSizeDrop: false,
+      baseHash: snapshot.hash,
+      afterWrite: GATEWAY_SETUP_AFTER_WRITE,
+    });
+    runtime.log("Done — gateway settings saved. Run `openclaw gateway restart` to apply them.");
+    return;
+  }
+  if (handoff.target === "search") {
+    if (opts.runSearchSetupHandoff) {
+      await opts.runSearchSetupHandoff(runtime, beforePersistentEffect);
+      return;
+    }
+    const [
+      { runSearchSetupFlow },
+      { createClackPrompter },
+      { readSetupConfigFileSnapshot, writeWizardConfigFile },
+    ] = await Promise.all([
+      import("../flows/search-setup.js"),
+      import("../wizard/clack-prompter.js"),
+      import("../wizard/setup.shared.js"),
+    ]);
+    const snapshot = await readSetupConfigFileSnapshot();
+    if (!snapshot.exists || !snapshot.valid || !snapshot.hash) {
+      throw new Error(
+        "Web search setup requires a valid saved config snapshot. Run `openclaw doctor --fix`, then retry.",
+      );
+    }
+    const baseConfig = snapshot.sourceConfig ?? snapshot.config;
+    const searchSetup = await runSearchSetupFlow(baseConfig, runtime, createClackPrompter(), {
+      preserveDisabledSearchState: false,
+      beforePersistentEffect,
+    });
+    if (searchSetup.outcome !== "completed") {
+      return;
+    }
+    await beforePersistentEffect();
+    await writeWizardConfigFile(searchSetup.config, {
+      allowConfigSizeDrop: false,
+      baseHash: snapshot.hash,
+    });
+    return;
+  }
+  const runChannelsAdd =
+    opts.runChannelsAdd ?? (await import("../commands/channels/add.js")).channelsAddCommand;
   await runChannelsAdd(handoff.channel ? { channel: handoff.channel } : {}, runtime, {
     hasFlags: false,
     beforePersistentEffect,
@@ -442,6 +542,7 @@ export async function runSystemAgentTui(
       welcome = (
         await buildOnboardingWelcome({
           engine,
+          localRecovery: true,
           ...(boundOpts.setupWorkspace ? { workspace: boundOpts.setupWorkspace } : {}),
         })
       ).text;
@@ -453,7 +554,7 @@ export async function runSystemAgentTui(
     // an agent handoff uses the normal repair-oriented startup message.
     welcomeVariant = undefined;
     const backend = new SystemAgentTuiBackend(boundOpts, welcome, engine, route);
-    const runTui = boundOpts.runTui ?? defaultRunTui;
+    const runTui = boundOpts.runTui ?? (await import("../tui/tui.js")).runTui;
     try {
       await runTui({
         local: true,
@@ -501,20 +602,21 @@ async function requireTuiVerifiedInference(
     throw new SystemAgentInferenceUnavailableError("conversation");
   }
   try {
-    const route = await resolveSystemAgentVerifiedInferenceRoute(binding, opts.deps);
-    if (route) {
-      const [{ loadPreparedModelCatalog }, { resolveThinkingDefault }] = await Promise.all([
+    const verified = await resolveSystemAgentVerifiedInferenceState(binding, opts.deps);
+    if (verified) {
+      const { config, route } = verified;
+      const [{ getPreparedModelCatalogSnapshot }, { resolveThinkingDefault }] = await Promise.all([
         import("../agents/prepared-model-catalog.js"),
         import("../agents/model-thinking-default.js"),
       ]);
       // Catalog metadata improves the label but must not become a new startup
       // dependency after this exact inference route has already been verified.
-      const catalog = await loadPreparedModelCatalog({
-        config: route.runConfig,
+      const catalog = getPreparedModelCatalogSnapshot({
+        config,
         agentId: route.agentId,
         agentDir: route.agentDir,
         readOnly: true,
-      }).catch(() => undefined);
+      })?.entries;
       const model = splitModelRef(route.modelLabel);
       return {
         model: model.model,

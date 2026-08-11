@@ -165,57 +165,35 @@ function makeInboundRuntime(
   };
 }
 
-function makeRuntime(params: {
+type ReplyPayload = {
+  text?: string;
+  mediaUrl?: string;
+  mediaUrls?: string[];
+  audioAsVoice?: boolean;
+};
+type DeliverReply = (payload: ReplyPayload, info: { kind: string }) => Promise<void>;
+interface DispatchOptions {
+  deliver: DeliverReply;
+  onSkip?: (
+    payload: ReplyPayload,
+    info: { kind: string; reason: "empty" | "silent" | "heartbeat" },
+  ) => void;
+  onSettled?: () => unknown;
+  onFreshSettledDelivery?: () => unknown;
+}
+interface RuntimeOptions {
   onFinalize?: (ctx: Record<string, unknown>) => void;
   onTurn?: (turn: Record<string, unknown>) => void;
   isControlCommandMessage?: (text?: string, cfg?: unknown) => boolean;
   skipFreshSettledDelivery?: boolean;
-  onDispatch?: (dispatcherOptions: {
-    deliver: (
-      payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; audioAsVoice?: boolean },
-      info: { kind: string },
-    ) => Promise<void>;
-    onSkip?: (
-      payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; audioAsVoice?: boolean },
-      info: { kind: string; reason: "empty" | "silent" | "heartbeat" },
-    ) => void;
-    onSettled?: () => unknown;
-    onFreshSettledDelivery?: () => unknown;
-  }) => Promise<void>;
-  onDeliver?: (
-    deliver: (
-      payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; audioAsVoice?: boolean },
-      info: { kind: string },
-    ) => Promise<void>,
-  ) => Promise<void>;
-}): GatewayPluginRuntime {
+  onDispatch?: (dispatcherOptions: DispatchOptions) => Promise<void>;
+  onDeliver?: (deliver: DeliverReply) => Promise<void>;
+}
+
+function makeRuntime(params: RuntimeOptions): GatewayPluginRuntime {
   const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (rawParams: unknown) => {
-    const dispatcherOptions = (
-      rawParams as {
-        dispatcherOptions: {
-          deliver: (
-            payload: {
-              text?: string;
-              mediaUrl?: string;
-              mediaUrls?: string[];
-              audioAsVoice?: boolean;
-            },
-            info: { kind: string },
-          ) => Promise<void>;
-          onSkip?: (
-            payload: {
-              text?: string;
-              mediaUrl?: string;
-              mediaUrls?: string[];
-              audioAsVoice?: boolean;
-            },
-            info: { kind: string; reason: "empty" | "silent" | "heartbeat" },
-          ) => void;
-          onSettled?: () => unknown;
-          onFreshSettledDelivery?: () => unknown;
-        };
-      }
-    ).dispatcherOptions;
+    const dispatcherOptions = (rawParams as { dispatcherOptions: DispatchOptions })
+      .dispatcherOptions;
     if (params.onDispatch) {
       await params.onDispatch(dispatcherOptions);
     } else {
@@ -275,6 +253,48 @@ function makeRuntime(params: {
   };
 }
 
+async function runOutbound(
+  params: {
+    runtime?: RuntimeOptions;
+    inbound?: InboundContext;
+    cfg?: unknown;
+    account?: GatewayAccount;
+  } = {},
+): Promise<GatewayPluginRuntime> {
+  const runtime = makeRuntime(params.runtime ?? {});
+  await dispatchOutbound(params.inbound ?? makeInbound(), {
+    runtime,
+    cfg: params.cfg ?? {},
+    account: params.account ?? account,
+  });
+  return runtime;
+}
+
+async function withTempMedia(
+  prefix: string,
+  fileName: string,
+  run: (media: { tmpRoot: string; filePath: string; realFilePath: string }) => Promise<void>,
+): Promise<void> {
+  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  try {
+    const filePath = path.join(tmpRoot, fileName);
+    await fs.writeFile(filePath, Buffer.from("report"));
+    await run({ tmpRoot, filePath, realFilePath: await fs.realpath(filePath) });
+  } finally {
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
+}
+
+function expectLocalFileMediaSent(realFilePath: string): void {
+  expect(sendMediaMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      kind: "file",
+      source: { localPath: realFilePath },
+      target: { id: "user-openid", type: "c2c" },
+    }),
+  );
+}
+
 describe("dispatchOutbound", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -294,71 +314,62 @@ describe("dispatchOutbound", () => {
     vi.useRealTimers();
   });
 
-  it("uploads local media from scoped outbound media roots", async () => {
-    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-scoped-media-"));
-    try {
-      const filePath = path.join(tmpRoot, "report.docx");
-      await fs.writeFile(filePath, Buffer.from("report"));
-      const realFilePath = await fs.realpath(filePath);
-
-      const result = await sendMedia({
-        to: "qqbot:c2c:user-openid",
-        text: "",
-        mediaUrl: filePath,
-        accountId: "qq-main",
-        account,
-        mediaAccess: { localRoots: [tmpRoot] },
-      });
-
-      expect(result.error).toBeUndefined();
-      expect(sendMediaMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "file",
-          source: { localPath: realFilePath },
-          target: { id: "user-openid", type: "c2c" },
+  it.each([
+    {
+      name: "uploads local media from scoped outbound media roots",
+      prefix: "qqbot-scoped-media-",
+      fileName: "report.docx",
+      send: ({ filePath, tmpRoot }: { filePath: string; tmpRoot: string }) =>
+        sendMedia({
+          to: "qqbot:c2c:user-openid",
+          text: "",
+          mediaUrl: filePath,
+          accountId: "qq-main",
+          account,
+          mediaAccess: { localRoots: [tmpRoot] },
         }),
-      );
-    } finally {
-      await fs.rm(tmpRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("uploads qqmedia text tags from scoped outbound media roots", async () => {
-    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-scoped-media-"));
-    try {
-      const filePath = path.join(tmpRoot, "tagged-report.docx");
-      await fs.writeFile(filePath, Buffer.from("report"));
-      const realFilePath = await fs.realpath(filePath);
-
-      const result = await sendText({
-        to: "qqbot:c2c:user-openid",
-        text: `<qqmedia>${filePath}</qqmedia>`,
-        accountId: "qq-main",
-        account,
-        mediaAccess: { localRoots: [tmpRoot] },
-      });
-
-      expect(result.error).toBeUndefined();
-      expect(sendMediaMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "file",
-          source: { localPath: realFilePath },
-          target: { id: "user-openid", type: "c2c" },
+    },
+    {
+      name: "uploads qqmedia text tags from scoped outbound media roots",
+      prefix: "qqbot-scoped-media-",
+      fileName: "tagged-report.docx",
+      send: ({ filePath, tmpRoot }: { filePath: string; tmpRoot: string }) =>
+        sendText({
+          to: "qqbot:c2c:user-openid",
+          text: `<qqmedia>${filePath}</qqmedia>`,
+          accountId: "qq-main",
+          account,
+          mediaAccess: { localRoots: [tmpRoot] },
         }),
-      );
-    } finally {
-      await fs.rm(tmpRoot, { recursive: true, force: true });
-    }
+    },
+    {
+      name: "resolves relative media paths from the scoped outbound media workspace",
+      prefix: "qqbot-scoped-workspace-",
+      fileName: "relative-report.docx",
+      send: ({ filePath, tmpRoot }: { filePath: string; tmpRoot: string }) =>
+        sendMedia({
+          to: "qqbot:c2c:user-openid",
+          text: "",
+          mediaUrl: path.basename(filePath),
+          accountId: "qq-main",
+          account,
+          mediaAccess: { localRoots: [tmpRoot], workspaceDir: tmpRoot },
+        }),
+    },
+  ])("$name", async ({ prefix, fileName, send }) => {
+    await withTempMedia(prefix, fileName, async (media) => {
+      const result = await send(media);
+      expect(result.error).toBeUndefined();
+      expectLocalFileMediaSent(media.realFilePath);
+    });
   });
 
   it("loads scoped media through host read callbacks", async () => {
-    // realpath: macOS tmpdir is a /var -> /private/var symlink and root
-    // containment checks compare against canonicalized roots.
+    // macOS tmpdir is a /var -> /private/var symlink; containment compares canonical roots.
     const tmpRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-host-read-")));
     try {
       const mediaPath = path.join(tmpRoot, "host-report.txt");
       const mediaReadFile = vi.fn(async () => Buffer.from("host report"));
-
       const result = await sendMedia({
         to: "qqbot:c2c:user-openid",
         text: "",
@@ -385,274 +396,129 @@ describe("dispatchOutbound", () => {
     }
   });
 
-  it("resolves relative media paths from the scoped outbound media workspace", async () => {
-    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-scoped-workspace-"));
-    try {
-      const filePath = path.join(tmpRoot, "relative-report.docx");
-      await fs.writeFile(filePath, Buffer.from("report"));
-      const realFilePath = await fs.realpath(filePath);
-
-      const result = await sendMedia({
-        to: "qqbot:c2c:user-openid",
-        text: "",
-        mediaUrl: "relative-report.docx",
-        accountId: "qq-main",
-        account,
-        mediaAccess: { localRoots: [tmpRoot], workspaceDir: tmpRoot },
-      });
-
-      expect(result.error).toBeUndefined();
-      expect(sendMediaMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "file",
-          source: { localPath: realFilePath },
-          target: { id: "user-openid", type: "c2c" },
-        }),
-      );
-    } finally {
-      await fs.rm(tmpRoot, { recursive: true, force: true });
-    }
-  });
-
   it("lets missing voice files inside scoped outbound roots reach the voice wait path", async () => {
-    // realpath: missing-path resolution returns canonicalized-root joins, so a
-    // symlinked macOS tmpdir root would change the asserted voice path.
+    // Missing-path resolution joins canonical roots, so keep macOS tmpdir canonical here.
     const tmpRoot = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-scoped-voice-")),
     );
     try {
       const missingVoicePath = path.join(tmpRoot, "pending.wav");
-      const runtime = makeRuntime({
-        onDeliver: async (deliver) => {
-          await deliver({ text: `<qqvoice>${missingVoicePath}</qqvoice>` }, { kind: "block" });
+      await runOutbound({
+        runtime: {
+          onDeliver: async (deliver) => {
+            await deliver({ text: `<qqvoice>${missingVoicePath}</qqvoice>` }, { kind: "block" });
+          },
         },
-      });
-
-      await dispatchOutbound(
-        makeInbound({
+        inbound: makeInbound({
           route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId: "agent-1" },
         }),
-        {
-          runtime,
-          cfg: { agents: { list: [{ id: "agent-1", workspace: tmpRoot }] } },
-          account,
-        },
-      );
-
+        cfg: { agents: { list: [{ id: "agent-1", workspace: tmpRoot }] } },
+      });
       expect(audioFileToSilkBase64Mock).toHaveBeenCalledWith(missingVoicePath, undefined);
     } finally {
       await fs.rm(tmpRoot, { recursive: true, force: true });
     }
   });
 
-  it("threads agent scoped media roots through gateway qqmedia block replies", async () => {
-    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-agent-root-"));
-    try {
-      const filePath = path.join(tmpRoot, "gateway-report.docx");
-      await fs.writeFile(filePath, Buffer.from("report"));
-      const realFilePath = await fs.realpath(filePath);
-      const runtime = makeRuntime({
-        onDeliver: async (deliver) => {
-          await deliver({ text: `<qqmedia>${filePath}</qqmedia>` }, { kind: "block" });
-        },
-      });
+  const mediaTestNames = {
+    tagPath: "threads agent scoped media roots through gateway qqmedia block replies",
+    tagRelative: "resolves relative gateway qqmedia block replies against the agent workspace",
+    urlRelative: "resolves relative block mediaUrl payloads against the agent workspace",
+    main: "resolves default main route mediaUrl payloads against the main agent workspace",
+    defaultAgent:
+      "resolves missing route agent mediaUrl payloads against the configured default agent workspace",
+    tagVirtual: "maps sandbox /workspace qqmedia block replies to the agent workspace",
+    tool: "threads agent scoped media roots through gateway tool media forwarding",
+    payload: "threads agent scoped media roots through gateway QQBOT_PAYLOAD replies",
+    payloadVirtual: "maps sandbox /workspace QQBOT_PAYLOAD media paths to the agent workspace",
+    stream: "threads agent scoped media roots through official C2C streaming media tags",
+  } as const;
+  const workspaceMediaCases = [
+    [mediaTestNames.tagPath, "gateway-report.docx", "tag-path", "agent"],
+    [mediaTestNames.tagRelative, "relative-report.docx", "tag-relative", "agent"],
+    [mediaTestNames.urlRelative, "relative-report.docx", "url-relative", "agent"],
+    [mediaTestNames.main, "main-report.docx", "url-relative", "main"],
+    [mediaTestNames.defaultAgent, "default-report.docx", "url-relative", "default"],
+    [mediaTestNames.tagVirtual, "sandbox-report.docx", "tag-virtual", "agent"],
+    [mediaTestNames.tool, "tool-report.docx", "tool-path", "agent"],
+    [mediaTestNames.payload, "payload-report.pdf", "payload-path", "agent"],
+    [mediaTestNames.payloadVirtual, "payload-workspace-report.pdf", "payload-virtual", "agent"],
+    [mediaTestNames.stream, "stream-report.docx", "tag-path", "agent-stream"],
+  ] as const;
 
-      await dispatchOutbound(
-        makeInbound({
-          route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId: "agent-1" },
-        }),
-        {
-          runtime,
-          cfg: { agents: { list: [{ id: "agent-1", workspace: tmpRoot }] } },
-          account,
-        },
-      );
-
-      expect(sendMediaMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "file",
-          source: { localPath: realFilePath },
-          target: { id: "user-openid", type: "c2c" },
-        }),
-      );
-    } finally {
-      await fs.rm(tmpRoot, { recursive: true, force: true });
+  async function deliverWorkspaceMedia(
+    mode: (typeof workspaceMediaCases)[number][2],
+    deliver: DeliverReply,
+    filePath: string,
+  ): Promise<void> {
+    if (mode === "tool-path") {
+      await deliver({ text: "final answer" }, { kind: "block" });
+      await deliver({ mediaUrl: filePath }, { kind: "tool" });
+      return;
     }
-  });
-
-  it("resolves relative gateway qqmedia block replies against the agent workspace", async () => {
-    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-agent-workspace-"));
-    try {
-      const filePath = path.join(tmpRoot, "relative-report.docx");
-      await fs.writeFile(filePath, Buffer.from("report"));
-      const realFilePath = await fs.realpath(filePath);
-      const runtime = makeRuntime({
-        onDeliver: async (deliver) => {
-          await deliver({ text: `<qqmedia>relative-report.docx</qqmedia>` }, { kind: "block" });
-        },
-      });
-
-      await dispatchOutbound(
-        makeInbound({
-          route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId: "agent-1" },
-        }),
-        {
-          runtime,
-          cfg: { agents: { list: [{ id: "agent-1", workspace: tmpRoot }] } },
-          account,
-        },
-      );
-
-      expect(sendMediaMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "file",
-          source: { localPath: realFilePath },
-          target: { id: "user-openid", type: "c2c" },
-        }),
-      );
-    } finally {
-      await fs.rm(tmpRoot, { recursive: true, force: true });
+    if (mode === "url-relative") {
+      await deliver({ mediaUrl: path.basename(filePath) }, { kind: "block" });
+      return;
     }
-  });
+    const text =
+      mode === "tag-path"
+        ? `<qqmedia>${filePath}</qqmedia>`
+        : mode === "tag-relative"
+          ? `<qqmedia>${path.basename(filePath)}</qqmedia>`
+          : mode === "tag-virtual"
+            ? `<qqmedia>/workspace/${path.basename(filePath)}</qqmedia>`
+            : `QQBOT_PAYLOAD:${JSON.stringify({
+                type: "media",
+                mediaType: "file",
+                source: "file",
+                path: mode === "payload-path" ? filePath : `/workspace/${path.basename(filePath)}`,
+              })}`;
+    await deliver({ text }, { kind: "block" });
+  }
 
-  it("resolves relative block mediaUrl payloads against the agent workspace", async () => {
-    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-block-mediaurl-workspace-"));
-    try {
-      const filePath = path.join(tmpRoot, "relative-report.docx");
-      await fs.writeFile(filePath, Buffer.from("report"));
-      const realFilePath = await fs.realpath(filePath);
-      const runtime = makeRuntime({
-        onDeliver: async (deliver) => {
-          await deliver({ mediaUrl: "relative-report.docx" }, { kind: "block" });
-        },
-      });
-
-      await dispatchOutbound(
-        makeInbound({
-          route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId: "agent-1" },
-        }),
-        {
-          runtime,
-          cfg: { agents: { list: [{ id: "agent-1", workspace: tmpRoot }] } },
-          account,
-        },
-      );
-
-      expect(sendMediaMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "file",
-          source: { localPath: realFilePath },
-          target: { id: "user-openid", type: "c2c" },
-        }),
-      );
-    } finally {
-      await fs.rm(tmpRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("resolves default main route mediaUrl payloads against the main agent workspace", async () => {
-    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-main-workspace-"));
-    try {
-      const filePath = path.join(tmpRoot, "main-report.docx");
-      await fs.writeFile(filePath, Buffer.from("report"));
-      const realFilePath = await fs.realpath(filePath);
-      const runtime = makeRuntime({
-        onDeliver: async (deliver) => {
-          await deliver({ mediaUrl: "main-report.docx" }, { kind: "block" });
-        },
-      });
-
-      await dispatchOutbound(makeInbound(), {
-        runtime,
-        cfg: { agents: { list: [{ id: "main", workspace: tmpRoot }] } },
-        account,
-      });
-
-      expect(sendMediaMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "file",
-          source: { localPath: realFilePath },
-          target: { id: "user-openid", type: "c2c" },
-        }),
-      );
-    } finally {
-      await fs.rm(tmpRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("resolves missing route agent mediaUrl payloads against the configured default agent workspace", async () => {
-    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-default-agent-workspace-"));
-    try {
-      const filePath = path.join(tmpRoot, "default-report.docx");
-      await fs.writeFile(filePath, Buffer.from("report"));
-      const realFilePath = await fs.realpath(filePath);
+  it.each(workspaceMediaCases)("%s", async (_, fileName, mode, routeKind) => {
+    const agentId =
+      routeKind === "main" ? "main" : routeKind === "default" ? "assistant" : "agent-1";
+    const routed = routeKind === "agent" || routeKind === "agent-stream";
+    const isDefault = routeKind === "default";
+    const streaming = routeKind === "agent-stream";
+    await withTempMedia("qqbot-workspace-media-", fileName, async (media) => {
       let finalized: Record<string, unknown> | undefined;
-      const runtime = makeRuntime({
-        onFinalize: (ctx) => (finalized = ctx),
-        onDeliver: async (deliver) => {
-          await deliver({ mediaUrl: "default-report.docx" }, { kind: "block" });
+      const runtime = await runOutbound({
+        runtime: {
+          onFinalize: (ctx) => (finalized = ctx),
+          onDeliver: (deliver) => deliverWorkspaceMedia(mode, deliver, media.filePath),
         },
+        inbound: routed
+          ? makeInbound({
+              route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId },
+            })
+          : makeInbound(),
+        cfg: {
+          agents: {
+            list: [
+              {
+                id: agentId,
+                ...(isDefault ? { default: true } : {}),
+                workspace: media.tmpRoot,
+              },
+            ],
+          },
+        },
+        account: streaming
+          ? { ...account, config: { streaming: { mode: "partial", nativeTransport: true } } }
+          : account,
       });
 
-      await dispatchOutbound(makeInbound(), {
-        runtime,
-        cfg: { agents: { list: [{ id: "assistant", default: true, workspace: tmpRoot }] } },
-        account,
-      });
-
-      expect(sendMediaMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "file",
-          source: { localPath: realFilePath },
-          target: { id: "user-openid", type: "c2c" },
-        }),
-      );
-      expect(runtime.channel.reply.resolveEffectiveMessagesConfig).toHaveBeenCalledWith(
-        expect.anything(),
-        "assistant",
-      );
-      expect(finalized?.AgentId).toBe("assistant");
-    } finally {
-      await fs.rm(tmpRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("maps sandbox /workspace qqmedia block replies to the agent workspace", async () => {
-    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-agent-virtual-workspace-"));
-    try {
-      const filePath = path.join(tmpRoot, "sandbox-report.docx");
-      await fs.writeFile(filePath, Buffer.from("report"));
-      const realFilePath = await fs.realpath(filePath);
-      const runtime = makeRuntime({
-        onDeliver: async (deliver) => {
-          await deliver(
-            { text: `<qqmedia>/workspace/sandbox-report.docx</qqmedia>` },
-            { kind: "block" },
-          );
-        },
-      });
-
-      await dispatchOutbound(
-        makeInbound({
-          route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId: "agent-1" },
-        }),
-        {
-          runtime,
-          cfg: { agents: { list: [{ id: "agent-1", workspace: tmpRoot }] } },
-          account,
-        },
-      );
-
-      expect(sendMediaMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "file",
-          source: { localPath: realFilePath },
-          target: { id: "user-openid", type: "c2c" },
-        }),
-      );
-    } finally {
-      await fs.rm(tmpRoot, { recursive: true, force: true });
-    }
+      expectLocalFileMediaSent(media.realFilePath);
+      if (isDefault) {
+        expect(runtime.channel.reply.resolveEffectiveMessagesConfig).toHaveBeenCalledWith(
+          expect.anything(),
+          agentId,
+        );
+        expect(finalized?.AgentId).toBe(agentId);
+      }
+    });
   });
 
   it("blocks sandbox /workspace qqmedia paths that escape the agent workspace", async () => {
@@ -661,25 +527,20 @@ describe("dispatchOutbound", () => {
       const workspaceDir = path.join(tmpRoot, "workspace");
       await fs.mkdir(workspaceDir);
       await fs.writeFile(path.join(tmpRoot, "outside-report.docx"), Buffer.from("outside"));
-      const runtime = makeRuntime({
-        onDeliver: async (deliver) => {
-          await deliver(
-            { text: `<qqmedia>/workspace/../outside-report.docx</qqmedia>` },
-            { kind: "block" },
-          );
+      await runOutbound({
+        runtime: {
+          onDeliver: async (deliver) => {
+            await deliver(
+              { text: "<qqmedia>/workspace/../outside-report.docx</qqmedia>" },
+              { kind: "block" },
+            );
+          },
         },
-      });
-
-      await dispatchOutbound(
-        makeInbound({
+        inbound: makeInbound({
           route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId: "agent-1" },
         }),
-        {
-          runtime,
-          cfg: { agents: { list: [{ id: "agent-1", workspace: workspaceDir }] } },
-          account,
-        },
-      );
+        cfg: { agents: { list: [{ id: "agent-1", workspace: workspaceDir }] } },
+      });
 
       expect(sendMediaMock).not.toHaveBeenCalled();
       expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([DEFAULT_MEDIA_SEND_ERROR]);
@@ -693,16 +554,12 @@ describe("dispatchOutbound", () => {
 
   it("sends sanitized fallback when media-only block payload forwarding fails", async () => {
     sendMediaMock.mockResolvedValueOnce({ channel: "qqbot", error: "upload failed" });
-    const runtime = makeRuntime({
-      onDeliver: async (deliver) => {
-        await deliver({ mediaUrl: "missing-report.pdf" }, { kind: "block" });
+    await runOutbound({
+      runtime: {
+        onDeliver: async (deliver) => {
+          await deliver({ mediaUrl: "missing-report.pdf" }, { kind: "block" });
+        },
       },
-    });
-
-    await dispatchOutbound(makeInbound(), {
-      runtime,
-      cfg: {},
-      account,
     });
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([DEFAULT_MEDIA_SEND_ERROR]);
@@ -715,304 +572,96 @@ describe("dispatchOutbound", () => {
       layout: "state-only",
       prefix: "qqbot-agent-root-boundary-",
     });
-    const tmpRoot = openClawState.root;
     try {
-      const workspaceDir = path.join(tmpRoot, "workspace");
+      const workspaceDir = path.join(openClawState.root, "workspace");
       const stateSandboxDir = openClawState.statePath("sandboxes", "other-agent");
       const stateSandboxFile = path.join(stateSandboxDir, "outside-report.docx");
       await fs.mkdir(workspaceDir, { recursive: true });
       await fs.mkdir(stateSandboxDir, { recursive: true });
       await fs.writeFile(stateSandboxFile, Buffer.from("outside"));
-      const runtime = makeRuntime({
-        onDeliver: async (deliver) => {
-          await deliver({ text: `<qqmedia>${stateSandboxFile}</qqmedia>` }, { kind: "block" });
+      await runOutbound({
+        runtime: {
+          onDeliver: async (deliver) => {
+            await deliver({ text: `<qqmedia>${stateSandboxFile}</qqmedia>` }, { kind: "block" });
+          },
         },
-      });
-
-      await dispatchOutbound(
-        makeInbound({
+        inbound: makeInbound({
           route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId: "agent-1" },
         }),
-        {
-          runtime,
-          cfg: { agents: { list: [{ id: "agent-1", workspace: workspaceDir }] } },
-          account,
-        },
-      );
-
+        cfg: { agents: { list: [{ id: "agent-1", workspace: workspaceDir }] } },
+      });
       expect(sendMediaMock).not.toHaveBeenCalled();
     } finally {
       await openClawState.cleanup();
     }
   });
 
-  it("threads agent scoped media roots through gateway tool media forwarding", async () => {
-    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-tool-root-"));
-    try {
-      const filePath = path.join(tmpRoot, "tool-report.docx");
-      await fs.writeFile(filePath, Buffer.from("report"));
-      const realFilePath = await fs.realpath(filePath);
-      const runtime = makeRuntime({
-        onDispatch: async ({ deliver }) => {
-          await deliver({ text: "final answer" }, { kind: "block" });
-          await deliver({ mediaUrl: filePath }, { kind: "tool" });
-        },
-      });
-
-      await dispatchOutbound(
-        makeInbound({
-          route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId: "agent-1" },
-        }),
-        {
-          runtime,
-          cfg: { agents: { list: [{ id: "agent-1", workspace: tmpRoot }] } },
-          account,
-        },
-      );
-
-      expect(sendMediaMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "file",
-          source: { localPath: realFilePath },
-          target: { id: "user-openid", type: "c2c" },
-        }),
-      );
-    } finally {
-      await fs.rm(tmpRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("threads agent scoped media roots through gateway QQBOT_PAYLOAD replies", async () => {
-    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-payload-root-"));
-    try {
-      const filePath = path.join(tmpRoot, "payload-report.pdf");
-      await fs.writeFile(filePath, Buffer.from("report"));
-      const realFilePath = await fs.realpath(filePath);
-      const runtime = makeRuntime({
-        onDeliver: async (deliver) => {
-          await deliver(
-            {
-              text: `QQBOT_PAYLOAD:${JSON.stringify({
-                type: "media",
-                mediaType: "file",
-                source: "file",
-                path: filePath,
-              })}`,
-            },
-            { kind: "block" },
-          );
-        },
-      });
-
-      await dispatchOutbound(
-        makeInbound({
-          route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId: "agent-1" },
-        }),
-        {
-          runtime,
-          cfg: { agents: { list: [{ id: "agent-1", workspace: tmpRoot }] } },
-          account,
-        },
-      );
-
-      expect(sendMediaMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "file",
-          source: { localPath: realFilePath },
-          target: { id: "user-openid", type: "c2c" },
-        }),
-      );
-    } finally {
-      await fs.rm(tmpRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("maps sandbox /workspace QQBOT_PAYLOAD media paths to the agent workspace", async () => {
-    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-payload-virtual-workspace-"));
-    try {
-      const filePath = path.join(tmpRoot, "payload-workspace-report.pdf");
-      await fs.writeFile(filePath, Buffer.from("report"));
-      const realFilePath = await fs.realpath(filePath);
-      const runtime = makeRuntime({
-        onDeliver: async (deliver) => {
-          await deliver(
-            {
-              text: `QQBOT_PAYLOAD:${JSON.stringify({
-                type: "media",
-                mediaType: "file",
-                source: "file",
-                path: "/workspace/payload-workspace-report.pdf",
-              })}`,
-            },
-            { kind: "block" },
-          );
-        },
-      });
-
-      await dispatchOutbound(
-        makeInbound({
-          route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId: "agent-1" },
-        }),
-        {
-          runtime,
-          cfg: { agents: { list: [{ id: "agent-1", workspace: tmpRoot }] } },
-          account,
-        },
-      );
-
-      expect(sendMediaMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "file",
-          source: { localPath: realFilePath },
-          target: { id: "user-openid", type: "c2c" },
-        }),
-      );
-    } finally {
-      await fs.rm(tmpRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("threads agent scoped media roots through official C2C streaming media tags", async () => {
-    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-stream-root-"));
-    try {
-      const filePath = path.join(tmpRoot, "stream-report.docx");
-      await fs.writeFile(filePath, Buffer.from("report"));
-      const realFilePath = await fs.realpath(filePath);
-      const runtime = makeRuntime({
-        onDeliver: async (deliver) => {
-          await deliver({ text: `<qqmedia>${filePath}</qqmedia>` }, { kind: "block" });
-        },
-      });
-
-      await dispatchOutbound(
-        makeInbound({
-          route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId: "agent-1" },
-        }),
-        {
-          runtime,
-          cfg: { agents: { list: [{ id: "agent-1", workspace: tmpRoot }] } },
-          account: {
-            ...account,
-            config: { streaming: { mode: "partial", nativeTransport: true } },
-          },
-        },
-      );
-
-      expect(sendMediaMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "file",
-          source: { localPath: realFilePath },
-          target: { id: "user-openid", type: "c2c" },
-        }),
-      );
-    } finally {
-      await fs.rm(tmpRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps waiting past 300s when a slow provider timeout is configured", async () => {
+  it.each([
+    {
+      name: "keeps waiting past 300s when a slow provider timeout is configured",
+      text: "late answer",
+      cfg: { models: { providers: { ollama: { timeoutSeconds: 1800 } } } },
+      durable: false,
+    },
+    {
+      name: "keeps durable settlement with a dispatch that outlives the response watchdog",
+      text: "late durable answer",
+      cfg: {},
+      durable: true,
+    },
+  ])("$name", async ({ text, cfg, durable }) => {
     vi.useFakeTimers();
-    try {
-      const runtime = makeRuntime({
-        onDeliver: async (deliver) => {
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 301_000);
-          });
-          await deliver({ text: "late answer" }, { kind: "block" });
-        },
-      });
-      let settled = false;
-
-      const dispatchPromise = dispatchOutbound(makeInbound(), {
-        runtime,
-        cfg: {
-          models: { providers: { ollama: { timeoutSeconds: 1800 } } },
-        },
-        account,
-      }).finally(() => {
-        settled = true;
-      });
-
-      await vi.advanceTimersByTimeAsync(300_000);
-
-      expect(settled).toBe(false);
-      expect(sendTextMock).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(1_000);
-      await dispatchPromise;
-
-      expect(sendTextMock).toHaveBeenCalledWith(
-        expect.anything(),
-        "late answer",
-        expect.anything(),
-        expect.anything(),
-      );
-    } finally {
-      vi.clearAllTimers();
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps durable settlement with a dispatch that outlives the response watchdog", async () => {
-    vi.useFakeTimers();
-    try {
-      const lifecycle = {
-        abortSignal: new AbortController().signal,
-        onAdopted: vi.fn(async () => {}),
-        onDeferred: vi.fn(),
-        onAdoptionFinalizing: vi.fn(),
-        onAbandoned: vi.fn(async () => {}),
-      };
-      const inbound = makeInbound();
+    const lifecycle = {
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onAbandoned: vi.fn(async () => {}),
+    };
+    const inbound = makeInbound();
+    if (durable) {
       inbound.event.turnAdoptionLifecycle = lifecycle;
-      const runtime = makeRuntime({
-        onDeliver: async (deliver) => {
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 301_000);
-          });
-          await deliver({ text: "late durable answer" }, { kind: "block" });
-        },
-      });
-      let settled = false;
-      const dispatchPromise = dispatchOutbound(inbound, {
-        runtime,
-        cfg: {},
-        account,
-      }).finally(() => {
-        settled = true;
-      });
-
-      await vi.advanceTimersByTimeAsync(300_000);
-
-      expect(settled).toBe(false);
-      expect(lifecycle.onAbandoned).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(1_000);
-      await dispatchPromise;
-
-      expect(sendTextMock).toHaveBeenCalledWith(
-        expect.anything(),
-        "late durable answer",
-        expect.anything(),
-        expect.anything(),
-      );
-    } finally {
-      vi.clearAllTimers();
-      vi.useRealTimers();
     }
+    const runtime = makeRuntime({
+      onDeliver: async (deliver) => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 301_000);
+        });
+        await deliver({ text }, { kind: "block" });
+      },
+    });
+    let settled = false;
+    const dispatchPromise = dispatchOutbound(inbound, { runtime, cfg, account }).finally(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(settled).toBe(false);
+    if (durable) {
+      expect(lifecycle.onAbandoned).not.toHaveBeenCalled();
+    } else {
+      expect(sendTextMock).not.toHaveBeenCalled();
+    }
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await dispatchPromise;
+    expect(sendTextMock).toHaveBeenCalledWith(
+      expect.anything(),
+      text,
+      expect.anything(),
+      expect.anything(),
+    );
   });
 
   it("marks voice-only inbound as type-only audio facts", async () => {
     let finalized: Record<string, unknown> | undefined;
-    const runtime = makeRuntime({ onFinalize: (ctx) => (finalized = ctx) });
-
-    await dispatchOutbound(
-      makeInbound({
+    await runOutbound({
+      runtime: { onFinalize: (ctx) => (finalized = ctx) },
+      inbound: makeInbound({
         uniqueVoicePaths: ["/tmp/qqbot/voice.wav"],
         voiceMediaTypes: ["audio/wav"],
       }),
-      { runtime, cfg: {}, account },
-    );
+    });
 
     expect(finalized?.media).toEqual([expect.objectContaining({ contentType: "audio/wav" })]);
     expect(finalized?.QQVoiceAttachmentPaths).toEqual(["/tmp/qqbot/voice.wav"]);
@@ -1022,16 +671,14 @@ describe("dispatchOutbound", () => {
 
   it("keeps disjoint local and remote images as separate ordered facts", async () => {
     let finalized: Record<string, unknown> | undefined;
-    const runtime = makeRuntime({ onFinalize: (ctx) => (finalized = ctx) });
-
-    await dispatchOutbound(
-      makeInbound({
+    await runOutbound({
+      runtime: { onFinalize: (ctx) => (finalized = ctx) },
+      inbound: makeInbound({
         localMediaPaths: ["/tmp/qqbot/local.png"],
         localMediaTypes: ["image/png"],
         remoteMediaUrls: ["https://example.test/remote.png"],
       }),
-      { runtime, cfg: {}, account },
-    );
+    });
 
     expect(finalized?.media).toEqual([
       expect.objectContaining({
@@ -1039,20 +686,19 @@ describe("dispatchOutbound", () => {
         contentType: "image/png",
         kind: "image",
       }),
-      // Remote URLs carry no MIME; without an explicit image kind the fact
-      // would classify as a generic file and skip image understanding.
+      // Remote URLs carry no MIME; the explicit kind preserves image understanding.
       expect.objectContaining({ url: "https://example.test/remote.png", kind: "image" }),
     ]);
   });
 
   it("synthesizes plain audioAsVoice text as a QQ voice reply", async () => {
-    const runtime = makeRuntime({
-      onDeliver: async (deliver) => {
-        await deliver({ text: "read this aloud", audioAsVoice: true }, { kind: "block" });
+    const runtime = await runOutbound({
+      runtime: {
+        onDeliver: async (deliver) => {
+          await deliver({ text: "read this aloud", audioAsVoice: true }, { kind: "block" });
+        },
       },
     });
-
-    await dispatchOutbound(makeInbound(), { runtime, cfg: {}, account });
 
     expect(runtime.tts.textToSpeech).toHaveBeenCalledWith({
       text: "read this aloud",
@@ -1071,63 +717,28 @@ describe("dispatchOutbound", () => {
     expect(sendTextMock).not.toHaveBeenCalled();
   });
 
-  it("delivers text-only tool progress immediately in partial streaming mode", async () => {
-    const runtime = makeRuntime({
-      onDeliver: async (deliver) => {
-        await deliver({ text: "Working: checking logs" }, { kind: "tool" });
-        await deliver({ text: "final answer" }, { kind: "block" });
+  it.each([
+    {
+      name: "delivers text-only tool progress immediately in partial streaming mode",
+      streaming: { mode: "partial" as const },
+    },
+    {
+      name: "delivers text-only tool progress immediately in recommended C2C streaming mode",
+      streaming: { mode: "partial" as const, nativeTransport: true },
+    },
+    {
+      name: "delivers text-only tool progress when nativeTransport is on despite mode off",
+      streaming: { mode: "off" as const, nativeTransport: true },
+    },
+  ])("$name", async ({ streaming }) => {
+    await runOutbound({
+      runtime: {
+        onDeliver: async (deliver) => {
+          await deliver({ text: "Working: checking logs" }, { kind: "tool" });
+          await deliver({ text: "final answer" }, { kind: "block" });
+        },
       },
-    });
-
-    await dispatchOutbound(makeInbound(), {
-      runtime,
-      cfg: {},
-      account: { ...account, config: { streaming: { mode: "partial" } } },
-    });
-
-    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
-      "Working: checking logs",
-      "final answer",
-    ]);
-    expect(sendMediaMock).not.toHaveBeenCalled();
-  });
-
-  it("delivers text-only tool progress immediately in recommended C2C streaming mode", async () => {
-    const runtime = makeRuntime({
-      onDeliver: async (deliver) => {
-        await deliver({ text: "Working: checking logs" }, { kind: "tool" });
-        await deliver({ text: "final answer" }, { kind: "block" });
-      },
-    });
-
-    await dispatchOutbound(makeInbound(), {
-      runtime,
-      cfg: {},
-      account: { ...account, config: { streaming: { mode: "partial", nativeTransport: true } } },
-    });
-
-    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
-      "Working: checking logs",
-      "final answer",
-    ]);
-    expect(sendMediaMock).not.toHaveBeenCalled();
-  });
-
-  it("delivers text-only tool progress when nativeTransport is on despite mode off", async () => {
-    const runtime = makeRuntime({
-      onDeliver: async (deliver) => {
-        await deliver({ text: "Working: checking logs" }, { kind: "tool" });
-        await deliver({ text: "final answer" }, { kind: "block" });
-      },
-    });
-
-    await dispatchOutbound(makeInbound(), {
-      runtime,
-      cfg: {},
-      account: {
-        ...account,
-        config: { streaming: { mode: "off", nativeTransport: true } },
-      },
+      account: { ...account, config: { streaming } },
     });
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
@@ -1139,16 +750,13 @@ describe("dispatchOutbound", () => {
 
   it("keeps immediate tool progress media-like text inert with markdown support enabled", async () => {
     const progress = "progress ![x](http://internal.example/progress.png)";
-    const runtime = makeRuntime({
-      onDeliver: async (deliver) => {
-        await deliver({ text: progress }, { kind: "tool" });
-        await deliver({ text: "final answer" }, { kind: "block" });
+    await runOutbound({
+      runtime: {
+        onDeliver: async (deliver) => {
+          await deliver({ text: progress }, { kind: "tool" });
+          await deliver({ text: "final answer" }, { kind: "block" });
+        },
       },
-    });
-
-    await dispatchOutbound(makeInbound(), {
-      runtime,
-      cfg: {},
       account: { ...account, markdownSupport: true, config: { streaming: { mode: "partial" } } },
     });
 
@@ -1158,34 +766,29 @@ describe("dispatchOutbound", () => {
   });
 
   it("keeps text-only tool progress buffered when streaming is off", async () => {
-    const runtime = makeRuntime({
-      onDeliver: async (deliver) => {
-        await deliver({ text: "Working: checking logs" }, { kind: "tool" });
-        await deliver({ text: "final answer" }, { kind: "block" });
+    await runOutbound({
+      runtime: {
+        onDeliver: async (deliver) => {
+          await deliver({ text: "Working: checking logs" }, { kind: "tool" });
+          await deliver({ text: "final answer" }, { kind: "block" });
+        },
       },
-    });
-
-    await dispatchOutbound(makeInbound(), {
-      runtime,
-      cfg: {},
       account: { ...account, config: { streaming: { mode: "off" } } },
     });
-
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["final answer"]);
     expect(sendMediaMock).not.toHaveBeenCalled();
   });
 
   it("flushes buffered tool text when non-streaming final block is silent", async () => {
-    const runtime = makeRuntime({
-      onDispatch: async ({ deliver, onSkip }) => {
-        await deliver({ text: "first visible tool message" }, { kind: "tool" });
-        await deliver({ text: "second visible tool message" }, { kind: "tool" });
-        onSkip?.({ text: "NO_REPLY" }, { kind: "block", reason: "silent" });
+    await runOutbound({
+      runtime: {
+        onDispatch: async ({ deliver, onSkip }) => {
+          await deliver({ text: "first visible tool message" }, { kind: "tool" });
+          await deliver({ text: "second visible tool message" }, { kind: "tool" });
+          onSkip?.({ text: "NO_REPLY" }, { kind: "block", reason: "silent" });
+        },
       },
-    });
-
-    await dispatchOutbound(
-      makeInbound({
+      inbound: makeInbound({
         event: {
           type: "group",
           senderId: "member-openid",
@@ -1202,9 +805,8 @@ describe("dispatchOutbound", () => {
         agentBody: "do it",
         body: "[member-openid] do it (@you)",
       }),
-      { runtime, cfg: {}, account: { ...account, config: { streaming: { mode: "off" } } } },
-    );
-
+      account: { ...account, config: { streaming: { mode: "off" } } },
+    });
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
       "first visible tool message",
       "second visible tool message",
@@ -1213,81 +815,65 @@ describe("dispatchOutbound", () => {
   });
 
   it("keeps buffered tool text suppressed when a visible block precedes a silent final skip", async () => {
-    const runtime = makeRuntime({
-      onDispatch: async ({ deliver, onSkip }) => {
-        await deliver({ text: "Working: checking logs" }, { kind: "tool" });
-        onSkip?.({ text: "NO_REPLY" }, { kind: "final", reason: "silent" });
-        await deliver({ text: "final answer" }, { kind: "block" });
+    await runOutbound({
+      runtime: {
+        onDispatch: async ({ deliver, onSkip }) => {
+          await deliver({ text: "Working: checking logs" }, { kind: "tool" });
+          onSkip?.({ text: "NO_REPLY" }, { kind: "final", reason: "silent" });
+          await deliver({ text: "final answer" }, { kind: "block" });
+        },
       },
-    });
-
-    await dispatchOutbound(makeInbound(), {
-      runtime,
-      cfg: {},
       account: { ...account, config: { streaming: { mode: "off" } } },
     });
-
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["final answer"]);
     expect(sendMediaMock).not.toHaveBeenCalled();
   });
 
   it("does not re-send tool fallback after timeout when non-streaming final block is silent", async () => {
     vi.useFakeTimers();
-    const runtime = makeRuntime({
-      onDispatch: async ({ deliver, onSkip }) => {
-        await deliver({ text: "visible tool message" }, { kind: "tool" });
-        await vi.advanceTimersByTimeAsync(60_000);
-        onSkip?.({ text: "NO_REPLY" }, { kind: "block", reason: "silent" });
+    await runOutbound({
+      runtime: {
+        onDispatch: async ({ deliver, onSkip }) => {
+          await deliver({ text: "visible tool message" }, { kind: "tool" });
+          await vi.advanceTimersByTimeAsync(60_000);
+          onSkip?.({ text: "NO_REPLY" }, { kind: "block", reason: "silent" });
+        },
       },
-    });
-
-    await dispatchOutbound(makeInbound(), {
-      runtime,
-      cfg: {},
       account: { ...account, config: { streaming: { mode: "off" } } },
     });
-
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["visible tool message"]);
     expect(sendMediaMock).not.toHaveBeenCalled();
   });
 
   it("waits for fresh settled delivery after a skipped silent block", async () => {
     vi.useFakeTimers();
-    const runtime = makeRuntime({
-      onDispatch: async ({ deliver, onSkip }) => {
-        await deliver({ text: "visible tool message" }, { kind: "tool" });
-        onSkip?.({ text: "NO_REPLY" }, { kind: "block", reason: "silent" });
-        await vi.advanceTimersByTimeAsync(60_000);
-        expect(sendTextMock).not.toHaveBeenCalled();
+    await runOutbound({
+      runtime: {
+        onDispatch: async ({ deliver, onSkip }) => {
+          await deliver({ text: "visible tool message" }, { kind: "tool" });
+          onSkip?.({ text: "NO_REPLY" }, { kind: "block", reason: "silent" });
+          await vi.advanceTimersByTimeAsync(60_000);
+          expect(sendTextMock).not.toHaveBeenCalled();
+        },
       },
-    });
-
-    await dispatchOutbound(makeInbound(), {
-      runtime,
-      cfg: {},
       account: { ...account, config: { streaming: { mode: "off" } } },
     });
-
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["visible tool message"]);
     expect(sendMediaMock).not.toHaveBeenCalled();
   });
 
   it("does not send stale tool fallback when fresh settled delivery is suppressed", async () => {
     vi.useFakeTimers();
-    const runtime = makeRuntime({
-      skipFreshSettledDelivery: true,
-      onDispatch: async ({ deliver, onSkip }) => {
-        await deliver({ text: "stale visible tool message" }, { kind: "tool" });
-        onSkip?.({ text: "NO_REPLY" }, { kind: "block", reason: "silent" });
+    await runOutbound({
+      runtime: {
+        skipFreshSettledDelivery: true,
+        onDispatch: async ({ deliver, onSkip }) => {
+          await deliver({ text: "stale visible tool message" }, { kind: "tool" });
+          onSkip?.({ text: "NO_REPLY" }, { kind: "block", reason: "silent" });
+        },
       },
-    });
-
-    await dispatchOutbound(makeInbound(), {
-      runtime,
-      cfg: {},
       account: { ...account, config: { streaming: { mode: "off" } } },
     });
-
     expect(sendTextMock).not.toHaveBeenCalled();
     expect(sendMediaMock).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
@@ -1295,73 +881,55 @@ describe("dispatchOutbound", () => {
 
   it("sends buffered tool text when tool media fallback fails", async () => {
     vi.useFakeTimers();
-    try {
-      sendMediaMock.mockResolvedValueOnce({ channel: "qqbot", error: "upload failed" });
-      const runtime = makeRuntime({
+    sendMediaMock.mockResolvedValueOnce({ channel: "qqbot", error: "upload failed" });
+    await runOutbound({
+      runtime: {
         onDispatch: async ({ deliver }) => {
           await deliver({ mediaUrl: "https://example.com/progress.png" }, { kind: "tool" });
           await deliver({ text: "visible tool fallback" }, { kind: "tool" });
           await vi.advanceTimersByTimeAsync(60_000);
         },
-      });
-
-      await dispatchOutbound(makeInbound(), {
-        runtime,
-        cfg: {},
-        account: { ...account, config: { streaming: { mode: "off" } } },
-      });
-
-      expect(sendMediaMock).toHaveBeenCalledTimes(1);
-      expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["visible tool fallback"]);
-    } finally {
-      vi.useRealTimers();
-    }
+      },
+      account: { ...account, config: { streaming: { mode: "off" } } },
+    });
+    expect(sendMediaMock).toHaveBeenCalledTimes(1);
+    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["visible tool fallback"]);
   });
 
   it("bounds tool media flushes without racing the fallback timer", async () => {
     vi.useFakeTimers();
     sendMediaMock.mockImplementationOnce(() => new Promise(() => {}));
     sendMediaMock.mockImplementationOnce(() => new Promise(() => {}));
-    const firstMediaUrl = "https://example.com/progress-1.png";
-    const secondMediaUrl = "https://example.com/progress-2.png";
     const runtime = makeRuntime({
       onDispatch: async ({ deliver, onSkip }) => {
-        await deliver({ mediaUrl: firstMediaUrl }, { kind: "tool" });
-        await deliver({ mediaUrl: secondMediaUrl }, { kind: "tool" });
+        await deliver({ mediaUrl: "https://example.com/progress-1.png" }, { kind: "tool" });
+        await deliver({ mediaUrl: "https://example.com/progress-2.png" }, { kind: "tool" });
         await deliver({ text: "visible tool message" }, { kind: "tool" });
         onSkip?.({ text: "NO_REPLY" }, { kind: "block", reason: "silent" });
       },
     });
-
     const dispatchPromise = dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
       account: { ...account, config: { streaming: { mode: "off" } } },
     });
-
     await vi.advanceTimersByTimeAsync(90_000);
     await dispatchPromise;
-
     expect(sendMediaMock).toHaveBeenCalledTimes(2);
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["visible tool message"]);
   });
 
   it("clears the media timeout after a successful silent-final flush", async () => {
     vi.useFakeTimers();
-    const mediaUrl = "https://example.com/progress.png";
-    const runtime = makeRuntime({
-      onDispatch: async ({ deliver, onSkip }) => {
-        await deliver({ mediaUrl }, { kind: "tool" });
-        onSkip?.({ text: "NO_REPLY" }, { kind: "block", reason: "silent" });
+    await runOutbound({
+      runtime: {
+        onDispatch: async ({ deliver, onSkip }) => {
+          await deliver({ mediaUrl: "https://example.com/progress.png" }, { kind: "tool" });
+          onSkip?.({ text: "NO_REPLY" }, { kind: "block", reason: "silent" });
+        },
       },
-    });
-
-    await dispatchOutbound(makeInbound(), {
-      runtime,
-      cfg: {},
       account: { ...account, config: { streaming: { mode: "off" } } },
     });
-
     expect(sendMediaMock).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -1371,18 +939,12 @@ describe("dispatchOutbound", () => {
     { name: "silent token", payload: { text: "NO_REPLY" } },
   ])("delivers media-only non-streaming final block replies with $name", async ({ payload }) => {
     const mediaUrl = "https://example.com/final.png";
-    const runtime = makeRuntime({
-      onDeliver: async (deliver) => {
-        await deliver({ ...payload, mediaUrl }, { kind: "block" });
+    await runOutbound({
+      runtime: {
+        onDeliver: async (deliver) => deliver({ ...payload, mediaUrl }, { kind: "block" }),
       },
-    });
-
-    await dispatchOutbound(makeInbound(), {
-      runtime,
-      cfg: {},
       account: { ...account, config: { streaming: { mode: "off" } } },
     });
-
     expect(sendTextMock).not.toHaveBeenCalled();
     expect(sendMediaMock).toHaveBeenCalledWith({
       creds: { appId: "app", clientSecret: "secret" },
@@ -1395,18 +957,10 @@ describe("dispatchOutbound", () => {
 
   it("delivers media-only final block replies when C2C streaming is enabled", async () => {
     const mediaUrl = "https://example.com/final.png";
-    const runtime = makeRuntime({
-      onDeliver: async (deliver) => {
-        await deliver({ mediaUrl }, { kind: "block" });
-      },
-    });
-
-    await dispatchOutbound(makeInbound(), {
-      runtime,
-      cfg: {},
+    await runOutbound({
+      runtime: { onDeliver: async (deliver) => deliver({ mediaUrl }, { kind: "block" }) },
       account: { ...account, config: { streaming: { mode: "partial", nativeTransport: true } } },
     });
-
     expect(sendTextMock).not.toHaveBeenCalled();
     expect(sendMediaMock).toHaveBeenCalledWith({
       creds: { appId: "app", clientSecret: "secret" },
@@ -1420,23 +974,19 @@ describe("dispatchOutbound", () => {
   it("renews pending tool-media fallback when partial progress is delivered", async () => {
     vi.useFakeTimers();
     const mediaUrl = "https://example.com/progress.png";
-    const runtime = makeRuntime({
-      onDeliver: async (deliver) => {
-        await deliver({ mediaUrl }, { kind: "tool" });
-        await vi.advanceTimersByTimeAsync(59_000);
-        await deliver({ text: "Working: checking logs" }, { kind: "tool" });
-        await vi.advanceTimersByTimeAsync(1_000);
-        expect(sendMediaMock).not.toHaveBeenCalled();
-        await deliver({ text: "final answer" }, { kind: "block" });
+    await runOutbound({
+      runtime: {
+        onDeliver: async (deliver) => {
+          await deliver({ mediaUrl }, { kind: "tool" });
+          await vi.advanceTimersByTimeAsync(59_000);
+          await deliver({ text: "Working: checking logs" }, { kind: "tool" });
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(sendMediaMock).not.toHaveBeenCalled();
+          await deliver({ text: "final answer" }, { kind: "block" });
+        },
       },
-    });
-
-    await dispatchOutbound(makeInbound(), {
-      runtime,
-      cfg: {},
       account: { ...account, config: { streaming: { mode: "partial" } } },
     });
-
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
       "Working: checking logs",
       "final answer",
@@ -1475,182 +1025,124 @@ describe("dispatchOutbound", () => {
     expect(finalized?.ChatType).toBe("direct");
   });
 
-  it("keeps markdown table chunks self-contained across block deliveries", async () => {
-    const runtime = makeRuntime({
-      onDispatch: async ({ deliver }) => {
-        await deliver(
-          {
-            text: ["| Id | Value |", "|---:|---|", "| 1 | alpha |"].join("\n"),
-          },
-          { kind: "block" },
-        );
-        await deliver({ text: ["| 2 | beta |", "| 3 | gamma |"].join("\n") }, { kind: "block" });
+  it.each([
+    {
+      name: "keeps markdown table chunks self-contained across block deliveries",
+      blocks: [
+        ["| Id | Value |", "|---:|---|", "| 1 | alpha |"].join("\n"),
+        ["| 2 | beta |", "| 3 | gamma |"].join("\n"),
+      ],
+      expected: [
+        ["| Id | Value |", "|---:|---|", "| 1 | alpha |"].join("\n"),
+        ["| Id | Value |", "|---:|---|", "| 2 | beta |", "| 3 | gamma |"].join("\n"),
+      ],
+      assertEach: true,
+    },
+    {
+      name: "waits for a table separator when a block ends after the header",
+      blocks: ["| Id | Value |", ["|---:|---|", "| 1 | alpha |"].join("\n")],
+      expected: [["| Id | Value |", "|---:|---|", "| 1 | alpha |"].join("\n")],
+    },
+    {
+      name: "flushes unfinished markdown table row fragments as plain text fields",
+      blocks: [
+        ["| Id | Function | Status |", "|---:|---|---|", "| 1 | auth | ok |"].join("\n"),
+        "| 10 | analyzeerror_patterns | 无需重试",
+      ],
+      expected: [
+        ["| Id | Function | Status |", "|---:|---|---|", "| 1 | auth | ok |"].join("\n"),
+        ["Id: 10", "Function: analyzeerror_patterns", "Status: 无需重试"].join("\n"),
+      ],
+    },
+    {
+      name: "holds short table rows until a following block completes the columns",
+      blocks: [
+        [
+          "| Id | Time | Owner | Note |",
+          "|---:|---|---|---|",
+          "| 16 | 40ms | He | ok |",
+          "| 17 | 100ms |",
+        ].join("\n"),
+        "Lin | daily cap |",
+      ],
+      expected: [
+        ["| Id | Time | Owner | Note |", "|---:|---|---|---|", "| 16 | 40ms | He | ok |"].join(
+          "\n",
+        ),
+        [
+          "| Id | Time | Owner | Note |",
+          "|---:|---|---|---|",
+          "| 17 | 100ms | Lin | daily cap |",
+        ].join("\n"),
+      ],
+    },
+  ])("$name", async ({ blocks, expected, assertEach }) => {
+    await runOutbound({
+      runtime: {
+        onDispatch: async ({ deliver }) => {
+          for (const text of blocks) {
+            await deliver({ text }, { kind: "block" });
+          }
+        },
       },
     });
 
-    await dispatchOutbound(makeInbound(), {
-      runtime,
-      cfg: {},
-      account,
-    });
-
-    expect(sendTextMock).toHaveBeenCalledTimes(2);
-    expect(sendTextMock.mock.calls[0]?.[1]).toBe(
-      ["| Id | Value |", "|---:|---|", "| 1 | alpha |"].join("\n"),
-    );
-    expect(sendTextMock.mock.calls[1]?.[1]).toBe(
-      ["| Id | Value |", "|---:|---|", "| 2 | beta |", "| 3 | gamma |"].join("\n"),
-    );
-  });
-
-  it("waits for a table separator when a block ends after the header", async () => {
-    const runtime = makeRuntime({
-      onDispatch: async ({ deliver }) => {
-        await deliver({ text: "| Id | Value |" }, { kind: "block" });
-        await deliver({ text: ["|---:|---|", "| 1 | alpha |"].join("\n") }, { kind: "block" });
-      },
-    });
-
-    await dispatchOutbound(makeInbound(), {
-      runtime,
-      cfg: {},
-      account,
-    });
-
-    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
-      ["| Id | Value |", "|---:|---|", "| 1 | alpha |"].join("\n"),
-    ]);
-  });
-
-  it("flushes unfinished markdown table row fragments as plain text fields", async () => {
-    const runtime = makeRuntime({
-      onDispatch: async ({ deliver }) => {
-        await deliver(
-          {
-            text: ["| Id | Function | Status |", "|---:|---|---|", "| 1 | auth | ok |"].join("\n"),
-          },
-          { kind: "block" },
-        );
-        await deliver({ text: "| 10 | analyzeerror_patterns | 无需重试" }, { kind: "block" });
-      },
-    });
-
-    await dispatchOutbound(makeInbound(), {
-      runtime,
-      cfg: {},
-      account,
-    });
-
-    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
-      ["| Id | Function | Status |", "|---:|---|---|", "| 1 | auth | ok |"].join("\n"),
-      ["Id: 10", "Function: analyzeerror_patterns", "Status: 无需重试"].join("\n"),
-    ]);
-  });
-
-  it("holds short table rows until a following block completes the columns", async () => {
-    const runtime = makeRuntime({
-      onDispatch: async ({ deliver }) => {
-        await deliver(
-          {
-            text: [
-              "| Id | Time | Owner | Note |",
-              "|---:|---|---|---|",
-              "| 16 | 40ms | He | ok |",
-              "| 17 | 100ms |",
-            ].join("\n"),
-          },
-          { kind: "block" },
-        );
-        await deliver({ text: "Lin | daily cap |" }, { kind: "block" });
-      },
-    });
-
-    await dispatchOutbound(makeInbound(), {
-      runtime,
-      cfg: {},
-      account,
-    });
-
-    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
-      ["| Id | Time | Owner | Note |", "|---:|---|---|---|", "| 16 | 40ms | He | ok |"].join("\n"),
-      [
-        "| Id | Time | Owner | Note |",
-        "|---:|---|---|---|",
-        "| 17 | 100ms | Lin | daily cap |",
-      ].join("\n"),
-    ]);
+    const sentTexts = sendTextMock.mock.calls.map((call) => call[1]);
+    if (assertEach) {
+      expect(sendTextMock).toHaveBeenCalledTimes(2);
+      expect(sentTexts[0]).toBe(expected[0]);
+      expect(sentTexts[1]).toBe(expected[1]);
+    } else {
+      expect(sentTexts).toEqual(expected);
+    }
   });
 
   it("persists announce routes only for group and guild turns", async () => {
     const cases = [
-      {
-        type: "group" as const,
-        isGroupChat: true,
-        eventTarget: { groupOpenid: "group-1001" },
-        peerId: "group-1001",
-        qualifiedTarget: "qqbot:group:group-1001",
-      },
-      {
-        type: "guild" as const,
-        isGroupChat: true,
-        eventTarget: { channelId: "channel-2001", guildId: "guild-2001" },
-        peerId: "channel-2001",
-        qualifiedTarget: "qqbot:channel:channel-2001",
-      },
-      {
-        type: "c2c" as const,
-        isGroupChat: false,
-        eventTarget: {},
-        peerId: "user-openid",
-        qualifiedTarget: "qqbot:c2c:user-openid",
-      },
-      {
-        type: "dm" as const,
-        isGroupChat: false,
-        eventTarget: { guildId: "dm-guild-1" },
-        peerId: "user-openid",
-        qualifiedTarget: "qqbot:dm:dm-guild-1",
-      },
-    ];
+      ["group", true, { groupOpenid: "group-1001" }, "group-1001", "qqbot:group:group-1001"],
+      [
+        "guild",
+        true,
+        { channelId: "channel-2001", guildId: "guild-2001" },
+        "channel-2001",
+        "qqbot:channel:channel-2001",
+      ],
+      ["c2c", false, {}, "user-openid", "qqbot:c2c:user-openid"],
+      ["dm", false, { guildId: "dm-guild-1" }, "user-openid", "qqbot:dm:dm-guild-1"],
+    ] as const;
 
-    for (const testCase of cases) {
+    for (const [type, isGroupChat, eventTarget, peerId, qualifiedTarget] of cases) {
       let record: Record<string, unknown> | undefined;
-      const runtime = makeRuntime({
-        onTurn: (turn) => {
-          record = turn.record as Record<string, unknown> | undefined;
+      const sessionKey = `agent:main:qqbot:${type}:${peerId}`;
+      await runOutbound({
+        runtime: {
+          onTurn: (turn) => {
+            record = turn.record as Record<string, unknown> | undefined;
+          },
+          onDeliver: async (deliver) => {
+            await deliver({ text: "hello" }, { kind: "block" });
+          },
         },
-        onDeliver: async (deliver) => {
-          await deliver({ text: "hello" }, { kind: "block" });
-        },
-      });
-      const sessionKey = `agent:main:qqbot:${testCase.type}:${testCase.peerId}`;
-      await dispatchOutbound(
-        makeInbound({
+        inbound: makeInbound({
           event: {
-            type: testCase.type,
+            type,
             senderId: "user-openid",
-            messageId: `msg-${testCase.type}`,
+            messageId: `msg-${type}`,
             content: "hello",
             timestamp: "2026-04-25T00:00:00.000Z",
-            ...testCase.eventTarget,
+            ...eventTarget,
           } as InboundContext["event"],
-          isGroupChat: testCase.isGroupChat,
-          peerId: testCase.peerId,
-          qualifiedTarget: testCase.qualifiedTarget,
+          isGroupChat,
+          peerId,
+          qualifiedTarget,
           route: { sessionKey, accountId: "qq-main" },
         }),
-        { runtime, cfg: {}, account },
-      );
+      });
 
       expect(record).toBeDefined();
       expect(record?.updateLastRoute).toEqual(
-        testCase.isGroupChat
-          ? {
-              sessionKey,
-              channel: "qqbot",
-              to: testCase.qualifiedTarget,
-              accountId: "qq-main",
-            }
+        isGroupChat
+          ? { sessionKey, channel: "qqbot", to: qualifiedTarget, accountId: "qq-main" }
           : undefined,
       );
     }

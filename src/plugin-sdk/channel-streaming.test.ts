@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildChannelProgressDraftLine,
   createChannelProgressDraftGate,
+  DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS,
   DEFAULT_PROGRESS_DRAFT_LABELS,
   formatChannelProgressDraftLine,
   formatChannelProgressDraftLineForEntry,
@@ -71,6 +72,15 @@ describe("channel-streaming", () => {
     expect(resolveChannelStreamingPreviewCommandText(entry)).toBe("status");
   });
 
+  it("defaults command progress to status while preserving the raw opt-in", () => {
+    expect(resolveChannelStreamingPreviewCommandText(undefined)).toBe("status");
+    expect(
+      resolveChannelStreamingPreviewCommandText({
+        streaming: { progress: { commandText: "raw" } },
+      }),
+    ).toBe("raw");
+  });
+
   it("keeps progress-only tool progress config out of normal preview modes", () => {
     expect(
       resolveChannelStreamingPreviewToolProgress({
@@ -128,6 +138,15 @@ describe("channel-streaming", () => {
         streaming: { mode: "block", block: { enabled: true } },
       }),
     ).toBe(true);
+    expect(
+      resolveChannelStreamingBlockEnabled(
+        { streaming: { mode: "partial" } },
+        {
+          previewAvailable: true,
+          blockStreamingDefault: "on",
+        },
+      ),
+    ).toBe(false);
   });
 
   it("selects a longer transcript candidate for ellipsis-truncated finals", async () => {
@@ -351,7 +370,7 @@ describe("channel-streaming", () => {
             "node scripts/check-something-with-a-very-long-path /tmp/openclaw/some/really/deep/path/that/keeps/going/and/going/index.ts --flag value",
         },
       },
-      { detailMode: "raw" },
+      { detailMode: "raw", commandText: "raw" },
     );
 
     const text = formatChannelProgressDraftText({
@@ -416,15 +435,18 @@ describe("channel-streaming", () => {
           name: "exec",
           args: { command: "pnpm test -- --watch=false" },
         },
-        { detailMode: "raw" },
+        { detailMode: "raw", commandText: "raw" },
       ),
     ).toBe("🛠️ run tests, `pnpm test -- --watch=false`");
     expect(
-      formatChannelProgressDraftLine({
-        event: "tool",
-        name: "bash",
-        args: { command: "sed -n '1,80p' extensions/discord/src/draft-stream.ts" },
-      }),
+      formatChannelProgressDraftLine(
+        {
+          event: "tool",
+          name: "bash",
+          args: { command: "sed -n '1,80p' extensions/discord/src/draft-stream.ts" },
+        },
+        { commandText: "raw" },
+      ),
     ).toBe("🛠️ print lines 1-80 from extensions/discord/src/draft-stream.ts");
     expect(
       formatChannelProgressDraftLine({
@@ -434,12 +456,15 @@ describe("channel-streaming", () => {
       }),
     ).toBe('🔎 Web Search: for "Codex OAuth API key"');
     expect(
-      formatChannelProgressDraftLine({
-        event: "item",
-        itemKind: "command",
-        name: "exec",
-        progressText: "raw command output",
-      }),
+      formatChannelProgressDraftLine(
+        {
+          event: "item",
+          itemKind: "command",
+          name: "exec",
+          progressText: "raw command output",
+        },
+        { commandText: "raw" },
+      ),
     ).toBe("🛠️ raw command output");
     expect(
       formatChannelProgressDraftLine(
@@ -527,30 +552,39 @@ describe("channel-streaming", () => {
   });
 
   it("keeps public command progress ids while replacing by command correlation", () => {
-    const toolLine = buildChannelProgressDraftLine({
-      event: "tool",
-      itemId: "tool:call-1",
-      toolCallId: "call-1",
-      name: "bash",
-      phase: "start",
-    });
-    const commandLine = buildChannelProgressDraftLine({
-      event: "command-output",
-      itemId: "tool:call-1-output",
-      toolCallId: "call-1",
-      name: "bash",
-      phase: "end",
-      exitCode: 0,
-    });
-    const itemLine = buildChannelProgressDraftLine({
-      event: "item",
-      itemId: "tool:call-1",
-      toolCallId: "call-1",
-      itemKind: "command",
-      name: "bash",
-      phase: "update",
-      progressText: "install dependencies",
-    });
+    const toolLine = buildChannelProgressDraftLine(
+      {
+        event: "tool",
+        itemId: "tool:call-1",
+        toolCallId: "call-1",
+        name: "bash",
+        phase: "start",
+      },
+      { commandText: "raw" },
+    );
+    const commandLine = buildChannelProgressDraftLine(
+      {
+        event: "command-output",
+        itemId: "tool:call-1-output",
+        toolCallId: "call-1",
+        name: "bash",
+        phase: "end",
+        exitCode: 0,
+      },
+      { commandText: "raw" },
+    );
+    const itemLine = buildChannelProgressDraftLine(
+      {
+        event: "item",
+        itemId: "tool:call-1",
+        toolCallId: "call-1",
+        itemKind: "command",
+        name: "bash",
+        phase: "update",
+        progressText: "install dependencies",
+      },
+      { commandText: "raw" },
+    );
 
     expect(toolLine).toMatchObject({ id: "tool:call-1", kind: "tool", toolName: "bash" });
     expect(itemLine).toMatchObject({ id: "tool:call-1", kind: "item", toolName: "bash" });
@@ -620,7 +654,7 @@ describe("channel-streaming", () => {
     expect(recoveredUpdated[0]).not.toHaveProperty("detail");
   });
 
-  it("starts progress drafts after five seconds", async () => {
+  it("starts progress drafts after the initial delay", async () => {
     vi.useFakeTimers();
     const onStart = vi.fn(async () => {});
     const gate = createChannelProgressDraftGate({ onStart });
@@ -628,7 +662,7 @@ describe("channel-streaming", () => {
     await expect(gate.noteWork()).resolves.toBe(false);
     expect(onStart).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(4_999);
+    await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS - 1);
     expect(onStart).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1);
@@ -646,7 +680,7 @@ describe("channel-streaming", () => {
 
     expect(gate.workEvents).toBe(2);
     expect(onStart).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(4_999);
+    await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS - 1);
     expect(onStart).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1);

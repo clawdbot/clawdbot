@@ -2,20 +2,21 @@
 // requirements, payload plans, gateway fallback, and optional mirroring.
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChatType } from "../../channels/chat-type.js";
-import { deriveDurableFinalDeliveryRequirements } from "../../channels/message/capabilities.js";
+import { deriveDurableFinalDeliveryRequirementsForBatch } from "../../channels/message/capabilities.js";
 import {
   sendDurableMessageBatch,
   serializeDurableMessagePayloadOutcomes,
   type SerializedDurableMessagePayloadOutcome,
 } from "../../channels/message/runtime.js";
 import type { DurableMessageSendIntent } from "../../channels/message/types.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import type { DeliveryQueueCompletionRetention } from "../delivery-queue-sqlite.js";
 import { formatErrorMessage } from "../errors.js";
-import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
 import {
   resolveOutboundDurableFinalDeliverySupport,
@@ -94,12 +95,18 @@ type MessageSendParams = {
   idempotencyKey?: string;
   /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
   preparedMessageId?: string;
+  /** @internal Channel plugin already selected and bootstrapped by the caller. */
+  preparedPlugin?: ChannelPlugin;
   /** @internal Use the active adapter directly when already executing inside the Gateway. */
   gatewayOwnedDelivery?: boolean;
   /** @internal Stable producer id for idempotent durable queue creation. */
   deliveryIntentId?: string;
   /** @internal Serializable owner state finalized by live send or recovery. */
   deliveryCompletion?: DurableDeliveryCompletion;
+  /** @internal Retry the same pending producer intent only before platform I/O begins. */
+  reusePendingDeliveryIntent?: boolean;
+  /** @internal Retain completion proof for replay-safe producer intents. */
+  completionRetention?: DeliveryQueueCompletionRetention;
   /** @internal Override provider unknown-send reconciliation independently from queue durability. */
   requireUnknownSendReconciliation?: boolean;
   /** @internal Runs after queue persistence and before platform I/O. */
@@ -145,6 +152,8 @@ type MessagePollParams = {
   cfg?: OpenClawConfig;
   gateway?: OutboundMessageGatewayOptionsInput;
   idempotencyKey?: string;
+  /** @internal Channel plugin already selected and bootstrapped by the caller. */
+  preparedPlugin?: ChannelPlugin;
 };
 
 export type MessagePollResult = {
@@ -195,7 +204,7 @@ function buildMessagePollResult(params: {
 
 function assertPollOptionSupport(params: {
   channel: string;
-  outbound: NonNullable<ReturnType<typeof resolveRequiredPlugin>["outbound"]>;
+  outbound: NonNullable<ChannelPlugin["outbound"]>;
   durationSeconds?: number;
   isAnonymous?: boolean;
 }): void {
@@ -213,43 +222,11 @@ function assertPollOptionSupport(params: {
 async function resolveRequiredChannel(params: {
   cfg: OpenClawConfig;
   channel?: string;
-}): Promise<string> {
-  const selection = await resolveMessageChannelSelection({
+}): Promise<{ channel: string; plugin: ChannelPlugin }> {
+  return await resolveMessageChannelSelection({
     cfg: params.cfg,
     channel: params.channel,
   });
-  return selection.channel;
-}
-
-function resolveRequiredPlugin(channel: string, cfg: OpenClawConfig) {
-  const plugin = resolveOutboundChannelPlugin({ channel, cfg });
-  if (!plugin) {
-    throw new Error(`Unknown channel: ${channel}`);
-  }
-  return plugin;
-}
-
-function payloadRequiresDurablePayloadTransport(payload: ReplyPayload): boolean {
-  return (
-    payload.presentation !== undefined ||
-    payload.delivery !== undefined ||
-    payload.interactive !== undefined ||
-    (payload.channelData !== undefined && Object.keys(payload.channelData).length > 0)
-  );
-}
-
-function mergeDurableRequirements(
-  target: DurableFinalDeliveryRequirements,
-  source: DurableFinalDeliveryRequirements,
-): DurableFinalDeliveryRequirements {
-  for (const [capability, required] of Object.entries(source) as Array<
-    [keyof DurableFinalDeliveryRequirements, boolean | undefined]
-  >) {
-    if (required === true) {
-      target[capability] = true;
-    }
-  }
-  return target;
 }
 
 function deriveRequiredMessageSendCapabilities(params: {
@@ -258,22 +235,10 @@ function deriveRequiredMessageSendCapabilities(params: {
   threadId?: string | number | null;
   silent?: boolean;
 }): DurableFinalDeliveryRequirements {
-  const requirements: DurableFinalDeliveryRequirements = { reconcileUnknownSend: true };
-  for (const payload of params.payloads) {
-    mergeDurableRequirements(
-      requirements,
-      deriveDurableFinalDeliveryRequirements({
-        payload,
-        replyToId: params.replyToId,
-        threadId: params.threadId,
-        silent: params.silent,
-        payloadTransport: payloadRequiresDurablePayloadTransport(payload),
-        batch: params.payloads.length > 1,
-        reconcileUnknownSend: true,
-      }),
-    );
-  }
-  return requirements;
+  return deriveDurableFinalDeliveryRequirementsForBatch({
+    ...params,
+    reconcileUnknownSend: true,
+  });
 }
 
 async function assertRequiredMessageSendDurability(params: {
@@ -343,8 +308,10 @@ async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<st
 
 export async function sendMessage(params: MessageSendParams): Promise<MessageSendResult> {
   const cfg = await resolveMessageConfig(params.cfg);
-  const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
-  const plugin = resolveRequiredPlugin(channel, cfg);
+  const prepared = params.preparedPlugin
+    ? { channel: params.preparedPlugin.id, plugin: params.preparedPlugin }
+    : await resolveRequiredChannel({ cfg, channel: params.channel });
+  const { channel, plugin } = prepared;
   const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
   const mediaSources = [params.mediaUrl, ...(params.mediaUrls ?? [])].filter(
     (source): source is string => Boolean(source),
@@ -387,6 +354,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     const outboundChannel = channel;
     const resolvedTarget = resolveOutboundTarget({
       channel: outboundChannel,
+      plugin,
       to: params.to,
       cfg,
       accountId: params.accountId,
@@ -445,6 +413,8 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       preparedMessageId: params.preparedMessageId,
       deliveryIntentId: params.deliveryIntentId,
       deliveryCompletion: params.deliveryCompletion,
+      reusePendingDeliveryIntent: params.reusePendingDeliveryIntent,
+      completionRetention: params.completionRetention,
       ...(params.onDeliveryIntent ? { onDeliveryIntent: params.onDeliveryIntent } : {}),
       ...(params.onDeliveryResult ? { onDeliveryResult: params.onDeliveryResult } : {}),
       ...(params.onDeliveredPayload ? { onDeliveredPayload: params.onDeliveredPayload } : {}),
@@ -517,7 +487,10 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
 
 export async function sendPoll(params: MessagePollParams): Promise<MessagePollResult> {
   const cfg = await resolveMessageConfig(params.cfg);
-  const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
+  const prepared = params.preparedPlugin
+    ? { channel: params.preparedPlugin.id, plugin: params.preparedPlugin }
+    : await resolveRequiredChannel({ cfg, channel: params.channel });
+  const { channel, plugin } = prepared;
 
   const pollInput: PollInput = {
     question: params.question,
@@ -526,8 +499,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     durationSeconds: params.durationSeconds,
     durationHours: params.durationHours,
   };
-  const plugin = resolveRequiredPlugin(channel, cfg);
-  const outbound = plugin?.outbound;
+  const outbound = plugin.outbound;
   if (!outbound?.sendPoll) {
     throw new Error(`Unsupported poll channel: ${channel}`);
   }
@@ -556,6 +528,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
   if (deliveryMode !== "gateway") {
     const resolvedTarget = resolveOutboundTarget({
       channel,
+      plugin,
       to: params.to,
       cfg,
       accountId: params.accountId,

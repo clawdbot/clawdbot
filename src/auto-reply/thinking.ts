@@ -4,7 +4,7 @@ import { resolveClaudeThinkingProfile } from "../plugins/provider-claude-thinkin
 import {
   BASE_THINKING_LEVELS,
   normalizeThinkLevel,
-  resolveThinkingDefaultForModel as resolveThinkingDefaultForModelFallback,
+  resolveThinkingDefaultForModelCore,
   THINKING_LEVEL_RANKS,
 } from "./thinking.shared.js";
 import type { ThinkLevel, ThinkingCatalogEntry } from "./thinking.shared.js";
@@ -94,14 +94,6 @@ function resolveThinkingPolicyContext(params: {
   };
 }
 
-function catalogSupportsXHigh(compat: ThinkingCatalogEntry["compat"]): boolean {
-  const efforts = compat?.supportedReasoningEfforts;
-  if (!Array.isArray(efforts)) {
-    return false;
-  }
-  return efforts.some((effort) => normalizeThinkLevel(effort) === "xhigh");
-}
-
 function normalizeProfileLevel(
   level: ProviderThinkingProfile["levels"][number],
 ): RankedThinkingLevelOption | undefined {
@@ -156,6 +148,32 @@ function appendProfileLevel(profile: ResolvedThinkingProfile, id: ThinkLevel) {
   }
   profile.levels.push({ id, label: id, rank: THINKING_LEVEL_RANKS[id] });
   profile.levels = profile.levels.toSorted((a, b) => a.rank - b.rank);
+}
+
+const CATALOG_ADVANCED_THINKING_LEVELS = new Set<ThinkLevel>(["adaptive", "xhigh", "max"]);
+
+function appendCatalogAdvancedThinkingLevels(
+  profile: ResolvedThinkingProfile,
+  compat: ThinkingCatalogEntry["compat"],
+  agentRuntime?: string | null,
+) {
+  const efforts = compat?.supportedReasoningEfforts;
+  if (!Array.isArray(efforts)) {
+    return;
+  }
+  let supportsMax = false;
+  for (const effort of efforts) {
+    const level = normalizeThinkLevel(effort);
+    if (level && CATALOG_ADVANCED_THINKING_LEVELS.has(level)) {
+      appendProfileLevel(profile, level);
+      supportsMax ||= level === "max";
+    }
+  }
+  const runtime = normalizeOptionalLowercaseString(agentRuntime);
+  if (supportsMax && (runtime === "openclaw" || runtime === "auto")) {
+    // Ultra is OpenClaw's orchestration tier; provider requests use Max.
+    appendProfileLevel(profile, "ultra");
+  }
 }
 
 /** Resolve supported thinking levels and default for a provider/model pair. */
@@ -215,9 +233,7 @@ export function resolveThinkingProfile(params: {
   }
 
   const profile = buildBaseThinkingProfile();
-  if (catalogSupportsXHigh(context.compat)) {
-    appendProfileLevel(profile, "xhigh");
-  }
+  appendCatalogAdvancedThinkingLevels(profile, context.compat, params.agentRuntime);
   return profile;
 }
 
@@ -295,7 +311,7 @@ export function resolveThinkingDefaultForModel(params: {
   if (profile.defaultLevel) {
     return profile.defaultLevel;
   }
-  const fallback = resolveThinkingDefaultForModelFallback(params);
+  const fallback = resolveThinkingDefaultForModelCore(params);
   if (fallback === "off") {
     return "off";
   }

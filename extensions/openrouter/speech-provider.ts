@@ -34,7 +34,7 @@ export function buildOpenRouterSpeechProvider(): SpeechProviderPlugin {
     responseFormats: OPENROUTER_TTS_RESPONSE_FORMATS,
     defaultResponseFormat: "mp3",
     voiceCompatibleResponseFormats: ["mp3"],
-    baseUrlPolicy: { kind: "canonical", aliases: ["https://openrouter.ai/v1"] },
+    baseUrlPolicy: { kind: "canonical", aliases: ["https://openrouter.ai/v1"], allowCustom: true },
     extraHeaders: {
       "HTTP-Referer": "https://openclaw.ai",
       "X-OpenRouter-Title": "OpenClaw",

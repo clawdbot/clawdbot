@@ -1,8 +1,11 @@
 import { html, nothing } from "lit";
+import { icons } from "../../components/icons.ts";
+import type { LobsterPetPaletteId } from "../../components/lobster-pet-contract.ts";
 import { LOBSTER_PALETTE_LORE } from "../../components/lobster-pet-lore.ts";
 import {
   LOBSTER_PET_PALETTES,
   canonicalLobsterLook,
+  lobsterLookStyle,
   lobsterPaletteName,
   renderLobsterSvg,
 } from "../../components/lobster-pet.ts";
@@ -17,7 +20,16 @@ type LobsterdexViewEntry = {
 
 type LobsterdexViewEntries = ReadonlyMap<string, LobsterdexViewEntry>;
 
-export function renderLobsterdex(entries: LobsterdexViewEntries) {
+type LobsterdexViewProps = {
+  copiedPaletteId?: LobsterPetPaletteId | null;
+  onCopyLink?: (paletteId: LobsterPetPaletteId) => void;
+};
+
+function formatLobsterdexDate(timestamp: number): string {
+  return new Date(timestamp).toLocaleDateString(i18n.getLocale());
+}
+
+export function renderLobsterdex(entries: LobsterdexViewEntries, props: LobsterdexViewProps = {}) {
   const seenCount = LOBSTER_PET_PALETTES.filter((palette) => entries.has(palette.id)).length;
   const complete = seenCount === LOBSTER_PET_PALETTES.length;
   const countLabel = t("quickSettings.appearance.lobsterdexSeen", {
@@ -37,6 +49,7 @@ export function renderLobsterdex(entries: LobsterdexViewEntries) {
       </header>
       <div class="lobsterdex-page__grid" aria-label=${countLabel}>
         ${LOBSTER_PET_PALETTES.map((palette) => {
+          const look = canonicalLobsterLook(palette);
           const entry = entries.get(palette.id);
           const seen = entry !== undefined;
           const name = seen ? (entry.name ?? lobsterPaletteName(palette.id)) : "?";
@@ -44,18 +57,37 @@ export function renderLobsterdex(entries: LobsterdexViewEntries) {
           const firstSeen =
             seen && entry.firstSeenAt !== null
               ? t("quickSettings.appearance.lobsterdexCardFirstVisited", {
-                  date: new Date(entry.firstSeenAt).toLocaleDateString(i18n.getLocale()),
+                  date: formatLobsterdexDate(entry.firstSeenAt),
+                })
+              : null;
+          const shinySeen =
+            entry?.shinySeenAt != null
+              ? t("quickSettings.appearance.lobsterdexCardShinySeen", {
+                  date: formatLobsterdexDate(entry.shinySeenAt),
                 })
               : null;
           return html`
-            <article class="lobsterdex-page__card ${seen ? "" : "lobsterdex-page__card--unseen"}">
+            <article
+              id="lobsterdex-${palette.id}"
+              class="lobsterdex-page__card ${seen ? "" : "lobsterdex-page__card--unseen"}"
+            >
+              <button
+                type="button"
+                class="lobsterdex-page__copy-link"
+                aria-label=${t("quickSettings.appearance.lobsterdexCardCopyLink")}
+                @click=${() => props.onCopyLink?.(palette.id)}
+              >
+                <span aria-hidden="true"
+                  >${props.copiedPaletteId === palette.id ? icons.check : icons.link}</span
+                >
+              </button>
               <div
                 class="lobsterdex-page__sprite lobster-pet lobster-pet--palette-${palette.id} ${seen
                   ? ""
                   : "lobsterdex__mini--unseen"}"
-                style="--lob-shell:${palette.shell};--lob-claw:${palette.claw}"
+                style=${lobsterLookStyle(look)}
               >
-                ${renderLobsterSvg(canonicalLobsterLook(palette), { standalone: true })}
+                ${renderLobsterSvg(look, { standalone: true })}
                 ${entry?.shinySeenAt != null
                   ? html`<span
                       class="lobsterdex__mini-star lobsterdex-page__star"
@@ -66,9 +98,14 @@ export function renderLobsterdex(entries: LobsterdexViewEntries) {
               </div>
               <h3>${name}</h3>
               <p class="lobsterdex-page__lore">${seen ? lore.flavor : lore.hint}</p>
-              ${firstSeen
-                ? html`<p class="lobsterdex-page__date"><time>${firstSeen}</time></p>`
-                : nothing}
+              <div class="lobsterdex-page__dates">
+                ${firstSeen
+                  ? html`<p class="lobsterdex-page__date"><time>${firstSeen}</time></p>`
+                  : nothing}
+                ${shinySeen
+                  ? html`<p class="lobsterdex-page__date"><time>${shinySeen}</time></p>`
+                  : nothing}
+              </div>
             </article>
           `;
         })}

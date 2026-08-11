@@ -61,6 +61,30 @@ export type PageMedia = {
   setSinkId(value: string): Promise<void>;
 };
 
+export const liveMediaStream = () => ({ getAudioTracks: () => [{ readyState: "live" }] });
+
+export function pageMedia(params: Partial<PageMedia> = {}): PageMedia {
+  const media: PageMedia = {
+    ...params,
+    sinkId: params.sinkId ?? "",
+    setSinkId:
+      params.setSinkId ??
+      (async (value) => {
+        media.sinkId = value;
+      }),
+  };
+  return media;
+}
+
+export function abortingMedia(message: string, params: Partial<PageMedia> = {}) {
+  return pageMedia({
+    ...params,
+    async setSinkId() {
+      throw new DOMException(message, "AbortError");
+    },
+  });
+}
+
 export function control(params: {
   checked?: boolean;
   label: string;
@@ -113,8 +137,8 @@ export function captionRow(
   return row;
 }
 
-export async function runStatusScript(params: {
-  allowMicrophone: boolean;
+type StatusScriptParams = {
+  allowMicrophone?: boolean;
   allowSessionAdoption?: boolean;
   autoJoin?: boolean;
   bodyText?: string;
@@ -145,7 +169,9 @@ export async function runStatusScript(params: {
   media?: PageMedia[];
   meetingSessionId?: string;
   devices?: Array<{ deviceId: string; kind: string; label: string }>;
-}) {
+};
+
+export async function runStatusScript(params: StatusScriptParams) {
   const currentUrl = params.currentUrl ?? URL;
   const location = new globalThis.URL(currentUrl);
   const controls = [
@@ -288,7 +314,7 @@ export async function runStatusScript(params: {
     window["__openclawTeamsCaptions"] = params.priorCaptions;
   }
   const script = teamsMeetingStatusScript({
-    allowMicrophone: params.allowMicrophone,
+    allowMicrophone: params.allowMicrophone ?? false,
     allowSessionAdoption: params.allowSessionAdoption ?? true,
     autoJoin: params.autoJoin ?? true,
     captureCaptions: params.captureCaptions ?? false,
@@ -338,6 +364,61 @@ export async function runStatusScript(params: {
     },
     result: JSON.parse(await run()) as Record<string, unknown>,
     window,
+  };
+}
+
+type StatusOverrides = Omit<StatusScriptParams, "allowMicrophone">;
+
+function runInCallStatusScript(params: StatusOverrides = {}) {
+  return runStatusScript({
+    allowMicrophone: false,
+    leave: control({ label: "Leave" }),
+    ...params,
+  });
+}
+
+export function runCaptionStatusScript(params: StatusOverrides = {}) {
+  return runInCallStatusScript({ captureCaptions: true, ...params });
+}
+
+type StatusScriptPage = Awaited<ReturnType<typeof runStatusScript>>;
+
+export function continueStatusScript(previous: StatusScriptPage, params: StatusScriptParams = {}) {
+  return runStatusScript({
+    ...params,
+    priorAudioOutputs: previous.window["__openclawTeamsAudioOutputs"] as unknown[],
+    priorMeeting: previous.window[MEETING_STATE_KEY] as Record<string, unknown>,
+  });
+}
+
+export function runCaptionRows(
+  captionRows: PageControl[],
+  previous?: StatusScriptPage,
+  params: StatusOverrides = {},
+) {
+  return runCaptionStatusScript({
+    captionRows,
+    priorCaptions: previous?.window["__openclawTeamsCaptions"],
+    ...params,
+  });
+}
+
+export function runAudioStatusScript(params: StatusOverrides = {}) {
+  return runStatusScript(audioStatusParams(params));
+}
+
+export function audioStatusParams(params: StatusOverrides = {}): StatusScriptParams {
+  return {
+    allowMicrophone: true,
+    devices: [
+      { deviceId: "blackhole-input", kind: "audioinput", label: "BlackHole 2ch" },
+      { deviceId: "blackhole-output", kind: "audiooutput", label: "BlackHole 2ch" },
+    ],
+    leave: control({ label: "Leave" }),
+    microphone: control({ label: "Turn microphone off", pressed: true }),
+    microphoneDevice: control({ label: "BlackHole 2ch" }),
+    priorMeeting: { identity: "teams-work:19:meeting_test@thread.v2" },
+    ...params,
   };
 }
 

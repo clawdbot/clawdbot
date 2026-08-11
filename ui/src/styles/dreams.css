@@ -14,39 +14,17 @@
   justify-content: flex-end;
 }
 
-/* ---- Sub-tab bar ---- */
-
-.dreams__tabs {
-  display: flex;
-  align-items: center;
-  gap: 2px;
+.dreams__topbar {
   padding: 6px 8px;
   flex-shrink: 0;
 }
 
-.dreams__tab {
-  padding: 4px 14px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted);
-  font-family: inherit;
-  font-size: 12px; /* was 11px */
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  transition:
-    color 140ms ease,
-    background 140ms ease;
-}
-
-.dreams__tab:hover {
-  color: var(--text);
-}
-
-.dreams__tab--active {
-  color: var(--text);
-  background: color-mix(in oklab, var(--panel) 80%, transparent);
+.dreams__panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .dreams {
@@ -758,29 +736,6 @@
   flex: 1;
 }
 
-.dreams-diary__subtabs {
-  display: inline-flex;
-  gap: 6px;
-  padding: 2px;
-  border-radius: 999px;
-  background: color-mix(in oklab, var(--panel) 82%, transparent);
-  border: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
-}
-
-.dreams-diary__subtab {
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  border-radius: 999px;
-  padding: 5px 10px;
-  font-size: 12px; /* was 11px */
-}
-
-.dreams-diary__subtab--active {
-  color: var(--text);
-  background: color-mix(in oklab, var(--accent-subtle) 88%, transparent);
-}
-
 .dreams-diary__explainer {
   width: min(100%, 920px);
   margin: 0 0 16px;
@@ -975,7 +930,7 @@
   color: var(--muted);
 }
 
-.dreams-diary__insight-badge--palace {
+.dreams-diary__insight-badge--wiki {
   color: var(--accent);
   background: color-mix(in oklab, var(--accent-subtle) 72%, transparent);
   border-color: color-mix(in oklab, var(--accent) 24%, transparent);

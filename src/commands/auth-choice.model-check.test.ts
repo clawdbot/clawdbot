@@ -43,8 +43,7 @@ vi.mock("../agents/openai-model-routes.js", async (importOriginal) => {
 });
 
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ version: 1, profiles: {} })));
-vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../agents/auth-profiles.js")>()),
+vi.mock("../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore,
 }));
 
@@ -68,7 +67,7 @@ describe("warnIfModelConfigLooksOff", () => {
       },
     } as OpenClawConfig;
 
-    await warnIfModelConfigLooksOff(config, prompter, { validateCatalog: false });
+    await warnIfModelConfigLooksOff(config, prompter, { env: {}, validateCatalog: false });
 
     expect(loadModelCatalog).not.toHaveBeenCalled();
     expect(ensureAuthProfileStore).toHaveBeenCalledOnce();

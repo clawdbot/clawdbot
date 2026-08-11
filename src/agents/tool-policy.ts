@@ -9,10 +9,12 @@ import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-name
 import { IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW } from "./sandbox-tool-policy.js";
 import { expandToolGroups, normalizeToolList, normalizeToolName } from "./tool-policy-shared.js";
 export {
+  attachToolAllowlistIntersection,
   couldNormalizeToolNamePrefixToAllowedTool,
   expandToolGroups,
   normalizeToolList,
   normalizeToolName,
+  readToolAllowlistIntersection,
   resolveToolProfilePolicy,
   TOOL_GROUPS,
 } from "./tool-policy-shared.js";
@@ -66,6 +68,21 @@ export function hasRestrictiveAllowPolicy(policy?: { allow?: string[] }): boolea
   }
   return normalizedAllow.some(
     (entry) => Boolean(entry) && entry !== DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+  );
+}
+
+/** Returns whether a policy removes at least one tool from the default surface. */
+export function toolPolicyRestrictsTools(policy?: ToolPolicyLike): boolean {
+  if (!policy) {
+    return false;
+  }
+  if (expandToolGroups(policy.deny ?? []).some((entry) => Boolean(normalizeToolName(entry)))) {
+    return true;
+  }
+  return (
+    Array.isArray(policy.allow) &&
+    policy.allow.length > 0 &&
+    !expandToolGroups(policy.allow).some((entry) => normalizeToolName(entry) === "*")
   );
 }
 

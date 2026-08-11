@@ -5,11 +5,12 @@
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { vi } from "vitest";
 import WebSocket from "ws";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 type RpcResponse = {
   id: number;
   result?: unknown;
-  error?: { message: string };
+  error?: { code: number; message: string };
 };
 
 /** Builds a minimal enabled sandbox context with overridable backend and fs bridge hooks. */
@@ -82,7 +83,7 @@ export function createSandboxContext(overrides: {
 /** Creates a fake Codex app-server client with a configurable server version. */
 export function createClient(options: { serverVersion?: string } = {}) {
   return {
-    getServerVersion: vi.fn(() => options.serverVersion ?? "0.132.0"),
+    getServerVersion: vi.fn(() => options.serverVersion ?? CODEX_APP_SERVER_VERSION),
     request: vi.fn(async (_method: string, _params?: unknown) => ({})),
   };
 }
@@ -242,7 +243,7 @@ export function rpc(socket: WebSocket, method: string, params: unknown): Promise
       }
       socket.off("message", onMessage);
       if (response.error) {
-        reject(new Error(response.error.message));
+        reject(Object.assign(new Error(response.error.message), { code: response.error.code }));
         return;
       }
       resolve(response.result);

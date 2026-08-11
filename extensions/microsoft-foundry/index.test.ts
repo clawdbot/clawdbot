@@ -803,6 +803,8 @@ describe("microsoft-foundry plugin", () => {
     const model = config.models?.providers?.["microsoft-foundry"]?.models[0];
     expect(model?.id).toBe("gpt-5.4");
     expect(model?.reasoning).toBe(true);
+    expect(model?.contextWindow).toBe(1_050_000);
+    expect(model?.maxTokens).toBe(128_000);
     expect(model?.compat?.supportsReasoningEffort).toBe(true);
   });
 
@@ -930,9 +932,10 @@ describe("microsoft-foundry plugin", () => {
       authMethod: "entra-id",
     });
 
-    expect(result.configPatch?.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(result.configPatch?.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "microsoft-foundry/mai-image-prod",
     });
+    expect(result.configPatch?.agents?.defaults).not.toHaveProperty("imageGenerationModel");
     expect(result.defaultModel).toBeUndefined();
     expect(requireFoundryProviderPatch(result).models[0]?.name).toBe("MAI-Image-2.5");
   });
@@ -984,7 +987,7 @@ describe("microsoft-foundry plugin", () => {
       modelNameHint: "MAI-Image-2.5",
       api: "openai-completions",
     });
-    expect(result.configPatch?.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(result.configPatch?.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "microsoft-foundry/prod-image",
     });
     expect(result.defaultModel).toBeUndefined();
@@ -1148,7 +1151,7 @@ describe("microsoft-foundry plugin", () => {
       ],
     });
 
-    expect(result.configPatch?.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(result.configPatch?.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "microsoft-foundry/custom-image-prod",
     });
     expect(result.defaultModel).toBeUndefined();
@@ -1419,6 +1422,41 @@ describe("microsoft-foundry plugin", () => {
     expect(provider?.apiKey).toBeUndefined();
     expect(provider?.headers).toBeUndefined();
   });
+
+  it.each([
+    ["gpt-5.6", 1_050_000, 128_000],
+    ["gpt-5.6-sol", 1_050_000, 128_000],
+    ["gpt-5.6-terra", 1_050_000, 128_000],
+    ["gpt-5.6-luna", 1_050_000, 128_000],
+    ["gpt-5.5", 1_050_000, 128_000],
+    ["gpt-5.4", 1_050_000, 128_000],
+    ["gpt-5.4-pro", 1_050_000, 128_000],
+    ["gpt-5.4-mini", 400_000, 128_000],
+    ["gpt-5.4-nano", 400_000, 128_000],
+    ["gpt-5-chat", 128_000, 16_384],
+    ["gpt-4o-mini", 128_000, 16_384],
+  ] as const)(
+    "uses Foundry-native token limits for %s",
+    (modelNameHint, contextWindow, maxTokens) => {
+      const result = buildFoundryAuthResult({
+        profileId: "microsoft-foundry:default",
+        apiKey: "test-api-key",
+        endpoint: "https://example.services.ai.azure.com",
+        modelId: `prod-${modelNameHint}`,
+        modelNameHint,
+        api: modelNameHint.startsWith("gpt-5") ? "openai-responses" : "openai-completions",
+        authMethod: "api-key",
+      });
+
+      expect(result.configPatch?.models?.providers?.["microsoft-foundry"]?.models[0]).toMatchObject(
+        {
+          name: modelNameHint,
+          contextWindow,
+          maxTokens,
+        },
+      );
+    },
+  );
 
   it.each([
     ["claude-mythos-preview", 128_000],

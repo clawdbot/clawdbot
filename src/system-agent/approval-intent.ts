@@ -1,5 +1,5 @@
 // Classifies whether a user's chat message approves a pending OpenClaw proposal.
-import { extractAssistantText } from "../agents/embedded-agent-utils.js";
+import { extractEmbeddedAssistantText } from "../agents/embedded-agent-utils.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
@@ -162,7 +162,7 @@ export async function classifySystemAgentApprovalIntent(
       if (!(await resolveVerifiedRoute(params.verifiedInference))) {
         return "other";
       }
-      const verdict = extractAssistantText(response)?.trim().toLowerCase().split(/\s+/)[0];
+      const verdict = extractEmbeddedAssistantText(response)?.trim().toLowerCase().split(/\s+/)[0];
       if (verdict === "approve" || verdict === "decline") {
         return verdict;
       }

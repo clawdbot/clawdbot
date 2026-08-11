@@ -63,7 +63,7 @@ data class ChatTranscriptAnchorState(
 )
 
 /**
- * One content part in a chat message; images carry either bounded base64 or a managed artifact reference.
+ * One content part in a chat message; media carries either bounded base64 or a managed artifact reference.
  */
 data class ChatMessageContent(
   val type: String = "text",
@@ -79,6 +79,7 @@ data class ChatMessageContent(
   val sizeBytes: Long? = null,
   val base64: String? = null,
   val durationMs: Long? = null,
+  val playback: String? = null,
   val widget: ChatWidgetPreview? = null,
 )
 
@@ -101,7 +102,29 @@ data class ChatPendingToolCall(
   val args: kotlinx.serialization.json.JsonObject? = null,
   val startedAtMs: Long,
   val isError: Boolean? = null,
+  val liveDiff: ChatDiffStat? = null,
 )
+
+data class ChatDiffStat(
+  val added: Int,
+  val removed: Int,
+  val files: Int? = null,
+)
+
+data class ChatSubagentActivity(
+  val id: String,
+  val status: String,
+  val snippet: String?,
+  val diffStat: ChatDiffStat?,
+  val terminalSummary: String?,
+  val error: String?,
+  val startedAtMs: Long,
+  val endedAtMs: Long?,
+  val childSessionKey: String?,
+) {
+  val isWorking: Boolean
+    get() = status == "queued" || status == "running"
+}
 
 enum class ChatPlanStepStatus {
   Pending,
@@ -182,6 +205,13 @@ internal val defaultChatThinkingLevelSelection =
     isGatewayProvided = false,
   )
 
+internal data class ChatActiveRunPresentation(
+  val count: Int = 0,
+  val runId: String? = null,
+  val clockKey: String? = null,
+  val outputTokens: Long? = null,
+)
+
 /**
  * Stable session selector row; [key] is the gateway session key used in chat requests.
  */
@@ -189,6 +219,13 @@ data class ChatSessionEntry(
   val key: String,
   val updatedAtMs: Long?,
   val ownerAgentId: String? = null,
+  val classification: String? = null,
+  val accountId: String? = null,
+  val peerKind: String? = null,
+  val isMain: Boolean? = null,
+  val isBackground: Boolean? = null,
+  val hasClassificationMetadata: Boolean =
+    classification != null || accountId != null || peerKind != null || isMain != null || isBackground != null,
   val displayName: String? = null,
   val derivedTitle: String? = null,
   val label: String? = null,

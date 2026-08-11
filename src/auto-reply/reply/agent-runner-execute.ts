@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { isLikelyContextOverflowError } from "../../agents/embedded-agent-helpers/errors.js";
+import { isLikelyContextOverflowError } from "../../agents/failover/classify.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
@@ -65,7 +65,6 @@ type ExecutePreparedReplyAgentRunInput = Pick<
   activeSessionStore: Record<string, SessionEntry> | undefined;
   admitUserTurn: ReturnType<typeof createReplyRestartRecoveryClaimController>["admitUserTurn"];
   applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
-  beforeAgentReplyDispatchedForSteer: boolean;
   beginBeforeAgentReply: ReturnType<
     typeof createReplyRestartRecoveryClaimController
   >["beginBeforeAgentReply"];
@@ -106,7 +105,6 @@ export async function executePreparedReplyAgentRun(
     admitUserTurn: admitUserTurnWithRecovery,
     agentCfgContextTokens,
     applyReplyToMode,
-    beforeAgentReplyDispatchedForSteer,
     beginBeforeAgentReply: beginBeforeAgentReplyWithRecovery,
     blockReplyChunking,
     blockReplyPipeline,
@@ -297,14 +295,7 @@ export async function executePreparedReplyAgentRun(
   const runOutcome = await withBeforeAgentReplyObserver(
     {
       beforeDispatch: async () => {
-        const shouldDispatch = await beginBeforeAgentReply();
-        if (!shouldDispatch || !beforeAgentReplyDispatchedForSteer) {
-          return shouldDispatch;
-        }
-        // The same source fell through from steering. Advance recovery while
-        // preserving the hook decision made before the attempted injection.
-        await checkpointBeforeAgentReply({ state: "continue" });
-        return false;
+        return await beginBeforeAgentReply();
       },
       afterDispatch: async (hookResult) => {
         if (!hookResult?.handled) {

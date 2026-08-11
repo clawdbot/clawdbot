@@ -28,6 +28,15 @@ const loadLauncher = () =>
         setTimeout?: (callback: () => void, ms: number) => { unref?: () => void };
       },
     ) => void;
+    launchSandbox: (
+      spawnSandboxFromConfig: (config: unknown, options: unknown) => unknown,
+      config: unknown,
+      options: unknown,
+      bridges?: {
+        child?: (spawned: unknown) => void;
+        pty?: (spawned: unknown) => void;
+      },
+    ) => Promise<void>;
     signalExitCode: (signal: number | string | undefined) => number;
   };
 
@@ -62,6 +71,45 @@ describe("mxc-spawn-launcher", () => {
     expect(signalExitCode("SIGINT")).toBe(130);
     expect(signalExitCode("SIGUNKNOWN")).toBe(1);
     expect(signalExitCode(undefined)).toBe(1);
+  });
+
+  it("resolves a promised PTY before selecting its bridge", async () => {
+    const { launchSandbox } = loadLauncher();
+    const pty = { onData: vi.fn() };
+    const spawnResult = Promise.resolve(pty);
+    const ptyBridge = vi.fn();
+    const childBridge = vi.fn();
+
+    await launchSandbox(() => spawnResult, { process: {} }, undefined, {
+      pty: ptyBridge,
+      child: childBridge,
+    });
+
+    expect(ptyBridge).toHaveBeenCalledWith(pty);
+    expect(ptyBridge).not.toHaveBeenCalledWith(spawnResult);
+    expect(childBridge).not.toHaveBeenCalled();
+  });
+
+  it("resolves a promised child process before selecting its bridge", async () => {
+    const { launchSandbox } = loadLauncher();
+    const child = { on: vi.fn(), stdout: undefined, stderr: undefined };
+    const spawnResult = Promise.resolve(child);
+    const ptyBridge = vi.fn();
+    const childBridge = vi.fn();
+
+    await launchSandbox(
+      () => spawnResult,
+      { process: {} },
+      { usePty: false },
+      {
+        pty: ptyBridge,
+        child: childBridge,
+      },
+    );
+
+    expect(childBridge).toHaveBeenCalledWith(child);
+    expect(childBridge).not.toHaveBeenCalledWith(spawnResult);
+    expect(ptyBridge).not.toHaveBeenCalled();
   });
 
   it("forwards process termination signals to spawned sandbox children", () => {

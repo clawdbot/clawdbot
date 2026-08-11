@@ -30,6 +30,24 @@ describe("resolveWorkerToolAuthority", () => {
     expect(authority()).toEqual(["read", "write", "edit", "apply_patch", "exec", "process"]);
   });
 
+  it("adds the optional browser surface only when the launcher makes it available", () => {
+    expect(
+      resolveWorkerToolAuthority({
+        modelRef: { provider: "openai", model: "gpt-test" },
+        turn: turn(),
+        availableOptionalToolNames: ["browser"],
+      }).allowedToolNames,
+    ).toEqual(["read", "write", "edit", "apply_patch", "exec", "process", "browser"]);
+    expect(
+      resolveWorkerToolAuthority({
+        modelRef: { provider: "openai", model: "gpt-test" },
+        turn: turn({ toolsAllow: ["browser"] }),
+        availableOptionalToolNames: ["browser"],
+      }).allowedToolNames,
+    ).toEqual(["browser"]);
+    expect(authority({ toolsAllow: ["browser"] })).toEqual([]);
+  });
+
   it("projects runtime caps with canonical write-to-apply_patch semantics", () => {
     expect(authority({ toolsAllow: ["write"] })).toEqual(["write", "apply_patch"]);
     expect(authority({ toolsAllow: [] })).toEqual([]);

@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { formatBillingErrorMessage } from "../../agents/embedded-agent-helpers.js";
+import { resolveMaxRunRetryIterations } from "../../agents/embedded-agent-runner/run/helpers.js";
 import { FailoverError } from "../../agents/failover-error.js";
+import { BILLING_ERROR_USER_MESSAGE } from "../../agents/failover/user-copy.js";
+import { ProviderAuthError } from "../../agents/model-auth.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -11,21 +14,39 @@ import {
   setupAgentRunnerExecutionTestState,
   GENERIC_RUN_FAILURE_TEXT,
   getExecuteAgentTurnForTest,
-  createMockTypingSignaler,
   createFollowupRun,
   createMockReplyOperation,
   createMinimalRunAgentTurnParams,
   NON_DIRECT_FAILURE_SURFACE_CASES,
   createNonDirectFailureSessionCtx,
   type EmbeddedAgentParams,
+  createTestFallbackSummaryError,
 } from "./agent-runner-execution.test-support.js";
+import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 
 const state = setupAgentRunnerExecutionTestState();
 
+async function executeTestTurn(
+  params?: Parameters<typeof createMinimalRunAgentTurnParams>[0],
+  overrides?: Partial<AgentTurnParams>,
+) {
+  const executeAgentTurn = await getExecuteAgentTurnForTest();
+  return executeAgentTurn({ ...createMinimalRunAgentTurnParams(params), ...overrides });
+}
+
+function createDirectFailureSessionCtx(provider: "discord" | "telegram" = "discord") {
+  return {
+    Provider: provider,
+    Surface: provider,
+    ChatType: "direct",
+    MessageSid: "msg",
+  } as unknown as TemplateContext;
+}
+
 function createOverloadSummaryError() {
-  return Object.assign(new Error("All models failed (1): anthropic/claude-opus-4-1: overloaded"), {
-    name: "FallbackSummaryError",
+  return createTestFallbackSummaryError({
+    message: "All models failed (1): anthropic/claude-opus-4-1: overloaded",
     attempts: [
       {
         provider: "anthropic",
@@ -60,12 +81,9 @@ describe("executeAgentTurn: provider failures", () => {
         new Error("openai/gpt-5.5 ended with an incomplete terminal response"),
       );
 
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      const result = await executeAgentTurn(
-        createMinimalRunAgentTurnParams({
-          sessionCtx: createNonDirectFailureSessionCtx(testCase),
-        }),
-      );
+      const result = await executeTestTurn({
+        sessionCtx: createNonDirectFailureSessionCtx(testCase),
+      });
 
       expect(result.kind).toBe("final");
       if (result.kind === "final") {
@@ -90,20 +108,17 @@ describe("executeAgentTurn: provider failures", () => {
         },
       };
 
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      const result = await executeAgentTurn(
-        createMinimalRunAgentTurnParams({
-          followupRun,
-          sessionCtx: {
-            Provider: "discord",
-            Surface: "discord",
-            ChatType: chatType,
-            GroupSubject: "agent group",
-            GroupChannel: "#general",
-            MessageSid: "msg",
-          } as unknown as TemplateContext,
-        }),
-      );
+      const result = await executeTestTurn({
+        followupRun,
+        sessionCtx: {
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: chatType,
+          GroupSubject: "agent group",
+          GroupChannel: "#general",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      });
 
       expect(result.kind).toBe("final");
       if (result.kind === "final") {
@@ -132,20 +147,17 @@ describe("executeAgentTurn: provider failures", () => {
       },
     };
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(
-      createMinimalRunAgentTurnParams({
-        followupRun,
-        sessionCtx: {
-          Provider: "discord",
-          Surface: "discord",
-          ChatType: "group",
-          GroupSubject: "agent group",
-          GroupChannel: "#general",
-          MessageSid: "msg",
-        } as unknown as TemplateContext,
-      }),
-    );
+    const result = await executeTestTurn({
+      followupRun,
+      sessionCtx: {
+        Provider: "discord",
+        Surface: "discord",
+        ChatType: "group",
+        GroupSubject: "agent group",
+        GroupChannel: "#general",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+    });
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -163,13 +175,10 @@ describe("executeAgentTurn: provider failures", () => {
       const followupRun = createFollowupRun();
       followupRun.run.config = {};
 
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      const result = await executeAgentTurn(
-        createMinimalRunAgentTurnParams({
-          followupRun,
-          sessionCtx: createNonDirectFailureSessionCtx(testCase),
-        }),
-      );
+      const result = await executeTestTurn({
+        followupRun,
+        sessionCtx: createNonDirectFailureSessionCtx(testCase),
+      });
 
       expect(result.kind).toBe("final");
       if (result.kind === "final") {
@@ -182,15 +191,16 @@ describe("executeAgentTurn: provider failures", () => {
     "keeps classified non-transient failures visible in $label chats",
     async (testCase) => {
       state.runEmbeddedAgentMock.mockRejectedValueOnce(
-        new Error('No API key found for provider "openai"'),
+        new ProviderAuthError(
+          "missing-provider-auth",
+          "openai",
+          'No API key found for provider "openai"',
+        ),
       );
 
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      const result = await executeAgentTurn(
-        createMinimalRunAgentTurnParams({
-          sessionCtx: createNonDirectFailureSessionCtx(testCase),
-        }),
-      );
+      const result = await executeTestTurn({
+        sessionCtx: createNonDirectFailureSessionCtx(testCase),
+      });
 
       expect(result.kind).toBe("final");
       if (result.kind === "final") {
@@ -208,19 +218,16 @@ describe("executeAgentTurn: provider failures", () => {
         throw createOpenAiServiceUnavailableError();
       });
 
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      const result = await executeAgentTurn(
-        createMinimalRunAgentTurnParams({
-          sessionCtx: {
-            Provider: "discord",
-            Surface: "discord",
-            ChatType: chatType,
-            GroupSubject: "agent group",
-            GroupChannel: "#general",
-            MessageSid: "msg",
-          } as unknown as TemplateContext,
-        }),
-      );
+      const result = await executeTestTurn({
+        sessionCtx: {
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: chatType,
+          GroupSubject: "agent group",
+          GroupChannel: "#general",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      });
 
       expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
       expect(result.kind).toBe("final");
@@ -298,12 +305,9 @@ describe("executeAgentTurn: provider failures", () => {
         }),
       );
 
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      const result = await executeAgentTurn(
-        createMinimalRunAgentTurnParams({
-          sessionCtx: createNonDirectFailureSessionCtx(testCase),
-        }),
-      );
+      const result = await executeTestTurn({
+        sessionCtx: createNonDirectFailureSessionCtx(testCase),
+      });
 
       expect(result.kind).toBe("final");
       if (result.kind === "final") {
@@ -320,12 +324,9 @@ describe("executeAgentTurn: provider failures", () => {
     async (testCase) => {
       state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("429 rate limit exceeded"));
 
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      const result = await executeAgentTurn(
-        createMinimalRunAgentTurnParams({
-          sessionCtx: createNonDirectFailureSessionCtx(testCase),
-        }),
-      );
+      const result = await executeTestTurn({
+        sessionCtx: createNonDirectFailureSessionCtx(testCase),
+      });
 
       expect(result.kind).toBe("final");
       if (result.kind === "final") {
@@ -351,12 +352,9 @@ describe("executeAgentTurn: provider failures", () => {
         }),
       );
 
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      const result = await executeAgentTurn(
-        createMinimalRunAgentTurnParams({
-          sessionCtx: createNonDirectFailureSessionCtx(testCase),
-        }),
-      );
+      const result = await executeTestTurn({
+        sessionCtx: createNonDirectFailureSessionCtx(testCase),
+      });
 
       expect(result.kind).toBe("final");
       if (result.kind === "final") {
@@ -371,8 +369,8 @@ describe("executeAgentTurn: provider failures", () => {
 
   it("scopes fallback exhaustion copy to the attempted models", () => {
     const payload = buildKnownAgentRunFailureReplyPayload({
-      err: Object.assign(new Error("fallback exhausted"), {
-        name: "FallbackSummaryError",
+      err: createTestFallbackSummaryError({
+        message: "fallback exhausted",
         attempts: [
           {
             provider: "anthropic",
@@ -435,6 +433,8 @@ describe("executeAgentTurn: provider failures", () => {
       const result = await resultPromise;
 
       expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(11);
+      const wholeTurnReruns = state.runEmbeddedAgentMock.mock.calls.length - 1;
+      expect(wholeTurnReruns * resolveMaxRunRetryIterations(17)).toBe(1_600);
       expect(result.kind).toBe("final");
       if (result.kind === "final") {
         expect(result.payload.isError).toBe(true);
@@ -488,8 +488,7 @@ describe("executeAgentTurn: provider failures", () => {
         throw new Error("model is overloaded");
       });
 
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
+      const result = await executeTestTurn();
 
       expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
       expect(result.kind).toBe("final");
@@ -518,8 +517,7 @@ describe("executeAgentTurn: provider failures", () => {
         });
       });
 
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
+      const result = await executeTestTurn();
 
       expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
       expect(result.kind).toBe("final");
@@ -547,8 +545,7 @@ describe("executeAgentTurn: provider failures", () => {
       });
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
+    const result = await executeTestTurn();
 
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expect(result.kind).toBe("final");
@@ -785,20 +782,17 @@ describe("executeAgentTurn: provider failures", () => {
       },
     };
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(
-      createMinimalRunAgentTurnParams({
-        followupRun,
-        sessionCtx: {
-          Provider: "discord",
-          Surface: "discord",
-          ChatType: "group",
-          GroupSubject: "agent group",
-          GroupChannel: "#general",
-          MessageSid: "msg",
-        } as unknown as TemplateContext,
-      }),
-    );
+    const result = await executeTestTurn({
+      followupRun,
+      sessionCtx: {
+        Provider: "discord",
+        Surface: "discord",
+        ChatType: "group",
+        GroupSubject: "agent group",
+        GroupChannel: "#general",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+    });
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -813,17 +807,7 @@ describe("executeAgentTurn: provider failures", () => {
       new Error("openai/gpt-5.5 ended with an incomplete terminal response"),
     );
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(
-      createMinimalRunAgentTurnParams({
-        sessionCtx: {
-          Provider: "discord",
-          Surface: "discord",
-          ChatType: "direct",
-          MessageSid: "msg",
-        } as unknown as TemplateContext,
-      }),
-    );
+    const result = await executeTestTurn({ sessionCtx: createDirectFailureSessionCtx() });
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -836,18 +820,10 @@ describe("executeAgentTurn: provider failures", () => {
       new Error("openai/gpt-5.5 ended with an incomplete terminal response"),
     );
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({
-        sessionCtx: {
-          Provider: "discord",
-          Surface: "discord",
-          ChatType: "direct",
-          MessageSid: "msg",
-        } as unknown as TemplateContext,
-      }),
-      resolvedVerboseLevel: "on",
-    });
+    const result = await executeTestTurn(
+      { sessionCtx: createDirectFailureSessionCtx() },
+      { resolvedVerboseLevel: "on" },
+    );
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -863,17 +839,7 @@ describe("executeAgentTurn: provider failures", () => {
     Object.assign(error, { status: 429 });
     state.runEmbeddedAgentMock.mockRejectedValueOnce(error);
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(
-      createMinimalRunAgentTurnParams({
-        sessionCtx: {
-          Provider: "discord",
-          Surface: "discord",
-          ChatType: "direct",
-          MessageSid: "msg",
-        } as unknown as TemplateContext,
-      }),
-    );
+    const result = await executeTestTurn({ sessionCtx: createDirectFailureSessionCtx() });
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -895,17 +861,9 @@ describe("executeAgentTurn: provider failures", () => {
       ),
     );
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(
-      createMinimalRunAgentTurnParams({
-        sessionCtx: {
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "direct",
-          MessageSid: "msg",
-        } as unknown as TemplateContext,
-      }),
-    );
+    const result = await executeTestTurn({
+      sessionCtx: createDirectFailureSessionCtx("telegram"),
+    });
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -922,21 +880,11 @@ describe("executeAgentTurn: provider failures", () => {
       ),
     );
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(
-      createMinimalRunAgentTurnParams({
-        sessionCtx: {
-          Provider: "discord",
-          Surface: "discord",
-          ChatType: "direct",
-          MessageSid: "msg",
-        } as unknown as TemplateContext,
-      }),
-    );
+    const result = await executeTestTurn({ sessionCtx: createDirectFailureSessionCtx() });
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toBe("billing");
+      expect(result.payload.text).toBe(BILLING_ERROR_USER_MESSAGE);
       expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
     }
   });
@@ -951,8 +899,7 @@ describe("executeAgentTurn: provider failures", () => {
       }),
     );
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
+    const result = await executeTestTurn();
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -964,8 +911,8 @@ describe("executeAgentTurn: provider failures", () => {
 
   it("preserves neutral billing guidance after fallback exhaustion", async () => {
     state.runWithModelFallbackMock.mockRejectedValueOnce(
-      Object.assign(new Error("All models failed (1): openai/gpt-5.5: billing"), {
-        name: "FallbackSummaryError",
+      createTestFallbackSummaryError({
+        message: "All models failed (1): openai/gpt-5.5: billing",
         attempts: [
           {
             provider: "openai",
@@ -979,8 +926,7 @@ describe("executeAgentTurn: provider failures", () => {
       }),
     );
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
+    const result = await executeTestTurn();
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -997,27 +943,8 @@ describe("executeAgentTurn: provider failures", () => {
       ),
     );
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
+    const result = await executeTestTurn(undefined, {
       commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
       resolvedVerboseLevel: "on",
     });
 

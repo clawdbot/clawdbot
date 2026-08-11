@@ -1,29 +1,27 @@
+import type { SessionsCatalogContinueResult } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  COMMAND_PALETTE_TARGET_EVENT,
+  type CommandPaletteTargetDetail,
+} from "../../components/command-palette-contract.ts";
+import {
+  announceCatalogSessionContinued,
+  parseCatalogSessionKey,
+  type CatalogSessionKey,
+} from "../../lib/sessions/catalog-key.ts";
+import { scopedAgentParamsForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
-  COMMAND_PALETTE_TARGET_EVENT,
-  announceCatalogSessionContinued,
-  captureChatSessionScrollPosition,
-  getChatSessionScrollPosition,
+  parseAgentSessionKey,
+} from "../../lib/sessions/session-key.ts";
+import { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts";
+import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
+import {
   loadChatHistory,
   loadOlderChatHistoryPage,
-  parseAgentSessionKey,
-  parseCatalogSessionKey,
-  persistChatComposerState,
   resolveChatHistoryPagination,
-  replaceChatAttachmentsFromEditor,
-  restoreChatScroll,
   rewindChatHistory,
-  saveChatSessionScrollPosition,
-  scheduleChatScroll,
-  scopedAgentParamsForSession,
   switchChatHistoryBranch,
-  visibleSessionMatches,
-  type CatalogSessionKey,
-  type ChatHistoryPagination,
-  type ChatSessionScrollPosition,
-  type CommandPaletteTargetDetail,
-  type SessionsCatalogContinueResult,
-} from "./chat-pane-deps.ts";
+} from "./chat-history.ts";
 import { ChatPaneSession } from "./chat-pane-session.ts";
 import {
   CHAT_HISTORY_BOOTSTRAP_PAGE_LIMIT,
@@ -31,7 +29,15 @@ import {
   CHAT_HISTORY_INTENT_IDLE_MS,
   CHAT_HISTORY_TOUCH_INTENT_PX,
   CHAT_HISTORY_UPWARD_KEYS,
+  clearPaneSessionHandoff,
+  preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
+import { persistChatComposerState } from "./composer-persistence.ts";
+import {
+  captureChatSessionScrollPosition,
+  saveChatSessionScrollPosition,
+  scheduleChatScroll,
+} from "./scroll.ts";
 
 export abstract class ChatPaneHistory extends ChatPaneSession {
   private activeCatalogContinuation: symbol | null = null;
@@ -52,30 +58,7 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
     return pagination.hasMore && !state.chatLoading;
   }
 
-  protected resetOlderMessagesViewport(nextSessionKey?: string): ChatSessionScrollPosition | null {
-    let restoredPosition: ChatSessionScrollPosition | null = null;
-    const state = this.state;
-    if (nextSessionKey && state) {
-      const root = this.querySelector<HTMLElement>(".chat-thread");
-      const outgoingSessionKey = root ? this.transcript.renderedSessionKey : state.sessionKey;
-      const pendingScrollTop = outgoingSessionKey
-        ? this.transcript.pendingScrollOffsetFor(outgoingSessionKey)
-        : null;
-      const outgoingPosition =
-        pendingScrollTop !== null
-          ? { scrollTop: pendingScrollTop, anchorToEnd: false }
-          : root
-            ? captureChatSessionScrollPosition(root)
-            : this.transcriptScrollTop !== null
-              ? { scrollTop: this.transcriptScrollTop, anchorToEnd: false }
-              : null;
-      if (outgoingSessionKey && outgoingPosition) {
-        saveChatSessionScrollPosition(this.paneId, outgoingSessionKey, outgoingPosition);
-      }
-    }
-    if (nextSessionKey) {
-      restoredPosition = getChatSessionScrollPosition(this.paneId, nextSessionKey) ?? null;
-    }
+  protected resetOlderMessagesViewport(): void {
     this.olderLoadGeneration += 1;
     this.loadingOlder = false;
     this.historyObserverArmed = false;
@@ -87,62 +70,11 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
       window.clearTimeout(this.historyIntentTimer);
       this.historyIntentTimer = null;
     }
-    this.transcriptScrollTop = restoredPosition?.scrollTop ?? null;
+    this.transcriptScrollTop = null;
     this.olderCursorsSeen.clear();
     this.olderOffsetsSeen.clear();
     this.nativePaginationSnapshot = null;
     this.clearHistoryObserver();
-    return restoredPosition;
-  }
-
-  protected restoreOlderMessagesViewport(sessionKey: string, scrollTop: number): void {
-    const state = this.state;
-    if (!state || !areUiSessionKeysEquivalent(state.sessionKey, sessionKey)) {
-      return;
-    }
-    const generation = this.olderLoadGeneration;
-    state.renderLifecycle.afterCommit((complete) => {
-      try {
-        if (
-          this.state !== state ||
-          !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
-          this.olderLoadGeneration !== generation
-        ) {
-          return;
-        }
-        const root = this.querySelector<HTMLElement>(".chat-thread");
-        if (root) {
-          restoreChatScroll(state, root, scrollTop);
-          // The outer scroller can still be zero-height on this commit. Let
-          // the virtualizer reconcile the logical target as rows are measured.
-          this.transcript.scrollToOffset(scrollTop, (settledPosition) => {
-            if (
-              this.state !== state ||
-              !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
-              this.olderLoadGeneration !== generation
-            ) {
-              return;
-            }
-            const settledRoot = this.querySelector<HTMLElement>(".chat-thread");
-            if (!settledRoot) {
-              return;
-            }
-            this.transcriptScrollTop = restoreChatScroll(
-              state,
-              settledRoot,
-              settledPosition.scrollTop,
-            );
-            saveChatSessionScrollPosition(this.paneId, sessionKey, {
-              ...settledPosition,
-              scrollTop: this.transcriptScrollTop,
-            });
-          });
-          this.transcriptScrollTop = scrollTop;
-        }
-      } finally {
-        complete();
-      }
-    });
   }
 
   protected clearHistoryObserver(): void {
@@ -165,6 +97,7 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
     }
     if (
       typeof IntersectionObserver !== "function" ||
+      !this.presented ||
       !this.state?.connected ||
       this.loadingOlder ||
       !this.hasOlderMessages()
@@ -241,7 +174,7 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
         areUiSessionKeysEquivalent(renderedSessionKey, stateSessionKey)
       ) {
         saveChatSessionScrollPosition(
-          this.paneId,
+          this.presentationId,
           renderedSessionKey,
           captureChatSessionScrollPosition(root),
         );
@@ -416,8 +349,6 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
     const sourceSessionKey = state.sessionKey;
     const sourceCatalogGeneration = this.catalogLoadGeneration;
     const continuation = Symbol("catalog-continuation");
-    let adoptedSessionKey: string | null = null;
-    let adoptedCatalogGeneration: number | null = null;
     this.activeCatalogContinuation = continuation;
     state.chatSending = true;
     state.requestUpdate();
@@ -448,29 +379,26 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
         releaseStaleContinuation();
         return;
       }
-      adoptedSessionKey = result.sessionKey;
-      announceCatalogSessionContinued({ ...key, sessionKey: result.sessionKey });
-      // Make the adopted session authoritative before routing; otherwise the
-      // outgoing catalog pane can immediately restore the previous chat URL.
-      this.switchPaneSession(result.sessionKey);
-      adoptedCatalogGeneration = this.catalogLoadGeneration;
-      this.onPaneSessionChange?.(this.paneId, result.sessionKey);
-      state.handleChatDraftChange(draft);
-      await state.handleSendChat();
-      if (this.activeCatalogContinuation === continuation) {
-        this.activeCatalogContinuation = null;
+      preparePaneSessionHandoff(this.context, this.paneId, result.sessionKey, {
+        attachments: [],
+        draft,
+        send: true,
+      });
+      if (this.onPaneSessionChange?.(this.paneId, result.sessionKey) === false) {
+        clearPaneSessionHandoff(this.context, this.paneId, result.sessionKey);
+        releaseStaleContinuation();
+        return;
       }
+      announceCatalogSessionContinued({ ...key, sessionKey: result.sessionKey });
+      this.activeCatalogContinuation = null;
+      state.chatSending = false;
+      state.requestUpdate();
     } catch (error) {
       if (
         this.activeCatalogContinuation !== continuation ||
         !this.isConnectionScopeCurrent(scope) ||
-        (adoptedSessionKey === null
-          ? this.catalogLoadGeneration !== sourceCatalogGeneration ||
-            state.sessionKey !== sourceSessionKey
-          : adoptedCatalogGeneration === null
-            ? state.sessionKey !== sourceSessionKey && state.sessionKey !== adoptedSessionKey
-            : this.catalogLoadGeneration !== adoptedCatalogGeneration ||
-              state.sessionKey !== adoptedSessionKey)
+        this.catalogLoadGeneration !== sourceCatalogGeneration ||
+        state.sessionKey !== sourceSessionKey
       ) {
         releaseStaleContinuation();
         return;
@@ -506,24 +434,20 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
     try {
       const result = await state.sessions.forkAtMessage(sourceKey, entryId, agentParams);
       const editorText = result.editorText ?? "";
-      const draftPersisted = persistChatComposerState(state, result.sessionKey, {
-        agentId: parseAgentSessionKey(result.sessionKey)?.agentId,
-        draft: editorText,
-      });
       if (this.state !== state || !visibleSessionMatches(state, sourceKey, agentParams.agentId)) {
         return;
       }
-      this.onPaneSessionChange?.(this.paneId, result.sessionKey);
-      this.switchPaneSession(result.sessionKey);
-      // Restored images intentionally stay in this tab's memory; persisted composer drafts remain
-      // text-only so large payloads do not enter local storage.
-      state.chatAttachments = replaceChatAttachmentsFromEditor(
-        state.chatAttachments,
-        result.editorAttachments,
-      );
-      if (!draftPersisted) {
-        state.handleChatDraftChange(editorText);
+      if (this.onPaneSessionChange?.(this.paneId, result.sessionKey) === false) {
+        return;
       }
+      persistChatComposerState(state, result.sessionKey, {
+        agentId: parseAgentSessionKey(result.sessionKey)?.agentId,
+        draft: editorText,
+      });
+      preparePaneSessionHandoff(this.context, this.paneId, result.sessionKey, {
+        attachments: replaceChatAttachmentsFromEditor([], result.editorAttachments),
+        draft: editorText,
+      });
     } catch (error) {
       state.lastError = error instanceof Error ? error.message : String(error);
       state.chatError = state.lastError;

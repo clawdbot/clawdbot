@@ -2,7 +2,7 @@
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import {
-  readProviderJsonResponse,
+  readProviderJsonObjectResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 
@@ -75,7 +75,7 @@ export async function fetchPluralKitMessageInfo(params: {
       const detail = text.trim() ? `: ${text.trim()}` : "";
       throw new Error(`PluralKit API failed (${res.status})${detail}`);
     }
-    return await readProviderJsonResponse<PluralKitMessageInfo>(res, "PluralKit message");
+    return (await readProviderJsonObjectResponse(res, "PluralKit message")) as PluralKitMessageInfo;
   } finally {
     // Keep the deadline active through bounded error and JSON body reads; header-only
     // coverage would leave a stalled response stream holding the inbound preflight.

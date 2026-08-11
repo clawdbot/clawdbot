@@ -8,17 +8,12 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveMemoryBackendConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import { normalizePluginsConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   definePluginEntry,
   type AnyAgentTool,
-  type OpenClawPluginApi,
   type OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type {
-  OpenKeyedStoreOptions,
-  PluginStateLeaseRunner,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { TSchema } from "typebox";
 import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
@@ -26,6 +21,7 @@ import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import type { MemoryCoreAcquireLocalService } from "./src/memory/embedding-local-service.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 import { buildPromptSection } from "./src/prompt-section.js";
+import { registerSessionBackfillGatewayMethods } from "./src/session-backfill-gateway.js";
 
 type MemoryToolsModule = typeof import("./src/tools.js");
 type StandingIntentToolModule = typeof import("./src/standing-intents-tool.js");
@@ -38,8 +34,8 @@ type MemoryToolOptions = {
   sandboxed?: boolean;
   oneShotCliRun?: boolean;
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
+  activeProjectKeys?: readonly string[];
   acquireLocalService?: MemoryCoreAcquireLocalService;
-  withLease?: PluginStateLeaseRunner;
 };
 
 const loadMemoryToolsModule = createLazyRuntimeModule(() => import("./src/tools.js"));
@@ -238,8 +234,8 @@ function resolveMemoryToolOptions(
     sandboxed: ctx.sandboxed,
     oneShotCliRun: ctx.oneShotCliRun,
     conversationRecall: ctx.conversationRecall,
+    activeProjectKeys: ctx.activeProjectKeys,
     ...(host.acquireLocalService ? { acquireLocalService: host.acquireLocalService } : {}),
-    ...(host.withLease ? { withLease: host.withLease } : {}),
   };
 }
 
@@ -248,6 +244,14 @@ function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRunti
     async getMemorySearchManager(params) {
       const { createMemoryRuntime } = await loadRuntimeProviderModule();
       return await createMemoryRuntime(host).getMemorySearchManager(params);
+    },
+    async authorizeSearchHits(params) {
+      const { createMemoryRuntime } = await loadRuntimeProviderModule();
+      const runtime = createMemoryRuntime(host);
+      if (!runtime.authorizeSearchHits) {
+        throw new Error("memory-core runtime search authorization is unavailable");
+      }
+      return await runtime.authorizeSearchHits(params);
     },
     resolveMemoryBackendConfig(params) {
       return resolveMemoryBackendConfig(params);
@@ -263,64 +267,21 @@ function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRunti
   };
 }
 
-function configuredMemoryAgentIds(config: OpenClawConfig): string[] {
-  const configured = (config.agents?.list ?? []).map((entry) => entry.id).filter(Boolean);
-  if (configured.length > 0) {
-    return [...new Set(configured)];
-  }
-  return [resolveSessionAgentIds({ config }).sessionAgentId];
-}
-
-function registerMemoryManagerWarmup(
-  api: OpenClawPluginApi,
-  memoryRuntime: MemoryPluginRuntime,
-): void {
-  api.on("gateway_start", (_event, ctx) => {
-    const config = (api.runtime.config?.current?.() ?? ctx.config ?? api.config) as OpenClawConfig;
-    if (normalizePluginsConfig(config.plugins).slots.memory !== "memory-core") {
-      return;
-    }
-    for (const agentId of configuredMemoryAgentIds(config)) {
-      const backend = memoryRuntime.resolveMemoryBackendConfig({ cfg: config, agentId });
-      void memoryRuntime
-        .getMemorySearchManager({ cfg: config, agentId })
-        .then(async ({ manager, error }) => {
-          if (!manager) {
-            if (error) {
-              api.logger.debug?.(`memory-core: startup index warmup unavailable: ${error}`);
-            }
-            return;
-          }
-          if (backend.backend === "builtin") {
-            await manager.sync?.({ reason: "startup-warmup" });
-          }
-        })
-        .catch((error: unknown) => {
-          api.logger.debug?.(
-            `memory-core: startup index warmup failed for ${agentId}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-        });
-    }
-  });
-}
-
 export default definePluginEntry({
   id: "memory-core",
-  name: "Memory (Core)",
+  name: "OpenClaw Memory",
   description: "File-backed memory search tools and CLI",
   kind: "memory",
   register(api) {
-    const acquireLocalService = api.runtime.llm?.acquireLocalService;
-    const withLease = api.runtime.state.withLease.bind(api.runtime.state);
-    const host = { acquireLocalService, withLease } satisfies MemoryCoreRuntimeHost;
-    configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
-      api.runtime.state.openKeyedStore<T>(options),
-    );
+    const acquireLocalService: MemoryCoreAcquireLocalService = (...args) =>
+      api.runtime.llm.acquireLocalService(...args);
+    const openKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+      api.runtime.state.openKeyedStore<T>(options);
+    const host = { acquireLocalService, openKeyedStore } satisfies MemoryCoreRuntimeHost;
+    configureMemoryCoreDreamingState(openKeyedStore);
     const memoryRuntime = createLazyMemoryRuntime(host);
     registerShortTermPromotionDreaming(api);
-    registerMemoryManagerWarmup(api, memoryRuntime);
+    registerSessionBackfillGatewayMethods(api);
     api.registerMemoryCapability({
       promptBuilder: buildPromptSection,
       flushPlanResolver: buildMemoryFlushPlan,
@@ -382,26 +343,30 @@ export default definePluginEntry({
       }
     });
 
-    api.on("before_agent_reply", async (_event, ctx) => {
-      if (ctx.trigger !== "heartbeat" && ctx.trigger !== "cron") {
+    api.on(
+      "before_agent_reply",
+      async (_event, ctx) => {
+        if (ctx.trigger !== "heartbeat" && ctx.trigger !== "cron") {
+          return undefined;
+        }
+        try {
+          const module = await loadStandingIntentsModule();
+          const config = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
+          const { sessionAgentId: agentId } = resolveSessionAgentIds({
+            sessionKey: ctx.sessionKey,
+            config,
+            agentId: ctx.agentId,
+          });
+          module.sweepStandingIntents({ agentId });
+        } catch (error) {
+          api.logger.warn?.(
+            `memory-core: standing intent maintenance failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
         return undefined;
-      }
-      try {
-        const module = await loadStandingIntentsModule();
-        const config = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
-        const { sessionAgentId: agentId } = resolveSessionAgentIds({
-          sessionKey: ctx.sessionKey,
-          config,
-          agentId: ctx.agentId,
-        });
-        module.sweepStandingIntents({ agentId });
-      } catch (error) {
-        api.logger.warn?.(
-          `memory-core: standing intent maintenance failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-      return undefined;
-    });
+      },
+      { eligibleTriggers: ["heartbeat", "cron"] },
+    );
 
     api.registerCommand({
       name: "dreaming",

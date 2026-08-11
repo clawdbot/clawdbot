@@ -1,8 +1,12 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isUsageCountedSessionTranscriptFileName } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
-import type { PluginStateLeaseRunner } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { isUsageCountedSessionTranscriptFileName } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+import {
+  normalizeExtraMemoryPathEntries,
+  type MemoryExtraPath,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   defaultRuntime,
@@ -30,18 +34,62 @@ type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpos
 function getMemoryCommandSecretTargetIds(): Set<string> {
   return new Set(["memory.search.remote.apiKey", "agents.entries.*.memory.search.remote.apiKey"]);
 }
-export async function loadMemoryCommandConfig(commandName: string) {
-  const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
-    config: getRuntimeConfig(),
-    commandName,
-    targetIds: getMemoryCommandSecretTargetIds(),
-  });
-  return {
-    config: resolvedConfig,
-    diagnostics,
-  };
+function isMemorySecretOwnerFailure(error: unknown, message: string): boolean {
+  const candidate = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+  if (
+    candidate.ownerKind === "capability" &&
+    typeof candidate.ownerId === "string" &&
+    candidate.ownerId.startsWith("memory-provider:")
+  ) {
+    return true;
+  }
+  if (
+    Array.isArray(candidate.paths) &&
+    candidate.paths.some(
+      (entry) => typeof entry === "string" && entry.includes("memory.search.remote.apiKey"),
+    )
+  ) {
+    return true;
+  }
+  // Gateway RPC errors preserve the typed owner's redacted message even when
+  // structured owner fields are unavailable to the CLI process.
+  return message.includes("capability:memory-provider:");
 }
-export function emitMemorySecretResolveDiagnostics(
+async function loadMemoryCommandConfig(
+  commandName: string,
+  mode?: "enforce_resolved" | "read_only_status",
+) {
+  const config = getRuntimeConfig({ skipPluginValidation: true });
+  try {
+    const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
+      config,
+      commandName,
+      targetIds: getMemoryCommandSecretTargetIds(),
+      ...(mode ? { mode } : {}),
+    });
+    return { config: resolvedConfig, diagnostics };
+  } catch (error) {
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code)
+        : "";
+    const message = formatErrorMessage(error);
+    if (
+      mode !== "read_only_status" ||
+      isMemorySecretOwnerFailure(error, message) ||
+      (code !== "SECRET_SURFACE_UNAVAILABLE" && !message.includes("SECRET_SURFACE_UNAVAILABLE"))
+    ) {
+      throw error;
+    }
+    return {
+      config,
+      diagnostics: [
+        `${commandName}: ${message}; continuing with degraded read-only config so healthy memory surfaces remain visible.`,
+      ],
+    };
+  }
+}
+function emitMemorySecretResolveDiagnostics(
   diagnostics: string[],
   params?: { json?: boolean },
 ): void {
@@ -84,7 +132,7 @@ export function formatAuditCounts(audit: ShortTermAuditSummary): string {
   const suffix = scriptCoverage ? ` · scripts=${scriptCoverage}` : "";
   return `${audit.entryCount} entries · ${audit.promotedCount} promoted · ${audit.conceptTaggedEntryCount} concept-tagged · ${audit.spacedEntryCount} spaced${suffix}`;
 }
-export function resolveAgent(cfg: OpenClawConfig, agent?: string) {
+function resolveAgent(cfg: OpenClawConfig, agent?: string) {
   const trimmed = agent?.trim();
   if (trimmed) {
     return trimmed;
@@ -99,26 +147,24 @@ export function buildCliMemorySearchSessionKey(agentId: string): string {
     dmScope: "per-channel-peer",
   });
 }
-export function resolveAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
+function resolveAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
   const trimmed = agent?.trim();
   if (trimmed) {
     return [trimmed];
   }
-  const list = cfg.agents?.list ?? [];
-  if (list.length > 0) {
-    return list.map((entry) => entry.id).filter(Boolean);
-  }
-  return [resolveDefaultAgentId(cfg)];
+  return listAgentIds(cfg);
 }
-export function formatExtraPaths(workspaceDir: string, extraPaths: string[]): string[] {
-  return normalizeExtraMemoryPaths(workspaceDir, extraPaths).map((entry) => shortenHomePath(entry));
+export function formatExtraPaths(workspaceDir: string, extraPaths: MemoryExtraPath[]): string[] {
+  return normalizeExtraMemoryPathEntries(workspaceDir, extraPaths).map((entry) => {
+    const root = shortenHomePath(entry.path);
+    return entry.pattern ? `${root} (pattern: ${entry.pattern})` : root;
+  });
 }
-export async function withMemoryManagerForAgent(params: {
+async function withMemoryManagerForAgent(params: {
   cfg: OpenClawConfig;
   agentId: string;
   purpose?: MemoryManagerPurpose;
   acquireLocalService?: MemoryCoreAcquireLocalService;
-  withLease?: PluginStateLeaseRunner;
   run: (manager: MemoryManager) => Promise<void>;
 }): Promise<void> {
   const managerParams: Parameters<typeof getMemorySearchManager>[0] = {
@@ -131,9 +177,6 @@ export async function withMemoryManagerForAgent(params: {
   if (params.acquireLocalService) {
     managerParams.acquireLocalService = params.acquireLocalService;
   }
-  if (params.withLease) {
-    managerParams.withLease = params.withLease;
-  }
   await withManager<MemoryManager>({
     getManager: () => getMemorySearchManager(managerParams),
     onMissing: (error) => defaultRuntime.log(error ?? "Memory search disabled."),
@@ -144,6 +187,34 @@ export async function withMemoryManagerForAgent(params: {
     },
     run: params.run,
   });
+}
+export async function withMemoryCommand(params: {
+  commandName: string;
+  agent?: string;
+  allAgents?: boolean;
+  diagnosticsToStderr?: boolean;
+  purpose?: MemoryManagerPurpose;
+  acquireLocalService?: MemoryCoreAcquireLocalService;
+  run: (context: { manager: MemoryManager; cfg: OpenClawConfig; agentId: string }) => Promise<void>;
+}): Promise<OpenClawConfig> {
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig(
+    params.commandName,
+    params.purpose === "status" ? "read_only_status" : undefined,
+  );
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: params.diagnosticsToStderr });
+  const agentIds = params.allAgents
+    ? resolveAgentIds(cfg, params.agent)
+    : [resolveAgent(cfg, params.agent)];
+  for (const agentId of agentIds) {
+    await withMemoryManagerForAgent({
+      cfg,
+      agentId,
+      purpose: params.purpose,
+      acquireLocalService: params.acquireLocalService,
+      run: async (manager) => params.run({ manager, cfg, agentId }),
+    });
+  }
+  return cfg;
 }
 export type MemorySourceName = "memory" | "sessions";
 type SourceScan = {
@@ -194,7 +265,7 @@ async function scanSessionFiles(agentId: string): Promise<SourceScan> {
 }
 async function scanMemoryFiles(
   workspaceDir: string,
-  extraPaths: string[] = [],
+  extraPaths: MemoryExtraPath[] = [],
 ): Promise<SourceScan> {
   const issues: string[] = [];
   const memoryFile = path.join(workspaceDir, "MEMORY.md");
@@ -244,7 +315,7 @@ async function scanMemoryFiles(
   let listed: string[] = [];
   let listedOk = false;
   try {
-    listed = await listMemoryFiles(workspaceDir, resolvedExtraPaths);
+    listed = await listMemoryFiles(workspaceDir, extraPaths);
     listedOk = true;
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
@@ -276,7 +347,7 @@ export async function scanMemorySources(params: {
   workspaceDir: string;
   agentId: string;
   sources: MemorySourceName[];
-  extraPaths?: string[];
+  extraPaths?: MemoryExtraPath[];
 }): Promise<MemorySourceScan> {
   const scans: SourceScan[] = [];
   const extraPaths = params.extraPaths ?? [];

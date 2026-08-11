@@ -12,7 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { heartbeatTaskDeclarationKey, isHeartbeatTaskCronJob } from "../cron/heartbeat-task.js";
 import { cronSchedulingInputsEqual } from "../cron/schedule-identity.js";
 import { readHeartbeatMonitorScratch } from "../cron/scratch-store.js";
-import { computeJobNextRunAtMs, hasScheduledNextRunAtMs } from "../cron/service/jobs.js";
+import { computeJobNextRunAtMs, hasScheduledNextRunAtMs } from "../cron/service/jobs-scheduling.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { cronStoreKey } from "../cron/store/key.js";
 import {
@@ -82,7 +82,7 @@ function migrationFinding(params: {
     path: params.storePath,
     target: params.agentId,
     requirement: params.requirement,
-    fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to convert heartbeat tasks into cron jobs.`,
+    fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to convert heartbeat tasks into automations.`,
   };
 }
 

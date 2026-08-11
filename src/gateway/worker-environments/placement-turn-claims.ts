@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   advanceCursor,
@@ -25,13 +26,32 @@ import {
   serializeWorkerWorkspaceReconciliationPlan,
 } from "./workspace-reconcile.js";
 
-type TurnClaimReleaseWaiter = () => void;
+type TurnClaimReleaseWaiter = (error?: Error) => void;
 type WorkerTurnClaimInput = WorkerSessionPlacementIdentity & {
   owner: WorkerSessionTurnOwner;
   claimId: string;
   runId: string;
 };
-const turnClaimReleaseWaiters = new Map<string, Map<string, Set<TurnClaimReleaseWaiter>>>();
+const turnClaimReleaseWaiters = resolveGlobalMap<string, Map<string, Set<TurnClaimReleaseWaiter>>>(
+  Symbol.for("openclaw.turnClaimReleaseWaiters"),
+  (waitersByPath) => {
+    const error = new Error("Gateway lifecycle ended while waiting for turn claim release");
+    for (const bySession of waitersByPath.values()) {
+      for (const waiters of bySession.values()) {
+        for (const reject of waiters) {
+          reject(error);
+        }
+      }
+    }
+    waitersByPath.clear();
+  },
+);
+const workerTurnClaimClosedHandlers = resolveGlobalMap<
+  string,
+  Set<(claim: WorkerSessionTurnClaim) => void>
+>(Symbol.for("openclaw.workerTurnClaimClosedHandlers"), (handlersByPath) => {
+  handlersByPath.clear();
+});
 const workspaceJournalQuery = (db: DatabaseSync) =>
   getNodeSqliteKysely<Pick<StateDatabase, "worker_workspace_reconciliations">>(db);
 
@@ -56,7 +76,7 @@ function waitersFor(path: string, sessionId: string): Set<TurnClaimReleaseWaiter
   return waiters;
 }
 
-export function signalTurnClaimRelease(path: string, sessionId: string): void {
+function signalTurnClaimRelease(path: string, sessionId: string): void {
   const bySession = turnClaimReleaseWaiters.get(path);
   const waiters = bySession?.get(sessionId);
   if (!waiters) {
@@ -68,6 +88,32 @@ export function signalTurnClaimRelease(path: string, sessionId: string): void {
   }
   for (const resolve of waiters) {
     resolve();
+  }
+}
+
+export function registerWorkerTurnClaimClosedHandler(
+  path: string,
+  handler: (claim: WorkerSessionTurnClaim) => void,
+): () => void {
+  const handlers = workerTurnClaimClosedHandlers.get(path) ?? new Set();
+  handlers.add(handler);
+  workerTurnClaimClosedHandlers.set(path, handlers);
+  return () => {
+    handlers.delete(handler);
+    if (handlers.size === 0) {
+      workerTurnClaimClosedHandlers.delete(path);
+    }
+  };
+}
+
+export function signalWorkerTurnClaimClosed(path: string, claim: WorkerSessionTurnClaim): void {
+  signalTurnClaimRelease(path, claim.sessionId);
+  for (const handler of workerTurnClaimClosedHandlers.get(path) ?? []) {
+    try {
+      handler(claim);
+    } catch {
+      // Settlement observation cannot roll back the authoritative store transition.
+    }
   }
 }
 
@@ -201,7 +247,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         }
         return getRequired(db, sessionId);
       });
-      signalTurnClaimRelease(path, sessionId);
+      signalWorkerTurnClaimClosed(path, claim);
       return released;
     },
 
@@ -262,7 +308,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         }
         return getRequired(db, sessionId);
       });
-      signalTurnClaimRelease(path, sessionId);
+      signalWorkerTurnClaimClosed(path, claim);
       return released;
     },
 
@@ -334,7 +380,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         }
         return getRequired(db, sessionId);
       });
-      signalTurnClaimRelease(path, sessionId);
+      signalWorkerTurnClaimClosed(path, claim);
       return released;
     },
 
@@ -407,7 +453,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
             resolve();
           }
         };
-        const onRelease = () => finish();
+        const onRelease = (error?: Error) => finish(error);
         const onAbort = () => finish(new Error(`Turn claim wait aborted for session ${sessionId}`));
         const timer = setTimeout(
           () => finish(new Error(`Timed out waiting for session ${sessionId} turn claim release`)),

@@ -33,10 +33,11 @@ export {
   sendVoice,
 } from "./outbound-media-send.js";
 
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { qqbotNotConfiguredMessage } from "../config/setup-guidance.js";
 import type { GatewayAccount } from "../types.js";
 import type { EngineLogger } from "../types.js";
-import { formatErrorMessage } from "../utils/format.js";
 import { debugError, debugLog, debugWarn } from "../utils/log.js";
 import { normalizeMediaTags } from "../utils/media-tags.js";
 import { decodeCronPayload } from "../utils/payload.js";
@@ -108,6 +109,18 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
   const mediaTagRegex =
     /<(qqimg|qqvoice|qqvideo|qqfile|qqmedia)>([^<>]+)<\/(?:qqimg|qqvoice|qqvideo|qqfile|qqmedia|img)>/gi;
   const mediaTagMatches = text.match(mediaTagRegex);
+
+  if (!replyToId && (!text || text.trim().length === 0)) {
+    debugError("[qqbot] sendText error: proactive message content cannot be empty");
+    return {
+      channel: "qqbot",
+      error: "Proactive messages require non-empty content (--message cannot be empty)",
+    };
+  }
+
+  if (!account.appId || !account.clientSecret) {
+    return { channel: "qqbot", error: qqbotNotConfiguredMessage(account.accountId) };
+  }
 
   if (mediaTagMatches && mediaTagMatches.length > 0) {
     debugLog(`[qqbot] sendText: Detected ${mediaTagMatches.length} media tag(s), processing...`);
@@ -236,18 +249,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
   }
 
   if (!replyToId) {
-    if (!text || text.trim().length === 0) {
-      debugError("[qqbot] sendText error: proactive message content cannot be empty");
-      return {
-        channel: "qqbot",
-        error: "Proactive messages require non-empty content (--message cannot be empty)",
-      };
-    }
     debugLog(`[qqbot] sendText: sending proactive message to ${to}, length=${text.length}`);
-  }
-
-  if (!account.appId || !account.clientSecret) {
-    return { channel: "qqbot", error: "QQBot not configured (missing appId or clientSecret)" };
   }
 
   try {
@@ -281,7 +283,7 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
   initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
 
   if (!account.appId || !account.clientSecret) {
-    return { channel: "qqbot", error: "QQBot not configured (missing appId or clientSecret)" };
+    return { channel: "qqbot", error: qqbotNotConfiguredMessage(account.accountId) };
   }
   if (!ctx.mediaUrl) {
     return { channel: "qqbot", error: "mediaUrl is required for sendMedia" };

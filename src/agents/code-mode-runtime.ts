@@ -2,16 +2,21 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { parse, tokenizer } from "acorn";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import { toCodeModeJsonSafe } from "./code-mode-json.js";
-import { createCodeModeApiVirtualFiles } from "./code-mode-namespaces.js";
+import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
+import {
+  buildCodeModeScriptParseSource,
+  parseCodeModeScriptSyntax,
+} from "./code-mode-script-syntax.js";
 import {
   CODE_MODE_SHELL_SOURCE_ERROR,
   isShellLikeCodeModeSource,
 } from "./code-mode-shell-source.js";
-import type { CodeModeWorkerResult as WorkerThreadCodeModeResult } from "./code-mode-worker-types.js";
+import type { CodeModeFailurePhase, CodeModeWorkerThreadResult } from "./code-mode-worker-types.js";
 import type { ToolSearchConfig, ToolSearchToolContext } from "./tool-search.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
 
@@ -81,18 +86,23 @@ export type CodeModeHeadlessResult =
     };
 
 export type CodeModeWorkerResult =
-  | Extract<WorkerThreadCodeModeResult, { status: "completed" | "waiting" }>
+  | Extract<CodeModeWorkerThreadResult, { status: "completed" | "waiting" }>
   | {
       status: "failed";
       error: string;
       code: CodeModeFailureCode;
+      failurePhase: CodeModeFailurePhase;
+      bridgeDispatchStarted: boolean;
       output: unknown[];
     };
 
 const typescriptRuntimeLoader = createLazyPromiseLoader(() => import("typescript"), {
   cacheRejections: true,
 });
-let typescriptRuntimeForTest: typeof import("typescript") | null = null;
+let typescriptRuntimeForTest:
+  | typeof import("typescript")
+  | Promise<typeof import("typescript")>
+  | null = null;
 
 function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | undefined {
   const codeMode = value;
@@ -275,7 +285,7 @@ class CodeModeLimitError extends ToolInputError {
 }
 
 function isRuntimeInterruptedError(error: unknown): boolean {
-  return errorMessage(error) === "interrupted";
+  return (error instanceof Error ? error.message : error) === "interrupted";
 }
 
 export function codeModeFailureCode(error: unknown): CodeModeFailureCode {
@@ -289,7 +299,9 @@ export function codeModeFailureCode(error: unknown): CodeModeFailureCode {
 }
 
 export function codeModeFailureMessage(error: unknown): string {
-  return isRuntimeInterruptedError(error) ? "code mode timeout exceeded" : errorMessage(error);
+  return isRuntimeInterruptedError(error)
+    ? "code mode timeout exceeded"
+    : formatErrorMessage(error);
 }
 
 export function enforceOutputLimit(output: unknown[], config: CodeModeConfig): void {
@@ -303,8 +315,11 @@ export function enforceResultLimit(params: {
   value?: unknown;
   config: CodeModeConfig;
 }): void {
-  enforceOutputLimit(params.output, params.config);
-  const outputBytes = params.output.length > 0 ? jsonByteLength(params.output) : 0;
+  const serializedOutputBytes = jsonByteLength(params.output);
+  if (serializedOutputBytes > params.config.maxOutputBytes) {
+    throw new CodeModeLimitError("output_limit_exceeded", "code mode output limit exceeded");
+  }
+  const outputBytes = params.output.length > 0 ? serializedOutputBytes : 0;
   if (
     params.value !== undefined &&
     outputBytes + jsonByteLength(params.value) > params.config.maxOutputBytes
@@ -370,10 +385,10 @@ function maskCodeLiteralsAndComments(
   };
 
   try {
-    const prefix = "(async () => {\n";
-    parse(`${prefix}${code}\n})`, {
+    const wrapped = buildCodeModeScriptParseSource(code);
+    parse(wrapped.source, {
       ecmaVersion: "latest",
-      onComment: (_isBlock, _text, start, end) => maskRange(start, end, prefix.length),
+      onComment: (_isBlock, _text, start, end) => maskRange(start, end, wrapped.codeOffset),
       onToken: (token) => {
         // Parse in the real async guest context: standalone tokenization can
         // mistake executable division for a regex after contextual keywords.
@@ -382,7 +397,7 @@ function maskCodeLiteralsAndComments(
           token.type.label === "regexp" ||
           token.type.label === "template"
         ) {
-          maskRange(token.start, token.end, prefix.length);
+          maskRange(token.start, token.end, wrapped.codeOffset);
         }
       },
     });
@@ -538,20 +553,17 @@ function rejectsModuleAccess(
   code: string,
   typescriptRuntime?: typeof import("typescript"),
 ): boolean {
-  try {
-    const source = parse(`(async () => {\n${code}\n})`, {
-      ecmaVersion: "latest",
-    });
+  const parsed = parseCodeModeScriptSyntax(code);
+  if (parsed.ok) {
     // The WASI guest has no host module loader. Only executable module syntax
     // belongs in this early check; ordinary guest methods are not capabilities.
-    return containsModuleAccess(source);
-  } catch {
-    if (typescriptRuntime) {
-      try {
-        return typeScriptContainsModuleAccess(code, typescriptRuntime);
-      } catch {
-        // Keep malformed input on the conservative lexical fallback.
-      }
+    return containsModuleAccess(parsed.program);
+  }
+  if (typescriptRuntime) {
+    try {
+      return typeScriptContainsModuleAccess(code, typescriptRuntime);
+    } catch {
+      // Keep malformed input on the conservative lexical fallback.
     }
   }
   const source = maskCodeLiteralsAndComments(code, typescriptRuntime);
@@ -560,7 +572,7 @@ function rejectsModuleAccess(
 
 async function loadTypeScriptRuntime(): Promise<typeof import("typescript")> {
   if (typescriptRuntimeForTest) {
-    return typescriptRuntimeForTest;
+    return await typescriptRuntimeForTest;
   }
   return await typescriptRuntimeLoader.load();
 }
@@ -615,18 +627,11 @@ export async function prepareSource(input: {
   return transformed.outputText;
 }
 
-export function errorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message || String(error);
-  }
-  return String(error);
-}
-
 export function createCodeModeApiFilesForRun(
-  catalog: Parameters<typeof createCodeModeApiVirtualFiles>[0],
+  namespaceRuntime: CodeModeNamespaceRuntime,
   swarmEnabled: boolean,
 ) {
-  const files = createCodeModeApiVirtualFiles(catalog);
+  const { apiFiles: files } = namespaceRuntime;
   return swarmEnabled ? files : files.filter((file) => file.path !== "agents.d.ts");
 }
 
@@ -644,7 +649,9 @@ export function enforceSnapshotPayloadLimits(params: {
 export const codeModeRuntimeTesting = {
   getTypescriptRuntimePromise: (): Promise<typeof import("typescript")> | null =>
     typescriptRuntimeLoader.peek() ?? null,
-  setTypescriptRuntimeForTest: (runtime: typeof import("typescript") | null) => {
+  setTypescriptRuntimeForTest: (
+    runtime: typeof import("typescript") | Promise<typeof import("typescript")> | null,
+  ) => {
     typescriptRuntimeForTest = runtime;
   },
 };

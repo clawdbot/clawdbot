@@ -387,21 +387,36 @@ export async function completeReplyAgentRun(input: {
         runtimePolicySessionKey,
         opts,
       });
-      await updateSessionEntry(
+      const expectedSessionId = activeSessionEntry?.sessionId ?? followupRun.run.sessionId;
+      // A reset can rebind the key while the model runs; its replacement must
+      // never inherit the old run's final or advertise an uncommitted intent.
+      const persistedPendingFinalDelivery = await updateSessionEntry(
         { storePath, sessionKey },
-        () => ({
-          pendingFinalDelivery: true,
-          pendingFinalDeliveryText: resolvedPendingText,
-          pendingFinalDeliveryIntentId,
-          pendingFinalDeliveryContext,
-          pendingFinalDeliveryCreatedAt: Date.now(),
-          updatedAt: Date.now(),
-        }),
+        (entry) =>
+          entry.sessionId === expectedSessionId
+            ? {
+                pendingFinalDelivery: {
+                  kind: "replayable" as const,
+                  text: resolvedPendingText,
+                  intentId: pendingFinalDeliveryIntentId,
+                  context: pendingFinalDeliveryContext,
+                  createdAt: Date.now(),
+                },
+                updatedAt: Date.now(),
+              }
+            : null,
         {
           skipMaintenance: true,
           takeCacheOwnership: true,
         },
       );
+      if (
+        persistedPendingFinalDelivery?.sessionId !== expectedSessionId ||
+        persistedPendingFinalDelivery.pendingFinalDelivery?.intentId !==
+          pendingFinalDeliveryIntentId
+      ) {
+        throw new Error("pending final delivery session changed or was deleted");
+      }
     }
   }
   const result = returnWithQueuedFollowupDrain(

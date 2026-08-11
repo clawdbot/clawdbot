@@ -4,7 +4,7 @@
 import { execFileSync } from "node:child_process";
 import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 
-export type ResolvedTimeFormat = "12" | "24";
+type ResolvedTimeFormat = "12" | "24";
 
 let cachedTimeFormat: ResolvedTimeFormat | undefined;
 

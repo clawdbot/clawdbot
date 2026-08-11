@@ -74,6 +74,38 @@ export function sessionBindingIdentity(params: {
   };
 }
 
+export type CodexRunSessionBindingAuthority = "current" | "ephemeral" | "superseded";
+
+/** Decides whether a run may share the durable stable-key binding owner. */
+export function resolveCodexRunSessionBindingAuthority(params: {
+  identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
+  config?: OpenClawConfig;
+  storePath?: string;
+}): CodexRunSessionBindingAuthority {
+  const sessionKey = params.identity.sessionKey?.trim();
+  if (!sessionKey) {
+    return "ephemeral";
+  }
+  try {
+    const storePath =
+      params.storePath?.trim() ||
+      resolveStorePath(params.config?.session?.store, { agentId: params.identity.agentId });
+    const entry = getSessionEntry({
+      agentId: params.identity.agentId,
+      hydrateSkillPromptRefs: false,
+      readConsistency: "latest",
+      sessionKey,
+      storePath,
+    });
+    if (!entry) {
+      return "ephemeral";
+    }
+    return entry.sessionId === params.identity.sessionId ? "current" : "superseded";
+  } catch {
+    return "superseded";
+  }
+}
+
 /** Builds the terminal coordination error used when a newer OpenClaw session owns the binding. */
 export function createCodexSessionGenerationSupersededError(
   sessionId: string,
@@ -216,8 +248,10 @@ const threadBindingSchema = z
     dynamicToolsFingerprint: optionalStringSchema,
     dynamicToolsContainDeferred: optionalBooleanSchema,
     webSearchThreadConfigFingerprint: optionalStringSchema,
+    nativeSkillIsolationFingerprint: optionalStringSchema,
     userMcpServersFingerprint: optionalStringSchema,
     mcpServersFingerprint: optionalStringSchema,
+    configuredMcpOwnershipVersion: z.literal(1).optional().catch(undefined),
     ringZeroConfigFingerprint: optionalStringSchema,
     ringZeroClientInstanceId: optionalStringSchema,
     nativeHookRelayGeneration: optionalNonBlankStringSchema,
@@ -333,6 +367,11 @@ type CodexAppServerBindingMutation =
       kind: "patch";
       threadId: string;
       patch: Partial<Omit<CodexAppServerThreadBinding, "threadId">>;
+    }
+  | {
+      kind: "replace-thread";
+      expectedThreadId: string;
+      binding: CodexAppServerThreadBinding;
     }
   | {
       kind: "patch-pending-supervision-branch";
@@ -534,11 +573,52 @@ export type CodexAppServerBindingStore = {
   withLease<T>(identity: CodexAppServerBindingIdentity, run: () => Promise<T>): Promise<T>;
 };
 
+/** Carries one prepared run identity through callers that rederive it from public params. */
+export function scopeCodexRunBindingStore(params: {
+  bindingStore: CodexAppServerBindingStore;
+  logicalIdentity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
+  physicalIdentity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
+}): CodexAppServerBindingStore {
+  const mapSessionIdentity = (
+    identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
+  ) =>
+    identity.agentId === params.logicalIdentity.agentId &&
+    identity.sessionId === params.logicalIdentity.sessionId &&
+    identity.sessionKey?.trim() === params.logicalIdentity.sessionKey?.trim()
+      ? params.physicalIdentity
+      : identity;
+  const mapIdentity = (identity: CodexAppServerBindingIdentity) =>
+    identity.kind === "session" ? mapSessionIdentity(identity) : identity;
+  return {
+    read: (identity) => params.bindingStore.read(mapIdentity(identity)),
+    hasOtherThreadOwner: (threadId, identity) =>
+      params.bindingStore.hasOtherThreadOwner(
+        threadId,
+        identity ? mapIdentity(identity) : undefined,
+      ),
+    mutate: (identity, mutation) => params.bindingStore.mutate(mapIdentity(identity), mutation),
+    prepareSessionGenerationReclaim: (identity) =>
+      params.bindingStore.prepareSessionGenerationReclaim(mapSessionIdentity(identity)),
+    adoptSessionGeneration: (identity, expectedPreviousSessionId) =>
+      params.bindingStore.adoptSessionGeneration(
+        mapSessionIdentity(identity),
+        expectedPreviousSessionId,
+      ),
+    resetSessionGeneration: (identity) =>
+      params.bindingStore.resetSessionGeneration(mapSessionIdentity(identity)),
+    retireSessionGeneration: (identity) =>
+      params.bindingStore.retireSessionGeneration(mapSessionIdentity(identity)),
+    withThreadArchiveFence: (run) => params.bindingStore.withThreadArchiveFence(run),
+    withLease: (identity, run) => params.bindingStore.withLease(mapIdentity(identity), run),
+  };
+}
+
 /** Lets the authoritative OpenClaw session generation claim a stale stable binding row. */
 export async function reclaimCurrentCodexSessionGeneration(params: {
   bindingStore: CodexAppServerBindingStore;
   identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
   config?: OpenClawConfig;
+  storePath?: string;
 }): Promise<boolean> {
   const sessionKey = params.identity.sessionKey?.trim();
   if (!sessionKey) {
@@ -552,9 +632,9 @@ export async function reclaimCurrentCodexSessionGeneration(params: {
   // Only a stale stable-key owner needs session-store authority. Resolve it before
   // the second mutation so the session read never runs inside the binding write transaction.
   try {
-    const storePath = resolveStorePath(params.config?.session?.store, {
-      agentId: params.identity.agentId,
-    });
+    const storePath =
+      params.storePath?.trim() ||
+      resolveStorePath(params.config?.session?.store, { agentId: params.identity.agentId });
     const entry = getSessionEntry({
       agentId: params.identity.agentId,
       hydrateSkillPromptRefs: false,
@@ -853,6 +933,12 @@ export function createCodexAppServerBindingStore(
                 mutation.threadId,
                 mutation.expectedPendingSupervisionBranch,
               );
+            const replacesExpectedOrdinaryOwner =
+              mutation.kind === "replace-thread" &&
+              active?.binding.threadId === mutation.expectedThreadId &&
+              active.binding.connectionScope !== "supervision" &&
+              mutation.binding.connectionScope !== "supervision" &&
+              mutation.binding.threadId !== mutation.expectedThreadId;
             if (
               (mutation.kind === "set" &&
                 ((mutation.if?.kind === "absent" && storedActive) ||
@@ -861,6 +947,7 @@ export function createCodexAppServerBindingStore(
                   (active?.binding.connectionScope === "supervision" &&
                     !preservesSupervisionOwner))) ||
               (mutation.kind === "patch" && active?.binding.threadId !== mutation.threadId) ||
+              (mutation.kind === "replace-thread" && !replacesExpectedOrdinaryOwner) ||
               ((mutation.kind === "patch-pending-supervision-branch" ||
                 mutation.kind === "commit-pending-supervision-branch") &&
                 !matchesPendingSupervisionBranch(active?.binding, mutation.expected)) ||
@@ -888,7 +975,7 @@ export function createCodexAppServerBindingStore(
               };
             }
             let binding: CodexAppServerThreadBinding;
-            if (mutation.kind === "set") {
+            if (mutation.kind === "set" || mutation.kind === "replace-thread") {
               binding = validateBindingForWrite(mutation.binding);
             } else if (mutation.kind === "patch-pending-supervision-branch") {
               binding = validateBindingForWrite({
@@ -1493,13 +1580,4 @@ export function normalizeCodexAppServerBindingModelProvider(params: {
   return modelProvider;
 }
 
-/** Restores the sole provider intentionally omitted from canonical binding rows. */
-export function resolveCodexAppServerBindingModelProvider(
-  params: CodexAppServerAuthProfileLookup & { modelProvider?: string },
-): string | undefined {
-  return (
-    params.modelProvider?.trim() ||
-    (isCodexAppServerNativeAuthProfile(params) ? PUBLIC_OPENAI_MODEL_PROVIDER : undefined)
-  );
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

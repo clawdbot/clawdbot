@@ -10,7 +10,8 @@ const CHECK_COMMANDS = [
   "pnpm deps:root-ownership:check",
   "node scripts/generate-npm-package-lock.mjs --all",
   "node --import tsx scripts/sync-plugin-versions.ts --check",
-  "node scripts/generate-plugin-inventory-doc.mjs --check",
+  "pnpm channels:catalog:check",
+  "node --import tsx scripts/generate-plugin-inventory-doc.mts --check",
   "pnpm config:schema:check",
   "pnpm config:channels:check",
   "pnpm config:docs:check",
@@ -22,7 +23,8 @@ const CHECK_COMMANDS = [
 ];
 const FIX_COMMANDS = [
   "node --import tsx scripts/sync-plugin-versions.ts",
-  "node scripts/generate-plugin-inventory-doc.mjs --write",
+  "pnpm channels:catalog:gen",
+  "node --import tsx scripts/generate-plugin-inventory-doc.mts --write",
   "pnpm config:schema:gen",
   "pnpm config:channels:gen",
   "pnpm config:docs:gen",
@@ -160,7 +162,7 @@ describe("scripts/release-preflight.mjs", () => {
       env: {
         ...process.env,
         OPENCLAW_RELEASE_PREFLIGHT_FAIL_COMMANDS:
-          "node scripts/generate-plugin-inventory-doc.mjs --write",
+          "node --import tsx scripts/generate-plugin-inventory-doc.mts --write",
         OPENCLAW_RELEASE_PREFLIGHT_PNPM_EVENTS: fakePnpm.eventsPath,
         OPENCLAW_RELEASE_PREFLIGHT_PNPM_LOG: fakePnpm.logPath,
         PATH: `${fakePnpm.binDir}${delimiter}${process.env.PATH ?? ""}`,
@@ -170,7 +172,7 @@ describe("scripts/release-preflight.mjs", () => {
     expect(result.status).toBe(1);
     expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(FIX_COMMANDS.toSorted());
     expect(result.stderr).toContain(
-      "- plugin inventory: exit 7 (node scripts/generate-plugin-inventory-doc.mjs --write)",
+      "- plugin inventory: exit 7 (node --import tsx scripts/generate-plugin-inventory-doc.mts --write)",
     );
   });
 
@@ -191,8 +193,11 @@ describe("scripts/release-preflight.mjs", () => {
     expect(events.indexOf("end node --import tsx scripts/sync-plugin-versions.ts")).toBeLessThan(
       events.indexOf("start pnpm plugin-sdk:sync-exports"),
     );
+    expect(events.indexOf("end node --import tsx scripts/sync-plugin-versions.ts")).toBeLessThan(
+      events.indexOf("start pnpm channels:catalog:gen"),
+    );
     expect(events.indexOf("end pnpm plugin-sdk:sync-exports")).toBeLessThan(
-      events.indexOf("start node scripts/generate-plugin-inventory-doc.mjs --write"),
+      events.indexOf("start node --import tsx scripts/generate-plugin-inventory-doc.mts --write"),
     );
   });
 
@@ -205,11 +210,13 @@ describe("scripts/release-preflight.mjs", () => {
     expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(
       [
         "node --import tsx scripts/sync-plugin-versions.ts",
-        "node scripts/generate-plugin-inventory-doc.mjs --write",
+        "pnpm channels:catalog:gen",
+        "node --import tsx scripts/generate-plugin-inventory-doc.mts --write",
         "pnpm ui:i18n:sync",
         "node --import tsx scripts/sync-plugin-versions.ts --check",
+        "pnpm channels:catalog:check",
         "node scripts/generate-npm-package-lock.mjs --all",
-        "node scripts/generate-plugin-inventory-doc.mjs --check",
+        "node --import tsx scripts/generate-plugin-inventory-doc.mts --check",
         "pnpm ui:i18n:check",
         "pnpm native:i18n:check",
       ].toSorted(),
@@ -226,10 +233,12 @@ describe("scripts/release-preflight.mjs", () => {
     expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(
       [
         "node --import tsx scripts/sync-plugin-versions.ts",
-        "node scripts/generate-plugin-inventory-doc.mjs --write",
+        "pnpm channels:catalog:gen",
+        "node --import tsx scripts/generate-plugin-inventory-doc.mts --write",
         "node --import tsx scripts/sync-plugin-versions.ts --check",
+        "pnpm channels:catalog:check",
         "node scripts/generate-npm-package-lock.mjs --all",
-        "node scripts/generate-plugin-inventory-doc.mjs --check",
+        "node --import tsx scripts/generate-plugin-inventory-doc.mts --check",
       ].toSorted(),
     );
     expect(result.stdout).toContain("(plugins, jobs=4)");

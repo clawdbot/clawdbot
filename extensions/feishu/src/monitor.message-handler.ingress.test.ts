@@ -1,3 +1,4 @@
+import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 // Feishu ingress tests cover debounce ownership and constituent claim settlement.
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +13,10 @@ type HandleMessageParams = Parameters<MessageReceiveHandlerContext["handleMessag
 type DebounceEntry = Parameters<
   Parameters<PluginRuntime["channel"]["debounce"]["createInboundDebouncer"]>[0]["onFlush"]
 >[0][number];
+type DebounceFlush = ReturnType<
+  Parameters<PluginRuntime["channel"]["debounce"]["createInboundDebouncer"]>[0]["onFlush"]
+>;
+type DebounceFlushFactory = typeof createTestInboundDebounceFlush;
 
 function createTextEvent(
   eventId: string,
@@ -74,7 +79,9 @@ function createHarness(params: {
   claims: readonly dedup.FeishuMessageProcessingClaim[];
   adoptTurn: boolean;
 }) {
-  let onFlush: ((entries: DebounceEntry[]) => Promise<void>) | undefined;
+  let onFlush:
+    | ((entries: DebounceEntry[], createFlush: DebounceFlushFactory) => DebounceFlush)
+    | undefined;
   let onError: ((err: unknown, entries: DebounceEntry[]) => void) | undefined;
   const entries: DebounceEntry[] = [];
   const runtimeError = vi.fn();
@@ -84,7 +91,7 @@ function createHarness(params: {
       resolveInboundDebounceMs: () => 25,
       createInboundDebouncer: vi.fn(
         (options: {
-          onFlush: (entries: DebounceEntry[]) => Promise<void>;
+          onFlush: (entries: DebounceEntry[], createFlush: DebounceFlushFactory) => DebounceFlush;
           onError: (err: unknown, entries: DebounceEntry[]) => void;
         }) => {
           onFlush = options.onFlush;
@@ -93,6 +100,9 @@ function createHarness(params: {
             enqueue: async (entry: DebounceEntry) => {
               entries.push(entry);
             },
+            flushKey: async () => {},
+            cancelKey: () => false,
+            drain: async () => {},
           };
         },
       ),
@@ -132,7 +142,7 @@ function createHarness(params: {
       if (!onFlush) {
         throw new Error("debouncer flush callback missing");
       }
-      await onFlush(entries.splice(0));
+      await onFlush(entries.splice(0), createTestInboundDebounceFlush).completion;
     },
     failFlush: (err: unknown) => {
       if (!onError) {
@@ -149,6 +159,73 @@ afterEach(() => {
 });
 
 describe("Feishu durable ingress debounce lifecycle", () => {
+  it("accepts an empty group message body without losing bot mentions or ingress adoption", async () => {
+    const transport = createLifecycle();
+    const logicalClaim = createClaim("empty-group-mention");
+    const harness = createHarness({
+      lifecycles: new Map([["evt-empty-group-mention", transport.lifecycle]]),
+      claims: [logicalClaim],
+      adoptTurn: true,
+    });
+    const event = createTextEvent("evt-empty-group-mention", "om-empty-group-mention", "");
+    event.message.chat_type = "group";
+    event.message.content = "";
+    event.message.mentions = [
+      {
+        key: "@_bot_1",
+        id: { open_id: "ou-bot" },
+        name: "OpenClaw",
+      },
+    ];
+
+    await expect(harness.handler(event)).resolves.toEqual({ kind: "deferred" });
+    await harness.flush();
+
+    expect(harness.handleMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: expect.objectContaining({
+          message: expect.objectContaining({
+            chat_type: "group",
+            content: "",
+            mentions: event.message.mentions,
+          }),
+        }),
+      }),
+    );
+    expect(logicalClaim.commit).toHaveBeenCalledTimes(1);
+    expect(transport.calls.adopted).toHaveBeenCalledTimes(1);
+    expect(transport.calls.abandoned).not.toHaveBeenCalled();
+    expect(harness.runtimeError).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "missing",
+      setContent: (event: FeishuMessageEvent) => Reflect.deleteProperty(event.message, "content"),
+    },
+    {
+      name: "non-string",
+      setContent: (event: FeishuMessageEvent) => Reflect.set(event.message, "content", 42),
+    },
+  ])("rejects a $name message body before durable dispatch", async ({ setContent }) => {
+    const transport = createLifecycle();
+    const harness = createHarness({
+      lifecycles: new Map([["evt-invalid-body", transport.lifecycle]]),
+      claims: [],
+      adoptTurn: true,
+    });
+    const event = createTextEvent("evt-invalid-body", "om-invalid-body", "");
+    setContent(event);
+
+    await expect(harness.handler(event)).rejects.toThrow(
+      "Feishu durable message event payload is malformed.",
+    );
+
+    expect(harness.claim).not.toHaveBeenCalled();
+    expect(harness.handleMessage).not.toHaveBeenCalled();
+    expect(transport.calls.adopted).not.toHaveBeenCalled();
+  });
+
   it("returns deferred and fans merged adoption to every constituent claim", async () => {
     const first = createLifecycle();
     const second = createLifecycle();

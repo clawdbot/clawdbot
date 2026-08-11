@@ -1,6 +1,6 @@
 // Slack plugin module implements approval handler behavior.
 import type { App } from "@slack/bolt";
-import type { Block, KnownBlock } from "@slack/web-api";
+import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import type {
   ChannelApprovalCapabilityHandlerContext,
   ExecApprovalExpiredView,
@@ -25,14 +25,18 @@ import {
   shouldHandleSlackNativeApprovalRequest,
 } from "./approval-native-gates.js";
 import { normalizeSlackApproverId } from "./exec-approvals.js";
+import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
+import type { SlackEventScope } from "./monitor/event-scope.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 import { sendMessageSlack } from "./send.js";
-import { truncateSlackText } from "./truncate.js";
+import { parseSlackTarget } from "./target-parsing.js";
+import { truncateSlackTextByUtf8Bytes } from "./truncate.js";
 
 type SlackBlock = Block | KnownBlock;
 type SlackPendingApproval = {
   channelId: string;
   messageTs: string;
+  teamId?: string;
 };
 type SlackPendingDelivery = {
   text: string;
@@ -48,7 +52,6 @@ type SlackPluginApprovalView =
   | PluginApprovalExpiredView;
 
 const SLACK_CONTEXT_ELEMENTS_MAX = 10;
-const SLACK_CHAT_UPDATE_TEXT_LIMIT = 4000;
 const SLACK_TEXT_OBJECT_MAX = 3000;
 
 type SlackExecApprovalConfig = NonNullable<
@@ -58,6 +61,11 @@ type SlackExecApprovalConfig = NonNullable<
 type SlackApprovalHandlerContext = {
   app: App;
   config: SlackExecApprovalConfig;
+  resolveClient?: (teamId?: string) => WebClient | undefined;
+  enterprise?: {
+    apiAppId?: string;
+    enterpriseId: string;
+  };
 };
 
 function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext): {
@@ -408,17 +416,17 @@ function buildSlackExpiredBlocks(view: ExpiredApprovalView): SlackBlock[] {
 }
 
 async function updateMessage(params: {
-  app: App;
+  client: WebClient;
   channelId: string;
   messageTs: string;
   text: string;
   blocks: SlackBlock[];
 }): Promise<void> {
   try {
-    await params.app.client.chat.update({
+    await params.client.chat.update({
       channel: params.channelId,
       ts: params.messageTs,
-      text: truncateSlackText(params.text, SLACK_CHAT_UPDATE_TEXT_LIMIT),
+      text: truncateSlackTextByUtf8Bytes(params.text, SLACK_EDIT_TEXT_MAX_BYTES),
       blocks: params.blocks,
     });
   } catch (err) {
@@ -428,7 +436,7 @@ async function updateMessage(params: {
 
 export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
   SlackPendingDelivery,
-  { to: string; threadTs?: string },
+  { to: string; threadTs?: string; teamId?: string },
   SlackPendingApproval,
   never,
   SlackPendingDelivery
@@ -478,29 +486,45 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
     }),
   },
   transport: {
-    prepareTarget: ({ plannedTarget }) => ({
-      dedupeKey: buildChannelApprovalNativeTargetKey(plannedTarget.target),
-      target: {
-        to: plannedTarget.target.to,
-        threadTs:
-          plannedTarget.target.threadId != null ? String(plannedTarget.target.threadId) : undefined,
-      },
-    }),
+    prepareTarget: ({ plannedTarget }) => {
+      const parsed = parseSlackTarget(plannedTarget.target.to, {
+        defaultKind: "channel",
+      });
+      if (!parsed) {
+        throw new Error("Slack approval delivery target is missing");
+      }
+      return {
+        dedupeKey: buildChannelApprovalNativeTargetKey(plannedTarget.target),
+        target: {
+          to: `${parsed.kind}:${parsed.id}`,
+          threadTs:
+            plannedTarget.target.threadId != null
+              ? String(plannedTarget.target.threadId)
+              : undefined,
+          teamId: parsed.teamId,
+        },
+      };
+    },
     deliverPending: async ({ cfg, accountId, context, preparedTarget, pendingPayload }) => {
       const resolved = resolveHandlerContext({ cfg, accountId, context });
       if (!resolved) {
         return null;
       }
-      const message = await sendMessageSlack(preparedTarget.to, pendingPayload.text, {
+      const client = resolveApprovalClient(resolved.context, preparedTarget.teamId);
+      const to = await resolveApprovalChannel(client, preparedTarget.to, preparedTarget.teamId);
+      const eventScope = resolveApprovalEventScope(client, preparedTarget.teamId);
+      const message = await sendMessageSlack(to, pendingPayload.text, {
         cfg,
         accountId: resolved.accountId,
         threadTs: preparedTarget.threadTs,
         blocks: pendingPayload.blocks,
-        client: resolved.context.app.client,
+        client,
+        eventScope,
       });
       return {
         channelId: message.channelId,
         messageTs: message.messageId,
+        teamId: preparedTarget.teamId,
       };
     },
     updateEntry: async ({ cfg, accountId, context, entry, payload }) => {
@@ -509,8 +533,9 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
         return;
       }
       const nextPayload = payload;
+      const client = resolveApprovalClient(resolved.context, entry.teamId);
       await updateMessage({
-        app: resolved.context.app,
+        client,
         channelId: entry.channelId,
         messageTs: entry.messageTs,
         text: nextPayload.text,
@@ -524,3 +549,49 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
     },
   },
 });
+
+function resolveApprovalClient(context: SlackApprovalHandlerContext, teamId?: string): WebClient {
+  if (!teamId) {
+    return context.app.client;
+  }
+  if (!context.enterprise || !context.resolveClient) {
+    throw new Error("Slack Enterprise Grid approval client is unavailable");
+  }
+  const client = context.resolveClient(teamId);
+  if (!client) {
+    throw new Error("Slack Enterprise Grid approval client is unavailable");
+  }
+  return client;
+}
+
+function resolveApprovalEventScope(
+  client: WebClient,
+  teamId?: string,
+): SlackEventScope | undefined {
+  if (!teamId) {
+    return undefined;
+  }
+  return {
+    teamId,
+    client,
+  };
+}
+
+async function resolveApprovalChannel(client: WebClient, target: string, teamId?: string) {
+  if (!teamId) {
+    return target;
+  }
+  const parsed = parseSlackTarget(target, { defaultKind: "channel" });
+  if (!parsed) {
+    throw new Error("Slack approval delivery target is missing");
+  }
+  if (parsed.kind === "channel") {
+    return `channel:${parsed.id}`;
+  }
+  const opened = await client.conversations.open({ users: parsed.id, return_im: true });
+  const channelId = normalizeOptionalString(opened.channel?.id);
+  if (!channelId) {
+    throw new Error("Slack Enterprise Grid approval DM did not return a channel id");
+  }
+  return `channel:${channelId}`;
+}

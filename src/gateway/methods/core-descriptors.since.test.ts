@@ -26,7 +26,6 @@ const CURRENT_TRAIN_METHODS = [
   "terminal.close",
   "terminal.attach",
   "terminal.list",
-  "terminal.text",
   "terminal.upload",
   "worktrees.list",
   "worktrees.branches",
@@ -38,6 +37,7 @@ const CURRENT_TRAIN_METHODS = [
   "agents.workspace.get",
   "audit.list",
   "audit.activity.list",
+  "audit.run.inspect",
   "board.widget.appView",
   "tts.speak",
   "environments.list",
@@ -46,6 +46,7 @@ const CURRENT_TRAIN_METHODS = [
   "environments.destroy",
   "sessions.dispatch",
   "sessions.reclaim",
+  "sessions.viewers.set",
   "sessions.catalog.list",
   "sessions.catalog.read",
   "sessions.catalog.continue",
@@ -68,8 +69,15 @@ const CURRENT_TRAIN_METHODS = [
   "channels.pairing.list",
   "channels.pairing.approve",
   "channels.pairing.dismiss",
+  "controlUi.sessionPullRequests.subscribe",
   "cron.scratch.get",
   "cron.scratch.set",
+  "memory.search",
+  "skills.proposals.evaluate",
+  "skills.proposals.events.list",
+  "hooks.status",
+  "tasks.retry",
+  "tasks.dismiss",
 ] as const;
 
 describe("core gateway method release trains", () => {
@@ -86,5 +94,16 @@ describe("core gateway method release trains", () => {
         .map((method) => method.name)
         .toSorted(),
     ).toEqual(CURRENT_TRAIN_METHODS.toSorted());
+    expect(methods.find((method) => method.name === "update.hold")?.since).toBe("2026.8");
+    expect(methods.find((method) => method.name === "sessions.catalog.startTerminal")?.since).toBe(
+      "2026.8",
+    );
+    expect(methods.find((method) => method.name === "worker.desktop.observe")?.since).toBe(
+      "2026.8",
+    );
+    for (const method of ["projects.list", "projects.register", "projects.remove"]) {
+      expect(methods.find((candidate) => candidate.name === method)?.since).toBe("2026.8");
+    }
+    expect(methods.find((method) => method.name === "worker.desktop.launch")?.since).toBe("2026.8");
   });
 });

@@ -50,7 +50,7 @@ The authoritative advertised **discovery** inventory lives in `src/gateway/serve
 - Generator registry: ordered `protocol-schema-fragment-*.ts` files map stable names to the canonical TypeBox objects from their owner modules. `protocol-schemas.ts` composes those fragments in a fixed order and rejects duplicate keys.
 - Runtime validators (AJV): `packages/gateway-protocol/src/index.ts`
 - Advertised feature/discovery registry: `src/gateway/server-methods-list.ts`
-- Server handshake and method dispatch: `src/gateway/server.impl.ts`
+- Server handshake and method dispatch: `src/gateway/server-core-runtime.ts`
 - Node client: `src/gateway/client.ts`
 - Generated JSON Schema: `dist/protocol.schema.json` (build output, not committed)
 - Generated Swift models: `apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift`
@@ -59,8 +59,11 @@ The authoritative advertised **discovery** inventory lives in `src/gateway/serve
 
 - `pnpm protocol:gen` writes JSON Schema (draft-07) to `dist/protocol.schema.json`.
 - `pnpm protocol:gen:swift` generates the Swift gateway models.
+- `pnpm protocol:check:swift` verifies the committed Swift models without rewriting them.
 - `pnpm protocol:gen:kotlin` generates the Android protocol models and constants.
 - `pnpm protocol:check` checks the registry structure, runs all three generators, and verifies the committed Swift and Kotlin output (the JSON Schema output is a gitignored build artifact).
+
+When a gateway schema affects native clients, run `pnpm protocol:gen:swift`, review the generated diff, then run `pnpm protocol:check:swift`. Commit the schema and `GatewayModels.swift` update together. Stable decoding behavior belongs in the focused `GatewayModelsCompatibilityTests.swift` regressions rather than in handwritten model copies.
 
 ## How the schemas are used at runtime
 
@@ -181,7 +184,7 @@ Example: add a new `system.echo` request that returns `{ ok: true, text }`.
 
 1. **Schema (source of truth)**
 
-Add to `packages/gateway-protocol/src/schema/system.ts` (or the closest matching feature module):
+Add to `packages/gateway-protocol/src/schema/system-info.ts` (or the closest matching feature module):
 
 ```ts
 export const SystemEchoParamsSchema = Type.Object(

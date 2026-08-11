@@ -7,6 +7,7 @@
  * - Markdown support flag is per-instance, not a global Map.
  */
 
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   ChatScope,
   MessageResponse,
@@ -15,7 +16,6 @@ import type {
   InlineKeyboard,
   StreamMessageRequest,
 } from "../types.js";
-import { formatErrorMessage } from "../utils/format.js";
 import { ApiClient } from "./api-client.js";
 import {
   messagePath,

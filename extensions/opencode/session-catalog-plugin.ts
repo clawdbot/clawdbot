@@ -171,7 +171,9 @@ function isOpenCodeSessionCatalogEnabled(pluginConfig: unknown): boolean {
   );
 }
 
-function createOpenCodeSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] {
+function createOpenCodeSessionNodeHostCommands(
+  api: OpenClawPluginApi,
+): OpenClawPluginNodeHostCommand[] {
   const available = ({ config, env }: { config: unknown; env: NodeJS.ProcessEnv }) =>
     fullConfigCatalogEnabled(config) && executableOnPath("opencode", env);
   return [
@@ -181,7 +183,11 @@ function createOpenCodeSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[
       dangerous: false,
       isAvailable: available,
       handle: async (paramsJSON) =>
-        JSON.stringify(await listLocalOpenCodeSessionPage(parseNodeParams(paramsJSON))),
+        JSON.stringify(
+          await listLocalOpenCodeSessionPage(parseNodeParams(paramsJSON), {
+            configIdentity: currentOpenCodeCatalogConfig(api),
+          }),
+        ),
     },
     {
       command: OPENCODE_SESSION_READ_COMMAND,
@@ -334,8 +340,9 @@ async function listOpenCodeHosts(
   query: Parameters<SessionCatalogProvider["list"]>[0],
 ): Promise<SessionCatalogHost[]> {
   const runtime = api.runtime;
+  const config = currentOpenCodeCatalogConfig(api);
   const canContinue = resolveAcpSessionAvailability({
-    config: currentOpenCodeCatalogConfig(api),
+    config,
     backendId: ACPX_BACKEND_ID,
     agentId: OPENCODE_ACP_AGENT_ID,
   }).available;
@@ -355,11 +362,14 @@ async function listOpenCodeHosts(
         label: "Local OpenCode",
         kind: "gateway",
         connected: true,
-        ...(await listLocalOpenCodeSessionPage({
-          limit: query.limitPerHost,
-          ...(query.search ? { searchTerm: query.search } : {}),
-          cursor: query.cursors?.[LOCAL_HOST_ID],
-        }).then((page) => setCatalogCapabilities(page, { canContinue, canOpenTerminal: true }))),
+        ...(await listLocalOpenCodeSessionPage(
+          {
+            limit: query.limitPerHost,
+            ...(query.search ? { searchTerm: query.search } : {}),
+            cursor: query.cursors?.[LOCAL_HOST_ID],
+          },
+          { configIdentity: config },
+        ).then((page) => setCatalogCapabilities(page, { canContinue, canOpenTerminal: true }))),
       });
     } catch {
       hosts.push({
@@ -484,15 +494,18 @@ async function continueOpenCodeSession(
     sourceKey,
     findExisting: () => listAdoptedOpenCodeSessions(api).get(sourceKey),
     create: async () => {
-      const page = await listLocalOpenCodeSessionPage({
-        searchTerm: threadId,
-        limit: MAX_PAGE_LIMIT,
-      }).catch(() => undefined);
+      const config = currentOpenCodeCatalogConfig(api);
+      const page = await listLocalOpenCodeSessionPage(
+        {
+          searchTerm: threadId,
+          limit: MAX_PAGE_LIMIT,
+        },
+        { configIdentity: config, forceRefresh: true },
+      ).catch(() => undefined);
       const record = page?.sessions.find((session) => session.threadId === threadId);
       if (!record) {
         throw new OpenCodeCatalogParamsError("OpenCode session is unavailable");
       }
-      const config = currentOpenCodeCatalogConfig(api);
       const currentAvailability = resolveAcpSessionAvailability({
         config,
         backendId: ACPX_BACKEND_ID,
@@ -564,7 +577,7 @@ export function registerOpenCodeSessionCatalog(api: OpenClawPluginApi): void {
         unwrapNodePayload,
       }),
   });
-  for (const command of createOpenCodeSessionNodeHostCommands()) {
+  for (const command of createOpenCodeSessionNodeHostCommands(api)) {
     api.registerNodeHostCommand(command);
   }
   for (const policy of createOpenCodeSessionNodeInvokePolicies()) {

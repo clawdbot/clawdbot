@@ -2,7 +2,11 @@ import {
   resolveOpenAIReasoningEffortForModel,
   supportsOpenAIReasoningEffort,
 } from "@openclaw/ai/internal/openai";
-import { emitModelTransportDebug, isCodeModeModelVisibleToolName } from "@openclaw/ai/transports";
+import {
+  filterCodeModePayloadTools,
+  isCodeModeModelVisibleToolName,
+  readCodeModePayloadToolName,
+} from "@openclaw/ai/transports";
 import {
   flattenCompletionMessagesToStringContent,
   stripCompletionMessagesToRoleContent,
@@ -44,6 +48,7 @@ type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
 type DynamicFastMode = boolean | (() => boolean | undefined);
 type OpenClawSimpleStreamOptions = SimpleStreamOptions & {
   openclawCodeModeToolSurface?: boolean;
+  openclawCodeModeAllowedHostedToolTypes?: Set<string>;
 };
 type OpenAIResponsesReplayOptions = Parameters<StreamFn>[2] & {
   replayResponsesItemIds?: boolean;
@@ -129,14 +134,6 @@ function isCodeModeEnabled(config?: OpenClawConfig): boolean {
   );
 }
 
-function readPayloadToolField(record: Record<string, unknown>, field: string): unknown {
-  try {
-    return record[field];
-  } catch {
-    return undefined;
-  }
-}
-
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   return (
     value !== null &&
@@ -145,84 +142,32 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   );
 }
 
-function readPayloadToolName(tool: unknown): string | undefined {
-  if (!tool || typeof tool !== "object") {
-    return undefined;
-  }
-  const record = tool as Record<string, unknown>;
-  const name = readPayloadToolField(record, "name");
-  if (typeof name === "string") {
-    return name;
-  }
-  const fn = readPayloadToolField(record, "function");
-  if (!fn || typeof fn !== "object") {
-    return undefined;
-  }
-  const fnName = readPayloadToolField(fn as Record<string, unknown>, "name");
-  return typeof fnName === "string" ? fnName : undefined;
-}
-
-function isCodeModePayloadToolName(name: string | undefined): boolean {
-  return typeof name === "string" && isCodeModeModelVisibleToolName(name);
-}
-
-function filterCodeModeToolDeclarations(declarations: unknown): unknown[] | undefined {
-  if (!Array.isArray(declarations)) {
-    return undefined;
-  }
-  return declarations.filter((declaration) =>
-    isCodeModePayloadToolName(readPayloadToolName(declaration)),
-  );
-}
-
-function filterCodeModeGroupedToolDeclarations(tool: unknown): Record<string, unknown> | undefined {
-  if (!tool || typeof tool !== "object" || Array.isArray(tool)) {
-    return undefined;
-  }
-  const record = tool as Record<string, unknown>;
-  const filteredGroups: Record<string, unknown> = {};
-  for (const key of ["functionDeclarations", "function_declarations"] as const) {
-    const filtered = filterCodeModeToolDeclarations(readPayloadToolField(record, key));
-    if (filtered === undefined) {
-      continue;
-    }
-    if (filtered.length > 0) {
-      filteredGroups[key] = filtered;
-    }
-  }
-  return Object.keys(filteredGroups).length > 0 ? filteredGroups : undefined;
-}
-
-function filterCodeModePayloadTools(payload: unknown): void {
-  if (!payload || typeof payload !== "object") {
-    return;
-  }
-  const record = payload as { tools?: unknown };
-  if (!Array.isArray(record.tools)) {
-    return;
-  }
-  record.tools = record.tools.flatMap((tool) => {
-    const name = readPayloadToolName(tool);
-    if (isCodeModePayloadToolName(name)) {
-      return [tool];
-    }
-    const grouped = filterCodeModeGroupedToolDeclarations(tool);
-    return grouped ? [grouped] : [];
-  });
-}
-
-function filterCodeModePayloadHookResult(payload: unknown, nextPayload: unknown): unknown {
+function filterCodeModePayloadHookResult(
+  payload: unknown,
+  nextPayload: unknown,
+  visibleToolNames: ReadonlySet<string>,
+  allowedHostedToolTypes: ReadonlySet<string>,
+): unknown {
   const finalPayload = nextPayload === undefined ? payload : nextPayload;
-  filterCodeModePayloadTools(finalPayload);
+  filterCodeModePayloadTools(finalPayload, visibleToolNames, allowedHostedToolTypes);
   return nextPayload === undefined ? undefined : finalPayload;
 }
 
-function hasCodeModeVisibleTools(context: { tools?: unknown }): boolean {
+function resolveCodeModeVisibleToolNames(context: {
+  tools?: unknown;
+}): ReadonlySet<string> | undefined {
   if (!Array.isArray(context.tools)) {
-    return false;
+    return undefined;
   }
-  const names = new Set(context.tools.map(readPayloadToolName).filter(Boolean));
-  return names.has("exec") && names.has("wait");
+  const names = new Set(
+    context.tools
+      .map(readCodeModePayloadToolName)
+      .filter((name): name is string => typeof name === "string"),
+  );
+  return isCodeModeModelVisibleToolName("exec", names) &&
+    isCodeModeModelVisibleToolName("wait", names)
+    ? names
+    : undefined;
 }
 
 function shouldApplyOpenAIReasoningCompatibility(model: {
@@ -703,31 +648,82 @@ export function createCodexNativeWebSearchWrapper(
     // provider-family wrapper stays aligned for the same request.
     const codeModeSurfaceFromOptions =
       (options as OpenClawSimpleStreamOptions | undefined)?.openclawCodeModeToolSurface === true;
+    const codeModeVisibleToolNames = resolveCodeModeVisibleToolNames(context);
+    const resolveNativeSearchActivation = () =>
+      resolveCodexNativeSearchActivation({
+        config: params.config,
+        modelProvider: readStringValue(model.provider),
+        modelApi: readStringValue(model.api),
+        modelId: readStringValue(model.id),
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        sandboxToolPolicy: params.sandboxToolPolicy,
+        messageProvider: params.messageProvider,
+        agentAccountId: params.agentAccountId,
+        groupId: params.groupId,
+        groupChannel: params.groupChannel,
+        groupSpace: params.groupSpace,
+        spawnedBy: params.spawnedBy,
+        senderId: params.senderId,
+        senderName: params.senderName,
+        senderUsername: params.senderUsername,
+        senderE164: params.senderE164,
+        agentDir: params.agentDir,
+      });
     if (
       (params.codeModeToolSurfaceEnabled === true ||
         codeModeSurfaceFromOptions ||
         isCodeModeEnabled(params.config)) &&
-      hasCodeModeVisibleTools(context)
+      codeModeVisibleToolNames
     ) {
-      emitModelTransportDebug(
-        log,
-        `skipping Codex native web search because code mode owns the model tool surface for ${
-          model.provider ?? "unknown"
-        }/${model.id ?? "unknown"}`,
-      );
+      // Every spread below must retain this request-scoped Set so the provider policy owner
+      // and final Responses egress agree on the same hosted-tool authorization fact.
+      const allowedHostedToolTypes =
+        (options as OpenClawSimpleStreamOptions | undefined)
+          ?.openclawCodeModeAllowedHostedToolTypes ?? new Set<string>();
+      const activation =
+        params.nativeWebSearchAllowedByToolPolicy === false
+          ? undefined
+          : resolveNativeSearchActivation();
+      if (activation?.state === "native_active") {
+        allowedHostedToolTypes.add("web_search");
+      }
+      if (activation?.state === "native_active" || activation?.codexNativeEnabled) {
+        const outcome =
+          activation.state === "native_active"
+            ? `activating (${activation.codexMode})`
+            : `skipping (${activation.inactiveReason ?? "inactive"})`;
+        log.debug(
+          `${outcome} Codex native web search alongside code mode for ${model.provider ?? "unknown"}/${model.id ?? "unknown"}`,
+        );
+      }
       const originalOnPayload = options?.onPayload;
       const codeModeOptions: OpenClawSimpleStreamOptions = {
         ...options,
         openclawCodeModeToolSurface: true,
+        openclawCodeModeAllowedHostedToolTypes: allowedHostedToolTypes,
         onPayload: (payload) => {
-          filterCodeModePayloadTools(payload);
+          if (activation?.state === "native_active") {
+            patchCodexNativeWebSearchPayload({ payload, config: params.config });
+          }
+          filterCodeModePayloadTools(payload, codeModeVisibleToolNames, allowedHostedToolTypes);
           const nextPayload = originalOnPayload?.(payload, model);
           if (isPromiseLike(nextPayload)) {
             return Promise.resolve(nextPayload).then((resolvedPayload) =>
-              filterCodeModePayloadHookResult(payload, resolvedPayload),
+              filterCodeModePayloadHookResult(
+                payload,
+                resolvedPayload,
+                codeModeVisibleToolNames,
+                allowedHostedToolTypes,
+              ),
             );
           }
-          return filterCodeModePayloadHookResult(payload, nextPayload);
+          return filterCodeModePayloadHookResult(
+            payload,
+            nextPayload,
+            codeModeVisibleToolNames,
+            allowedHostedToolTypes,
+          );
         },
       };
       return underlying(model, context, codeModeOptions);
@@ -742,26 +738,7 @@ export function createCodexNativeWebSearchWrapper(
       return underlying(model, context, options);
     }
 
-    const activation = resolveCodexNativeSearchActivation({
-      config: params.config,
-      modelProvider: readStringValue(model.provider),
-      modelApi: readStringValue(model.api),
-      modelId: readStringValue(model.id),
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      sandboxToolPolicy: params.sandboxToolPolicy,
-      messageProvider: params.messageProvider,
-      agentAccountId: params.agentAccountId,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      spawnedBy: params.spawnedBy,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-      agentDir: params.agentDir,
-    });
+    const activation = resolveNativeSearchActivation();
 
     if (activation.state !== "native_active") {
       if (activation.codexNativeEnabled) {
@@ -802,18 +779,6 @@ export function createCodexNativeWebSearchWrapper(
     });
   };
 }
-/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
-export function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    const mergedOptions = {
-      ...options,
-      transport: options?.transport ?? "auto",
-    } as SimpleStreamOptions;
-    return underlying(model, context, mergedOptions);
-  };
-}
-
 /** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenAIAttributionHeadersWrapper(
   baseStreamFn: StreamFn | undefined,

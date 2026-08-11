@@ -10,12 +10,18 @@ import {
   publishSessionTranscriptUpdateByIdentity,
   readVisibleSessionTranscriptMessageEntries,
   type SessionTranscriptTargetParams,
+  type TranscriptEntryAnchor,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import type { AttemptParamsLike } from "./attempt-types.js";
 
 type TranscriptMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>;
 type AppendResult =
-  | { appended: boolean; message: TranscriptMessage; messageId: string }
+  | {
+      anchor: TranscriptEntryAnchor;
+      appended: boolean;
+      message: TranscriptMessage;
+      messageId: string;
+    }
   | undefined;
 type PendingWrite = { eventId?: string; message: TranscriptMessage };
 type ToolGroup = {
@@ -24,6 +30,45 @@ type ToolGroup = {
   order: string[];
   results: Map<string, PendingWrite>;
 };
+type PersistenceReceipt = {
+  promise: Promise<void>;
+  reject: (error: Error) => void;
+  resolve: () => void;
+};
+
+type TurnTaintMetadata = { resultContentSource?: "network"; turnTainted?: true };
+
+function readTurnTaintMetadata(message: AgentMessage): TurnTaintMetadata | undefined {
+  const metadata = (message as unknown as Record<string, unknown>)["__openclaw"];
+  return metadata && typeof metadata === "object" && !Array.isArray(metadata)
+    ? (metadata as TurnTaintMetadata)
+    : undefined;
+}
+
+function isActiveTurnTainted(messages: readonly AgentMessage[]): boolean {
+  for (const message of messages.toReversed()) {
+    if (message.role === "user") {
+      return false;
+    }
+    const metadata = readTurnTaintMetadata(message);
+    if (metadata?.turnTainted === true || metadata?.resultContentSource === "network") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function withAssistantTurnTaint(
+  message: Extract<AgentMessage, { role: "assistant" }>,
+  tainted: boolean,
+) {
+  return tainted
+    ? ({
+        ...message,
+        __openclaw: { ...readTurnTaintMetadata(message), turnTainted: true },
+      } as typeof message)
+    : message;
+}
 
 export type AttemptTranscriptJournal = ReturnType<typeof createAttemptTranscriptJournal>;
 
@@ -31,6 +76,7 @@ export function createAttemptTranscriptJournal(params: {
   abortSession: () => Promise<void>;
   attempt: AttemptParamsLike;
   messages: AgentMessage[];
+  onInitialSdkUserValidated?: () => void;
   sdkSessionId: string;
 }) {
   const hiddenTurn = params.attempt.trigger === "memory";
@@ -40,6 +86,7 @@ export function createAttemptTranscriptJournal(params: {
       message,
     });
   const messagesSnapshot = [...params.messages];
+  let turnTainted = isActiveTurnTainted(messagesSnapshot);
   const snapshotIdempotencyKeys = new Set(
     messagesSnapshot.flatMap((message) => {
       const key = readIdempotencyKey(message);
@@ -78,6 +125,7 @@ export function createAttemptTranscriptJournal(params: {
   let pendingTools: ToolGroup | undefined;
   let queue = Promise.resolve();
   let firstFailure: Error | undefined;
+  const sdkUserPersistenceReceipts = new Map<string, PersistenceReceipt>();
   let abortPromise: Promise<void> | undefined;
   let replayInvalid = false;
   let initialSdkUserObserved = false;
@@ -86,6 +134,7 @@ export function createAttemptTranscriptJournal(params: {
   let latestAssistantKey: string | undefined;
   let assistantTranscriptOwned = false;
   let assistantTranscriptIdempotencyKey: string | undefined;
+  let terminalAnchor: TranscriptEntryAnchor | undefined;
 
   const captureFailure = (error: unknown) => {
     if (firstFailure) {
@@ -94,7 +143,21 @@ export function createAttemptTranscriptJournal(params: {
     firstFailure = error instanceof Error ? error : new Error(String(error));
     replayInvalid = true;
     pendingTools = undefined;
+    for (const receipt of sdkUserPersistenceReceipts.values()) {
+      receipt.reject(firstFailure);
+    }
     abortPromise = params.abortSession().catch(() => undefined);
+  };
+  const sdkUserPersistenceReceipt = (eventId: string) => {
+    let receipt = sdkUserPersistenceReceipts.get(eventId);
+    if (!receipt) {
+      receipt = createPersistenceReceipt();
+      sdkUserPersistenceReceipts.set(eventId, receipt);
+      if (firstFailure) {
+        receipt.reject(firstFailure);
+      }
+    }
+    return receipt;
   };
   const claim = (eventId: string) =>
     !firstFailure && !seenEventIds.has(eventId) && Boolean(seenEventIds.add(eventId));
@@ -128,6 +191,7 @@ export function createAttemptTranscriptJournal(params: {
       replayInvalid = true;
     }
     const idempotencyKey = (message as { idempotencyKey?: string }).idempotencyKey;
+    const taintMetadata = readTurnTaintMetadata(message);
     const toolIdentity =
       message.role === "toolResult"
         ? { toolCallId: message.toolCallId, toolName: message.toolName }
@@ -135,6 +199,9 @@ export function createAttemptTranscriptJournal(params: {
     const prepared = projectDisplay({
       ...hooked,
       ...toolIdentity,
+      ...(taintMetadata
+        ? { __openclaw: { ...readTurnTaintMetadata(hooked), ...taintMetadata } }
+        : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
       ...((message as { display?: boolean }).display === false ? { display: false } : {}),
     }) as TranscriptMessage;
@@ -250,10 +317,11 @@ export function createAttemptTranscriptJournal(params: {
     }
     return result.appended;
   };
-  const ownAssistant = (key: string, persisted: boolean) => {
+  const ownAssistant = (key: string, persisted: boolean, anchor?: TranscriptEntryAnchor) => {
     if (latestAssistantKey === key) {
       assistantTranscriptOwned = true;
       assistantTranscriptIdempotencyKey = persisted ? key : undefined;
+      terminalAnchor = persisted ? anchor : undefined;
     }
   };
 
@@ -306,6 +374,7 @@ export function createAttemptTranscriptJournal(params: {
       latestAssistantKey = undefined;
       assistantTranscriptOwned = false;
       assistantTranscriptIdempotencyKey = undefined;
+      terminalAnchor = undefined;
     },
     async persistInitialUser() {
       const recorder = params.attempt.userTurnTranscriptRecorder;
@@ -338,7 +407,8 @@ export function createAttemptTranscriptJournal(params: {
         const persisted = outcome.message as Extract<AgentMessage, { role: "user" }>;
         accept(outcome);
         persistedInitialUser = persisted;
-        recorder.markRuntimePersisted(persisted);
+        terminalAnchor = outcome.anchor;
+        recorder.markRuntimePersisted(persisted, outcome.anchor);
         params.attempt.onUserMessagePersisted?.(persisted);
         await publish(outcome.appended);
       })();
@@ -352,6 +422,7 @@ export function createAttemptTranscriptJournal(params: {
       autopilotContinuation: boolean;
       replayIncomplete?: boolean;
     }) {
+      const persistenceReceipt = sdkUserPersistenceReceipt(input.eventId);
       if (!claim(input.eventId)) {
         return;
       }
@@ -365,7 +436,9 @@ export function createAttemptTranscriptJournal(params: {
           replayInvalid = true;
         } else {
           initialSdkUserValidated = true;
+          params.onInitialSdkUserValidated?.();
         }
+        persistenceReceipt.resolve();
         return;
       }
       initialSdkUserObserved = true;
@@ -378,8 +451,11 @@ export function createAttemptTranscriptJournal(params: {
         const outcome = await append(write);
         if (!outcome) {
           replayInvalid = true;
+          persistenceReceipt.reject(new Error("Copilot steering user write was suppressed"));
+          return;
         }
         await publish(accept(outcome));
+        persistenceReceipt.resolve();
       });
     },
     recordAssistant(input: {
@@ -392,17 +468,19 @@ export function createAttemptTranscriptJournal(params: {
         return;
       }
       replayInvalid ||= input.replayIncomplete === true;
+      const message = withAssistantTurnTaint(input.message, turnTainted);
       const key = `copilot-sdk:${params.sdkSessionId}:${input.eventId}`;
       latestAssistantKey = key;
       assistantTranscriptOwned = false;
       assistantTranscriptIdempotencyKey = undefined;
+      terminalAnchor = undefined;
       schedule(async () => {
         if (pendingTools) {
           throw new Error("Copilot emitted an assistant message before tool results settled");
         }
         const write = {
           eventId: input.eventId,
-          message: { ...input.message, idempotencyKey: key } as TranscriptMessage,
+          message: { ...message, idempotencyKey: key } as TranscriptMessage,
         };
         if (input.toolCallIds.length > 0) {
           pendingTools = {
@@ -417,7 +495,7 @@ export function createAttemptTranscriptJournal(params: {
         if (!outcome) {
           replayInvalid = true;
         }
-        ownAssistant(key, Boolean(outcome));
+        ownAssistant(key, Boolean(outcome), outcome?.anchor);
         await publish(accept(outcome));
       });
     },
@@ -429,6 +507,7 @@ export function createAttemptTranscriptJournal(params: {
       if (!claim(input.eventId)) {
         return;
       }
+      turnTainted ||= readTurnTaintMetadata(input.message)?.resultContentSource === "network";
       schedule(async () => {
         const group = pendingTools;
         if (!group || !group.order.includes(input.message.toolCallId)) {
@@ -455,29 +534,74 @@ export function createAttemptTranscriptJournal(params: {
             const didAppend = accept(result as AppendResult);
             appended ||= didAppend;
           }
-          ownAssistant(group.assistantKey, true);
+          ownAssistant(group.assistantKey, true, results.at(-1)?.anchor);
         }
         pendingTools = undefined;
+        const deferredReceipts: PersistenceReceipt[] = [];
         for (const write of deferredUserWrites.splice(0)) {
           const outcome = await append(write);
           if (!outcome) {
             replayInvalid = true;
+            if (write.eventId) {
+              sdkUserPersistenceReceipt(write.eventId).reject(
+                new Error("Copilot steering user write was suppressed"),
+              );
+            }
+            continue;
           }
           const didAppend = accept(outcome);
           appended ||= didAppend;
+          if (write.eventId) {
+            deferredReceipts.push(sdkUserPersistenceReceipt(write.eventId));
+          }
         }
         await publish(appended);
+        for (const receipt of deferredReceipts) {
+          receipt.resolve();
+        }
       });
+    },
+    waitForSdkUserPersisted(eventId: string) {
+      return sdkUserPersistenceReceipt(eventId).promise;
     },
     barrier,
     hasFailed: () => firstFailure !== undefined,
     snapshot: () => ({
       assistantTranscriptOwned,
       assistantTranscriptIdempotencyKey,
+      terminalAnchor,
       initialSdkUserValidated,
       messagesSnapshot: [...messagesSnapshot],
       replayInvalid,
     }),
+  };
+}
+
+function createPersistenceReceipt(): PersistenceReceipt {
+  let settled = false;
+  let rejectPromise: ((error: Error) => void) | undefined;
+  let resolvePromise: (() => void) | undefined;
+  const promise = new Promise<void>((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+  });
+  // Some SDK user events are not steering receipts. Keep their later journal
+  // failure observable without creating an unhandled rejection.
+  void promise.catch(() => undefined);
+  return {
+    promise,
+    reject(error) {
+      if (!settled) {
+        settled = true;
+        rejectPromise?.(error);
+      }
+    },
+    resolve() {
+      if (!settled) {
+        settled = true;
+        resolvePromise?.();
+      }
+    },
   };
 }
 

@@ -16,7 +16,8 @@ import {
   type CodexPluginRuntimeRequest,
 } from "./plugin-inventory.js";
 import type { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
-import type { v2 } from "./protocol.js";
+import type { CodexAppServerRequestResult, v2 } from "./protocol.js";
+import { CodexAppServerRpcError } from "./rpc-error.js";
 
 /** Terminal reason reported after trying to activate one Codex plugin policy. */
 type CodexPluginActivationReason =
@@ -25,6 +26,7 @@ type CodexPluginActivationReason =
   | "disabled"
   | "marketplace_missing"
   | "plugin_missing"
+  | "install_failed"
   | "auth_required"
   | "refresh_failed";
 
@@ -52,6 +54,8 @@ type EnsureCodexPluginActivationParams = {
   appCacheKey?: string;
   metadataCache?: CodexPluginMetadataCache;
   installEvenIfActive?: boolean;
+  /** Thread setup batches app refresh once after all plugin activations. */
+  deferAppInventoryRefresh?: boolean;
   targetAppIds?: readonly string[];
 };
 
@@ -85,6 +89,12 @@ export async function ensureCodexPluginActivation(
     });
   }
 
+  if (resolved.marketplace.remoteMarketplaceName && !resolved.summary.remotePluginId) {
+    return activationFailure(params.identity, "plugin_missing", {
+      message: `${params.identity.pluginName} detail unavailable: Codex did not return a remote plugin id.`,
+    });
+  }
+
   if (resolved.summary.installed && resolved.summary.enabled && !params.installEvenIfActive) {
     return {
       identity: params.identity,
@@ -96,15 +106,45 @@ export async function ensureCodexPluginActivation(
     };
   }
 
-  const installResponse = (await params.request(
-    "plugin/install",
-    pluginReadParams(
-      resolved.marketplace,
-      resolved.marketplace.remoteMarketplaceName && resolved.summary.remotePluginId
-        ? resolved.summary.remotePluginId
-        : params.identity.pluginName,
-    ) satisfies v2.PluginInstallParams,
-  )) as v2.PluginInstallResponse;
+  const remotePluginId = resolved.marketplace.remoteMarketplaceName
+    ? resolved.summary.remotePluginId
+    : undefined;
+  let installResponse: v2.PluginInstallResponse;
+  try {
+    installResponse = (await params.request(
+      "plugin/install",
+      pluginReadParams(
+        resolved.marketplace,
+        remotePluginId ?? params.identity.pluginName,
+      ) satisfies v2.PluginInstallParams,
+    )) as v2.PluginInstallResponse;
+  } catch (error) {
+    if (
+      !(error instanceof CodexAppServerRpcError) ||
+      error.code !== -32600 ||
+      !remotePluginId ||
+      (error.message !== `remote plugin ${remotePluginId} is disabled by admin` &&
+        error.message !== `remote plugin ${remotePluginId} is not available for install`)
+    ) {
+      throw error;
+    }
+    // The catalog can be stale by install time. Isolate only Codex's exact
+    // terminal remote-install contract; unrelated RPC failures abort the turn.
+    return {
+      identity: params.identity,
+      ok: false,
+      reason: "install_failed",
+      installAttempted: true,
+      marketplace: resolved.marketplace,
+      diagnostics: [
+        {
+          message: `Codex plugin install failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        },
+      ],
+    };
+  }
   if (params.metadataCache && params.appCacheKey) {
     params.metadataCache.invalidate(params.appCacheKey);
   }
@@ -116,6 +156,7 @@ export async function ensureCodexPluginActivation(
       appCache: params.appCache,
       appCacheKey: params.appCacheKey,
       metadataCache: params.metadataCache,
+      deferAppInventoryRefresh: params.deferAppInventoryRefresh,
       targetAppIds: params.targetAppIds,
     });
     refreshDiagnostics.push(...refreshResult.diagnostics);
@@ -156,10 +197,11 @@ async function refreshCodexPluginRuntimeState(params: {
   appCache?: CodexAppInventoryCache;
   appCacheKey?: string;
   metadataCache?: CodexPluginMetadataCache;
+  deferAppInventoryRefresh?: boolean;
   targetAppIds?: readonly string[];
 }): Promise<CodexPluginRuntimeRefreshResult> {
   const diagnostics: CodexPluginActivationDiagnostic[] = [];
-  await listCuratedCodexPluginMetadata(params);
+  await listCuratedCodexPluginMetadata(params, { forceRefetch: true });
   await (params.request("skills/list", {
     cwds: [],
     forceReload: true,
@@ -176,9 +218,19 @@ async function refreshCodexPluginRuntimeState(params: {
   await params.request("config/mcpServer/reload", undefined);
 
   if (params.appCache && params.appCacheKey) {
-    params.appCache.invalidate(params.appCacheKey, "Codex plugin activation changed app inventory");
+    // Scope the invalidation to the activated plugin's apps so the follow-up
+    // targeted refresh (immediate or deferred union) can revalidate the entry.
+    params.appCache.invalidate(
+      params.appCacheKey,
+      "Codex plugin activation changed app inventory",
+      undefined,
+      params.targetAppIds,
+    );
+    if (params.deferAppInventoryRefresh) {
+      return { diagnostics };
+    }
     const request: CodexAppInventoryRequest = async (method, requestParams) =>
-      (await params.request(method, requestParams)) as v2.AppsListResponse;
+      (await params.request(method, requestParams)) as CodexAppServerRequestResult<typeof method>;
     try {
       await params.appCache.refreshNow({
         key: params.appCacheKey,
@@ -198,12 +250,17 @@ async function refreshCodexPluginRuntimeState(params: {
   return { diagnostics };
 }
 
-async function listCuratedCodexPluginMetadata(params: {
-  request: CodexPluginRuntimeRequest;
-  metadataCache?: CodexPluginMetadataCache;
-  appCacheKey?: string;
-}): Promise<v2.PluginListResponse> {
-  const requestParams = {} satisfies v2.PluginListParams;
+async function listCuratedCodexPluginMetadata(
+  params: {
+    request: CodexPluginRuntimeRequest;
+    metadataCache?: CodexPluginMetadataCache;
+    appCacheKey?: string;
+  },
+  options: { forceRefetch?: boolean } = {},
+): Promise<v2.PluginListResponse> {
+  const requestParams = (
+    options.forceRefetch ? { forceRefetch: true } : {}
+  ) satisfies v2.PluginListParams;
   if (!params.metadataCache || !params.appCacheKey) {
     return (await params.request("plugin/list", requestParams)) as v2.PluginListResponse;
   }
@@ -217,7 +274,7 @@ async function listCuratedCodexPluginMetadata(params: {
     // marketplace itself (upstream returns local-only on remote fetch failure
     // without a load error). See listCodexPluginMetadata in plugin-inventory.
     cacheable: (response: v2.PluginListResponse) =>
-      (response.marketplaces ?? []).some((marketplace) => isOpenAiCuratedMarketplace(marketplace)),
+      response.marketplaces.some((marketplace) => isOpenAiCuratedMarketplace(marketplace)),
   });
   return snapshot.response;
 }

@@ -9,10 +9,10 @@ import { writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
   sessionStoreEntry,
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 test.each([
   {
@@ -115,6 +115,7 @@ test("sessions.reset rechecks plugin ownership inside lifecycle admission", asyn
     key: sessionKey,
     reason: "reset",
     commandSource: "gateway:sessions.reset",
+    workerPlacementContext: {},
     authorizedPluginId: "memory-core",
     assertCurrent: () => {
       if (replaced) {

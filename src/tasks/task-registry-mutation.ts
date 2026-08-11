@@ -8,6 +8,7 @@ import {
   syncFlowFromTaskResult,
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-runtime-internal.js";
+import { clearTaskActivity, flushTaskActivity } from "./task-registry-activity.js";
 import { ensureLinkedTaskFlowRegistryReady, isTerminalFlowStatus } from "./task-registry-common.js";
 import { findLatestTaskForFlowId, listTasksForFlowId } from "./task-registry-query.js";
 import {
@@ -177,12 +178,20 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
   const parentFlowIndexChanged = current.parentFlowId?.trim() !== next.parentFlowId?.trim();
   ensureLinkedTaskFlowRegistryReady(current);
   ensureLinkedTaskFlowRegistryReady(next);
+  const becomesTerminal =
+    !isTerminalTaskStatus(current.status) && isTerminalTaskStatus(next.status);
+  if (becomesTerminal) {
+    flushTaskActivity(taskId);
+  }
   // Persist before mutating memory. If the store rejects the write, keep the
   // in-memory mirror at the durable value and report that no mutation applied.
   if (!tryPersistTaskUpsert(next, "update")) {
     return null;
   }
   tasks.set(taskId, next);
+  if (becomesTerminal) {
+    clearTaskActivity(taskId);
+  }
   if (patch.runId && patch.runId !== current.runId) {
     rebuildRunIdIndex();
   }
@@ -210,6 +219,39 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
     kind: "upserted",
     task: cloneTaskRecord(next),
     previous: cloneTaskRecord(current),
+  }));
+  return cloneTaskRecord(next);
+}
+
+/** Publishes a record already committed by a cross-owner shared-state transaction. */
+export function publishTaskRecordAfterAtomicStore(record: TaskRecord): TaskRecord {
+  const next = normalizeTaskTimestamps(cloneTaskRecord(record));
+  const current = tasks.get(next.taskId);
+  const becomesTerminal =
+    current !== undefined &&
+    !isTerminalTaskStatus(current.status) &&
+    isTerminalTaskStatus(next.status);
+  if (becomesTerminal) {
+    flushTaskActivity(next.taskId);
+  }
+  if (current) {
+    deleteOwnerKeyIndex(next.taskId, current);
+    deleteParentFlowIdIndex(next.taskId, current);
+    deleteRelatedSessionKeyIndex(next.taskId, current);
+  }
+  tasks.set(next.taskId, next);
+  if (becomesTerminal) {
+    clearTaskActivity(next.taskId);
+  }
+  addOwnerKeyIndex(next.taskId, next);
+  addParentFlowIdIndex(next.taskId, next);
+  addRelatedSessionKeyIndex(next.taskId, next);
+  rebuildRunIdIndex();
+  syncFlowFromTaskAfterTaskMutation(next, "atomic completion admission");
+  emitTaskRegistryObserverEvent(() => ({
+    kind: "upserted",
+    task: cloneTaskRecord(next),
+    ...(current ? { previous: cloneTaskRecord(current) } : {}),
   }));
   return cloneTaskRecord(next);
 }

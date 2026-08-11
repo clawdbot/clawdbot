@@ -4,6 +4,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { consolidateLiveModelSwitchAfterRun } from "../../agents/live-model-switch.js";
 import { isCliProvider } from "../../agents/model-selection.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
@@ -191,10 +192,18 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     cfg,
   });
   if (fallbackTransition.stateChanged && !fallbackExhausted && !preserveUserFacingSessionState) {
+    const fallbackNotice = fallbackTransition.nextState.selectedModel
+      ? {
+          kind: "active" as const,
+          selectedModel: fallbackTransition.nextState.selectedModel,
+          activeModel: fallbackTransition.nextState.activeModel!,
+          ...(fallbackTransition.nextState.reason
+            ? { reason: fallbackTransition.nextState.reason }
+            : {}),
+        }
+      : undefined;
     if (fallbackStateEntry) {
-      fallbackStateEntry.fallbackNoticeSelectedModel = fallbackTransition.nextState.selectedModel;
-      fallbackStateEntry.fallbackNoticeActiveModel = fallbackTransition.nextState.activeModel;
-      fallbackStateEntry.fallbackNoticeReason = fallbackTransition.nextState.reason;
+      fallbackStateEntry.fallbackNotice = fallbackNotice;
       fallbackStateEntry.updatedAt = Date.now();
       activeSessionEntry = fallbackStateEntry;
     }
@@ -202,18 +211,10 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
       activeSessionStore[sessionKey] = fallbackStateEntry;
     }
     if (sessionKey && storePath) {
-      await updateSessionEntry(
-        { storePath, sessionKey },
-        () => ({
-          fallbackNoticeSelectedModel: fallbackTransition.nextState.selectedModel,
-          fallbackNoticeActiveModel: fallbackTransition.nextState.activeModel,
-          fallbackNoticeReason: fallbackTransition.nextState.reason,
-        }),
-        {
-          skipMaintenance: true,
-          takeCacheOwnership: true,
-        },
-      );
+      await updateSessionEntry({ storePath, sessionKey }, () => ({ fallbackNotice }), {
+        skipMaintenance: true,
+        takeCacheOwnership: true,
+      });
     }
   }
   const usedCliProvider = isCliProvider(providerUsed, cfg);
@@ -251,7 +252,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
     compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
     promptTokens,
-    usageIsContextSnapshot: usedCliProvider ? true : undefined,
     isHeartbeat,
     preserveRuntimeModel: fallbackExhausted,
     preserveUserFacingSessionModelState: preserveUserFacingSessionState,
@@ -359,7 +359,7 @@ export async function accountFollowupTurn(params: {
       nextModel: accounting.modelUsed,
       nextModelOverrideSource: entry?.modelOverrideSource,
       nextAuthProfileId: entry?.authProfileOverride,
-      nextAuthProfileIdSource: entry?.authProfileOverrideSource,
+      nextAuthProfileIdSource: resolveSessionAuthProfileOverrideSource(entry),
     });
   }
   let compactionNotice: ReplyPayload | undefined;

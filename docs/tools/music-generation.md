@@ -41,8 +41,10 @@ idempotent direct fallback with just the missing audio.
         {
           agents: {
             defaults: {
-              musicGenerationModel: {
-                primary: "google/lyria-3-clip-preview",
+              mediaModels: {
+                music: {
+                  primary: "google/lyria-3-clip-preview",
+                },
               },
             },
           },
@@ -123,8 +125,9 @@ fal also exposes `fal-ai/ace-step/prompt-to-audio` (wav, no lyrics, no
 instrumental toggle) and `fal-ai/stable-audio-25/text-to-audio` (wav,
 prompt-only) alongside its default MiniMax-backed model. Google's default
 `lyria-3-clip-preview` outputs mp3 only; `lyria-3-pro-preview` also supports
-wav. MiniMax also exposes `music-2.6`, `music-3.0-free`, `music-2.6-free`, `music-cover`, and
-`music-cover-free`. OpenRouter also exposes `google/lyria-3-clip-preview`.
+wav. MiniMax also exposes `music-2.6`, `music-3.0-free`, `music-2.6-free`,
+`music-cover`, and `music-cover-free`. OpenRouter also exposes
+`google/lyria-3-clip-preview`.
 
 ### Capability matrix
 
@@ -238,9 +241,11 @@ openclaw tasks cancel <taskId>
 {
   agents: {
     defaults: {
-      musicGenerationModel: {
-        primary: "google/lyria-3-clip-preview",
-        fallbacks: ["fal/fal-ai/minimax-music/v2.6", "minimax/music-3.0"],
+      mediaModels: {
+        music: {
+          primary: "google/lyria-3-clip-preview",
+          fallbacks: ["fal/fal-ai/minimax-music/v2.6", "minimax/music-3.0"],
+        },
       },
     },
   },
@@ -252,8 +257,8 @@ openclaw tasks cancel <taskId>
 OpenClaw tries providers in this order:
 
 1. `model` parameter from the tool call (if the agent specifies one).
-2. `musicGenerationModel.primary` from config.
-3. `musicGenerationModel.fallbacks` in order.
+2. `agents.defaults.mediaModels.music.primary` from config.
+3. `agents.defaults.mediaModels.music.fallbacks` in order.
 4. Auto-detection using auth-backed provider defaults only:
    - current default text-model provider first, if it also offers music
      generation;
@@ -271,9 +276,8 @@ Automatic fallback across authenticated providers is always enabled. A per-call
 <AccordionGroup>
   <Accordion title="ComfyUI">
     Workflow-driven and depends on the configured graph plus node mapping
-    for prompt/output fields. The bundled `comfy` plugin plugs into the
-    shared `music_generate` tool through the music-generation provider
-    registry.
+    for prompt/output fields. The `comfy` plugin plugs into the shared
+    `music_generate` tool through the music-generation provider registry.
   </Accordion>
   <Accordion title="fal">
     Uses fal model endpoints through the shared provider auth path. The
@@ -384,7 +388,7 @@ sections are configured.
 
 - [Background tasks](/automation/tasks) — task tracking for detached `music_generate` runs
 - [ComfyUI](/providers/comfy)
-- [Configuration reference](/gateway/config-agents#agent-defaults) — `musicGenerationModel` config
+- [Configuration reference](/gateway/config-agents#agent-defaults) — `agents.defaults.mediaModels.music` config
 - [Google (Gemini)](/providers/google)
 - [MiniMax](/providers/minimax)
 - [Models](/concepts/models) — model configuration and failover

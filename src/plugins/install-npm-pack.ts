@@ -161,6 +161,7 @@ export async function installPluginFromNpmPackArchive(
     extensionsDir?: string;
     npmDir?: string;
     timeoutMs?: number;
+    signal?: AbortSignal;
     logger?: PluginInstallLogger;
     mode?: "install" | "update";
     dryRun?: boolean;
@@ -177,6 +178,7 @@ export async function installPluginFromNpmPackArchive(
   const metadataResult = await resolveNpmPackArchiveMetadata({
     archivePath: params.archivePath,
     timeoutMs,
+    signal: params.signal,
   });
   if (!metadataResult.ok) {
     return metadataResult;
@@ -267,6 +269,7 @@ export async function installPluginFromNpmPackArchive(
     extensionsDir: params.extensionsDir,
     npmDir: npmBaseDir,
     timeoutMs,
+    signal: params.signal,
     logger,
     mode,
     dryRun,

@@ -1,5 +1,8 @@
 // Gateway RPC runtime tests cover CLI gateway RPC calls and runtime error handling.
+import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { addGatewayClientOptions } from "./gateway-rpc.js";
+import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 
 const callGatewayMock = vi.fn(async () => ({ ok: true }));
 vi.mock("../gateway/call.js", () => ({
@@ -11,6 +14,31 @@ vi.mock("./progress.js", () => ({
 }));
 
 const { callGatewayFromCliRuntime } = await import("./gateway-rpc.runtime.js");
+
+describe("addGatewayClientOptions", () => {
+  it.each([
+    { name: "token", flag: "--token", value: "test-gateway-token" },
+    { name: "password", flag: "--password", value: "test-gateway-password" },
+  ])(
+    "registers and parses explicit gateway $name authentication",
+    async ({ name, flag, value }) => {
+      const program = new Command().exitOverride();
+      const action = vi.fn((_opts: GatewayRpcOpts) => {});
+      addGatewayClientOptions(program.command("gateway-command")).action(action);
+
+      await program.parseAsync(
+        ["gateway-command", "--url", "wss://gateway.example/ws", flag, value],
+        { from: "user" },
+      );
+
+      expect(action).toHaveBeenCalledOnce();
+      expect(action.mock.calls[0]?.[0]).toMatchObject({
+        url: "wss://gateway.example/ws",
+        [name]: value,
+      });
+    },
+  );
+});
 
 describe("callGatewayFromCliRuntime", () => {
   beforeEach(() => {
@@ -24,6 +52,59 @@ describe("callGatewayFromCliRuntime", () => {
       expect.objectContaining({
         method: "cron.status",
         timeoutMs: 30_000,
+      }),
+    );
+  });
+
+  it("accepts a caller-specific default timeout", async () => {
+    await callGatewayFromCliRuntime("health", {}, undefined, { defaultTimeoutMs: 10_000 });
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "health", timeoutMs: 10_000 }),
+    );
+  });
+
+  it("forwards specialized connection and authorization context", async () => {
+    const config = { gateway: { mode: "local" as const } };
+    await callGatewayFromCliRuntime(
+      "node.list",
+      { config, localPortOverride: 19_083 },
+      {},
+      {
+        timeoutMs: null,
+        scopes: ["operator.read", "operator.pairing"],
+        useStoredDeviceAuth: true,
+        requiredStoredDeviceAuthScopes: ["operator.read", "operator.pairing"],
+        requireLocalBackendSharedAuth: true,
+      },
+    );
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        localPortOverride: 19_083,
+        timeoutMs: null,
+        scopes: ["operator.read", "operator.pairing"],
+        useStoredDeviceAuth: true,
+        requiredStoredDeviceAuthScopes: ["operator.read", "operator.pairing"],
+        requireLocalBackendSharedAuth: true,
+      }),
+    );
+  });
+
+  it.each([
+    { name: "token", auth: { token: "test-gateway-token" } },
+    { name: "password", auth: { password: "test-gateway-password" } },
+  ])("forwards explicit gateway $name authentication", async ({ auth }) => {
+    await callGatewayFromCliRuntime("cron.status", {
+      url: "wss://gateway.example/ws",
+      ...auth,
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "wss://gateway.example/ws",
+        ...auth,
       }),
     );
   });

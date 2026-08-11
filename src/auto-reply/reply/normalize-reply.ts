@@ -1,6 +1,7 @@
 // Normalizes raw agent output into sendable reply text and metadata.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { copyReplyPayloadMetadata } from "../reply-payload.js";
@@ -28,7 +29,6 @@ type NormalizeReplyOptions = {
   /** Context for template variable interpolation in responsePrefix */
   responsePrefixContext?: ResponsePrefixContext;
   onHeartbeatStrip?: () => void;
-  stripHeartbeat?: boolean;
   silentToken?: string;
   transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
   onSkip?: (reason: NormalizeReplySkipReason) => void;
@@ -85,8 +85,7 @@ export function normalizeReplyPayload(
     text = "";
   }
 
-  const shouldStripHeartbeat = opts.stripHeartbeat ?? true;
-  if (shouldStripHeartbeat && text?.includes(HEARTBEAT_TOKEN)) {
+  if (text?.includes(HEARTBEAT_TOKEN)) {
     const stripped = stripHeartbeatToken(text, { mode: "message" });
     if (stripped.didStrip) {
       opts.onHeartbeatStrip?.();
@@ -104,7 +103,9 @@ export function normalizeReplyPayload(
   }
 
   if (text) {
-    text = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
+    text = payload.isError
+      ? renderUserFacingText(text, { errorContext: true })
+      : sanitizeUserFacingText(text);
   }
   if (!hasContent(text)) {
     opts.onSkip?.("empty");

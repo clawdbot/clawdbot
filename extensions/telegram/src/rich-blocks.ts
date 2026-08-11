@@ -13,7 +13,6 @@ import {
   type MarkdownTableMeta,
 } from "openclaw/plugin-sdk/text-chunking";
 import {
-  countInputRichBlocks,
   inputRichBlocksToPlainText,
   maxInputRichBlockNesting,
   normalizeRichText,
@@ -647,10 +646,7 @@ export function markdownToTelegramRichBlocks(
   const hasMarkdownLists = segments.some((segment) => segment.kind === "list");
   const flattenedSegments = segments.filter((segment) => segment.kind !== "list");
   let blocks = emitSegments(ir, segments, 0, ir.text.length, degradationReasons);
-  if (
-    hasMarkdownLists &&
-    (countInputRichBlocks(blocks) > 500 || maxInputRichBlockNesting(blocks) > 16)
-  ) {
+  if (hasMarkdownLists && maxInputRichBlockNesting(blocks) > 16) {
     degradationReasons = new Set<TelegramRichBlocksDegradationReason>();
     degradationReasons.add("list-limit");
     blocks = emitSegments(ir, flattenedSegments, 0, ir.text.length, degradationReasons);

@@ -25,11 +25,9 @@ export function resolveMemoryFlushContextWindowTokens(params: {
 }
 
 export function resolveMaxActiveTranscriptBytes(cfg?: OpenClawConfig): number | undefined {
-  const compaction = cfg?.agents?.defaults?.compaction;
-  if (compaction?.truncateAfterCompaction !== true) {
-    return undefined;
-  }
-  const parsed = parseNonNegativeByteSize(compaction.maxActiveTranscriptBytes);
+  const parsed = parseNonNegativeByteSize(
+    cfg?.agents?.defaults?.compaction?.maxActiveTranscriptBytes,
+  );
   return typeof parsed === "number" && parsed > 0 ? parsed : undefined;
 }
 
@@ -94,7 +92,7 @@ export function resolveResponsesServerCompactionThreshold(params: {
 }
 
 function resolveMemoryFlushGateState<
-  TEntry extends Pick<SessionEntry, "totalTokens" | "totalTokensFresh">,
+  TEntry extends Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion">,
 >(params: {
   entry?: TEntry;
   tokenCount?: number;
@@ -131,7 +129,7 @@ function resolveMemoryFlushGateState<
 export function shouldRunMemoryFlush(params: {
   entry?: Pick<
     SessionEntry,
-    "totalTokens" | "totalTokensFresh" | "compactionCount" | "memoryFlushCompactionCount"
+    "totalTokens" | "totalTokensFresh" | "totalTokensVersion" | "compactionCount" | "memoryFlush"
   >;
   /**
    * Optional token count override for flush gating. When provided, this value is
@@ -156,7 +154,7 @@ export function shouldRunMemoryFlush(params: {
 }
 
 export function shouldRunPreflightCompaction(params: {
-  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh">;
+  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion">;
   /**
    * Optional projected token count override for pre-run compaction gating.
    * When provided, this value is treated as a fresh estimate and used instead
@@ -178,9 +176,9 @@ export function shouldRunPreflightCompaction(params: {
  * important for both the token-based and transcript-size–based trigger paths.
  */
 export function hasAlreadyFlushedForCurrentCompaction(
-  entry: Pick<SessionEntry, "compactionCount" | "memoryFlushCompactionCount">,
+  entry: Pick<SessionEntry, "compactionCount" | "memoryFlush">,
 ): boolean {
   const compactionCount = entry.compactionCount ?? 0;
-  const lastFlushAt = entry.memoryFlushCompactionCount;
+  const lastFlushAt = entry.memoryFlush?.compactionCount;
   return typeof lastFlushAt === "number" && lastFlushAt === compactionCount;
 }

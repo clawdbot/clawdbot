@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import type { ProviderRouteOverridePresence } from "../../../plugin-sdk/provider-model-types.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
 import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
@@ -22,7 +23,6 @@ import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.j
 import {
   hasAttemptTerminalState,
   hasYieldContinuationEvidence,
-  resolveAttemptReplayMetadata,
   resolveEmptyResponseRetryInstruction,
   resolveIncompleteTurnPayloadText,
   resolveReasoningOnlyRetryInstruction,
@@ -88,13 +88,30 @@ export function resolveSettledTurnFinalizationRequest(input: {
     timedOut: terminalTimedOut,
     attempt: input.attempt,
   });
+  const terminalAssistant = input.attempt.currentAttemptAssistant ?? input.attempt.lastAssistant;
+  // Payload preparation renders an undelivered tool-error fallback before the
+  // model gets its final answer. It must not masquerade as an assistant reply;
+  // exact failed-call settlement is independently proven by the finalizer owner.
+  const hasOnlySyntheticToolErrorPayload = Boolean(
+    terminalAssistant?.stopReason === "toolUse" &&
+    input.attempt.lastToolError &&
+    input.attempt.assistantTexts.every((text) => text.trim().length === 0) &&
+    (input.payloadsWithToolMedia?.length ?? 0) > 0 &&
+    input.payloadsWithToolMedia?.every(
+      (payload) =>
+        payload.isError === true &&
+        Object.keys(payload).every((key) => key === "text" || key === "isError"),
+    ),
+  );
   const payloadCount = input.recoveredFinalAssistantPayloadsAfterPromptTimeout
     ? input.recoveredFinalAssistantPayloadsAfterPromptTimeout.length
-    : input.payloadsWithToolMedia?.length
-      ? input.payloadsWithToolMedia.length
-      : silentToolResultReplyPayload
-        ? 1
-        : 0;
+    : hasOnlySyntheticToolErrorPayload
+      ? 0
+      : input.payloadsWithToolMedia?.length
+        ? input.payloadsWithToolMedia.length
+        : silentToolResultReplyPayload
+          ? 1
+          : 0;
   const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
     allowEmptyAssistantReplyAsSilent: input.runParams.allowEmptyAssistantReplyAsSilent,
     terminalReplyExpectation: input.runParams.terminalReplyExpectation,
@@ -167,12 +184,14 @@ export async function resolveEmbeddedRunTerminal(input: {
   modelId: string;
   modelTransportId: string;
   modelTransportApi: string;
+  modelTransportBaseUrl?: string;
+  requestTransportOverrides?: ProviderRouteOverridePresence;
   authProfileId?: string;
   profileFailureStore: AuthProfileStore;
   attemptAuthProfileStore: AuthProfileStore;
   apiKeyInfo: ResolvedProviderAuth | null;
   agentHarnessId: string;
-  settledTurnFinalizationAttempted: boolean;
+  settledTurnFinalizationOutcome: "not-attempted" | "answered" | "completed-empty" | "failed";
   pluginHarnessOwnsTransport: boolean;
   pluginHarnessOwnsAuthBootstrap: boolean;
   reportedModelRef: { provider: string; model: string };
@@ -204,7 +223,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   const payloadCount = payloadsForTerminalPath?.length ?? 0;
   // A failed isolated finalization is terminal for this user turn. Do not let
   // its settled side effects cascade into any ordinary retry family.
-  const settledTurnFinalizationAttempted = input.settledTurnFinalizationAttempted;
+  const settledTurnFinalizationAttempted = input.settledTurnFinalizationOutcome !== "not-attempted";
   const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
     allowEmptyAssistantReplyAsSilent: runParams.allowEmptyAssistantReplyAsSilent,
     terminalReplyExpectation: runParams.terminalReplyExpectation,
@@ -290,16 +309,17 @@ export async function resolveEmbeddedRunTerminal(input: {
     );
     return { action: "retry" };
   }
-  const incompleteTurnText = emptyAssistantReplyIsSilent
-    ? null
-    : resolveIncompleteTurnPayloadText({
-        payloadCount,
-        aborted: terminalAborted,
-        externalAbort: externalAbort || signalOwnedInterruption,
-        timedOut: terminalTimedOut,
-        hadPotentialSideEffects: input.replayState.hadPotentialSideEffects,
-        attempt,
-      });
+  const incompleteTurnText =
+    emptyAssistantReplyIsSilent || input.settledTurnFinalizationOutcome === "completed-empty"
+      ? null
+      : resolveIncompleteTurnPayloadText({
+          payloadCount,
+          aborted: terminalAborted,
+          externalAbort: externalAbort || signalOwnedInterruption,
+          timedOut: terminalTimedOut,
+          hadPotentialSideEffects: input.replayState.hadPotentialSideEffects,
+          attempt,
+        });
   const incompleteTurnFallbackSafe = Boolean(
     incompleteTurnText &&
     !terminalInterrupted &&
@@ -361,7 +381,6 @@ export async function resolveEmbeddedRunTerminal(input: {
     );
   }
   if (incompleteTurnText) {
-    const replayMetadata = resolveAttemptReplayMetadata(attempt);
     const incompleteStopReason =
       attempt.currentAttemptAssistant?.stopReason ?? attempt.lastAssistant?.stopReason;
     log.warn(
@@ -369,7 +388,7 @@ export async function resolveEmbeddedRunTerminal(input: {
         `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} ` +
         `stopReason=${incompleteStopReason ?? "missing"} hasLastAssistant=${attempt.lastAssistant ? "yes" : "no"} ` +
         `hasCurrentAttemptAssistant=${attempt.currentAttemptAssistant ? "yes" : "no"} payloads=${payloadCount} ` +
-        `tools=${attempt.toolMetas?.length ?? 0} replaySafe=${replayMetadata.replaySafe ? "yes" : "no"} ` +
+        `tools=${attempt.toolMetas?.length ?? 0} replaySafe=${attempt.replayMetadata.replaySafe ? "yes" : "no"} ` +
         `compactions=${input.attemptCompactionCount} reasoningRetries=${retryState.reasoningOnlyAttempts}/${input.maxReasoningOnlyRetryAttempts} ` +
         `emptyRetries=${retryState.emptyResponseAttempts}/${input.maxEmptyResponseRetryAttempts} ` +
         `missingAssistantRetries=${retryState.missingAssistantAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} — ` +
@@ -507,8 +526,12 @@ function completeEmbeddedRun(
     apiKeyInfo: input.apiKeyInfo,
     attempt: input.attempt,
     provider: input.provider,
+    agentDir: input.runParams.agentDir,
     modelId: input.modelTransportId,
     modelApi: input.modelTransportApi,
+    ...(input.modelTransportBaseUrl ? { modelBaseUrl: input.modelTransportBaseUrl } : {}),
+    requestTransportOverrides: input.requestTransportOverrides ?? "none",
+    config: input.runParams.config,
     agentHarnessId: input.agentHarnessId,
     pluginHarnessOwnsTransport: input.pluginHarnessOwnsTransport,
     pluginHarnessOwnsAuthBootstrap: input.pluginHarnessOwnsAuthBootstrap,

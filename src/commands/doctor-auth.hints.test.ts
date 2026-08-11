@@ -5,7 +5,6 @@ import {
   collectAuthProfileHealthFindings,
   noteLegacyCodexProviderOverride,
 } from "./doctor-auth.js";
-import { legacyCodexProviderOverrideToHealthFinding } from "./doctor-auth.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
@@ -64,22 +63,6 @@ describe("doctor auth hints", () => {
     );
   });
 
-  it("maps legacy Codex overrides to structured auth profile findings", () => {
-    expect(
-      legacyCodexProviderOverrideToHealthFinding({
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-      }),
-    ).toMatchObject({
-      checkId: "core/doctor/auth-profiles",
-      severity: "warning",
-      message:
-        "Legacy openai-codex transport override can shadow configured Codex OAuth credentials.",
-      path: "models.providers.openai-codex",
-      target: "openai-codex",
-    });
-  });
-
   it("collects legacy Codex override structured findings", async () => {
     const findings = await collectAuthProfileHealthFindings({
       cfg: doctorFixtureConfig({
@@ -104,6 +87,9 @@ describe("doctor auth hints", () => {
     expect(findings).toEqual([
       expect.objectContaining({
         checkId: "core/doctor/auth-profiles",
+        severity: "warning",
+        message:
+          "Legacy openai-codex transport override can shadow configured Codex OAuth credentials.",
         path: "models.providers.openai-codex",
         target: "openai-codex",
       }),

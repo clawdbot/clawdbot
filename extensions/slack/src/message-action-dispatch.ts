@@ -16,13 +16,14 @@ import {
 import { resolveDefaultSlackAccountId } from "./accounts.js";
 import { SLACK_MAX_BLOCKS } from "./blocks-input.js";
 import { buildSlackPresentationBlocks, canRenderSlackPresentation } from "./blocks-render.js";
-import { SLACK_EDIT_TEXT_LIMIT } from "./limits.js";
+import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
 import { renderSlackMessagePresentationFallbackText } from "./presentation-fallback.js";
 import {
   resolveSlackReplyBlockResolution,
   resolveSlackReplyDeliveryMessages,
   type SlackReplyDeliveryMessage,
 } from "./reply-blocks.js";
+import { countSlackTextUtf8Bytes } from "./truncate.js";
 
 type SlackActionInvoke = (
   action: Record<string, unknown>,
@@ -171,15 +172,12 @@ export async function handleSlackMessageAction(params: {
     const messageId = readStringParam(actionParams, "messageId", {
       required: true,
     });
-    const limit = readPositiveIntegerParam(actionParams, "limit", {
-      message: "limit must be a positive integer.",
-    });
     return await invoke(
       {
         action: "reactions",
         channelId: resolveChannelId(),
         messageId,
-        limit,
+        limit: actionParams.limit,
         accountId,
       },
       cfg,
@@ -188,13 +186,10 @@ export async function handleSlackMessageAction(params: {
   }
 
   if (action === "read") {
-    const limit = readPositiveIntegerParam(actionParams, "limit", {
-      message: "limit must be a positive integer.",
-    });
     const readAction: Record<string, unknown> = {
       action: "readMessages",
       channelId: resolveChannelId(),
-      limit,
+      limit: actionParams.limit,
       before: readStringParam(actionParams, "before"),
       after: readStringParam(actionParams, "after"),
       messageId: readStringParam(actionParams, "messageId"),
@@ -223,10 +218,10 @@ export async function handleSlackMessageAction(params: {
       : resolveSlackPresentationText(content, presentation);
     if (
       renderedPresentation.usesPresentationTextFallback &&
-      accessibleContent.length > SLACK_EDIT_TEXT_LIMIT
+      countSlackTextUtf8Bytes(accessibleContent) > SLACK_EDIT_TEXT_MAX_BYTES
     ) {
       throw new Error(
-        `Slack presentation fallback exceeds the ${String(SLACK_EDIT_TEXT_LIMIT)}-character edit limit. Send a new message instead.`,
+        `Slack presentation fallback exceeds the ${String(SLACK_EDIT_TEXT_MAX_BYTES)}-byte edit limit. Send a new message instead.`,
       );
     }
     if (!accessibleContent && !blocks) {

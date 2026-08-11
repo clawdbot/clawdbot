@@ -210,6 +210,22 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardOptions().tui).toBe(true);
   });
 
+  it("forwards --skip-ui to guided onboarding", async () => {
+    await runCli(["onboard", "--skip-ui"]);
+
+    expect(setupWizardOptions().skipUi).toBe(true);
+  });
+
+  it("rejects conflicting custom model input capabilities", async () => {
+    await runCli(["onboard", "--custom-image-input", "--custom-text-input"]);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Use either --custom-image-input or --custom-text-input, not both.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
   it("parses --mistral-api-key and forwards mistralApiKey", async () => {
     await runCli(["onboard", "--mistral-api-key", "sk-mistral-test"]);
     expect(setupWizardOptions().mistralApiKey).toBe("sk-mistral-test"); // pragma: allowlist secret

@@ -1,15 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { gatewaySubagentState } from "../../plugins/runtime/gateway-bindings.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { bindPluginRegistryRuntime } from "../../plugins/registry-runtime-binding.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
-import {
-  listSessionCatalogEntries,
-  type SessionCatalogProvider,
-} from "../../plugins/session-catalog.js";
+import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
+
+type TestPluginRegistry = Omit<PluginRegistry, "sessionCatalogs"> & {
+  sessionCatalogs: Array<{
+    pluginId?: string;
+    pluginName?: string;
+    provider: SessionCatalogProvider;
+    rootDir?: string;
+    source?: string;
+  }>;
+};
 
 const hoisted = vi.hoisted(() => ({
-  activeRegistry: { sessionCatalogs: [] as unknown[] },
-  pinnedSessionExtensionRegistry: undefined as { sessionCatalogs: unknown[] } | undefined,
+  activeRegistry: {} as TestPluginRegistry,
   listSessionEntriesReadOnly: vi.fn<
     (scope?: { agentId?: string; clone?: boolean; projection?: "full" | "list" }) => Array<{
       sessionKey: string;
@@ -30,8 +38,8 @@ const conversationBindingMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../plugins/runtime.js", () => ({
-  getActivePluginSessionExtensionRegistry: () =>
-    hoisted.pinnedSessionExtensionRegistry ?? hoisted.activeRegistry,
+  getActivePluginRegistry: () => hoisted.activeRegistry,
+  requireActivePluginRegistry: () => hoisted.activeRegistry,
 }));
 
 vi.mock("../../sessions/session-state-events.js", () => ({
@@ -99,8 +107,7 @@ function startCall(
 
 describe("session catalog Gateway methods", () => {
   beforeEach(() => {
-    hoisted.activeRegistry.sessionCatalogs = [];
-    hoisted.pinnedSessionExtensionRegistry = undefined;
+    hoisted.activeRegistry = createEmptyPluginRegistry() as TestPluginRegistry;
     hoisted.listSessionEntriesReadOnly.mockReset();
     hoisted.listSessionEntriesReadOnly.mockReturnValue([]);
     hoisted.recordSessionStateEvent.mockClear();
@@ -176,7 +183,7 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
-  it("single-flights identical concurrent lists and gives followers only the final result", async () => {
+  it("single-flights identical concurrent lists and fans progress to active followers", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -189,8 +196,8 @@ describe("session catalog Gateway methods", () => {
       sessions: [],
     };
     const list = vi.fn(async ({ onHost }: { onHost?: (value: typeof host) => void }) => {
-      onHost?.(host);
       await gate;
+      onHost?.(host);
       return [host];
     });
     hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("codex", { list }) }];
@@ -224,11 +231,53 @@ describe("session catalog Gateway methods", () => {
     ]);
 
     expect(leaderBroadcast).toHaveBeenCalledOnce();
-    expect(followerBroadcast).not.toHaveBeenCalled();
+    expect(followerBroadcast).toHaveBeenCalledOnce();
     for (const pending of [leader, follower, otherAgent, otherParams]) {
       expect(pending.respond).toHaveBeenCalledWith(true, {
         catalogs: [expect.objectContaining({ id: "codex", hosts: [host] })],
       });
+    }
+  });
+
+  it("keeps differently ordered host filters distinct when sharing lists", async () => {
+    const observedHostIds: Array<string[] | undefined> = [];
+    const list = vi.fn(async ({ hostIds }: { hostIds?: string[] }) => {
+      observedHostIds.push(hostIds ? [...hostIds] : undefined);
+      return [];
+    });
+    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("codex", { list }) }];
+    const config = {};
+
+    await Promise.all([
+      call("sessions.catalog.list", { hostIds: ["host-a", "host-b"] }, config),
+      call("sessions.catalog.list", { hostIds: ["host-b", "host-a"] }, config),
+    ]);
+
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(observedHostIds).toEqual([
+      ["host-a", "host-b"],
+      ["host-b", "host-a"],
+    ]);
+  });
+
+  it("shares settled identical lists across out-of-phase clients until the window expires", async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const list = vi.fn(async () => []);
+    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("codex", { list }) }];
+    const config = {};
+    try {
+      await call("sessions.catalog.list", {}, config);
+
+      now += 2_500;
+      await call("sessions.catalog.list", {}, config);
+      expect(list).toHaveBeenCalledOnce();
+
+      now += 501;
+      await call("sessions.catalog.list", {}, config);
+      expect(list).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
     }
   });
 
@@ -326,7 +375,7 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
-  it("does not clone the shared list projection for each catalog request", async () => {
+  it("does not clone the shared list projection for a settled shared catalog result", async () => {
     const storedEntries = [
       {
         sessionKey: "agent:main:shared",
@@ -347,12 +396,13 @@ describe("session catalog Gateway methods", () => {
       },
     ];
     const cloneSpy = vi.spyOn(globalThis, "structuredClone");
+    const config = {};
     try {
-      await call("sessions.catalog.list", {});
-      await call("sessions.catalog.list", {});
+      await call("sessions.catalog.list", {}, config);
+      await call("sessions.catalog.list", {}, config);
 
       expect(cloneSpy).not.toHaveBeenCalled();
-      expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledTimes(2);
+      expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledOnce();
       expect(hoisted.listSessionEntriesReadOnly).toHaveBeenLastCalledWith({
         agentId: "main",
         clone: false,
@@ -363,208 +413,62 @@ describe("session catalog Gateway methods", () => {
     }
   });
 
-  it("shares one flattened entry snapshot across catalogs and creator projection", async () => {
-    hoisted.listSessionEntriesReadOnly.mockReturnValue([
-      {
-        sessionKey: "agent:main:alpha-adopted",
-        entry: { createdActor: { type: "agent", id: "worker-alpha" }, updatedAt: 2 },
-      },
-      {
-        sessionKey: "agent:main:zeta-adopted",
-        entry: { createdActor: { type: "system", id: "scheduler" }, updatedAt: 1 },
-      },
-    ]);
-    const flattenedEntries: unknown[] = [];
-    const runtime = createPluginRuntime();
-    const catalogProvider = (id: string, sessionKey: string) =>
-      provider(id, {
-        list: vi.fn(async ({ sessionEntries }) => {
-          const entries = listSessionCatalogEntries({ config: {}, runtime, sessionEntries });
-          flattenedEntries.push(entries);
-          const adopted = entries.find((candidate) => candidate.sessionKey === sessionKey);
-          return [
-            {
-              hostId: `gateway:${id}`,
-              label: `${id} host`,
-              kind: "gateway" as const,
-              connected: true,
-              sessions: adopted
-                ? [
-                    {
-                      threadId: `${id}-thread`,
-                      status: "stored" as const,
-                      archived: false,
-                      sessionKey: adopted.sessionKey,
-                      canContinue: true,
-                      canArchive: false,
-                    },
-                  ]
-                : [],
-            },
-          ];
-        }),
-      });
-    hoisted.activeRegistry.sessionCatalogs = [
-      { provider: catalogProvider("zeta", "agent:main:zeta-adopted") },
-      { provider: catalogProvider("alpha", "agent:main:alpha-adopted") },
-    ];
-
-    const respond = await call("sessions.catalog.list", {});
-
-    expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledOnce();
-    expect(flattenedEntries).toHaveLength(2);
-    expect(flattenedEntries[0]).toBe(flattenedEntries[1]);
-    expect(respond).toHaveBeenCalledWith(true, {
-      catalogs: [
-        {
-          id: "alpha",
-          label: "ALPHA",
-          capabilities: { continueSession: false, archive: false },
-          hosts: [
-            {
-              hostId: "gateway:alpha",
-              label: "alpha host",
-              kind: "gateway",
-              connected: true,
-              sessions: [
-                {
-                  threadId: "alpha-thread",
-                  status: "stored",
-                  archived: false,
-                  sessionKey: "agent:main:alpha-adopted",
-                  canContinue: true,
-                  canArchive: false,
-                  createdActor: { type: "agent", id: "worker-alpha" },
-                },
-              ],
-            },
-          ],
-        },
-        {
-          id: "zeta",
-          label: "ZETA",
-          capabilities: { continueSession: false, archive: false },
-          hosts: [
-            {
-              hostId: "gateway:zeta",
-              label: "zeta host",
-              kind: "gateway",
-              connected: true,
-              sessions: [
-                {
-                  threadId: "zeta-thread",
-                  status: "stored",
-                  archived: false,
-                  sessionKey: "agent:main:zeta-adopted",
-                  canContinue: true,
-                  canArchive: false,
-                  createdActor: { type: "system", id: "scheduler" },
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    });
-  });
-
   it("shares one lazy Gateway node snapshot across catalog providers", async () => {
-    const previousNodesRuntime = gatewaySubagentState.nodes;
     const dispatchNodeList = vi.fn(async () => ({
       nodes: [{ nodeId: "shared-node", connected: true }],
     }));
-    gatewaySubagentState.nodes = {
-      list: dispatchNodeList,
-      invoke: vi.fn(async () => undefined),
-    };
-    try {
-      const catalogUsingNodes = (id: string) =>
-        provider(id, {
-          list: vi.fn(async ({ listNodes }) => {
-            expect(await listNodes?.()).toEqual({
-              nodes: [{ nodeId: "shared-node", connected: true }],
-            });
-            return [];
-          }),
-        });
-      hoisted.activeRegistry.sessionCatalogs = [
-        { provider: catalogUsingNodes("zeta") },
-        { provider: catalogUsingNodes("alpha") },
-      ];
+    bindPluginRegistryRuntime(
+      hoisted.activeRegistry as PluginRegistry,
+      createPluginRuntime({
+        nodes: { list: dispatchNodeList, invoke: vi.fn(async () => undefined) },
+      }),
+    );
+    const catalogUsingNodes = (id: string) =>
+      provider(id, {
+        list: vi.fn(async ({ listNodes }) => {
+          expect(await listNodes?.()).toEqual({
+            nodes: [{ nodeId: "shared-node", connected: true }],
+          });
+          return [];
+        }),
+      });
+    hoisted.activeRegistry!.sessionCatalogs = [
+      { provider: catalogUsingNodes("zeta") },
+      { provider: catalogUsingNodes("alpha") },
+    ];
 
-      await call("sessions.catalog.list", {});
+    await call("sessions.catalog.list", {});
 
-      expect(dispatchNodeList).toHaveBeenCalledOnce();
-    } finally {
-      gatewaySubagentState.nodes = previousNodesRuntime;
-    }
+    expect(dispatchNodeList).toHaveBeenCalledOnce();
   });
 
   it("keeps catalog-filtered Gateway node snapshots lazy", async () => {
-    const previousNodesRuntime = gatewaySubagentState.nodes;
     const dispatchNodeList = vi.fn(async () => ({ nodes: [] }));
-    gatewaySubagentState.nodes = {
-      list: dispatchNodeList,
-      invoke: vi.fn(async () => undefined),
-    };
-    try {
-      const selectedList = vi.fn(async () => []);
-      hoisted.activeRegistry.sessionCatalogs = [
-        {
-          provider: provider("selected", { list: selectedList }),
-        },
-        {
-          provider: provider("unselected", {
-            list: vi.fn(async ({ listNodes }) => {
-              await listNodes?.();
-              return [];
-            }),
-          }),
-        },
-      ];
-
-      await call("sessions.catalog.list", { catalogId: "selected" });
-
-      expect(selectedList).toHaveBeenCalledWith(
-        expect.objectContaining({ listNodes: expect.any(Function) }),
-      );
-      expect(dispatchNodeList).not.toHaveBeenCalled();
-    } finally {
-      gatewaySubagentState.nodes = previousNodesRuntime;
-    }
-  });
-
-  it("uses the pinned Gateway catalog runtime after active registry churn", async () => {
-    const previousNodesRuntime = gatewaySubagentState.nodes;
-    const listNodes = vi.fn(async () => ({ nodes: [] }));
-    gatewaySubagentState.nodes = {
-      list: listNodes,
-      invoke: vi.fn(async () => undefined),
-    };
-    try {
-      const gatewayRuntime = createPluginRuntime({ allowGatewaySubagentBinding: true });
-      const standaloneRuntime = createPluginRuntime();
-      const catalogUsing = (runtime: ReturnType<typeof createPluginRuntime>) =>
-        provider("codex", {
-          list: async () => {
-            await runtime.nodes.list();
+    bindPluginRegistryRuntime(
+      hoisted.activeRegistry as PluginRegistry,
+      createPluginRuntime({
+        nodes: { list: dispatchNodeList, invoke: vi.fn(async () => undefined) },
+      }),
+    );
+    const selectedList = vi.fn(async () => []);
+    hoisted.activeRegistry!.sessionCatalogs = [
+      { provider: provider("selected", { list: selectedList }) },
+      {
+        provider: provider("unselected", {
+          list: vi.fn(async ({ listNodes }) => {
+            await listNodes?.();
             return [];
-          },
-        });
-      hoisted.pinnedSessionExtensionRegistry = {
-        sessionCatalogs: [{ provider: catalogUsing(gatewayRuntime) }],
-      };
-      hoisted.activeRegistry.sessionCatalogs = [{ provider: catalogUsing(standaloneRuntime) }];
+          }),
+        }),
+      },
+    ];
 
-      const respond = await call("sessions.catalog.list", { catalogId: "codex" });
+    await call("sessions.catalog.list", { catalogId: "selected" });
 
-      expect(listNodes).toHaveBeenCalledOnce();
-      expect(respond).toHaveBeenCalledWith(true, {
-        catalogs: [expect.objectContaining({ id: "codex", hosts: [] })],
-      });
-    } finally {
-      gatewaySubagentState.nodes = previousNodesRuntime;
-    }
+    expect(selectedList).toHaveBeenCalledWith(
+      expect.objectContaining({ listNodes: expect.any(Function) }),
+    );
+    expect(dispatchNodeList).not.toHaveBeenCalled();
   });
 
   it("rejects host cursors without a catalog selector", async () => {
@@ -629,6 +533,72 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
+  it("advertises terminal start only inside implemented create capabilities", async () => {
+    const createTarget = () => ({ model: "openai/gpt-5.6-sol", agentRuntime: "codex" });
+    hoisted.activeRegistry.sessionCatalogs = [
+      {
+        provider: provider("codex", {
+          resolveCreateSession: createTarget,
+          startTerminalSession: async ({ cwd }) => ({ kind: "local", argv: ["codex"], cwd }),
+        }),
+      },
+      {
+        provider: provider("readonly", { resolveCreateSession: createTarget }),
+      },
+    ];
+
+    const respond = await call("sessions.catalog.list", {});
+
+    expect(respond).toHaveBeenCalledWith(true, {
+      catalogs: [
+        expect.objectContaining({
+          id: "codex",
+          capabilities: expect.objectContaining({
+            createSession: { model: "openai/gpt-5.6-sol", startTerminal: true },
+          }),
+        }),
+        expect.objectContaining({
+          id: "readonly",
+          capabilities: expect.objectContaining({
+            createSession: { model: "openai/gpt-5.6-sol" },
+          }),
+        }),
+      ],
+    });
+  });
+
+  it("refuses direct terminal start when the requested agent has no create target", async () => {
+    const resolveCreateSession = vi.fn(() => undefined);
+    const startTerminalSession = vi.fn();
+    const open = vi.fn();
+    hoisted.activeRegistry.sessionCatalogs = [
+      {
+        provider: provider("codex", { resolveCreateSession, startTerminalSession }),
+      },
+    ];
+    const config = { gateway: { cliAgents: { enabled: true } } };
+
+    const respond = await call(
+      "sessions.catalog.startTerminal",
+      { catalogId: "codex", agentId: "restricted", cwd: process.cwd() },
+      config,
+      { connId: "conn-1", connect: { scopes: ["operator.admin"] } },
+      { isTerminalEnabled: () => true, terminalSessions: { open } },
+    );
+
+    expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "restricted" });
+    expect(startTerminalSession).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.UNAVAILABLE,
+        message: "session catalog codex cannot create sessions",
+      }),
+    );
+  });
+
   it("memoizes a provider's create target until runtime config identity changes", async () => {
     let createSession: { model: string; agentRuntime: string } | undefined = {
       model: "anthropic/claude-opus-4-8",
@@ -689,6 +659,8 @@ describe("session catalog Gateway methods", () => {
   });
 
   it("retries an exception-derived create target failure without a config reload", async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
     const resolveCreateSession = vi
       .fn()
       .mockImplementationOnce(() => {
@@ -703,25 +675,30 @@ describe("session catalog Gateway methods", () => {
     ];
     const config = {};
 
-    const unavailable = await call("sessions.catalog.list", {}, config);
-    expect(unavailable).toHaveBeenCalledWith(true, {
-      catalogs: [
-        expect.objectContaining({
-          capabilities: { continueSession: false, archive: false },
-        }),
-      ],
-    });
-    const recovered = await call("sessions.catalog.list", {}, config);
-    expect(recovered).toHaveBeenCalledWith(true, {
-      catalogs: [
-        expect.objectContaining({
-          capabilities: expect.objectContaining({
-            createSession: { model: "anthropic/claude-opus-4-8" },
+    try {
+      const unavailable = await call("sessions.catalog.list", {}, config);
+      expect(unavailable).toHaveBeenCalledWith(true, {
+        catalogs: [
+          expect.objectContaining({
+            capabilities: { continueSession: false, archive: false },
           }),
-        }),
-      ],
-    });
-    expect(resolveCreateSession).toHaveBeenCalledTimes(2);
+        ],
+      });
+      now += 3_001;
+      const recovered = await call("sessions.catalog.list", {}, config);
+      expect(recovered).toHaveBeenCalledWith(true, {
+        catalogs: [
+          expect.objectContaining({
+            capabilities: expect.objectContaining({
+              createSession: { model: "anthropic/claude-opus-4-8" },
+            }),
+          }),
+        ],
+      });
+      expect(resolveCreateSession).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("keeps creation available when catalog history listing fails", async () => {

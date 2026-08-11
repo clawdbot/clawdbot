@@ -23,6 +23,7 @@ import { buildQuery, buildSearchQuery, extractRecentTurns, getModelRef } from ".
 import {
   buildCacheKey,
   buildCircuitBreakerKey,
+  forgetActiveRecallRun,
   getCachedResult,
   getCircuitBreakerEntry,
   isCircuitBreakerOpen,
@@ -66,7 +67,12 @@ import {
   createActiveMemoryHookDeadline,
   hasUsableMemoryResultInSessionRecord,
 } from "./transcript.js";
-import { resolveTriggerRecall } from "./trigger-recall.js";
+import {
+  forgetTriggerRecallPrewarm,
+  prewarmTriggerRecall,
+  resetTriggerRecallPrewarmsForTests,
+  resolveTriggerRecall,
+} from "./trigger-recall.js";
 import {
   HOOK_TIMEOUT_RECOVERY_GRACE_MS,
   MAX_SETUP_GRACE_TIMEOUT_MS,
@@ -365,7 +371,9 @@ export default definePluginEntry({
                 agentId: effectiveAgentId,
                 query: searchQuery,
                 message: event.prompt,
+                activeProjectKeys: ctx.activeProjectKeys,
                 signal: AbortSignal.timeout(HOOK_TIMEOUT_RECOVERY_GRACE_MS),
+                runId: ctx.runId,
               }).catch((error: unknown) => {
                 api.logger.debug?.(
                   `active-memory: lane-1 trigger recall failed: ${toSingleLineLogValue(
@@ -458,6 +466,7 @@ export default definePluginEntry({
               currentModelId: ctx.modelId,
               conversationRecall,
               abortSignal: deadlineController.signal,
+              runId: ctx.runId,
             });
             deadlineController.signal.throwIfAborted();
             if (!result.summary) {
@@ -492,6 +501,63 @@ export default definePluginEntry({
       },
       { timeoutMs: beforePromptBuildTimeoutMs },
     );
+    api.on("before_model_resolve", async (event, ctx) => {
+      refreshLiveConfigFromRuntime();
+      const liveConfig = readCurrentConfig() ?? (api.config as OpenClawConfig);
+      const effectiveAgentId = resolveStatusUpdateAgentId(ctx);
+      const sessionContext = {
+        ...ctx,
+        sessionKey:
+          ctx.sessionKey?.trim() ||
+          (effectiveAgentId
+            ? resolveCanonicalSessionKeyFromSessionId({
+                api,
+                agentId: effectiveAgentId,
+                sessionId: ctx.sessionId,
+              })
+            : undefined),
+        mainKey: liveConfig.session?.mainKey ?? api.config.session?.mainKey,
+      };
+      if (
+        !isEligibleInteractiveSession(sessionContext) ||
+        !isEnabledForAgent(config, effectiveAgentId) ||
+        !effectiveAgentId ||
+        normalizePluginsConfig(liveConfig.plugins).slots.memory !== MEMORY_CORE_PLUGIN_ID ||
+        !isPrivateRecallDestination(sessionContext) ||
+        !isAllowedChatId(config, sessionContext)
+      ) {
+        return;
+      }
+      if (
+        await isSessionActiveMemoryDisabled({
+          api,
+          sessionKey: sessionContext.sessionKey,
+        })
+      ) {
+        return;
+      }
+
+      // Start now, but do not await: runtime/model preparation overlaps the
+      // cold SQLite open and FTS statement/page warmup before lane 1 is budgeted.
+      void prewarmTriggerRecall({
+        cfg: liveConfig,
+        agentId: effectiveAgentId,
+        query: buildSearchQuery({ latestUserMessage: event.prompt }),
+        activeProjectKeys: ctx.activeProjectKeys,
+        runId: ctx.runId,
+      }).catch((error: unknown) => {
+        api.logger.debug?.(
+          `active-memory: lane-1 prewarm failed: ${toSingleLineLogValue(
+            error instanceof Error ? error.message : String(error),
+          )}`,
+        );
+      });
+    });
+    api.on("agent_end", (event, ctx) => {
+      const runId = event.runId ?? ctx.runId;
+      forgetActiveRecallRun(runId);
+      forgetTriggerRecallPrewarm(runId);
+    });
   },
 });
 
@@ -514,6 +580,7 @@ const testing = {
     resetActiveRecallStateForTests();
     resetActiveMemoryConfigForTests();
     resetActiveMemoryTranscriptForTests();
+    resetTriggerRecallPrewarmsForTests();
   },
   setMinimumTimeoutMsForTests,
   setSetupGraceTimeoutMsForTests,

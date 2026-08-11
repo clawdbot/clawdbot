@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it } from "vitest";
+import { i18n } from "../../i18n/index.ts";
 import {
   encodeTerminalUpload,
   quoteTerminalUploadPath,
@@ -91,4 +92,30 @@ describe("terminal file upload", () => {
       );
     },
   );
+
+  it("localizes upload validation while preserving file and shell details", async () => {
+    i18n.registerTranslation("pt-BR", {
+      terminal: {
+        uploadTooLarge: "O arquivo excede o limite de 16 MiB: {file}",
+        uploadUnsafeCmdPath: "O caminho enviado não é seguro para cmd.exe",
+        uploadUnsupportedShell: "Shell sem suporte para caminho enviado: {shell}",
+      },
+    });
+    await i18n.setLocale("pt-BR");
+    try {
+      const oversized = {
+        name: "archive.zip",
+        size: MAX_TERMINAL_UPLOAD_BYTES + 1,
+        arrayBuffer: () => Promise.reject(new Error("should not read")),
+      } as File;
+      await expect(encodeTerminalUpload(oversized)).rejects.toThrow(
+        "O arquivo excede o limite de 16 MiB: archive.zip",
+      );
+      expect(() => quoteTerminalUploadPath("/tmp/report.pdf", "nu")).toThrow(
+        "Shell sem suporte para caminho enviado: nu",
+      );
+    } finally {
+      await i18n.setLocale("en");
+    }
+  });
 });

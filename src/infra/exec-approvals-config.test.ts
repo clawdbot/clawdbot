@@ -1,4 +1,5 @@
 // Covers exec approval config normalization and safe-bin policy.
+import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { makeTempDir } from "./exec-approvals-test-helpers.js";
@@ -14,6 +15,19 @@ import {
   type ExecAllowlistEntry,
   type ExecApprovalsFile,
 } from "./exec-approvals.js";
+
+describe.sequential("exec approval temp fixture cleanup", () => {
+  let cleanupProbeRoot = "";
+
+  it("creates a disposable fixture root", () => {
+    cleanupProbeRoot = makeTempDir();
+    expect(existsSync(cleanupProbeRoot)).toBe(true);
+  });
+
+  it("removes the fixture root before the next test", () => {
+    expect(existsSync(cleanupProbeRoot), cleanupProbeRoot).toBe(false);
+  });
+});
 
 describe("exec approvals wildcard agent", () => {
   it("merges wildcard allowlist entries with agent entries", () => {

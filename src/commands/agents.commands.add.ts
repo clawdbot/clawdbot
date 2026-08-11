@@ -24,6 +24,7 @@ import {
   commitConfigWithPendingPluginInstalls,
   transformConfigWithPendingPluginInstalls,
 } from "../plugins/install-record-commit.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -32,10 +33,10 @@ import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { applyAgentBindings, buildChannelBindings, describeBinding } from "./agents.bindings.js";
-import { requireValidConfigFileSnapshot } from "./agents.command-shared.js";
 import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { applyAuthChoice, warnIfModelConfigLooksOff } from "./auth-choice.js";
+import { requireValidConfigFileSnapshot } from "./config-validation.js";
 import {
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
@@ -129,13 +130,15 @@ export async function agentsAddCommand(
       runtime.log(`Normalized agent id to "${agentId}".`);
     }
 
-    const created = await createAgent({
-      name: nameInput,
-      workspace: workspaceFlag,
-      ...(opts.agentDir ? { agentDir: opts.agentDir } : {}),
-      ...(opts.model ? { model: opts.model } : {}),
-      ...(opts.bind?.length ? { bindingSpecs: opts.bind } : {}),
-      transformConfig: transformConfigWithPendingPluginInstalls,
+    const created = await withPluginLifecycleLease({}, async () => {
+      return await createAgent({
+        name: nameInput,
+        workspace: workspaceFlag,
+        ...(opts.agentDir ? { agentDir: opts.agentDir } : {}),
+        ...(opts.model ? { model: opts.model } : {}),
+        ...(opts.bind?.length ? { bindingSpecs: opts.bind } : {}),
+        transformConfig: transformConfigWithPendingPluginInstalls,
+      });
     });
     if (created.status === "error") {
       runtime.error(

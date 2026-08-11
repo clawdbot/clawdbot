@@ -48,8 +48,8 @@ public final class OpenClawChatViewModel {
     var prefersExplicitVerboseLevel: Bool
     public private(set) var modelSelectionID: String = "__default__"
     public private(set) var modelChoices: [OpenClawChatModelChoice] = []
-    private var modelPickerFavorites: [String]
-    private var modelPickerRecents: [String]
+    var modelPickerFavorites: [String]
+    var modelPickerRecents: [String]
     /// Setters are module-internal for the sending extension's command catalog.
     public internal(set) var slashCommands: [OpenClawChatCommandChoice] = []
     public internal(set) var isLoadingSlashCommands = false
@@ -84,23 +84,9 @@ public final class OpenClawChatViewModel {
     public internal(set) var isLoadingSessionBranches = false
     @ObservationIgnored
     var sessionBranchesRefreshGeneration: UInt64 = 0
-    struct SessionBranchSwitchActivity: Equatable {
-        let session: SessionSnapshot
-        let generation: UInt64
-    }
-
     var sessionBranchSwitchActivity: SessionBranchSwitchActivity?
     @ObservationIgnored
     var nextSessionBranchSwitchGeneration: UInt64 = 0
-
-    var isSwitchingSessionBranch: Bool {
-        self.sessionBranchSwitchActivity != nil
-    }
-
-    /// True when this view model owns a gateway-scoped durable text outbox.
-    public var supportsOfflineTextOutbox: Bool {
-        self.outbox != nil
-    }
 
     public private(set) var pendingRunCount: Int = 0
     public internal(set) var questionCards: [OpenClawQuestionCardModel] = []
@@ -111,15 +97,22 @@ public final class OpenClawChatViewModel {
     var questionRefreshRetryTask: Task<Void, Never>?
     var questionRefreshRetryDelaysMs: [Int64] = [1000, 2000, 4000]
     var hasActiveSessionRunWithoutChatSnapshot = false
+    var activeSessionRunIDs: [String] = []
+    var liveRunStateByRunID: [String: ChatLiveRunState] = [:]
 
     public private(set) var sessionKey: String {
-        didSet { syncContextUsageFraction() }
+        didSet {
+            syncContextUsageFraction()
+            syncActiveSessionRunIDsFromCurrentSession()
+        }
     }
 
     public internal(set) var sessionId: String?
     public private(set) var streamingAssistantText: String?
 
     public private(set) var pendingToolCalls: [OpenClawChatPendingToolCall] = []
+    var subagentActivities: [ChatSubagentActivity] = []
+    var hiddenWorkingSubagentCount = 0
     public internal(set) var planSteps: [OpenClawChatPlanStep] = []
     public internal(set) var planExplanation: String?
     var planRunId: String?
@@ -127,7 +120,10 @@ public final class OpenClawChatViewModel {
     private(set) var timelineRevision: UInt64 = 0
     /// Setter is module-internal for the transcript-cache extension only.
     public internal(set) var sessions: [OpenClawChatSessionEntry] = [] {
-        didSet { syncContextUsageFraction() }
+        didSet {
+            syncContextUsageFraction()
+            syncActiveSessionRunIDsFromCurrentSession()
+        }
     }
 
     public internal(set) var swarmSessions: [OpenClawChatSessionEntry] = []
@@ -159,7 +155,7 @@ public final class OpenClawChatViewModel {
     let transcriptCache: (any OpenClawChatTranscriptCache)?
     let outbox: (any OpenClawChatCommandOutbox)?
     @ObservationIgnored
-    private let modelPickerStore: ChatModelPickerStore
+    let modelPickerStore: ChatModelPickerStore
     /// Per-message outbox display state; rows without an entry are normal
     /// transcript rows. Observable so bubbles update when flush progresses.
     public internal(set) var outboxStatesByMessageID: [UUID: OpenClawChatOutboxMessageState] = [:]
@@ -450,6 +446,11 @@ public final class OpenClawChatViewModel {
         }
     }
 
+    @ObservationIgnored
+    var subagentActivityState = ChatSubagentActivityState()
+    @ObservationIgnored
+    var subagentActivityCleanupTask: Task<Void, Never>?
+
     var lastHealthPollAt: Date?
 
     public init(
@@ -550,6 +551,7 @@ public final class OpenClawChatViewModel {
         }
         self.outboxChangesTask?.cancel()
         self.activeSessionRunIndicatorTimeoutTask?.cancel()
+        self.subagentActivityCleanupTask?.cancel()
         self.questionRefreshRetryTask?.cancel()
         for (_, task) in self.questionExpiryTasks {
             task.cancel()
@@ -565,35 +567,6 @@ public final class OpenClawChatViewModel {
 
     public func refresh() {
         startBootstrap()
-    }
-
-    public var modelPickerSections: ChatModelPickerSections {
-        let defaultProvider = ChatModelPickerStore.resolvedDefaultProvider(
-            provider: self.sessionDefaults?.modelProvider,
-            model: self.sessionDefaults?.model)
-        return ChatModelPickerStore.sections(
-            choices: self.modelChoices,
-            favorites: self.modelPickerFavorites,
-            recents: self.modelPickerRecents,
-            defaultProvider: defaultProvider)
-    }
-
-    public func isDefaultModel(_ model: OpenClawChatModelChoice) -> Bool {
-        ChatModelPickerStore.isDefaultModel(
-            model,
-            defaultProvider: self.sessionDefaults?.modelProvider,
-            defaultModel: self.sessionDefaults?.model)
-    }
-
-    public var isSelectedModelPinned: Bool {
-        self.modelSelectionID != Self.defaultModelSelectionID &&
-            self.modelPickerFavorites.contains(self.modelSelectionID)
-    }
-
-    public func toggleSelectedModelPinned() {
-        guard self.modelSelectionID != Self.defaultModelSelectionID else { return }
-        self.modelPickerStore.toggleFavorite(self.modelSelectionID)
-        self.modelPickerFavorites = self.modelPickerStore.favorites
     }
 
     public func resumeFromForeground() {
@@ -963,6 +936,7 @@ extension OpenClawChatViewModel {
 
             Task { [weak self] in await self?.refreshQuestions() }
             Task { [weak self] in await self?.refreshSwarmCapability(sessionSnapshot: context.session) }
+            Task { [weak self] in await self?.refreshSubagentActivities(sessionSnapshot: context.session) }
 
             let payload = try await transport.requestHistory(sessionKey: context.session.key)
             guard self.isCurrentBootstrap(context) else { return }
@@ -1283,9 +1257,12 @@ extension OpenClawChatViewModel {
         resetOutboxPresentationForSessionSwitch()
         self.sessionId = nil
         self.pendingToolCallsById = [:]
+        self.clearSubagentActivities()
         self.updateStreamingAssistantText(nil)
         clearPlan()
         self.updateActiveSessionRunWithoutChatSnapshot(false)
+        self.activeSessionRunIDs = []
+        self.liveRunStateByRunID.removeAll()
         resetSlashCommandCatalog()
         self.sessionBranches = []
         self.isLoadingSessionBranches = false

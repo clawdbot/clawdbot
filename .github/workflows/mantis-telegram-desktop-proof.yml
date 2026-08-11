@@ -123,6 +123,8 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
+      # Intentionally separate: the candidate is the selected open PR head SHA, with fork
+      # heads allowed as fork-pr-head, while only the baseline uses main-ancestor trust.
       - name: Validate refs are trusted
         id: validate
         env:
@@ -555,6 +557,15 @@ jobs:
               '.lane == $lane and .sha == $sha' \
               "$runtime_parent/attestations/$lane.json" >/dev/null
           done
+
+      - name: Return proof artifacts to the runner
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d "$MANTIS_OUTPUT_DIR" ]]; then
+            sudo chown -R "$(id -u):$(id -g)" "$MANTIS_OUTPUT_DIR"
+          fi
 
       - name: Inspect Mantis evidence manifest
         id: inspect

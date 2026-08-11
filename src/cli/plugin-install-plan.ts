@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveArchiveKind } from "../infra/archive.js";
-import { parseClawHubPluginSpec } from "../infra/clawhub.js";
+import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { findBundledPluginSource, type BundledPluginSource } from "../plugins/bundled-sources.js";
 import { parseGitPluginSpec } from "../plugins/git-install.js";
@@ -94,8 +94,12 @@ export function resolvePluginInstallSourcePlan(params: {
       ? sourcePlan({ source: "git", spec: params.raw, mode: params.mode }, params.raw, "git")
       : { ok: false, error: `unsupported git: plugin spec: ${params.raw}` };
   }
-  if (parseClawHubPluginSpec(params.raw)) {
-    return sourcePlan({ source: "clawhub", spec: params.raw, mode: params.mode }, params.raw);
+  const clawhubPrefix = params.raw.trim().toLowerCase().startsWith("clawhub:");
+  const clawhub = parseClawHubPluginSpec(params.raw);
+  if (clawhubPrefix) {
+    return clawhub
+      ? sourcePlan({ source: "clawhub", spec: params.raw, mode: params.mode }, params.raw)
+      : { ok: false, error: `Unsupported ClawHub plugin spec: ${params.raw}` };
   }
   const explicitNpm = parseNpmPrefixSpec(params.raw);
   if (explicitNpm !== null && !explicitNpm) {

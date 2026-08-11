@@ -6,7 +6,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveCliBackendConfig, resolveCliBackendLiveTest } from "../agents/cli-backends.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
-import { getClaudeLiveSessionGenerationForOwner } from "../agents/cli-runner/claude-live-session.js";
+import { getClaudeGeneration } from "../agents/cli-runner/claude-live-registry.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.js";
 import { parseModelRef } from "../agents/model-selection.js";
@@ -23,7 +23,7 @@ import {
   buildClaudeCliResumeContinuityProbe,
   createBootstrapWorkspace,
   ensurePairedTestGatewayClientIdentity,
-  getFreeGatewayPort,
+  getCliBackendPortBlock,
   matchesCliBackendReply,
   parseImageMode,
   parseJsonStringArray,
@@ -297,7 +297,7 @@ describeLive("gateway live (cli backend)", () => {
 
       const token = `test-${randomUUID()}`;
       setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
-      const port = await getFreeGatewayPort();
+      const port = await getCliBackendPortBlock();
       logCliBackendLiveStep("env-ready", { port });
 
       const rawModel = process.env.OPENCLAW_LIVE_CLI_BACKEND_MODEL ?? DEFAULT_MODEL;
@@ -672,9 +672,7 @@ describeLive("gateway live (cli backend)", () => {
           ).toBe(true);
         } else if (CLI_RESUME) {
           logCliBackendLiveStep("agent-resume:start", { sessionKey, resumeNonce });
-          let continuityOwner:
-            | Parameters<typeof getClaudeLiveSessionGenerationForOwner>[0]
-            | undefined;
+          let continuityOwner: Parameters<typeof getClaudeGeneration>[0] | undefined;
           let expectedLiveSessionGeneration: string | undefined;
           if (resumeContinuityProbe) {
             const nativeHistory = await activeClient.request<{
@@ -695,7 +693,7 @@ describeLive("gateway live (cli backend)", () => {
               sessionId: continuitySessionId,
               sessionKey,
             };
-            expectedLiveSessionGeneration = getClaudeLiveSessionGenerationForOwner(continuityOwner);
+            expectedLiveSessionGeneration = getClaudeGeneration(continuityOwner);
             expect(expectedLiveSessionGeneration).toBeTruthy();
           }
           const resumePayload = await requestWithCodexTimeoutRetry(
@@ -735,9 +733,7 @@ describeLive("gateway live (cli backend)", () => {
             if (!continuityOwner || !expectedLiveSessionGeneration) {
               throw new Error("Claude CLI continuity probe lost its live-session generation");
             }
-            expect(getClaudeLiveSessionGenerationForOwner(continuityOwner)).toBe(
-              expectedLiveSessionGeneration,
-            );
+            expect(getClaudeGeneration(continuityOwner)).toBe(expectedLiveSessionGeneration);
           } else {
             expect(
               matchesCliBackendReply(resumeText, `CLI backend RESUME OK ${resumeNonce}.`),

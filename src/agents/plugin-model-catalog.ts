@@ -43,7 +43,7 @@ export function isPluginModelCatalogMigrationFile(filename: string): boolean {
 
 type PluginModelCatalogDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
 
-type PersistedPluginModelCatalog = {
+export type PersistedPluginModelCatalog = {
   pluginId: string;
   contents: string;
 };
@@ -82,6 +82,25 @@ function readPersistedPluginModelCatalogEntries(
 
 function readPersistedPluginModelCatalogs(agentDir: string): PersistedPluginModelCatalog[] {
   return readPersistedPluginModelCatalogEntries(agentDir, PLUGIN_MODEL_CATALOG_CACHE_SCOPE);
+}
+
+/**
+ * Reads an exact plugin-catalog generation without migration or repair writes.
+ * Lifecycle preparation uses this for configured providers before atomic publication.
+ */
+export function loadPersistedPluginModelCatalogsReadOnly(
+  agentDir: string,
+  pluginIds?: readonly string[],
+): PersistedPluginModelCatalog[] {
+  if (pluginIds?.length === 0) {
+    return [];
+  }
+  const catalogs = readPersistedPluginModelCatalogs(agentDir);
+  if (!pluginIds) {
+    return catalogs;
+  }
+  const allowed = new Set(pluginIds);
+  return catalogs.filter(({ pluginId }) => allowed.has(pluginId));
 }
 
 function repairPersistedPluginModelCatalogs(params: {

@@ -1,8 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buzzSetupAdapter } from "./setup-core.js";
+import { buzzSetupContract } from "./setup-core.js";
 
-describe("buzzSetupAdapter", () => {
+describe("buzzSetupContract", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -19,7 +19,7 @@ describe("buzzSetupAdapter", () => {
       },
     } as OpenClawConfig;
 
-    const result = buzzSetupAdapter.applyAccountConfig({
+    const result = buzzSetupContract.applyAccountConfig({
       cfg,
       accountId: "default",
       input: { relayUrl: "wss://buzz.example.com", useEnv: true },
@@ -33,12 +33,12 @@ describe("buzzSetupAdapter", () => {
 
   it("rejects --use-env when BUZZ_PRIVATE_KEY is unset", () => {
     vi.stubEnv("BUZZ_PRIVATE_KEY", "");
-    if (!buzzSetupAdapter.validateInput) {
-      throw new Error("Expected buzzSetupAdapter.validateInput to be defined");
+    if (!buzzSetupContract.validateInput) {
+      throw new Error("Expected buzzSetupContract.validateInput to be defined");
     }
 
     expect(
-      buzzSetupAdapter.validateInput({
+      buzzSetupContract.validateInput({
         cfg: {} as OpenClawConfig,
         accountId: "default",
         input: { relayUrl: "wss://buzz.example.com", useEnv: true },
@@ -57,7 +57,7 @@ describe("buzzSetupAdapter", () => {
       },
     } as OpenClawConfig;
 
-    const result = buzzSetupAdapter.applyAccountConfig({
+    const result = buzzSetupContract.applyAccountConfig({
       cfg,
       accountId: "default",
       input: { relayUrl: "wss://buzz.example.com", privateKey: "22".repeat(32) },
@@ -79,7 +79,7 @@ describe("buzzSetupAdapter", () => {
       },
     } as OpenClawConfig;
 
-    const result = buzzSetupAdapter.applyAccountConfig({
+    const result = buzzSetupContract.applyAccountConfig({
       cfg,
       accountId: "default",
       input: { relayUrl: "wss://buzz.example.com", useEnv: true },

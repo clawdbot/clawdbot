@@ -1,6 +1,8 @@
 // Msteams tests cover messenger plugin behavior.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-chunking";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -379,6 +381,108 @@ describe("msteams messenger", () => {
       } finally {
         await rm(tmpDir, { recursive: true, force: true });
       }
+    });
+
+    it("marks local activity preparation failures as never dispatched", async () => {
+      const sendActivity = vi.fn(async () => ({ id: "should-not-send" }));
+      const missingPath = path.join(resolvePreferredOpenClawTmpDir(), "missing-msteams-file.txt");
+
+      await expect(
+        sendMSTeamsMessages({
+          replyStyle: "thread",
+          app: createMockApp(),
+          appId: "app123",
+          conversationRef: baseRef,
+          context: { sendActivity },
+          messages: [{ mediaUrl: missingPath }],
+        }),
+      ).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
+      expect(sendActivity).not.toHaveBeenCalled();
+    });
+
+    it("loads uppercase file URLs before sending personal images", async () => {
+      const tmpDir = await mkdtemp(
+        path.join(resolvePreferredOpenClawTmpDir(), "msteams-file-url-"),
+      );
+      const localFile = path.join(tmpDir, "café image.png");
+      const png = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+        "base64",
+      );
+      await writeFile(localFile, png);
+
+      try {
+        const mediaUrl = pathToFileURL(localFile).href.replace(/^file:/u, "FILE:");
+        const activity = await buildActivity(
+          { mediaUrl },
+          {
+            ...baseRef,
+            conversation: { ...baseRef.conversation, conversationType: "personal" },
+          },
+        );
+        const attachment = (activity.attachments as Array<Record<string, unknown>>)[0];
+
+        expect(attachment).toMatchObject({
+          name: "café image.png",
+          contentType: "image/png",
+          contentUrl: `data:image/png;base64,${png.toString("base64")}`,
+        });
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it("does not claim no dispatch after an earlier batch message was sent", async () => {
+      const sendActivity = vi.fn(async () => ({ id: "sent-first" }));
+      const missingPath = path.join(resolvePreferredOpenClawTmpDir(), "missing-second-file.txt");
+
+      const error = await sendMSTeamsMessages({
+        replyStyle: "thread",
+        app: createMockApp(),
+        appId: "app123",
+        conversationRef: baseRef,
+        context: { sendActivity },
+        messages: [{ text: "first" }, { mediaUrl: missingPath }],
+      }).catch((cause: unknown) => cause);
+
+      expect(sendActivity).toHaveBeenCalledTimes(1);
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
+    });
+
+    it("does not claim no dispatch when proactive fallback preparation fails after a send", async () => {
+      const threadSent: string[] = [];
+      const error = await sendMSTeamsMessages({
+        replyStyle: "thread",
+        app: createMockApp(),
+        appId: "app123",
+        conversationRef: {
+          ...baseRef,
+          user: undefined,
+        },
+        context: createRevokedThreadContext({ failAfterAttempt: 2, sent: threadSent }),
+        messages: [{ text: "first" }, { text: "second" }],
+      }).catch((cause: unknown) => cause);
+
+      expect(threadSent).toEqual(["first"]);
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
+      expect((error as Error).message).toContain("missing user.id");
+    });
+
+    it("marks invalid proactive conversation references as never dispatched", async () => {
+      await expect(
+        sendMSTeamsMessages({
+          replyStyle: "top-level",
+          app: createMockApp(),
+          appId: "app123",
+          conversationRef: {
+            ...baseRef,
+            conversation: { id: "" },
+          },
+          messages: [{ text: "hello" }],
+        }),
+      ).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
     });
 
     it("retries thread sends on throttling (429)", async () => {

@@ -67,13 +67,6 @@ const qaScenarioChannelSchema = z
     message: "scenario execution channel ids must use lowercase dotted or dashed tokens",
   });
 
-const qaScenarioProfileSchema = z
-  .string()
-  .trim()
-  .regex(/^[a-z0-9]+(?:[.:/-][a-z0-9]+)*$/, {
-    message: "scenario execution profiles must use lowercase namespaced tokens",
-  });
-
 const qaScenarioTransportPolicySchema = z.object({
   requireGroupMention: z.literal(true).optional(),
   senderAllowlist: z.array(z.string().trim().min(1)).min(1).optional(),
@@ -92,7 +85,6 @@ const qaFlowScenarioExecutionSchema = z
         message: "scenario execution channel ids must be unique",
       })
       .optional(),
-    profiles: z.record(qaScenarioProfileSchema, z.number().int().nonnegative()).optional(),
     suiteIsolation: z.literal("isolated").optional(),
     isolationReason: z.string().trim().min(1).optional(),
     transportPolicy: qaScenarioTransportPolicySchema.optional(),
@@ -103,7 +95,6 @@ const qaFlowScenarioExecutionSchema = z
 const qaTestFileScenarioExecutionBaseSchema = z.object({
   summary: z.string().trim().min(1).optional(),
   channel: qaScenarioChannelSchema.optional(),
-  profiles: z.record(qaScenarioProfileSchema, z.number().int().nonnegative()).optional(),
   path: qaScenarioRepoRefSchema,
   config: qaScenarioConfigSchema.optional(),
 });
@@ -120,6 +111,7 @@ const qaTestFileScenarioExecutionSchema = z.discriminatedUnion("kind", [
     kind: z.literal("script"),
     allowBlockedEvidence: z.boolean().optional(),
     args: z.array(z.string()).optional(),
+    parallelSafe: z.boolean().optional(),
     timeoutMs: z.number().int().positive().optional(),
   }),
 ]);
@@ -172,6 +164,7 @@ const qaScenarioCoverageSchema = z
   }));
 
 const qaScenarioGatewayRuntimeSchema = z.object({
+  allowUnhealthyStartup: z.boolean().optional(),
   forwardHostHome: z.boolean().optional(),
   preserveDebugArtifacts: z.boolean().optional(),
 });
@@ -357,6 +350,7 @@ export type QaSeedScenarioWithSource = QaSeedScenario & {
   sourcePath: string;
   execution: QaScenarioExecution & {
     flow?: QaScenarioFlow;
+    flowKind?: "module" | "steps";
   };
 };
 
@@ -370,7 +364,31 @@ export type QaBootstrapScenarioCatalog = {
   scenarios: QaSeedScenarioWithSource[];
 };
 
-export { QA_SCENARIO_PACKS } from "./scenario-packs.js";
+export function resolveQaScenarioRequiredProviderMode(
+  scenario: Pick<QaSeedScenarioWithSource, "id" | "execution">,
+) {
+  const configuredValue = scenario.execution.config?.requiredProviderMode;
+  const configuredResult =
+    configuredValue === undefined
+      ? undefined
+      : qaScenarioModuleFlow.providerModeSchema.safeParse(
+          typeof configuredValue === "string" ? configuredValue.trim() : configuredValue,
+        );
+  if (configuredResult && !configuredResult.success) {
+    throw new Error(
+      `QA scenario ${scenario.id} declares unknown provider mode: ${String(configuredValue)}`,
+    );
+  }
+  const configuredMode = configuredResult?.success ? configuredResult.data : undefined;
+  const executionMode =
+    scenario.execution.kind === "flow" ? scenario.execution.providerMode : undefined;
+  if (configuredMode && executionMode && configuredMode !== executionMode) {
+    throw new Error(
+      `QA scenario ${scenario.id} declares conflicting provider modes: execution.providerMode=${executionMode}, execution.config.requiredProviderMode=${configuredMode}`,
+    );
+  }
+  return configuredMode ?? executionMode;
+}
 
 const QA_SCENARIO_PACK_INDEX_PATH = "qa/scenarios/index.yaml";
 const QA_SCENARIO_LEGACY_OVERVIEW_PATH = "qa/scenarios.md";
@@ -464,19 +482,24 @@ export function readQaScenarioPack(): QaScenarioPack {
         parsedScenario.execution ?? {},
         relativePath,
       );
+      // Module shorthand normalizes to ordinary steps below. Preserve its authored form so
+      // planning cannot schedule it on an adapter that does not support module flows.
+      const flowKind = qaScenarioModuleFlow.resolveKind(parsedScenarioFile.flow);
       const flow = qaScenarioModuleFlow.resolveFlow(
         parsedScenarioFile.flow,
         parsedScenarioFile.title,
       );
       qaScenarioModuleFlow.assertDefined({ executionKind: execution.kind, flow, relativePath });
-      return {
+      const scenario = {
         ...parsedScenario,
         sourcePath: relativePath,
         execution: {
           ...execution,
-          ...(flow ? { flow } : {}),
+          ...(flow ? { flow, flowKind } : {}),
         },
       } satisfies QaSeedScenarioWithSource;
+      resolveQaScenarioRequiredProviderMode(scenario);
+      return scenario;
     })(),
   );
   const seenScenarioIds = new Set<string>();
@@ -554,21 +577,6 @@ export function readQaScenarioById(id: string): QaSeedScenarioWithSource {
 
 export function readQaScenarioExecutionConfig(id: string): Record<string, unknown> | undefined {
   return readQaScenarioPack().scenarios.find((candidate) => candidate.id === id)?.execution?.config;
-}
-
-export function listQaScenariosForExecutionProfile(profile: string): QaSeedScenarioWithSource[] {
-  const normalized = qaScenarioProfileSchema.parse(profile);
-  const scenarios = readQaScenarioPack()
-    .scenarios.filter((scenario) => scenario.execution.profiles?.[normalized] !== undefined)
-    .toSorted((left, right) => {
-      const orderDelta =
-        left.execution.profiles![normalized]! - right.execution.profiles![normalized]!;
-      return orderDelta || left.sourcePath.localeCompare(right.sourcePath);
-    });
-  if (scenarios.length === 0) {
-    throw new Error(`unknown QA scenario execution profile: ${normalized}`);
-  }
-  return scenarios;
 }
 
 export function validateQaScenarioExecutionConfig(config: Record<string, unknown>) {

@@ -11,6 +11,7 @@ import {
   type ActiveSessionCatalog,
 } from "openclaw/plugin-sdk/session-catalog-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { BEAM_MAX_BODY_BYTES, BEAM_MAX_ITEM_CHARS, BEAM_MAX_ITEMS } from "./types.js";
 
 const MIRROR_CONFIG_PATH = "plugins.entries.beam.config.mirror";
@@ -134,7 +135,7 @@ export function beamMirrorId(catalogId: string, hostId: string, threadId: string
 }
 
 function clipText(text: string): string {
-  return text.length > BEAM_MAX_ITEM_CHARS ? text.slice(0, BEAM_MAX_ITEM_CHARS) : text;
+  return truncateUtf16Safe(text, BEAM_MAX_ITEM_CHARS);
 }
 
 function droppedSummary(counts: Map<string, number>): string | undefined {
@@ -293,11 +294,17 @@ export function createBeamMirrorRunner(params: {
       },
       body: JSON.stringify(payload),
     });
-    if (!response.ok) {
-      warnThrottled(`beam mirror upload failed (${response.status}) for ${payload.source}`);
-      return false;
+    try {
+      if (!response.ok) {
+        warnThrottled(`beam mirror upload failed (${response.status}) for ${payload.source}`);
+        return false;
+      }
+      return true;
+    } finally {
+      // The mirror uses only the status; cancel the ignored payload so slow
+      // receiver responses cannot retain connection slots across poll retries.
+      await response.body?.cancel().catch(() => undefined);
     }
-    return true;
   };
 
   const buildUpload = async (
@@ -318,7 +325,7 @@ export function createBeamMirrorRunner(params: {
       version: 1,
       beamId: beamMirrorId(candidate.catalogId, candidate.hostId, candidate.threadId),
       source: candidate.catalogId,
-      title: candidate.title.slice(0, 160),
+      title: truncateUtf16Safe(candidate.title, 160),
       updatedAt: new Date(candidate.recencyAt || now()).toISOString(),
       completed,
       items,

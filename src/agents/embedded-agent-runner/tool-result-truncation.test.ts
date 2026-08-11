@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
@@ -1437,16 +1438,39 @@ describe("truncateOversizedToolResultsInSession", () => {
     await appendTranscriptMessage(scope, {
       message: makeUserMessage("run tools"),
     });
+    const staleCheckpointReplay = {
+      v: 1,
+      type: "openai-responses-compaction",
+      data: "stale-checkpoint",
+      provider: "openai",
+      api: "openai-responses",
+      model: "gpt-5.2",
+      baseUrlHash: "ozhevd1smnk8s",
+    } satisfies NonNullable<AssistantMessage["providerReplay"]>;
+    const preBoundaryCheckpointOwner = makeAssistantMessage("pre-boundary checkpoint owner");
+    preBoundaryCheckpointOwner.providerReplay = staleCheckpointReplay;
+    await appendTranscriptMessage(scope, { message: preBoundaryCheckpointOwner });
     const medium = "alpha beta gamma delta epsilon ".repeat(600);
-    await appendTranscriptMessage(scope, {
+    const firstToolResult = await appendTranscriptMessage(scope, {
       message: makeToolResult(medium, "call_1"),
     });
-    await appendTranscriptMessage(scope, {
+    const secondToolResult = await appendTranscriptMessage(scope, {
       message: makeToolResult(medium, "call_2"),
     });
-    await appendTranscriptMessage(scope, {
+    const thirdToolResult = await appendTranscriptMessage(scope, {
       message: makeToolResult(medium, "call_3"),
     });
+    const staleCheckpointOwner = makeAssistantMessage("stale checkpoint owner");
+    staleCheckpointOwner.providerReplay = staleCheckpointReplay;
+    await appendTranscriptMessage(scope, { message: staleCheckpointOwner });
+    const suppressionReplay = {
+      ...staleCheckpointReplay,
+      type: "openai-responses-compaction-suppression",
+      data: "rejected",
+    } satisfies NonNullable<AssistantMessage["providerReplay"]>;
+    const suppressionOwner = makeAssistantMessage("suppression owner");
+    suppressionOwner.providerReplay = suppressionReplay;
+    await appendTranscriptMessage(scope, { message: suppressionOwner });
 
     const listener = vi.fn();
     const cleanup = onInternalSessionTranscriptUpdate(listener);
@@ -1465,21 +1489,102 @@ describe("truncateOversizedToolResultsInSession", () => {
       target: { agentId: "main", sessionId, sessionKey, storePath },
     });
 
-    const toolResultTexts = (await loadTranscriptEvents(scope))
+    const storedEvents = await loadTranscriptEvents(scope);
+    const originalToolResultIds = new Set([
+      firstToolResult.messageId,
+      secondToolResult.messageId,
+      thirdToolResult.messageId,
+    ]);
+    const originalToolResultTexts = storedEvents
       .filter(
-        (entry): entry is { message: AgentMessage; type: "message" } =>
+        (entry): entry is { id: string; message: AgentMessage; type: "message" } =>
           typeof entry === "object" &&
           entry !== null &&
+          "id" in entry &&
           "message" in entry &&
           "type" in entry &&
-          entry.type === "message",
+          entry.type === "message" &&
+          typeof entry.id === "string" &&
+          originalToolResultIds.has(entry.id),
       )
       .map((entry) => entry.message)
       .filter((message): message is ToolResultMessage => message.role === "toolResult")
       .map(getFirstToolResultText);
+    expect(originalToolResultTexts).toEqual([medium, medium, medium]);
+
+    const activeMessages = SessionManager.open(scope)
+      .getBranch()
+      .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
+    const toolResultTexts = activeMessages.flatMap((message) =>
+      message.role === "toolResult" ? [getFirstToolResultText(message as ToolResultMessage)] : [],
+    );
+    const findAssistant = (text: string) =>
+      activeMessages.find(
+        (message): message is AssistantMessage =>
+          message.role === "assistant" &&
+          message.content.some((block) => block.type === "text" && block.text === text),
+      );
 
     expect(toolResultTexts.some((text) => text.includes("truncated"))).toBe(true);
     expect(toolResultTexts.join("").length).toBeLessThan(medium.length * 3);
+    expect(findAssistant("pre-boundary checkpoint owner")?.providerReplay).toEqual(
+      staleCheckpointReplay,
+    );
+    expect(findAssistant("stale checkpoint owner")?.providerReplay).toBeUndefined();
+    expect(findAssistant("suppression owner")?.providerReplay).toEqual(suppressionReplay);
+  });
+
+  it("reuses frozen provider projection bytes on the recovery branch", async () => {
+    const dir = await createTmpDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "runtime-sqlite-frozen-projection";
+    const sessionKey = "agent:main:frozen-projection";
+    const sessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await replaceSessionEntry({ sessionKey, storePath }, {
+      sessionFile,
+      sessionId,
+      updatedAt: 10,
+    } as SessionStoreEntry);
+    await appendTranscriptMessage(scope, { message: makeUserMessage("run tool") });
+    const original = makeToolResult("frozen output ".repeat(2_000), "frozen_call");
+    const persisted = await appendTranscriptMessage(scope, { message: original });
+    const projectionState = createPromptProjectionStateForTest();
+    const projected = truncateOversizedToolResultsInMessages(
+      [original],
+      128_000,
+      12_000,
+      48_000,
+      projectionState,
+    ).messages[0];
+
+    const result = await truncateOversizedToolResultsInActiveTarget({
+      scope: { ...scope, sessionFile },
+      contextWindowTokens: 128_000,
+      maxCharsOverride: 12_000,
+      aggregateMaxCharsOverride: 48_000,
+      projectionState,
+    });
+
+    expect(result.truncated).toBe(true);
+    const activeToolResult = SessionManager.open(scope)
+      .getBranch()
+      .find((entry) => entry.type === "message" && entry.message.role === "toolResult");
+    expect(activeToolResult?.type === "message" ? activeToolResult.message : undefined).toEqual(
+      projected,
+    );
+    const originalEvent = (await loadTranscriptEvents(scope)).find(
+      (entry) =>
+        typeof entry === "object" &&
+        entry !== null &&
+        "id" in entry &&
+        entry.id === persisted.messageId,
+    ) as { message?: AgentMessage } | undefined;
+    expect(originalEvent?.message).toEqual(original);
   });
 
   it("honors SQLite leaf controls when truncating runtime transcripts", async () => {
@@ -1544,7 +1649,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     });
 
     expect(result.truncated).toBe(true);
-    const messages = (await loadTranscriptEvents(scope))
+    const storedMessages = (await loadTranscriptEvents(scope))
       .filter(
         (entry): entry is { message: AgentMessage; type: "message" } =>
           typeof entry === "object" &&
@@ -1554,16 +1659,27 @@ describe("truncateOversizedToolResultsInSession", () => {
           entry.type === "message",
       )
       .map((entry) => entry.message);
-    const selectedTool = messages.find(
+    const originalSelectedTool = storedMessages.find(
       (message): message is ToolResultMessage =>
         message.role === "toolResult" && message.toolCallId === "call_selected",
     );
-    const inactiveTool = messages.find(
+    const inactiveTool = storedMessages.find(
       (message): message is ToolResultMessage =>
         message.role === "toolResult" && message.toolCallId === "call_inactive",
     );
+    const selectedTool = SessionManager.open(scope)
+      .getBranch()
+      .filter((entry) => entry.type === "message")
+      .map((entry) => entry.message)
+      .find(
+        (message): message is ToolResultMessage =>
+          message.role === "toolResult" && message.toolCallId === "call_selected",
+      );
 
     expect(selectedTool ? getFirstToolResultText(selectedTool) : "").toContain("truncated");
+    expect(originalSelectedTool ? getFirstToolResultText(originalSelectedTool) : "").toBe(
+      activeLarge,
+    );
     expect(inactiveTool ? getFirstToolResultText(inactiveTool) : "").toBe(inactiveLarge);
   });
 });

@@ -7,6 +7,47 @@ public enum ChatMarkdownVariant: String, CaseIterable, Sendable {
     case compact
 }
 
+func chatMarkdownDisclosureSummarySource(
+    _ authoredSummary: String?,
+    localizedDefault: () -> String) -> String
+{
+    authoredSummary ?? localizedDefault()
+}
+
+/// Shared native Markdown rendering for app-owned chat surfaces outside the
+/// full OpenClaw chat transcript.
+@MainActor
+public struct OpenClawChatMarkdownView: View {
+    private let text: String
+    private let isUserMessage: Bool
+    private let variant: ChatMarkdownVariant
+    private let textColor: Color
+    private let isComplete: Bool
+
+    public init(
+        text: String,
+        isUserMessage: Bool,
+        variant: ChatMarkdownVariant = .standard,
+        textColor: Color,
+        isComplete: Bool = true)
+    {
+        self.text = text
+        self.isUserMessage = isUserMessage
+        self.variant = variant
+        self.textColor = textColor
+        self.isComplete = isComplete
+    }
+
+    public var body: some View {
+        ChatMarkdownRenderer(
+            text: self.text,
+            context: self.isUserMessage ? .user : .assistant,
+            variant: self.variant,
+            textColor: self.textColor,
+            isComplete: self.isComplete)
+    }
+}
+
 @MainActor
 struct ChatMarkdownRenderer: View {
     enum Context {
@@ -145,6 +186,13 @@ struct ChatMarkdownRenderer: View {
             ChatMarkdownTableView(table: table)
         case let .list(list):
             self.listView(list)
+        case let .disclosure(disclosure):
+            ChatMarkdownDisclosureView(
+                disclosure: disclosure,
+                context: self.context,
+                variant: self.variant,
+                typography: self.typography,
+                textColor: self.textColor)
         case .thematicBreak:
             Divider()
                 .accessibilityHidden(true)
@@ -192,33 +240,63 @@ struct ChatMarkdownRenderSnapshot {
         let processed = ChatMarkdownPreprocessor.preprocess(markdown: text)
         self.blocks = ChatMarkdownBlockSegmenter.segments(
             markdown: processed.cleaned,
-            isComplete: isComplete).map { block in
-            switch block {
-            case let .prose(markdown):
-                .prose(ChatMarkdownProse(
-                    markdown: markdown,
-                    isComplete: isComplete,
-                    preparesReveal: preparesReveal))
-            case let .heading(heading):
-                .heading(
-                    level: heading.level,
-                    prose: ChatMarkdownProse(
-                        markdown: heading.markdown,
-                        isComplete: isComplete,
-                        preparesReveal: false))
-            case let .code(code):
-                .code(code)
-            case let .math(math):
-                .math(math)
-            case let .table(table):
-                .table(table)
-            case let .list(list):
-                .list(list)
-            case .thematicBreak:
-                .thematicBreak
-            }
+            isComplete: isComplete).map {
+            Self.renderedBlock($0, isComplete: isComplete, preparesReveal: preparesReveal)
         }
         self.images = processed.images
+    }
+
+    init(blocks: [ChatMarkdownRenderedBlock], images: [ChatMarkdownPreprocessor.InlineImage] = []) {
+        self.blocks = blocks
+        self.images = images
+    }
+
+    private static func renderedBlock(
+        _ block: ChatMarkdownBlock,
+        isComplete: Bool,
+        preparesReveal: Bool) -> ChatMarkdownRenderedBlock
+    {
+        switch block {
+        case let .prose(markdown):
+            .prose(ChatMarkdownProse(
+                markdown: markdown,
+                isComplete: isComplete,
+                preparesReveal: preparesReveal))
+        case let .heading(heading):
+            .heading(
+                level: heading.level,
+                prose: ChatMarkdownProse(
+                    markdown: heading.markdown,
+                    isComplete: isComplete,
+                    preparesReveal: false))
+        case let .code(code):
+            .code(code)
+        case let .math(math):
+            .math(math)
+        case let .table(table):
+            .table(table)
+        case let .list(list):
+            .list(list)
+        case let .disclosure(disclosure):
+            .disclosure(ChatMarkdownRenderedDisclosure(
+                summary: ChatMarkdownProse(
+                    markdown: chatMarkdownDisclosureSummarySource(disclosure.summary) {
+                        String(localized: "Details")
+                    },
+                    isComplete: true,
+                    preparesReveal: false),
+                isExpanded: disclosure.isExpanded,
+                blocks: disclosure.blocks.map {
+                    // Reveal locations address only top-level blocks. Disclosure content
+                    // uses a nested renderer without reveal state, so render it directly.
+                    Self.renderedBlock(
+                        $0,
+                        isComplete: isComplete,
+                        preparesReveal: false)
+                }))
+        case .thematicBreak:
+            .thematicBreak
+        }
     }
 
     var lastProseIndex: Int? {
@@ -238,7 +316,63 @@ enum ChatMarkdownRenderedBlock {
     case math(ChatMathBlock)
     case table(ChatMarkdownTable)
     case list(ChatMarkdownList)
+    case disclosure(ChatMarkdownRenderedDisclosure)
     case thematicBreak
+}
+
+struct ChatMarkdownRenderedDisclosure {
+    let summary: ChatMarkdownProse
+    let isExpanded: Bool
+    let blocks: [ChatMarkdownRenderedBlock]
+}
+
+@MainActor
+private struct ChatMarkdownDisclosureView: View {
+    let disclosure: ChatMarkdownRenderedDisclosure
+    let context: ChatMarkdownRenderer.Context
+    let variant: ChatMarkdownVariant
+    let typography: ChatMarkdownRenderer.Typography
+    let textColor: Color
+
+    @State private var isExpanded: Bool
+
+    init(
+        disclosure: ChatMarkdownRenderedDisclosure,
+        context: ChatMarkdownRenderer.Context,
+        variant: ChatMarkdownVariant,
+        typography: ChatMarkdownRenderer.Typography,
+        textColor: Color)
+    {
+        self.disclosure = disclosure
+        self.context = context
+        self.variant = variant
+        self.typography = typography
+        self.textColor = textColor
+        self._isExpanded = State(initialValue: disclosure.isExpanded)
+    }
+
+    var body: some View {
+        DisclosureGroup(isExpanded: self.$isExpanded) {
+            ChatMarkdownRenderer(
+                snapshot: ChatMarkdownRenderSnapshot(blocks: self.disclosure.blocks),
+                context: self.context,
+                variant: self.variant,
+                typography: self.typography,
+                textColor: self.textColor)
+                .padding(.top, self.variant == .compact ? 4 : 6)
+        } label: {
+            ChatMarkdownRenderer(
+                snapshot: ChatMarkdownRenderSnapshot(blocks: [.prose(self.disclosure.summary)]),
+                context: self.context,
+                variant: self.variant,
+                typography: self.typography,
+                textColor: self.textColor)
+                .accessibilityLabel(
+                    self.disclosure.summary.inlineAccessibilityText
+                        ?? String(self.disclosure.summary.attributed.characters))
+        }
+        .tint(self.context == .user ? self.textColor : OpenClawChatTheme.accent)
+    }
 }
 
 @MainActor

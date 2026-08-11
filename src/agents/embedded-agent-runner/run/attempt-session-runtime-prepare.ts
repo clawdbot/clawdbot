@@ -5,13 +5,15 @@ import type { guardSessionManager } from "../../session-tool-result-guard-wrappe
 import type { AgentSession } from "../../sessions/index.js";
 import { getProviderPromptState } from "../provider-prompt-state.js";
 import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
-import type { createEmbeddedAttemptExternalAbortController } from "./attempt-abort.js";
-import { installEmbeddedAttemptContextGuards } from "./attempt-context-guards.js";
-import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-boundary.js";
-import { prepareEmbeddedAttemptSessionManager } from "./attempt-session-manager-prepare.js";
+import type { createEmbeddedAttemptExternalAbortController } from "./attempt-finalize.js";
+import {
+  prepareEmbeddedAttemptAgentSession,
+  prepareEmbeddedAttemptSessionBoundary,
+  prepareEmbeddedAttemptSessionManager,
+} from "./attempt-session-prepare.js";
 import { createEmbeddedAttemptSessionSettleTracker } from "./attempt-session-settle.js";
-import { prepareEmbeddedAttemptAgentSession } from "./attempt-session.js";
-import { prepareEmbeddedAttemptTransport } from "./attempt-stream-transport.js";
+import { installEmbeddedAttemptContextGuards } from "./attempt-setup.js";
+import { prepareEmbeddedAttemptTransport } from "./attempt-stream-settle.js";
 import { prepareEmbeddedAttemptTrajectory } from "./attempt-trajectory.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
@@ -48,8 +50,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     | "replayAllowedToolNames"
     | "resolveActiveContextEnginePluginId"
     | "sessionAgentId"
-    | "sessionLockController"
-    | "withOwnedSessionWriteLock"
+    | "transcriptLifecycle"
+    | "withOwnedTranscriptWrite"
   >;
   agentSession: Pick<
     AgentSessionInput,
@@ -99,8 +101,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     replayAllowedToolNames: input.sessionManager.replayAllowedToolNames,
     resolveActiveContextEnginePluginId: input.sessionManager.resolveActiveContextEnginePluginId,
     sessionAgentId: input.sessionManager.sessionAgentId,
-    sessionLockController: input.sessionManager.sessionLockController,
-    withOwnedSessionWriteLock: input.sessionManager.withOwnedSessionWriteLock,
+    transcriptLifecycle: input.sessionManager.transcriptLifecycle,
+    withOwnedTranscriptWrite: input.sessionManager.withOwnedTranscriptWrite,
   });
   const { isOpenAIResponsesApi, preparedUserTurnMessage, sessionManager, transcriptPolicy } =
     preparedSessionManager;
@@ -129,10 +131,11 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     },
     runAbortSignal: input.agentSession.runAbortSignal,
     sessionAgentId: input.sessionManager.sessionAgentId,
-    sessionLockController: input.sessionManager.sessionLockController,
+    transcriptLifecycle: input.sessionManager.transcriptLifecycle,
     sessionManager,
   });
   const { activeSession, setActiveSessionSystemPrompt, settingsManager } = preparedAgentSession;
+  await attempt.userTurnTranscriptRecorder?.waitForRuntimePersistence();
   const boundary = prepareEmbeddedAttemptSessionBoundary({
     activeSession,
     attempt,
@@ -167,6 +170,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     agentDir: input.agentDir,
     attempt,
     computerContextEpoch: input.contextGuards.computerContextEpoch,
+    dropThinkingBlocksForEstimate: transcriptPolicy.dropThinkingBlocks,
     effectiveCwd: input.effectiveCwd,
     effectiveFsWorkspaceOnly: input.effectiveFsWorkspaceOnly,
     effectiveWorkspace: input.effectiveWorkspace,
@@ -237,6 +241,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
         1,
         Math.floor(attempt.contextTokenBudget ?? attempt.model.contextWindow),
       ),
+      ...(trajectoryRecorder ? { recordEvent: trajectoryRecorder.recordEvent } : {}),
     },
   });
   promptCacheRetentionRef.current = transport.effectivePromptCacheRetention;

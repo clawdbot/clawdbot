@@ -10,6 +10,8 @@ import {
   jsdomOptimizedDeps,
   resolveDefaultVitestPool,
 } from "../test/vitest/vitest.shared.config.ts";
+import { uiIsolatedTestFiles } from "../test/vitest/vitest.ui-isolated-paths.mjs";
+import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
@@ -92,8 +94,11 @@ const nodeDrivenBrowserLayoutTests = [
   "src/pages/chat/chat-responsive.browser.test.ts",
   "src/components/form-controls.browser.test.ts",
   "src/pages/sessions/view.browser.test.ts",
+  "src/styles/cursor-policy.browser.test.ts",
+  "src/styles/chat-file-link-presentation.browser.test.ts",
 ] as const;
 const mockRegistryUnitTests = [
+  ...uiIsolatedTestFiles.map((testFile) => testFile.slice("ui/".length)),
   "src/components/mcp-app-view.test.ts",
   "src/pages/chat/chat-page.test.ts",
 ] as const;
@@ -138,6 +143,7 @@ export default defineConfig({
     ...sharedUiTestConfig,
     projects: [
       defineProject({
+        plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -157,13 +163,14 @@ export default defineConfig({
         },
       }),
       defineProject({
+        plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },
         test: {
           ...sharedUiTestConfig,
-          // These two tests intentionally replace module exports. Isolate only this tiny
-          // project so the main 339-file suite keeps its isolate:false speed contract.
+          // Reuse the canonical singleton-sensitive list so the package and
+          // root runners isolate the same tests without slowing the main suite.
           isolate: true,
           deps: jsdomOptimizedDeps,
           name: "unit-mock-registry",
@@ -173,6 +180,7 @@ export default defineConfig({
         },
       }),
       defineProject({
+        plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -186,6 +194,7 @@ export default defineConfig({
         },
       }),
       defineProject({
+        plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },

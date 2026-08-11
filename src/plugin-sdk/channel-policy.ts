@@ -1,4 +1,5 @@
 // Channel policy helpers evaluate plugin channel runtime policy and operator-facing warnings.
+import { asNullableRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeStringEntries,
   uniqueStrings,
@@ -103,12 +104,6 @@ type StandardAllowlistScope = {
   prefix: string;
   account: Record<string, unknown>;
 };
-
-function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 /** Collect the common account, nested-DM, and group/room allowlist paths for doctor warnings. */
 export function collectStandardAllowlistLists(
@@ -311,6 +306,7 @@ export function createRestrictSendersChannelSecurity<
   normalizeDmEntry?: (raw: string) => string;
   /** Allows non-default accounts to inherit shared defaults from the default account. */
   inheritSharedDefaultsFromDefaultAccount?: boolean;
+  dmRouting?: ChannelSecurityAdapter<ResolvedAccount>["dmRouting"];
 }): ChannelSecurityAdapter<ResolvedAccount> {
   return {
     resolveDmPolicy: createScopedDmSecurityResolver<ResolvedAccount>({
@@ -326,6 +322,7 @@ export function createRestrictSendersChannelSecurity<
       normalizeEntry: params.normalizeDmEntry,
       inheritSharedDefaultsFromDefaultAccount: params.inheritSharedDefaultsFromDefaultAccount,
     }),
+    ...(params.dmRouting ? { dmRouting: params.dmRouting } : {}),
     collectWarnings: createAllowlistProviderRestrictSendersWarningCollector<ResolvedAccount>({
       providerConfigPresent:
         params.providerConfigPresent ?? ((cfg) => cfg.channels?.[params.channelKey] !== undefined),

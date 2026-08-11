@@ -35,7 +35,7 @@ describe("parseOpenClawNpmPostpublishVerifyArgs", () => {
   it("keeps trusted release verification independent from target app dependencies", () => {
     const source = readFileSync("scripts/openclaw-npm-postpublish-verify.ts", "utf8");
 
-    expect(source).toContain('from "./lib/error-format.mjs"');
+    expect(source).toContain('from "./lib/error-format.mts"');
     expect(source).not.toContain('from "../src/infra/errors.ts"');
   });
 

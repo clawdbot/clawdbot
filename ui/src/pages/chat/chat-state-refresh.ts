@@ -2,6 +2,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
+import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   areUiSessionKeysEquivalent,
   resolveUiDefaultAgentId,
@@ -270,15 +271,16 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { re
     return;
   }
   const client = host.client;
+  const connectionEpoch = host.connectionEpoch;
   try {
     const result = await loadModelAuthStatus(client, opts);
-    if (host.client !== client || !host.connected) {
+    if (host.client !== client || !host.connected || host.connectionEpoch !== connectionEpoch) {
       return;
     }
     host.modelAuthStatusResult = result;
     host.modelAuthStatusError = null;
   } catch (err) {
-    if (host.client !== client || !host.connected) {
+    if (host.client !== client || !host.connected || host.connectionEpoch !== connectionEpoch) {
       return;
     }
     host.modelAuthStatusResult = { ts: 0, providers: [] };
@@ -322,6 +324,19 @@ async function refreshChat(
     const sessionsResult = reconciled ? host.sessions.state.result : host.sessionsResult;
     if (reconciled) {
       host.sessionsResult = sessionsResult;
+    }
+    const snapshotRunId = history.inFlightRun?.runId?.trim();
+    const activeRunIds = history.sessionInfo.activeRunIds;
+    const snapshotConfirmsCurrentRun = Boolean(
+      snapshotRunId &&
+      host.chatRunId === snapshotRunId &&
+      isSessionRunActive(history.sessionInfo) &&
+      (!Array.isArray(activeRunIds) || activeRunIds.includes(snapshotRunId)),
+    );
+    if (snapshotConfirmsCurrentRun) {
+      // History just adopted this authoritative active run. A newer catalog
+      // timestamp may still describe its prior terminal state during remount.
+      return;
     }
     const sessionInfo = sessionsResult?.sessions.find(
       (row: GatewaySessionRow) =>

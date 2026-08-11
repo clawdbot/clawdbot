@@ -12,9 +12,11 @@ import {
   buildProjectedAgentRunIndex,
   clearAgentRunContext,
   registerAgentRunContext,
-} from "../../infra/agent-events.js";
+} from "../../infra/agent-run-registry.js";
 import {
   collectTrackedActiveSessionRuns,
+  hasRegisteredChatRunForSessionKey,
+  hasTrackedActiveSessionRun,
   hasVisibleActiveSessionRun,
   resolveVisibleActiveSessionRunState,
 } from "./session-active-runs.js";
@@ -90,6 +92,38 @@ it("matches session-id-only gateway runs during archive admission", () => {
       requestedKey: "agent:main:child",
       canonicalKey: "agent:main:child",
       sessionId: "session-1",
+    }),
+  ).toBe(true);
+});
+
+it("excludes the replacement run from an internal active-session check", () => {
+  const sessionKey = "agent:main:main";
+  const context = {
+    chatAbortControllers: new Map([
+      [
+        "replacement-run",
+        {
+          sessionKey,
+          controlUiVisible: true,
+          projectSessionActive: true,
+        },
+      ],
+    ]),
+  } as never;
+
+  expect(
+    hasTrackedActiveSessionRun({
+      context,
+      requestedKey: sessionKey,
+      canonicalKey: sessionKey,
+      excludeRunIds: new Set(["replacement-run"]),
+    }),
+  ).toBe(false);
+  expect(
+    hasTrackedActiveSessionRun({
+      context,
+      requestedKey: sessionKey,
+      canonicalKey: sessionKey,
     }),
   ).toBe(true);
 });
@@ -258,4 +292,52 @@ it("does not project an aborted embedded handle retained for cleanup as active",
   } finally {
     clearActiveEmbeddedRun(sessionId, handle, sessionKey);
   }
+});
+
+it("counts settled but still registered chat runs for a session key", () => {
+  const context = {
+    chatAbortControllers: new Map([
+      [
+        "run-finalizing",
+        {
+          sessionKey: "agent:main:main",
+          sessionId: "session-main",
+          projectSessionActive: false,
+          controlUiVisible: false,
+        },
+      ],
+      ["run-global-work", { sessionKey: "global", agentId: "work" }],
+    ]),
+  } as never;
+
+  expect(
+    hasRegisteredChatRunForSessionKey({
+      context,
+      sessionKey: "agent:main:main",
+      agentId: undefined,
+    }),
+  ).toBe(true);
+  expect(
+    hasRegisteredChatRunForSessionKey({
+      context,
+      sessionKey: "agent:other:other",
+      agentId: undefined,
+    }),
+  ).toBe(false);
+  expect(
+    hasRegisteredChatRunForSessionKey({ context, sessionKey: "global", agentId: "work" }),
+  ).toBe(true);
+  expect(
+    hasRegisteredChatRunForSessionKey({ context, sessionKey: "global", agentId: "other" }),
+  ).toBe(false);
+  expect(
+    hasRegisteredChatRunForSessionKey({ context, sessionKey: "global", agentId: undefined }),
+  ).toBe(true);
+  expect(
+    hasRegisteredChatRunForSessionKey({
+      context: {},
+      sessionKey: "agent:main:main",
+      agentId: undefined,
+    }),
+  ).toBe(false);
 });

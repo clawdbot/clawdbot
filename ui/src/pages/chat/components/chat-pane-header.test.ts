@@ -85,12 +85,14 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
     platform: "darwin",
     canReveal: true,
     copiedAction: null,
-    canRename: true,
-    terminalAction: nothing,
+    renameDisabledReason: undefined,
+    panelActions: nothing,
     discussionAction: nothing,
     diffAction: nothing,
     backgroundTasksAction: nothing,
     workspaceAction: nothing,
+    sessionRailAction: nothing,
+    sessionMenuAction: nothing,
     onBeginRename: vi.fn(),
     onRenameInput: vi.fn(),
     onCommitRename: vi.fn(),
@@ -120,6 +122,7 @@ describe("chat pane header", () => {
     const { container } = mount({ nativeGateways: nativeGateways(gatewaySnapshot) });
     const rows = container.querySelectorAll(".chat-pane__gateway-item");
     expect(rows).toHaveLength(2);
+    expect(container.querySelectorAll(".chat-pane__gateway-menu-item")).toHaveLength(4);
     expect(rows[0]?.textContent).toContain("Local Gateway");
     expect(rows[0]?.textContent).toContain("primary");
     expect(rows[0]?.querySelector(".chat-pane__gateway-check")).not.toBeNull();
@@ -237,6 +240,19 @@ describe("chat pane header", () => {
     expect(container.querySelector(".chat-pane__palette-open")).toBeNull();
   });
 
+  it("places the session menu last in the header action row", () => {
+    const { container } = mount({
+      mergedChrome: true,
+      onClosePane: vi.fn(),
+      sessionMenuAction: html`<button data-action="session-menu"></button>`,
+    });
+    const actions = container.querySelector(".chat-pane__actions");
+
+    expect(actions?.lastElementChild?.getAttribute("data-action")).toBe("session-menu");
+    expect(actions?.querySelector(".chat-pane__palette-open")).not.toBeNull();
+    expect(actions?.querySelector(".chat-pane__close-pane")).not.toBeNull();
+  });
+
   it("renders an editable title and workspace chip", () => {
     const { container, props } = mount();
     const title = container.querySelector<HTMLButtonElement>(".chat-pane__session-title-button");
@@ -273,15 +289,17 @@ describe("chat pane header", () => {
     expect(dormant.container.querySelector("openclaw-session-owner-chip")).toBeNull();
   });
 
-  it("renders a resolved owner avatar with the header attribution semantics", async () => {
+  it("renders the durable session actor avatar with the header attribution semantics", async () => {
     const mounted = mount({
       showOwnerChip: true,
-      session: row({ createdActor: { type: "human", id: "profile-ada", label: "Ada" } }),
-      ownerUser: {
-        id: "profile-ada",
-        name: "Ada",
-        avatarUrl: "/api/users/profile-ada/avatar",
-      },
+      session: row({
+        createdActor: {
+          type: "human",
+          id: "profile-ada",
+          label: "Ada",
+          avatarUrl: "/api/users/profile-ada/avatar?v=7",
+        },
+      }),
     });
 
     await vi.waitFor(() => {
@@ -310,10 +328,11 @@ describe("chat pane header", () => {
     const { container } = mount({
       catalog: true,
       session: undefined,
-      terminalAction: html`<span data-action="terminal"></span>`,
+      panelActions: html`<span data-action="terminal"></span>`,
       diffAction: html`<span data-action="diff"></span>`,
       backgroundTasksAction: html`<span data-action="tasks"></span>`,
       workspaceAction: html`<span data-action="workspace"></span>`,
+      sessionRailAction: html`<span data-action="rail"></span>`,
     });
     expect(container.querySelector(".chat-pane__session-title-button")).toBeNull();
     expect(container.querySelector(".chat-pane__session-title")?.textContent).toContain(
@@ -324,13 +343,17 @@ describe("chat pane header", () => {
     expect(container.querySelector('[data-action="diff"]')).toBeNull();
     expect(container.querySelector('[data-action="tasks"]')).toBeNull();
     expect(container.querySelector('[data-action="workspace"]')).toBeNull();
+    expect(container.querySelector('[data-action="rail"]')).toBeNull();
   });
 
   it("keeps read-only gateway session titles static", () => {
-    const { container } = mount({ canRename: false });
+    const { container } = mount({ renameDisabledReason: "Operator write access is required." });
     expect(container.querySelector(".chat-pane__session-title-button")).toBeNull();
     expect(container.querySelector(".chat-pane__session-title")?.textContent).toContain(
       "Session title",
+    );
+    expect(container.querySelector(".chat-pane__session-title")?.getAttribute("title")).toBe(
+      "Operator write access is required.",
     );
   });
 
@@ -354,7 +377,7 @@ describe("chat pane header", () => {
   it("shows an incognito indicator for in-memory threads", () => {
     const { container } = mount({ session: row({ incognito: true }) });
     expect(container.querySelector(".chat-pane__incognito")?.getAttribute("aria-label")).toBe(
-      "Incognito thread",
+      "Incognito session",
     );
   });
 
@@ -378,6 +401,14 @@ describe("chat pane header", () => {
     });
     const items = multiple.container.querySelectorAll(".chat-pane__branch-item");
     expect(multiple.container.querySelector(".chat-pane__branches-trigger")).not.toBeNull();
+    // wa-popup anchors to the first slot="trigger" element; a display:contents
+    // wrapper (like openclaw-tooltip) has a zero rect and pins the menu to the
+    // window's top-left corner, so the slotted trigger must be the button itself.
+    expect(
+      multiple.container
+        .querySelector('.chat-pane__branches-menu > [slot="trigger"]')
+        ?.classList.contains("chat-pane__branches-trigger"),
+    ).toBe(true);
     expect(items).toHaveLength(2);
     expect(items[0]?.textContent).toContain("Current work");
     expect(items[0]?.getAttribute("data-active")).toBe("true");

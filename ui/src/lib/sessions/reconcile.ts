@@ -1,4 +1,5 @@
 import { asNullableRecord as recordOrNull } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as stringValue } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
 import {
@@ -32,6 +33,43 @@ export type SessionChangedResult = {
   deletedKey?: string;
   result: SessionsListResult | null;
 };
+
+export type SessionRunTerminal = {
+  sessionKeys: readonly string[];
+  runId?: string | null;
+  /** Latest session status after this owned model run leaves the active registry. */
+  status: SessionRunStatus;
+  endedAt: number;
+};
+
+/** Merge canonical and filtered pages with the same cursor/deduplication contract. */
+export function appendSessionResults(
+  previous: SessionsListResult,
+  page: SessionsListResult,
+): SessionsListResult {
+  const seen = new Set<string>();
+  const sessions = [...previous.sessions, ...page.sessions].filter((row) => {
+    if (!row.key || seen.has(row.key)) {
+      return false;
+    }
+    seen.add(row.key);
+    return true;
+  });
+  const totalCount = page.totalCount ?? previous.totalCount;
+  const hasMore =
+    page.hasMore ??
+    (typeof totalCount === "number" && Number.isFinite(totalCount)
+      ? sessions.length < totalCount
+      : false);
+  return {
+    ...page,
+    count: sessions.length,
+    totalCount,
+    hasMore,
+    nextOffset: page.nextOffset ?? (hasMore ? sessions.length : null),
+    sessions,
+  };
+}
 
 type SessionChangedEventInfo = {
   key: string;
@@ -176,10 +214,6 @@ function sessionAgentId(
 
 function recordValue(record: Record<string, unknown>, key: string): unknown {
   return Object.hasOwn(record, key) ? record[key] : undefined;
-}
-
-function stringValue(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function sessionRunStatus(value: unknown): SessionRunStatus | null {
@@ -369,9 +403,6 @@ export function reconcileSessionChanged(
   if (rowFields.pinnedAt === null) {
     delete row.pinnedAt;
   }
-  if (rowFields.icon === null) {
-    delete row.icon;
-  }
   if (rowFields.label === null) {
     delete row.label;
   }
@@ -504,4 +535,63 @@ export function reconcileSessionHistory(
     count: sessions.length,
     sessions,
   };
+}
+
+export function reconcileSessionRunTerminal(
+  result: SessionsListResult | null,
+  terminal: SessionRunTerminal,
+): SessionsListResult | null {
+  const keys = terminal.sessionKeys.map((key) => key.trim()).filter(Boolean);
+  if (!result || keys.length === 0) {
+    return result;
+  }
+  const runId = terminal.runId?.trim() || null;
+  let changed = false;
+  const sessions = result.sessions.map((row): GatewaySessionRow => {
+    if (!keys.some((key) => areUiSessionKeysEquivalent(row.key, key))) {
+      return row;
+    }
+    if (row.hasActiveRun === true || isSessionRunActive(row)) {
+      // Active identity belongs to the originating model run, not a newer overlap.
+      if (!runId || !row.activeRunIds?.includes(runId)) {
+        return row;
+      }
+    }
+    const remainingRunIds = runId ? row.activeRunIds?.filter((id) => id !== runId) : [];
+    if (remainingRunIds?.length) {
+      changed = true;
+      return { ...row, activeRunIds: remainingRunIds, hasActiveRun: true, status: "running" };
+    }
+    const endedAt = row.endedAt ?? terminal.endedAt;
+    const runtimeMs =
+      typeof row.startedAt === "number" ? Math.max(0, endedAt - row.startedAt) : row.runtimeMs;
+    const activeRunIds = row.activeRunIds?.length ? [] : row.activeRunIds;
+    const abortedLastRun =
+      terminal.status === "killed"
+        ? true
+        : terminal.status === "running"
+          ? false
+          : row.abortedLastRun;
+    if (
+      row.hasActiveRun === false &&
+      row.status === terminal.status &&
+      row.endedAt === endedAt &&
+      row.runtimeMs === runtimeMs &&
+      row.activeRunIds === activeRunIds &&
+      row.abortedLastRun === abortedLastRun
+    ) {
+      return row;
+    }
+    changed = true;
+    return {
+      ...row,
+      activeRunIds,
+      hasActiveRun: false,
+      status: terminal.status,
+      endedAt,
+      runtimeMs,
+      abortedLastRun,
+    };
+  });
+  return changed ? { ...result, sessions } : result;
 }

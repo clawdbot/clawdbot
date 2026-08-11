@@ -1,11 +1,11 @@
 // Prompt composition scenarios build reusable agent prompt fixtures.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { buildBootstrapPromptWarning } from "../../../src/agents/bootstrap-budget-warning.js";
 import {
   appendBootstrapPromptWarning,
   analyzeBootstrapBudget,
   buildBootstrapInjectionStats,
-  buildBootstrapPromptWarning,
 } from "../../../src/agents/bootstrap-budget.js";
 import { resolveBootstrapContextForRun } from "../../../src/agents/bootstrap-files.js";
 import { buildCurrentInboundPrompt } from "../../../src/agents/embedded-agent-runner/run/runtime-context-prompt.js";
@@ -73,8 +73,7 @@ function buildCommonSystemParams(workspaceDir: string) {
       shell: "zsh",
     },
     userTimezone: "America/Los_Angeles",
-    userTime: "Monday, March 16th, 2026 - 9:00 PM",
-    userTimeFormat: "12" as const,
+    userDate: "2026-03-16",
     toolNames,
   };
 }
@@ -87,15 +86,15 @@ function buildSystemPrompt(params: {
   contextFiles?: Array<{ path: string; content: string }>;
   silentReplyPromptMode?: "generic" | "none";
 }) {
-  const { runtimeInfo, userTimezone, userTime, userTimeFormat, toolNames } =
-    buildCommonSystemParams(params.workspaceDir);
+  const { runtimeInfo, userTimezone, userDate, toolNames } = buildCommonSystemParams(
+    params.workspaceDir,
+  );
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
     extraSystemPrompt: params.extraSystemPrompt,
     runtimeInfo,
     userTimezone,
-    userTime,
-    userTimeFormat,
+    userDate,
     toolNames,
     modelAliasLines: [],
     promptMode: "full",
@@ -184,9 +183,7 @@ function buildToolRichSystemPrompt(params: {
   skillsPrompt: string;
   contextFiles: Array<{ path: string; content: string }>;
 }) {
-  const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildCommonSystemParams(
-    params.workspaceDir,
-  );
+  const { runtimeInfo, userTimezone, userDate } = buildCommonSystemParams(params.workspaceDir);
   const tools = [
     "bash",
     "read",
@@ -207,8 +204,7 @@ function buildToolRichSystemPrompt(params: {
     tools,
     modelAliasLines: [],
     userTimezone,
-    userTime,
-    userTimeFormat,
+    userDate,
     acpEnabled: true,
     skillsPrompt: params.skillsPrompt,
     reactionGuidance: { level: "extensive", channel: "Telegram" },

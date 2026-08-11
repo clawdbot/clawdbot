@@ -1,8 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  loadControlUiSessionPullRequests,
-  parseControlUiSessionPullRequestsParams,
-} from "./control-ui-session-prs.js";
+import { loadControlUiSessionPullRequests } from "./control-ui-session-prs.js";
 import {
   evictPullRequestCache,
   githubJson,
@@ -33,50 +30,18 @@ describe("parseGitHubRemoteUrl", () => {
   });
 });
 
-describe("parseControlUiSessionPullRequestsParams", () => {
-  it("requires a non-empty session key", () => {
-    expect(parseControlUiSessionPullRequestsParams({ sessionKey: "agent:main:main" })).toEqual({
-      sessionKey: "agent:main:main",
-    });
-    expect(parseControlUiSessionPullRequestsParams({ sessionKey: "  " })).toBeNull();
-    expect(parseControlUiSessionPullRequestsParams("agent:main:main")).toBeNull();
-    expect(parseControlUiSessionPullRequestsParams({})).toBeNull();
-  });
-
-  it("keeps the UI's scoped agent id for global-alias session keys", () => {
-    expect(
-      parseControlUiSessionPullRequestsParams({ sessionKey: "global", agentId: "work" }),
-    ).toEqual({ sessionKey: "global", agentId: "work" });
-    expect(parseControlUiSessionPullRequestsParams({ sessionKey: "global", agentId: " " })).toEqual(
-      { sessionKey: "global" },
-    );
-  });
-
-  it("accepts only an explicit refresh request", () => {
-    expect(
-      parseControlUiSessionPullRequestsParams({
-        sessionKey: "agent:main:main",
-        refresh: true,
-      }),
-    ).toEqual({ sessionKey: "agent:main:main", refresh: true });
-    expect(
-      parseControlUiSessionPullRequestsParams({
-        sessionKey: "agent:main:main",
-        refresh: false,
-      }),
-    ).toEqual({ sessionKey: "agent:main:main" });
-  });
-});
-
 describe("loadControlUiSessionPullRequests", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.stubEnv("GH_TOKEN", "");
+    vi.stubEnv("GITHUB_TOKEN", "");
     cacheEpochMs += 10 * 60_000;
     vi.setSystemTime(cacheEpochMs);
   });
 
   afterEach(async () => {
     await evictPullRequestCache();
+    vi.unstubAllEnvs();
     vi.useRealTimers();
   });
 
@@ -129,6 +94,28 @@ describe("loadControlUiSessionPullRequests", () => {
       },
       rateLimited: false,
     });
+  });
+
+  it("retries stale optional authentication anonymously for session PRs", async () => {
+    vi.stubEnv("GH_TOKEN", "stale-github-token");
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(githubJson({ message: "Bad credentials" }, 401))
+      .mockResolvedValueOnce(githubJson([pullListItem({ merged_at: "2026-07-09T10:00:00Z" })]));
+
+    const result = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+
+    expect(result.pullRequests).toHaveLength(1);
+    expect(result.pullRequests[0]).toMatchObject({ number: 103469, state: "merged" });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[0]?.[1]?.headers).toHaveProperty(
+      "Authorization",
+      "Bearer stale-github-token",
+    );
+    expect(fetchImpl.mock.calls[1]?.[1]?.headers).not.toHaveProperty("Authorization");
   });
 
   it("skips diff and check fetches for merged PRs", async () => {

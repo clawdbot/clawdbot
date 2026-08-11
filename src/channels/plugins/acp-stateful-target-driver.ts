@@ -12,8 +12,8 @@ import { resolveConfiguredAcpBindingSpecFromRecord } from "../../acp/persistent-
 import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import { resolveSessionEntryAccessTarget } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { performGatewaySessionReset } from "../../gateway/session-reset-service.js";
 import { isAcpSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { performGatewaySessionReset } from "./acp-stateful-target-reset.runtime.js";
 import type {
   ConfiguredBindingResolution,
   StatefulBindingTargetDescriptor,

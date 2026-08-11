@@ -11,6 +11,7 @@ const mockSkillCommands = [
     skillName: "code-review",
     name: "code_review",
     description: "Run code review",
+    modelVisible: true,
     acceptsArgs: true,
   },
 ];
@@ -372,6 +373,7 @@ describe("commands.list handler", () => {
     const commands = listCommands();
     const skill = commands.find((c) => c.name === "code_review");
     expect(skill?.source).toBe("skill");
+    expect(skill?.skillModelVisible).toBe(true);
     expect(skill?.category).toBe("tools");
   });
 

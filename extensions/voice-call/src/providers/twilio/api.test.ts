@@ -101,6 +101,33 @@ describe("twilioApiRequest", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects malformed UTF-8 JSON instead of returning a corrupted call SID", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        Buffer.concat([
+          Buffer.from('{"sid":"CA'),
+          Buffer.from([0xff]),
+          Buffer.from('","status":"queued"}'),
+        ]),
+        { status: 200 },
+      ),
+      release,
+    });
+
+    await expect(
+      twilioApiRequest({
+        baseUrl: DEFAULT_BASE_URL,
+        accountSid: "AC123",
+        authToken: "secret",
+        endpoint: "/Calls.json",
+        body: {},
+      }),
+    ).rejects.toThrow("Twilio API returned malformed JSON.");
+
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("derives the regional hostname for the request and SSRF policy", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({
@@ -147,7 +174,7 @@ describe("twilioApiRequest", () => {
 
   it("passes through URLSearchParams, allows 404s, and returns undefined for empty bodies", async () => {
     const missing = cancelTrackedTextResponse("missing", { status: 404 });
-    const responses = [new Response(null, { status: 204 }), missing.response];
+    const responses = [new Response("", { status: 200 }), missing.response];
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockImplementation(async () => ({
       response: responses.shift()!,

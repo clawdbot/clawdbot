@@ -2,6 +2,7 @@
  * Exec tool policy, host dispatch, and process lifecycle pipeline.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createAbortError } from "../infra/abort-signal.js";
 import {
   type ExecHost,
   loadExecApprovals,
@@ -16,7 +17,7 @@ import { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-comma
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
@@ -65,6 +66,21 @@ import type { AgentToolWithMeta } from "./tools/common.js";
 export function createExecTool(
   defaults?: ExecToolDefaults,
 ): AgentToolWithMeta<typeof execSchema, ExecToolDetails> {
+  // Agent runs own one tool instance, so the store is read on first exec and reused for that run.
+  // A new run constructs a new instance and observes later store mutations.
+  let storeEnvPromise: Promise<Record<string, string> | undefined> | undefined;
+  const resolveStoreEnv = () => {
+    storeEnvPromise ??= import("../secrets/store/secret-store.js").then((store) => {
+      const env: Record<string, string> = {};
+      for (const entry of store.listSecretStoreEntries({ scope: { kind: "team" } })) {
+        if (entry.kind === "env" && entry.valuePreview !== undefined) {
+          env[entry.name] = entry.valuePreview;
+        }
+      }
+      return Object.keys(env).length > 0 ? env : undefined;
+    });
+    return storeEnvPromise;
+  };
   const defaultBackgroundMs = clampWithDefault(
     defaults?.backgroundMs ?? readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS"),
     10_000,
@@ -152,6 +168,9 @@ export function createExecTool(
     finalizeBeforeToolCallParams: requestPreparation.finalizeBeforeToolCallParams,
     execute: async (toolCallId, args, signal, onUpdate) => {
       signal?.throwIfAborted();
+      if (Object.hasOwn(args, "timeout")) {
+        throw new Error('exec parameter "timeout" is unsupported; use "timeoutSeconds" instead');
+      }
       // Review cancellation belongs to this execution, never another call on the shared tool.
       const autoReviewer =
         defaults?.autoReviewer ??
@@ -381,6 +400,7 @@ export function createExecTool(
         }
 
         const resolvedExecEnvState = requestPreparation.getResolvedExecEnvPreparedState(params);
+        const storeEnv = await resolveStoreEnv();
         const { env, requestedEnv } = resolvePreparedExecEnvironment({
           execParams: params,
           host,
@@ -389,6 +409,7 @@ export function createExecTool(
           channelContext: defaults?.channelContext,
           defaultPathPrepend,
           pluginEnv: resolvedExecEnvState?.pluginEnv,
+          storeEnv,
           warnings,
         });
 
@@ -420,7 +441,7 @@ export function createExecTool(
             strictInlineEval: defaults?.strictInlineEval,
             commandHighlighting: defaults?.commandHighlighting,
             trigger: defaults?.trigger,
-            timeoutSec: params.timeout,
+            timeoutSec: params.timeoutSeconds,
             defaultTimeoutSec,
             approvalRunningNoticeMs,
             warnings,
@@ -443,7 +464,7 @@ export function createExecTool(
             pathPrepend: defaultPathPrepend,
             requestedEnv,
             pty: params.pty === true && !sandbox,
-            timeoutSec: params.timeout,
+            timeoutSec: params.timeoutSeconds,
             defaultTimeoutSec,
             security,
             ask,
@@ -498,7 +519,7 @@ export function createExecTool(
           warnings.push(foregroundFallbackWarning);
         }
 
-        const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;
+        const explicitTimeoutSec = params.timeoutSeconds ?? null;
         effectiveTimeout = explicitTimeoutSec ?? defaultTimeoutSec;
         const usePty = params.pty === true && !sandbox;
 
@@ -548,6 +569,7 @@ export function createExecTool(
       let yielded = false;
       let yieldTimer: NodeJS.Timeout | null = null;
       let registeredAbortSignal: AbortSignal | null = null;
+      let toolAborted = false;
 
       // Tool-call abort should not kill backgrounded sessions; timeouts still must.
       const onAbortSignal = () => {
@@ -561,6 +583,13 @@ export function createExecTool(
         run.disableUpdates();
         if (yielded || run.session.backgrounded) {
           return;
+        }
+        // Cancellation must win over foreground-to-background promotion while
+        // the child settles; detached background sessions keep their owner.
+        toolAborted = true;
+        if (yieldTimer) {
+          clearTimeout(yieldTimer);
+          yieldTimer = null;
         }
         run.kill();
       };
@@ -584,6 +613,14 @@ export function createExecTool(
       }
 
       return new Promise<AgentToolResult<ExecToolDetails>>((resolve, reject) => {
+        const rejectIfAborted = () => {
+          if (!toolAborted) {
+            return false;
+          }
+          reject(createAbortError("Tool execution was aborted", { cause: signal?.reason }));
+          return true;
+        };
+
         const resolveRunning = () => {
           cleanupToolRunListeners();
           resolve({
@@ -607,7 +644,7 @@ export function createExecTool(
         };
 
         const onYieldNow = () => {
-          if (yielded) {
+          if (yielded || toolAborted) {
             return;
           }
           if (settledOutcome) {
@@ -617,6 +654,8 @@ export function createExecTool(
                 outcome: settledOutcome,
                 cwd: run.session.cwd,
                 warningText: getWarningText(),
+                aggregateOutputDropped:
+                  run.session.totalOutputChars > run.session.aggregated.length,
               }),
             );
             return;
@@ -634,7 +673,7 @@ export function createExecTool(
           resolveRunning();
         };
 
-        if (allowBackground && yieldWindow !== null) {
+        if (!toolAborted && allowBackground && yieldWindow !== null) {
           if (yieldWindow === 0) {
             onYieldNow();
           } else {
@@ -647,7 +686,7 @@ export function createExecTool(
         run.promise
           .then((outcome) => {
             cleanupToolRunListeners();
-            if (yielded || run.session.backgrounded) {
+            if (rejectIfAborted() || yielded || run.session.backgrounded) {
               return;
             }
             resolve(
@@ -655,12 +694,14 @@ export function createExecTool(
                 outcome,
                 cwd: run.session.cwd,
                 warningText: getWarningText(),
+                aggregateOutputDropped:
+                  run.session.totalOutputChars > run.session.aggregated.length,
               }),
             );
           })
           .catch((err: unknown) => {
             cleanupToolRunListeners();
-            if (yielded || run.session.backgrounded) {
+            if (rejectIfAborted() || yielded || run.session.backgrounded) {
               return;
             }
             reject(err as Error);

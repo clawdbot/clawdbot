@@ -1,11 +1,11 @@
 // Shared mocks and fixtures for agent-runner execution tests.
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
-import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../agents/embedded-agent-helpers/errors.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import { FailoverError, type FallbackAttemptRecord } from "../../agents/failover-error.js";
+import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../agents/failover/user-copy.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
-import type { ReplyOptionsWithHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
 import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
@@ -20,12 +20,32 @@ import type { TypingSignaler } from "./typing-mode.js";
 type RunEntryParams = Parameters<typeof runEmbeddedAgentEntry<EmbeddedAgentRunResult>>[0];
 type RunEntryResult = Awaited<ReturnType<typeof runEmbeddedAgentEntry<EmbeddedAgentRunResult>>>;
 type RunEntryDelegate = (params: RunEntryParams) => Promise<RunEntryResult>;
+type RunCliAgent = typeof import("../../agents/cli-runner.js").runCliAgent;
 
 export const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
 export const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned HTTP 429 before replying. This can mean rate limiting, exhausted quota, or an account balance/billing issue. Check the selected provider/model, API key, and provider billing/quota dashboard, then try again.";
 export const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned a temporary internal error before replying. Try again in a moment, or switch to another model if it keeps happening.";
+
+type TestFallbackAttempt = FallbackAttemptRecord & { authMode?: string };
+
+export function createTestFallbackSummaryError(params: {
+  message: string;
+  attempts: TestFallbackAttempt[];
+  soonestCooldownExpiry?: number | null;
+  cause?: unknown;
+}): FailoverError {
+  const lastAttempt = params.attempts.at(-1);
+  return new FailoverError(params.message, {
+    reason: lastAttempt?.reason ?? "unknown",
+    provider: lastAttempt?.provider,
+    model: lastAttempt?.model,
+    attempts: params.attempts,
+    soonestCooldownExpiry: params.soonestCooldownExpiry ?? null,
+    cause: params.cause,
+  });
+}
 
 const state = vi.hoisted(() => ({
   runEmbeddedAgentMock: vi.fn(),
@@ -82,7 +102,43 @@ vi.mock("../../agents/cli-runner.js", () => ({
 }));
 
 vi.mock("../../agents/model-fallback-runner.js", () => ({
-  runWithModelFallback: (params: unknown) => state.runWithModelFallbackMock(params),
+  runWithModelFallback: async (params: unknown) => {
+    const input = params as {
+      classifyResult?: (classification: { result: unknown; [key: string]: unknown }) => unknown;
+      [key: string]: unknown;
+    };
+    const adapted = input.classifyResult
+      ? {
+          ...input,
+          classifyResult: (classification: { result: unknown; [key: string]: unknown }) => {
+            const candidate = classification.result;
+            const wrappedCandidate =
+              candidate && typeof candidate === "object" && "result" in candidate
+                ? candidate
+                : { result: candidate };
+            return input.classifyResult?.({
+              ...classification,
+              result: wrappedCandidate,
+            });
+          },
+        }
+      : input;
+    const resolved = (await state.runWithModelFallbackMock(adapted)) as {
+      outcome?: "completed" | "exhausted";
+      result?: unknown;
+      [key: string]: unknown;
+    };
+    const candidate = resolved?.result;
+    const wrappedCandidate =
+      candidate && typeof candidate === "object" && "result" in candidate
+        ? candidate
+        : { result: candidate };
+    return {
+      ...resolved,
+      outcome: resolved.outcome ?? "completed",
+      result: wrappedCandidate,
+    };
+  },
 }));
 
 vi.mock("../../agents/model-fallback-attempt.js", () => ({
@@ -102,7 +158,10 @@ vi.mock("../../agents/model-selection.js", async () => {
   };
 });
 
-vi.mock("../../agents/bootstrap-budget.js", () => ({
+vi.mock("../../agents/bootstrap-budget.js", async () => ({
+  ...(await vi.importActual<typeof import("../../agents/bootstrap-budget.js")>(
+    "../../agents/bootstrap-budget.js",
+  )),
   resolveBootstrapWarningSignaturesSeen: () => [],
 }));
 
@@ -111,28 +170,12 @@ vi.mock("../../agents/embedded-agent-helpers.js", async () => {
     "../../agents/embedded-agent-helpers.js",
   );
   return {
-    BILLING_ERROR_USER_MESSAGE: "billing",
+    ...actual,
     formatBillingErrorMessage: actual.formatBillingErrorMessage,
-    formatRateLimitOrOverloadedErrorCopy: (message: string) => {
-      if (/model\s+(?:is\s+)?at capacity/i.test(message)) {
-        return "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
-      }
-      if (/rate.limit|too many requests|429/i.test(message)) {
-        return "⚠️ API rate limit reached. Please try again later.";
-      }
-      if (/overloaded/i.test(message)) {
-        return "The AI service is temporarily overloaded. Please try again in a moment.";
-      }
-      return undefined;
-    },
     isCompactionFailureError: (message?: string) => state.isCompactionFailureErrorMock(message),
     isContextOverflowError: (message?: string) => state.isContextOverflowErrorMock(message),
-    isBillingErrorMessage: actual.isBillingErrorMessage,
     isLikelyContextOverflowError: (message?: string) =>
       state.isLikelyContextOverflowErrorMock(message),
-    isOverloadedErrorMessage: (message: string) => /overloaded|capacity/i.test(message),
-    isRateLimitErrorMessage: (message: string) =>
-      /rate.limit|too many requests|429|usage limit/i.test(message),
     isTransientHttpError: () => false,
     sanitizeUserFacingText: (text?: string) => text ?? "",
   };
@@ -144,7 +187,8 @@ vi.mock("../../config/sessions.js", () => ({
   updateSessionStore: state.updateSessionStoreMock,
 }));
 
-vi.mock("../../globals.js", () => ({
+vi.mock("../../globals.js", async () => ({
+  ...(await vi.importActual<typeof import("../../globals.js")>("../../globals.js")),
   logVerbose: vi.fn(),
 }));
 
@@ -162,6 +206,16 @@ vi.mock("../../infra/agent-events.js", async () => {
     registerAgentRunContext: vi.fn(),
   };
 });
+vi.mock("../../infra/agent-run-registry.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/agent-run-registry.js")>(
+    "../../infra/agent-run-registry.js",
+  );
+  return {
+    ...actual,
+    clearAgentRunContext: vi.fn(),
+    registerAgentRunContext: vi.fn(),
+  };
+});
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: {
@@ -169,7 +223,10 @@ vi.mock("../../runtime.js", () => ({
   },
 }));
 
-vi.mock("../../utils/message-channel.js", () => ({
+vi.mock("../../utils/message-channel.js", async () => ({
+  ...(await vi.importActual<typeof import("../../utils/message-channel.js")>(
+    "../../utils/message-channel.js",
+  )),
   isMarkdownCapableMessageChannel: () => true,
   resolveMessageChannel: () => "whatsapp",
   isInternalMessageChannel: (value: unknown) => state.isInternalMessageChannelMock(value),
@@ -284,6 +341,12 @@ export async function getExecuteAgentTurnForTest() {
   };
 }
 
+export async function loadActualRunCliAgentForTest(): Promise<RunCliAgent> {
+  return (
+    await vi.importActual<typeof import("../../agents/cli-runner.js")>("../../agents/cli-runner.js")
+  ).runCliAgent;
+}
+
 export type FallbackRunnerParams = {
   provider: string;
   model: string;
@@ -300,6 +363,9 @@ export type FallbackRunnerParams = {
 };
 
 export type EmbeddedAgentParams = {
+  runId: string;
+  sessionId?: string;
+  sessionKey?: string;
   prompt?: string;
   transcriptPrompt?: string;
   lifecycleGeneration?: string;
@@ -544,7 +610,7 @@ export function expectBlockReplyCall(
 
 export function createMinimalRunAgentTurnParams(overrides?: {
   followupRun?: FollowupRun;
-  opts?: GetReplyOptions & ReplyOptionsWithHeartbeatRunScope;
+  opts?: GetReplyOptions;
   replyOperation?: ReplyOperation;
   sessionCtx?: TemplateContext;
   typingSignals?: TypingSignaler;

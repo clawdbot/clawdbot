@@ -36,6 +36,7 @@ export function resolveConversationToolPolicies(params: {
   capabilityProfile: ResolvedConversationCapabilityProfile;
   additionalProfileAllow?: readonly string[];
   additionalPolicyAllow?: readonly string[];
+  additionalInheritedAllow?: readonly string[];
 }): ResolvedConversationToolPolicies {
   const policy = params.capabilityProfile.policy;
   const profileAllow = [
@@ -64,7 +65,10 @@ export function resolveConversationToolPolicies(params: {
     sandboxPolicy: mergePolicyAllowlist(policy.sandboxPolicy, params.additionalPolicyAllow),
     subagentPolicy: mergePolicyAllowlist(policy.subagentPolicy, params.additionalPolicyAllow),
     runtimeToolPolicy: policy.runtimeToolPolicyForInheritance,
-    inheritedToolPolicy: policy.inheritedToolPolicy,
+    inheritedToolPolicy: mergePolicyAllowlist(
+      policy.inheritedToolPolicy,
+      params.additionalInheritedAllow,
+    ),
   };
 }
 

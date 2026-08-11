@@ -6,23 +6,18 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   resolveAccessStorePath,
-  loadExactSessionEntry,
   loadSessionEntry,
   listSessionEntries,
   patchSessionEntry,
   resolveSessionEntryFromStore,
 } from "./session-accessor.entry.js";
-import type { SessionLifecycleStoreTarget } from "./session-accessor.lifecycle-types.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
 import {
-  appendSqliteTranscriptEvent,
-  forkSqliteSessionEntryFromParentTarget,
-  forkSqliteSessionTranscriptFromParent,
+  patchSqliteSessionEntry,
   recordSqliteInboundSessionMeta,
   updateSqliteSessionLastRoute,
-  patchSqliteSessionEntry,
-  resolveSqliteSessionParentForkDecision,
-} from "./session-accessor.sqlite.js";
+} from "./session-accessor.sqlite-entry.js";
+import { appendSqliteTranscriptEvent } from "./session-accessor.sqlite-transcript-write.js";
 import type {
   SessionAccessScope,
   SessionEntryUpdateOptions,
@@ -30,22 +25,11 @@ import type {
   SessionAbortTargetContext,
   SessionAbortTargetIdentity,
   SessionAbortTargetResult,
-  SessionParentForkDecision,
-  ForkSessionFromParentTranscriptResult,
-  ForkSessionFromParentTranscriptParams,
-  ForkSessionEntryFromParentTargetResult,
-  ForkSessionEntryFromParentTargetParams,
   SessionEntryCreateWithTranscriptContext,
   SessionEntryCreateWithTranscriptResult,
   SessionEntryCreateWithTranscriptPrepareResult,
   SessionEntryCreateWithTranscriptOptions,
-  CanonicalizeSessionEntryAliasesResult,
 } from "./session-accessor.types.js";
-import {
-  cloneOptionalSessionEntry as cloneOptionalEntry,
-  normalizeTargetStoreKeys,
-  resolveFreshestTargetEntry,
-} from "./session-entry-selection.js";
 import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
@@ -70,73 +54,11 @@ function projectSessionEntryForPersistenceRevision(params: {
   return projected.store.entry ?? stripped;
 }
 
-export async function forkSessionFromParentTranscript(
-  params: ForkSessionFromParentTranscriptParams,
-): Promise<ForkSessionFromParentTranscriptResult> {
-  return await forkSqliteSessionTranscriptFromParent(params);
-}
-
-/**
- * Forks parent transcript content and persists the child entry/alias cleanup in
- * one storage-owned operation.
- */
-export async function forkSessionEntryFromParentTarget(
-  params: ForkSessionEntryFromParentTargetParams,
-): Promise<ForkSessionEntryFromParentTargetResult> {
-  return await forkSqliteSessionEntryFromParentTarget(params);
-}
-
-/** Resolves whether a parent session is small enough to fork through the active store. */
-export async function resolveSessionParentForkDecision(params: {
-  parentEntry: SessionEntry;
-  storePath: string;
-}): Promise<SessionParentForkDecision> {
-  return await resolveSqliteSessionParentForkDecision(params);
-}
-
-/**
- * Promotes the freshest alias row to the canonical key, prunes legacy aliases,
- * and optionally patches the canonical entry under one accessor operation.
- */
-export async function canonicalizeSessionEntryAliases(params: {
-  agentId?: string;
-  storePath: string;
-  target: SessionLifecycleStoreTarget;
-  update?: (
-    entry: SessionEntry | undefined,
-  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
-}): Promise<CanonicalizeSessionEntryAliasesResult> {
-  const targetKeys = normalizeTargetStoreKeys(params.target);
-  const targetEntries = targetKeys.flatMap((sessionKey) => {
-    const entry = loadExactSessionEntry({
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      sessionKey,
-      storePath: params.storePath,
-    });
-    return entry ? [entry] : [];
-  });
-  const freshest = resolveFreshestTargetEntry(targetEntries, targetKeys);
-  const patch = params.update ? await params.update(cloneOptionalEntry(freshest?.entry)) : null;
-  const entry = patch
-    ? ({
-        ...freshest?.entry,
-        ...patch,
-      } as SessionEntry)
-    : cloneOptionalEntry(freshest?.entry);
-  await applySessionEntryLifecycleMutation({
-    agentId: params.agentId,
-    storePath: params.storePath,
-    removals: targetKeys
-      .filter((key) => key !== params.target.canonicalKey)
-      .map((sessionKey) => ({ sessionKey })),
-    upserts: entry ? [{ sessionKey: params.target.canonicalKey, entry }] : undefined,
-    skipMaintenance: true,
-  });
-  return {
-    canonicalKey: params.target.canonicalKey,
-    ...(entry ? { entry: cloneOptionalEntry(entry) } : {}),
-  };
-}
+export {
+  forkSqliteSessionEntryFromParentTarget as forkSessionEntryFromParentTarget,
+  forkSqliteSessionTranscriptFromParent as forkSessionFromParentTranscript,
+  resolveSqliteSessionParentForkDecision as resolveSessionParentForkDecision,
+} from "./session-accessor.sqlite-parent-session.js";
 
 /**
  * Creates or updates one session entry and initializes its transcript header as
@@ -167,6 +89,7 @@ export async function createSessionEntryWithTranscript<TError = string>(
   }
 
   try {
+    options.commitGuard?.();
     await appendSqliteTranscriptEvent(
       {
         agentId,
@@ -191,6 +114,7 @@ export async function createSessionEntryWithTranscript<TError = string>(
     removals: resolved.legacyKeys.map((sessionKey) => ({ sessionKey })),
     upserts: [{ sessionKey: resolved.normalizedKey, entry }],
     skipMaintenance: true,
+    ...(options.commitGuard ? { beforeCommitInTransaction: options.commitGuard } : {}),
   });
   return { ok: true, entry, sessionFile: resolved.normalizedKey };
 }

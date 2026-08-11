@@ -2,6 +2,8 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { ConfigUiHints } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
+import "./web-awesome-popover.ts";
 import { SECTION_META } from "./config-form.meta.ts";
 import { renderNode } from "./config-form.node.ts";
 import { matchesConfigSectionSearch, parseConfigSearchQuery } from "./config-form.search.ts";
@@ -35,6 +37,7 @@ type ConfigFormProps = {
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
   onToggleSensitivePath?: (path: Array<string | number>) => void;
   onPatch: (path: Array<string | number>, value: unknown) => void;
+  onRemove?: (path: Array<string | number>) => void;
 };
 
 function renderAdvancedDivider(onHideAdvanced: (() => void) | undefined) {
@@ -43,7 +46,8 @@ function renderAdvancedDivider(onHideAdvanced: (() => void) | undefined) {
     ${onHideAdvanced
       ? html`<button
           type="button"
-          class="config-advanced-divider__toggle"
+          class="config-advanced-divider__toggle config-show-advanced active"
+          aria-pressed="true"
           @click=${() => onHideAdvanced()}
         >
           ${t("common.hideAdvanced")}
@@ -89,7 +93,8 @@ export function renderConfigTierGroups(params: {
           : html`
               <button
                 type="button"
-                class="config-advanced-ghost"
+                class="config-advanced-ghost config-show-advanced"
+                aria-pressed="false"
                 @click=${() => params.onShowAdvanced()}
               >
                 <span class="config-advanced-ghost__count">
@@ -210,6 +215,9 @@ export function renderConfigForm(props: ConfigFormProps) {
     nodeValue: unknown;
     path: Array<string | number>;
   }) => {
+    const sectionHint = hintForPath(params.path.slice(0, 1), props.uiHints);
+    const docsUrl = sectionHint?.docsUrl;
+    const docsTriggerId = `settings-section-help-${params.id}`;
     const revealAdvanced =
       props.showAdvanced === true ||
       props.forceAdvancedSection === params.path[0] ||
@@ -224,18 +232,52 @@ export function renderConfigForm(props: ConfigFormProps) {
         unsupported,
         disabled: props.disabled ?? false,
         showLabel: false,
+        showHeaderMeta: true,
         searchCriteria,
         revealSensitive: props.revealSensitive ?? false,
         isSensitivePathRevealed: props.isSensitivePathRevealed,
         onToggleSensitivePath: props.onToggleSensitivePath,
         onPatch: props.onPatch,
+        onRemove: props.onRemove,
       });
     return html`
       <section class="settings-section" id=${params.id}>
         <div class="settings-section__header">
           <h2 class="settings-section__heading">${params.label}</h2>
-          ${props.sectionActions
-            ? html`<div class="settings-section__actions">${props.sectionActions}</div>`
+          ${props.sectionActions || docsUrl
+            ? html`<div class="settings-section__actions">
+                ${props.sectionActions ?? nothing}
+                ${docsUrl
+                  ? html`
+                      <span class="settings-section__docs">
+                        <button
+                          id=${docsTriggerId}
+                          type="button"
+                          class="settings-section__help-button"
+                          aria-label=${t("configForm.sectionHelp", { section: params.label })}
+                          aria-haspopup="dialog"
+                        >
+                          <span aria-hidden="true">?</span>
+                        </button>
+                        <wa-popover
+                          class="settings-section__help-popover"
+                          for=${docsTriggerId}
+                          placement="bottom-end"
+                        >
+                          <div class="settings-section__help-panel">
+                            ${params.description ? html`<p>${params.description}</p>` : nothing}
+                            <a
+                              href=${docsUrl}
+                              target=${EXTERNAL_LINK_TARGET}
+                              rel=${buildExternalLinkRel()}
+                              >${t("configForm.readGuide")} <span aria-hidden="true">→</span></a
+                            >
+                          </div>
+                        </wa-popover>
+                      </span>
+                    `
+                  : nothing}
+              </div>`
             : nothing}
         </div>
         ${params.description

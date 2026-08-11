@@ -32,6 +32,7 @@ import {
   runWorkspaceSuggestionsHealth,
 } from "./doctor-health-contribution-runners.workspace.js";
 import type {
+  DoctorHealthCheckContext,
   DoctorHealthContribution,
   DoctorHealthFlowContext,
 } from "./doctor-health-contribution-types.js";
@@ -184,7 +185,12 @@ export function resolveFinalDoctorHealthContributions(params: {
             cfg: ctx.cfg,
             options: { nonInteractive: true, allowExec: ctx.allowExecSecretRefs === true },
           });
-          return collectWorkspaceStatusHealthFindings(ctx.cfg, { pluginVersionDrift });
+          const runWithPluginMetadataSnapshot = (ctx as DoctorHealthCheckContext)
+            .runWithPluginMetadataSnapshot;
+          return collectWorkspaceStatusHealthFindings(ctx.cfg, {
+            pluginVersionDrift,
+            ...(runWithPluginMetadataSnapshot ? { runWithPluginMetadataSnapshot } : {}),
+          });
         },
       },
       run: runWorkspaceStatusHealth,
@@ -199,31 +205,6 @@ export function resolveFinalDoctorHealthContributions(params: {
           }),
         ]
       : []),
-    createDoctorHealthContribution({
-      id: "doctor:skill-curator",
-      label: "Skill curator",
-      healthChecks: {
-        description: "Stalled skill lifecycle curation is reported as a warning.",
-        defaultEnabled: false,
-        async detect() {
-          const { getSkillCuratorDoctorWarning } = await import("../skills/workshop/curator.js");
-          const warning = getSkillCuratorDoctorWarning();
-          return warning
-            ? [
-                {
-                  checkId: "core/doctor/skill-curator",
-                  severity: "warning" as const,
-                  source: "doctor",
-                  message: warning,
-                  target: "skill-curator",
-                  requirement:
-                    "latest sweep succeeds and attempts do not trail success by seven days",
-                },
-              ]
-            : [];
-        },
-      },
-    }),
     createDoctorHealthContribution({
       id: "doctor:skills",
       label: "Skills",
@@ -282,7 +263,7 @@ export function resolveFinalDoctorHealthContributions(params: {
       id: "doctor:heartbeat-task-cron-migration",
       label: "Heartbeat task cron migration",
       healthChecks: {
-        description: "Heartbeat scratch task blocks must migrate into cron jobs.",
+        description: "Heartbeat scratch task blocks must migrate into automations.",
         defaultEnabled: true,
         async detect(ctx) {
           const { collectHeartbeatTaskMigrationFindings } =
@@ -314,7 +295,7 @@ export function resolveFinalDoctorHealthContributions(params: {
         async detect(ctx) {
           const { collectWhatsappResponsivenessHealthFindings } =
             await import("../commands/doctor-whatsapp-responsiveness.js");
-          let status: import("../commands/status.types.js").StatusSummary | undefined;
+          let status: import("../status/types.js").StatusSummary | undefined;
           if (
             !(
               (await hasActiveGatewayExecCredential({ cfg: ctx.cfg })) &&
@@ -322,7 +303,7 @@ export function resolveFinalDoctorHealthContributions(params: {
             )
           ) {
             const { callGateway } = await import("../gateway/call.js");
-            status = await callGateway<import("../commands/status.types.js").StatusSummary>({
+            status = await callGateway<import("../status/types.js").StatusSummary>({
               method: "status",
               params: { includeChannelSummary: false },
               timeoutMs: 3000,

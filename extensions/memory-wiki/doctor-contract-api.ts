@@ -6,7 +6,7 @@ import {
   archiveLegacyStateSource,
   legacyStateFileExists,
   type PluginDoctorStateMigration,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { LEGACY_MEMORY_WIKI_COMPILED_CACHE_PATHS } from "./src/compiled-cache.js";
 import {
@@ -25,6 +25,7 @@ import {
   MEMORY_WIKI_IMPORT_RUN_STATE_NAMESPACE,
   readLegacyMemoryWikiImportRunRecords,
   resolveMemoryWikiImportRunsDir,
+  type ChatGptImportRunRecord,
   writeMemoryWikiImportRunRecord,
 } from "./src/import-runs-state.js";
 import {
@@ -131,7 +132,7 @@ async function archiveLegacyImportRunRecords(params: {
 }
 
 function countImportRunStateRows(
-  records: Array<{ createdPaths: string[]; updatedPaths: unknown[] }>,
+  records: Array<Pick<ChatGptImportRunRecord, "createdPaths" | "updatedPaths">>,
 ): number {
   return records.reduce(
     (total, record) => total + 1 + record.createdPaths.length + record.updatedPaths.length,

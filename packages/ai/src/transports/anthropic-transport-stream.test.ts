@@ -352,7 +352,20 @@ describe("anthropic transport stream", () => {
         };
       },
     });
-    guardedFetchMock.mockResolvedValue(createSseResponse());
+    guardedFetchMock.mockResolvedValue(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_default", usage: { input_tokens: 0, output_tokens: 0 } },
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 0, output_tokens: 0 },
+        },
+        { type: "message_stop" },
+      ]),
+    );
   });
 
   afterEach(() => {
@@ -528,6 +541,42 @@ describe("anthropic transport stream", () => {
       expect(result.usage).toMatchObject(testCase.expected);
     }
     expect(result.usage.contextUsage).toEqual(testCase.context);
+  });
+
+  it("prices one-hour cache writes at the same rate as the direct Anthropic provider", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: {
+            id: "msg_cache_ttl_usage",
+            usage: {
+              input_tokens: 100,
+              output_tokens: 0,
+              cache_creation_input_tokens: 1_000_000,
+              cache_creation: {
+                ephemeral_5m_input_tokens: 600_000,
+                ephemeral_1h_input_tokens: 400_000,
+              },
+            },
+          },
+        },
+        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } },
+        { type: "message_stop" },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      {
+        ...makeAnthropicTransportModel(),
+        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      },
+      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.usage).toMatchObject({ cacheWrite: 1_000_000, cacheWrite1h: 400_000 });
+    expect(result.usage.cost.cacheWrite).toBeCloseTo(7.75, 10);
   });
 
   it("tags pre-tool narration as commentary when a proxy mislabels stop_reason (pioneer/Bedrock)", async () => {
@@ -1582,6 +1631,75 @@ describe("anthropic transport stream", () => {
     expect(result.errorMessage).toBe("Anthropic stream ended before message_stop");
   });
 
+  it("rejects ordinary Anthropic output when the stream ends before message_stop", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_partial", usage: { input_tokens: 3, output_tokens: 0 } },
+        },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "truncated answer" },
+        },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 3, output_tokens: 2 },
+        },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("Anthropic stream ended before message_stop");
+  });
+
+  it("accepts proxy provider streams that end without message_stop", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_proxy", usage: { input_tokens: 3, output_tokens: 0 } },
+        },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "proxy answer" },
+        },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 3, output_tokens: 2 },
+        },
+      ]),
+    );
+
+    // Proxy identity: non-anthropic provider through a custom endpoint is not
+    // held to the first-party message_stop framing contract.
+    const result = await runTransportStream(
+      makeAnthropicTransportModel({
+        provider: "openrouter",
+        baseUrl: "https://proxy.example.com/v1",
+      }),
+      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+      { apiKey: "sk-proxy" } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("stop");
+    expect(result.errorMessage).toBeUndefined();
+  });
+
   it("defers a pre-tool text block's text_end until it carries the commentary phase", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
@@ -1781,6 +1899,7 @@ describe("anthropic transport stream", () => {
           delta: { stop_reason: "tool_use" },
           usage: { input_tokens: 10, output_tokens: 5 },
         },
+        { type: "message_stop" },
       ]),
     );
     const model = makeAnthropicTransportModel({
@@ -2135,7 +2254,7 @@ describe("anthropic transport stream", () => {
     {
       label: "the stream ends before content_block_stop",
       response: () => createSseResponse(createInterruptedThinkingEvents()),
-      stopReason: "stop",
+      stopReason: "error",
     },
     {
       label: "the provider errors before content_block_stop",

@@ -116,6 +116,7 @@ public actor GatewayNodeSession {
     }
 
     private struct ActiveInvoke {
+        let requestID: String
         let admissionGeneration: UInt64
         let task: Task<BridgeInvokeResponse, Never>
     }
@@ -160,7 +161,7 @@ public actor GatewayNodeSession {
     private var serverMethods: Set<String>?
     private var serverCapabilities: Set<GatewayServerCapability>?
     private var mainSessionKey: String?
-    private var snapshotWaiters: [CheckedContinuation<Bool, Never>] = []
+    private var snapshotWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
     private var snapshotReadyWaiters: [CheckedContinuation<Bool, Never>] = []
     // `computer.act` is not safe to repeat after a response is lost. Keep recent
     // in-flight/results on the long-lived node session so a channel reconnect can
@@ -979,12 +980,13 @@ extension GatewayNodeSession {
             return true
         }
         let clamped = max(0, timeoutMs)
+        let waiterID = UUID()
         return await withCheckedContinuation { cont in
-            self.snapshotWaiters.append(cont)
+            self.snapshotWaiters[waiterID] = cont
             Task { [weak self] in
                 guard let self else { return }
                 try? await Task.sleep(nanoseconds: UInt64(clamped) * 1_000_000)
-                await self.timeoutSnapshotWaiters()
+                await self.timeoutSnapshotWaiter(id: waiterID)
             }
         }
     }
@@ -998,14 +1000,16 @@ extension GatewayNodeSession {
         }
     }
 
-    private func timeoutSnapshotWaiters() {
-        guard !self.snapshotReceived else { return }
-        self.drainSnapshotWaiters(returning: false)
+    private func timeoutSnapshotWaiter(id: UUID) {
+        guard !self.snapshotReceived,
+              let waiter = self.snapshotWaiters.removeValue(forKey: id)
+        else { return }
+        waiter.resume(returning: false)
     }
 
     private func drainSnapshotWaiters(returning value: Bool) {
         if !self.snapshotWaiters.isEmpty {
-            let waiters = self.snapshotWaiters
+            let waiters = self.snapshotWaiters.values
             self.snapshotWaiters.removeAll()
             for waiter in waiters {
                 waiter.resume(returning: value)
@@ -1124,10 +1128,13 @@ extension GatewayNodeSession {
             return
         }
         if evt.event == "node.invoke.cancel" {
-            guard let payload = evt.payload, let onInvokeCancel else { return }
+            guard let payload = evt.payload else { return }
             do {
                 let cancel: NodeInvokeCancelPayload = try self.decodeEventPayload(from: payload)
-                await onInvokeCancel(cancel.invokeId)
+                self.cancelActiveInvoke(
+                    requestID: cancel.invokeId,
+                    admissionGeneration: admissionGeneration)
+                await self.onInvokeCancel?(cancel.invokeId)
             } catch {
                 self.logger.error("node invoke cancel decode failed: \(error.localizedDescription, privacy: .public)")
             }
@@ -1239,6 +1246,7 @@ extension GatewayNodeSession {
               self.channel != nil
         else { return Self.staleRouteInvokeResponse(requestId: request.id) }
         let requiresRouteScopedCancellation = request.command == "computer.act" ||
+            request.command == OpenClawCameraCommand.ptzControl.rawValue ||
             OpenClawTalkCommand(rawValue: request.command) != nil
         guard requiresRouteScopedCancellation else {
             return await onInvoke(request)
@@ -1248,6 +1256,7 @@ extension GatewayNodeSession {
         let invokeID = UUID()
         let task = Task { await onInvoke(request) }
         self.activeInvokes[invokeID] = ActiveInvoke(
+            requestID: request.id,
             admissionGeneration: expectedRoute.admissionGeneration,
             task: task)
         let response = await withTaskCancellationHandler {
@@ -1332,6 +1341,26 @@ extension GatewayNodeSession {
         self.broadcastServerEvent(event)
     }
 
+    // periphery:ignore - package tests reproduce a stale timeout across route reset.
+    func _test_waitForSnapshot(timeoutMs: Int) async -> Bool {
+        await self.waitForSnapshot(timeoutMs: timeoutMs)
+    }
+
+    // periphery:ignore - package tests complete snapshot waits without a live socket.
+    func _test_markSnapshotReceived() {
+        self.markSnapshotReceived()
+    }
+
+    // periphery:ignore - package tests reproduce route replacement snapshot state.
+    func _test_resetConnectionState() {
+        self.resetConnectionState()
+    }
+
+    // periphery:ignore - package tests wait until a snapshot continuation is registered.
+    func _test_snapshotWaiterCount() -> Int {
+        self.snapshotWaiters.count
+    }
+
     #endif
 
     private func cancelActiveInvokes(
@@ -1346,6 +1375,14 @@ extension GatewayNodeSession {
             match.task.cancel()
         }
         return matches
+    }
+
+    private func cancelActiveInvoke(requestID: String, admissionGeneration: UInt64) {
+        for invoke in self.activeInvokes.values
+            where invoke.requestID == requestID && invoke.admissionGeneration == admissionGeneration
+        {
+            invoke.task.cancel()
+        }
     }
 
     private func awaitActiveInvokes(

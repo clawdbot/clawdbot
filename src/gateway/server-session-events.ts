@@ -11,22 +11,24 @@ import {
   loadSessionEntryReadOnly as loadAccessorSessionEntryReadOnly,
   resolveTranscriptSessionKeyBySessionId,
 } from "../config/sessions/session-accessor.js";
-import { hasPluginSessionsChangedSubscribers } from "../plugins/gateway-events.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { projectChatDisplayMessage } from "./chat-display-projection.js";
+import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
 } from "./server-chat.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
+import { hasSessionChangeReceivers } from "./session-change-receivers.js";
 import {
   buildGatewaySessionEventFields,
   buildGatewaySessionEventRow,
 } from "./session-event-payload.js";
+import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
 import {
   attachOpenClawTranscriptMeta,
   readSessionMessageCountAsync,
@@ -39,10 +41,6 @@ import {
 
 type SessionEventSubscribers = Pick<SessionEventSubscriberRegistry, "getAll">;
 type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get">;
-
-function hasSessionsChangedReceiver(connIds: ReadonlySet<string>): boolean {
-  return connIds.size > 0 || hasPluginSessionsChangedSubscribers();
-}
 
 function readMessageIdempotencyKey(message: unknown): string | undefined {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
@@ -64,21 +62,34 @@ function readMessageSenderIsOwner(message: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
-function resolveSessionMessageBroadcastKeys(sessionKey: string, agentId?: string): string[] {
-  // Global sessions can be subscribed through either the raw global key or the
-  // default-agent scoped key; non-default agent global sessions stay scoped.
-  const normalizedAgentId = normalizeOptionalString(agentId);
-  if (sessionKey === "global") {
-    const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(getRuntimeConfig()));
-    if (normalizedAgentId) {
-      const scopedKey = `agent:${normalizeAgentId(normalizedAgentId)}:global`;
-      return normalizeAgentId(normalizedAgentId) === defaultAgentId
-        ? [scopedKey, sessionKey]
-        : [scopedKey];
-    }
-    return [`agent:${defaultAgentId}:global`, sessionKey];
+function readTranscriptUpdateLifecycleOwner(
+  update: InternalSessionTranscriptUpdate,
+): { lifecycleRevision?: string } | undefined {
+  const marker = parseSqliteSessionFileMarker(update.sessionFile);
+  const sessionKey =
+    normalizeOptionalString(update.target?.sessionKey) ??
+    normalizeOptionalString(update.sessionKey) ??
+    (marker ? resolveTranscriptSessionKeyBySessionId(marker) : undefined);
+  if (!sessionKey) {
+    return undefined;
   }
-  return [sessionKey];
+  const agentId =
+    normalizeOptionalString(update.target?.agentId) ??
+    normalizeOptionalString(update.agentId) ??
+    marker?.agentId;
+  const sessionId =
+    normalizeOptionalString(update.target?.sessionId) ??
+    normalizeOptionalString(update.sessionId) ??
+    marker?.sessionId;
+  const storePath = normalizeOptionalString(update.target?.storePath) ?? marker?.storePath;
+  const entry = storePath
+    ? loadAccessorSessionEntryReadOnly({ agentId, sessionKey, storePath })
+    : loadSessionEntryReadOnly(sessionKey, agentId ? { agentId } : undefined)?.entry;
+  if (!entry || (sessionId && entry.sessionId !== sessionId)) {
+    return undefined;
+  }
+  const lifecycleRevision = normalizeOptionalString(entry.lifecycleRevision);
+  return lifecycleRevision ? { lifecycleRevision } : {};
 }
 
 function buildGatewaySessionSnapshot(params: {
@@ -137,13 +148,40 @@ export function createTranscriptUpdateBroadcastHandler(params: {
   sessionMessageSubscribers: SessionMessageSubscribers;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
 }) {
-  let broadcastQueue = Promise.resolve();
-  return (update: InternalSessionTranscriptUpdate): void => {
-    // Preserve transcript update order even when counting messages requires an
-    // async read from the session file.
-    broadcastQueue = broadcastQueue
-      .then(() => handleTranscriptUpdateBroadcast(params, update))
-      .catch(() => undefined);
+  // Ordering is a per-transcript contract: subscribers merge each session's
+  // updates independently, so lanes keyed by transcript identity keep message
+  // order without one session's async seq reads stalling every other session.
+  const broadcastQueues = new Map<string, Promise<void>>();
+  return (update: InternalSessionTranscriptUpdate): Promise<void> => {
+    // Capture legacy ownership before the async queue can cross a same-id reset;
+    // committed producer ownership always wins over a later session-store read.
+    const lifecycleRevision =
+      normalizeOptionalString(update.lifecycleRevision) ??
+      (update.message !== undefined
+        ? readTranscriptUpdateLifecycleOwner(update)?.lifecycleRevision
+        : undefined);
+    const queuedUpdate = lifecycleRevision ? { ...update, lifecycleRevision } : update;
+    const laneKey =
+      normalizeOptionalString(update.target?.sessionKey) ??
+      normalizeOptionalString(update.sessionKey) ??
+      normalizeOptionalString(update.sessionFile) ??
+      "";
+    // Preserve transcript update order within the lane even when counting
+    // messages requires an async read from the session file.
+    const tail = broadcastQueues.get(laneKey) ?? Promise.resolve();
+    const task = tail.then(() => handleTranscriptUpdateBroadcast(params, queuedUpdate));
+    const settled = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    broadcastQueues.set(laneKey, settled);
+    void settled.then(() => {
+      // Drop drained lanes so idle sessions do not accumulate map entries.
+      if (broadcastQueues.get(laneKey) === settled) {
+        broadcastQueues.delete(laneKey);
+      }
+    });
+    return task;
   };
 }
 
@@ -212,7 +250,7 @@ async function handleTranscriptUpdateBroadcast(
       ? candidateSessionKey
       : markerSessionKey
     : candidateSessionKey;
-  if (!sessionKey || update.message === undefined) {
+  if (!sessionKey) {
     return;
   }
   const effectiveAgentId = compatibleLegacyMarker?.agentId ?? targetAgentId ?? update.agentId;
@@ -226,18 +264,30 @@ async function handleTranscriptUpdateBroadcast(
   for (const connId of params.sessionEventSubscribers.getAll()) {
     connIds.add(connId);
   }
-  for (const broadcastKey of resolveSessionMessageBroadcastKeys(sessionKey, routingAgentId)) {
+  let broadcastKeys = [sessionKey];
+  if (sessionKey === "global") {
+    const defaultAgentId = resolveDefaultAgentId(getRuntimeConfig());
+    broadcastKeys = resolveSessionSubscriptionKeys(
+      sessionKey,
+      routingAgentId ?? defaultAgentId,
+      defaultAgentId,
+    );
+  }
+  for (const broadcastKey of broadcastKeys) {
     for (const connId of params.sessionMessageSubscribers.get(broadcastKey)) {
       connIds.add(connId);
     }
   }
   if (connIds.size === 0) {
-    if (!hasPluginSessionsChangedSubscribers() || projectChatDisplayMessage(update.message)) {
+    if (
+      !hasSessionChangeReceivers(connIds) ||
+      (update.message !== undefined && projectChatDisplayMessage(update.message))
+    ) {
       return;
     }
   }
   let messageSeq = asPositiveSafeInteger(update.messageSeq);
-  if (messageSeq === undefined) {
+  if (update.message !== undefined && messageSeq === undefined) {
     // Updates from raw transcript events may not carry seq; fall back to the
     // current transcript line count for cursor-compatible live history.
     const updateStorePath = targetStorePath ?? compatibleLegacyMarker?.storePath;
@@ -269,6 +319,21 @@ async function handleTranscriptUpdateBroadcast(
         )
       : undefined;
   }
+  const lifecycleRevision = normalizeOptionalString(update.lifecycleRevision);
+  if (lifecycleRevision) {
+    // A reset can retain sessionId, so validate the captured owner after every
+    // awaited transcript read before projecting the current session snapshot.
+    const currentLifecycleOwner = readTranscriptUpdateLifecycleOwner(update);
+    if (
+      !currentLifecycleOwner ||
+      (currentLifecycleOwner.lifecycleRevision &&
+        currentLifecycleOwner.lifecycleRevision !== lifecycleRevision)
+    ) {
+      return;
+    }
+  }
+  // Message frames must keep transcript-derived live usage (dashboard API
+  // contract from #50101); the 64KB cap bounds the per-message tail read.
   const sessionRow = loadGatewaySessionRow(sessionKey, {
     agentId: routingAgentId,
     transcriptUsageMaxBytes: 64 * 1024,
@@ -290,6 +355,22 @@ async function handleTranscriptUpdateBroadcast(
     hasActiveRun: activeRunState?.active,
     activeRunIds: activeRunState?.runIds,
   });
+  if (update.message === undefined) {
+    // A committed batch without individually proven cursors must invalidate
+    // both session-list and targeted transcript subscribers exactly once.
+    params.broadcastToConnIds(
+      "sessions.changed",
+      {
+        sessionKey,
+        ...(visibleAgentId ? { agentId: visibleAgentId } : {}),
+        phase: "message",
+        ts: Date.now(),
+        ...sessionSnapshot,
+      },
+      connIds,
+    );
+    return;
+  }
   const idempotencyKey = readMessageIdempotencyKey(update.message);
   const senderIsOwner = readMessageSenderIsOwner(update.message);
   const rawMessage = attachOpenClawTranscriptMeta(update.message, {
@@ -297,7 +378,7 @@ async function handleTranscriptUpdateBroadcast(
     ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(messageSeq !== undefined ? { seq: messageSeq } : {}),
   });
-  const message = projectChatDisplayMessage(rawMessage);
+  const message = projectChatDisplayMessage(rawMessage, { resolveCurrentUserProfileDisplay });
   if (message) {
     params.broadcastToConnIds(
       "session.message",
@@ -311,7 +392,6 @@ async function handleTranscriptUpdateBroadcast(
         ...sessionSnapshot,
       },
       connIds,
-      { dropIfSlow: true },
     );
     return;
   }
@@ -319,7 +399,7 @@ async function handleTranscriptUpdateBroadcast(
   // Messages suppressed from display can still change transcript state, so
   // notify broad session listeners even when no session.message is emitted.
   const sessionEventConnIds = params.sessionEventSubscribers.getAll();
-  if (!hasSessionsChangedReceiver(sessionEventConnIds)) {
+  if (!hasSessionChangeReceivers(sessionEventConnIds)) {
     return;
   }
   params.broadcastToConnIds(
@@ -351,7 +431,7 @@ export function createLifecycleEventBroadcastHandler(params: {
       text?: string;
     };
     const connIds = params.sessionEventSubscribers.getAll();
-    if (!hasSessionsChangedReceiver(connIds)) {
+    if (!hasSessionChangeReceivers(connIds)) {
       return;
     }
     const sessionRow = loadGatewaySessionRow(event.sessionKey);

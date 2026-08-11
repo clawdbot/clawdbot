@@ -1,0 +1,37 @@
+title: App SDK composed event, run, and resource contracts
+
+scenario:
+  id: app-sdk-composed-resources
+  surface: app-sdk
+  coverage:
+    primary:
+      - app-sdk.event-stream
+      - app-sdk.event-envelope
+      - app-sdk.run-results
+      - app-sdk.artifact-resources-artifacts
+      - app-sdk.environments
+      - app-sdk.schema-alignment
+  objective: Verify the source-internal preview App SDK event, run, artifact, and environment operations preserve their external contracts while remaining accepted by the current Gateway schemas.
+  successCriteria:
+    - App-wide and per-run event iterators receive the same relevant Gateway run events.
+    - Normalized events preserve version, deterministic id, timestamp, sessionId, taskId, agentId, data, and raw Gateway stateVersion fields.
+    - Deterministic Gateway websocket coverage proves successful artifact list, get, and download calls with exact public parameters.
+    - Deterministic Gateway websocket coverage routes managed environment list, create, status, and destroy through the actual owner handlers and a deterministic worker service fixture.
+    - Every deterministic artifact and environment request/result satisfies the current Gateway protocol schemas.
+    - A real local Gateway normalizes completed and provider-timeout agent.wait results through the public SDK.
+    - A real local Gateway lists, gets, and downloads an inline transcript artifact through current artifact schemas.
+    - A real local Gateway accepts environment list, status, create, and destroy parameter shapes and returns its configured-state product outcomes.
+  docsRefs:
+    - docs/gateway/external-apps.md
+    - docs/gateway/protocol.md
+    - docs/help/testing.md
+  codeRefs:
+    - packages/sdk/src/client.ts
+    - packages/sdk/src/app-sdk-composed-resources.e2e.test.ts
+    - src/gateway/server-methods/agent-job.ts
+    - src/gateway/server-methods/artifacts.ts
+    - src/gateway/server-methods/environments.ts
+  execution:
+    kind: vitest
+    path: packages/sdk/src/app-sdk-composed-resources.e2e.test.ts
+    summary: Run handler-backed deterministic assertions and real-Gateway schema and behavior proof through the source-internal preview SDK.

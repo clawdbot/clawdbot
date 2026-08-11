@@ -7,9 +7,12 @@ import type {
   WorkerInferenceModelRef,
   WorkerInferenceOptions,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { toToolDefinitions } from "../agents/agent-tool-definition-adapter.js";
-import { createOpenClawCodingTools } from "../agents/agent-tools.js";
+import { finalizeAgentTools } from "../agents/agent-tools.finalize.js";
+import { isApplyPatchAllowedForModel } from "../agents/apply-patch-model-policy.js";
 import { buildBootstrapContextForFiles } from "../agents/bootstrap-files.js";
+import { createCoreCodingTools } from "../agents/core-coding-tools.js";
 import { createNativeModelOwnedRuntimeModel } from "../agents/embedded-agent-runner/run/setup.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { AuthStorage } from "../agents/sessions/auth-storage.js";
@@ -18,17 +21,26 @@ import { DefaultResourceLoader } from "../agents/sessions/resource-loader.js";
 import { createAgentSession } from "../agents/sessions/sdk.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { SettingsManager } from "../agents/sessions/settings-manager.js";
+import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
+import { wrapToolWithGatewayCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { DEFAULT_AGENTS_FILENAME, loadWorkspaceBootstrapFiles } from "../agents/workspace.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AssistantMessage, AssistantMessageEventStreamLike } from "../llm/types.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { createWorkerBrowserToolRuntime } from "./browser-runtime.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
 import {
   createWorkerTranscriptRuntime,
   toAgentMessage,
   toWorkerInferenceContext,
 } from "./embedded-agent-transcript.runtime.js";
-import { WORKER_LOCAL_TOOL_NAMES, type WorkerLocalToolName } from "./tool-authority.js";
-import { toWorkerTranscriptMessage } from "./transcript-message.js";
+import type { WorkerBrowserLaunchDescriptor } from "./launch-descriptor.js";
+import {
+  WORKER_LOCAL_TOOL_NAMES,
+  WORKER_REQUIRED_LOCAL_TOOL_NAMES,
+  type WorkerLocalToolName,
+} from "./tool-authority.js";
+import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
 
 function toError(value: unknown, fallback: string): Error {
   return value instanceof Error ? value : new Error(fallback, { cause: value });
@@ -56,6 +68,9 @@ type WorkerEmbeddedLiveClient = {
 };
 
 type RunWorkerEmbeddedTurnParams = {
+  agentId: string;
+  operationalRunInstance: OperationalRunInstanceRef;
+  agentRuntimeIdentityToken: string;
   cwd: string;
   stateDir: string;
   sessionId: string;
@@ -71,16 +86,20 @@ type RunWorkerEmbeddedTurnParams = {
   systemPrompt?: string;
   inferenceOptions?: WorkerInferenceOptions;
   allowedToolNames: readonly WorkerLocalToolName[];
+  browser?: WorkerBrowserLaunchDescriptor;
   signal?: AbortSignal;
 };
 
-type RunWorkerEmbeddedTurnResult = {
-  messages: WorkerTranscriptMessage[];
-};
+const WORKER_TOOL_CONFIG = { plugins: { enabled: false } } satisfies OpenClawConfig;
 
-export async function runWorkerEmbeddedTurn(
-  params: RunWorkerEmbeddedTurnParams,
-): Promise<RunWorkerEmbeddedTurnResult> {
+export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams): Promise<void> {
+  const browserAuthorized = params.allowedToolNames.includes("browser");
+  if (browserAuthorized !== (params.browser !== undefined)) {
+    throw new Error("Worker Browser authority and launch descriptor must be provided together.");
+  }
+  if (params.operationalRunInstance.runId !== params.runId) {
+    throw new Error("worker operational run instance disagrees with the admitted turn");
+  }
   const model = createNativeModelOwnedRuntimeModel({
     provider: params.modelRef.provider,
     modelId: params.modelRef.model,
@@ -123,62 +142,118 @@ export async function runWorkerEmbeddedTurn(
   const allowedToolNameSet = new Set<string>(params.allowedToolNames);
   const activeToolNames = WORKER_LOCAL_TOOL_NAMES.filter((name) => allowedToolNameSet.has(name));
   const localToolNameSet = new Set<string>(WORKER_LOCAL_TOOL_NAMES);
-  const localTools = createOpenClawCodingTools({
-    cwd: params.cwd,
-    workspaceDir: params.cwd,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    runSessionKey: params.sessionKey,
-    runId: params.runId,
-    oneShotCliRun: true,
-    senderIsOwner: true,
-    disableMessageTool: true,
-    runtimeToolAllowlist: [...WORKER_LOCAL_TOOL_NAMES],
-    modelProvider: params.modelRef.provider,
-    modelId: params.modelRef.model,
-    modelApi: model.api,
+  const coreTools = createCoreCodingTools({
+    codingRoot: params.cwd,
+    includeBaseCodingTools: true,
+    includeShellTools: true,
+    workspaceOnly: false,
     modelContextWindowTokens: model.contextWindow,
-    config: { plugins: { enabled: false } },
-    exec: { host: "gateway", security: "full", ask: "off" },
-    toolConstructionPlan: {
-      includeBaseCodingTools: true,
-      includeShellTools: true,
-      includeChannelTools: false,
-      includeOpenClawTools: false,
-      includePluginTools: false,
+    imageSanitization: {},
+    applyPatchEnabled: isApplyPatchAllowedForModel({
+      modelProvider: params.modelRef.provider,
+      modelId: params.modelRef.model,
+    }),
+    applyPatchWorkspaceOnly: true,
+    execDefaults: {
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      config: WORKER_TOOL_CONFIG,
+      commandHighlighting: false,
+      agentId: params.agentId,
+      allowBackground: true,
+      scopeKey: params.sessionKey,
+      sessionKey: params.sessionKey,
+      runId: params.runId,
+      notifySessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      eventRouting: { preserveSessionKey: false },
     },
-  }).filter((tool) => localToolNameSet.has(tool.name));
-  const discoveredToolNames = new Set(localTools.map((tool) => tool.name));
-  for (const toolName of WORKER_LOCAL_TOOL_NAMES) {
-    if (!discoveredToolNames.has(toolName)) {
-      throw new Error(`Worker coding tool unavailable: ${toolName}`);
-    }
-  }
-
-  const { session } = await createAgentSession({
-    cwd: params.cwd,
-    agentDir: params.stateDir,
-    authStorage,
-    modelRegistry,
-    model,
-    thinkingLevel: "medium",
-    tools: [...activeToolNames],
-    customTools: toToolDefinitions(localTools.filter((tool) => allowedToolNameSet.has(tool.name))),
-    noTools: "all",
-    sessionManager,
-    settingsManager,
-    resourceLoader,
-    withSessionWriteLock: transcriptRuntime.withSessionWriteLock,
+    processDefaults: { scopeKey: params.sessionKey },
   });
+  const browserRuntime = params.browser
+    ? await createWorkerBrowserToolRuntime({
+        descriptor: params.browser,
+        sessionKey: params.sessionKey,
+        stateDir: params.stateDir,
+        workspaceDir: params.cwd,
+      })
+    : undefined;
+  const { session } = await (async () => {
+    try {
+      const unboundLocalTools = finalizeAgentTools({
+        tools: browserRuntime ? [...coreTools, browserRuntime.tool] : coreTools,
+        modelProvider: params.modelRef.provider,
+        modelId: params.modelRef.model,
+        hookContext: {
+          agentId: params.agentId,
+          config: WORKER_TOOL_CONFIG,
+          cwd: params.cwd,
+          workspaceDir: params.cwd,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          runId: params.runId,
+          requester: { senderIsOwner: true },
+          loopDetection: resolveToolLoopDetectionConfig({
+            cfg: WORKER_TOOL_CONFIG,
+            agentId: params.agentId,
+          }),
+        },
+        agentId: params.agentId,
+      }).filter((tool) => localToolNameSet.has(tool.name));
+      const localTools = unboundLocalTools.map((tool) =>
+        wrapToolWithGatewayCallerIdentity(tool, {
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          operationalRunInstance: params.operationalRunInstance,
+          signedAgentRuntimeIdentityToken: params.agentRuntimeIdentityToken,
+        }),
+      );
+      const discoveredToolNames = new Set(localTools.map((tool) => tool.name));
+      for (const toolName of WORKER_REQUIRED_LOCAL_TOOL_NAMES) {
+        if (!discoveredToolNames.has(toolName)) {
+          throw new Error(`Worker coding tool unavailable: ${toolName}`);
+        }
+      }
+
+      return await createAgentSession({
+        cwd: params.cwd,
+        agentDir: params.stateDir,
+        authStorage,
+        modelRegistry,
+        model,
+        thinkingLevel: "medium",
+        tools: [...activeToolNames],
+        customTools: toToolDefinitions(
+          localTools.filter((tool) => allowedToolNameSet.has(tool.name)),
+        ),
+        noTools: "all",
+        sessionManager,
+        settingsManager,
+        resourceLoader,
+        withSessionWriteSettlement: transcriptRuntime.withSessionWriteSettlement,
+      });
+    } catch (error) {
+      await browserRuntime?.dispose();
+      throw error;
+    }
+  })();
   session.agent.sessionId = params.sessionId;
   session.setActiveToolsByName([...activeToolNames]);
-  session.agent.streamFn = (_model, context, options) =>
-    params.inference.stream({
+  session.agent.streamFn = (_model, context, options) => {
+    const projected = toWorkerInferenceContext(context);
+    if (projected.kind === "provider-replay-unavailable") {
+      throw new Error(
+        `${WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE} (${projected.details.reason})`,
+      );
+    }
+    return params.inference.stream({
       modelRef: params.modelRef,
-      context: toWorkerInferenceContext(context),
+      context: projected.context,
       options: structuredClone(params.inferenceOptions ?? {}),
       ...(options?.signal ? { signal: options.signal } : {}),
     });
+  };
 
   const liveRuntime = createWorkerLiveRuntime(params.live);
   const unsubscribe = session.subscribe(liveRuntime.handleSessionEvent);
@@ -213,13 +288,16 @@ export async function runWorkerEmbeddedTurn(
     runFailure = params.signal?.aborted
       ? toError(params.signal.reason, "Worker agent turn aborted.")
       : toError(error, "Worker agent turn failed.");
-    liveRuntime.enqueueRunFailure({ aborted: params.signal?.aborted === true, error: runFailure });
+    liveRuntime.enqueueRunFailure({
+      aborted: params.signal?.aborted === true,
+      error: runFailure,
+    });
   }
 
   let finalTranscriptFailure: Error | undefined;
   try {
     try {
-      await transcriptRuntime.withSessionWriteLock(() => undefined);
+      await transcriptRuntime.withSessionWriteSettlement(() => undefined);
     } catch (error) {
       finalTranscriptFailure = toError(error, "Worker transcript flush failed.");
     }
@@ -232,6 +310,7 @@ export async function runWorkerEmbeddedTurn(
     unsubscribe();
     getProcessSupervisor().cancelScope(params.sessionKey, "manual-cancel");
     session.dispose();
+    await browserRuntime?.dispose();
   }
   if (runFailure !== undefined) {
     throw runFailure;
@@ -239,11 +318,4 @@ export async function runWorkerEmbeddedTurn(
   if (finalTranscriptFailure !== undefined) {
     throw finalTranscriptFailure;
   }
-
-  return {
-    messages: session.agent.state.messages.flatMap((message) => {
-      const projected = toWorkerTranscriptMessage(message);
-      return projected ? [projected] : [];
-    }),
-  };
 }

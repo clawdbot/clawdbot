@@ -14,7 +14,8 @@ import {
 import type { ConversationRecord } from "../../config/sessions/conversation-registry.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { runMessageAction, type MessageActionRunResult } from "./message-action-runner.js";
+import type { MessageActionResult } from "./message-action-contracts.js";
+import { runMessageAction } from "./message-action-runner.js";
 
 export type ConversationDeliveryDeps = {
   beginOperation: typeof beginConversationDeliveryOperation;
@@ -76,7 +77,7 @@ function resolveConversationDeliveryStoreScope(
   };
 }
 
-function readMessageIdFromActionResult(result: MessageActionRunResult): string | undefined {
+function readMessageIdFromActionResult(result: MessageActionResult): string | undefined {
   if (result.kind !== "send") {
     return undefined;
   }

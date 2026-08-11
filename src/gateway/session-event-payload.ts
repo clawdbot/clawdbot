@@ -42,7 +42,6 @@ export function buildGatewaySessionEventFields(params: {
     archivedBy: sessionRow.archivedBy ?? null,
     pinned: sessionRow.pinned ?? false,
     pinnedAt: sessionRow.pinnedAt ?? null,
-    icon: sessionRow.icon ?? null,
     unread: sessionRow.unread ?? false,
     lastReadAt: sessionRow.lastReadAt,
     agentStatus: sessionRow.agentStatus ?? null,
@@ -71,6 +70,7 @@ export function buildGatewaySessionEventFields(params: {
     // Explicit null lets subscribed clients clear an override during merge-reconcile.
     thinkingLevel: sessionRow.thinkingLevel ?? null,
     fastMode: sessionRow.fastMode,
+    toolOverrides: sessionRow.toolOverrides ?? null,
     verboseLevel: sessionRow.verboseLevel,
     reasoningLevel: sessionRow.reasoningLevel,
     elevatedLevel: sessionRow.elevatedLevel,

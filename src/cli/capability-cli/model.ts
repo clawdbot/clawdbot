@@ -45,8 +45,8 @@ import {
   formatEnvelopeForText,
   providerHasGenericConfig,
   providerSummaryText,
+  requireProviderModelOverride,
   resolveLocalCapabilityRuntimeConfig,
-  resolveModelRefOverride,
   resolveSelectedProviderFromModelRef,
   resolveTransport,
 } from "./shared.js";
@@ -169,6 +169,7 @@ async function runModelRun(params: {
   thinking?: ThinkLevel;
   transport: CapabilityTransport;
 }) {
+  const explicitModelOverride = requireProviderModelOverride(params.model);
   const cfg =
     params.transport === "local"
       ? await resolveLocalCapabilityRuntimeConfig({
@@ -182,10 +183,7 @@ async function runModelRun(params: {
     cfg,
     preserveAuthProfile: params.transport === "local",
   });
-  const explicitModelOverride = resolveModelRefOverride(params.model);
-  const hasExplicitProviderModelOverride = Boolean(
-    params.model?.trim() && explicitModelOverride.provider && explicitModelOverride.model,
-  );
+  const hasExplicitProviderModelOverride = Boolean(explicitModelOverride);
   const imageFiles = await readModelRunImageFiles(params.files);
   const messageContent =
     imageFiles.length > 0
@@ -274,7 +272,7 @@ async function runModelRun(params: {
     } satisfies CapabilityEnvelope;
   }
 
-  const { provider, model } = resolveModelRefOverride(modelRef);
+  const { provider, model } = requireProviderModelOverride(modelRef) ?? {};
   // Provider/model overrides require trusted-operator scope. Use the backend
   // shared-secret lane so local gateway smokes do not depend on paired CLI device scopes.
   const hasModelOverride = Boolean(provider || model);

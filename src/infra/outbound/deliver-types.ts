@@ -5,7 +5,7 @@ import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 
 /** Successful channel send result normalized for core delivery accounting. */
 export type OutboundDeliveryResult = {
-  channel: Exclude<ChannelId, "none">;
+  channel: ChannelId;
   messageId: string;
   chatId?: string;
   channelId?: string;

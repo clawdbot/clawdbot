@@ -20,6 +20,7 @@ describe("message action turn capability", () => {
       agentId: "main",
       runId: "run-1",
       sessionKey: "agent:main:matrix:direct:room-1",
+      sourceReplySessionKey: "agent:main:main",
       sessionId: "session-1",
       requesterAccountId: "ops",
       requesterSenderId: "@sender:example.org",
@@ -44,6 +45,7 @@ describe("message action turn capability", () => {
       }),
     ).toMatchObject({
       expiresAtMs: 6000,
+      sourceReplySessionKey: "agent:main:main",
       sessionId: "session-1",
       requesterAccountId: "ops",
       requesterSenderId: "@sender:example.org",

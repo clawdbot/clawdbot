@@ -285,6 +285,38 @@ describe("multi-token details shapes", () => {
     expect(html).not.toContain("&lt;/details");
   });
 
+  it("closes before trailing prose when a type-6 HTML block absorbs the closer", () => {
+    const html = toSanitizedMarkdownHtml(
+      "<details>\n<summary>X</summary>\n\n<div>body</div>\n</details>\n\nFollowing",
+    );
+    const fragment = htmlFragment(html);
+    const details = fragment.querySelector("details");
+
+    expect(details?.textContent).toContain("body");
+    expect(details?.textContent).not.toContain("Following");
+    expect(fragment.lastElementChild?.textContent).toBe("Following");
+  });
+
+  it.each([
+    ["comment", "<!--\n</details>\n-->"],
+    ["pre", "<pre>\n</details>\n</pre>"],
+    ["script", "<script>\n</details>\n</script>"],
+    ["style", "<style>\n</details>\n</style>"],
+    ["processing instruction", "<?pi\n</details>\n?>"],
+    ["declaration", "<!DOCTYPE\n</details>\n>"],
+    ["CDATA", "<![CDATA[\n</details>\n]]>"],
+  ])("keeps closer-shaped text inside an embedded raw HTML %s literal", (_name, raw) => {
+    const html = toSanitizedMarkdownHtml(
+      `<details>\n<summary>X</summary>\n\n<div>\n${raw}\n</div>\n</details>\n\nFollowing`,
+    );
+    const fragment = htmlFragment(html);
+    const details = fragment.querySelector("details");
+
+    expect(details?.textContent).toContain("</details>");
+    expect(details?.textContent).not.toContain("Following");
+    expect(fragment.lastElementChild?.textContent).toBe("Following");
+  });
+
   it("renders details when body text starts without a summary", () => {
     const html = toSanitizedMarkdownHtml("<details>\nfirst line\n\nsecond paragraph\n</details>");
     const fragment = htmlFragment(html);

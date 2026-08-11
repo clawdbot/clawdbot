@@ -1,5 +1,6 @@
 // Coverage for embedded attempt tool construction and runtime allowlists.
 import { describe, expect, it } from "vitest";
+import { attachToolAllowlistIntersection } from "../../tool-policy.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
@@ -90,6 +91,19 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
       includeCoreTools: true,
       codingToolConstructionPlan: { includeOpenClawTools: true },
     });
+  });
+
+  it("keeps forced tools through preserved hook intersections", () => {
+    const tools = [{ name: "web_search" }, { name: "message" }, { name: "read" }];
+    const toolsAllow = mergeForcedEmbeddedAttemptToolsAllow(
+      attachToolAllowlistIntersection([], [["web_*"], ["*_search"]]),
+      { forceMessageTool: true },
+    );
+
+    expect(applyEmbeddedAttemptToolsAllow(tools, toolsAllow).map((tool) => tool.name)).toEqual([
+      "web_search",
+      "message",
+    ]);
   });
 
   it("normalizes explicit toolsAllow entries before filtering", () => {
@@ -366,7 +380,7 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
         },
       },
     );
-    for (const toolName of ["spawn_task", "dismiss_task"]) {
+    for (const toolName of ["suggest_task", "dismiss_task"]) {
       expectConstructionPlan(
         resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: [toolName] }),
         {

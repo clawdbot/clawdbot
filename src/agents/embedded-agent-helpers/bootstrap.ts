@@ -8,7 +8,7 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
-import type { EmbeddedContextFile } from "./types.js";
+import type { EmbeddedContextFile } from "./context-file.js";
 
 type ContentBlockWithSignature = {
   thought_signature?: unknown;
@@ -91,7 +91,6 @@ const DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 60_000;
 // USER.md stays directive-sized so profile guidance cannot crowd out project
 // rules or durable facts from the shared bootstrap budget.
 export const USER_BOOTSTRAP_MAX_CHARS = 4_000;
-const DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE = "always";
 const MIN_BOOTSTRAP_FILE_BUDGET_CHARS = 64;
 // Ratios split `contentBudget` (= maxChars − marker.length − join separators), not `maxChars`.
 // The marker and "\n" separators are already reserved before this split runs; these ratios
@@ -144,12 +143,6 @@ export function resolveBootstrapTotalMaxChars(
     return Math.floor(raw);
   }
   return DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS;
-}
-
-export function resolveBootstrapPromptTruncationWarningMode(
-  _cfg?: OpenClawConfig,
-): "off" | "once" | "always" {
-  return DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE;
 }
 
 function isAgentsBootstrapFile(fileName: string | undefined): boolean {

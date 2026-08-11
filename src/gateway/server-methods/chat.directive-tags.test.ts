@@ -6,7 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
@@ -14,9 +14,20 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  bindActiveCronCreatorAuthorityResolver,
+  runWithCronCreatorAuthorityResolver,
+} from "../../agents/cron-creator-authority-context.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import { getTotalPendingReplies } from "../../auto-reply/reply/dispatcher-registry.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
+import {
+  replyRunRegistry,
+  type ReplyBackendQueueMessageOptions,
+} from "../../auto-reply/reply/reply-run-registry.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   appendTranscriptMessage,
@@ -27,13 +38,23 @@ import {
   type SessionTranscriptReadScope,
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
-import { getAgentRunContext } from "../../infra/agent-events.js";
+import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
-import { createDeferred } from "../../test-utils/deferred.js";
+import {
+  disposeOpenClawAgentDatabaseByPath,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { handleChatSend } from "./chat-send-handler.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ProjectedDispatchParams = Parameters<
@@ -42,6 +63,7 @@ type ProjectedDispatchParams = Parameters<
 
 const mockState = vi.hoisted(() => ({
   config: {} as Record<string, unknown>,
+  storePath: "",
   transcriptPath: "",
   sessionId: "sess-1",
   mainSessionKey: "main",
@@ -100,7 +122,9 @@ const mockState = vi.hoisted(() => ({
   lastDispatchImages: undefined as Array<{ mimeType: string; data: string }> | undefined,
   lastDispatchImageOrder: undefined as string[] | undefined,
   lastDispatchThinkingLevelOverride: undefined as string | undefined,
+  lastDispatchOriginatingLeafEntryId: undefined as string | null | undefined,
   lastTaskSuggestionDeliveryMode: undefined as "gateway" | undefined,
+  lastMessageInjectionAttempted: undefined as true | undefined,
   lastDispatchUserTurnInput: undefined as unknown,
   modelCatalog: null as ModelCatalogEntry[] | null,
   emittedTranscriptUpdates: [] as Array<{
@@ -118,14 +142,30 @@ const mockState = vi.hoisted(() => ({
   saveMediaWait: null as Promise<void> | null,
   activeSaveMediaCalls: 0,
   maxActiveSaveMediaCalls: 0,
+  replyContextCalls: 0,
+  replyContextResult: null as {
+    ReplyToId?: string;
+    ReplyToBody?: string;
+    ReplyToSender?: string;
+  } | null,
+  replyContextWait: null as Promise<void> | null,
   sandboxWorkspace: null as { workspaceDir: string; containerWorkdir?: string } | null,
   stageSandboxMediaError: null as Error | null,
   stagedRelativePaths: null as string[] | null,
   hasBeforeAgentRunHooks: false,
+  hasMessageReceivedHooks: false,
+  messageReceivedCalls: [] as Array<{ event: unknown; context: unknown }>,
   beforeMessageWriteBlock: false,
   beforeMessageWriteContent: null as string | null,
   beforeMessageWriteCalls: [] as Array<{ message: unknown; ctx: unknown }>,
   dispatchBlockedByBeforeAgentRun: false,
+  disposedTranscriptWriteContext: false,
+  disposedTranscriptWriteAttempts: 0,
+  runtimeAssistantContentBeforeDelivery: null as Array<Record<string, unknown>> | null,
+  runtimeAssistantTextsBeforeDelivery: [] as string[],
+  cronAuthorityProbe: undefined as
+    | ((runId: string | undefined) => Promise<void> | void)
+    | undefined,
   // `unstagedSources` lets tests simulate partial staging failure: absolute
   // source paths listed here are excluded from the returned `staged` map even
   // though ctx still carries their rewritten paths. This mirrors how the real
@@ -133,6 +173,11 @@ const mockState = vi.hoisted(() => ({
   unstagedSources: null as string[] | null,
   deleteMediaBufferCalls: [] as Array<{ id: string; subdir?: string }>,
 }));
+
+let suiteFixtureRoot = "";
+let suiteDatabasePath = "";
+let suiteFixtureEnv: NodeJS.ProcessEnv = {};
+let suiteFixtureSeq = 0;
 
 function readTranscriptJsonLines(transcriptPath: string): Array<Record<string, unknown>> {
   const sqliteEvents = loadTranscriptEventsSync(transcriptScope()).filter(
@@ -198,7 +243,7 @@ vi.mock("../session-utils.js", async () => {
           mainKey: mockState.mainSessionKey,
         },
       },
-      storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
+      storePath: mockState.storePath,
       store: entry ? { [canonicalKey]: entry } : {},
       entry,
       canonicalKey,
@@ -217,14 +262,18 @@ vi.mock("../../auto-reply/dispatch.js", async () => {
   const { createReplyDispatcher } = await vi.importActual<
     typeof import("../../auto-reply/reply/reply-dispatcher.js")
   >("../../auto-reply/reply/reply-dispatcher.js");
+  const { withReplyDispatcher } = await vi.importActual<
+    typeof import("../../auto-reply/dispatch-dispatcher.js")
+  >("../../auto-reply/dispatch-dispatcher.js");
   return {
     dispatchInboundMessage: dispatchInboundMessageMock,
     dispatchInboundMessageWithProjectedDispatcher: vi.fn(
       async (params: ProjectedDispatchParams) => {
         const { dispatcherOptions, ...dispatchParams } = params;
-        return await dispatchInboundMessageMock({
-          ...dispatchParams,
-          dispatcher: createReplyDispatcher(dispatcherOptions),
+        const dispatcher = createReplyDispatcher(dispatcherOptions);
+        return await withReplyDispatcher({
+          dispatcher,
+          run: () => dispatchInboundMessageMock({ ...dispatchParams, dispatcher }),
         });
       },
     ),
@@ -284,6 +333,7 @@ dispatchInboundMessageMock.mockImplementation(
         }>,
       ) => void;
       replyOptions?: {
+        runId?: string;
         onAgentRunStart?: (runId: string) => void;
         userTurnTranscriptRecorder?: {
           message?: unknown;
@@ -295,13 +345,21 @@ dispatchInboundMessageMock.mockImplementation(
         imageOrder?: string[];
         thinkingLevelOverride?: string;
         taskSuggestionDeliveryMode?: "gateway";
+        messageInjectionAttempted?: true;
+        turnAdoptionLifecycle?: {
+          originatingLeafEntryId?: string | null;
+        };
       };
     }) => {
       mockState.lastDispatchCtx = params.ctx;
       mockState.lastDispatchImages = params.replyOptions?.images;
       mockState.lastDispatchImageOrder = params.replyOptions?.imageOrder;
       mockState.lastDispatchThinkingLevelOverride = params.replyOptions?.thinkingLevelOverride;
+      mockState.lastDispatchOriginatingLeafEntryId =
+        params.replyOptions?.turnAdoptionLifecycle?.originatingLeafEntryId;
       mockState.lastTaskSuggestionDeliveryMode = params.replyOptions?.taskSuggestionDeliveryMode;
+      mockState.lastMessageInjectionAttempted = params.replyOptions?.messageInjectionAttempted;
+      await mockState.cronAuthorityProbe?.(params.replyOptions?.runId);
       const recorder = params.replyOptions?.userTurnTranscriptRecorder;
       mockState.lastDispatchUserTurnInput = recorder?.resolveMessage
         ? await recorder.resolveMessage()
@@ -330,26 +388,67 @@ dispatchInboundMessageMock.mockImplementation(
       if (mockState.dispatchErrorAfterAgentRunStart) {
         throw mockState.dispatchErrorAfterAgentRunStart;
       }
+      if (mockState.runtimeAssistantContentBeforeDelivery) {
+        await appendSourceReplyMirrorEntry({
+          content: mockState.runtimeAssistantContentBeforeDelivery,
+          text: "",
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          now: Date.now(),
+        });
+      }
+      for (const text of mockState.runtimeAssistantTextsBeforeDelivery) {
+        await appendSourceReplyMirrorEntry({
+          text,
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          now: Date.now(),
+        });
+      }
       if (mockState.sessionMetadataChanges.length > 0) {
         params.onSessionMetadataChanges?.(mockState.sessionMetadataChanges);
       }
-      if (mockState.dispatchedReplies.length > 0) {
-        for (const reply of mockState.dispatchedReplies) {
-          if (reply.kind === "tool") {
-            params.dispatcher.sendToolResult(reply.payload);
-            continue;
+      const deliverReplies = async () => {
+        if (mockState.dispatchedReplies.length > 0) {
+          for (const reply of mockState.dispatchedReplies) {
+            if (reply.kind === "tool") {
+              params.dispatcher.sendToolResult(reply.payload);
+              continue;
+            }
+            if (reply.kind === "block") {
+              params.dispatcher.sendBlockReply(reply.payload);
+              continue;
+            }
+            params.dispatcher.sendFinalReply(reply.payload);
           }
-          if (reply.kind === "block") {
-            params.dispatcher.sendBlockReply(reply.payload);
-            continue;
-          }
-          params.dispatcher.sendFinalReply(reply.payload);
+        } else {
+          params.dispatcher.sendFinalReply(mockState.finalPayload ?? { text: mockState.finalText });
         }
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+      };
+      if (mockState.disposedTranscriptWriteContext) {
+        const sessionKey = mockState.mainSessionKey;
+        const storePath = mockState.storePath;
+        await withOwnedSessionTranscriptWrites(
+          {
+            sessionKey,
+            sessionTarget: {
+              agentId: "main",
+              sessionId: mockState.sessionId,
+              sessionKey,
+              storePath,
+            },
+            withTranscriptWrite: async () => {
+              mockState.disposedTranscriptWriteAttempts += 1;
+              throw new Error("attempt disposed before transcript write");
+            },
+          },
+          deliverReplies,
+        );
       } else {
-        params.dispatcher.sendFinalReply(mockState.finalPayload ?? { text: mockState.finalText });
+        await deliverReplies();
       }
-      params.dispatcher.markComplete();
-      await params.dispatcher.waitForIdle();
       if (mockState.dispatchErrorAfterDelivery) {
         throw mockState.dispatchErrorAfterDelivery;
       }
@@ -376,9 +475,26 @@ vi.mock("../../infra/outbound/session-binding-service.js", async () => {
   };
 });
 
+vi.mock("./chat-send-reply-context.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./chat-send-reply-context.js")>();
+  return {
+    ...actual,
+    resolveChatSendReplyContext: async (
+      ...args: Parameters<typeof actual.resolveChatSendReplyContext>
+    ) => {
+      mockState.replyContextCalls += 1;
+      if (mockState.replyContextWait) {
+        await mockState.replyContextWait;
+      }
+      return mockState.replyContextResult ?? actual.resolveChatSendReplyContext(...args);
+    },
+  };
+});
+
 vi.mock("../../plugins/hook-runner-global.js", () => {
   const hasHooks = (hookName: string) =>
     (hookName === "before_agent_run" && mockState.hasBeforeAgentRunHooks) ||
+    (hookName === "message_received" && mockState.hasMessageReceivedHooks) ||
     (hookName === "before_message_write" &&
       (mockState.beforeMessageWriteBlock || mockState.beforeMessageWriteContent !== null));
   return {
@@ -399,6 +515,9 @@ vi.mock("../../plugins/hook-runner-global.js", () => {
           };
         }
         return undefined;
+      },
+      runMessageReceived: async (event: unknown, context: unknown) => {
+        mockState.messageReceivedCalls.push({ event, context });
       },
     }),
     hasGlobalHooks: hasHooks,
@@ -513,9 +632,16 @@ async function waitForAssertion(assertion: () => void, timeoutMs = 5_000, stepMs
   await vi.waitFor(assertion, { interval: stepMs, timeout: timeoutMs });
 }
 
-async function createTranscriptFixture(prefix: string) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+function createFixturePaths(prefix: string): { dir: string; transcriptPath: string } {
+  const dir = fs.mkdtempSync(path.join(suiteFixtureRoot, `${suiteFixtureSeq++}-${prefix}`));
   const transcriptPath = path.join(dir, "sess.jsonl");
+  mockState.sessionId = `chat-directive-${suiteFixtureSeq}`;
+  mockState.transcriptPath = transcriptPath;
+  return { dir, transcriptPath };
+}
+
+async function createTranscriptFixture(prefix: string) {
+  const { dir, transcriptPath } = createFixturePaths(prefix);
   fs.writeFileSync(
     transcriptPath,
     `${JSON.stringify({
@@ -527,28 +653,27 @@ async function createTranscriptFixture(prefix: string) {
     })}\n`,
     "utf-8",
   );
-  mockState.transcriptPath = transcriptPath;
   // The accessor resolves transcript targets from the persisted store, so the
   // fixture seeds a real entry instead of relying on the mocked gateway wrapper.
-  await replaceSessionEntry(
-    { agentId: "main", sessionKey: "main", storePath: path.join(dir, "sessions.json") },
-    { sessionId: mockState.sessionId, sessionFile: transcriptPath, updatedAt: Date.now() },
-  );
+  await replaceSessionEntry(sessionEntryScope(), {
+    sessionId: mockState.sessionId,
+    sessionFile: transcriptPath,
+    updatedAt: Date.now(),
+  });
   return dir;
 }
 
-function createSqliteTranscriptFixture(prefix: string) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  mockState.transcriptPath = path.join(dir, "sess.jsonl");
+async function createSqliteTranscriptFixture(prefix: string) {
+  const { dir } = createFixturePaths(prefix);
+  await replaceSessionEntry(sessionEntryScope(), {
+    sessionId: mockState.sessionId,
+    updatedAt: 1,
+  });
   return dir;
 }
 
 async function createGatewayUserTurnSqliteFixture(prefix: string) {
-  const dir = createSqliteTranscriptFixture(prefix);
-  await seedSqliteSessionEntry({
-    updatedAt: 1,
-  });
-  return dir;
+  return await createSqliteTranscriptFixture(prefix);
 }
 
 async function withTranscriptFixtureState(
@@ -556,15 +681,15 @@ async function withTranscriptFixtureState(
   run: (fixtureDir: string) => Promise<void>,
 ): Promise<void> {
   const fixtureDir = await createTranscriptFixture(prefix);
-  await withEnvAsync({ OPENCLAW_STATE_DIR: fixtureDir }, async () => await run(fixtureDir));
+  await withEnvAsync({ OPENCLAW_STATE_DIR: suiteFixtureRoot }, async () => await run(fixtureDir));
 }
 
 async function withSqliteTranscriptFixtureState(
   prefix: string,
   run: (fixtureDir: string) => Promise<void>,
 ): Promise<void> {
-  const fixtureDir = createSqliteTranscriptFixture(prefix);
-  await withEnvAsync({ OPENCLAW_STATE_DIR: fixtureDir }, async () => await run(fixtureDir));
+  const fixtureDir = await createSqliteTranscriptFixture(prefix);
+  await withEnvAsync({ OPENCLAW_STATE_DIR: suiteFixtureRoot }, async () => await run(fixtureDir));
 }
 
 function transcriptScope(): SessionTranscriptReadScope {
@@ -572,7 +697,7 @@ function transcriptScope(): SessionTranscriptReadScope {
     agentId: "main",
     sessionId: mockState.sessionId,
     sessionKey: "main",
-    storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
+    storePath: mockState.storePath,
   };
 }
 
@@ -580,7 +705,7 @@ function sessionEntryScope(): SessionAccessScope {
   return {
     agentId: "main",
     sessionKey: "main",
-    storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
+    storePath: mockState.storePath,
   };
 }
 
@@ -596,17 +721,20 @@ function readSqliteMainSessionEntry(): Record<string, any> | undefined {
 }
 
 async function appendSourceReplyMirrorEntry(params: {
+  content?: Array<Record<string, unknown>>;
   idempotencyKey?: string;
   text: string;
   provider?: string;
   model?: string;
+  now?: number;
 }) {
+  const now = params.now ?? 0;
   await appendTranscriptMessage(transcriptScope(), {
     idempotencyLookup: "scan",
-    now: 0,
+    now,
     message: {
       role: "assistant",
-      content: [{ type: "text", text: params.text }],
+      content: params.content ?? [{ type: "text", text: params.text }],
       api: "openai-responses",
       provider: params.provider ?? "openclaw",
       model: params.model ?? "delivery-mirror",
@@ -626,7 +754,7 @@ async function appendSourceReplyMirrorEntry(params: {
         },
       },
       stopReason: "stop",
-      timestamp: 0,
+      timestamp: now,
     },
   });
 }
@@ -756,6 +884,7 @@ function expectUserUpdateIdentity(update: ReturnType<typeof findUserUpdate>) {
     agentId: "main",
     sessionId: mockState.sessionId,
     sessionKey: "main",
+    storePath: mockState.storePath,
   });
   expect(update?.sessionKey).toBe("main");
   expect(update?.agentId).toBe("main");
@@ -948,6 +1077,26 @@ function createSlashCommandMediaReply(
   return { kind, payload: { mediaUrls, trustedLocalMedia: true, ...payload } };
 }
 
+function managedAudioBlocks(content: Array<Record<string, unknown>>) {
+  return content.filter((block) => block.type === "audio");
+}
+
+function expectManagedAudioBlock(
+  block: Record<string, unknown> | undefined,
+  fileName: string,
+  isVoiceNote?: boolean,
+) {
+  expect(block).toEqual(
+    expect.objectContaining({
+      type: "audio",
+      artifactId: expect.stringMatching(/^artifact_managed_media_/u),
+      fileName,
+      mimeType: "audio/mpeg",
+      ...(isVoiceNote === undefined ? {} : { isVoiceNote }),
+    }),
+  );
+}
+
 async function runNonStreamingChatSend(params: {
   context: ChatContext;
   respond: ReturnType<typeof vi.fn>;
@@ -958,6 +1107,7 @@ async function runNonStreamingChatSend(params: {
   client?: unknown;
   expectBroadcast?: boolean;
   requestParams?: Record<string, unknown>;
+  directExternal?: boolean;
   waitForCompletion?: boolean;
   waitForDedupe?: boolean;
   waitFor?: NonStreamingChatSendWaitFor;
@@ -975,10 +1125,11 @@ async function runNonStreamingChatSend(params: {
   if (typeof params.deliver === "boolean") {
     sendParams.deliver = params.deliver;
   }
-  await expectDefined(
-    chatHandlers["chat.send"],
-    'chatHandlers["chat.send"] test invariant',
-  )({
+  const handler =
+    params.directExternal === false
+      ? handleChatSend
+      : expectDefined(chatHandlers["chat.send"], 'chatHandlers["chat.send"] test invariant');
+  await handler({
     params: {
       ...sendParams,
       ...params.requestParams,
@@ -1020,6 +1171,87 @@ async function runNonStreamingChatSend(params: {
   return chatCall?.[1] as Record<string, any> | undefined;
 }
 
+async function expectUnpersistedAgentRunFinal(params: {
+  transcriptPrefix: string;
+  idempotencyKey: string;
+  payload: (typeof mockState.dispatchedReplies)[number]["payload"];
+  staleAudio?: boolean;
+}) {
+  const transcriptDir = await createTranscriptFixture(params.transcriptPrefix);
+  const staleAudioPath = path.join(transcriptDir, "stale.mp3");
+  mockState.config = { agents: { defaults: { workspace: transcriptDir } } };
+  mockState.triggerAgentRunStart = true;
+  mockState.dispatchedReplies = [
+    {
+      kind: "final",
+      payload: {
+        ...params.payload,
+        ...(params.staleAudio
+          ? {
+              mediaUrl: staleAudioPath,
+              mediaUrls: [staleAudioPath],
+              trustedLocalMedia: true,
+            }
+          : {}),
+      },
+    },
+  ];
+  const { send } = createChatRequestFixture();
+  await send({ idempotencyKey: params.idempotencyKey, expectBroadcast: false, waitFor: "dedupe" });
+
+  // Agent-run delivery is a live projection; message_end alone owns persisted assistant turns.
+  expect(findAssistantTranscriptUpdates()).toStrictEqual([]);
+  expect(
+    readTranscriptJsonLines(mockState.transcriptPath).filter(
+      (entry) =>
+        (entry as { message?: { role?: string } }).message?.role === "assistant" ||
+        (entry as { role?: string }).role === "assistant",
+    ),
+  ).toStrictEqual([]);
+}
+
+async function expectImageOnlyFinal(params: {
+  transcriptPrefix: string;
+  idempotencyKey: string;
+  finalPayload: NonNullable<typeof mockState.finalPayload>;
+}) {
+  await createTranscriptFixture(params.transcriptPrefix);
+  mockState.finalPayload = params.finalPayload;
+  const { send } = createChatRequestFixture();
+  const payload = await send({ idempotencyKey: params.idempotencyKey });
+  const content = getMessageContent(payload);
+  expect(getMessage(payload)?.role).toBe("assistant");
+  expect(content[0]).toEqual({ type: "text", text: "Image reply" });
+  expect(content[1]).toEqual({ type: "input_image", image_url: "data:image/png;base64,cG5n" });
+}
+
+beforeAll(() => {
+  suiteFixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-chat-directive-suite-"));
+  suiteDatabasePath = path.join(suiteFixtureRoot, "openclaw-agent.sqlite");
+  suiteFixtureEnv = { ...process.env, OPENCLAW_STATE_DIR: suiteFixtureRoot };
+  mockState.storePath = suiteDatabasePath;
+  openOpenClawAgentDatabase({
+    agentId: "main",
+    env: suiteFixtureEnv,
+    path: suiteDatabasePath,
+  });
+});
+
+afterAll(async () => {
+  try {
+    expect(getTotalPendingReplies()).toBe(0);
+    await waitForSessionTranscriptIndexReconcile({
+      agentId: "main",
+      env: suiteFixtureEnv,
+      path: suiteDatabasePath,
+    });
+  } finally {
+    disposeOpenClawAgentDatabaseByPath(suiteDatabasePath, { env: suiteFixtureEnv });
+    closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(suiteFixtureEnv));
+    fs.rmSync(suiteFixtureRoot, { recursive: true, force: true });
+  }
+});
+
 describe("chat directive tag stripping for non-streaming final payloads", () => {
   afterEach(() => {
     mockState.config = {};
@@ -1044,7 +1276,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.lastDispatchImages = undefined;
     mockState.lastDispatchImageOrder = undefined;
     mockState.lastDispatchThinkingLevelOverride = undefined;
+    mockState.lastDispatchOriginatingLeafEntryId = undefined;
     mockState.lastTaskSuggestionDeliveryMode = undefined;
+    mockState.lastMessageInjectionAttempted = undefined;
     mockState.lastDispatchUserTurnInput = undefined;
     mockState.modelCatalog = null;
     mockState.emittedTranscriptUpdates = [];
@@ -1054,6 +1288,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.saveMediaWait = null;
     mockState.activeSaveMediaCalls = 0;
     mockState.maxActiveSaveMediaCalls = 0;
+    mockState.replyContextCalls = 0;
+    mockState.replyContextResult = null;
+    mockState.replyContextWait = null;
     bindingMocks.resolveByConversation.mockReset();
     bindingMocks.resolveByConversation.mockReturnValue(null);
     mockState.sandboxWorkspace = null;
@@ -1062,10 +1299,17 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.unstagedSources = null;
     mockState.deleteMediaBufferCalls = [];
     mockState.hasBeforeAgentRunHooks = false;
+    mockState.hasMessageReceivedHooks = false;
+    mockState.messageReceivedCalls = [];
     mockState.beforeMessageWriteBlock = false;
     mockState.beforeMessageWriteContent = null;
     mockState.beforeMessageWriteCalls = [];
     mockState.dispatchBlockedByBeforeAgentRun = false;
+    mockState.disposedTranscriptWriteContext = false;
+    mockState.disposedTranscriptWriteAttempts = 0;
+    mockState.runtimeAssistantContentBeforeDelivery = null;
+    mockState.runtimeAssistantTextsBeforeDelivery = [];
+    mockState.cronAuthorityProbe = undefined;
   });
 
   it.each([
@@ -1114,6 +1358,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect.any(Object),
     );
     expect(context.addChatRun).toHaveBeenCalledTimes(1);
+    expect(mockState.lastDispatchOriginatingLeafEntryId).toBeNull();
   });
 
   it.each([
@@ -1141,6 +1386,920 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect.any(Object),
     );
     expect(context.addChatRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects targetless steer when no leaf-bound owner exists", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-stale-steer-no-owner-");
+    await appendTranscriptMessage(transcriptScope(), {
+      eventId: "current-leaf",
+      message: { role: "assistant", content: "finished" },
+      now: 1,
+      parentId: null,
+    });
+    const { context, respond, send } = createChatRequestFixture();
+
+    await send({
+      idempotencyKey: "idem-stale-steer-no-owner",
+      requestParams: {
+        expectedLeafEntryId: "current-leaf",
+        queueMode: "steer",
+      },
+      waitFor: "none",
+    });
+
+    expect(lastRespondCall(respond)).toEqual([
+      false,
+      undefined,
+      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
+    ]);
+    expect(context.addChatRun).not.toHaveBeenCalled();
+  });
+
+  it("rejects targetless steer without a supplied leaf before dispatch", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-targetless-no-leaf-");
+    const { context, respond, send } = createChatRequestFixture();
+    const queueMessage = vi.fn(async () => {});
+    const operation = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+    });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: () => {},
+      messageInjection: { isAvailable: () => true, queueMessage },
+    });
+
+    try {
+      await send({
+        idempotencyKey: "idem-targetless-no-leaf",
+        requestParams: { queueMode: "steer" },
+        waitFor: "none",
+      });
+    } finally {
+      operation.complete();
+    }
+
+    expect(lastRespondCall(respond)).toEqual([
+      false,
+      undefined,
+      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
+    ]);
+    expect(queueMessage).not.toHaveBeenCalled();
+    expect(context.addChatRun).not.toHaveBeenCalled();
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+  });
+
+  it("injects a matching leaf-bound targetless steer through the legacy backend seam", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-targetless-steer-");
+    await appendTranscriptMessage(transcriptScope(), {
+      eventId: "current-leaf",
+      message: { role: "assistant", content: "working" },
+      now: 1,
+      parentId: null,
+    });
+    const { context, respond, send } = createChatRequestFixture();
+    const queueMessage = vi.fn(async () => {});
+    const operation = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: "current-leaf",
+    });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: () => {},
+      isStopped: () => false,
+      queueMessage,
+    });
+
+    try {
+      await send({
+        idempotencyKey: "idem-targetless-steer",
+        requestParams: { expectedLeafEntryId: "current-leaf", queueMode: "steer" },
+      });
+    } finally {
+      operation.complete();
+    }
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "started" }),
+      undefined,
+      expect.any(Object),
+    );
+    expect(queueMessage).toHaveBeenCalledOnce();
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+    expect(context.addChatRun).toHaveBeenCalledOnce();
+  });
+
+  it("rejects targetless steer when the owner immutable leaf differs", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-targetless-leaf-mismatch-");
+    await appendTranscriptMessage(transcriptScope(), {
+      eventId: "current-leaf",
+      message: { role: "assistant", content: "working" },
+      now: 1,
+      parentId: null,
+    });
+    const { context, respond, send } = createChatRequestFixture();
+    const queueMessage = vi.fn(async () => {});
+    const operation = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: "different-owner-leaf",
+    });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: () => {},
+      messageInjection: { isAvailable: () => true, queueMessage },
+    });
+
+    try {
+      await send({
+        idempotencyKey: "idem-targetless-leaf-mismatch",
+        requestParams: { expectedLeafEntryId: "current-leaf", queueMode: "steer" },
+        waitFor: "none",
+      });
+    } finally {
+      operation.complete();
+    }
+
+    expect(lastRespondCall(respond)).toEqual([
+      false,
+      undefined,
+      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
+    ]);
+    expect(queueMessage).not.toHaveBeenCalled();
+    expect(context.addChatRun).not.toHaveBeenCalled();
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+  });
+
+  it("rejects a captured targetless steer when a successor replaces its operation", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-targetless-operation-aba-");
+    await appendTranscriptMessage(transcriptScope(), {
+      eventId: "current-leaf",
+      message: { role: "assistant", content: "working" },
+      now: 1,
+      parentId: null,
+    });
+    const { context, respond } = createChatRequestFixture();
+    const originalQueue = vi.fn(async () => {});
+    const successorQueue = vi.fn(async () => {});
+    const original = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: "current-leaf",
+    });
+    original.setPhase("running");
+    original.attachBackend({
+      kind: "embedded",
+      cancel: () => {},
+      messageInjection: { isAvailable: () => true, queueMessage: originalQueue },
+    });
+    let successor: ReturnType<typeof replyRunRegistry.begin> | undefined;
+
+    try {
+      await handleChatSend(
+        {
+          params: {
+            sessionKey: "main",
+            message: "hello",
+            idempotencyKey: "idem-targetless-operation-aba",
+            expectedLeafEntryId: "current-leaf",
+            queueMode: "steer",
+          },
+          respond: respond as never,
+          req: {} as never,
+          client: {
+            connect: {
+              client: {
+                id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+                mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+                version: "dev",
+                platform: "web",
+              },
+              scopes: ["operator.admin"],
+            },
+          } as never,
+          isWebchatConnect: () => false,
+          context: context as GatewayRequestContext,
+        },
+        async () => {
+          original.complete();
+          successor = replyRunRegistry.begin({
+            sessionKey: "main",
+            sessionId: mockState.sessionId,
+            resetTriggered: false,
+            originatingLeafEntryId: "current-leaf",
+          });
+          successor.setPhase("running");
+          successor.attachBackend({
+            kind: "embedded",
+            cancel: () => {},
+            messageInjection: { isAvailable: () => true, queueMessage: successorQueue },
+          });
+          return true;
+        },
+      );
+    } finally {
+      original.complete();
+      successor?.complete();
+    }
+
+    expect(lastRespondCall(respond)).toEqual([
+      false,
+      undefined,
+      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
+    ]);
+    expect(originalQueue).not.toHaveBeenCalled();
+    expect(successorQueue).not.toHaveBeenCalled();
+    expect(context.addChatRun).not.toHaveBeenCalled();
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+  });
+
+  it("allows an exact-run steer after the active transcript leaf advances", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-moving-leaf-");
+    await appendTranscriptMessage(transcriptScope(), {
+      eventId: "current-leaf",
+      message: { role: "assistant", content: "working" },
+      now: 1,
+      parentId: null,
+    });
+    const { context, respond, send } = createChatRequestFixture();
+    const operation = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: "leaf-before-active-run-output",
+    });
+    operation.setPhase("running");
+    const queueMessage = vi.fn(async () => {});
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "active-run",
+      supportsQueueMessageImages: true,
+      cancel: () => {},
+      messageInjection: { isAvailable: () => true, queueMessage },
+    });
+
+    try {
+      await send({
+        idempotencyKey: "idem-steer-moving-leaf",
+        requestParams: {
+          expectedLeafEntryId: "current-leaf",
+          expectedRunId: "active-run",
+          queueMode: "steer",
+        },
+      });
+    } finally {
+      operation.complete();
+    }
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "started" }),
+      undefined,
+      expect.any(Object),
+    );
+    expect(context.addChatRun).toHaveBeenCalledTimes(1);
+    expect(queueMessage).toHaveBeenCalledOnce();
+    expect(queueMessage).toHaveBeenCalledWith(
+      "hello",
+      expect.objectContaining({
+        isInboundUserMessage: true,
+        waitForTranscriptCommit: true,
+      }),
+    );
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+  });
+
+  it("starts exact-run injection before ACK and does not dispatch after the owner clears", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-before-ack-");
+    const { context, respond, send } = createChatRequestFixture();
+    const delivery = createDeferred();
+    const operation = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: null,
+    });
+    operation.setPhase("running");
+    let reportAcceptance: ((accepted: boolean) => void) | undefined;
+    const queueMessage = vi.fn((_text: string, options?: ReplyBackendQueueMessageOptions) => {
+      expect(respond).not.toHaveBeenCalled();
+      reportAcceptance = options?.onQueueAccepted;
+      return delivery.promise;
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "active-run",
+      cancel: () => {},
+      messageInjection: { isAvailable: () => true, queueMessage },
+    });
+
+    const pendingSend = send({
+      idempotencyKey: "idem-steer-before-ack",
+      requestParams: { expectedRunId: "active-run", queueMode: "steer" },
+      waitFor: "none",
+    });
+
+    await waitForAssertion(() => expect(queueMessage).toHaveBeenCalledOnce());
+    expect(respond).not.toHaveBeenCalled();
+    reportAcceptance?.(true);
+    await pendingSend;
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "started" }),
+      undefined,
+      expect.any(Object),
+    );
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+    operation.complete();
+    delivery.resolve();
+    await waitForAssertion(() => {
+      expect(context.dedupe.get("chat:idem-steer-before-ack")?.payload).toEqual({
+        runId: "idem-steer-before-ack",
+        status: "ok",
+      });
+    });
+    expect(context.broadcast).toHaveBeenCalledOnce();
+  });
+
+  it("records accepted steering once across transcript, hooks, audit, and finalization", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-accounting-");
+    mockState.hasMessageReceivedHooks = true;
+    mockState.savedMediaResults = [{ path: "/tmp/steer.png", contentType: "image/png" }];
+    const auditEvents: Array<{ reasonCode?: unknown; runId?: unknown }> = [];
+    const disposeAudit = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
+    const { context, send } = createChatRequestFixture();
+    const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
+    const operation = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: null,
+    });
+    operation.setPhase("running");
+    const queueMessage = vi.fn(async (_text: string, options?: ReplyBackendQueueMessageOptions) => {
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore);
+      await options?.userTurnTranscriptRecorder?.persistApproved();
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "active-run",
+      supportsQueueMessageImages: true,
+      taskSuggestionDeliveryMode: "gateway",
+      cancel: () => {},
+      messageInjection: { isAvailable: () => true, queueMessage },
+    });
+
+    try {
+      await send({
+        idempotencyKey: "idem-steer-accounting",
+        requestParams: {
+          expectedRunId: "active-run",
+          queueMode: "steer",
+          attachments: [{ mimeType: "image/png", content: TINY_PNG_BASE64 }],
+        },
+        client: {
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+              version: "dev",
+              platform: "web",
+            },
+            caps: [GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS],
+            scopes: ["operator.admin"],
+          },
+        },
+      });
+    } finally {
+      operation.complete();
+      disposeAudit();
+    }
+
+    await waitForAssertion(() => expect(mockState.messageReceivedCalls).toHaveLength(1));
+    expect(readPersistedUserMessages()).toHaveLength(1);
+    expect(readPersistedUserMessages()[0]?.content).toBe("hello");
+    expect(queueMessage).toHaveBeenCalledWith(
+      "hello",
+      expect.objectContaining({
+        images: [expect.objectContaining({ mimeType: "image/png" })],
+        imageOrder: ["inline"],
+        taskSuggestionDeliveryMode: "gateway",
+        userTurnTranscriptRecorder: expect.any(Object),
+      }),
+    );
+    expect(auditEvents).toContainEqual(
+      expect.objectContaining({
+        reasonCode: "active_run_injected",
+        runId: "idem-steer-accounting",
+      }),
+    );
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore);
+    expect(context.broadcast).toHaveBeenCalledOnce();
+  });
+
+  it("hydrates and accepts reply injection before ACK without waiting for delivery", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-reply-steer-");
+    mockState.hasMessageReceivedHooks = true;
+    const hydration = createDeferred();
+    mockState.replyContextWait = hydration.promise;
+    mockState.replyContextResult = {
+      ReplyToId: "prior-message",
+      ReplyToBody: "quoted deployment status",
+      ReplyToSender: "Alice",
+    };
+    const auditEvents: Array<{ reasonCode?: unknown }> = [];
+    const disposeAudit = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
+    const { context, respond, send } = createChatRequestFixture();
+    const delivery = createDeferred();
+    let reportAcceptance: ((accepted: boolean) => void) | undefined;
+    const queueMessage = vi.fn((_text: string, options?: ReplyBackendQueueMessageOptions) => {
+      reportAcceptance = options?.onQueueAccepted;
+      return delivery.promise;
+    });
+    const operation = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: "current-leaf",
+    });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: () => {},
+      messageInjection: { isAvailable: () => true, queueMessage },
+    });
+
+    try {
+      const pendingSend = send({
+        idempotencyKey: "idem-reply-steer",
+        requestParams: {
+          expectedRunId: "run-a",
+          queueMode: "steer",
+          replyToId: "prior-message",
+        },
+        waitFor: "none",
+      });
+
+      await waitForAssertion(() => expect(mockState.replyContextCalls).toBe(1));
+      expect(queueMessage).not.toHaveBeenCalled();
+      expect(respond).not.toHaveBeenCalled();
+
+      hydration.resolve();
+      await waitForAssertion(() => expect(queueMessage).toHaveBeenCalledOnce());
+      expect(queueMessage.mock.calls[0]?.[0]).toContain("Reply target of current user message:");
+      expect(queueMessage.mock.calls[0]?.[0]).toContain("quoted deployment status");
+      expect(queueMessage.mock.calls[0]?.[0]).toContain("hello");
+      expect(respond).not.toHaveBeenCalled();
+
+      reportAcceptance?.(true);
+      await pendingSend;
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "started" }),
+        undefined,
+        expect.any(Object),
+      );
+      expect(context.broadcast).not.toHaveBeenCalled();
+      expect(mockState.lastDispatchCtx).toBeUndefined();
+
+      delivery.resolve();
+      await waitForAssertion(() => expect(context.broadcast).toHaveBeenCalledOnce());
+    } finally {
+      hydration.resolve();
+      delivery.resolve();
+      operation.complete();
+      disposeAudit();
+    }
+
+    expect(mockState.messageReceivedCalls).toHaveLength(1);
+    expect(readPersistedUserMessages()).toHaveLength(1);
+    expect(auditEvents.filter((event) => event.reasonCode === "active_run_injected")).toHaveLength(
+      1,
+    );
+    expect(mockState.replyContextCalls).toBe(1);
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+    expect(context.broadcast).toHaveBeenCalledOnce();
+  });
+
+  it("falls back once when reply hydration outlives its captured run", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-reply-steer-race-");
+    const hydration = createDeferred();
+    mockState.replyContextWait = hydration.promise;
+    mockState.replyContextResult = {
+      ReplyToId: "prior-message",
+      ReplyToBody: "quoted deployment status",
+      ReplyToSender: "Alice",
+    };
+    const { context, respond, send } = createChatRequestFixture();
+    const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
+    const originalQueue = vi.fn(async () => {});
+    const successorQueue = vi.fn(async () => {});
+    const successorCancel = vi.fn();
+    const original = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: "current-leaf",
+    });
+    original.setPhase("running");
+    original.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: () => {},
+      messageInjection: { isAvailable: () => true, queueMessage: originalQueue },
+    });
+    let successor: ReturnType<typeof replyRunRegistry.begin> | undefined;
+
+    try {
+      const pendingSend = send({
+        idempotencyKey: "idem-reply-steer-race",
+        requestParams: {
+          expectedRunId: "run-a",
+          queueMode: "steer",
+          replyToId: "prior-message",
+        },
+        waitFor: "none",
+      });
+      await waitForAssertion(() => expect(mockState.replyContextCalls).toBe(1));
+      expect(respond).not.toHaveBeenCalled();
+      expect(originalQueue).not.toHaveBeenCalled();
+      original.complete();
+      successor = replyRunRegistry.begin({
+        sessionKey: "main",
+        sessionId: mockState.sessionId,
+        resetTriggered: false,
+        originatingLeafEntryId: "current-leaf",
+      });
+      successor.setPhase("running");
+      successor.attachBackend({
+        kind: "embedded",
+        runId: "run-b",
+        cancel: successorCancel,
+        messageInjection: { isAvailable: () => true, queueMessage: successorQueue },
+      });
+      hydration.resolve();
+      await pendingSend;
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "started" }),
+        undefined,
+        expect.any(Object),
+      );
+      await waitForAssertion(() => {
+        expect(context.dedupe.get("chat:idem-reply-steer-race")?.payload).toMatchObject({
+          status: "ok",
+        });
+      });
+    } finally {
+      hydration.resolve();
+      original.complete();
+      successor?.complete();
+    }
+
+    expect(originalQueue).not.toHaveBeenCalled();
+    expect(successorQueue).not.toHaveBeenCalled();
+    expect(successorCancel).not.toHaveBeenCalled();
+    expect(mockState.replyContextCalls).toBe(1);
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore + 1);
+    expect(mockState.lastMessageInjectionAttempted).toBe(true);
+    expect(readPersistedUserMessages()).toHaveLength(1);
+    const broadcasts = (context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([, payload]) => payload as Record<string, unknown>,
+    );
+    expect(broadcasts.filter((payload) => payload.state === "error")).toEqual([]);
+  });
+
+  it("keeps ordinary reply hydration after ACK when no injection target was captured", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-reply-no-steer-");
+    const hydration = createDeferred();
+    mockState.replyContextWait = hydration.promise;
+    mockState.replyContextResult = {
+      ReplyToId: "prior-message",
+      ReplyToBody: "quoted deployment status",
+      ReplyToSender: "Alice",
+    };
+    const { context, respond, send } = createChatRequestFixture();
+
+    const pendingSend = send({
+      idempotencyKey: "idem-reply-no-steer",
+      requestParams: { replyToId: "prior-message" },
+      waitFor: "none",
+    });
+    try {
+      await waitForAssertion(() => expect(mockState.replyContextCalls).toBe(1));
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "started" }),
+        undefined,
+        expect.any(Object),
+      );
+      expect(mockState.lastDispatchCtx).toBeUndefined();
+      await pendingSend;
+
+      hydration.resolve();
+      await waitForAssertion(() => {
+        expect(context.dedupe.get("chat:idem-reply-no-steer")?.payload).toMatchObject({
+          status: "ok",
+        });
+      });
+    } finally {
+      hydration.resolve();
+    }
+
+    expect(mockState.replyContextCalls).toBe(1);
+    expect(mockState.lastDispatchCtx).toMatchObject({
+      ReplyToId: "prior-message",
+      ReplyToBody: "quoted deployment status",
+      ReplyToSender: "Alice",
+    });
+  });
+
+  it("falls back once when exact-run injection rejects acceptance", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-reject-");
+    mockState.finalText = "fallback reply";
+    const { context, respond, send } = createChatRequestFixture();
+    const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
+    const delivery = createDeferred();
+    const operation = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: null,
+    });
+    operation.setPhase("running");
+    const queueMessage = vi.fn((_text: string, options?: ReplyBackendQueueMessageOptions) => {
+      options?.onQueueAccepted?.(false);
+      return delivery.promise;
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "active-run",
+      cancel: () => {},
+      messageInjection: { isAvailable: () => true, queueMessage },
+    });
+
+    await send({
+      idempotencyKey: "idem-steer-reject",
+      requestParams: { expectedRunId: "active-run", queueMode: "steer" },
+      waitFor: "none",
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "started" }),
+      undefined,
+      expect.any(Object),
+    );
+    delivery.reject(new Error("native turn ended"));
+    operation.complete();
+
+    await waitForAssertion(() => {
+      expect(context.dedupe.get("chat:idem-steer-reject")?.payload).toEqual({
+        runId: "idem-steer-reject",
+        status: "ok",
+      });
+    });
+    expect(queueMessage).toHaveBeenCalledOnce();
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore + 1);
+    expect(mockState.lastDispatchCtx?.BodyForAgent).toBe("hello");
+  });
+
+  it("never aborts or replays onto a successor after unconfirmed acceptance", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-unconfirmed-");
+    const { context, send } = createChatRequestFixture();
+    const delivery = createDeferred<{
+      transcriptCommit: "unconfirmed";
+      errorMessage: string;
+    }>();
+    const first = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: null,
+    });
+    first.setPhase("running");
+    const queueMessage = vi.fn((_text: string, options?: ReplyBackendQueueMessageOptions) => {
+      options?.onQueueAccepted?.(true);
+      return delivery.promise;
+    });
+    first.attachBackend({
+      kind: "embedded",
+      runId: "active-run",
+      cancel: vi.fn(),
+      messageInjection: { isAvailable: () => true, queueMessage },
+    });
+
+    await send({
+      idempotencyKey: "idem-steer-unconfirmed",
+      requestParams: { expectedRunId: "active-run", queueMode: "steer" },
+      waitFor: "none",
+    });
+    first.complete();
+    const successorCancel = vi.fn();
+    const successor = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: null,
+    });
+    successor.setPhase("running");
+    successor.attachBackend({
+      kind: "embedded",
+      runId: "successor-run",
+      cancel: successorCancel,
+      messageInjection: { isAvailable: () => true, queueMessage: vi.fn(async () => {}) },
+    });
+    delivery.resolve({
+      transcriptCommit: "unconfirmed",
+      errorMessage: "receipt timed out",
+    });
+
+    await waitForAssertion(() => {
+      expect(context.dedupe.get("chat:idem-steer-unconfirmed")?.payload).toEqual({
+        runId: "idem-steer-unconfirmed",
+        status: "ok",
+      });
+    });
+    expect(successor.result).toBeNull();
+    expect(successorCancel).not.toHaveBeenCalled();
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+    successor.complete();
+  });
+
+  it("ACKs and dispatches once when exact-run injection throws synchronously", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-sync-reject-");
+    const { respond, send } = createChatRequestFixture();
+    const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
+    const operation = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: null,
+    });
+    operation.setPhase("running");
+    const queueMessage = vi.fn((): Promise<void> => {
+      expect(respond).not.toHaveBeenCalled();
+      throw new Error("synchronous rejection");
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "active-run",
+      cancel: () => {},
+      messageInjection: { isAvailable: () => true, queueMessage },
+    });
+
+    try {
+      await send({
+        idempotencyKey: "idem-steer-sync-reject",
+        requestParams: { expectedRunId: "active-run", queueMode: "steer" },
+      });
+    } finally {
+      operation.complete();
+    }
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "started" }),
+      undefined,
+      expect.any(Object),
+    );
+    expect(queueMessage).toHaveBeenCalledOnce();
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore + 1);
+  });
+
+  it("falls back once after the expected active run changes", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-run-changed-");
+    const { context, respond, send } = createChatRequestFixture();
+    const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
+    const operation = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: "leaf-before-active-run-output",
+    });
+    operation.setPhase("running");
+    const successorQueue = vi.fn(async () => {});
+    const successorCancel = vi.fn();
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "successor-run",
+      cancel: successorCancel,
+      messageInjection: { isAvailable: () => true, queueMessage: successorQueue },
+    });
+
+    try {
+      await send({
+        idempotencyKey: "idem-steer-run-changed",
+        requestParams: {
+          expectedRunId: "original-run",
+          queueMode: "steer",
+        },
+        waitFor: "none",
+      });
+    } finally {
+      operation.complete();
+    }
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "started" }),
+      undefined,
+      expect.any(Object),
+    );
+    await waitForAssertion(() =>
+      expect(context.dedupe.get("chat:idem-steer-run-changed")?.payload).toMatchObject({
+        status: "ok",
+      }),
+    );
+    expect(context.addChatRun).toHaveBeenCalledOnce();
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore + 1);
+    expect(mockState.lastMessageInjectionAttempted).toBe(true);
+    expect(successorQueue).not.toHaveBeenCalled();
+    expect(successorCancel).not.toHaveBeenCalled();
+    expect(readPersistedUserMessages()).toHaveLength(1);
+    expect(
+      (context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(
+        ([, payload]) => (payload as { state?: unknown }).state === "error",
+      ),
+    ).toEqual([]);
+  });
+
+  it("falls back once when exact-run owner evidence is stale", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-stale-owner-");
+    await appendTranscriptMessage(transcriptScope(), {
+      eventId: "current-leaf",
+      message: { role: "assistant", content: "stale tool work" },
+      now: 1,
+      parentId: null,
+    });
+    const { context, respond, send } = createChatRequestFixture();
+    const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const operation = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: "leaf-before-stale-run-output",
+    });
+    operation.setPhase("running");
+    const staleQueue = vi.fn(async () => {});
+    const staleCancel = vi.fn();
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "active-run",
+      cancel: staleCancel,
+      isStreaming: () => false,
+      isStopped: () => false,
+      queueMessage: staleQueue,
+    });
+
+    try {
+      vi.advanceTimersByTime(RUN_STALE_TAKEOVER_MS + 1);
+      await send({
+        idempotencyKey: "idem-steer-stale-owner",
+        requestParams: {
+          expectedLeafEntryId: "current-leaf",
+          expectedRunId: "active-run",
+          queueMode: "steer",
+        },
+        waitFor: "none",
+      });
+    } finally {
+      operation.complete();
+      vi.useRealTimers();
+    }
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "started" }),
+      undefined,
+      expect.any(Object),
+    );
+    await waitForAssertion(() =>
+      expect(context.dedupe.get("chat:idem-steer-stale-owner")?.payload).toMatchObject({
+        status: "ok",
+      }),
+    );
+    expect(context.addChatRun).toHaveBeenCalledOnce();
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore + 1);
+    expect(mockState.lastMessageInjectionAttempted).toBe(true);
+    expect(staleQueue).not.toHaveBeenCalled();
+    expect(staleCancel).not.toHaveBeenCalled();
+    expect(readPersistedUserMessages()).toHaveLength(1);
+    expect(
+      (context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(
+        ([, payload]) => (payload as { state?: unknown }).state === "error",
+      ),
+    ).toEqual([]);
   });
 
   it("broadcasts session metadata changes reported by chat command dispatch", async () => {
@@ -1243,7 +2402,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         idempotencyKey: "idem-final-sqlite",
         expectBroadcast: false,
       });
-
       expect(fs.existsSync(mockState.transcriptPath)).toBe(false);
       const assistantEntries = await readActiveAssistantTranscriptMessages();
       expect(assistantEntries).toHaveLength(1);
@@ -1281,7 +2439,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     expect(assistantUpdate?.target).toMatchObject({
       agentId: "main",
-      sessionKey: targetSessionKey,
+      sessionKey: `agent:main:${targetSessionKey}`,
     });
   });
 
@@ -1400,7 +2558,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     expect(assistantUpdate?.target).toMatchObject({
       agentId: "main",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
     });
     expect(context.logGateway.warn).not.toHaveBeenCalledWith(
       "webchat transcript append skipped: inconsistent binding-owned transcript metadata",
@@ -1751,7 +2909,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     await waitForAssertion(() => {
-      const assistantUpdate = findAssistantUpdateWithBlock((block) => block.type === "attachment");
+      const assistantUpdate = findAssistantUpdateWithBlock((block) => block.type === "audio");
       const message = assistantUpdate?.message as Record<string, any> | undefined;
       const content = Array.isArray(message?.content)
         ? (message.content as Array<Record<string, any>>)
@@ -1759,15 +2917,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(message?.role).toBe("assistant");
       expect(message?.idempotencyKey).toBe("idem-agent-audio:assistant-media");
       expect(content[0]).toEqual({ type: "text", text: "Audio reply" });
-      expect(content[1]).toEqual({
-        type: "attachment",
-        attachment: {
-          url: fs.realpathSync(audioPath),
-          kind: "audio",
-          label: "reply.mp3",
+      expect(content[1]).toEqual(
+        expect.objectContaining({
+          type: "audio",
+          artifactId: expect.stringMatching(/^artifact_managed_media_/u),
+          fileName: "reply.mp3",
           mimeType: "audio/mpeg",
-        },
-      });
+        }),
+      );
+      expect(JSON.stringify(content[1])).not.toContain(fs.realpathSync(audioPath));
     });
   });
 
@@ -1830,6 +2988,156 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
+  it("persists agent media only after a disposed attempt transcript owner has unwound", async () => {
+    await withTranscriptFixtureState(
+      "openclaw-chat-send-disposed-media-owner-",
+      async (fixtureDir) => {
+        const savedImagePath = path.join(fixtureDir, "reply.png");
+        const mediaUrl = savedImagePath;
+        fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+        mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
+        await appendSourceReplyMirrorEntry({
+          text: `Stale reply\nMEDIA:${mediaUrl}`,
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          now: Date.now(),
+        });
+        mockState.triggerAgentRunStart = true;
+        mockState.disposedTranscriptWriteContext = true;
+        mockState.dispatchErrorAfterDelivery = new Error("after media delivery");
+        mockState.runtimeAssistantContentBeforeDelivery = [
+          { type: "thinking", thinking: "preserve runtime reasoning" },
+          { type: "text", text: "Earlier chunk" },
+          { type: "text", text: "[[reply_to_current]] Image reply" },
+          { type: "text", text: `MEDIA:${mediaUrl}` },
+          { type: "toolCall", id: "call-1", name: "read", arguments: {} },
+        ];
+        mockState.runtimeAssistantTextsBeforeDelivery = [`Later reply\nMEDIA:${mediaUrl}`];
+        mockState.dispatchedReplies = [
+          {
+            kind: "final",
+            payload: setReplyPayloadMetadata(
+              {
+                text: "Image reply",
+                mediaUrl,
+                mediaUrls: [mediaUrl],
+              },
+              { assistantMessageIndex: 1, assistantTranscriptMediaUrls: [mediaUrl] },
+            ),
+          },
+        ];
+        const { send } = createChatRequestFixture();
+
+        await send({
+          idempotencyKey: "idem-disposed-media-owner",
+          expectBroadcast: false,
+          waitFor: "dedupe",
+        });
+
+        const messages = await readActiveAssistantTranscriptMessages();
+        expect(messages).toHaveLength(3);
+        expect(messages[0]?.content).toEqual([
+          { type: "text", text: `Stale reply\nMEDIA:${mediaUrl}` },
+        ]);
+        expect(messages[1]?.idempotencyKey).toBeUndefined();
+        const content = Array.isArray(messages[1]?.content)
+          ? (messages[1].content as Array<Record<string, unknown>>)
+          : [];
+        expect(content[0]).toEqual({ type: "thinking", thinking: "preserve runtime reasoning" });
+        expect(content.filter((block) => block.type === "text")).toEqual([
+          { type: "text", text: "Earlier chunk" },
+          { type: "text", text: "Image reply" },
+        ]);
+        expect(content.filter((block) => block.type === "image")).toHaveLength(1);
+        expect(content.at(-1)).toEqual({
+          type: "toolCall",
+          id: "call-1",
+          name: "read",
+          arguments: {},
+        });
+        expect(JSON.stringify(content)).toContain("artifact_managed_image_");
+        expect(JSON.stringify(content)).not.toContain("MEDIA:");
+        expect(JSON.stringify(messages)).not.toContain(":assistant-media");
+        expect(messages[2]?.content).toEqual([
+          { type: "text", text: `Later reply\nMEDIA:${mediaUrl}` },
+        ]);
+        expect(mockState.disposedTranscriptWriteAttempts).toBe(0);
+      },
+    );
+  });
+
+  it("materializes each distinct assistant media row once", async () => {
+    await withTranscriptFixtureState(
+      "openclaw-chat-send-multiple-assistant-media-",
+      async (fixtureDir) => {
+        const firstMediaUrl = path.join(fixtureDir, "first.png");
+        const secondMediaUrl = path.join(fixtureDir, "second.png");
+        fs.writeFileSync(firstMediaUrl, Buffer.from(TINY_PNG_BASE64, "base64"));
+        fs.writeFileSync(secondMediaUrl, Buffer.from(TINY_PNG_BASE64, "base64"));
+        await appendSourceReplyMirrorEntry({
+          text: "Older assistant reply",
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          now: Date.now(),
+        });
+        mockState.savedMediaResults = [
+          { path: firstMediaUrl, contentType: "image/png" },
+          { path: secondMediaUrl, contentType: "image/png" },
+        ];
+        mockState.triggerAgentRunStart = true;
+        mockState.runtimeAssistantTextsBeforeDelivery = [
+          `First image\nMEDIA:${firstMediaUrl}`,
+          `Second image\nMEDIA:${secondMediaUrl}`,
+        ];
+        mockState.dispatchedReplies = [
+          {
+            kind: "block",
+            payload: setReplyPayloadMetadata(
+              { text: "First image", mediaUrl: firstMediaUrl, mediaUrls: [firstMediaUrl] },
+              {
+                assistantMessageIndex: 1,
+                assistantTranscriptMediaUrls: [firstMediaUrl],
+              },
+            ),
+          },
+          {
+            kind: "final",
+            payload: setReplyPayloadMetadata(
+              { text: "Second image", mediaUrl: secondMediaUrl, mediaUrls: [secondMediaUrl] },
+              {
+                assistantMessageIndex: 2,
+                assistantTranscriptMediaUrls: [secondMediaUrl],
+              },
+            ),
+          },
+        ];
+        const { send } = createChatRequestFixture();
+
+        await send({
+          idempotencyKey: "idem-multiple-assistant-media",
+          expectBroadcast: false,
+          waitFor: "dedupe",
+        });
+
+        const messages = await readActiveAssistantTranscriptMessages();
+        expect(messages).toHaveLength(3);
+        expect(messages[0]?.content).toEqual([{ type: "text", text: "Older assistant reply" }]);
+        for (const [index, expectedText] of ["First image", "Second image"].entries()) {
+          const message = messages[index + 1];
+          const content = Array.isArray(message?.content)
+            ? (message.content as Array<Record<string, unknown>>)
+            : [];
+          expect(content.filter((block) => block.type === "text")).toEqual([
+            { type: "text", text: expectedText },
+          ]);
+          expect(content.filter((block) => block.type === "image")).toHaveLength(1);
+          expect(JSON.stringify(content)).not.toContain("MEDIA:");
+        }
+        expect(JSON.stringify(messages)).not.toContain(":assistant-media");
+      },
+    );
+  });
+
   it("persists auto-TTS final media as audio-only so webchat does not duplicate assistant text", async () => {
     const transcriptDir = await createTranscriptFixture("openclaw-chat-send-agent-tts-final-");
     const audioPath = path.join(transcriptDir, "tts.mp3");
@@ -1873,101 +3181,37 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(message?.role).toBe("assistant");
     expect(message?.idempotencyKey).toBe("idem-agent-tts:assistant-media");
     expect(content[0]).toEqual({ type: "text", text: "Audio reply" });
-    expect(content[1]).toEqual({
-      type: "attachment",
-      attachment: {
-        url: fs.realpathSync(audioPath),
-        kind: "audio",
-        label: "tts.mp3",
+    expect(content[1]).toEqual(
+      expect.objectContaining({
+        type: "audio",
+        artifactId: expect.stringMatching(/^artifact_managed_media_/u),
+        fileName: "tts.mp3",
         mimeType: "audio/mpeg",
-        isVoiceNote: true,
-      },
-    });
+      }),
+    );
+    expect(JSON.stringify(content[1])).not.toContain(fs.realpathSync(audioPath));
     expect(JSON.stringify(assistantUpdates[0]?.message)).not.toContain(
       "This text is already in the model transcript.",
     );
   });
 
   it("does not mirror agent-run stale media final text from live delivery", async () => {
-    const transcriptDir = await createTranscriptFixture("openclaw-chat-send-agent-stale-tts-");
-    const staleAudioPath = path.join(transcriptDir, "stale.mp3");
-    mockState.config = {
-      agents: {
-        defaults: {
-          workspace: transcriptDir,
-        },
-      },
-    };
-    mockState.triggerAgentRunStart = true;
-    mockState.dispatchedReplies = [
-      {
-        kind: "final",
-        payload: {
-          text: "Text-only test: one clean reply, no TTS, no media, no tool narration.",
-          mediaUrl: staleAudioPath,
-          mediaUrls: [staleAudioPath],
-          trustedLocalMedia: true,
-        },
-      },
-    ];
-    const { send } = createChatRequestFixture();
-
-    await send({
+    await expectUnpersistedAgentRunFinal({
+      transcriptPrefix: "openclaw-chat-send-agent-stale-tts-",
       idempotencyKey: "idem-stale-agent-media",
-      expectBroadcast: false,
-      waitFor: "dedupe",
+      payload: {
+        text: "Text-only test: one clean reply, no TTS, no media, no tool narration.",
+      },
+      staleAudio: true,
     });
-
-    const assistantUpdates = findAssistantTranscriptUpdates();
-    // Agent-run delivery is a live projection; message_end owns persisted
-    // assistant transcript entries, including stale media/text final payloads.
-    expect(assistantUpdates).toStrictEqual([]);
-    const transcriptLines = readTranscriptJsonLines(mockState.transcriptPath);
-    const assistantEntries = transcriptLines.filter(
-      (entry) =>
-        (entry as { message?: { role?: string } }).message?.role === "assistant" ||
-        (entry as { role?: string }).role === "assistant",
-    );
-    expect(assistantEntries).toStrictEqual([]);
   });
 
   it("does not mirror normal agent-run final text from live delivery", async () => {
-    const transcriptDir = await createTranscriptFixture("openclaw-chat-send-agent-text-only-");
-    mockState.config = {
-      agents: {
-        defaults: {
-          workspace: transcriptDir,
-        },
-      },
-    };
-    mockState.triggerAgentRunStart = true;
-    mockState.dispatchedReplies = [
-      {
-        kind: "final",
-        payload: {
-          text: "It's 11:52 AM EDT.",
-        },
-      },
-    ];
-    const { send } = createChatRequestFixture();
-
-    await send({
+    await expectUnpersistedAgentRunFinal({
+      transcriptPrefix: "openclaw-chat-send-agent-text-only-",
       idempotencyKey: "idem-agent-text-only",
-      expectBroadcast: false,
-      waitFor: "dedupe",
+      payload: { text: "It's 11:52 AM EDT." },
     });
-
-    const assistantUpdates = findAssistantTranscriptUpdates();
-    // Normal agent-run final text must not be mirrored into JSONL by WebChat;
-    // The agent runtime persists the model-visible assistant turn from message_end.
-    expect(assistantUpdates).toStrictEqual([]);
-    const transcriptLines = readTranscriptJsonLines(mockState.transcriptPath);
-    const assistantEntries = transcriptLines.filter(
-      (entry) =>
-        (entry as { message?: { role?: string } }).message?.role === "assistant" ||
-        (entry as { role?: string }).role === "assistant",
-    );
-    expect(assistantEntries).toStrictEqual([]);
   });
 
   it("broadcasts agent-run internal-ui source replies without duplicating transcript", async () => {
@@ -2048,6 +3292,72 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(extractFirstTextBlock(broadcast)).toBe("⚙️ Codex compaction started • Context 2k/200k");
     const assistantEntries = await readActiveAssistantTranscriptMessages();
     expect(assistantEntries).toStrictEqual([]);
+  });
+
+  it("broadcasts a block status once while ignoring an ordinary agent final", async () => {
+    await createTranscriptFixture("openclaw-chat-send-agent-block-status-notice-");
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: {
+          text: "Model set to openai/gpt-5.5 for this session.",
+          isStatusNotice: true,
+        },
+      },
+      {
+        kind: "final",
+        payload: {
+          text: "ordinary provider final",
+        },
+      },
+    ];
+    const { context, send } = createChatRequestFixture();
+
+    const broadcast = await send({
+      idempotencyKey: "idem-agent-block-status-notice",
+      message: "/model openai/gpt-5.5 keep going",
+    });
+
+    expect(broadcast).toMatchObject({
+      runId: "idem-agent-block-status-notice",
+      sessionKey: "main",
+      state: "final",
+    });
+    expect(extractFirstTextBlock(broadcast)).toBe("Model set to openai/gpt-5.5 for this session.");
+    expect((context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+    expect(findAssistantTranscriptUpdates()).toStrictEqual([]);
+    expect(await readActiveAssistantTranscriptMessages()).toStrictEqual([]);
+  });
+
+  it("ignores non-status block and final payloads during source finalization", async () => {
+    await createTranscriptFixture("openclaw-chat-send-agent-non-status-replies-");
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: {
+          text: "ordinary block",
+        },
+      },
+      {
+        kind: "final",
+        payload: {
+          text: "ordinary final",
+        },
+      },
+    ];
+    const { context, send } = createChatRequestFixture();
+
+    await send({
+      idempotencyKey: "idem-agent-non-status-replies",
+      expectBroadcast: false,
+      waitFor: "dedupe",
+    });
+
+    expect((context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls).toStrictEqual([]);
+    expect(findAssistantTranscriptUpdates()).toStrictEqual([]);
+    expect(await readActiveAssistantTranscriptMessages()).toStrictEqual([]);
   });
 
   it("does not duplicate media-bearing internal-ui source replies in the transcript", async () => {
@@ -2183,12 +3493,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       "openclaw-chat-send-agent-source-reply-deduped-",
       async (fixtureDir) => {
         const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
+        const replyText = "Source reply with media";
         const savedImagePath = path.join(fixtureDir, "source-reply-deduped.png");
         fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
         mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
         const mirrorIdempotencyKey = "idem-agent-source-reply-deduped:internal-source-reply:0";
         await appendSourceReplyMirrorEntry({
-          text: resolveMirroredTranscriptText({ mediaUrls: [mediaUrl] }) ?? "media",
+          text:
+            resolveMirroredTranscriptText({ text: replyText, mediaUrls: [mediaUrl] }) ?? "media",
         });
         mockState.triggerAgentRunStart = true;
         mockState.dispatchedReplies = [
@@ -2196,11 +3508,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
             kind: "final",
             payload: setReplyPayloadMetadata(
               {
+                text: replyText,
                 mediaUrls: [mediaUrl],
               },
               {
                 sourceReplyTranscriptMirror: {
                   sessionKey: "main",
+                  text: replyText,
                   mediaUrls: [mediaUrl],
                   idempotencyKey: mirrorIdempotencyKey,
                 },
@@ -2221,6 +3535,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         const assistantEntries = await readActiveAssistantTranscriptMessages();
         expect(assistantEntries).toHaveLength(1);
         expect(assistantEntries[0]?.idempotencyKey).toBe(mirrorIdempotencyKey);
+        expect(JSON.stringify(assistantEntries[0])).toContain(replyText);
         expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
         expect(JSON.stringify(assistantEntries[0])).not.toContain(mediaUrl);
       },
@@ -2803,7 +4118,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.triggerAgentRunStart = true;
     mockState.dispatchedReplies = [
       {
-        kind: "final",
+        kind: "block",
         payload: {
           text: "⚙️ Codex compaction started • Context 2k/200k",
           isStatusNotice: true,
@@ -2905,16 +4220,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const content = getMessageContent(payload);
     expect(getMessage(payload)?.role).toBe("assistant");
     expect(content[0]).toEqual({ type: "text", text: "Command result with TTS." });
-    expect(content[1]).toEqual({
-      type: "attachment",
-      attachment: {
-        url: fs.realpathSync(audioPath),
-        kind: "audio",
-        label: "tts.mp3",
-        mimeType: "audio/mpeg",
-        isVoiceNote: true,
-      },
-    });
+    expectManagedAudioBlock(content[1], "tts.mp3", true);
+    expect(JSON.stringify(content[1])).not.toContain(fs.realpathSync(audioPath));
     const assistantUpdates = findAssistantTranscriptUpdates();
     expect(assistantUpdates).toHaveLength(1);
     expect(JSON.stringify(assistantUpdates[0]?.message)).toContain("Command result with TTS.");
@@ -2997,13 +4304,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     const content = getMessageContent(payload);
     expect(content[0]).toEqual({ type: "text", text: "Trajectory exports can include prompts." });
-    expect(content[1]).toEqual({
-      type: "attachment",
-      attachment: expect.objectContaining({
-        kind: "audio",
-        label: "tts.mp3",
-      }),
-    });
+    expectManagedAudioBlock(content[1], "tts.mp3", true);
     const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
       (update) =>
         typeof update.message === "object" &&
@@ -3176,14 +4477,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           .filter(Boolean)
           .join("\n");
         expect(text.match(/Trajectory exports/gu)).toHaveLength(1);
-        expect(content[1]).toEqual({
-          type: "attachment",
-          attachment: expect.objectContaining({
-            isVoiceNote: true,
-            kind: "audio",
-            label: "tts.mp3",
-          }),
-        });
+        expectManagedAudioBlock(content[1], "tts.mp3", true);
       },
     },
     {
@@ -3200,14 +4494,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       ],
       verify: (content) => {
         expect(content).toHaveLength(2);
-        expect(content[1]).toEqual({
-          type: "attachment",
-          attachment: expect.objectContaining({
-            isVoiceNote: true,
-            kind: "audio",
-            label: "voice.mp3",
-          }),
-        });
+        expectManagedAudioBlock(content[1], "voice.mp3", true);
       },
     },
     {
@@ -3222,11 +4509,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         createSlashCommandMediaReply("final", [audio], { audioAsVoice: false }),
       ],
       verify: (content) => {
-        const attachments = content.filter((block) => block.type === "attachment");
+        const attachments = managedAudioBlocks(content);
         expect(attachments).toHaveLength(1);
-        expect(attachments[0]?.attachment).toEqual(
-          expect.objectContaining({ isVoiceNote: true, label: "voice.mp3" }),
-        );
+        expectManagedAudioBlock(attachments[0], "voice.mp3", true);
       },
     },
     {
@@ -3247,7 +4532,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           .join("\n");
         expect(text).toContain("preview");
         expect(text).toContain("done");
-        expect(content.filter((block) => block.type === "attachment")).toHaveLength(1);
+        expect(managedAudioBlocks(content)).toHaveLength(1);
         const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
           (update) =>
             typeof update.message === "object" &&
@@ -3270,15 +4555,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         }),
       ],
       verify: (content) => {
-        const attachments = content.filter((block) => block.type === "attachment");
+        const attachments = managedAudioBlocks(content);
         expect(attachments).toHaveLength(2);
-        expect(attachments[0]?.attachment).toEqual(expect.objectContaining({ label: "block.mp3" }));
-        expect(
-          (attachments[0]?.attachment as { isVoiceNote?: unknown } | undefined)?.isVoiceNote,
-        ).not.toBe(true);
-        expect(attachments[1]?.attachment).toEqual(
-          expect.objectContaining({ isVoiceNote: true, label: "final.mp3" }),
-        );
+        expectManagedAudioBlock(attachments[0], "block.mp3");
+        expect(attachments[0]?.isVoiceNote).not.toBe(true);
+        expectManagedAudioBlock(attachments[1], "final.mp3", true);
       },
     },
     {
@@ -3299,12 +4580,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           .filter(Boolean)
           .join("\n");
         expect(text.match(/shared caption/gu)).toHaveLength(2);
-        const attachments = content.filter((block) => block.type === "attachment");
+        const attachments = managedAudioBlocks(content);
         expect(attachments).toHaveLength(2);
-        expect(attachments[0]?.attachment).toEqual(expect.objectContaining({ label: "first.mp3" }));
-        expect(attachments[1]?.attachment).toEqual(
-          expect.objectContaining({ isVoiceNote: true, label: "second.mp3" }),
-        );
+        expectManagedAudioBlock(attachments[0], "first.mp3");
+        expectManagedAudioBlock(attachments[1], "second.mp3", true);
       },
     },
     {
@@ -3324,16 +4603,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           type: "text",
           text: expect.stringContaining("Trajectory exports can include prompts."),
         });
-        expect(content.slice(1)).toEqual([
-          {
-            type: "attachment",
-            attachment: expect.objectContaining({ kind: "audio", label: "block.mp3" }),
-          },
-          {
-            type: "attachment",
-            attachment: expect.objectContaining({ kind: "audio", label: "final.mp3" }),
-          },
-        ]);
+        const attachments = managedAudioBlocks(content);
+        expect(attachments).toHaveLength(2);
+        expectManagedAudioBlock(attachments[0], "block.mp3", true);
+        expectManagedAudioBlock(attachments[1], "final.mp3", true);
       },
     },
     {
@@ -3347,17 +4620,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         createSlashCommandMediaReply("final", [first], { audioAsVoice: true }),
       ],
       verify: (content) => {
-        const attachments = content.filter((block) => block.type === "attachment");
+        const attachments = managedAudioBlocks(content);
         expect(attachments).toHaveLength(3);
-        expect(attachments[0]?.attachment).toEqual(expect.objectContaining({ label: "first.mp3" }));
-        expect(attachments[0]?.attachment?.isVoiceNote).not.toBe(true);
-        expect(attachments[1]?.attachment).toEqual(
-          expect.objectContaining({ label: "second.mp3" }),
-        );
-        expect(attachments[1]?.attachment?.isVoiceNote).not.toBe(true);
-        expect(attachments[2]?.attachment).toEqual(
-          expect.objectContaining({ isVoiceNote: true, label: "first.mp3" }),
-        );
+        expectManagedAudioBlock(attachments[0], "first.mp3");
+        expect(attachments[0]?.isVoiceNote).not.toBe(true);
+        expectManagedAudioBlock(attachments[1], "second.mp3");
+        expect(attachments[1]?.isVoiceNote).not.toBe(true);
+        expectManagedAudioBlock(attachments[2], "first.mp3", true);
       },
     },
     {
@@ -3389,19 +4658,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         createSlashCommandMediaReply("final", [second, first], { audioAsVoice: true }),
       ],
       verify: (content) => {
-        const attachments = content.filter((block) => block.type === "attachment");
-        expect(attachments.map((block) => block.attachment?.label)).toEqual([
+        const attachments = managedAudioBlocks(content);
+        expect(attachments.map((block) => block.fileName)).toEqual([
           "first.mp3",
           "second.mp3",
           "second.mp3",
           "first.mp3",
         ]);
-        expect(
-          attachments.slice(0, 2).every((block) => block.attachment?.isVoiceNote !== true),
-        ).toBe(true);
-        expect(attachments.slice(2).every((block) => block.attachment?.isVoiceNote === true)).toBe(
-          true,
-        );
+        expect(attachments.slice(0, 2).every((block) => block.isVoiceNote !== true)).toBe(true);
+        expect(attachments.slice(2).every((block) => block.isVoiceNote === true)).toBe(true);
       },
     },
   ] satisfies SlashCommandMediaCase[])("$name", async ({ id, files, replies, verify }) => {
@@ -3504,7 +4769,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it("chat.inject rechecks archive state after lifecycle admission waits", async () => {
     await createTranscriptFixture("openclaw-chat-inject-archive-race-");
-    const storePath = path.join(path.dirname(mockState.transcriptPath), "sessions.json");
+    const storePath = mockState.storePath;
     const mutationStarted = createDeferred();
     const releaseMutation = createDeferred();
     const mutation = runExclusiveSessionLifecycleMutation({
@@ -3696,7 +4961,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("chat.inject advances the session registry marker after transcript append", async () => {
-    const fixtureDir = await createTranscriptFixture("openclaw-chat-inject-registry-marker-");
+    await createTranscriptFixture("openclaw-chat-inject-registry-marker-");
     const updatedAt = Date.parse("2026-05-18T11:00:00.000Z");
     const appendedAt = Date.parse("2026-05-18T11:05:00.000Z");
     await seedSqliteSessionEntry({
@@ -3720,7 +4985,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(entry?.status).toBe("done");
     } finally {
       vi.useRealTimers();
-      fs.rmSync(fixtureDir, { recursive: true, force: true });
     }
   });
 
@@ -4647,54 +5911,27 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("preserves media-only final replies in the final broadcast message", async () => {
-    await createTranscriptFixture("openclaw-chat-send-media-only-final-");
-    mockState.finalPayload = { mediaUrl: "data:image/png;base64,cG5n" };
-    const { send } = createChatRequestFixture();
-
-    const payload = await send({
+    await expectImageOnlyFinal({
+      transcriptPrefix: "openclaw-chat-send-media-only-final-",
       idempotencyKey: "idem-media-only-final",
+      finalPayload: { mediaUrl: "data:image/png;base64,cG5n" },
     });
-
-    const content = getMessageContent(payload);
-    expect(getMessage(payload)?.role).toBe("assistant");
-    expect(content[0]).toEqual({ type: "text", text: "Image reply" });
-    expect(content[1]).toEqual({ type: "input_image", image_url: "data:image/png;base64,cG5n" });
   });
 
   it("strips NO_REPLY from transcript text when final replies only carry media", async () => {
-    await createTranscriptFixture("openclaw-chat-send-media-only-silent-final-");
-    mockState.finalPayload = {
-      text: "NO_REPLY",
-      mediaUrl: "data:image/png;base64,cG5n",
-    };
-    const { send } = createChatRequestFixture();
-
-    const payload = await send({
+    await expectImageOnlyFinal({
+      transcriptPrefix: "openclaw-chat-send-media-only-silent-final-",
       idempotencyKey: "idem-media-only-silent-final",
+      finalPayload: { text: "NO_REPLY", mediaUrl: "data:image/png;base64,cG5n" },
     });
-
-    const content = getMessageContent(payload);
-    expect(getMessage(payload)?.role).toBe("assistant");
-    expect(content[0]).toEqual({ type: "text", text: "Image reply" });
-    expect(content[1]).toEqual({ type: "input_image", image_url: "data:image/png;base64,cG5n" });
   });
 
   it("preserves reply tags in transcript updates for media replies while stripping them from the broadcast", async () => {
-    await createTranscriptFixture("openclaw-chat-send-media-reply-tags-");
-    mockState.finalPayload = {
-      replyToCurrent: true,
-      mediaUrl: "data:image/png;base64,cG5n",
-    };
-    const { send } = createChatRequestFixture();
-
-    const payload = await send({
+    await expectImageOnlyFinal({
+      transcriptPrefix: "openclaw-chat-send-media-reply-tags-",
       idempotencyKey: "idem-media-reply-tags",
+      finalPayload: { replyToCurrent: true, mediaUrl: "data:image/png;base64,cG5n" },
     });
-
-    const content = getMessageContent(payload);
-    expect(getMessage(payload)?.role).toBe("assistant");
-    expect(content[0]).toEqual({ type: "text", text: "Image reply" });
-    expect(content[1]).toEqual({ type: "input_image", image_url: "data:image/png;base64,cG5n" });
     const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
       (update) =>
         typeof update.message === "object" &&
@@ -5753,6 +6990,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(typeof message?.timestamp).toBe("number");
     const persistedUser = readPersistedUserMessages()[0];
     expect(persistedUser?.content).toBe("quick command");
+    expect(getTotalPendingReplies()).toBe(0);
   });
 
   it("emits a user transcript update when chat.send fails before an agent run starts", async () => {
@@ -5777,6 +7015,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       const persistedUser = readPersistedUserMessages()[0];
       expect(persistedUser?.content).toBe("hello from failed dispatch");
     });
+    expect(getTotalPendingReplies()).toBe(0);
   });
 
   it("emits a user transcript update when a slash-prefixed turn fails before command delivery", async () => {
@@ -6027,6 +7266,187 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 });
 
 describe("chat.send operator UI client sender context", () => {
+  it.each([
+    [GATEWAY_CLIENT_NAMES.CONTROL_UI, GATEWAY_CLIENT_MODES.WEBCHAT, "web"],
+    [GATEWAY_CLIENT_NAMES.MACOS_APP, GATEWAY_CLIENT_MODES.UI, "darwin"],
+  ] as const)(
+    "binds lazy configured-MCP cron authority to an admitted local %s turn",
+    async (clientId, mode, platform) => {
+      await createGatewayUserTurnSqliteFixture(`openclaw-chat-send-cron-authority-${clientId}-`);
+      const { send } = createChatRequestFixture();
+      let retainedResolver: ReturnType<typeof bindActiveCronCreatorAuthorityResolver>;
+      let resolvedGrant: { runId: string; token: string } | undefined;
+      mockState.cronAuthorityProbe = async (runId) => {
+        await runWithCronCreatorAuthorityResolver({
+          runId: runId ?? "",
+          resolve: async () => ({
+            tools: ["read", { name: "configured__lookup", pluginId: "bundle-mcp" }],
+            provenance: { version: 1, source: "final-executable-surface" },
+          }),
+          run: async () => {
+            retainedResolver = bindActiveCronCreatorAuthorityResolver(runId);
+            const snapshot = await retainedResolver!();
+            resolvedGrant = snapshot.grant;
+            expect(snapshot.tools).toEqual([
+              "read",
+              { name: "configured__lookup", pluginId: "bundle-mcp" },
+            ]);
+          },
+        });
+      };
+
+      await send({
+        idempotencyKey: `idem-cron-authority-${clientId}`,
+        client: {
+          connect: {
+            client: { id: clientId, mode, version: "dev", platform },
+            scopes: ["operator.admin"],
+          },
+          internal: { isLocalClient: true },
+        },
+        expectBroadcast: false,
+      });
+
+      expect(resolvedGrant).toMatchObject({ runId: `idem-cron-authority-${clientId}` });
+      await expect(retainedResolver!()).rejects.toThrow(
+        "Configured MCP cron authority is no longer active",
+      );
+      expect(() => consumeCronCreatorAuthorityGrant(resolvedGrant!)).toThrow(
+        "Configured MCP cron authority is no longer active",
+      );
+    },
+  );
+
+  it("denies otherwise-eligible internal chat.send re-entry, including Talk consults", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-cron-authority-internal-reentry-");
+    let boundResolver: ReturnType<typeof bindActiveCronCreatorAuthorityResolver>;
+    mockState.cronAuthorityProbe = async (runId) => {
+      runWithCronCreatorAuthorityResolver({
+        runId: runId ?? "",
+        resolve: async () => ({
+          tools: ["read", "configured__lookup"],
+          provenance: { version: 1, source: "final-executable-surface" },
+        }),
+        run: () => {
+          boundResolver = bindActiveCronCreatorAuthorityResolver(runId);
+        },
+      });
+    };
+    const { send } = createChatRequestFixture();
+
+    await send({
+      idempotencyKey: "idem-cron-authority-internal-reentry",
+      message: "Talk realtime agent consult prompt",
+      directExternal: false,
+      client: {
+        connect: {
+          client: {
+            id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            version: "dev",
+            platform: "web",
+          },
+          scopes: ["operator.admin"],
+        },
+        internal: { isLocalClient: true },
+      },
+      expectBroadcast: false,
+    });
+
+    expect(boundResolver!).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "remote client",
+      client: { internal: {}, scopes: ["operator.admin"] },
+    },
+    {
+      name: "non-admin client",
+      client: { internal: { isLocalClient: true }, scopes: ["operator.write"] },
+    },
+    {
+      name: "incognito session",
+      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
+      sessionEntry: { incognito: true },
+    },
+    {
+      name: "synthetic client",
+      client: {
+        internal: { isLocalClient: true, syntheticClient: true },
+        scopes: ["operator.admin"],
+      },
+    },
+    {
+      name: "input provenance",
+      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
+      requestParams: { systemInputProvenance: { kind: "external_user" } },
+    },
+    {
+      name: "delegated handoff",
+      client: {
+        internal: { isLocalClient: true, delegatedToolPolicyHandoffId: "handoff-1" },
+        scopes: ["operator.admin"],
+      },
+    },
+    {
+      name: "spawned lineage",
+      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
+      sessionEntry: { spawnedBy: "agent:main:parent" },
+    },
+    {
+      name: "synthetic cron continuation",
+      client: {
+        internal: { isLocalClient: true, cronRunContinuation: true },
+        scopes: ["operator.admin"],
+      },
+    },
+    {
+      name: "persisted cron continuation",
+      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
+      sessionEntry: {
+        cronRunContinuation: { lifecycleRevision: "revision-1", phase: "running" },
+      },
+    },
+  ])("does not mint configured-MCP cron authority for $name", async (testCase) => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-cron-authority-negative-");
+    mockState.sessionEntry = testCase.sessionEntry ?? {};
+    let boundResolver: ReturnType<typeof bindActiveCronCreatorAuthorityResolver>;
+    mockState.cronAuthorityProbe = async (runId) => {
+      runWithCronCreatorAuthorityResolver({
+        runId: runId ?? "",
+        resolve: async () => ({
+          tools: ["read"],
+          provenance: { version: 1, source: "final-executable-surface" },
+        }),
+        run: () => {
+          boundResolver = bindActiveCronCreatorAuthorityResolver(runId);
+        },
+      });
+    };
+    const { send } = createChatRequestFixture();
+
+    await send({
+      idempotencyKey: `idem-cron-authority-negative-${testCase.name.replaceAll(" ", "-")}`,
+      client: {
+        connect: {
+          client: {
+            id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            version: "dev",
+            platform: "web",
+          },
+          scopes: testCase.client.scopes,
+        },
+        internal: testCase.client.internal,
+      },
+      requestParams: testCase.requestParams,
+      expectBroadcast: false,
+    });
+
+    expect(boundResolver!).toBeUndefined();
+  });
+
   it("does not inject sender identity fields for Control UI clients", async () => {
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-control-ui-sender-");
     const { send } = createChatRequestFixture();

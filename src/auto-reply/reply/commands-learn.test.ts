@@ -99,9 +99,12 @@ describe("learn command", () => {
     await handleLearnCommand(params, true);
     const instruction = (params.ctx as { BodyForAgent?: string }).BodyForAgent ?? "";
 
-    expect(instruction).toContain('`skill_workshop` with action `"create"`');
-    expect(instruction).toContain("ONE short generic trigger phrase in double quotes");
-    expect(instruction).toContain("NEVER invent flags, commands, paths, APIs");
+    expect(instruction).toContain(
+      "Revise the best pending proposal or update the best existing skill before creating anything new.",
+    );
+    expect(instruction).toContain("Make at most one proposal mutation.");
+    expect(instruction).toContain("first ~60 characters");
+    expect(instruction).toContain("never invent flags, commands, paths, APIs");
   });
 
   it("replies without continuing when the workshop is unavailable", async () => {

@@ -1,9 +1,9 @@
 // Focused persistence compatibility tests kept separate from the session tree suite.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import "../../../test/helpers/session-manager-file-compat.js";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { openFileBackedSessionManagerForTest } from "../../../test/helpers/session-manager-file-fixture.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -15,13 +15,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 
-const tempPaths: string[] = [];
-
-async function makeTempDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-manager-compat-"));
-  tempPaths.push(dir);
-  return dir;
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function buildAssistantMessage(text: string) {
   return {
@@ -44,14 +38,8 @@ function buildAssistantMessage(text: string) {
 }
 
 describe("SessionManager persistence compatibility", () => {
-  afterEach(async () => {
-    await Promise.all(
-      tempPaths.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
-  });
-
   it("rewrites SQLite transcript rows when removing trailing entries", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-compat-");
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "sqlite-remove-trailing-session";
     const sessionKey = "agent:main:dashboard:sqlite-remove-trailing";
@@ -112,8 +100,47 @@ describe("SessionManager persistence compatibility", () => {
     });
   });
 
+  it("keeps file fixture factories off the production SessionManager class", () => {
+    expect(SessionManager).not.toHaveProperty("create");
+    expect(SessionManager).not.toHaveProperty("openFile");
+  });
+
+  it("keeps the default fixture cwd independent from its transcript directory", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-compat-");
+    const manager = openFileBackedSessionManagerForTest(path.join(dir, "session.jsonl"));
+
+    expect(manager.getCwd()).toBe(process.cwd());
+    expect(manager.getSessionDir()).toBe(dir);
+  });
+
+  it("keeps requested file fixture session identities aligned", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-compat-");
+    const sessionFile = path.join(dir, "session.jsonl");
+    const manager = openFileBackedSessionManagerForTest(sessionFile, {
+      sessionId: "session-1",
+      sessionDir: dir,
+      cwd: dir,
+    });
+
+    expect(manager.getSessionId()).toBe("session-1");
+    expect(manager.getCwd()).toBe(dir);
+    expect(await fs.readFile(sessionFile, "utf8")).toContain('"id":"session-1"');
+    expect(() =>
+      openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-2" }),
+    ).toThrow("belongs to session-1, not session-2");
+    const inMemory = vi.fn((cwd?: string) => SessionManager.inMemory(cwd));
+    const ManagerClass = { inMemory } as unknown as typeof SessionManager;
+    openFileBackedSessionManagerForTest(
+      path.join(dir, "legacy.jsonl"),
+      undefined,
+      dir,
+      ManagerClass,
+    );
+    expect(inMemory).toHaveBeenCalledWith(dir);
+  });
+
   it("separates appended records from a final unterminated JSONL record", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-compat-");
     const sessionFile = path.join(dir, "unterminated.jsonl");
     await fs.writeFile(
       sessionFile,
@@ -125,20 +152,20 @@ describe("SessionManager persistence compatibility", () => {
         cwd: dir,
       }),
     );
-    SessionManager.openFile(sessionFile, dir).appendMessage({
+    openFileBackedSessionManagerForTest(sessionFile, dir).appendMessage({
       role: "user",
       content: "appended",
       timestamp: 1,
     });
-    expect(SessionManager.openFile(sessionFile, dir).buildSessionContext().messages).toEqual([
-      expect.objectContaining({ content: "appended", role: "user" }),
-    ]);
+    expect(
+      openFileBackedSessionManagerForTest(sessionFile, dir).buildSessionContext().messages,
+    ).toEqual([expect.objectContaining({ content: "appended", role: "user" })]);
   });
 
   it("rotates new-session fixtures without rewriting the previous file", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-compat-");
     const sessionFile = path.join(dir, "original.jsonl");
-    const manager = SessionManager.openFile(sessionFile, dir);
+    const manager = openFileBackedSessionManagerForTest(sessionFile, dir);
     manager.appendMessage({ role: "user", content: "original", timestamp: 1 });
     const original = await fs.readFile(sessionFile, "utf8");
     manager.newSession({ id: "replacement" });

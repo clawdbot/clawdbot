@@ -10,7 +10,7 @@ import {
 } from "./session-binding.test-helpers.js";
 import { rotateOversizedCodexAppServerStartupBinding as rotateStartupBindingImpl } from "./startup-binding.js";
 
-function rotateOversizedCodexAppServerStartupBinding(
+function resolveCodexAppServerStartupBinding(
   params: Omit<Parameters<typeof rotateStartupBindingImpl>[0], "bindingStore" | "identity">,
 ) {
   return rotateStartupBindingImpl({
@@ -18,6 +18,12 @@ function rotateOversizedCodexAppServerStartupBinding(
     bindingStore: testCodexAppServerBindingStore,
     identity: { kind: "session", agentId: "main", sessionId: params.sessionFile },
   });
+}
+
+async function rotateOversizedCodexAppServerStartupBinding(
+  params: Omit<Parameters<typeof rotateStartupBindingImpl>[0], "bindingStore" | "identity">,
+) {
+  return (await resolveCodexAppServerStartupBinding(params)).binding;
 }
 
 describe("Codex app-server startup binding", () => {
@@ -53,6 +59,11 @@ describe("Codex app-server startup binding", () => {
       JSON.stringify({
         "agent:main:session-1": {
           sessionFile,
+          ...(typeof record.totalTokens === "number" &&
+          record.totalTokensFresh !== false &&
+          !Object.hasOwn(record, "totalTokensVersion")
+            ? { totalTokensFresh: true, totalTokensVersion: 1 }
+            : {}),
           ...record,
         },
       }),
@@ -76,15 +87,7 @@ describe("Codex app-server startup binding", () => {
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
-      config: {
-        agents: {
-          defaults: {
-            compaction: {
-              truncateAfterCompaction: true,
-            },
-          },
-        },
-      } as never,
+      config: undefined,
     });
 
     expect(binding?.threadId).toBe("thread-existing");
@@ -122,7 +125,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: "1k",
             },
           },
@@ -163,7 +165,7 @@ describe("Codex app-server startup binding", () => {
       config: {
         agents: {
           defaults: {
-            compaction: { truncateAfterCompaction: true, maxActiveTranscriptBytes: "1b" },
+            compaction: { maxActiveTranscriptBytes: "1b" },
           },
         },
       } as never,
@@ -521,7 +523,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: "1k",
             },
           },
@@ -553,7 +554,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: "1k",
             },
           },
@@ -590,7 +590,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: "1k",
             },
           },
@@ -628,7 +627,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: "1k",
             },
           },
@@ -666,7 +664,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: "1k",
             },
           },
@@ -698,7 +695,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: 1_000,
             },
           },
@@ -744,7 +740,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: "1mb",
             },
           },
@@ -757,15 +752,25 @@ describe("Codex app-server startup binding", () => {
     expect(savedBinding?.threadId).toBe("thread-existing");
   });
 
-  it("ignores stale session token totals for native rollout rotation", async () => {
+  it.each([
+    {
+      name: "stale",
+      record: { totalTokens: 300_000, totalTokensFresh: false },
+    },
+    {
+      name: "unversioned",
+      record: {
+        totalTokens: 300_000,
+        totalTokensFresh: true,
+        totalTokensVersion: undefined,
+      },
+    },
+  ])("ignores $name session token totals for native rollout rotation", async ({ record }) => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const agentDir = path.join(tempDir, "agent");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
-    await writeSessionRecord(sessionFile, {
-      totalTokens: 300_000,
-      totalTokensFresh: false,
-    });
+    await writeSessionRecord(sessionFile, record);
     const rolloutDir = path.join(agentDir, "codex-home", "sessions");
     await fs.mkdir(rolloutDir, { recursive: true });
     await fs.writeFile(
@@ -790,7 +795,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: "1mb",
             },
           },
@@ -843,7 +847,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: "1mb",
             },
           },
@@ -856,12 +859,12 @@ describe("Codex app-server startup binding", () => {
     expect(savedBinding).toBeUndefined();
   });
 
-  it("keeps native rollouts above the old guard when Codex still has context window headroom", async () => {
+  it("prefers the native rollout window over a stale persisted context fallback", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const agentDir = path.join(tempDir, "agent");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
-    await writeSessionRecord(sessionFile, { totalTokens: 12_000 });
+    await writeSessionRecord(sessionFile, { totalTokens: 12_000, contextTokens: 272_000 });
     const rolloutDir = path.join(agentDir, "codex-home", "sessions");
     await fs.mkdir(rolloutDir, { recursive: true });
     await fs.writeFile(
@@ -873,13 +876,13 @@ describe("Codex app-server startup binding", () => {
             last_token_usage: {
               total_tokens: 86_000,
             },
-            model_context_window: 272_000,
+            model_context_window: 1_050_000,
           },
         },
       })}\n`,
     );
 
-    const binding = await rotateOversizedCodexAppServerStartupBinding({
+    const resolution = await resolveCodexAppServerStartupBinding({
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
@@ -887,7 +890,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: "1mb",
             },
           },
@@ -895,7 +897,8 @@ describe("Codex app-server startup binding", () => {
       } as never,
     });
 
-    expect(binding?.threadId).toBe("thread-existing");
+    expect(resolution.binding?.threadId).toBe("thread-existing");
+    expect(resolution.startupContextTokens).toBe(1_050_000);
     const savedBinding = await readCodexAppServerBinding(sessionFile);
     expect(savedBinding?.threadId).toBe("thread-existing");
   });
@@ -990,7 +993,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: 1_000,
             },
           },
@@ -1022,7 +1024,6 @@ describe("Codex app-server startup binding", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
               maxActiveTranscriptBytes: 1_000,
             },
           },

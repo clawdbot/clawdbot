@@ -16,7 +16,7 @@ import {
 export const DEFAULT_LIVE_MUSIC_MODELS: Record<string, string> = {
   fal: "fal/fal-ai/minimax-music/v2.6",
   google: "google/lyria-3-clip-preview",
-  minimax: "minimax/music-2.6",
+  minimax: "minimax/music-3.0",
   openrouter: "openrouter/google/lyria-3-pro-preview",
 };
 

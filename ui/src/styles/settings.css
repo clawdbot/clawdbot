@@ -141,6 +141,60 @@
   flex: 0 0 auto;
 }
 
+.settings-section__docs {
+  display: inline-flex;
+  align-items: center;
+}
+
+.settings-section__help-button {
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--muted) 35%, transparent);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font: 600 var(--control-ui-text-xs) / 1 var(--font-body);
+  cursor: var(--cursor-action);
+}
+
+.settings-section__help-button > span {
+  /* SF's ascent+descent exceed 1em, so a centered line box parks the glyph
+     below the circle's midline; trim to cap bounds for true centering. */
+  display: block;
+  text-box: trim-both cap alphabetic;
+}
+
+.settings-section__help-button:hover,
+.settings-section__help-button:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  color: var(--accent);
+}
+
+.settings-section__help-popover::part(body) {
+  max-width: 280px;
+  padding: var(--space-3) var(--space-4);
+}
+
+.settings-section__help-panel {
+  display: grid;
+  gap: var(--space-2);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+}
+
+.settings-section__help-panel p {
+  margin: 0;
+  color: var(--muted-strong);
+}
+
+.settings-section__help-panel a {
+  width: fit-content;
+  font-weight: 600;
+}
+
 /* ── Group (the only surface) ── */
 
 .settings-group {
@@ -189,7 +243,7 @@
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .config-advanced-divider__toggle:hover {
@@ -322,7 +376,7 @@
 
 /* Label-wrapped toggle row: whole row toggles the switch. */
 .settings-row--toggle {
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .settings-row--toggle:has(wa-switch[disabled]) {
@@ -337,7 +391,7 @@
   font: inherit;
   text-align: left;
   color: inherit;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition: background var(--duration-fast) var(--ease-out);
 }
 
@@ -420,7 +474,7 @@ select.settings-select:not([multiple]) {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .settings-control__sr-label {
@@ -476,7 +530,7 @@ wa-radio-group.settings-segmented::part(radios) {
   background: transparent;
   color: var(--muted);
   white-space: nowrap;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition:
     color var(--duration-normal) var(--ease-out),
     background var(--duration-normal) var(--ease-out),
@@ -639,7 +693,7 @@ select.settings-select:not([multiple]) {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition: color var(--duration-fast) var(--ease-out);
 }
 
@@ -691,7 +745,7 @@ wa-select.settings-select::part(combobox) {
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
   color: var(--text);
-  cursor: default;
+  cursor: var(--cursor-action);
   transition: border-color var(--duration-fast) var(--ease-out);
 }
 
@@ -728,7 +782,7 @@ wa-select.settings-select wa-option {
   border-radius: calc(var(--radius-md) - 4px);
   font-size: var(--control-ui-text-md);
   color: var(--text);
-  cursor: default;
+  cursor: var(--cursor-action);
 }
 
 /* The roving "current" option already carries the accent fill; the global
@@ -807,6 +861,43 @@ textarea.settings-input {
 
 .settings-status--accent .settings-status__dot {
   background: var(--accent);
+}
+
+.updates-status-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+
+.updates-commit-list {
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.updates-commit-list__row {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text);
+  font-size: var(--control-ui-text-xs);
+}
+
+.updates-commit-list__row + .updates-commit-list__row {
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.updates-commit-list__row code {
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.updates-commit-list__row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* ── Count badge (quiet; genuine counts/alerts only, not status) ── */

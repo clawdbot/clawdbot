@@ -36,6 +36,7 @@ import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
+import { createCachedLazyValueGetter } from "./lazy-value.js";
 export type {
   AgentPromptGuidance,
   AgentPromptGuidanceEntry,
@@ -278,7 +279,7 @@ export {
   readNumberParam,
   readReactionParams,
   readStringArrayParam,
-  readStringParam,
+  readToolStringParam as readStringParam,
 } from "../agents/tools/common.js";
 export { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 export { isTrustedProxyAddress, resolveClientIp } from "../gateway/net.js";
@@ -502,13 +503,14 @@ type DefineChannelPluginEntryOptions<TPlugin = ChannelPlugin> = {
   setRuntime?: (runtime: PluginRuntime) => void;
   registerCliMetadata?: (api: OpenClawPluginApi) => void;
   registerFull?: (api: OpenClawPluginApi) => void;
+  registerCapabilities?: (api: OpenClawPluginApi) => void;
 };
 
 type DefinedChannelPluginEntry<TPlugin> = {
   id: string;
   name: string;
   description: string;
-  configSchema: ChannelEntryConfigSchema<TPlugin>;
+  configSchema: ChannelConfigSchema;
   register: (api: OpenClawPluginApi) => void;
   channelPlugin: TPlugin;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
@@ -562,9 +564,8 @@ type CreatedChannelPluginBase<TResolvedAccount> = Pick<
 /**
  * Canonical entry helper for channel plugins.
  *
- * This wraps `definePluginEntry(...)`, registers the channel capability, and
- * optionally exposes extra full-runtime registration such as tools or gateway
- * handlers that only make sense outside setup-only registration modes.
+ * Registers the channel capability and optionally exposes full-runtime hooks
+ * such as tools or gateway handlers outside setup-only registration modes.
  */
 export function defineChannelPluginEntry<TPlugin>({
   id,
@@ -575,16 +576,16 @@ export function defineChannelPluginEntry<TPlugin>({
   setRuntime,
   registerCliMetadata,
   registerFull,
+  registerCapabilities,
 }: DefineChannelPluginEntryOptions<TPlugin>): DefinedChannelPluginEntry<TPlugin> {
-  const resolvedConfigSchema: ChannelEntryConfigSchema<TPlugin> =
-    typeof configSchema === "function"
-      ? configSchema()
-      : ((configSchema ?? emptyChannelConfigSchema()) as ChannelEntryConfigSchema<TPlugin>);
-  const entry = {
+  const getConfigSchema = createCachedLazyValueGetter(configSchema ?? emptyChannelConfigSchema);
+  return {
     id,
     name,
     description,
-    configSchema: resolvedConfigSchema,
+    get configSchema() {
+      return getConfigSchema();
+    },
     register(api: OpenClawPluginApi) {
       if (api.registrationMode === "cli-metadata") {
         registerCliMetadata?.(api);
@@ -592,12 +593,14 @@ export function defineChannelPluginEntry<TPlugin>({
       }
       if (api.registrationMode === "tool-discovery") {
         registerFull?.(api);
+        registerCapabilities?.(api);
         return;
       }
       api.registerChannel({ plugin: plugin as ChannelPlugin });
       setRuntime?.(api.runtime);
       if (api.registrationMode === "discovery") {
         registerCliMetadata?.(api);
+        registerCapabilities?.(api);
         return;
       }
       if (api.registrationMode !== "full") {
@@ -605,10 +608,8 @@ export function defineChannelPluginEntry<TPlugin>({
       }
       registerCliMetadata?.(api);
       registerFull?.(api);
+      registerCapabilities?.(api);
     },
-  };
-  return {
-    ...entry,
     channelPlugin: plugin,
     ...(setRuntime ? { setChannelRuntime: setRuntime } : {}),
   };
@@ -649,6 +650,7 @@ type ChatChannelSecurityOptions<TResolvedAccount extends { accountId?: string | 
     normalizeEntry?: (raw: string) => string;
     inheritSharedDefaultsFromDefaultAccount?: boolean;
   };
+  dmRouting?: ChannelSecurityAdapter<TResolvedAccount>["dmRouting"];
   collectWarnings?: ChannelSecurityAdapter<TResolvedAccount>["collectWarnings"];
   collectAuditFindings?: ChannelSecurityAdapter<TResolvedAccount>["collectAuditFindings"];
 };
@@ -759,6 +761,7 @@ function resolveChatChannelSecurity<TResolvedAccount extends { accountId?: strin
         inheritSharedDefaultsFromDefaultAccount:
           security.dm.inheritSharedDefaultsFromDefaultAccount,
       }),
+    ...(security.dmRouting ? { dmRouting: security.dmRouting } : {}),
     ...(security.collectWarnings ? { collectWarnings: security.collectWarnings } : {}),
     ...(security.collectAuditFindings
       ? { collectAuditFindings: security.collectAuditFindings }

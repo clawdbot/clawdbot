@@ -480,6 +480,51 @@ describe("executeAgentTurn: result and tool delivery", () => {
     expect(delivered).toEqual(["second"]);
   });
 
+  it.each([
+    {
+      label: "typed approval prompt",
+      payload: {
+        text: "Approval required.",
+        channelData: {
+          execApproval: {
+            approvalId: "approval-1",
+            approvalSlug: "approval",
+          },
+        },
+      },
+    },
+    {
+      label: "unavailable approval notice",
+      payload: {
+        text: "Exec approval is required, but no interactive approval client is currently available.",
+      },
+    },
+  ])(
+    "propagates rejected $label delivery while preserving later best-effort results",
+    async ({ payload }) => {
+      const delivered: string[] = [];
+      const onToolResult = vi.fn(async (result: { text?: string }) => {
+        if (result.text !== "later") {
+          throw new Error("delivery failed");
+        }
+        delivered.push(result.text);
+      });
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        await expect(params.onToolResult?.(payload)).rejects.toThrow("delivery failed");
+        await expect(params.onToolResult?.({ text: "later" })).resolves.toBeUndefined();
+        return { payloads: [{ text: "final" }], meta: {} };
+      });
+
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const input = createMinimalRunAgentTurnParams({ opts: { onToolResult } });
+      const result = await executeAgentTurn(input);
+      await Promise.all(input.pendingToolTasks);
+
+      expect(result.kind).toBe("success");
+      expect(delivered).toEqual(["later"]);
+    },
+  );
+
   it("delivers streamed tool results in callback order even when dispatch latency differs", async () => {
     const deliveryOrder: string[] = [];
     const onToolResult = vi.fn(async (payload: { text?: string }) => {

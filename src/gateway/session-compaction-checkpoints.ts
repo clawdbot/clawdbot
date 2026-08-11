@@ -8,10 +8,11 @@ import {
   SessionManager,
   type FileEntry as SessionFileEntry,
 } from "../agents/sessions/session-manager.js";
-import type {
-  SessionCompactionCheckpoint,
-  SessionCompactionCheckpointReason,
-  SessionEntry,
+import {
+  SESSION_TOTAL_TOKENS_VERSION,
+  type SessionCompactionCheckpoint,
+  type SessionCompactionCheckpointReason,
+  type SessionEntry,
 } from "../config/sessions.js";
 import { isCompactionCheckpointTranscriptFileName } from "../config/sessions/artifacts.js";
 import { readFileRangeAsync } from "../config/sessions/file-range.js";
@@ -25,7 +26,7 @@ import {
 import {
   branchSqliteCompactionCheckpointSession,
   restoreSqliteCompactionCheckpointSession,
-} from "../config/sessions/session-accessor.sqlite.js";
+} from "../config/sessions/session-accessor.sqlite-checkpoint.js";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js";
@@ -65,10 +66,14 @@ export function resolveCompactionCheckpointTranscriptPosition(params: {
   };
 }
 
-type CompactionCheckpointSessionMutationResult = SessionCompactionCheckpointMutationResult;
+type CompactionCheckpointSessionMutationResult =
+  | SessionCompactionCheckpointMutationResult
+  | { status: "conflict" };
+type SessionEntryExpectedState = Pick<SessionEntry, "lifecycleRevision" | "sessionId">;
 
 type BranchCheckpointSessionParams = {
   agentId?: string;
+  expectedState: SessionEntryExpectedState;
   storePath: string;
   sourceKey: string;
   sourceStoreKey?: string;
@@ -78,6 +83,7 @@ type BranchCheckpointSessionParams = {
 
 type RestoreCheckpointSessionParams = {
   agentId?: string;
+  expectedState: SessionEntryExpectedState;
   storePath: string;
   sessionKey: string;
   sessionStoreKey?: string;
@@ -450,12 +456,13 @@ function readSessionLeafStateFromRecords(
 function resolveCheckpointTranscriptForkSource(
   checkpoint: SessionCompactionCheckpoint,
 ): { sourceFile: string; sourceLeafId?: string; totalTokens?: number } | null {
+  const checkpointTokensTrusted = checkpoint.tokensVersion === SESSION_TOTAL_TOKENS_VERSION;
   const preCompactionFile = checkpoint.preCompaction.sessionFile?.trim();
   if (preCompactionFile) {
     return {
       sourceFile: preCompactionFile,
       sourceLeafId: checkpoint.preCompaction.entryId ?? checkpoint.preCompaction.leafId,
-      totalTokens: checkpoint.tokensBefore,
+      totalTokens: checkpointTokensTrusted ? checkpoint.tokensBefore : undefined,
     };
   }
 
@@ -471,7 +478,7 @@ function resolveCheckpointTranscriptForkSource(
   return {
     sourceFile: postCompactionFile,
     sourceLeafId: postCompactionLeafId,
-    totalTokens: checkpoint.tokensAfter,
+    totalTokens: checkpointTokensTrusted ? checkpoint.tokensAfter : undefined,
   };
 }
 
@@ -538,6 +545,7 @@ async function branchCheckpointSessionFromStoredBoundary(
     sourceKey: params.sourceKey,
     nextKey: params.nextKey,
     checkpointId: params.checkpointId,
+    expectedState: params.expectedState,
     ...(params.sourceStoreKey ? { sourceStoreKey: params.sourceStoreKey } : {}),
     ...(legacySource ? { legacySource } : {}),
   });
@@ -559,6 +567,7 @@ async function restoreCheckpointSessionFromStoredBoundary(
     storePath: params.storePath,
     sessionKey: params.sessionKey,
     checkpointId: params.checkpointId,
+    expectedState: params.expectedState,
     ...(params.sessionStoreKey ? { sessionStoreKey: params.sessionStoreKey } : {}),
     ...(legacySource ? { legacySource } : {}),
   });
@@ -721,6 +730,7 @@ async function persistSessionCompactionCheckpoint(
     sessionId: params.sessionId,
     createdAt,
     reason: params.reason,
+    tokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     ...(typeof params.tokensBefore === "number" ? { tokensBefore: params.tokensBefore } : {}),
     ...(typeof params.tokensAfter === "number" ? { tokensAfter: params.tokensAfter } : {}),
     ...(params.summary?.trim() ? { summary: params.summary.trim() } : {}),

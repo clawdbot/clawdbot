@@ -3,7 +3,7 @@ import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-time
 import type { AgentMessage } from "../../runtime/index.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
-import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-boundary.js";
+import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
 
 function createActiveSession(messages: AgentMessage[] = []) {
   const reset = vi.fn();
@@ -257,6 +257,292 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
 
     expect((converted[0] as { content?: unknown }).content).toContain('"name":"Alice"');
     expect((converted[1] as { content?: unknown }).content).toContain('"name":"Bob"');
+  });
+
+  it.each([false, true])(
+    "preserves the admitted current user with persistence suppression set to %s",
+    (suppressNextUserMessagePersistence) => {
+      const currentUser = {
+        role: "user" as const,
+        content: "current prompt",
+        idempotencyKey: "current-run:user",
+        timestamp: 1,
+      };
+      const { activeSession } = createActiveSession([currentUser]);
+      const branch = vi.fn();
+      const resetLeaf = vi.fn();
+      const clearNextUserMessagePersistenceSuppression = vi.fn();
+      const onUserMessagePersistenceInvalidated = vi.fn();
+      const sessionManager = createSessionManager({
+        branch,
+        resetLeaf,
+        clearNextUserMessagePersistenceSuppression,
+        getLeafEntry: () => ({
+          id: "current-user",
+          parentId: "previous-assistant",
+          timestamp: "2026-07-13T00:00:00.000Z",
+          type: "message",
+          message: currentUser,
+        }),
+      });
+      const recorder = {
+        hasPersisted: () => true,
+      } as NonNullable<
+        Parameters<
+          typeof prepareEmbeddedAttemptSessionBoundary
+        >[0]["attempt"]["userTurnTranscriptRecorder"]
+      >;
+
+      const boundary = prepareEmbeddedAttemptSessionBoundary({
+        activeSession,
+        attempt: {
+          onUserMessagePersistenceInvalidated,
+          prompt: "current prompt",
+          suppressNextUserMessagePersistence,
+          trigger: "user",
+          userTurnTranscriptRecorder: recorder,
+        },
+        getUserTranscriptContexts: () => undefined,
+        isRawModelRun: false,
+        preparedUserTurnMessage: currentUser,
+        sessionManager,
+        setActiveSessionSystemPrompt: vi.fn(),
+      });
+
+      expect(boundary.orphanRepair).toBeUndefined();
+      expect(activeSession.agent.state.messages).toEqual([]);
+      expect(branch).not.toHaveBeenCalled();
+      expect(resetLeaf).not.toHaveBeenCalled();
+      expect(clearNextUserMessagePersistenceSuppression).not.toHaveBeenCalled();
+      expect(onUserMessagePersistenceInvalidated).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves the admitted current user when its active-session copy is absent", () => {
+    const currentUser = {
+      role: "user" as const,
+      content: "current prompt",
+      idempotencyKey: "current-run:user",
+      timestamp: 1,
+    };
+    const { activeSession } = createActiveSession([]);
+    const branch = vi.fn();
+    const resetLeaf = vi.fn();
+    const clearNextUserMessagePersistenceSuppression = vi.fn();
+    const onUserMessagePersistenceInvalidated = vi.fn();
+    const sessionManager = createSessionManager({
+      branch,
+      resetLeaf,
+      clearNextUserMessagePersistenceSuppression,
+      getLeafEntry: () => ({
+        id: "current-user",
+        parentId: "previous-assistant",
+        timestamp: "2026-07-13T00:00:00.000Z",
+        type: "message",
+        message: currentUser,
+      }),
+    });
+    const recorder = {
+      hasPersisted: () => true,
+    } as NonNullable<
+      Parameters<
+        typeof prepareEmbeddedAttemptSessionBoundary
+      >[0]["attempt"]["userTurnTranscriptRecorder"]
+    >;
+
+    const boundary = prepareEmbeddedAttemptSessionBoundary({
+      activeSession,
+      attempt: {
+        onUserMessagePersistenceInvalidated,
+        prompt: "current prompt",
+        trigger: "user",
+        userTurnTranscriptRecorder: recorder,
+      },
+      getUserTranscriptContexts: () => undefined,
+      isRawModelRun: false,
+      preparedUserTurnMessage: currentUser,
+      sessionManager,
+      setActiveSessionSystemPrompt: vi.fn(),
+    });
+
+    expect(boundary.orphanRepair).toBeUndefined();
+    expect(activeSession.agent.state.messages).toEqual([]);
+    expect(branch).not.toHaveBeenCalled();
+    expect(resetLeaf).not.toHaveBeenCalled();
+    expect(clearNextUserMessagePersistenceSuppression).not.toHaveBeenCalled();
+    expect(onUserMessagePersistenceInvalidated).not.toHaveBeenCalled();
+  });
+
+  it("preserves a recorder-owned durable user when the prepared message is unavailable", () => {
+    const currentUser = {
+      role: "user" as const,
+      content: "current prompt",
+      idempotencyKey: "current-run:user",
+      timestamp: 1,
+    };
+    const { activeSession } = createActiveSession([]);
+    const branch = vi.fn();
+    const resetLeaf = vi.fn();
+    const clearNextUserMessagePersistenceSuppression = vi.fn();
+    const onUserMessagePersistenceInvalidated = vi.fn();
+    const sessionManager = createSessionManager({
+      branch,
+      resetLeaf,
+      clearNextUserMessagePersistenceSuppression,
+      buildSessionContext: () => ({ messages: [] }),
+      getLeafEntry: () => ({
+        id: "current-user",
+        parentId: "previous-assistant",
+        timestamp: "2026-07-13T00:00:00.000Z",
+        type: "message",
+        message: currentUser,
+      }),
+    });
+    const recorder = {
+      getPersistedMessage: () => currentUser,
+      hasPersisted: () => true,
+    } as unknown as NonNullable<
+      Parameters<
+        typeof prepareEmbeddedAttemptSessionBoundary
+      >[0]["attempt"]["userTurnTranscriptRecorder"]
+    >;
+
+    const boundary = prepareEmbeddedAttemptSessionBoundary({
+      activeSession,
+      attempt: {
+        onUserMessagePersistenceInvalidated,
+        prompt: "current prompt",
+        trigger: "user",
+        userTurnTranscriptRecorder: recorder,
+      },
+      getUserTranscriptContexts: () => undefined,
+      isRawModelRun: false,
+      preparedUserTurnMessage: undefined,
+      sessionManager,
+      setActiveSessionSystemPrompt: vi.fn(),
+    });
+
+    expect(boundary.orphanRepair).toBeUndefined();
+    expect(activeSession.agent.state.messages).toEqual([]);
+    expect(branch).not.toHaveBeenCalled();
+    expect(resetLeaf).not.toHaveBeenCalled();
+    expect(clearNextUserMessagePersistenceSuppression).not.toHaveBeenCalled();
+    expect(onUserMessagePersistenceInvalidated).not.toHaveBeenCalled();
+  });
+
+  it("adopts an exact durable user leaf after recorder state is lost on restart", () => {
+    const currentUser = {
+      role: "user" as const,
+      content: "current prompt",
+      idempotencyKey: "current-run:user",
+      timestamp: 1,
+    };
+    const { activeSession } = createActiveSession([]);
+    const branch = vi.fn();
+    const resetLeaf = vi.fn();
+    const clearNextUserMessagePersistenceSuppression = vi.fn();
+    const onUserMessagePersistenceInvalidated = vi.fn();
+    const sessionManager = createSessionManager({
+      getLeafEntry: () => ({
+        id: "unconfirmed-user",
+        parentId: "previous-assistant",
+        timestamp: "2026-07-13T00:00:00.000Z",
+        type: "message",
+        message: currentUser,
+      }),
+      branch,
+      resetLeaf,
+      clearNextUserMessagePersistenceSuppression,
+    });
+    const recorder = {
+      hasPersisted: () => false,
+    } as NonNullable<
+      Parameters<
+        typeof prepareEmbeddedAttemptSessionBoundary
+      >[0]["attempt"]["userTurnTranscriptRecorder"]
+    >;
+
+    const boundary = prepareEmbeddedAttemptSessionBoundary({
+      activeSession,
+      attempt: {
+        onUserMessagePersistenceInvalidated,
+        prompt: "current prompt",
+        trigger: "user",
+        userTurnTranscriptRecorder: recorder,
+      },
+      getUserTranscriptContexts: () => undefined,
+      isRawModelRun: false,
+      preparedUserTurnMessage: currentUser,
+      sessionManager,
+      setActiveSessionSystemPrompt: vi.fn(),
+    });
+
+    expect(boundary.orphanRepair).toBeUndefined();
+    expect(branch).not.toHaveBeenCalled();
+    expect(resetLeaf).not.toHaveBeenCalled();
+    expect(clearNextUserMessagePersistenceSuppression).not.toHaveBeenCalled();
+    expect(onUserMessagePersistenceInvalidated).not.toHaveBeenCalled();
+    expect(activeSession.agent.state.messages).toEqual([]);
+  });
+
+  it("repairs a durable user leaf that does not match the admitted current user", () => {
+    const currentUser = {
+      role: "user" as const,
+      content: "current prompt",
+      idempotencyKey: "current-run:user",
+      timestamp: 2,
+    };
+    const repairedMessages: AgentMessage[] = [currentUser];
+    const { activeSession } = createActiveSession([]);
+    const branch = vi.fn();
+    const clearNextUserMessagePersistenceSuppression = vi.fn();
+    const onUserMessagePersistenceInvalidated = vi.fn();
+    const sessionManager = createSessionManager({
+      getLeafEntry: () => ({
+        id: "orphan-user",
+        parentId: "previous-assistant",
+        timestamp: "2026-07-13T00:00:00.000Z",
+        type: "message",
+        message: {
+          role: "user",
+          content: "old prompt",
+          idempotencyKey: "previous-run:user",
+          timestamp: 1,
+        },
+      }),
+      branch,
+      clearNextUserMessagePersistenceSuppression,
+      buildSessionContext: () => ({ messages: repairedMessages }),
+    });
+    const recorder = {
+      getPersistedMessage: () => currentUser,
+      hasPersisted: () => true,
+    } as unknown as NonNullable<
+      Parameters<
+        typeof prepareEmbeddedAttemptSessionBoundary
+      >[0]["attempt"]["userTurnTranscriptRecorder"]
+    >;
+
+    const boundary = prepareEmbeddedAttemptSessionBoundary({
+      activeSession,
+      attempt: {
+        onUserMessagePersistenceInvalidated,
+        prompt: "current prompt",
+        trigger: "user",
+        userTurnTranscriptRecorder: recorder,
+      },
+      getUserTranscriptContexts: () => undefined,
+      isRawModelRun: false,
+      preparedUserTurnMessage: undefined,
+      sessionManager,
+      setActiveSessionSystemPrompt: vi.fn(),
+    });
+
+    expect(boundary.orphanRepair?.removeLeaf).toBe(true);
+    expect(branch).toHaveBeenCalledWith("previous-assistant");
+    expect(clearNextUserMessagePersistenceSuppression).toHaveBeenCalledOnce();
+    expect(onUserMessagePersistenceInvalidated).toHaveBeenCalledOnce();
+    expect(activeSession.agent.state.messages).toBe(repairedMessages);
   });
 
   it("repairs an orphaned user leaf before rebuilding active session messages", () => {

@@ -81,11 +81,11 @@ function expectTaskUpdate(task: unknown, fields: { id: unknown; title: string; s
 }
 
 describe("buildSlackProgressDraftBlocks", () => {
-  it("keeps a typed checklist below Slack status draft text", () => {
+  it("keeps a typed checklist below Slack status draft text and work lines", () => {
     expect(
       formatChannelProgressDraftText({
         entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-        lines: [toolLine("hidden while status exists")],
+        lines: [toolLine("read the config")],
         narration: "Implementing the change.",
         plan: [
           { step: "Inspect", status: "completed" },
@@ -93,7 +93,9 @@ describe("buildSlackProgressDraftBlocks", () => {
           { step: "Test", status: "pending" },
         ],
       }),
-    ).toBe("Shelling\n\nImplementing the change.\n\n✅ Inspect\n▸ Patch\n▢ Test");
+    ).toBe(
+      "Shelling\n\nImplementing the change.\n\n🛠️ read the config\n✅ Inspect\n▸ Patch\n▢ Test",
+    );
   });
 
   it("keeps legacy rich draft rendering as section field blocks", () => {
@@ -196,6 +198,32 @@ describe("buildSlackProgressDraftBlocks", () => {
         lines: [itemLine("prepare the workspace", "Preamble"), toolLine("run tests")],
       }),
     ).toEqual([legacyLineBlock("• *Preamble*", "—"), legacyLineBlock("🛠️ *Exec*", "run tests")]);
+  });
+
+  it("renders authored commentary Markdown in legacy rich draft details", () => {
+    expect(
+      buildSlackProgressDraftBlocks({
+        lines: [
+          {
+            id: "commentary:preamble-1",
+            kind: "item",
+            label: "Commentary",
+            text: "💬 Rendering the `sample-widget` fixture on **example.test**.",
+            prefix: false,
+          },
+          {
+            id: "reasoning",
+            kind: "item",
+            label: "Reasoning",
+            text: "_Reading the Slack handler_",
+            prefix: false,
+          },
+        ],
+      }),
+    ).toEqual([
+      legacyLineBlock("• *Commentary*", "Rendering the `sample-widget` fixture on *example.test*."),
+      legacyLineBlock("• *Reasoning*", "_Reading the Slack handler_"),
+    ]);
   });
 
   it("does not emit legacy rich draft blocks when there are no lines or heading", () => {

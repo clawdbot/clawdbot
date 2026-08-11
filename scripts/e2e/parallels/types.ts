@@ -24,6 +24,7 @@ export interface ProviderAuth {
   apiKeyEnv: string;
   apiKeyValue: string;
   modelId: string;
+  tokenProvider?: Provider;
 }
 
 export interface SnapshotInfo {

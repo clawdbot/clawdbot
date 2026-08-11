@@ -112,9 +112,25 @@ There is also a grounded historical backfill lane for review and recovery work:
     - `memory rem-backfill --path ...` writes reversible grounded diary entries into `DREAMS.md`.
     - `memory rem-backfill --path ... --stage-short-term` stages grounded durable candidates into the same short-term evidence store the normal deep phase uses.
     - `memory rem-backfill --rollback` and `--rollback-short-term` remove those staged backfill artifacts without touching ordinary diary entries or live short-term recall.
+    - `memory session-backfill --agent <id>` previews trusted candidates from the agent's retained session history, oldest unprocessed day first.
+    - `memory session-backfill --agent <id> --apply` stages those candidates through the normal short-term store and writes reversible diary blocks without changing `MEMORY.md` or `USER.md`.
+    - `memory session-backfill --agent <id> --rem` writes a deterministic grounded preview per day to `DREAMS.md` without staging candidates or calling a model.
+    - `memory session-backfill --agent <id> --rollback` clears the shared grounded backfill candidates and diary blocks, including artifacts created by `rem-backfill`.
 
   </Accordion>
 </AccordionGroup>
+
+Session backfill uses canonical retained transcript identities, including
+sessions preserved across rotation. Messages are bucketed in the configured
+dreaming timezone and share live ingestion's tracked message hashes and signal
+caps. Apply drains bounded batches to completion in one command. Rollback
+removes generated artifacts plus the hashes and cursor progress owned by those
+batches, allowing the same candidates to be staged again.
+Foreign files supplied with `--archive-files` are treated conservatively. Their
+embedded ownership fields are caller-controlled and therefore remain untrusted;
+without an authenticated provenance contract, they cannot enter short-term
+staging. Tool output, web content, and non-owner turns are excluded from the
+canonical session path as well.
 
 The Control UI exposes the same diary backfill/reset flow on the agent's Memory tab (Agents page) so you can inspect results in the dream scene before deciding whether grounded candidates deserve promotion. A distinct grounded Scene lane shows which staged short-term entries came from historical replay, which promoted items were grounded-led, and lets you clear only grounded-only staged entries without touching live short-term state.
 
@@ -266,6 +282,19 @@ When enabled, the Gateway **Dreams** tab shows:
 - next scheduled run timing
 - a distinct grounded Scene lane for staged historical replay entries
 - an expandable Dream Diary reader backed by `doctor.memory.dreamDiary`
+
+When the bundled [`memory-wiki`](/plugins/memory-wiki) plugin is enabled, the
+Diary view gains two more sub-tabs next to Dreams:
+
+- **Imported Insights**: clustered insights surfaced by external-history
+  imports (for example `openclaw wiki chatgpt import`), for review before any
+  of it graduates into durable memory
+- **Memory Wiki**: the compiled wiki the memory system can search and reason
+  over — synthesis, entity, and concept pages (plus sources and reports that
+  carry claims, open questions, or contradictions) with per-page counts, a
+  full-vault breakdown, and inline page previews
+
+Both sub-tabs show an enable hint instead when `memory-wiki` is off.
 
 ## Related
 

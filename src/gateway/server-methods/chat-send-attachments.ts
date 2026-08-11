@@ -9,17 +9,17 @@ import {
 } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { clearAgentRunContext } from "../../infra/agent-events.js";
+import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { parseInboundMediaUri } from "../../media/media-reference.js";
 import { deleteMediaBuffer, MEDIA_MAX_BYTES } from "../../media/store.js";
+import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
 import {
   MediaOffloadError,
   type OffloadedRef,
   logAttachmentFailure,
   parseMessageWithAttachments,
-  resolveChatAttachmentMaxBytes,
   stripImageMediaMarkers,
   UnsupportedAttachmentError,
 } from "../chat-attachments.js";
@@ -190,7 +190,13 @@ export async function prepareChatSendAttachments(params: {
   const { request, session, admission, respond, context } = params;
   const { inboundMessage, normalizedAttachments, explicitOrigin } = request;
   const { cfg, sessionKey, agentId, resolvedSessionModel, clientRunId } = session;
-  const { chatSendTraceAttributes, cleanupAdmittedRun, lifecycleGeneration } = admission;
+  const {
+    activeRunAbort,
+    chatSendTraceAttributes,
+    cleanupAdmittedRun,
+    finishAbortedChatSend,
+    lifecycleGeneration,
+  } = admission;
   let parsedMessage = inboundMessage;
   let parsedImages: Awaited<ReturnType<typeof parseMessageWithAttachments>>["images"] = [];
   let imageOrder: Awaited<ReturnType<typeof parseMessageWithAttachments>>["imageOrder"] = [];
@@ -209,6 +215,8 @@ export async function prepareChatSendAttachments(params: {
         async () => {
           const supportsSessionModelImages = await resolveGatewayModelSupportsImages({
             loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+            loadGatewayModelCatalogSnapshot: context.loadGatewayModelCatalogSnapshot,
+            agentId,
             provider: resolvedSessionModel.provider,
             model: resolvedSessionModel.model,
           });
@@ -253,6 +261,13 @@ export async function prepareChatSendAttachments(params: {
         performance.now() - prepareAttachmentsStartedAtMs,
       );
     } catch (err) {
+      if (
+        activeRunAbort.controller.signal.aborted &&
+        context.chatRunState.hasAbortMarker(clientRunId)
+      ) {
+        finishAbortedChatSend();
+        return { ok: false as const };
+      }
       cleanupAdmittedRun({ force: true });
       clearAgentRunContext(clientRunId, lifecycleGeneration);
       logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);

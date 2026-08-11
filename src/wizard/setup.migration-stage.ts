@@ -4,6 +4,7 @@ import path from "node:path";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { clearRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/store.js";
+import { resolveGatewayLockDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isNotFoundPathError } from "../infra/path-guards.js";
 import { summarizeMigrationItems } from "../plugin-sdk/migration.js";
@@ -354,6 +355,16 @@ export async function createSetupMigrationStage(params: {
     projectResultToFinal: (result) => projectValue(result, toFinal) as MigrationApplyResult,
     async promote({ expectedConfig, continuation, readConfigFile, commitConfigFile }) {
       disposeDatabases();
+      // Bootstrap owns this state-local lock tree; it is not provider output and must not be promoted.
+      const gatewayLockDir = resolveGatewayLockDir(stagedStateDir);
+      await fs.rm(gatewayLockDir, { recursive: true, force: true });
+      try {
+        await fs.rmdir(path.dirname(gatewayLockDir));
+      } catch (error) {
+        if (!isNotFoundPathError(error) && (error as NodeJS.ErrnoException).code !== "ENOTEMPTY") {
+          throw error;
+        }
+      }
       const configBefore = await readConfigFile();
       if (hashSetupMigrationConfig(configBefore) !== hashSetupMigrationConfig(expectedConfig)) {
         throw new Error("Migration config changed before promotion. Review it and retry.");

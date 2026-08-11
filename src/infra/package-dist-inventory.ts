@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import pLimit, { type LimitFunction } from "p-limit";
-import { isLocalBuildMetadataDistPath } from "../../scripts/lib/local-build-metadata-paths.mjs";
+import { isLocalBuildMetadataDistPath } from "../../scripts/lib/local-build-metadata-paths.mts";
 import { escapeRegExp } from "../shared/regexp.js";
 import { readJsonIfExists } from "./json-files.js";
 

@@ -40,7 +40,10 @@ import type { CodexRunAttemptInput } from "./run-attempt-types.js";
 import {
   createCodexSessionGenerationSupersededError,
   reclaimCurrentCodexSessionGeneration,
+  resolveCodexRunSessionBindingAuthority,
+  scopeCodexRunBindingStore,
   sessionBindingIdentity,
+  type CodexAppServerBindingIdentity,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
 import { getLeasedSharedCodexAppServerClient } from "./shared-client.js";
@@ -104,11 +107,14 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const sandboxSessionKey =
     params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
   const contextSessionKey = params.sessionKey?.trim() || sandboxSessionKey;
-  const sandbox = await resolveSandboxContext({
-    config: params.config,
-    sessionKey: sandboxSessionKey,
-    workspaceDir: resolvedWorkspace,
-  });
+  const sandbox =
+    params.sandbox !== undefined
+      ? params.sandbox
+      : await resolveSandboxContext({
+          config: params.config,
+          sessionKey: sandboxSessionKey,
+          workspaceDir: resolvedWorkspace,
+        });
   preDynamicStartupStages.mark("sandbox");
   const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
     execOverrides: params.execOverrides,
@@ -117,25 +123,58 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     agentId: sessionAgentId,
   });
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
-  const bindingIdentity = sessionBindingIdentity({
+  let bindingIdentity: CodexAppServerBindingIdentity = sessionBindingIdentity({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     config: params.config,
   });
-  const bindingStore = options.bindingStore;
+  let bindingStore = options.bindingStore;
   preDynamicStartupStages.mark("session-agent");
   let activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
     : undefined;
   const isInactiveThreadBootstrapBinding = (binding: CodexAppServerThreadBinding | undefined) =>
     !activeContextEngine && binding?.contextEngine?.projection?.mode === "thread_bootstrap";
+  // The public runner carries a resolved store target. Its durable row must
+  // authorize a stable-key fence before an old generation can read its binding.
+  if (
+    bindingIdentity.kind === "session" &&
+    bindingIdentity.sessionKey &&
+    (params.sessionTarget?.storePath || params.config?.session?.store)
+  ) {
+    const authority = resolveCodexRunSessionBindingAuthority({
+      identity: bindingIdentity,
+      config: params.config,
+      storePath: params.sessionTarget?.storePath,
+    });
+    if (authority === "superseded") {
+      throw createCodexSessionGenerationSupersededError(bindingIdentity.sessionId);
+    }
+    if (authority === "ephemeral") {
+      // Stable-key fences protect only durable session rows. Ephemeral callers rotate
+      // physical ids, so sharing that owner would strand every run after the first.
+      const logicalIdentity = bindingIdentity;
+      const physicalIdentity = {
+        kind: "session",
+        agentId: bindingIdentity.agentId,
+        sessionId: bindingIdentity.sessionId,
+      } as const;
+      bindingStore = scopeCodexRunBindingStore({
+        bindingStore,
+        logicalIdentity,
+        physicalIdentity,
+      });
+      bindingIdentity = physicalIdentity;
+    }
+  }
   let startupBinding = await bindingStore.read(bindingIdentity);
   if (!startupBinding && bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
     const reclaimed = await reclaimCurrentCodexSessionGeneration({
       bindingStore,
       identity: bindingIdentity,
       config: params.config,
+      storePath: params.sessionTarget?.storePath,
     });
     if (!reclaimed) {
       throw createCodexSessionGenerationSupersededError(bindingIdentity.sessionId);
@@ -274,7 +313,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     env: process.env,
     agentDir,
   });
-  if (configuredAppServer.approvalPolicy === "never" && appServer.approvalPolicy === "untrusted") {
+  let approvalPolicyPromotedForOpenClawToolPolicy =
+    configuredAppServer.approvalPolicy === "never" && appServer.approvalPolicy === "untrusted";
+  if (approvalPolicyPromotedForOpenClawToolPolicy) {
     embeddedAgentLog.info("codex app-server approval policy promoted for OpenClaw tool policy", {
       from: "never",
       to: "untrusted",
@@ -321,7 +362,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     params.abortSignal?.addEventListener("abort", abortFromUpstream, { once: true });
   }
   const startupBindingBeforeRotation = startupBinding;
-  startupBinding = await rotateOversizedCodexAppServerStartupBinding({
+  const startupBindingResolution = await rotateOversizedCodexAppServerStartupBinding({
     binding: startupBinding,
     bindingStore,
     identity: bindingIdentity,
@@ -331,6 +372,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     config: params.config,
     contextEngineActive: Boolean(activeContextEngine),
   });
+  startupBinding = startupBindingResolution.binding;
   const initialInactiveThreadBootstrapBindingForcedFreshStart =
     initialStartupBindingHadInactiveThreadBootstrap && !startupBinding?.threadId;
   preDynamicStartupStages.mark("rotate-binding");
@@ -351,12 +393,18 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       env: process.env,
       agentDir,
     });
+    approvalPolicyPromotedForOpenClawToolPolicy =
+      configuredAppServer.approvalPolicy === "never" && appServer.approvalPolicy === "untrusted";
   }
   const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
     configuredEvents: options.nativeHookRelay?.events,
     appServer,
   });
-  const mutable = { startupBinding, pluginAppServer: appServer };
+  const mutable = {
+    startupBinding,
+    startupContextTokens: startupBindingResolution.startupContextTokens,
+    pluginAppServer: appServer,
+  };
   const resolveRuntimeOptionsForCurrentBinding = (selection: {
     modelProvider?: string;
     model?: string;
@@ -408,6 +456,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     effectiveWorkspace,
     effectiveCwd,
     appServer,
+    approvalPolicyPromotedForOpenClawToolPolicy,
     nativeHookRelayEvents,
     runAbortController,
     terminalState,

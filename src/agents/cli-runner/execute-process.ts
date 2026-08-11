@@ -7,22 +7,19 @@ import {
 } from "../../infra/event-session-routing.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import type { RunExit } from "../../process/supervisor/types.js";
-import {
-  createCliJsonlStreamingParser,
-  extractCliErrorMessage,
-  parseCliOutput,
-  type CliOutput,
-} from "../cli-output.js";
+import type { CliOutput } from "../cli-output-contracts.js";
+import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
+import { extractCliErrorMessage, parseCliOutput } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
-import { runClaudeLiveSessionTurn } from "./claude-live-session.js";
+import { runClaudeTurn } from "./claude-live-session.js";
 import type { CliExecuteDeps } from "./execute-deps.js";
 import type { CliEventHandlers } from "./execute-events.js";
 import {
   createCliAbortError,
   executeNodeClaudeRun,
-  type resolveNodeClaudePlacement,
+  type resolveNodeClaudeTarget,
 } from "./execute-node-claude.js";
 import { appendCliOutputTail } from "./execute-output-buffer.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
@@ -69,7 +66,7 @@ export async function executeCliProcess(params: {
   events: CliEventHandlers;
   toolTracking: CliToolTracking;
   diagnostics: ReturnType<typeof createClaudeCliModelCallDiagnostics>;
-  nodePlacement: ReturnType<typeof resolveNodeClaudePlacement>;
+  nodePlacement: ReturnType<typeof resolveNodeClaudeTarget>;
   nodeSystemPrompt?: string;
   nodeEnv?: Record<string, string>;
   nodeClearEnv?: string[];
@@ -114,7 +111,7 @@ export async function executeCliProcess(params: {
       backend: context.backendResolved.id,
     });
     params.claimFallbackCleanup();
-    const liveResult = await runClaudeLiveSessionTurn({
+    const liveResult = await runClaudeTurn({
       context,
       args: params.executionArgs,
       executableCommand: params.executionCommand,
@@ -167,12 +164,14 @@ export async function executeCliProcess(params: {
     ? createCliJsonlStreamingParser({
         backend: params.backend,
         providerId: context.backendResolved.id,
+        parseJsonlEvent: context.backendResolved.parseJsonlEvent,
         onAssistantDelta: params.events.emitCliAssistantDelta,
         onThinkingDelta: params.events.emitCliThinkingDelta,
         onThinkingProgress: params.events.emitCliThinkingProgress,
-        onPlanUpdate: params.events.emitCliPlanUpdate,
         onToolUseStart: params.events.emitParsedToolUseStart,
         onToolResult: params.events.emitParsedToolResult,
+        onDisplayToolUseStart: params.events.emitCliDisplayToolUseStart,
+        onDisplayToolResult: params.events.emitCliDisplayToolResult,
         onCommentaryText:
           params.events.emitLiveEvents && runParams.emitCommentaryText
             ? params.events.emitCliCommentaryText
@@ -254,47 +253,51 @@ export async function executeCliProcess(params: {
       backendId: context.backendResolved.id,
       cliSessionId: params.useResume ? params.resolvedSessionId : undefined,
     });
-    const managedRun = await supervisor.spawn({
-      sessionId: runParams.sessionId,
-      backendId: context.backendResolved.id,
-      scopeKey,
-      replaceExistingScope: Boolean(params.useResume && scopeKey),
-      mode: "child",
-      argv: [params.executionCommand, ...params.executionLeadingArgv, ...params.executionArgs],
-      timeoutMs: runParams.timeoutMs,
-      noOutputTimeoutMs: params.noOutputTimeoutMs,
-      cwd: context.cwd ?? context.workspaceDir,
-      env: params.env,
-      input: params.stdin ?? "",
-      secretInput: context.preparedBackend.secretInput,
-      captureOutput: false,
-      onStdout: consumeStdout,
-      onStderr: consumeStderr,
-    });
-    managedRunPid = managedRun.pid;
-    let replyBackendCompleted = false;
-    const replyBackendHandle = runParams.replyOperation
-      ? {
-          kind: "cli" as const,
-          cancel: () => managedRun.cancel("manual-cancel"),
-          isStreaming: () => !replyBackendCompleted,
-        }
-      : undefined;
-    if (replyBackendHandle) {
-      runParams.replyOperation?.attachBackend(replyBackendHandle);
-    }
-    const abortManagedRun = () => managedRun.cancel("manual-cancel");
-    runParams.abortSignal?.addEventListener("abort", abortManagedRun, { once: true });
     if (runParams.abortSignal?.aborted) {
-      abortManagedRun();
+      throw createCliAbortError();
     }
+    // Startup can wait behind another scoped run. Reserve cancellation under
+    // the caller's run id before awaiting the child or replacement fence.
+    const abortManagedRun = () => supervisor.cancel(runParams.runId, "manual-cancel");
+    runParams.abortSignal?.addEventListener("abort", abortManagedRun, { once: true });
     try {
-      result = await managedRun.wait();
-    } finally {
-      replyBackendCompleted = true;
+      const managedRun = await supervisor.spawn({
+        runId: runParams.runId,
+        sessionId: runParams.sessionId,
+        backendId: context.backendResolved.id,
+        scopeKey,
+        replaceExistingScope: Boolean(params.useResume && scopeKey),
+        mode: "child",
+        argv: [params.executionCommand, ...params.executionLeadingArgv, ...params.executionArgs],
+        timeoutMs: runParams.timeoutMs,
+        noOutputTimeoutMs: params.noOutputTimeoutMs,
+        cwd: context.cwd ?? context.workspaceDir,
+        env: params.env,
+        input: params.stdin ?? "",
+        secretInput: context.preparedBackend.secretInput,
+        captureOutput: false,
+        onStdout: consumeStdout,
+        onStderr: consumeStderr,
+      });
+      managedRunPid = managedRun.pid;
+      const replyBackendHandle = runParams.replyOperation
+        ? {
+            kind: "cli" as const,
+            runId: runParams.runId,
+            cancel: () => managedRun.cancel("manual-cancel"),
+          }
+        : undefined;
       if (replyBackendHandle) {
-        runParams.replyOperation?.detachBackend(replyBackendHandle);
+        runParams.replyOperation?.attachBackend(replyBackendHandle);
       }
+      try {
+        result = await managedRun.wait();
+      } finally {
+        if (replyBackendHandle) {
+          runParams.replyOperation?.detachBackend(replyBackendHandle);
+        }
+      }
+    } finally {
       runParams.abortSignal?.removeEventListener("abort", abortManagedRun);
     }
   }
@@ -321,7 +324,7 @@ export async function executeCliProcess(params: {
     nodeRunTruncated &&
     result.exitCode === 0 &&
     !result.timedOut &&
-    !streamingParser?.getOutput()
+    !streamingParser?.hasTerminalResult()
   ) {
     throw new FailoverError(
       "paired node truncated the Claude CLI stream before the terminal result; refusing to accept partial output.",

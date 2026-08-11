@@ -103,9 +103,15 @@ slug matching.
 If one short id matches more than one session and the slug does not settle it,
 the UI does not guess. It shows a small disambiguation view with the matching
 display names, agents, and longer id prefixes. Use a longer prefix to make the
-URL unique. Resolution examines at
-most five pages of search results; if more remain, the view says that the search
-was incomplete instead of guessing.
+URL unique. Current Gateways return at most ten recent candidates; when that
+bound is reached, the view treats the result as incomplete instead of guessing.
+Against an older Gateway that predates short-id resolve support, the UI falls
+back to the prior bounded list search, scanning at most five pages of results.
+It likewise reports an incomplete search instead of guessing when that fallback
+cannot prove uniqueness.
+
+To continue one of these links in the terminal or attach a coding harness, see
+[Session synchronization and attachment](/concepts/session-attachment).
 
 Canonical links do not use `?session=` or `?face=`. Released links such as
 `/chat?session=<sessionKey>` are accepted only at the application boundary as a
@@ -131,10 +137,10 @@ no route-specific URL parameters.
 | New session         | `/new`                      | -                         | `?agent=<agentId>`, `?catalog=<catalogId>`       |
 | Activity            | `/activity`                 | -                         | -                                                |
 | Apps                | `/apps`                     | -                         | -                                                |
-| Agents              | `/settings/agents`          | `/agents`                 | `?agent=<agentId>`                               |
+| Agents              | `/settings/agents`          | `/agents`                 | `/settings/agents/<agentId>[/<panel>]`           |
 | Channels            | `/settings/channels`        | `/channels`               | Shared settings parameters below                 |
 | Connection          | `/settings/connection`      | -                         | Shared settings parameters below                 |
-| General settings    | `/settings/general`         | `/config`                 | Shared settings parameters below                 |
+| Legacy General      | `/settings/general`         | `/config`                 | Redirects to Appearance → Language               |
 | Profile             | `/settings/profile`         | `/profile`                | Shared settings parameters below                 |
 | Communications      | `/settings/communications`  | `/communications`         | Shared settings parameters below                 |
 | Appearance          | `/settings/appearance`      | `/appearance`             | Shared settings parameters below                 |
@@ -144,6 +150,7 @@ no route-specific URL parameters.
 | Approvals           | `/settings/approvals`       | -                         | Shared settings parameters below                 |
 | Automation settings | `/settings/automation`      | `/automation`             | Shared settings parameters below                 |
 | MCP                 | `/settings/mcp`             | `/mcp`                    | Shared settings parameters below                 |
+| Memory              | `/settings/memory`          | -                         | `/settings/memory/memories\|dreams\|settings`    |
 | Infrastructure      | `/settings/infrastructure`  | `/infrastructure`         | Shared settings parameters below                 |
 | Labs                | `/settings/labs`            | -                         | Shared settings parameters below                 |
 | About               | `/settings/about`           | -                         | Shared settings parameters below                 |
@@ -159,7 +166,7 @@ no route-specific URL parameters.
 | Logs                | `/logs`                     | -                         | -                                                |
 | Skill Workshop      | `/skills/workshop`          | -                         | -                                                |
 | Skills              | `/skills`                   | -                         | -                                                |
-| Plugins             | `/settings/plugins`         | -                         | `?tab=discover\|installed`                       |
+| Plugins             | `/settings/plugins`         | -                         | `/settings/plugins/discover`                     |
 | Automations         | `/cron`                     | -                         | -                                                |
 | Tasks               | `/tasks`                    | -                         | -                                                |
 | Devices             | `/settings/devices`         | `/nodes`                  | Shared settings parameters below                 |
@@ -169,14 +176,33 @@ Settings routes that use schema-backed deep links accept `?section=<section>`,
 `?advanced=1`, and `#<setting-id>`. These values select content within the page;
 they do not change the route identity.
 
+The retired General route and its `/config` alias are replaced once with
+`/settings/appearance?section=__appearance__#settings-language`. The historical
+`#settings-general-model` target instead lands on the Models behavior section.
+
+Memory tabs use the paths in the table instead of `?tab=`. Older Memory links
+with `?tab=memories|dreams|settings`, `?tab=dreaming`, `?tab=search`, or
+`?section=memory` are replaced once with the corresponding path while keeping
+any setting anchor.
+
+Plugin catalog tabs also use paths instead of `?tab=`. Older links with
+`?tab=discover|installed` are replaced once with the corresponding path while
+keeping other query parameters and the fragment.
+
+Agent selection and its `overview|files|tools|skills|channels|cron|memory`
+panels use paths. Older links with `?agent=<agentId>` are replaced once with
+the agent path while keeping other query parameters and the fragment.
+
 ## Special documents and startup modes
 
 These Gateway-served documents sit outside the application route table:
 
 - `/?onboarding=1` opens the first-run onboarding presentation.
-- `/?view=terminal` opens the full-screen terminal-only document used by the
-  mobile apps. Availability still requires `gateway.terminal.enabled` and
-  `operator.admin`.
+- `/terminal` opens the user-facing full-screen terminal. With a base path, use
+  `<basePath>/terminal`.
+- `/?view=terminal` opens the same terminal-only document in the WebView/embed
+  form used by the mobile apps. Terminal availability in either form still
+  requires `gateway.terminal.enabled` and `operator.admin`.
 - `/approve/<approvalId>` opens a standalone approval document. With a base
   path, use `<basePath>/approve/<approvalId>`. The id identifies an approval but
   never authorizes it; normal Gateway authentication still applies.

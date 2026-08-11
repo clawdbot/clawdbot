@@ -88,22 +88,22 @@ async function runSetupWizardOnce(
   let baseConfig: OpenClawConfig = snapshot.valid
     ? (snapshot.runtimeConfig ?? snapshot.config)
     : {};
+  let setupConfigMergeBase = structuredClone(baseConfig);
   baseConfig = await requireRiskAcknowledgement({ opts, prompter, config: baseConfig });
   // Ordinary onboard reruns must preserve existing agents.list / bindings. Only
   // explicit reset or import flows are allowed to shrink the config — see issue
   // openclaw#84692.
-  let pendingPluginInstallMigrationBaseConfig: OpenClawConfig | undefined = baseConfig;
   const writeSetupConfigFile = async (
     config: OpenClawConfig,
     optsLocal: { allowConfigSizeDrop?: boolean } = {},
-  ) =>
-    await writeWizardConfigFile(config, {
+  ) => {
+    const committed = await writeWizardConfigFile(config, {
       ...optsLocal,
-      migrationBaseConfig: pendingPluginInstallMigrationBaseConfig,
-      onPendingPluginInstallMigration: () => {
-        pendingPluginInstallMigrationBaseConfig = undefined;
-      },
+      mergeBase: setupConfigMergeBase,
     });
+    setupConfigMergeBase = structuredClone(committed);
+    return committed;
+  };
 
   if (snapshot.exists && !snapshot.valid) {
     await prompter.note(
@@ -275,7 +275,7 @@ async function runSetupWizardOnce(
     }
     currentSetupSnapshot = migratedSnapshot;
     baseConfig = migratedSnapshot.runtimeConfig ?? migratedSnapshot.config;
-    pendingPluginInstallMigrationBaseConfig = baseConfig;
+    setupConfigMergeBase = structuredClone(baseConfig);
     const importedModelRef = resolveAgentModelPrimaryValue(baseConfig.agents?.defaults?.model);
     importedInferenceVerified =
       migrationOutcome.kind === "verified-inference" &&
@@ -648,10 +648,11 @@ async function runSetupWizardOnce(
     await prompter.note(t("wizard.setup.skipSearch"), t("wizard.setup.searchTitle"));
   } else {
     const { runSearchSetupFlow } = await import("../flows/search-setup.js");
-    nextConfig = await runSearchSetupFlow(nextConfig, runtime, prompter, {
+    const searchSetup = await runSearchSetupFlow(nextConfig, runtime, prompter, {
       quickstartDefaults: flow === "quickstart",
       secretInputMode: opts.secretInputMode,
     });
+    nextConfig = searchSetup.config;
   }
 
   if (opts.skipSkills) {

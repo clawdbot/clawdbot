@@ -3,14 +3,17 @@ import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { clearMemoryEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
-  formatSqliteSessionFileMarker,
-  upsertSessionEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
+  hashText,
+  INVALID_PROJECT_ANNOTATION_KEY,
+  MEMORY_CHUNKING_VERSION,
+  type MemorySessionSyncTarget,
+  type MemorySyncParams,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
@@ -19,6 +22,10 @@ import {
   openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  configureMemoryCoreDreamingStateForTests,
+  resetMemoryCoreDreamingStateForTests,
+} from "../test-helpers.js";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
@@ -28,6 +35,7 @@ import {
   closeMemoryIndexManagersForAgent,
   MemoryIndexManager as RuntimeMemoryIndexManager,
 } from "./manager.js";
+import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
 
 // This suite performs real sqlite/media indexing and can exceed the global
 // timeout when it shares a packed CI extension shard.
@@ -38,6 +46,7 @@ afterAll(() => {
 });
 
 let embedBatchCalls = 0;
+let embeddedBatchTexts: string[] = [];
 let embedBatchInputCalls = 0;
 let providerRuntimeBatchCalls: string[][] = [];
 let providerRuntimeBatchGate: Promise<void> | null = null;
@@ -82,7 +91,8 @@ function restoreMemoryIndexStateDir(): void {
   }
 }
 
-vi.mock("./embeddings.js", () => {
+vi.mock("./embeddings.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./embeddings.js")>();
   const embedText = (text: string) => {
     const lower = text.toLowerCase();
     const alpha = lower.split("alpha").length - 1;
@@ -92,6 +102,7 @@ vi.mock("./embeddings.js", () => {
     return [alpha, beta, image, audio];
   };
   return {
+    ...actual,
     resolveEmbeddingProviderFallbackModel: (providerId: string, fallbackSourceModel: string) =>
       providerId === "gemini" || providerId === "fallback-provider"
         ? `${providerId}-embed`
@@ -188,6 +199,7 @@ vi.mock("./embeddings.js", () => {
           embedQuery: async (text: string) => embedText(text),
           embedBatch: async (texts: string[]) => {
             embedBatchCalls += 1;
+            embeddedBatchTexts.push(...texts);
             return texts.map(embedText);
           },
           ...(providerId === "gemini" || providerId === "fallback-provider"
@@ -311,6 +323,7 @@ describe("memory index", () => {
     await closeAllMemorySearchManagers();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
+    resetMemoryCoreDreamingStateForTests();
     clearRegistry();
     managersForCleanup.clear();
     restoreMemoryIndexStateDir();
@@ -320,6 +333,7 @@ describe("memory index", () => {
     vi.useRealTimers();
     clearRegistry();
     embedBatchCalls = 0;
+    embeddedBatchTexts = [];
     embedBatchInputCalls = 0;
     providerRuntimeBatchCalls = [];
     providerRuntimeBatchGate = null;
@@ -340,6 +354,7 @@ describe("memory index", () => {
     rmSync(workspaceDir, { recursive: true, force: true });
     mkdirSync(memoryDir, { recursive: true });
     setMemoryIndexStateDir(path.join(workspaceDir, ".state-memory-index"));
+    await configureMemoryCoreDreamingStateForTests();
     await fs.writeFile(
       path.join(memoryDir, "2026-01-12.md"),
       "# Log\nAlpha memory line.\nZebra memory line.",
@@ -405,7 +420,7 @@ describe("memory index", () => {
       temporalDecay?: { enabled: boolean };
     };
   }): TestCfg {
-    return {
+    return isolateMemoryManagerTestConfig({
       memory: {
         search: {
           ...(params.provider !== undefined ? { provider: params.provider } : {}),
@@ -437,7 +452,7 @@ describe("memory index", () => {
         list: [{ id: "main", default: true }],
       },
       models: params.providerAliases ? { providers: params.providerAliases } : undefined,
-    };
+    });
   }
 
   async function seedMemoryIndexSessionTranscript(params: {
@@ -463,11 +478,6 @@ describe("memory index", () => {
       storePath,
       entry: {
         sessionId: params.sessionId,
-        sessionFile: formatSqliteSessionFileMarker({
-          agentId: "main",
-          sessionId: params.sessionId,
-          storePath,
-        }),
         updatedAt,
       },
     });
@@ -627,8 +637,12 @@ describe("memory index", () => {
     await fs.writeFile(
       path.join(workspaceDir, "MEMORY.md"),
       [
-        "- Keep the gateway local. <!-- trigger: gateway setup, local access --> <!-- importance: 4 -->",
-        "- Preserve loopback binding. <!-- trigger: local access; network safety --> <!-- importance: 9 -->",
+        "# Curated entries",
+        "",
+        "- Alpha deploy preference. <!-- trigger: alpha deploy --> <!-- importance: 4 --> <!-- project: alpha-key -->",
+        "  Keep the alpha gateway local.",
+        "- Beta deploy preference. <!-- trigger: beta deploy --> <!-- importance: 9 --> <!-- project: beta-key -->",
+        "- Global deploy preference. <!-- trigger: global defaults --> <!-- importance: 7 -->",
       ].join("\n"),
     );
     await fs.writeFile(
@@ -637,45 +651,368 @@ describe("memory index", () => {
     );
     await fs.writeFile(
       path.join(memoryDir, "2026-01-12.md"),
-      "- Daily note. <!-- trigger: should not inject --> <!-- importance: 10 -->\n",
+      "- Daily note. <!-- trigger: should not inject --> <!-- importance: 10 --> <!-- project: github.com/openclaw/openclaw -->\n",
+    );
+    await fs.writeFile(
+      path.join(memoryDir, "2026-01-13.md"),
+      [
+        "- Uppercase path. <!-- project: path:/Users/Alice/Repo -->",
+        "- Lowercase path. <!-- project: path:/Users/alice/repo -->",
+      ].join("\n"),
     );
 
-    const manager = await getFreshManager(createCfg({ provider: "none" }));
+    const manager = await getFreshManager(createCfg({}));
     try {
       await manager.sync({ reason: "test", force: true });
       const db = Reflect.get(manager, "db") as DatabaseSync;
       const rows = db
         .prepare(
-          `SELECT chunk.path, chunk.importance, chunk.triggers,
+          `SELECT chunk.path, chunk.start_line AS startLine, chunk.text, metadata.importance,
+                  metadata.triggers, metadata.project_key AS projectKey,
                   provenance.origin_class AS originClass
            FROM memory_index_chunks AS chunk
+           LEFT JOIN memory_index_chunk_recall_metadata AS metadata
+             ON metadata.chunk_id = chunk.id
            JOIN memory_index_chunk_provenance AS provenance
              ON provenance.chunk_id = chunk.id
            WHERE chunk.source = 'memory'
-           ORDER BY chunk.path`,
+           ORDER BY chunk.path, chunk.start_line`,
         )
         .all() as Array<{
         path: string;
+        startLine: number;
+        text: string;
         importance: number | null;
         triggers: string | null;
+        projectKey: string | null;
         originClass: string;
       }>;
 
-      expect(rows.find((row) => row.path === "MEMORY.md")).toMatchObject({
-        importance: 9,
-        triggers: "gateway setup; local access; network safety",
-        originClass: "agent",
-      });
+      const memoryEntries = rows.filter((row) => row.path === "MEMORY.md" && row.triggers !== null);
+      expect(memoryEntries).toHaveLength(3);
+      expect(memoryEntries).toMatchObject([
+        {
+          text: "- Alpha deploy preference.\n  Keep the alpha gateway local.",
+          importance: 4,
+          triggers: "alpha deploy",
+          projectKey: "alpha-key",
+          originClass: "agent",
+        },
+        {
+          text: "- Beta deploy preference.",
+          importance: 9,
+          triggers: "beta deploy",
+          projectKey: "beta-key",
+          originClass: "agent",
+        },
+        {
+          text: "- Global deploy preference.",
+          importance: 7,
+          triggers: "global defaults",
+          projectKey: null,
+          originClass: "agent",
+        },
+      ]);
       expect(rows.find((row) => row.path === "USER.md")).toMatchObject({
         importance: 7,
         triggers: "writing style",
+        projectKey: null,
         originClass: "agent",
       });
       expect(rows.find((row) => row.path === "memory/2026-01-12.md")).toMatchObject({
         importance: null,
         triggers: null,
+        projectKey: "github.com/openclaw/openclaw",
         originClass: "agent",
       });
+      expect(rows.find((row) => row.path === "memory/2026-01-13.md")).toMatchObject({
+        importance: null,
+        triggers: null,
+        projectKey: "path:/Users/Alice/Repo; path:/Users/alice/repo",
+        originClass: "agent",
+      });
+      expect(rows.every((row) => !row.text.includes("<!--"))).toBe(true);
+      expect(embeddedBatchTexts.length).toBeGreaterThan(0);
+      expect(embeddedBatchTexts.every((text) => !text.includes("<!--"))).toBe(true);
+
+      for (const query of ["trigger", "importance", "project"]) {
+        const annotationHits = await manager.search(query, {
+          lexicalOnly: true,
+          maxResults: 20,
+          minScore: 0,
+          sources: ["memory"],
+        });
+        expect(annotationHits).toEqual([]);
+      }
+
+      const bodyHits = await manager.search("Alpha deploy preference", {
+        lexicalOnly: true,
+        maxResults: 10,
+        minScore: 0,
+        sources: ["memory"],
+      });
+      expect(bodyHits[0]?.snippet).toContain("Alpha deploy preference.");
+      expect(bodyHits[0]?.snippet).not.toContain("<!--");
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("round-trips mixed-case project keys through indexed recall consumers", async () => {
+    const projectKey = "github.com/OpenClaw/OpenClaw";
+    await fs.writeFile(
+      path.join(workspaceDir, "MEMORY.md"),
+      `- Follow the kraken deploy ritual. <!-- trigger: kraken deploy ritual --> <!-- importance: 8 --> <!-- project: ${projectKey} -->\n`,
+    );
+
+    const manager = await getFreshManager(createCfg({}));
+    try {
+      await manager.sync({ reason: "test", force: true });
+      const db = Reflect.get(manager, "db") as DatabaseSync;
+      expect(
+        db
+          .prepare(
+            `SELECT metadata.project_key AS projectKey
+             FROM memory_index_chunks AS chunk
+             JOIN memory_index_chunk_recall_metadata AS metadata
+               ON metadata.chunk_id = chunk.id
+             WHERE chunk.path = 'MEMORY.md'
+               AND metadata.triggers = 'kraken deploy ritual'`,
+          )
+          .get(),
+      ).toEqual({ projectKey });
+
+      if (!manager.listCuratedProjectCandidates || !manager.listTriggerCandidates) {
+        throw new Error("expected curated project and trigger candidate listing");
+      }
+      const activeProjectKeys = [projectKey];
+      const curated = await manager.listCuratedProjectCandidates({ activeProjectKeys });
+      const triggers = await manager.listTriggerCandidates({ activeProjectKeys });
+      expect(curated).toMatchObject([{ projectKey, triggers: "kraken deploy ritual" }]);
+      expect(triggers).toMatchObject([{ projectKey, triggers: "kraken deploy ritual" }]);
+
+      const neutral = await manager.search("kraken deploy", {
+        minScore: 0,
+        maxResults: 10,
+        activeProjectKeys: [],
+      });
+      const active = await manager.search("kraken deploy", {
+        minScore: 0,
+        maxResults: 10,
+        activeProjectKeys,
+      });
+      const neutralHit = neutral.find((entry) => entry.projectKey === projectKey);
+      const activeHit = active.find((entry) => entry.projectKey === projectKey);
+      expect(neutralHit).toBeDefined();
+      expect(activeHit).toBeDefined();
+      if (!neutralHit || !activeHit) {
+        throw new Error("expected mixed-case project hit in neutral and active search");
+      }
+      expect(activeHit.score).toBeGreaterThan(neutralHit.score);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("keeps invalid project annotations scoped but unsatisfiable", async () => {
+    await fs.writeFile(
+      path.join(workspaceDir, "MEMORY.md"),
+      [
+        "- Invalid fact. <!-- trigger: invalid fact --> <!-- project: bad< -->",
+        "- Mixed fact. <!-- trigger: mixed fact --> <!-- project: alpha-key; bad< -->",
+        "- Unterminated fact. <!-- trigger: unterminated fact --> <!-- project: alpha-key",
+        "- Global fact. <!-- trigger: global fact -->",
+      ].join("\n"),
+    );
+    const manager = await getFreshManager(createCfg({ provider: "none" }));
+    try {
+      await manager.sync({ reason: "test", force: true });
+      const db = Reflect.get(manager, "db") as DatabaseSync;
+      expect(
+        db
+          .prepare(
+            `SELECT metadata.triggers, metadata.project_key AS projectKey
+             FROM memory_index_chunks AS chunk
+             LEFT JOIN memory_index_chunk_recall_metadata AS metadata
+               ON metadata.chunk_id = chunk.id
+             WHERE chunk.path = 'MEMORY.md'
+             ORDER BY chunk.start_line`,
+          )
+          .all(),
+      ).toEqual([
+        { triggers: "invalid fact", projectKey: INVALID_PROJECT_ANNOTATION_KEY },
+        { triggers: "mixed fact", projectKey: INVALID_PROJECT_ANNOTATION_KEY },
+        { triggers: null, projectKey: INVALID_PROJECT_ANNOTATION_KEY },
+        { triggers: "global fact", projectKey: null },
+      ]);
+      const activeProjectKeys = ["alpha-key"];
+      if (!manager.listTriggerCandidates) {
+        throw new Error("expected trigger candidate listing");
+      }
+      const triggerCandidates = await manager.listTriggerCandidates({ activeProjectKeys });
+      expect(triggerCandidates).toMatchObject([{ triggers: "global fact" }]);
+      const results = await manager.search("fact", {
+        minScore: 0,
+        maxResults: 10,
+        activeProjectKeys,
+      });
+      expect(
+        results.every((entry) => !/Invalid fact|Mixed fact|Unterminated fact/u.test(entry.snippet)),
+      ).toBe(true);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("inherits entry-scoped annotations across oversized curated fragments", async () => {
+    await fs.writeFile(
+      path.join(workspaceDir, "MEMORY.md"),
+      [
+        "- Oversized alpha entry. <!-- trigger: oversized alpha --> <!-- importance: 8 --> <!-- project: alpha-key -->",
+        `  ${"alpha-fragment-body ".repeat(400)}`,
+        "- Global neighbor. <!-- trigger: global neighbor -->",
+      ].join("\n"),
+    );
+
+    const manager = await getFreshManager(createCfg({ provider: "none" }));
+    try {
+      const settings = Reflect.get(manager, "settings") as {
+        chunking: { tokens: number; overlap: number };
+      };
+      settings.chunking = { tokens: 64, overlap: 0 };
+      await manager.sync({ reason: "test", force: true });
+      const db = Reflect.get(manager, "db") as DatabaseSync;
+      const rows = db
+        .prepare(
+          `SELECT chunk.text, metadata.importance, metadata.triggers,
+                  metadata.project_key AS projectKey
+           FROM memory_index_chunks AS chunk
+           LEFT JOIN memory_index_chunk_recall_metadata AS metadata
+             ON metadata.chunk_id = chunk.id
+           WHERE chunk.path = 'MEMORY.md' AND chunk.source = 'memory'
+           ORDER BY chunk.start_line, chunk.id`,
+        )
+        .all() as Array<{
+        text: string;
+        importance: number | null;
+        triggers: string | null;
+        projectKey: string | null;
+      }>;
+      const fragments = rows.filter((row) => row.triggers === "oversized alpha");
+
+      expect(fragments.length).toBeGreaterThanOrEqual(2);
+      expect(fragments.every((row) => row.projectKey === "alpha-key" && row.importance === 8)).toBe(
+        true,
+      );
+      expect(rows.find((row) => row.triggers === "global neighbor")).toMatchObject({
+        projectKey: null,
+        importance: null,
+      });
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("re-chunks unchanged files and removes stale rows when the chunking version advances", async () => {
+    const curatedContent = [
+      "- Alpha entry. <!-- trigger: alpha entry --> <!-- project: alpha-key -->",
+      "- Beta entry. <!-- trigger: beta entry --> <!-- project: beta-key -->",
+      "- Global entry. <!-- trigger: global entry -->",
+    ].join("\n");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), curatedContent);
+
+    const manager = await getFreshManager(createCfg({ provider: "none" }));
+    try {
+      await manager.sync({ reason: "test", force: true });
+      const db = Reflect.get(manager, "db") as DatabaseSync;
+      const metaRow = db
+        .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
+        .get() as { value: string };
+      const currentMeta = JSON.parse(metaRow.value) as MemoryIndexMeta;
+      const legacyMeta: MemoryIndexMeta = {
+        ...currentMeta,
+        chunkingVersion: MEMORY_CHUNKING_VERSION - 1,
+      };
+
+      db.prepare("DELETE FROM memory_index_chunks WHERE path = ? AND source = 'memory'").run(
+        "MEMORY.md",
+      );
+      db.prepare(
+        `INSERT INTO memory_index_chunks
+         (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+         VALUES (?, ?, 'memory', 1, 3, ?, 'fts-only', ?, '[]', ?)`,
+      ).run(
+        "legacy-curated-chunk",
+        "MEMORY.md",
+        hashText(curatedContent),
+        curatedContent,
+        Date.now(),
+      );
+      db.prepare(
+        `INSERT INTO memory_index_chunk_provenance (
+           chunk_id, origin_class, session_kind, observed_at
+         ) VALUES ('legacy-curated-chunk', 'agent', 'unknown', ?)`,
+      ).run(Date.now());
+      db.prepare(
+        `INSERT INTO memory_index_sources (path, source, hash, mtime, size)
+         VALUES ('memory/default-diagram.png', 'memory', 'stale-default-media', ?, 3)`,
+      ).run(Date.now());
+      db.prepare(
+        `INSERT INTO memory_index_chunks
+         (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+         VALUES (
+           'stale-default-media', 'memory/default-diagram.png', 'memory', 1, 1,
+           'stale-default-media', 'fts-only', 'Image file: memory/default-diagram.png', '[]', ?
+         )`,
+      ).run(Date.now());
+      db.prepare(
+        `INSERT INTO memory_index_chunk_provenance (
+           chunk_id, origin_class, session_kind, observed_at
+         ) VALUES ('stale-default-media', 'agent', 'unknown', ?)`,
+      ).run(Date.now());
+      db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'").run(
+        JSON.stringify(legacyMeta),
+      );
+
+      await manager.sync({ reason: "test" });
+
+      const rows = db
+        .prepare(
+          `SELECT chunk.text, metadata.triggers, metadata.project_key AS projectKey
+           FROM memory_index_chunks AS chunk
+           LEFT JOIN memory_index_chunk_recall_metadata AS metadata
+             ON metadata.chunk_id = chunk.id
+           WHERE chunk.path = 'MEMORY.md' AND chunk.source = 'memory'
+           ORDER BY chunk.start_line`,
+        )
+        .all();
+      expect(rows).toMatchObject([
+        { triggers: "alpha entry", projectKey: "alpha-key" },
+        { triggers: "beta entry", projectKey: "beta-key" },
+        { triggers: "global entry", projectKey: null },
+      ]);
+      expect(rows).toHaveLength(3);
+      expect(
+        db
+          .prepare(
+            "SELECT 1 FROM memory_index_sources WHERE path = 'memory/default-diagram.png' AND source = 'memory'",
+          )
+          .get(),
+      ).toBeUndefined();
+      expect(
+        db
+          .prepare(
+            "SELECT 1 FROM memory_index_chunks WHERE path = 'memory/default-diagram.png' AND source = 'memory'",
+          )
+          .get(),
+      ).toBeUndefined();
+      expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      const upgradedMeta = db
+        .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
+        .get() as { value: string };
+      expect((JSON.parse(upgradedMeta.value) as MemoryIndexMeta).chunkingVersion).toBe(
+        MEMORY_CHUNKING_VERSION,
+      );
     } finally {
       await manager.close?.();
     }
@@ -1432,6 +1769,504 @@ describe("memory index", () => {
     }
   });
 
+  it("drains retained queued targets through the next idle sync call", async () => {
+    const markers = {
+      blocker: "BLOCKER LOCKED SYNC 729",
+      retained: "RETAINED RETRY TARGET 729",
+      trigger: "IDLE TRIGGER TARGET 729",
+    };
+    const sessionKey = (sessionId: string) => `agent:main:proof:${sessionId}`;
+    const manager = await getFreshManager(
+      createCfg({
+        provider: "none",
+        sources: ["sessions"],
+        sessionMemory: true,
+      }),
+    );
+    let lock: DatabaseSync | null = null;
+    try {
+      await manager.sync({ reason: "test-baseline", force: true });
+      for (const [sessionId, marker] of Object.entries(markers)) {
+        await seedMemoryIndexSessionTranscript({
+          sessionId,
+          sessionKey: sessionKey(sessionId),
+          messages: [
+            {
+              role: "user",
+              timestamp: Date.now(),
+              content: marker,
+            },
+          ],
+        });
+      }
+
+      const dbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+      lock = new DatabaseSync(dbPath);
+      lock.exec("PRAGMA busy_timeout = 0");
+      lock.exec("BEGIN EXCLUSIVE");
+
+      const active = manager.sync({
+        reason: "test-locked-owner",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "blocker",
+            sessionKey: sessionKey("blocker"),
+          },
+        ],
+      });
+      const failedQueued = manager.sync({
+        reason: "test-queued-retained",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "retained",
+            sessionKey: sessionKey("retained"),
+          },
+        ],
+      });
+      const failures = await Promise.allSettled([active, failedQueued]);
+      lock.exec("ROLLBACK");
+      lock.close();
+      lock = null;
+      const describeSqliteFailure = (failure: unknown): string => {
+        const details = [String(failure)];
+        if (failure && typeof failure === "object") {
+          const record = failure as Record<string, unknown>;
+          for (const key of ["message", "code"] as const) {
+            if (typeof record[key] === "string") {
+              details.push(record[key]);
+            }
+          }
+          if (record.cause && typeof record.cause === "object") {
+            const cause = record.cause as Record<string, unknown>;
+            for (const key of ["message", "code"] as const) {
+              if (typeof cause[key] === "string") {
+                details.push(cause[key]);
+              }
+            }
+          }
+        }
+        return details.join(" ");
+      };
+      for (const result of failures) {
+        expect(result.status).toBe("rejected");
+        if (result.status !== "rejected") {
+          throw new Error("expected SQLite-locked sync to reject");
+        }
+        expect(describeSqliteFailure(result.reason)).toMatch(
+          /SQLITE_(?:BUSY|LOCKED)|database is (?:busy|locked)/i,
+        );
+      }
+
+      const ftsMatchCount = (marker: string): number => {
+        const observer = new DatabaseSync(dbPath, { readOnly: true });
+        try {
+          return (
+            observer
+              .prepare(
+                "SELECT COUNT(*) AS count FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?",
+              )
+              .get(`"${marker}"`) as { count: number }
+          ).count;
+        } finally {
+          observer.close();
+        }
+      };
+
+      expect(ftsMatchCount(markers.retained)).toBe(0);
+      expect(ftsMatchCount(markers.trigger)).toBe(0);
+      const recoveryState = manager as unknown as {
+        syncing: Promise<void> | null;
+        queuedSessions: Map<string, unknown>;
+        sessionsDirtyFiles: Set<string>;
+        sessionsFullRetryDirty: boolean;
+      };
+      expect(recoveryState.syncing).toBeNull();
+      expect(recoveryState.queuedSessions.size).toBe(1);
+      expect(recoveryState.sessionsDirtyFiles.size).toBe(0);
+      expect(recoveryState.sessionsFullRetryDirty).toBe(false);
+
+      const recoveryProgress = vi.fn();
+      const recovery = manager.sync({
+        reason: "test-recovery-trigger",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "trigger",
+            sessionKey: sessionKey("trigger"),
+          },
+        ],
+        progress: recoveryProgress,
+      });
+      // A full sync can claim `syncing` before the retained queue owner resumes.
+      // Both owners must settle without the queue awaiting its own promise.
+      const competingFullSync = manager.sync({ reason: "test-competing-full-sync" });
+      const recoveryResults = await Promise.allSettled([recovery, competingFullSync]);
+      expect(recoveryResults.map((result) => result.status)).toEqual(["fulfilled", "fulfilled"]);
+
+      expect(ftsMatchCount(markers.retained)).toBeGreaterThan(0);
+      expect(ftsMatchCount(markers.trigger)).toBeGreaterThan(0);
+      expect(recoveryState.queuedSessions.size).toBe(0);
+      expect(recoveryProgress).toHaveBeenCalled();
+    } finally {
+      if (lock) {
+        try {
+          lock.exec("ROLLBACK");
+        } finally {
+          lock.close();
+        }
+      }
+      await manager.close?.();
+    }
+  });
+
+  it("drains retained queued targets from a live rejection transition", async () => {
+    const markers = {
+      retained: "LIVE REJECTION RETAINED TARGET 729",
+      transition: "LIVE REJECTION TRANSITION TARGET 729",
+      trigger: "LIVE REJECTION RECOVERY TARGET 729",
+    };
+    const sessionKey = (sessionId: string) => `agent:main:live-rejection:${sessionId}`;
+    const manager = await getFreshManager(
+      createCfg({
+        provider: "none",
+        sources: ["sessions"],
+        sessionMemory: true,
+      }),
+    );
+    let resolveActiveSync: (() => void) | undefined;
+    const activeSyncGate = new Promise<void>((resolve) => {
+      resolveActiveSync = resolve;
+    });
+    let rejectQueuedSync: ((error: Error) => void) | undefined;
+    const queuedSyncGate = new Promise<void>((_resolve, reject) => {
+      rejectQueuedSync = reject;
+    });
+    const owner = manager as unknown as {
+      syncing: Promise<void> | null;
+      queuedSessions: Map<string, MemorySessionSyncTarget>;
+      queuedSessionSync: Promise<void> | null;
+      runSync: (params?: MemorySyncParams) => Promise<void>;
+    };
+    const originalRunSync = owner.runSync.bind(owner);
+    const runSyncSpy = vi
+      .spyOn(owner, "runSync")
+      .mockImplementationOnce(async (params) => await originalRunSync(params))
+      .mockImplementationOnce(async () => await activeSyncGate)
+      .mockImplementationOnce(async () => await queuedSyncGate)
+      .mockImplementation(async (params) => await originalRunSync(params));
+    const queuedError = new Error("controlled queued rejection");
+    try {
+      await manager.sync({ reason: "test-live-rejection-baseline", force: true });
+      for (const [sessionId, marker] of Object.entries(markers)) {
+        await seedMemoryIndexSessionTranscript({
+          sessionId,
+          sessionKey: sessionKey(sessionId),
+          messages: [
+            {
+              role: "user",
+              timestamp: Date.now(),
+              content: marker,
+            },
+          ],
+        });
+      }
+
+      const active = manager.sync({
+        reason: "test-live-rejection-owner",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "active",
+            sessionKey: sessionKey("active"),
+          },
+        ],
+      });
+      const queuedProgress = vi.fn();
+      const failedQueued = manager.sync({
+        reason: "test-live-rejection-queued",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "retained",
+            sessionKey: sessionKey("retained"),
+          },
+        ],
+        force: true,
+        progress: queuedProgress,
+      });
+      const failuresPromise = Promise.allSettled([active, failedQueued]);
+      resolveActiveSync?.();
+      await vi.waitFor(() => {
+        expect(runSyncSpy).toHaveBeenCalledTimes(3);
+        expect(owner.syncing).not.toBeNull();
+        expect(owner.queuedSessionSync).not.toBeNull();
+      });
+      const rejectingQueuedSync = owner.syncing;
+      if (!rejectingQueuedSync) {
+        throw new Error("expected a live queued sync");
+      }
+
+      let resolveTransitionResult!: (result: PromiseSettledResult<void>) => void;
+      const transitionResult = new Promise<PromiseSettledResult<void>>((resolve) => {
+        resolveTransitionResult = resolve;
+      });
+      let transitionState:
+        | { syncingNull: boolean; queueOwnerLive: boolean; queuedTargets: number }
+        | undefined;
+      const transitionProgress = vi.fn();
+      void rejectingQueuedSync.catch(() => {
+        transitionState = {
+          syncingNull: owner.syncing === null,
+          queueOwnerLive: owner.queuedSessionSync !== null,
+          queuedTargets: owner.queuedSessions.size,
+        };
+        const transitionCall = manager.sync({
+          reason: "test-live-rejection-transition",
+          sessions: [
+            {
+              agentId: "main",
+              sessionId: "transition",
+              sessionKey: sessionKey("transition"),
+            },
+          ],
+          progress: transitionProgress,
+        });
+        void transitionCall.then(
+          (value) => resolveTransitionResult({ status: "fulfilled", value }),
+          (reason: unknown) => resolveTransitionResult({ status: "rejected", reason }),
+        );
+      });
+
+      rejectQueuedSync?.(queuedError);
+      const failures = await failuresPromise;
+      const transitionFailure = await transitionResult;
+      expect(failures[0]?.status).toBe("fulfilled");
+      expect(failures[1]?.status).toBe("rejected");
+      expect(transitionFailure.status).toBe("rejected");
+      if (failures[1]?.status !== "rejected" || transitionFailure.status !== "rejected") {
+        throw new Error("expected shared queued rejection");
+      }
+      expect(failures[1].reason).toBe(queuedError);
+      expect(transitionFailure.reason).toBe(queuedError);
+      expect(transitionState).toEqual({
+        syncingNull: true,
+        queueOwnerLive: true,
+        queuedTargets: 0,
+      });
+      expect(Array.from(owner.queuedSessions.values())).toEqual([
+        {
+          agentId: "main",
+          sessionId: "transition",
+          sessionKey: sessionKey("transition"),
+        },
+        {
+          agentId: "main",
+          sessionId: "retained",
+          sessionKey: sessionKey("retained"),
+        },
+      ]);
+      expect(queuedProgress).not.toHaveBeenCalled();
+      expect(transitionProgress).not.toHaveBeenCalled();
+
+      const recoveryProgress = vi.fn();
+      await manager.sync({
+        reason: "test-live-rejection-recovery",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "trigger",
+            sessionKey: sessionKey("trigger"),
+          },
+        ],
+        progress: recoveryProgress,
+      });
+
+      const dbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+      const observer = new DatabaseSync(dbPath, { readOnly: true });
+      try {
+        const indexedCount = (marker: string) =>
+          (
+            observer
+              .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks WHERE text LIKE ?")
+              .get(`%${marker}%`) as { count: number }
+          ).count;
+        expect(indexedCount(markers.retained)).toBeGreaterThan(0);
+        expect(indexedCount(markers.transition)).toBeGreaterThan(0);
+        expect(indexedCount(markers.trigger)).toBeGreaterThan(0);
+      } finally {
+        observer.close();
+      }
+      expect(owner.queuedSessions.size).toBe(0);
+      expect(recoveryProgress).toHaveBeenCalled();
+      expect(transitionProgress).not.toHaveBeenCalled();
+    } finally {
+      resolveActiveSync?.();
+      rejectQueuedSync?.(queuedError);
+      await manager.close?.();
+      runSyncSpy.mockRestore();
+    }
+  });
+
+  it("clears retained queued targets when close interrupts a competing sync", async () => {
+    const manager = await getFreshManager(
+      createCfg({
+        provider: "none",
+        sources: ["sessions"],
+        sessionMemory: true,
+      }),
+    );
+    let resolveFullSync: (() => void) | undefined;
+    const fullSyncGate = new Promise<void>((resolve) => {
+      resolveFullSync = resolve;
+    });
+    const owner = manager as unknown as {
+      closing: boolean;
+      closed: boolean;
+      queuedSessions: Map<string, MemorySessionSyncTarget>;
+      queuedProgressCallbacks: Set<NonNullable<MemorySyncParams["progress"]>>;
+      queuedForce: boolean;
+      syncAdmitted: (params?: MemorySyncParams) => Promise<void>;
+      runSync: (params?: MemorySyncParams) => Promise<void>;
+    };
+    const syncAdmitted = vi.spyOn(owner, "syncAdmitted");
+    const runSyncSpy = vi.spyOn(owner, "runSync").mockReturnValueOnce(fullSyncGate);
+    const progress = vi.fn();
+    owner.queuedSessions.set("retained", {
+      agentId: "main",
+      sessionId: "retained-close",
+      sessionKey: "agent:main:retained-close",
+    });
+
+    try {
+      const recovery = manager.sync({
+        reason: "test-close-recovery",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "trigger-close",
+            sessionKey: "agent:main:trigger-close",
+          },
+        ],
+        force: true,
+        progress,
+      });
+      const competingFullSync = manager.sync({ reason: "test-close-competing-full-sync" });
+
+      await vi.waitFor(() => {
+        expect(syncAdmitted).toHaveBeenCalledTimes(2);
+      });
+      const closing = manager.close?.() ?? Promise.resolve();
+      expect(owner.closing).toBe(true);
+      resolveFullSync?.();
+
+      await expect(Promise.all([recovery, competingFullSync, closing])).resolves.toEqual([
+        undefined,
+        undefined,
+        undefined,
+      ]);
+      expect(runSyncSpy).toHaveBeenCalledTimes(1);
+      expect(syncAdmitted).toHaveBeenCalledTimes(2);
+      expect(owner.closed).toBe(true);
+      expect(owner.queuedSessions.size).toBe(0);
+      expect(owner.queuedProgressCallbacks.size).toBe(0);
+      expect(owner.queuedForce).toBe(false);
+      expect(progress).not.toHaveBeenCalled();
+    } finally {
+      resolveFullSync?.();
+      await manager.close?.();
+      runSyncSpy.mockRestore();
+      syncAdmitted.mockRestore();
+    }
+  });
+
+  it("clears retained queued targets after failure when the manager closes", async () => {
+    const manager = await getFreshManager(
+      createCfg({
+        provider: "none",
+        sources: ["sessions"],
+        sessionMemory: true,
+      }),
+    );
+    let resolveActiveSync: (() => void) | undefined;
+    const activeSyncGate = new Promise<void>((resolve) => {
+      resolveActiveSync = resolve;
+    });
+    const owner = manager as unknown as {
+      closed: boolean;
+      queuedArchiveFiles: Set<string>;
+      queuedSessions: Map<string, MemorySessionSyncTarget>;
+      queuedProgressCallbacks: Set<NonNullable<MemorySyncParams["progress"]>>;
+      queuedForce: boolean;
+      queuedSessionSync: Promise<void> | null;
+      runSync: (params?: MemorySyncParams) => Promise<void>;
+    };
+    const runSyncSpy = vi
+      .spyOn(owner, "runSync")
+      .mockReturnValueOnce(activeSyncGate)
+      .mockRejectedValueOnce(new Error("test queued failure"));
+    const progress = vi.fn();
+
+    try {
+      const active = manager.sync({
+        reason: "test-close-after-failure-owner",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "active-close-after-failure",
+            sessionKey: "agent:main:active-close-after-failure",
+          },
+        ],
+      });
+      const failedQueued = manager.sync({
+        reason: "test-close-after-failure-queued",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "retained-close-after-failure",
+            sessionKey: "agent:main:retained-close-after-failure",
+          },
+        ],
+        archiveFiles: ["/tmp/retained-close-after-failure.jsonl"],
+        force: true,
+        progress,
+      });
+      const queuedRejection = expect(failedQueued).rejects.toThrow("test queued failure");
+
+      resolveActiveSync?.();
+      await active;
+      await queuedRejection;
+
+      expect(runSyncSpy).toHaveBeenCalledTimes(2);
+      expect(owner.queuedArchiveFiles).toEqual(
+        new Set(["/tmp/retained-close-after-failure.jsonl"]),
+      );
+      expect(Array.from(owner.queuedSessions.values())).toEqual([
+        {
+          agentId: "main",
+          sessionId: "retained-close-after-failure",
+          sessionKey: "agent:main:retained-close-after-failure",
+        },
+      ]);
+      expect(owner.queuedForce).toBe(true);
+      expect(owner.queuedProgressCallbacks.size).toBe(0);
+      expect(owner.queuedSessionSync).toBeNull();
+
+      await manager.close?.();
+
+      expect(owner.closed).toBe(true);
+      expect(owner.queuedArchiveFiles.size).toBe(0);
+      expect(owner.queuedSessions.size).toBe(0);
+      expect(owner.queuedProgressCallbacks.size).toBe(0);
+      expect(owner.queuedForce).toBe(false);
+    } finally {
+      resolveActiveSync?.();
+      await manager.close?.();
+      runSyncSpy.mockRestore();
+    }
+  });
+
   it("keeps provider cutover vector search paused during targeted session sync", async () => {
     try {
       setMemoryIndexStateDir(path.join(workspaceDir, ".state-targeted-cutover"));
@@ -1617,26 +2452,26 @@ describe("memory index", () => {
     const manager = await getFreshManager(cfg);
     let releaseSync: () => void = () => {};
     const syncStarted = new Promise<void>((resolve) => {
-      const originalRunSyncWithReadonlyRecovery = (
+      const originalRunSync = (
         manager as unknown as {
-          runSyncWithReadonlyRecovery: (params?: {
+          runSync: (params?: {
             reason?: string;
             force?: boolean;
             archiveFiles?: string[];
             progress?: (update: unknown) => void;
           }) => Promise<void>;
         }
-      ).runSyncWithReadonlyRecovery.bind(manager);
+      ).runSync.bind(manager);
       (
         manager as unknown as {
-          runSyncWithReadonlyRecovery: typeof originalRunSyncWithReadonlyRecovery;
+          runSync: typeof originalRunSync;
         }
-      ).runSyncWithReadonlyRecovery = async (params) => {
+      ).runSync = async (params) => {
         resolve();
         await new Promise<void>((syncResolve) => {
           releaseSync = syncResolve;
         });
-        await originalRunSyncWithReadonlyRecovery(params);
+        await originalRunSync(params);
       };
     });
 
@@ -2044,11 +2879,12 @@ describe("memory index", () => {
     expect(providerCloseCalls).toBe(2);
   });
 
-  it("indexes multimodal image and audio files from extra paths with Gemini structured inputs", async () => {
+  it("indexes multimodal files only from extra paths", async () => {
     const mediaDir = path.join(workspaceDir, "media-memory");
     await fs.mkdir(mediaDir, { recursive: true });
     await fs.writeFile(path.join(mediaDir, "diagram.png"), Buffer.from("png"));
     await fs.writeFile(path.join(mediaDir, "meeting.wav"), Buffer.from("wav"));
+    await fs.writeFile(path.join(memoryDir, "default-diagram.png"), Buffer.from("png"));
 
     const cfg = createCfg({
       provider: "gemini",
@@ -2060,6 +2896,17 @@ describe("memory index", () => {
     await manager.sync({ reason: "test" });
 
     expect(embedBatchInputCalls).toBeGreaterThan(0);
+
+    const db = Reflect.get(manager, "db") as DatabaseSync;
+    const indexedMediaPaths = () =>
+      (
+        db
+          .prepare(
+            "SELECT path FROM memory_index_chunks WHERE source = 'memory' AND path LIKE '%.png' ORDER BY path",
+          )
+          .all() as Array<{ path: string }>
+      ).map((row) => row.path);
+    expect(indexedMediaPaths()).toEqual(["media-memory/diagram.png"]);
 
     const imageResults = await manager.search("image");
     expect(imageResults.some((result) => result.path.endsWith("diagram.png"))).toBe(true);
@@ -2165,6 +3012,49 @@ describe("memory index", () => {
         hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
       }),
     );
+  });
+
+  it("supplements thin strict FTS results for conversational queries", async () => {
+    const cases = [
+      {
+        query: "that thing we discussed about the API",
+        strictFile: "strict-english.md",
+        strictText: "That thing we discussed about the API belongs in the first draft.",
+        recallFile: "recall-english.md",
+        recallText: "API authentication uses short-lived OAuth tokens.",
+      },
+      {
+        query: "ayer hablamos sobre estrategia de despliegue",
+        strictFile: "strict-spanish.md",
+        strictText: "Ayer hablamos sobre estrategia de despliegue para la primera region.",
+        recallFile: "recall-spanish.md",
+        recallText: "La estrategia de despliegue requiere una ventana de mantenimiento.",
+      },
+    ] as const;
+    for (const entry of cases) {
+      await fs.writeFile(path.join(memoryDir, entry.strictFile), entry.strictText);
+      await fs.writeFile(path.join(memoryDir, entry.recallFile), entry.recallText);
+    }
+
+    const manager = await getPersistentManager(
+      createCfg({
+        minScore: 0,
+        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+      }),
+    );
+    await manager.sync({ reason: "test" });
+    const provider = Reflect.get(manager, "provider") as {
+      embedQuery: (text: string) => Promise<number[]>;
+    };
+    const embedQuerySpy = vi.spyOn(provider, "embedQuery");
+
+    for (const entry of cases) {
+      const results = await manager.search(entry.query, { maxResults: 6 });
+      expect(results.some((result) => result.path.endsWith(`memory/${entry.recallFile}`))).toBe(
+        true,
+      );
+    }
+    expect(embedQuerySpy).toHaveBeenCalledTimes(cases.length);
   });
 
   it("bounds per-keyword FTS fallback in provider-backed hybrid search", async () => {
@@ -2282,6 +3172,44 @@ describe("memory index", () => {
     expect(status.vector?.storeAvailable).toBe(available);
     expect(status.vector?.semanticAvailable).toBeUndefined();
     expect(status.vector?.available).toBeUndefined();
+  });
+
+  it("reports persisted vector index state on the unprobed status path", async () => {
+    const cfg = createCfg({ provider: "gemini", vectorEnabled: true });
+    const emptyManager = await getFreshManager(cfg, "status");
+    try {
+      const emptyStatus = emptyManager.status();
+      expect(emptyStatus.chunks).toBe(0);
+      expect(emptyStatus.vector?.storeAvailable).toBeUndefined();
+      expect(emptyStatus.vector?.index).toEqual({ state: "empty" });
+    } finally {
+      await emptyManager.close?.();
+    }
+
+    const indexingManager = await getFreshManager(cfg);
+    try {
+      await indexingManager.sync({ reason: "test", force: true });
+      expect(indexingManager.status().chunks).toBeGreaterThan(0);
+    } finally {
+      await indexingManager.close?.();
+    }
+
+    const statusManager = await getFreshManager(cfg, "status");
+    try {
+      expect(Reflect.get(statusManager, "vector")).toMatchObject({ available: null, dims: 4 });
+      expect(statusManager.status().vector).toMatchObject({
+        index: { state: "complete" },
+        storeAvailable: undefined,
+      });
+
+      const db = Reflect.get(statusManager, "db") as DatabaseSync;
+      db.prepare("UPDATE memory_index_meta SET value = '1' WHERE key = ?").run(
+        "memory_vector_rebuild_v1",
+      );
+      expect(statusManager.status().vector?.index).toEqual({ state: "incomplete" });
+    } finally {
+      await statusManager.close?.();
+    }
   });
 
   it("keeps current vector indexes clean after vector store probing", async () => {
@@ -4297,6 +5225,90 @@ describe("memory index", () => {
 
       const result = manager.status();
       expect(result.dirty).toBe(true);
+    } finally {
+      restoreMemoryIndexStateDir();
+    }
+  });
+
+  it("prunes removed sessions without re-embedding unchanged survivors", async () => {
+    const cfg = createCfg({
+      provider: "gemini",
+      sources: ["sessions"],
+      sessionMemory: true,
+      minScore: 0,
+    });
+    const stateDirName = ".state-status-stale-session-test";
+    setMemoryIndexStateDir(path.join(workspaceDir, stateDirName));
+    const sessionId = "status-stale-session-test";
+    const sessionKey = `agent:main:memory:${sessionId}`;
+    const survivorId = "status-stale-session-survivor";
+    const survivorKey = `agent:main:memory:${survivorId}`;
+    const storePath = path.join(resolveSessionTranscriptsDirForAgent("main"), "sessions.json");
+    try {
+      await seedMemoryIndexSessionTranscript({
+        sessionId,
+        sessionKey,
+        messages: [
+          {
+            role: "user",
+            timestamp: 1,
+            content: "Deleted session index canary ORBIT-DELETE-91.",
+          },
+        ],
+      });
+      await seedMemoryIndexSessionTranscript({
+        sessionId: survivorId,
+        sessionKey: survivorKey,
+        messages: [
+          {
+            role: "user",
+            timestamp: 2,
+            content: "Surviving session index canary ORBIT-SURVIVE-92.",
+          },
+        ],
+      });
+
+      const initial = await getFreshManager(cfg, "cli");
+      managersForCleanup.add(initial);
+      await initial.sync({ reason: "cli", force: true });
+      await expect(
+        initial.search("ORBIT-DELETE-91", { minScore: 0, sources: ["sessions"] }),
+      ).resolves.not.toEqual([]);
+      await initial.close?.();
+      const agentDb = new DatabaseSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }));
+      agentDb.exec("DELETE FROM memory_embedding_cache");
+      agentDb.close();
+      embedBatchCalls = 0;
+
+      await expect(
+        deleteSessionEntry({
+          agentId: "main",
+          archiveTranscript: false,
+          expectedSessionId: sessionId,
+          sessionKey,
+          storePath,
+        }),
+      ).resolves.toBe(true);
+
+      const statusManager = await getFreshManager(cfg, "status");
+      managersForCleanup.add(statusManager);
+      expect(statusManager.status().dirty).toBe(true);
+
+      await statusManager.sync({ reason: "cli" });
+      expect(embedBatchCalls).toBe(0);
+      const deletedResults = await statusManager.search("ORBIT-DELETE-91", {
+        minScore: 0,
+        sources: ["sessions"],
+      });
+      expect(deletedResults.some((result) => result.path.includes(sessionId))).toBe(false);
+      await expect(
+        statusManager.search("ORBIT-SURVIVE-92", { minScore: 0, sources: ["sessions"] }),
+      ).resolves.not.toEqual([]);
+      const db = Reflect.get(statusManager, "db") as DatabaseSync;
+      const sourceCount = db
+        .prepare("SELECT COUNT(*) AS count FROM memory_index_sources WHERE source = 'sessions'")
+        .get() as { count: number };
+      expect(sourceCount.count).toBe(1);
     } finally {
       restoreMemoryIndexStateDir();
     }

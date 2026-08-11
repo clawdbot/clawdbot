@@ -1,7 +1,9 @@
 import { randomBytes } from "node:crypto";
 import { lstatSync, mkdirSync, readlinkSync, realpathSync, rmdirSync, statSync } from "node:fs";
 import path from "node:path";
+import { resolveStateDir } from "../config/paths.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { isPathInside } from "../infra/path-guards.js";
 import {
   assertAgentDeletionPathFence,
   prepareAgentDeletionPathFence,
@@ -526,10 +528,10 @@ function resolveAgentDatabasePathIdentity(pathname: string): AgentDatabasePathId
   }
 }
 
-/** Compare two database locators by canonical filesystem identity when available. */
-export function isSameOpenClawAgentDatabasePath(left: string, right: string): boolean {
-  const leftIdentity = resolveAgentDatabasePathIdentity(left);
-  const rightIdentity = resolveAgentDatabasePathIdentity(right);
+function areSameAgentDatabasePathIdentities(
+  leftIdentity: AgentDatabasePathIdentity,
+  rightIdentity: AgentDatabasePathIdentity,
+): boolean {
   if (leftIdentity.lexicalPath === rightIdentity.lexicalPath) {
     return true;
   }
@@ -565,11 +567,41 @@ export function isSameOpenClawAgentDatabasePath(left: string, right: string): bo
   );
 }
 
+/** Create a synchronous-operation matcher that prepares each exact locator once. */
+export function createOpenClawAgentDatabasePathMatcher(): (left: string, right: string) => boolean {
+  const identities = new Map<string, AgentDatabasePathIdentity>();
+  const resolveIdentity = (pathname: string): AgentDatabasePathIdentity => {
+    const lexicalPath = anchorDatabasePathWithoutNormalizing(pathname);
+    const cached = identities.get(lexicalPath);
+    if (cached) {
+      return cached;
+    }
+    // Cache successes only. Filesystem errors must be retried if the caller recovers.
+    const identity = resolveAgentDatabasePathIdentity(lexicalPath);
+    identities.set(lexicalPath, identity);
+    return identity;
+  };
+  return (left, right) =>
+    areSameAgentDatabasePathIdentities(resolveIdentity(left), resolveIdentity(right));
+}
+
+/** Compare two database locators by canonical filesystem identity when available. */
+export function isSameOpenClawAgentDatabasePath(left: string, right: string): boolean {
+  return areSameAgentDatabasePathIdentities(
+    resolveAgentDatabasePathIdentity(left),
+    resolveAgentDatabasePathIdentity(right),
+  );
+}
+
 export function registerOpenClawAgentDatabase(params: {
   agentId: string;
   path: string;
   env?: NodeJS.ProcessEnv;
+  schemaVersion?: number;
 }): void {
+  if (!isPersistentOpenClawAgentDatabasePath(params.path, params.env)) {
+    return;
+  }
   const deletionFence = prepareAgentDeletionPathFence(
     { agentId: params.agentId, path: params.path },
     { env: params.env },
@@ -592,13 +624,13 @@ export function registerOpenClawAgentDatabase(params: {
           .values({
             agent_id: params.agentId,
             path: params.path,
-            schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+            schema_version: params.schemaVersion ?? OPENCLAW_AGENT_SCHEMA_VERSION,
             last_seen_at: lastSeenAt,
             size_bytes: sizeBytes,
           })
           .onConflict((conflict) =>
             conflict.columns(["agent_id", "path"]).doUpdateSet({
-              schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+              schema_version: params.schemaVersion ?? OPENCLAW_AGENT_SCHEMA_VERSION,
               last_seen_at: lastSeenAt,
               size_bytes: sizeBytes,
             }),
@@ -608,6 +640,39 @@ export function registerOpenClawAgentDatabase(params: {
     { env: params.env },
   );
   invalidateRegisteredAgentDatabasesMemo({ env: params.env });
+}
+
+function canonicalPathForRegistryBoundary(pathname: string): string {
+  const identity = resolveAgentDatabasePathIdentity(pathname);
+  if (identity.realPath) {
+    return identity.realPath;
+  }
+  if (!identity.parentRealPath || !identity.unresolvedSuffix) {
+    return identity.parentRealPath ?? path.resolve(pathname);
+  }
+  const unresolvedSegments = identity.unresolvedSuffix.split(path.sep);
+  return unresolvedSegments.includes("..")
+    ? identity.parentRealPath
+    : path.join(identity.parentRealPath, ...unresolvedSegments);
+}
+
+/** Named import artifacts are offline archives, not durable runtime discovery state. */
+export function isPersistentOpenClawAgentDatabasePath(
+  pathname: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const lexicalCandidate = path.resolve(pathname);
+  const lexicalImportsDir = path.join(path.resolve(resolveStateDir(env)), "imports");
+  if (lexicalCandidate === lexicalImportsDir || isPathInside(lexicalImportsDir, lexicalCandidate)) {
+    return false;
+  }
+  const candidate = canonicalPathForRegistryBoundary(pathname);
+  const stateDir = canonicalPathForRegistryBoundary(resolveStateDir(env));
+  const importsDir = canonicalPathForRegistryBoundary(path.join(stateDir, "imports"));
+  if (candidate === importsDir || isPathInside(importsDir, candidate)) {
+    return false;
+  }
+  return true;
 }
 
 export function unregisterOpenClawAgentDatabase(params: {

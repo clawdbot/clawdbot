@@ -1,8 +1,9 @@
-// Codex tests cover config plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
+// Codex tests cover config plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
@@ -45,12 +46,7 @@ function envRef(id: string) {
   return { source: "env" as const, provider: "default", id };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 
 function expectFields(
   value: unknown,
@@ -2220,7 +2216,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
           execMode,
         }),
       ).toThrow(
-        `Codex app-server local execution is not available when tools.exec.mode=${execMode}`,
+        `Codex app-server local execution is unavailable because effective tools.exec.mode=${execMode}`,
       );
     },
   );
@@ -2634,7 +2630,8 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
 
     expect(execPolicy.mode).toBe("deny");
-    expect(() =>
+    let error: unknown;
+    try {
       resolveRuntimeForTest({
         pluginConfig: {
           appServer: {
@@ -2644,8 +2641,18 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
           },
         },
         execPolicy,
-      }),
-    ).toThrow("Codex app-server local execution is not available when tools.exec.mode=deny");
+      });
+    } catch (cause) {
+      error = cause;
+    }
+    expect(error).toMatchObject({
+      name: "AgentHarnessPreflightError",
+      scope: "harness",
+      message: expect.stringContaining(
+        "inspect them with `openclaw approvals get --gateway` and update that same target with `openclaw approvals set --gateway --stdin`",
+      ),
+    });
+    expect((error as Error).message).not.toContain("--node");
   });
 
   it("applies host exec approval ask floors before starting Codex app-server", () => {
@@ -2761,7 +2768,9 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
         },
         execPolicy,
       }),
-    ).toThrow("Codex app-server local execution is not available when tools.exec.mode=deny");
+    ).toThrow(
+      "Codex app-server local execution is unavailable because effective tools.exec.mode=deny",
+    );
   });
 
   it("applies agent-scoped exec approval ask floors before starting Codex app-server", () => {

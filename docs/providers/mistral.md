@@ -7,12 +7,14 @@ read_when:
 title: "Mistral"
 ---
 
-The bundled `mistral` plugin registers four contracts: chat completions, media understanding (Voxtral batch transcription), realtime STT for Voice Call (Voxtral Realtime), and memory embeddings (`mistral-embed`).
+The official external `mistral` plugin registers four contracts: chat completions,
+media understanding (Voxtral batch transcription), realtime STT for Voice Call
+(Voxtral Realtime), and memory embeddings (`mistral-embed`).
 
 | Property         | Value                                       |
 | ---------------- | ------------------------------------------- |
 | Provider id      | `mistral`                                   |
-| Plugin           | bundled, enabled by default                 |
+| Plugin           | `@openclaw/mistral-provider`                |
 | Auth env var     | `MISTRAL_API_KEY`                           |
 | Onboarding flag  | `--auth-choice mistral-api-key`             |
 | Direct CLI flag  | `--mistral-api-key <key>`                   |
@@ -26,6 +28,12 @@ The bundled `mistral` plugin registers four contracts: chat completions, media u
 ## Getting started
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install @openclaw/mistral-provider
+    openclaw gateway restart
+    ```
+  </Step>
   <Step title="Get your API key">
     Create an API key in the [Mistral Console](https://console.mistral.ai/).
   </Step>
@@ -44,7 +52,7 @@ The bundled `mistral` plugin registers four contracts: chat completions, media u
   <Step title="Set a default model">
     ```json5
     {
-      env: { MISTRAL_API_KEY: "sk-..." },
+      env: { vars: { MISTRAL_API_KEY: "sk-..." } },
       agents: { defaults: { model: { primary: "mistral/mistral-large-latest" } } },
     }
     ```
@@ -68,7 +76,7 @@ The bundled `mistral` plugin registers four contracts: chat completions, media u
 | `mistral/mistral-medium-2508`    | text, image | 128,000 | 8,192      | Deprecated; hidden; use Mistral Medium 3.5            |
 | `mistral/devstral-medium-latest` | text        | 262,144 | 32,768     | Deprecated; hidden; use Mistral Medium 3.5            |
 
-Browse the bundled catalog row before changing config:
+Browse the plugin catalog row before changing config:
 
 ```bash
 openclaw models list --all --provider mistral --plain
@@ -91,9 +99,9 @@ Use Voxtral for batch audio transcription through the media understanding pipeli
 {
   tools: {
     media: {
+      models: [{ provider: "mistral", model: "voxtral-mini-latest", capabilities: ["audio"] }],
       audio: {
         enabled: true,
-        models: [{ provider: "mistral", model: "voxtral-mini-latest" }],
       },
     },
   },
@@ -106,7 +114,7 @@ The media transcription path uses `/v1/audio/transcriptions`. The default audio 
 
 ## Voice Call streaming STT
 
-The bundled `mistral` plugin registers Voxtral Realtime as a Voice Call streaming STT provider.
+The `mistral` plugin registers Voxtral Realtime as a Voice Call streaming STT provider.
 
 | Setting      | Config path                                                            | Default                                 |
 | ------------ | ---------------------------------------------------------------------- | --------------------------------------- |
@@ -147,7 +155,7 @@ OpenClaw defaults Mistral realtime STT to `pcm_mulaw` at 8 kHz so Voice Call can
 
 <AccordionGroup>
   <Accordion title="Adjustable reasoning">
-    `mistral/mistral-small-latest`, `mistral/mistral-small-2603`, and `mistral/mistral-medium-3-5` support [adjustable reasoning](https://docs.mistral.ai/studio-api/conversations/reasoning/adjustable) on the Chat Completions API via `reasoning_effort` (`none` minimizes extra thinking in the output; `high` surfaces full thinking traces before the final answer).
+    `mistral/mistral-small-latest`, `mistral/mistral-small-2603`, and `mistral/mistral-medium-3-5` support [adjustable reasoning](https://docs.mistral.ai/studio-api/conversations/reasoning) on the Chat Completions API via `reasoning_effort` (`none` minimizes extra thinking in the output; `high` surfaces full thinking traces before the final answer).
 
     OpenClaw maps the session **thinking** level to Mistral's API:
 
@@ -178,7 +186,7 @@ OpenClaw defaults Mistral realtime STT to `pcm_mulaw` at 8 kHz so Voice Call can
     ```
 
     <Note>
-    Other bundled Mistral catalog models do not use this parameter. Mistral's native Magistral models are deprecated; use adjustable reasoning on Mistral Small 4 or Mistral Medium 3.5 for current API models.
+    Other Mistral catalog models do not use this parameter. Mistral's native Magistral models are deprecated; use adjustable reasoning on Mistral Small 4 or Mistral Medium 3.5 for current API models.
     </Note>
 
   </Accordion>

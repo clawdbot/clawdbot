@@ -136,6 +136,9 @@ export function parseInboundMediaUri(source: string): InboundMediaUri | null {
       `Unsupported media URI location: ${parsed.hostname || "(missing)"}`,
     );
   }
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new MediaReferenceError("invalid-path", `Invalid media URI: ${normalizedSource}`);
+  }
 
   let id: string;
   try {
@@ -146,7 +149,8 @@ export function parseInboundMediaUri(source: string): InboundMediaUri | null {
     });
   }
 
-  if (!id || id.includes("/") || id.includes("\\") || id.includes("\0")) {
+  const invalidId = !id || id === "." || id === "..";
+  if (invalidId || id.includes("/") || id.includes("\\") || id.includes("\0")) {
     throw new MediaReferenceError("invalid-path", `Invalid media URI: ${normalizedSource}`);
   }
 

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../shared/deferred.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { prepareSource } from "./code-mode-runtime.js";
 import { runCodeModeScriptHeadless, type CodeModeHeadlessResult } from "./code-mode.js";
 import { testing } from "./code-mode.test-support.js";
 import {
@@ -58,6 +59,7 @@ function expectFailed(result: CodeModeHeadlessResult) {
 describe("headless Code Mode", () => {
   afterEach(() => {
     vi.useRealTimers();
+    testing.setTypescriptRuntimeForTest(null);
     expect(testing.activeRuns.size).toBe(0);
     testing.activeRuns.clear();
     testing.resumingRunIds.clear();
@@ -200,23 +202,20 @@ describe("headless Code Mode", () => {
     async ({ auditCode }) => {
       let auditCompleted = false;
       let auditAborted = false;
+      const auditStarted = createDeferred();
+      const auditRelease = createDeferred();
       const audit = fakeTool("headless_early_audit", async (_toolCallId, _input, signal) => {
-        await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(resolve, 250);
-          signal?.addEventListener(
-            "abort",
-            () => {
-              clearTimeout(timer);
-              auditAborted = true;
-              reject(new Error("aborted"));
-            },
-            { once: true },
-          );
-        });
+        auditStarted.resolve();
+        signal?.addEventListener("abort", () => (auditAborted = true), { once: true });
+        await auditRelease.promise;
         auditCompleted = true;
         return jsonResult({ recorded: true });
       });
-      const fast = fakeTool("headless_awaited_fast", async () => jsonResult({ winner: "fast" }));
+      const fast = fakeTool("headless_awaited_fast", async () => {
+        await auditStarted.promise;
+        setImmediate(() => auditRelease.resolve());
+        return jsonResult({ winner: "fast" });
+      });
 
       const result = expectCompleted(
         await runCodeModeScriptHeadless({
@@ -404,6 +403,7 @@ describe("headless Code Mode", () => {
       name: "template-literal import text",
       code: "return `import('node:fs')`;",
       value: "import('node:fs')",
+      realHeadless: true,
     },
     {
       name: "template-literal require text",
@@ -419,11 +419,13 @@ describe("headless Code Mode", () => {
       name: "regular-expression module text",
       code: 'return /import.meta/.test("import.meta");',
       value: true,
+      realHeadless: true,
     },
     {
       name: "ordinary import method",
       code: "const api = { import(value) { return value; } }; return api.import(42);",
       value: 42,
+      realHeadless: true,
     },
     {
       name: "ordinary require method",
@@ -435,17 +437,26 @@ describe("headless Code Mode", () => {
       code: "const api = { import: { meta: 42 } }; return api.import.meta;",
       value: 42,
     },
-  ])("executes harmless $name in a headless guest worker", async ({ code, value }) => {
-    const result = expectCompleted(
-      await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness(),
-        code,
-      }),
-    );
+  ])(
+    "preserves harmless $name in headless source validation",
+    async ({ code, value, realHeadless }) => {
+      if (!realHeadless) {
+        const ctx = createHeadlessHarness();
+        const config = testing.resolveCodeModeHeadlessConfig(ctx);
+        await expect(prepareSource({ code, config })).resolves.toBe(code);
+        return;
+      }
+      const result = expectCompleted(
+        await runCodeModeScriptHeadless({
+          ctx: createHeadlessHarness(),
+          code,
+        }),
+      );
 
-    expect(result.value).toBe(value);
-    expect(result.toolCallCount).toBe(0);
-  });
+      expect(result.value).toBe(value);
+      expect(result.toolCallCount).toBe(0);
+    },
+  );
 
   it("executes module-shaped regular expressions in a TypeScript headless guest", async () => {
     const result = expectCompleted(
@@ -661,8 +672,12 @@ describe("headless Code Mode", () => {
       await runCodeModeScriptHeadless({
         ctx: createHeadlessHarness([tool]),
         code: `
-          for (let index = 0; index < 129; index += 1) {
-            await tools.call("openclaw:core:budgeted", {});
+          const calls = Array.from({ length: 129 }, () => () =>
+            tools.call("openclaw:core:budgeted", {}),
+          );
+          // Keep each leg within the default 16-call pending cap while proving the cumulative budget.
+          for (let offset = 0; offset < calls.length; offset += 16) {
+            await Promise.all(calls.slice(offset, offset + 16).map((call) => call()));
           }
           return true;
         `,
@@ -804,6 +819,46 @@ describe("headless Code Mode", () => {
     expect(result).toMatchObject({
       code: "aborted",
       error: "code mode execution aborted",
+    });
+  });
+
+  it("times out an unfinished headless TypeScript runtime load", async () => {
+    testing.setTypescriptRuntimeForTest(new Promise<typeof import("typescript")>(() => {}));
+
+    const result = expectFailed(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness(),
+        language: "typescript",
+        code: "return 42;",
+        wallClockMs: 25,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      code: "timeout",
+      error: "code mode headless wall-clock timeout exceeded",
+      output: [],
+      toolCallCount: 0,
+    });
+  });
+
+  it("aborts an unfinished headless TypeScript runtime load", async () => {
+    testing.setTypescriptRuntimeForTest(new Promise<typeof import("typescript")>(() => {}));
+    const controller = new AbortController();
+    const resultPromise = runCodeModeScriptHeadless({
+      ctx: createHeadlessHarness(),
+      language: "typescript",
+      code: "return 42;",
+      signal: controller.signal,
+    });
+
+    controller.abort();
+
+    expect(expectFailed(await resultPromise)).toMatchObject({
+      code: "aborted",
+      error: "code mode execution aborted",
+      output: [],
+      toolCallCount: 0,
     });
   });
 

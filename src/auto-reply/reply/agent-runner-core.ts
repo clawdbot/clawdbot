@@ -1,7 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
 import { hasVisibleCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
-import { enqueueCommitmentExtraction } from "../../commitments/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveSessionPluginStatusLines,
@@ -30,12 +29,14 @@ import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
+import {
+  buildKnownAgentRunFailureReplyPayload,
+  buildTerminalAgentRunFailureReplyPayload,
+} from "./agent-runner-failure-reply.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
-import { resolveOriginMessageTo } from "./origin-routing.js";
 import {
   buildPendingFinalDeliveryText,
   sanitizePendingFinalDeliveryText,
@@ -252,17 +253,6 @@ export function buildInlinePluginStatusPayload(params: {
   return { text: lines.join("\n") };
 }
 
-function joinCommitmentAssistantText(payloads: ReplyPayload[]): string {
-  return payloads
-    .filter(
-      (payload) => !payload.isError && !payload.isReasoning && !isReplyPayloadStatusNotice(payload),
-    )
-    .map((payload) => payload.text?.trim())
-    .filter((text): text is string => Boolean(text))
-    .join("\n")
-    .trim();
-}
-
 export function normalizeAssistantFinalDeliveryText(text: string): string {
   const parsed = normalizeReplyPayloadDirectives({
     payload: { text },
@@ -270,55 +260,6 @@ export function normalizeAssistantFinalDeliveryText(text: string): string {
     parseMode: "auto",
   });
   return sanitizePendingFinalDeliveryText(parsed.payload.text ?? "");
-}
-
-export function enqueueCommitmentExtractionForTurn(params: {
-  cfg: OpenClawConfig;
-  commandBody: string;
-  isHeartbeat: boolean;
-  followupRun: FollowupRun;
-  sessionCtx: TemplateContext;
-  sessionKey?: string;
-  replyToChannel?: string;
-  payloads: ReplyPayload[];
-  runId: string;
-}): void {
-  if (params.isHeartbeat) {
-    return;
-  }
-  const userText = params.commandBody.trim() || params.sessionCtx.agentText?.trim() || "";
-  const assistantText = joinCommitmentAssistantText(params.payloads);
-  const sessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
-  const channel =
-    params.replyToChannel ??
-    params.followupRun.run.messageProvider ??
-    params.sessionCtx.Surface ??
-    params.sessionCtx.Provider;
-  if (!userText || !assistantText || !sessionKey || !channel) {
-    return;
-  }
-  const to = resolveOriginMessageTo({
-    originatingTo: params.sessionCtx.OriginatingTo,
-    to: params.sessionCtx.To,
-  });
-  enqueueCommitmentExtraction({
-    cfg: params.cfg,
-    agentId: params.followupRun.run.agentId,
-    sessionKey,
-    channel,
-    ...(params.sessionCtx.AccountId ? { accountId: params.sessionCtx.AccountId } : {}),
-    ...(to ? { to } : {}),
-    ...(params.sessionCtx.MessageThreadId !== undefined
-      ? { threadId: String(params.sessionCtx.MessageThreadId) }
-      : {}),
-    ...(params.followupRun.run.senderId ? { senderId: params.followupRun.run.senderId } : {}),
-    userText,
-    assistantText,
-    ...(params.sessionCtx.MessageSidFull || params.sessionCtx.MessageSid
-      ? { sourceMessageId: params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid }
-      : {}),
-    sourceRunId: params.runId,
-  });
 }
 
 export function refreshSessionEntryFromStore(params: {
@@ -365,6 +306,9 @@ export async function handleReplyAgentRunError(
   error: unknown,
   context: {
     cfg: OpenClawConfig;
+    blockReplyPipeline: BlockReplyPipeline | null;
+    didDeliverVisiblePartialReply: () => boolean;
+    isHeartbeat: boolean;
     isRestartRecoveryArmed: () => boolean;
     replyOperation: ReplyOperation;
     resolvedVerboseLevel: VerboseLevel;
@@ -374,6 +318,9 @@ export async function handleReplyAgentRunError(
 ): Promise<ReplyPayload | undefined> {
   const {
     cfg,
+    blockReplyPipeline,
+    didDeliverVisiblePartialReply,
+    isHeartbeat,
     isRestartRecoveryArmed,
     replyOperation,
     resolvedVerboseLevel,
@@ -425,6 +372,28 @@ export async function handleReplyAgentRunError(
   if (knownFailurePayload) {
     replyOperation.fail("run_failed", error);
     return returnWithQueuedFollowupDrain(knownFailurePayload);
+  }
+  if (blockReplyPipeline) {
+    try {
+      await blockReplyPipeline.flush({ force: true });
+    } catch (flushError) {
+      logVerbose(
+        `failed to flush streamed reply blocks before surfacing run failure: ${String(flushError)}`,
+      );
+    }
+  }
+  const didDeliverVisibleReply =
+    (blockReplyPipeline?.didStreamTerminalReply?.() === true && !blockReplyPipeline.isAborted()) ||
+    didDeliverVisiblePartialReply();
+  if (!isHeartbeat && didDeliverVisibleReply && !replyOperation.abortSignal.aborted) {
+    replyOperation.fail("run_failed", error);
+    return returnWithQueuedFollowupDrain(
+      buildTerminalAgentRunFailureReplyPayload({
+        visibleReplyDelivered: true,
+        sessionCtx,
+        cfg,
+      }),
+    );
   }
   replyOperation.fail("run_failed", error);
   // Keep the followup queue moving even when an unexpected exception escapes
@@ -496,9 +465,9 @@ export type RunReplyAgentParams = {
   resolvedQueue: QueueSettings;
   shouldSteer: boolean;
   shouldFollowup: boolean;
+  queueAdmissionState?: "empty" | "steering" | "ready";
   isActive: boolean;
   isRunActive?: () => boolean;
-  isStreaming: boolean;
   opts?: InternalGetReplyOptions;
   typing: TypingController;
   sessionEntry?: SessionEntry;

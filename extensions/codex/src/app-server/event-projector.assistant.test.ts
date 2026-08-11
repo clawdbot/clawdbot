@@ -1,3 +1,4 @@
+import { normalizeUsage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -71,6 +72,7 @@ describe("CodexAppServerEventProjector assistant projection", () => {
       promptTokens: 5,
       totalTokens: 12,
     });
+    expect(result.attemptUsage?.reasoningTokens).toBe(3);
     expectUsageFields(result.lastAssistant?.usage, {
       input: 2,
       output: 7,
@@ -83,7 +85,31 @@ describe("CodexAppServerEventProjector assistant projection", () => {
       promptTokens: 5,
       totalTokens: 12,
     });
+    expect(normalizeUsage(result.lastAssistant?.usage)?.reasoningTokens).toBe(3);
+    expect(normalizeUsage(result.currentAttemptAssistant?.usage)?.reasoningTokens).toBe(3);
     expect(result.replayMetadata.replaySafe).toBe(true);
+  });
+
+  it("projects a current-turn model reroute onto the terminal assistant", async () => {
+    const projector = await createProjector();
+    await projector.handleNotification(
+      forCurrentTurn("model/rerouted", {
+        fromModel: "gpt-5.4-codex",
+        toModel: "gpt-5.4-codex-mini",
+        reason: "high_risk_cyber_activity",
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([{ type: "agentMessage", id: "msg-rerouted", text: "done" }]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.currentAttemptAssistant?.responseModel).toBe("gpt-5.4-codex-mini");
+    expect(result.lastAssistant?.responseModel).toBe("gpt-5.4-codex-mini");
+    expect(result).toMatchObject({
+      terminalTurnId: "turn-1",
+    });
   });
 
   it("keeps reopened final answers as Activity candidates until turn completion selects one", async () => {
@@ -263,6 +289,40 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     expect(candidateStatuses).toEqual(["candidate", "superseded"]);
   });
 
+  it("selects an unphased final answer supplied only by the completed-turn snapshot", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onAgentEvent,
+    });
+
+    await projector.handleNotification(
+      turnCompleted([{ type: "agentMessage", id: "answer-unphased", text: "done" }]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual(["done"]);
+    expect(result.messagesSnapshot.at(-1)).toEqual(
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+      }),
+    );
+    expect(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .filter((event) => event.stream === "item" && event.data.kind === "answer_candidate")
+        .map((event) => event.data),
+    ).toEqual([
+      expect.objectContaining({
+        itemId: "answer-unphased",
+        status: "selected",
+        progressText: "done",
+        hideFromChannelProgress: true,
+      }),
+    ]);
+  });
+
   it("streams final-answer assistant deltas into partial replies", async () => {
     const onAgentEvent = vi.fn();
     const onPartialReply = vi.fn();
@@ -301,9 +361,8 @@ describe("CodexAppServerEventProjector assistant projection", () => {
   });
 
   it("streams assistant deltas when the app-server omits the item phase", async () => {
-    // Newer Codex app-servers (>= 0.139) stream agentMessage deltas without a
-    // "final_answer" phase. These surface on the replaceable agent-event path;
-    // legacy append-oriented partial callbacks stay quiet.
+    // Codex can stream agentMessage deltas without a final-answer phase. Route
+    // them through replaceable events, not append-oriented partial callbacks.
     const onAgentEvent = vi.fn();
     const onPartialReply = vi.fn();
     const params = await createParams();

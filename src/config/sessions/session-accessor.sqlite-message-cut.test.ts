@@ -21,13 +21,19 @@ import {
   readSessionTranscriptMessageEvents,
   rewindSessionToMessage,
   switchSessionBranch,
+  updateSessionEntry,
   upsertSessionEntry,
 } from "./session-accessor.js";
-import { listSqliteSessionBranches } from "./session-accessor.sqlite.js";
+import { listSqliteSessionBranches } from "./session-accessor.sqlite-message-cut.js";
+import type { InternalSessionEntry } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const agentId = "main";
 const sessionKey = "agent:main:message-cut";
+const sourceExpectedState = {
+  lifecycleRevision: "source-lifecycle-revision",
+  sessionId: "message-cut-source",
+};
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -74,7 +80,7 @@ async function createSession(options: { activeLeafTarget?: string } = {}) {
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   const sessionId = "message-cut-source";
   const scope = { agentId, env, sessionId, sessionKey };
-  await upsertSessionEntry(scope, {
+  const entry: InternalSessionEntry = {
     agentHarnessId: "embedded",
     claudeCliSessionId: "claude-conversation",
     cliSessionBindings: { "claude-cli": { sessionId: "claude-conversation" } },
@@ -89,12 +95,14 @@ async function createSession(options: { activeLeafTarget?: string } = {}) {
     }),
     forkSource: { sessionKey: "agent:main:root", sessionId: "root-session" },
     lifecycleRevision: "source-lifecycle-revision",
+    lifecycleRunId: "source-run",
     modelOverride: "gpt-5",
     modelOverrideSource: "user",
     providerOverride: "openai",
     sessionId,
     updatedAt: Date.now(),
-  });
+  };
+  await upsertSessionEntry(scope, entry);
   for (const event of [
     { type: "session", id: sessionId, version: 3, timestamp: "2026-07-18T00:00:00.000Z" },
     {
@@ -228,7 +236,12 @@ describe("SQLite session message cuts", () => {
 
       const result =
         mode === "rewind"
-          ? await rewindSessionToMessage({ agentId, env, entryId: "user-2", sessionKey })
+          ? await rewindSessionToMessage({
+              agentId,
+              env,
+              entryId: "user-2",
+              sessionKey,
+            })
           : mode === "switch"
             ? await switchSessionBranch({
                 agentId,
@@ -260,6 +273,69 @@ describe("SQLite session message cuts", () => {
       }
       expect(listed.branches.find((branch) => branch.active)).toMatchObject({
         leafEntryId: mode === "switch" ? "off-path-user" : "assistant-1",
+      });
+    },
+  );
+
+  it.each(["rewind", "switch", "fork"] as const)(
+    "rejects %s when the source lifecycle changes in the writer queue",
+    async (mode) => {
+      const { env, scope } = await createSession();
+      let releaseOwnerChange = () => {};
+      const ownerChangeGate = new Promise<void>((resolve) => {
+        releaseOwnerChange = resolve;
+      });
+      let markOwnerChangeStarted = () => {};
+      const ownerChangeStarted = new Promise<void>((resolve) => {
+        markOwnerChangeStarted = resolve;
+      });
+      const ownerChange = updateSessionEntry(scope, async () => {
+        markOwnerChangeStarted();
+        await ownerChangeGate;
+        return { lifecycleRevision: "replacement-lifecycle-revision" };
+      });
+      await ownerChangeStarted;
+
+      const targetKey = `${sessionKey}:raced-fork`;
+      const mutation =
+        mode === "rewind"
+          ? rewindSessionToMessage({
+              agentId,
+              env,
+              entryId: "user-2",
+              sessionKey,
+            })
+          : mode === "switch"
+            ? switchSessionBranch({
+                agentId,
+                env,
+                leafEntryId: "off-path-user",
+                sessionKey,
+              })
+            : forkSessionAtMessage({
+                agentId,
+                env,
+                entryId: "user-2",
+                sessionKey,
+                targetKey,
+              });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      releaseOwnerChange();
+
+      await ownerChange;
+      await expect(mutation).resolves.toEqual({ status: "failed" });
+      expect(loadSessionEntry(scope)).toMatchObject({
+        lifecycleRevision: "replacement-lifecycle-revision",
+        sessionId: sourceExpectedState.sessionId,
+      });
+      expect(loadSessionEntry({ agentId, env, sessionKey: targetKey })).toBeUndefined();
+      await expect(listSessionBranches({ agentId, env, sessionKey })).resolves.toMatchObject({
+        status: "ok",
+        branches: expect.arrayContaining([
+          expect.objectContaining({ active: true, leafEntryId: "assistant-2" }),
+        ]),
       });
     },
   );
@@ -371,7 +447,12 @@ describe("SQLite session message cuts", () => {
     const { env } = await createSession();
 
     await expect(
-      switchSessionBranch({ agentId, env, leafEntryId, sessionKey }),
+      switchSessionBranch({
+        agentId,
+        env,
+        leafEntryId,
+        sessionKey,
+      }),
     ).resolves.toMatchObject({ status });
   });
 
@@ -495,6 +576,7 @@ describe("SQLite session message cuts", () => {
     ).toEqual([result.entry.sessionId, "user-1", "assistant-1"]);
     expect(loadSessionEntry(scope)?.sessionId).toBe(scope.sessionId);
     expect(result.entry.lifecycleRevision).not.toBe("source-lifecycle-revision");
+    expect((result.entry as InternalSessionEntry).lifecycleRunId).toBeUndefined();
     expect(result.entry.cliSessionBindings).toBeUndefined();
     expect(deliveryContextFromSession(result.entry)).toBeUndefined();
     expect(result.entry.parentSessionKey).toBe(canonicalSourceKey);
@@ -524,7 +606,12 @@ describe("SQLite session message cuts", () => {
     const { env } = await createSession();
 
     await expect(
-      rewindSessionToMessage({ agentId, env, entryId, sessionKey }),
+      rewindSessionToMessage({
+        agentId,
+        env,
+        entryId,
+        sessionKey,
+      }),
     ).resolves.toMatchObject({ status });
   });
 });

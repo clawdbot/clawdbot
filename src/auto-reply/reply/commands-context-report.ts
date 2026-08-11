@@ -188,8 +188,8 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
 
   const cachedContextUsageTokens = resolveFreshSessionTotalTokens(targetSessionEntry);
   const session = {
-    totalTokens: targetSessionEntry?.totalTokens ?? null,
-    totalTokensFresh: targetSessionEntry?.totalTokensFresh ?? null,
+    totalTokens: cachedContextUsageTokens ?? null,
+    totalTokensFresh: targetSessionEntry ? cachedContextUsageTokens !== undefined : null,
     inputTokens: targetSessionEntry?.inputTokens ?? null,
     outputTokens: targetSessionEntry?.outputTokens ?? null,
     contextTokens: params.contextTokens ?? null,

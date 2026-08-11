@@ -1,4 +1,5 @@
 import { runGit } from "../agents/worktrees/git.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   gitOutput,
   resolveBranchLanding,
@@ -45,13 +46,7 @@ function createLocalGitCache<T>() {
     const entry = { expiresAt: Date.now() + LOCAL_GIT_CACHE_MS, promise: load() };
     entries.delete(key);
     entries.set(key, entry);
-    while (entries.size > LOCAL_GIT_CACHE_LIMIT) {
-      const oldestKey = entries.keys().next().value;
-      if (oldestKey === undefined) {
-        break;
-      }
-      entries.delete(oldestKey);
-    }
+    pruneMapToMaxSize(entries, LOCAL_GIT_CACHE_LIMIT);
     return entry.promise;
   };
 }

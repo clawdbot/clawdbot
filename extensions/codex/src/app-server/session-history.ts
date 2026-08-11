@@ -10,50 +10,39 @@ import {
   migrateSessionEntries,
   parseSessionEntries,
 } from "openclaw/plugin-sdk/agent-sessions";
+import { readCodexSessionTranscriptEventsBeforeAdmission } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
 import {
-  listSessionEntries,
+  getSessionEntry,
   parseSqliteSessionFileMarker,
+  resolveTranscriptSessionKeyBySessionId,
   type SqliteSessionFileMarker,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  readSessionTranscriptEvents,
+  type TranscriptTurnAdmission,
+  type SessionTranscriptTargetParams,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import { sanitizeCodexHistoryImagePayloads } from "./image-payload-sanitizer.js";
 
 function isMissingFileError(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
 }
 
-type CodexMirroredSessionHistoryTarget = {
+export type CodexMirroredSessionHistoryTarget = {
   agentId?: string;
   sessionFile: string;
   sessionId: string;
   sessionKey?: string;
+  sessionTarget?: Partial<SessionTranscriptTargetParams>;
 };
-
-function selectPreferredSessionKey(
-  matches: Array<{ entry: { updatedAt?: number }; sessionKey: string }>,
-  sessionId: string,
-): string | undefined {
-  const structural = matches.filter(
-    ({ sessionKey }) => sessionKey === sessionId || sessionKey.endsWith(`:${sessionId}`),
-  );
-  const candidates = structural.length > 0 ? structural : matches;
-  if (candidates.length === 1) {
-    return candidates[0]?.sessionKey;
-  }
-  const sorted = candidates.toSorted(
-    (left, right) => (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0),
-  );
-  return (sorted[0]?.entry.updatedAt ?? 0) > (sorted[1]?.entry.updatedAt ?? 0)
-    ? sorted[0]?.sessionKey
-    : undefined;
-}
 
 /** Returns sanitized session-context messages for a Codex mirrored session file. */
 export async function readCodexMirroredSessionHistoryMessages(
   target: CodexMirroredSessionHistoryTarget,
+  admission?: TranscriptTurnAdmission,
 ): Promise<AgentMessage[] | undefined> {
   try {
-    const entries = await readCodexMirroredSessionEntries(target);
+    const entries = await readCodexMirroredSessionEntries(target, admission);
     if (entries.length === 0) {
       return [];
     }
@@ -70,6 +59,9 @@ export async function readCodexMirroredSessionHistoryMessages(
       // A `session` header without a string id is a corrupted Codex transcript,
       // not a foreign one — keep it on the warn path.
       return undefined;
+    }
+    if (firstEntry.id !== target.sessionId) {
+      return [];
     }
     migrateSessionEntries(entries);
     const sessionEntries = entries.filter((entry): entry is SessionEntry => {
@@ -95,7 +87,31 @@ export async function readCodexMirroredSessionHistoryMessages(
 
 async function readCodexMirroredSessionEntries(
   target: CodexMirroredSessionHistoryTarget,
+  admission?: TranscriptTurnAdmission,
 ): Promise<SessionEntry[]> {
+  if (target.sessionTarget) {
+    const { agentId, sessionId, sessionKey, storePath } = target.sessionTarget;
+    if (
+      !agentId ||
+      !sessionId ||
+      !sessionKey ||
+      !storePath ||
+      sessionId !== target.sessionId ||
+      (target.agentId !== undefined && agentId !== target.agentId) ||
+      (target.sessionKey !== undefined && sessionKey !== target.sessionKey)
+    ) {
+      return [];
+    }
+    const transcriptTarget = {
+      agentId,
+      sessionId,
+      sessionKey,
+      storePath,
+    };
+    return (await (admission
+      ? readCodexSessionTranscriptEventsBeforeAdmission(transcriptTarget, admission)
+      : readSessionTranscriptEvents(transcriptTarget))) as SessionEntry[];
+  }
   const sqliteMarker = parseSqliteSessionFileMarker(target.sessionFile);
   if (sqliteMarker) {
     if (
@@ -108,12 +124,33 @@ async function readCodexMirroredSessionEntries(
     if (!sessionKey) {
       return [];
     }
-    return (await readSessionTranscriptEvents({
+    const transcriptTarget = {
       agentId: sqliteMarker.agentId,
       sessionId: sqliteMarker.sessionId,
       sessionKey,
       storePath: sqliteMarker.storePath,
-    })) as SessionEntry[];
+    };
+    return (await (admission
+      ? readCodexSessionTranscriptEventsBeforeAdmission(transcriptTarget, admission)
+      : readSessionTranscriptEvents(transcriptTarget))) as SessionEntry[];
+  }
+  if (admission) {
+    if (
+      admission.sessionId !== target.sessionId ||
+      (target.agentId !== undefined && admission.agentId !== target.agentId) ||
+      (target.sessionKey !== undefined && admission.sessionKey !== target.sessionKey)
+    ) {
+      return [];
+    }
+    return (await readCodexSessionTranscriptEventsBeforeAdmission(
+      {
+        agentId: admission.agentId,
+        sessionId: admission.sessionId,
+        sessionKey: admission.sessionKey,
+        storePath: admission.storePath,
+      },
+      admission,
+    )) as SessionEntry[];
   }
   return parseSessionEntries(await fs.readFile(target.sessionFile, "utf-8")) as SessionEntry[];
 }
@@ -123,17 +160,20 @@ function resolveSqliteMarkerSessionKey(
   marker: SqliteSessionFileMarker,
 ): string | undefined {
   const explicitSessionKey = target.sessionKey?.trim();
-  const entries = listSessionEntries({
-    agentId: marker.agentId,
-    readOnly: true,
-    storePath: marker.storePath,
-  });
   if (explicitSessionKey) {
-    const explicitEntry = entries.find(({ sessionKey }) => sessionKey === explicitSessionKey);
+    // The SDK exact-entry accessor uses a read-only database handle.
+    const explicitEntry = getSessionEntry({
+      agentId: marker.agentId,
+      sessionKey: explicitSessionKey,
+      storePath: marker.storePath,
+    });
     if (explicitEntry) {
-      return explicitEntry.entry.sessionId === marker.sessionId ? explicitSessionKey : undefined;
+      return explicitEntry.sessionId === marker.sessionId ? explicitSessionKey : undefined;
     }
   }
-  const matches = entries.filter(({ entry }) => entry.sessionId === marker.sessionId);
-  return selectPreferredSessionKey(matches, marker.sessionId);
+  return resolveTranscriptSessionKeyBySessionId({
+    agentId: marker.agentId,
+    sessionId: marker.sessionId,
+    storePath: marker.storePath,
+  });
 }

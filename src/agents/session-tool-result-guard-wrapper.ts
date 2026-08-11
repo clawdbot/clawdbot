@@ -54,6 +54,7 @@ export function guardSessionManager(
     allowedToolNames?: Iterable<string>;
     trigger?: EmbeddedRunTrigger;
     preparedUserTurnMessage?: PersistedUserTurnMessage;
+    preparedUserTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
     suppressNextUserMessagePersistence?: boolean;
     suppressTranscriptOnlyAssistantPersistence?: boolean;
     suppressAssistantErrorPersistence?: boolean;
@@ -175,17 +176,21 @@ export function guardSessionManager(
       const withProvenance = applyInputProvenanceToUserMessage(message, opts?.inputProvenance);
       const runtimeContext = takeRuntimeUserTurnTranscriptContext(message);
       const prepared = runtimeContext?.message ?? pendingPreparedUserTurnMessage;
+      const recorder =
+        runtimeContext?.recorder ??
+        (prepared !== undefined && prepared === pendingPreparedUserTurnMessage
+          ? opts?.preparedUserTurnTranscriptRecorder
+          : undefined);
       if (message.role === "user") {
-        opts?.onUserMessagePreparingForPersistence?.(message, runtimeContext?.recorder, prepared);
+        opts?.onUserMessagePreparingForPersistence?.(message, recorder, prepared);
       }
       const merged = mergePreparedUserTurnMessageForRuntime({
         runtimeMessage: withProvenance,
         ...(prepared ? { preparedMessage: prepared } : {}),
       });
       if (merged !== withProvenance) {
-        if (runtimeContext) {
-          queuedUserTurnTranscriptRecorder = runtimeContext.recorder;
-        } else {
+        queuedUserTurnTranscriptRecorder = recorder;
+        if (!runtimeContext) {
           pendingPreparedUserTurnMessage = undefined;
         }
       }
@@ -213,11 +218,15 @@ export function guardSessionManager(
     suppressAssistantErrorPersistence: opts?.suppressAssistantErrorPersistence,
     onMessagePersisted: opts?.onMessagePersisted,
     withCompactionPersistence: opts?.withCompactionPersistence,
-    onUserMessagePersisted: async (message) => {
+    onUserMessagePersisted: async (message, persistence) => {
       const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);
       runtimeUserMessageByPersistedMessage.delete(message);
       const recorder = takeRuntimeUserTurnTranscriptRecorder(message);
-      recorder?.markRuntimePersisted(message);
+      if (persistence.anchor) {
+        recorder?.markRuntimePersisted(message, persistence.anchor);
+      } else {
+        recorder?.markRuntimePersisted(message);
+      }
       await opts?.onUserMessagePersisted?.(message, runtimeMessage);
     },
     onUserMessagePersistenceSuppressed: async (message) => {

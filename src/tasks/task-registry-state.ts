@@ -29,8 +29,7 @@ export const taskIdsByOwnerKey = taskRegistryProcessState.taskIdsByOwnerKey;
 export const taskIdsByParentFlowId = taskRegistryProcessState.taskIdsByParentFlowId;
 export const taskIdsByRelatedSessionKey = taskRegistryProcessState.taskIdsByRelatedSessionKey;
 export const tasksWithPendingDelivery = taskRegistryProcessState.tasksWithPendingDelivery;
-let listenerStarted = false;
-let listenerStop: (() => void) | null = null;
+export const taskActivityByTaskId = taskRegistryProcessState.taskActivityByTaskId;
 type TaskRegistryRestoreState =
   | { status: "uninitialized" }
   | { status: "restoring" }
@@ -83,21 +82,20 @@ export function setTaskRegistryListenerStarter(starter: () => void): void {
 }
 
 export function claimTaskRegistryListenerStart(): boolean {
-  if (listenerStarted) {
+  if (taskRegistryProcessState.listenerStop !== undefined) {
     return false;
   }
-  listenerStarted = true;
+  taskRegistryProcessState.listenerStop = null;
   return true;
 }
 
 export function setTaskRegistryListenerStop(stop: (() => void) | null): void {
-  listenerStop = stop;
+  taskRegistryProcessState.listenerStop = stop;
 }
 
 export function resetTaskRegistryListenerState(): void {
-  listenerStop?.();
-  listenerStop = null;
-  listenerStarted = false;
+  taskRegistryProcessState.listenerStop?.();
+  taskRegistryProcessState.listenerStop = undefined;
 }
 
 function clearTaskFlowSyncRetries(): void {
@@ -252,6 +250,12 @@ export function tryPersistTaskDeliveryStateUpsert(state: TaskDeliveryState): boo
 
 export function clearTaskRegistryMemory(): void {
   clearTaskFlowSyncRetries();
+  for (const activity of taskActivityByTaskId.values()) {
+    if (activity.flushTimer) {
+      clearTimeout(activity.flushTimer);
+    }
+  }
+  taskActivityByTaskId.clear();
   tasks.clear();
   taskDeliveryStates.clear();
   taskIdsByRunId.clear();

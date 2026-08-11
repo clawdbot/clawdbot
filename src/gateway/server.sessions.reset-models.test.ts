@@ -12,12 +12,12 @@ import { listSessionStateEventsSince } from "../sessions/session-state-events.js
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
   sessionStoreEntry,
   directSessionReq,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 type ResetSessionEntry = {
   sessionId?: string;
@@ -51,9 +51,7 @@ type ResetSessionEntry = {
   model?: string;
   authProfileOverrideSource?: string;
   authProfileOverrideCompactionCount?: number;
-  fallbackNoticeSelectedModel?: string;
-  fallbackNoticeActiveModel?: string;
-  fallbackNoticeReason?: string;
+  fallbackNotice?: SessionEntry["fallbackNotice"];
   sendPolicy?: string;
   queueMode?: string;
   queueDebounceMs?: number;
@@ -132,6 +130,10 @@ const ownedChildMetadata = {
   groupChannel: "dev",
   space: "hq",
   spawnedBy: "agent:main:main",
+  completionOwnerSessionKey: "agent:main:discord:direct:alice",
+  inheritedToolPolicyVersion: 1,
+  inheritedToolAllow: ["read", "message"],
+  inheritedToolDeny: ["exec"],
   spawnedWorkspaceDir: "/tmp/child-workspace",
   spawnedCwd: "/tmp/task-repo",
   parentSessionKey: "agent:main:main",
@@ -544,9 +546,12 @@ test("sessions.reset clears fallback-pinned model overrides and restores the sel
       providerOverride: "anthropic",
       modelOverride: "claude-opus-4-1",
       modelOverrideSource: "auto",
-      fallbackNoticeSelectedModel: "openai/gpt-test-a",
-      fallbackNoticeActiveModel: "anthropic/claude-opus-4-1",
-      fallbackNoticeReason: "rate limit",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "openai/gpt-test-a",
+        activeModel: "anthropic/claude-opus-4-1",
+        reason: "rate limit",
+      },
     },
     expected: {
       providerOverride: undefined,
@@ -564,9 +569,12 @@ test("sessions.reset follows the updated default after an auto fallback pinned a
       providerOverride: "anthropic",
       modelOverride: "claude-opus-4-1",
       modelOverrideSource: "auto",
-      fallbackNoticeSelectedModel: "openai/gpt-test-a",
-      fallbackNoticeActiveModel: "anthropic/claude-opus-4-1",
-      fallbackNoticeReason: "rate limit",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "openai/gpt-test-a",
+        activeModel: "anthropic/claude-opus-4-1",
+        reason: "rate limit",
+      },
     },
     expected: {
       providerOverride: undefined,

@@ -149,6 +149,7 @@ public struct OpenClawChatView: View {
     private let dictationControl: OpenClawChatDictationControl?
     private let voiceNoteControl: OpenClawChatVoiceNoteControl?
     private let speech: OpenClawChatSpeechController?
+    private let mediaPlaybackAllowed: @MainActor @Sendable () -> Bool
 
     private enum Layout {
         #if os(macOS)
@@ -203,7 +204,8 @@ public struct OpenClawChatView: View {
         talkControl: OpenClawChatTalkControl? = nil,
         dictationControl: OpenClawChatDictationControl? = nil,
         voiceNoteControl: OpenClawChatVoiceNoteControl? = nil,
-        speech: OpenClawChatSpeechController? = nil)
+        speech: OpenClawChatSpeechController? = nil,
+        mediaPlaybackAllowed: @escaping @MainActor @Sendable () -> Bool = { true })
     {
         _viewModel = State(initialValue: viewModel)
         self.drawsBackground = drawsBackground
@@ -226,6 +228,7 @@ public struct OpenClawChatView: View {
         self.dictationControl = dictationControl
         self.voiceNoteControl = voiceNoteControl
         self.speech = speech
+        self.mediaPlaybackAllowed = mediaPlaybackAllowed
     }
 
     public var body: some View {
@@ -492,8 +495,16 @@ public struct OpenClawChatView: View {
                 assistantAvatarTint: self.assistantAvatarTint,
                 showsAssistantAvatar: self.showsAssistantAvatars,
                 isClean: self.composerChrome == .clean,
-                runIdentity: self.viewModel.workingIndicatorIdentity)
+                runIdentity: self.viewModel.workingIndicatorIdentity,
+                outputTokens: self.viewModel.liveRunOutputTokens)
                 .equatable()
+        }
+
+        if self.displayOptions.contains(.toolActivity), !self.viewModel.subagentActivities.isEmpty {
+            ChatSubagentActivityList(
+                activities: self.viewModel.subagentActivities,
+                hiddenWorkingCount: self.viewModel.hiddenWorkingSubagentCount)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
 
         if self.displayOptions.contains(.toolActivity), !self.viewModel.pendingToolCalls.isEmpty {
@@ -545,12 +556,15 @@ public struct OpenClawChatView: View {
             inlineWidgetResourceResolver: { [weak viewModel] path, failedResource in
                 await viewModel?.resolveInlineWidgetResource(path: path, replacing: failedResource)
             },
-            imageArtifactResolverReady: self.viewModel.healthOK,
-            loadImageArtifact: { [weak viewModel] artifactId in
+            mediaArtifactResolverReady: self.viewModel.healthOK,
+            mediaPlaybackAllowed: self.mediaPlaybackAllowed,
+            loadMediaArtifact: { [weak viewModel] artifactId, kind, playback in
                 guard let viewModel else { return nil }
-                return try await viewModel.transport.loadImageArtifact(
+                return try await viewModel.transport.loadMediaArtifact(
                     sessionKey: viewModel.sessionKey,
-                    artifactId: artifactId)
+                    artifactId: artifactId,
+                    kind: kind,
+                    playback: playback)
             })
             .frame(
                 maxWidth: .infinity,
@@ -787,7 +801,8 @@ public struct OpenClawChatView: View {
     }
 
     private var showsWorkingIndicator: Bool {
-        self.viewModel.hasBlockingRunActivity && !self.hasVisibleStreamingAssistantText
+        self.viewModel.hasBlockingRunActivity &&
+            (!self.hasVisibleStreamingAssistantText || self.viewModel.liveUsageRunID != nil)
     }
 
     private var turnRecapObservation: ChatTurnRecapObservation {
@@ -811,6 +826,7 @@ public struct OpenClawChatView: View {
 
     private var hasVisibleTransientContent: Bool {
         self.viewModel.hasBlockingRunActivity ||
+            (self.displayOptions.contains(.toolActivity) && !self.viewModel.subagentActivities.isEmpty) ||
             (self.displayOptions.contains(.toolActivity) && !self.viewModel.pendingToolCalls.isEmpty) ||
             self.hasVisibleStreamingAssistantText ||
             !self.viewModel.visibleQuestionCards.isEmpty
@@ -867,6 +883,7 @@ public struct OpenClawChatView: View {
         self.viewModel.messages.isEmpty &&
             !self.hasVisibleStreamingAssistantText &&
             !self.viewModel.hasBlockingRunActivity &&
+            self.viewModel.subagentActivities.isEmpty &&
             self.viewModel.pendingToolCalls.isEmpty
     }
 
@@ -919,6 +936,7 @@ public struct OpenClawChatView: View {
         guard self.hasPerformedInitialScroll else { return }
         if self.viewModel.messages.isEmpty,
            !self.viewModel.hasBlockingRunActivity,
+           self.viewModel.subagentActivities.isEmpty,
            self.viewModel.pendingToolCalls.isEmpty,
            self.viewModel.streamingAssistantText == nil
         {
@@ -1103,16 +1121,9 @@ extension OpenClawChatView {
     }
 
     private func primaryText(in message: OpenClawChatMessage) -> String {
-        let parts = message.content.compactMap { content -> String? in
-            let kind = (content.type ?? "text").lowercased()
-            guard kind == "text" || kind.isEmpty else { return nil }
-            return content.text
-        }
-        return OpenClawChatMessage.displayText(
-            contentText: parts.joined(separator: "\n"),
-            role: message.role,
-            stopReason: message.stopReason,
-            errorMessage: message.errorMessage)
+        ChatMessageVisibleText.displayText(
+            in: message,
+            includeThinking: self.displayOptions.contains(.reasoning))
     }
 
     private func hasInlineAttachments(in message: OpenClawChatMessage) -> Bool {

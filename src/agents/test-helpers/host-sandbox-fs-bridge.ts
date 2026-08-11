@@ -45,6 +45,25 @@ export function createSandboxFsBridgeFromResolver(
       const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
       await fs.writeFile(target.hostPath, buffer);
     },
+    createFileExclusive: async ({ filePath, cwd, data, mkdir = true }) => {
+      const target = resolvePath(filePath, cwd);
+      if (!target.hostPath) {
+        throw new Error(`Expected hostPath for ${target.containerPath}`);
+      }
+      if (mkdir) {
+        await fs.mkdir(path.dirname(target.hostPath), { recursive: true });
+      }
+      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      try {
+        await fs.writeFile(target.hostPath, buffer, { flag: "wx" });
+        return "created";
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          return "exists";
+        }
+        throw error;
+      }
+    },
     mkdirp: async ({ filePath, cwd }) => {
       const target = resolvePath(filePath, cwd);
       if (!target.hostPath) {
@@ -117,4 +136,22 @@ export function createHostSandboxFsBridge(rootDir: string): SandboxFsBridge {
   };
 
   return createSandboxFsBridgeFromResolver(resolvePath);
+}
+
+/** Creates a host-backed bridge that accepts the Docker-style /workspace mount path. */
+export function createContainerWorkspaceSandboxFsBridge(rootDir: string): SandboxFsBridge {
+  const root = path.resolve(rootDir);
+  return createSandboxFsBridgeFromResolver((filePath, cwd) => {
+    const normalized = filePath.replace(/\\/g, "/");
+    const relativePath = normalized.startsWith("/workspace/")
+      ? normalized.slice("/workspace/".length)
+      : normalized === "/workspace" || path.resolve(filePath) === root
+        ? ""
+        : path.relative(root, path.resolve(cwd ?? root, filePath)).replace(/\\/g, "/");
+    return {
+      hostPath: path.join(root, relativePath),
+      relativePath,
+      containerPath: relativePath ? path.posix.join("/workspace", relativePath) : "/workspace",
+    };
+  });
 }

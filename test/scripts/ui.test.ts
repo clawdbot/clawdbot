@@ -9,8 +9,7 @@ import {
   resolvePnpmSpawnCall,
   resolveSpawnCall,
   shouldUseCmdExeForCommand,
-} from "../../scripts/ui.js";
-
+} from "../../scripts/ui.mts";
 // writeFileSync creates the file before its content lands, so an existence
 // poll can observe an empty file on loaded runners; wait for bytes instead.
 function readNonEmpty(file: string): string | null {

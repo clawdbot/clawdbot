@@ -1,9 +1,11 @@
 /** Executes prepared CLI backend runs and owns their queue and resource lifecycle. */
 import crypto from "node:crypto";
+import { parse as parseSemver } from "semver";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
+import { compareValidSemver } from "../../infra/semver.js";
 import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
 import { appendBootstrapPromptWarning } from "../bootstrap-budget.js";
@@ -12,17 +14,15 @@ import {
   resolveCliRuntimeOwnerFingerprint,
 } from "../cli-auth-epoch.js";
 import { resolveCliExecutableIdentity } from "../cli-executable-identity.js";
-import type { CliOutput } from "../cli-output.js";
+import type { CliOutput } from "../cli-output-contracts.js";
 import {
   detectImageReferences,
   hasHydratableMediaImages,
 } from "../embedded-agent-runner/run/images.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
-import {
-  closeClaudeLiveSessionForContext,
-  shouldUseClaudeLiveSession,
-} from "./claude-live-session.js";
+import { buildClaudeOwnerKey, closeClaudeSession } from "./claude-live-registry.js";
+import { acceptsClaudeLive } from "./claude-live-session-policy.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { executeDeps } from "./execute-deps.js";
 import { createCliEventHandlers } from "./execute-events.js";
@@ -38,13 +38,12 @@ import {
 } from "./execute-logging.js";
 import {
   createCliAbortError,
-  resolveNodeClaudePlacement,
+  resolveNodeClaudeTarget,
   stripGatewayLocalClaudeArgs,
 } from "./execute-node-claude.js";
 import { executeCliProcess } from "./execute-process.js";
 import { createCliToolTracking } from "./execute-tool-tracking.js";
 import {
-  buildClaudeOwnerKey,
   buildCliArgs,
   enqueueCliRun,
   prepareCliPromptImagePayload,
@@ -68,6 +67,50 @@ function normalizeCliBackendThinkingLevel(
   level: PreparedCliRunContext["params"]["thinkLevel"],
 ): CliBackendThinkingLevel | undefined {
   return level === "ultra" ? "max" : level;
+}
+
+function exactToolAvailabilityError(params: {
+  code: "unsupported" | "runtime-unavailable";
+  isolatedCompletion: boolean;
+  message: string;
+}): Error {
+  if (!params.isolatedCompletion) {
+    return new Error(params.message);
+  }
+  const error = new Error(params.message) as Error & { code: typeof params.code };
+  error.name = "IsolatedCompletionRuntimeError";
+  error.code = params.code;
+  return error;
+}
+
+function assertExactToolAvailabilityRuntimeVersion(params: {
+  backendId: string;
+  policy: NonNullable<
+    PreparedCliRunContext["backendResolved"]["runtimeArtifact"]
+  >["exactToolAvailabilityVersionPolicy"];
+  executableIdentity: Awaited<ReturnType<typeof resolveCliExecutableIdentity>>;
+  isolatedCompletion: boolean;
+}): void {
+  const artifact = params.executableIdentity?.runtimeArtifact;
+  const packageVersion = artifact?.kind === "package-tree" ? artifact.packageVersion : undefined;
+  const parsedVersion = packageVersion ? parseSemver(packageVersion) : null;
+  const prereleaseChannel = parsedVersion?.prerelease[0];
+  const minimumVersion =
+    parsedVersion?.prerelease.length === 0
+      ? params.policy?.stableMinimum
+      : typeof prereleaseChannel === "string"
+        ? params.policy?.prereleaseMinimums?.[prereleaseChannel]
+        : undefined;
+  const comparison =
+    packageVersion && minimumVersion ? compareValidSemver(packageVersion, minimumVersion) : null;
+  if (comparison !== null && comparison >= 0) {
+    return;
+  }
+  throw exactToolAvailabilityError({
+    code: "unsupported",
+    isolatedCompletion: params.isolatedCompletion,
+    message: `CLI backend ${params.backendId} requires a supported package version for exact per-run tool availability${minimumVersion ? ` (requires >=${minimumVersion}` : " (unsupported release line"}${packageVersion ? `; found ${packageVersion})` : ")"}`,
+  });
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
@@ -95,7 +138,7 @@ export async function executePreparedCliRun(
     throw createCliAbortError();
   }
   const backend = context.preparedBackend.backend;
-  const nodePlacement = resolveNodeClaudePlacement(context);
+  const nodePlacement = resolveNodeClaudeTarget(context);
   const { sessionId: resolvedSessionId, isNew } = resolveSessionIdToSend({
     backend,
     cliSessionId: cliSessionIdToUse,
@@ -230,8 +273,7 @@ export async function executePreparedCliRun(
     cliSessionId: useResume ? resolvedSessionId : undefined,
     ownerKey: claudeOwnerKey,
   });
-  const useManagedClaudeLiveSession =
-    shouldUseClaudeLiveSession(context) && !params.onSuccessfulAuthBinding;
+  const useManagedClaudeLiveSession = acceptsClaudeLive(context) && !params.onSuccessfulAuthBinding;
   // Fresh-session retries invoke this function again. Keep one helper per
   // observable CLI attempt so every started call retains its own terminal event.
   const diagnostics = createClaudeCliModelCallDiagnostics({
@@ -292,6 +334,9 @@ export async function executePreparedCliRun(
   };
   const executeAttempt = async (): Promise<CliOutput> => {
     await context.preparedBackend.beforeExecution?.();
+    if (params.abortSignal?.aborted) {
+      throw createCliAbortError();
+    }
     const cliTurnStartedAt = Date.now();
     const restoreSkillEnv = params.skillsSnapshot
       ? applySkillEnvOverridesFromSnapshot({
@@ -392,7 +437,20 @@ export async function executePreparedCliRun(
       let executionLeadingArgv: readonly string[] = [];
       context.runtimeOwnerFingerprint = undefined;
       context.runtimeArtifactFingerprint = undefined;
-      if (params.onSuccessfulAuthBinding && !nodePlacement) {
+      const exactToolAvailabilityVersionPolicy = params.cliToolAvailability
+        ? context.backendResolved.runtimeArtifact?.exactToolAvailabilityVersionPolicy
+        : undefined;
+      if (exactToolAvailabilityVersionPolicy && nodePlacement) {
+        throw exactToolAvailabilityError({
+          code: "unsupported",
+          isolatedCompletion: params.isolatedCompletion === true,
+          message: `CLI backend ${context.backendResolved.id} cannot verify its exact tool-availability runtime on a paired node`,
+        });
+      }
+      if (
+        (params.onSuccessfulAuthBinding || exactToolAvailabilityVersionPolicy) &&
+        !nodePlacement
+      ) {
         const executableIdentity = await resolveCliExecutableIdentity({
           command: backend.command,
           cwd: context.cwd ?? context.workspaceDir,
@@ -402,9 +460,21 @@ export async function executePreparedCliRun(
             : {}),
         });
         if (!executableIdentity) {
-          throw new Error(
-            `CLI backend ${context.backendResolved.id} executable cannot be bound to one durable absolute owner`,
-          );
+          throw exactToolAvailabilityError({
+            code: "runtime-unavailable",
+            isolatedCompletion:
+              params.isolatedCompletion === true &&
+              exactToolAvailabilityVersionPolicy !== undefined,
+            message: `CLI backend ${context.backendResolved.id} executable cannot be bound to one durable absolute owner`,
+          });
+        }
+        if (exactToolAvailabilityVersionPolicy) {
+          assertExactToolAvailabilityRuntimeVersion({
+            backendId: context.backendResolved.id,
+            policy: exactToolAvailabilityVersionPolicy,
+            executableIdentity,
+            isolatedCompletion: params.isolatedCompletion === true,
+          });
         }
         executionCommand = executableIdentity.invocation.command;
         executionLeadingArgv = executableIdentity.invocation.leadingArgv;
@@ -413,7 +483,7 @@ export async function executePreparedCliRun(
           backendId: context.backendResolved.id,
           executableIdentity,
         });
-        if (!context.authBindingFingerprint) {
+        if (params.onSuccessfulAuthBinding && !context.authBindingFingerprint) {
           context.runtimeOwnerFingerprint = await resolveCliRuntimeOwnerFingerprint({
             provider: params.provider,
             config: params.config ?? context.contextEngineConfig,
@@ -512,10 +582,16 @@ export async function executePreparedCliRun(
     if (!runOutput) {
       throw new Error("CLI run completed without output");
     }
-    return toolTracking.withExecutionEvidence(runOutput);
+    return toolTracking.withExecutionEvidence({
+      ...runOutput,
+      toolSummary: events.getToolSummary(),
+    });
   };
   try {
     completedOutput = await enqueueCliRun(queueKey, async () => {
+      if (params.abortSignal?.aborted) {
+        throw createCliAbortError();
+      }
       if (params.lifecycleGeneration) {
         assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       }
@@ -530,7 +606,7 @@ export async function executePreparedCliRun(
         }
         // The fork argument only applies at process startup; a cached warm child
         // would run inside the source session. Force a fresh spawn.
-        await closeClaudeLiveSessionForContext(context);
+        await closeClaudeSession(context, "restart");
       }
       return await executeAttempt();
     });

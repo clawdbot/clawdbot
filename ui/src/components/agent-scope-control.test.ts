@@ -23,6 +23,31 @@ function createSelection(setScope: (agentId: string | null) => void) {
 }
 
 describe("renderAgentScopeControl", () => {
+  it("renders only when multiple configured agents are selectable", () => {
+    const container = document.createElement("div");
+    const renderAgents = (agents: Array<{ id: string; name: string }>) => {
+      render(
+        renderAgentScopeControl({
+          agents,
+          selection: createSelection(vi.fn()),
+        }),
+        container,
+      );
+    };
+
+    renderAgents([]);
+    expect(container.querySelector(".agent-scope-control")).toBeNull();
+
+    renderAgents([{ id: "main", name: "Main agent" }]);
+    expect(container.querySelector(".agent-scope-control")).toBeNull();
+
+    renderAgents([
+      { id: "main", name: "Main agent" },
+      { id: "writer", name: "Writer" },
+    ]);
+    expect(container.querySelector(".agent-scope-control")).not.toBeNull();
+  });
+
   it("does not wrap dropdown options in a label that reactivates the trigger", async () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -55,7 +80,10 @@ describe("renderAgentScopeControl", () => {
 
     render(
       renderAgentScopeControl({
-        agents: [{ id: "main", name: "Main agent", identity: { emoji: "🦞" } }],
+        agents: [
+          { id: "main", name: "Main agent", identity: { emoji: "🦞" } },
+          { id: "writer", name: "Writer" },
+        ],
         additionalAgentIds: ["retired"],
         selection: createSelection(setScope),
       }),
@@ -65,7 +93,12 @@ describe("renderAgentScopeControl", () => {
     const select = container.querySelector<AgentSelectElement>("openclaw-agent-select");
     expect(select).not.toBeNull();
     await select?.updateComplete;
-    expect(select?.options.map((option) => option.value)).toEqual(["", "main", "retired"]);
+    expect(select?.options.map((option) => option.value)).toEqual([
+      "",
+      "main",
+      "retired",
+      "writer",
+    ]);
     expect(select?.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
       "🦞",
     );

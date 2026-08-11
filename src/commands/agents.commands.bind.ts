@@ -11,7 +11,7 @@ import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { describeBinding } from "./agents.binding-format.js";
-import { requireValidConfig, requireValidConfigFileSnapshot } from "./agents.command-shared.js";
+import { requireValidConfig, requireValidConfigFileSnapshot } from "./config-validation.js";
 
 type AgentBindingsModule = typeof import("./agents.bindings.js");
 
@@ -179,7 +179,7 @@ export async function agentsBindingsCommand(
   opts: AgentsBindingsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const cfg = await requireValidConfig(runtime);
+  const cfg = await requireValidConfig(runtime, { skipPluginValidation: true });
   if (!cfg) {
     return;
   }

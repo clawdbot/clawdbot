@@ -1,11 +1,15 @@
 // Matrix plugin module implements outbound behavior.
-import { createReplyToFanout } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createMessageReceiptFromOutboundResults,
+  createReplyToFanout,
+} from "openclaw/plugin-sdk/channel-outbound";
+import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import {
   renderMessagePresentationFallbackText,
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import {
-  resolvePayloadMediaUrls,
+  resolveSendableOutboundReplyParts,
   sendPayloadMediaSequence,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -104,7 +108,7 @@ function resolveMatrixDeliveryProgress(
 ) {
   return onDeliveryResult
     ? async (result: Awaited<ReturnType<typeof sendMessageMatrix>>) => {
-        await onDeliveryResult({ channel: "matrix", ...result });
+        await onDeliveryResult(attachChannelToResult("matrix", result));
       }
     : undefined;
 }
@@ -143,6 +147,8 @@ export const matrixOutbound: ChannelOutboundAdapter = {
     threadId,
     accountId,
     audioAsVoice,
+    deliveryQueueId,
+    onPlatformSendDispatch,
     onDeliveryResult,
   }) => {
     const send =
@@ -154,13 +160,14 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       ...(replyToIdSource !== undefined ? { replyToIdSource } : {}),
       ...(replyToMode !== undefined ? { replyToMode } : {}),
     });
-    const urls = resolvePayloadMediaUrls(payload);
+    const urls = resolveSendableOutboundReplyParts(payload).mediaUrls;
     const payloadText = resolveMatrixPayloadText(payload);
     if (urls.length > 0) {
+      const sentResults: Awaited<ReturnType<typeof sendMessageMatrix>>[] = [];
       const lastResult = await sendPayloadMediaSequence({
         text: payloadText,
         mediaUrls: urls,
-        send: async ({ text, mediaUrl, isFirst }) =>
+        send: async ({ text, mediaUrl, index, isFirst }) =>
           await send(to, text, {
             cfg,
             mediaUrl,
@@ -171,16 +178,27 @@ export const matrixOutbound: ChannelOutboundAdapter = {
             threadId: resolvedThreadId,
             accountId: accountId ?? undefined,
             audioAsVoice: payload.audioAsVoice ?? audioAsVoice,
+            deliveryQueueId,
+            deliveryPartIndex: index,
+            deliveryPartCount: urls.length,
+            onPlatformSendDispatch,
             extraContent: isFirst ? resolveMatrixExtraContent(payload) : undefined,
             onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
           }),
+        onResult: (result) => {
+          sentResults.push(result);
+        },
       });
       if (lastResult !== undefined) {
-        return {
-          channel: "matrix",
-          messageId: lastResult.messageId,
-          roomId: lastResult.roomId,
-        };
+        // One payload owns one receipt; keep every attachment and its original reply metadata.
+        const receipt = createMessageReceiptFromOutboundResults({ results: sentResults });
+        receipt.parts = receipt.parts.map((part, index) => ({ ...part, index }));
+        return attachChannelToResult("matrix", {
+          ...lastResult,
+          primaryMessageId: receipt.primaryPlatformMessageId,
+          receipt,
+          content: sentResults.map((result) => result.content).join("\n"),
+        });
       }
     }
     const result = await send(to, payloadText, {
@@ -192,14 +210,14 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       threadId: resolvedThreadId,
       accountId: accountId ?? undefined,
       audioAsVoice: payload.audioAsVoice ?? audioAsVoice,
+      deliveryQueueId,
+      deliveryPartIndex: 0,
+      deliveryPartCount: 1,
+      onPlatformSendDispatch,
       extraContent: resolveMatrixExtraContent(payload),
       onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
     });
-    return {
-      channel: "matrix",
-      messageId: result.messageId,
-      roomId: result.roomId,
-    };
+    return attachChannelToResult("matrix", result);
   },
   sendText: async ({
     cfg,
@@ -210,6 +228,10 @@ export const matrixOutbound: ChannelOutboundAdapter = {
     threadId,
     accountId,
     audioAsVoice,
+    deliveryQueueId,
+    deliveryPartIndex,
+    deliveryPartCount,
+    onPlatformSendDispatch,
     onDeliveryResult,
   }) => {
     const send =
@@ -222,13 +244,13 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       threadId: resolvedThreadId,
       accountId: accountId ?? undefined,
       audioAsVoice,
+      deliveryQueueId,
+      deliveryPartIndex,
+      ...(deliveryQueueId !== undefined ? { deliveryPartCount } : {}),
+      onPlatformSendDispatch,
       onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
     });
-    return {
-      channel: "matrix",
-      messageId: result.messageId,
-      roomId: result.roomId,
-    };
+    return attachChannelToResult("matrix", result);
   },
   sendMedia: async ({
     cfg,
@@ -237,11 +259,16 @@ export const matrixOutbound: ChannelOutboundAdapter = {
     mediaUrl,
     mediaLocalRoots,
     mediaReadFile,
+    mediaAccess,
     deps,
     replyToId,
     threadId,
     accountId,
     audioAsVoice,
+    deliveryQueueId,
+    deliveryPartIndex,
+    deliveryPartCount,
+    onPlatformSendDispatch,
     onDeliveryResult,
   }) => {
     const send =
@@ -253,17 +280,18 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       mediaUrl,
       mediaLocalRoots,
       mediaReadFile,
+      mediaAccess,
       replyToId: replyToId ?? undefined,
       threadId: resolvedThreadId,
       accountId: accountId ?? undefined,
       audioAsVoice,
+      deliveryQueueId,
+      deliveryPartIndex,
+      ...(deliveryQueueId !== undefined ? { deliveryPartCount } : {}),
+      onPlatformSendDispatch,
       onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
     });
-    return {
-      channel: "matrix",
-      messageId: result.messageId,
-      roomId: result.roomId,
-    };
+    return attachChannelToResult("matrix", result);
   },
   sendPoll: async ({ cfg, to, poll, threadId, accountId }) => {
     const resolvedThreadId = threadId !== undefined && threadId !== null ? threadId : undefined;

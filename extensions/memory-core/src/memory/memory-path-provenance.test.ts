@@ -3,7 +3,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  DREAMING_DAILY_PROVENANCE_NAMESPACE,
+  writeMemoryCoreWorkspaceEntry,
+} from "../dreaming-state.js";
+import { createMemoryCoreTestHarness } from "../test-helpers.js";
 import { resolveMemoryPathClassification } from "./memory-path-provenance.js";
+
+createMemoryCoreTestHarness();
 
 describe("memory path provenance", () => {
   it("trusts canonical workspace memory while excluding system and lookalike paths", async () => {
@@ -64,6 +71,26 @@ describe("memory path provenance", () => {
           workspaceDir,
         }),
       ).resolves.toMatchObject({ originClass: "untrusted" });
+    }
+  });
+
+  it("honors sticky untrusted provenance for runtime-written memory files", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-path-runtime-taint-"));
+    try {
+      const absolutePath = path.join(workspaceDir, "MEMORY.md");
+      await fs.writeFile(absolutePath, "network-authored memory", "utf8");
+      await writeMemoryCoreWorkspaceEntry({
+        namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
+        workspaceDir,
+        key: "MEMORY.md",
+        value: { originClass: "untrusted" },
+      });
+
+      await expect(
+        resolveMemoryPathClassification({ absolutePath, source: "memory", workspaceDir }),
+      ).resolves.toEqual({ curatedRoot: true, originClass: "untrusted" });
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
 });

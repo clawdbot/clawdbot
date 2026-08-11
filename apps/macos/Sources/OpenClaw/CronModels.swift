@@ -57,9 +57,9 @@ enum CronDeliveryMode: String, CaseIterable, Identifiable, Codable {
 
 struct CronDelivery: Codable, Equatable {
     var mode: CronDeliveryMode
-    var channel: String?
-    var to: String?
-    var bestEffort: Bool?
+    var channel: String?, to: String?, bestEffort: Bool?, threadId: AnyCodable?
+    /// Preserve Gateway-validated destination objects exactly so native edits cannot erase routing state.
+    var completionDestination: [String: AnyCodable]?, failureDestination: [String: AnyCodable]?
 }
 
 enum CronSchedule: Codable, Equatable {

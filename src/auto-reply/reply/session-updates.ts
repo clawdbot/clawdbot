@@ -5,7 +5,7 @@ import {
   type ExecPolicyOverrides,
   resolveNodeExecEligibility,
 } from "../../agents/exec-defaults.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { patchSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
@@ -171,6 +171,7 @@ export async function ensureSkillSnapshot(params: {
   execOverrides?: ExecPolicyOverrides;
   /** If provided, only load skills with these names (for per-channel skill filtering) */
   skillFilter?: string[];
+  skillOverrides?: Record<string, boolean>;
 }): Promise<{
   sessionEntry?: SessionEntry;
   skillsSnapshot?: SessionEntry["skillsSnapshot"];
@@ -197,6 +198,7 @@ export async function ensureSkillSnapshot(params: {
     workspaceDir,
     cfg,
     skillFilter,
+    skillOverrides,
   } = params;
 
   let nextEntry = sessionEntryHandle?.getCurrent() ?? sessionEntry;
@@ -219,6 +221,7 @@ export async function ensureSkillSnapshot(params: {
       config: cfg,
       agentId: sessionAgentId,
       skillFilter,
+      skillOverrides,
       eligibility: { nodeSkills: nodeSkillsEligibility, remote: remoteEligibility },
       existingSnapshot: snapshot,
     });
@@ -359,6 +362,7 @@ export async function incrementCompactionCount(params: {
   if (tokensAfterCompaction !== undefined) {
     updates.totalTokens = tokensAfterCompaction;
     updates.totalTokensFresh = true;
+    updates.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
     // Clear input/output breakdown since we only have the total estimate after compaction
     updates.inputTokens = undefined;
     updates.outputTokens = undefined;
@@ -366,6 +370,7 @@ export async function incrementCompactionCount(params: {
     updates.cacheWrite = undefined;
   } else if (incrementBy > 0) {
     updates.totalTokensFresh = false;
+    updates.totalTokensVersion = undefined;
   }
   const nextEntry = projectCanonicalSessionEntryShape({ ...entry, ...updates });
   sessionStore[sessionKey] = nextEntry;

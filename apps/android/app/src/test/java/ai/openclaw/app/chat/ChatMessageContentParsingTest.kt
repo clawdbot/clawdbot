@@ -321,6 +321,38 @@ class ChatMessageContentParsingTest {
   }
 
   @Test
+  fun derivesArtifactIdentityForManagedAudioAndVideoBlocks() {
+    val attachmentId = "22222222-2222-4222-8222-222222222222"
+    val url = "/api/chat/media/outgoing/main/$attachmentId/full"
+
+    assertEquals("artifact_managed_media_$attachmentId", managedMediaArtifactId(url))
+    assertEquals(
+      "artifact_managed_media_$attachmentId",
+      parseChatMessageContent(Json.parseToJsonElement("""{"type":"video","mimeType":"video/mp4","url":"$url"}"""))?.artifactId,
+    )
+  }
+
+  @Test
+  fun parsesSupportedPlaybackRenditions() {
+    val direct =
+      Json.parseToJsonElement(
+        """{"type":"video","mimeType":"video/mp4","playback":"transcode"}""",
+      )
+    val attachment =
+      Json.parseToJsonElement(
+        """{"type":"attachment","attachment":{"kind":"audio","mimeType":"audio/mp4","playback":"native"}}""",
+      )
+    val unsupported =
+      Json.parseToJsonElement(
+        """{"type":"video","mimeType":"video/mp4","playback":"future"}""",
+      )
+
+    assertEquals("transcode", parseChatMessageContent(direct)?.playback)
+    assertEquals("native", parseChatMessageContent(attachment)?.playback)
+    assertEquals(null, parseChatMessageContent(unsupported)?.playback)
+  }
+
+  @Test
   fun dropsOversizedInlineImageContentBeforeRendering() {
     val oversized = "A".repeat(CHAT_IMAGE_MAX_BASE64_CHARS + 1)
     val image =
@@ -335,14 +367,27 @@ class ChatMessageContentParsingTest {
   }
 
   @Test
-  fun parsesDirectAndAttachmentAudioBlocks() {
+  fun dropsInlineAudioAndVideoContentThatRequiresManagedArtifacts() {
+    val audio = Json.parseToJsonElement("""{"type":"audio","mimeType":"audio/mpeg","content":"audio-bytes"}""")
+    val video = Json.parseToJsonElement("""{"type":"video","mimeType":"video/mp4","content":"video-bytes"}""")
+
+    assertEquals(ChatMessageContent(type = "audio", mimeType = "audio/mpeg"), parseChatMessageContent(audio))
+    assertEquals(ChatMessageContent(type = "video", mimeType = "video/mp4"), parseChatMessageContent(video))
+  }
+
+  @Test
+  fun parsesDirectAndAttachmentAudioVideoBlocks() {
     val direct =
       Json.parseToJsonElement(
         """{"type":"audio","mimeType":"audio/mp4","fileName":"voice.m4a"}""",
       )
     val attachment =
       Json.parseToJsonElement(
-        """{"type":"attachment","attachment":{"kind":"audio","mimeType":"audio/mpeg","label":"reply.mp3"}}""",
+        """{"type":"attachment","attachment":{"kind":"audio","mimeType":"audio/mpeg","label":"reply.mp3","artifactId":"artifact_managed_media_33333333-3333-4333-8333-333333333333","url":"/api/chat/media/outgoing/main/33333333-3333-4333-8333-333333333333/full","sizeBytes":4096,"durationMs":2100}}""",
+      )
+    val video =
+      Json.parseToJsonElement(
+        """{"type":"attachment","attachment":{"kind":"video","mimeType":"video/mp4","fileName":"demo.mp4","artifactId":"artifact_managed_media_44444444-4444-4444-8444-444444444444","url":"/api/chat/media/outgoing/main/44444444-4444-4444-8444-444444444444/full","sizeBytes":8192,"durationMs":5300,"width":1920,"height":1080}}""",
       )
 
     assertEquals(
@@ -350,8 +395,30 @@ class ChatMessageContentParsingTest {
       parseChatMessageContent(direct),
     )
     assertEquals(
-      ChatMessageContent(type = "audio", mimeType = "audio/mpeg", fileName = "reply.mp3"),
+      ChatMessageContent(
+        type = "audio",
+        mimeType = "audio/mpeg",
+        fileName = "reply.mp3",
+        artifactId = "artifact_managed_media_33333333-3333-4333-8333-333333333333",
+        url = "/api/chat/media/outgoing/main/33333333-3333-4333-8333-333333333333/full",
+        sizeBytes = 4096,
+        durationMs = 2100,
+      ),
       parseChatMessageContent(attachment),
+    )
+    assertEquals(
+      ChatMessageContent(
+        type = "video",
+        mimeType = "video/mp4",
+        fileName = "demo.mp4",
+        artifactId = "artifact_managed_media_44444444-4444-4444-8444-444444444444",
+        url = "/api/chat/media/outgoing/main/44444444-4444-4444-8444-444444444444/full",
+        width = 1920,
+        height = 1080,
+        sizeBytes = 8192,
+        durationMs = 5300,
+      ),
+      parseChatMessageContent(video),
     )
   }
 

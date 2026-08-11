@@ -27,7 +27,10 @@ async function withOllamaServer<T>(
     chatRequests: Record<string, unknown>[],
     showRequests: string[],
   ) => Promise<T>,
-  options?: { models: Array<Record<string, unknown>> },
+  options?: {
+    models: Array<Record<string, unknown>>;
+    loadedModels?: Array<Record<string, unknown>>;
+  },
 ): Promise<T> {
   const chatRequests: Record<string, unknown>[] = [];
   const showRequests: string[] = [];
@@ -72,20 +75,20 @@ async function withOllamaServer<T>(
       return;
     }
     if (request.url === "/api/ps") {
-      response.end(JSON.stringify({ models: [{ name: "chat:large" }] }));
+      response.end(JSON.stringify({ models: options?.loadedModels ?? [{ name: "chat:large" }] }));
       return;
     }
     if (request.url === "/api/show") {
-      const body = (await readBody(request)) as { name?: string };
-      if (body.name) {
-        showRequests.push(body.name);
+      const body = (await readBody(request)) as { model?: string };
+      if (body.model) {
+        showRequests.push(body.model);
       }
-      if (body.name === "unknown:latest") {
+      if (body.model === "unknown:latest") {
         response.statusCode = 500;
         response.end(JSON.stringify({ error: "show failed" }));
         return;
       }
-      const embedding = body.name?.startsWith("embedding") === true;
+      const embedding = body.model?.startsWith("embedding") === true;
       response.end(
         JSON.stringify({
           capabilities: embedding ? ["embedding"] : ["completion", "tools"],
@@ -191,6 +194,29 @@ describe("Ollama node host inference", () => {
         expect(showRequests).toHaveLength(201);
       },
       { models },
+    );
+  });
+
+  it("discovers a loaded local model beyond the completion model limit", async () => {
+    const models = [
+      ...Array.from({ length: 200 }, (_, index) => ({ name: `chat-${index}:latest` })),
+      { name: "chat:loaded", size: 500 },
+    ];
+
+    await withOllamaServer(
+      async (baseUrl, _chatRequests, showRequests) => {
+        const result = JSON.parse(await commandByName(baseUrl, OLLAMA_MODELS_COMMAND).handle()) as {
+          provider: string;
+          models: Array<{ name: string; loaded: boolean }>;
+        };
+
+        expect(result.provider).toBe("ollama");
+        expect(result.models).toHaveLength(200);
+        expect(result.models[0]).toMatchObject({ name: "chat:loaded", loaded: true });
+        expect(showRequests[0]).toBe("chat:loaded");
+        expect(showRequests).toHaveLength(200);
+      },
+      { models, loadedModels: [{ name: "chat:loaded" }] },
     );
   });
 
@@ -450,7 +476,7 @@ describe("node_inference agent tool", () => {
         maxTokens: 32,
         timeoutMs: 120_000,
       },
-      timeoutMs: 130_000,
+      timeoutMs: 120_000,
       scopes: ["operator.write"],
     });
     expect(result.details).toMatchObject({

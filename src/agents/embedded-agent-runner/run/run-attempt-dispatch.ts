@@ -1,4 +1,3 @@
-import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
@@ -6,9 +5,17 @@ import { resolveDelegationCapability } from "../../delegation-capability.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "../../harness/runtime-artifact.types.js";
 import { appendIncognitoSystemPrompt } from "../../incognito-system-prompt.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
+import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
+import { resolveSandboxContext } from "../../sandbox/context.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../../tools/gateway-caller-context.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
+import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approval-continuation.js";
+import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
 import {
   EMBEDDED_RUN_LANE_HEARTBEAT_MS,
@@ -27,9 +34,7 @@ type InternalRunParams = RunEmbeddedAgentParams & {
 type AttemptRuntime = {
   sessionId: string;
   sessionFile: string;
-  sessionTarget?: ContextEngineSessionTarget;
   sessionKey?: string;
-  trajectorySessionFile: string;
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder;
   workspaceDir: string;
   isCanonicalWorkspace: boolean;
@@ -69,6 +74,16 @@ type AttemptRuntime = {
   captureRuntimeArtifact: boolean;
 };
 
+type AttemptTranscriptOwnership =
+  | {
+      kind: "caller-owned";
+      sessionManager: NonNullable<RunEmbeddedAgentParams["sessionManager"]>;
+    }
+  | {
+      kind: "runtime-target";
+      sessionTarget?: AgentRunSessionTarget;
+    };
+
 type AttemptControl = {
   lifecycleGeneration: string;
   pluginHarnessOwnsTransport: boolean;
@@ -76,6 +91,7 @@ type AttemptControl = {
   laneTaskReleaseController: AbortController;
   noteLaneTaskProgress: () => void;
   onToolOutcome: ToolOutcomeObserver;
+  isTurnTainted: () => boolean;
   allocateToolOutcomeOrdinal: (toolCallId?: string) => number;
   onToolStreamBoundary: NonNullable<EmbeddedRunAttemptParams["onToolStreamBoundary"]>;
   onRunProgress: NonNullable<EmbeddedRunAttemptParams["onRunProgress"]>;
@@ -93,6 +109,7 @@ type AttemptControl = {
 export async function dispatchEmbeddedRunAttempt(input: {
   params: InternalRunParams;
   runtime: AttemptRuntime;
+  transcriptOwnership: AttemptTranscriptOwnership;
   control: AttemptControl;
   bootstrapPromptWarningSignaturesSeen: string[];
   suppressNextUserMessagePersistence: boolean;
@@ -163,12 +180,44 @@ export async function dispatchEmbeddedRunAttempt(input: {
   };
 
   let cancellationRequested = false;
+  const preparedExecApprovalContinuation = prepareExecApprovalContinuationForAttempt({
+    prompt: runtime.prompt,
+    transcriptPrompt: params.transcriptPrompt,
+    promptRange: params.execApprovalContinuationPromptRange,
+    transcriptPromptRange: params.execApprovalContinuationTranscriptPromptRange,
+    contextTokenBudget: runtime.contextTokenBudget,
+    modelContextWindow: runtime.model.contextWindow,
+    modelMaxTokens: runtime.model.maxTokens,
+    userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+  });
   const promptMedia = await preparePluginHarnessPromptImages({
     runParams: params,
     runtime,
     pluginHarnessOwnsTransport: control.pluginHarnessOwnsTransport,
   });
+  // Plugin harnesses own their tool materialization, so the host cannot attest
+  // a message tool. Finalize conservatively instead of leaking phantom guidance.
+  const pluginHarnessPrompt =
+    control.pluginHarnessOwnsTransport && params.finalizePromptForResolvedTools
+      ? applyResolvedToolPromptFinalizer({
+          prompt: preparedExecApprovalContinuation.prompt,
+          activeToolNames: [],
+          finalize: params.finalizePromptForResolvedTools,
+        })
+      : undefined;
+  const pluginSandbox = control.pluginHarnessOwnsTransport
+    ? await resolveSandboxContext({
+        config: params.config,
+        sessionKey: params.sandboxSessionKey ?? runtime.sessionKey ?? runtime.sessionId,
+        workspaceDir: runtime.workspaceDir,
+      })
+    : undefined;
+  if (!params.admittedRunContext) {
+    throw new Error("embedded attempt reached dispatch without an admitted run context");
+  }
   const attemptParams: EmbeddedRunAttemptParams = {
+    admittedRunContext: params.admittedRunContext,
+    ...(control.pluginHarnessOwnsTransport ? { sandbox: pluginSandbox } : {}),
     operation: "attempt",
     sessionId: runtime.sessionId,
     sessionKey: runtime.sessionKey,
@@ -180,10 +229,12 @@ export async function dispatchEmbeddedRunAttempt(input: {
     messageChannel: params.messageChannel,
     messageProvider: params.messageProvider,
     clientCaps: params.clientCaps,
+    toolBindings: params.toolBindings,
     chatType: params.chatType,
     agentAccountId: params.agentAccountId,
     messageTo: params.messageTo,
     messageThreadId: params.messageThreadId,
+    conversationToolPolicy: params.conversationToolPolicy,
     messageActionTurnCapability: params.messageActionTurnCapability,
     groupId: params.groupId,
     groupChannel: params.groupChannel,
@@ -207,14 +258,16 @@ export async function dispatchEmbeddedRunAttempt(input: {
     replyToMode: params.replyToMode,
     hasRepliedRef: params.hasRepliedRef,
     sessionFile: runtime.sessionFile,
-    sessionTarget: runtime.sessionTarget,
-    trajectorySessionFile: runtime.trajectorySessionFile,
+    ...(input.transcriptOwnership.kind === "caller-owned"
+      ? { sessionManager: input.transcriptOwnership.sessionManager }
+      : { sessionTarget: input.transcriptOwnership.sessionTarget }),
     trajectoryRecorder: runtime.trajectoryRecorder,
     workspaceDir: runtime.workspaceDir,
     cwd: params.cwd,
     agentDir: runtime.agentDir,
     preparedModelRuntime: runtime.preparedModelRuntime,
     config: params.config,
+    toolOverrides: params.toolOverrides,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     ...(runtime.contextEngine
       ? {
@@ -224,9 +277,17 @@ export async function dispatchEmbeddedRunAttempt(input: {
         }
       : {}),
     skillsSnapshot: params.skillsSnapshot,
-    prompt: runtime.prompt,
-    transcriptPrompt: params.transcriptPrompt,
+    prompt: pluginHarnessPrompt ?? preparedExecApprovalContinuation.prompt,
+    transcriptPrompt:
+      pluginHarnessPrompt !== undefined && params.transcriptPrompt === undefined
+        ? preparedExecApprovalContinuation.prompt
+        : preparedExecApprovalContinuation.transcriptPrompt,
+    finalizePromptForResolvedTools:
+      pluginHarnessPrompt === undefined ? params.finalizePromptForResolvedTools : undefined,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+    // The outer run-loop owns the begun lease; the inner attempt reports only
+    // the accepted candidate boundary to that owner.
+    onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
     skipPreparedUserTurnMessage: runtime.skipPreparedUserTurnMessage,
     currentInboundEventKind: params.currentInboundEventKind,
     currentInboundContext: params.currentInboundContext,
@@ -243,6 +304,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
     delegationCapability: resolveDelegationCapability({
       fallbackActive: runtime.fallbackActive,
       inputProvenance: params.inputProvenance,
+      disableTools: params.disableTools,
+      toolsAllow: params.toolsAllow,
     }),
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
     agentHarnessId: runtime.agentHarnessId,
@@ -277,6 +340,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     agentId: runtime.agentId,
     thinkLevel: runtime.thinkLevel,
     onToolOutcome: control.onToolOutcome,
+    isTurnTainted: control.isTurnTainted,
     allocateToolOutcomeOrdinal: control.allocateToolOutcomeOrdinal,
     onToolStreamBoundary: control.onToolStreamBoundary,
     onRunProgress: control.onRunProgress,
@@ -343,6 +407,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
     scheduledToolPolicy: params.scheduledToolPolicy,
+    cronCreatorAuthorityUnavailableReason: params.cronCreatorAuthorityUnavailableReason,
     streamParams: params.streamParams,
     modelRun: params.modelRun,
     disableTrajectory: params.disableTrajectory,
@@ -362,6 +427,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     swarmCollector: params.swarmCollector,
     swarmOutputSchema: params.swarmOutputSchema,
     forceRestartSafeTools: params.forceRestartSafeTools,
+    forceCodeModeTools: params.forceCodeModeTools,
     forceMessageTool: params.forceMessageTool,
     enableHeartbeatTool: params.enableHeartbeatTool,
     forceHeartbeatTool: params.forceHeartbeatTool,
@@ -381,7 +447,18 @@ export async function dispatchEmbeddedRunAttempt(input: {
     onUserMessagePersistenceInvalidated: control.onUserMessagePersistenceInvalidated,
     onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
   };
-  const rawAttempt = await runEmbeddedAttemptWithBackend(attemptParams)
+  const callerIdentity = createAdmittedGatewayToolCallerIdentity({
+    admittedRunContext: attemptParams.admittedRunContext,
+    agentId: runtime.agentId,
+    sessionKey: runtime.sessionKey,
+    turnSourceChannel: params.messageChannel ?? params.messageProvider,
+    turnSourceTo: params.currentMessagingTarget ?? params.currentChannelId,
+    turnSourceAccountId: params.agentAccountId,
+    turnSourceThreadId: params.currentThreadTs,
+  });
+  const rawAttempt = await withGatewayToolCallerIdentity(callerIdentity, () =>
+    runEmbeddedAttemptWithBackend(attemptParams),
+  )
     .catch((err: unknown): never => {
       throw control.getPostCompactionAbortError() ?? err;
     })

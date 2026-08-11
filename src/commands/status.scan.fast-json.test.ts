@@ -135,6 +135,23 @@ describe("scanStatusJsonFast", () => {
     expect(mocks.buildPluginCompatibilityNotices).not.toHaveBeenCalled();
   });
 
+  it("collects actual plugin compatibility warnings when full JSON status is requested", async () => {
+    const notice = {
+      pluginId: "legacy-plugin",
+      code: "hook-only",
+      severity: "warn",
+      message: "plugin registers only legacy hooks",
+    };
+    mocks.buildPluginCompatibilityNotices.mockReturnValue([notice]);
+
+    const result = await scanStatusJsonFast({ all: true }, {} as never);
+
+    expect(mocks.buildPluginCompatibilityNotices).toHaveBeenCalledWith({
+      config: createStatusMemorySearchConfig(),
+    });
+    expect(result.pluginCompatibility).toEqual([notice]);
+  });
+
   it("keeps default fast JSON update scans local-only", async () => {
     mocks.hasConfiguredChannels.mockReturnValue(true);
 

@@ -3,9 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { migrateOrphanedSessionKeys } from "./state-migrations.js";
-import { resolveSessionStoreOwnership } from "./state-migrations.session-store.js";
+import {
+  migrateOrphanedSessionKeys,
+  resolveSessionStoreOwnership,
+} from "./state-migrations.session-store.js";
 
 const listPluginDoctorSessionStoreAgentIdsMock = vi.hoisted(() => vi.fn((): string[] => []));
 
@@ -72,6 +75,7 @@ async function migrateFixtureState(
     cfg,
     env: { OPENCLAW_STATE_DIR: stateDir },
     additionalAgentIds,
+    legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
   });
 }
 
@@ -158,6 +162,7 @@ describe("migrateOrphanedSessionKeys", () => {
         cfg,
         env: { OPENCLAW_STATE_DIR: stateDir },
         additionalAgentIds: ["voice"],
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
       });
 
       const store = readStore(voiceStorePath);
@@ -444,6 +449,7 @@ describe("migrateOrphanedSessionKeys", () => {
           cfg,
           env: { OPENCLAW_STATE_DIR: stateDir },
           additionalAgentIds: ["voice"],
+          legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
         });
       } finally {
         statSpy.mockRestore();
@@ -674,6 +680,44 @@ describe("migrateOrphanedSessionKeys", () => {
     });
   });
 
+  it.each([
+    {
+      name: "commented JSON5 with trailing commas",
+      raw: `// operator-authored session history\n{\n  'agent:ops:work': { sessionId: 'abc-123', updatedAt: 1000, },\n}\n`,
+    },
+    {
+      name: "an escaped canonical session key",
+      raw: '{"agent:ops:w\\u006frk":{"sessionId":"abc-123","updatedAt":1000}}\n',
+    },
+  ])("preserves the exact bytes of $name", async ({ raw }) => {
+    await withStateFixture(async ({ stateDir }) => {
+      const storePath = opsSessionStorePath(stateDir);
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      fs.writeFileSync(storePath, raw);
+
+      expect(await migrateFixtureState(stateDir)).toEqual({ changes: [], warnings: [] });
+      expect(fs.readFileSync(storePath, "utf-8")).toBe(raw);
+    });
+  });
+
+  it("canonicalizes an escaped legacy session key using the shared JSON5 parser", async () => {
+    await withStateFixture(async ({ stateDir }) => {
+      const storePath = opsSessionStorePath(stateDir);
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      fs.writeFileSync(
+        storePath,
+        '{"agent:main:m\\u0061in":{"sessionId":"escaped-legacy","updatedAt":1000}}\n',
+      );
+
+      const result = await migrateFixtureState(stateDir);
+
+      expect(result.changes).toHaveLength(1);
+      expect(requireStoreEntry(readStore(storePath), "agent:ops:work").sessionId).toBe(
+        "escaped-legacy",
+      );
+    });
+  });
+
   it("handles missing store files gracefully", async () => {
     await withStateFixture(async ({ stateDir }) => {
       const result = await migrateFixtureState(stateDir);
@@ -691,8 +735,16 @@ describe("migrateOrphanedSessionKeys", () => {
       });
 
       const env = { OPENCLAW_STATE_DIR: stateDir };
-      await migrateOrphanedSessionKeys({ cfg: OPS_WORK_CONFIG, env });
-      const result2 = await migrateOrphanedSessionKeys({ cfg: OPS_WORK_CONFIG, env });
+      await migrateOrphanedSessionKeys({
+        cfg: OPS_WORK_CONFIG,
+        env,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      });
+      const result2 = await migrateOrphanedSessionKeys({
+        cfg: OPS_WORK_CONFIG,
+        env,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      });
 
       expect(result2.changes).toHaveLength(0);
       const store = readStore(storePath);
@@ -980,6 +1032,7 @@ describe("migrateOrphanedSessionKeys", () => {
       const result = await migrateOrphanedSessionKeys({
         cfg,
         env: { OPENCLAW_STATE_DIR: stateDir },
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
       });
 
       expect(result.changes).toHaveLength(0);

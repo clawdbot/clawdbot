@@ -11,6 +11,26 @@ afterEach(() => {
 });
 
 describe("resolveAgentHarnessBeforePromptBuildResult", () => {
+  it("forwards a per-turn tool restriction to native harness adapters", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          handler: () => ({ toolsAllow: [] }),
+        },
+      ]),
+    );
+
+    const result = await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: "answer directly",
+      developerInstructions: "base instructions",
+      messages: [],
+      ctx: {},
+    });
+
+    expect(result.toolsAllow).toEqual([]);
+  });
+
   it("retains an empty prompt range without hooks", async () => {
     const result = await resolveAgentHarnessBeforePromptBuildResult({
       prompt: "",
@@ -95,28 +115,5 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
 
     expect(handler).not.toHaveBeenCalled();
     expect(result.prompt).toBe("hello");
-  });
-
-  it("skips heartbeat_prompt_contribution for commitment-only heartbeat lifecycle turns", async () => {
-    const heartbeatHandler = vi.fn(() => ({ prependContext: "global heartbeat context" }));
-    const promptHandler = vi.fn(() => ({ prependContext: "turn policy" }));
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        { hookName: "heartbeat_prompt_contribution", handler: heartbeatHandler },
-        { hookName: "before_prompt_build", handler: promptHandler },
-      ]),
-    );
-
-    const result = await resolveAgentHarnessBeforePromptBuildResult({
-      prompt: "due commitment",
-      developerInstructions: "base instructions",
-      messages: [],
-      ctx: { trigger: "heartbeat", agentId: "agent-1", sessionKey: "session-1" },
-      bootstrapContextRunKind: "commitment-only",
-    });
-
-    expect(heartbeatHandler).not.toHaveBeenCalled();
-    expect(promptHandler).toHaveBeenCalledTimes(1);
-    expect(result.prompt).toBe("turn policy\n\ndue commitment");
   });
 });

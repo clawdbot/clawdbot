@@ -3,6 +3,7 @@ import type { MemoryEntryProvenance } from "openclaw/plugin-sdk/memory-core-host
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyImportanceMultiplier } from "./importance.js";
 import { applyMMRToHybridResults, type MMRConfig, DEFAULT_MMR_CONFIG } from "./mmr.js";
+import { applyProjectRanking, projectScoreMultiplier } from "./project-ranking.js";
 import {
   applyTemporalDecayToHybridResults,
   type TemporalDecayConfig,
@@ -22,6 +23,7 @@ type HybridVectorResult = {
   vectorScore: number;
   importance?: number;
   triggers?: string;
+  projectKey?: string;
   exactPathSpecificity?: ExactPathSpecificity;
   provenance?: MemoryEntryProvenance;
 };
@@ -36,6 +38,7 @@ type HybridKeywordResult = {
   textScore: number;
   importance?: number;
   triggers?: string;
+  projectKey?: string;
   rankingScore?: number;
   pathScore?: number;
   exactPathSpecificity?: ExactPathSpecificity;
@@ -77,6 +80,7 @@ export async function mergeHybridResults(params: {
   mmr?: Partial<MMRConfig>;
   /** Temporal decay configuration for recency-aware scoring */
   temporalDecay?: Partial<TemporalDecayConfig>;
+  activeProjectKeys?: readonly string[];
   /** Test hook for deterministic time-dependent behavior */
   nowMs?: number;
 }): Promise<
@@ -91,6 +95,7 @@ export async function mergeHybridResults(params: {
     source: HybridSource;
     importance?: number;
     triggers?: string;
+    projectKey?: string;
     provenance?: MemoryEntryProvenance;
   }>
 > {
@@ -112,6 +117,7 @@ export async function mergeHybridResults(params: {
       hasKeyword: boolean;
       importance?: number;
       triggers?: string;
+      projectKey?: string;
       provenance?: MemoryEntryProvenance;
     }
   >();
@@ -133,6 +139,7 @@ export async function mergeHybridResults(params: {
       hasKeyword: false,
       importance: r.importance,
       triggers: r.triggers,
+      projectKey: r.projectKey,
       ...(r.provenance ? { provenance: r.provenance } : {}),
     });
   }
@@ -151,6 +158,7 @@ export async function mergeHybridResults(params: {
       existing.hasKeyword = true;
       existing.importance ??= r.importance;
       existing.triggers ??= r.triggers;
+      existing.projectKey ??= r.projectKey;
       if (!existing.provenance && r.provenance) {
         existing.provenance = r.provenance;
       }
@@ -174,6 +182,7 @@ export async function mergeHybridResults(params: {
         hasKeyword: true,
         importance: r.importance,
         triggers: r.triggers,
+        projectKey: r.projectKey,
         ...(r.provenance ? { provenance: r.provenance } : {}),
       });
     }
@@ -222,6 +231,7 @@ export async function mergeHybridResults(params: {
       source: entry.source,
       importance: entry.importance,
       triggers: entry.triggers,
+      projectKey: entry.projectKey,
     };
     if (entry.provenance) {
       Object.assign(result, { provenance: entry.provenance });
@@ -237,13 +247,19 @@ export async function mergeHybridResults(params: {
     workspaceDir: params.workspaceDir,
     nowMs: params.nowMs,
   });
-  const rankable = applyImportanceMultiplier(decayed).map((entry) => {
+  const rankable = applyProjectRanking(
+    applyImportanceMultiplier(decayed),
+    params.activeProjectKeys,
+  ).map((entry) => {
     // Specificity owns cross-tier precedence. Keep the decayed weighted score
     // separately for within-tier ranking while exact public scores stay at 1.
     const exactPathTieScore = entry.score;
     return Object.assign(entry, {
       exactPathTieScore,
-      score: entry.exactPathSpecificity > 0 ? 1 : entry.score,
+      score:
+        entry.exactPathSpecificity > 0
+          ? projectScoreMultiplier(entry.projectKey, params.activeProjectKeys)
+          : entry.score,
     });
   });
   const nonExact = rankable
@@ -265,7 +281,11 @@ export async function mergeHybridResults(params: {
     return applyMMRToHybridResults(
       entries.map((entry) => Object.assign(entry, { score: entry.exactPathTieScore })),
       mmrConfig,
-    ).map((entry) => Object.assign(entry, { score: 1 }));
+    ).map((entry) =>
+      Object.assign(entry, {
+        score: projectScoreMultiplier(entry.projectKey, params.activeProjectKeys),
+      }),
+    );
   };
   const compareExactTieScores = (a: (typeof rankable)[number], b: (typeof rankable)[number]) =>
     b.exactPathTieScore - a.exactPathTieScore ||

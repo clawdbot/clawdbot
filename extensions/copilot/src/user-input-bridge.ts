@@ -5,7 +5,7 @@ import {
   runAgentHarnessGatewayQuestion,
   type AgentHarnessQuestionGatewayCall,
   type AgentHarnessUserInputQuestion,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 type CopilotUserInputHandler = NonNullable<SessionConfig["onUserInputRequest"]>;
@@ -21,7 +21,7 @@ const COPILOT_USER_INPUT_QUESTION_ID = "answer";
 const DEFAULT_USER_INPUT_TIMEOUT_MS = 15 * 60_000;
 
 export function createCopilotUserInputBridge(params: {
-  paramsForRun: EmbeddedRunAttemptParams;
+  paramsForRun: EmbeddedRunAttemptParamsV2;
   signal?: AbortSignal;
   gatewayCall?: AgentHarnessQuestionGatewayCall;
 }): CopilotUserInputBridge {

@@ -11,7 +11,7 @@ import type {
   CodeModeConfig,
   CodeModeNamespaceDescriptor,
   CodeModeWorkerPayload,
-  CodeModeWorkerResult,
+  CodeModeWorkerThreadResult as CodeModeWorkerResult,
   PendingBridgeRequest,
   SettledBridgeRequest,
 } from "./code-mode-worker-types.js";
@@ -41,13 +41,6 @@ class CodeModeWorkerFailureWithOutput extends CodeModeWorkerFailure {
     super(code, message, options);
     this.name = "CodeModeWorkerFailureWithOutput";
     this.output = output;
-  }
-}
-
-class CodeModeGuestError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "CodeModeGuestError";
   }
 }
 
@@ -325,7 +318,7 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
         dumped instanceof Error
           ? formatQuickJsError(dumped.name, dumped.message, dumped.stack)
           : errorMessage(dumped);
-      throw new CodeModeGuestError(text);
+      throw new Error(text);
     });
   }
   return settled.value.consume((value) => toJsonSafe(vm.dump(value)));
@@ -482,6 +475,8 @@ async function main(): Promise<CodeModeWorkerResult> {
       status: "failed",
       error: "invalid code mode worker input",
       code: "invalid_input",
+      failurePhase: "input",
+      bridgeDispatchStarted: false,
       output: [],
     };
   }
@@ -518,18 +513,23 @@ async function main(): Promise<CodeModeWorkerResult> {
       status: "failed",
       error: "invalid code mode worker input",
       code: "invalid_input",
+      failurePhase: "input",
+      bridgeDispatchStarted: false,
       output: [],
     };
   } catch (error) {
     const timedOut = isQuickJsInterruptedError(error);
+    const code = timedOut
+      ? "timeout"
+      : error instanceof CodeModeWorkerFailure
+        ? error.code
+        : "internal_error";
     return {
       status: "failed",
       error: timedOut ? "code mode timeout exceeded" : errorMessage(error),
-      code: timedOut
-        ? "timeout"
-        : error instanceof CodeModeWorkerFailure
-          ? error.code
-          : "internal_error",
+      code,
+      failurePhase: code === "invalid_input" ? "input" : "guest",
+      bridgeDispatchStarted: false,
       output: error instanceof CodeModeWorkerFailureWithOutput ? error.output : [],
     };
   }

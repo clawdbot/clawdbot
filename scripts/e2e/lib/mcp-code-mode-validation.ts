@@ -3,6 +3,33 @@ export type McpCodeModeMentions = Record<
   number
 >;
 
+/** Extracts actual assistant tool calls, never prompt or assistant prose. */
+export function extractMcpCodeModePlannedTools(transcriptEvents: readonly unknown[]): string[] {
+  return transcriptEvents.flatMap((event) => {
+    if (!event || typeof event !== "object") {
+      return [];
+    }
+    const message = (event as { message?: unknown }).message;
+    if (!message || typeof message !== "object") {
+      return [];
+    }
+    const { role, content } = message as { role?: unknown; content?: unknown };
+    if (role !== "assistant" || !Array.isArray(content)) {
+      return [];
+    }
+    return content.flatMap((block) => {
+      if (!block || typeof block !== "object") {
+        return [];
+      }
+      const { type, name } = block as { type?: unknown; name?: unknown };
+      return (type === "toolCall" || type === "tool_use" || type === "tool_call") &&
+        typeof name === "string"
+        ? [name]
+        : [];
+    });
+  });
+}
+
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);

@@ -20,13 +20,13 @@ const loggedOpenAIStrictToolDowngradeDiagnosticKeys = new Set<string>();
 
 function readToolPayloadField(record: Record<string, unknown>, field: string): unknown {
   try {
-    return record[field];
+    return Object.hasOwn(record, field) ? record[field] : undefined;
   } catch {
     return undefined;
   }
 }
 
-function transportPayloadToolName(tool: unknown): string | undefined {
+export function readCodeModePayloadToolName(tool: unknown): string | undefined {
   if (!isRecord(tool)) {
     return undefined;
   }
@@ -42,30 +42,136 @@ function transportPayloadToolName(tool: unknown): string | undefined {
   return typeof fnName === "string" ? fnName : undefined;
 }
 
-export function enforceCodeModeResponsesToolSurface(payload: unknown): void {
-  if (!isRecord(payload) || !Array.isArray(payload.tools)) {
+function readCodeModePayloadToolIdentity(
+  tool: unknown,
+  visibleToolNames: ReadonlySet<string>,
+  allowedHostedToolTypes?: ReadonlySet<string>,
+): string | false | undefined {
+  if (!isRecord(tool)) {
+    return undefined;
+  }
+  const type = readToolPayloadField(tool, "type");
+  if (typeof type === "string" && allowedHostedToolTypes?.has(type)) {
+    try {
+      if (
+        Object.hasOwn(tool, "name") ||
+        Object.hasOwn(tool, "function") ||
+        Object.hasOwn(tool, "functionDeclarations") ||
+        Object.hasOwn(tool, "function_declarations")
+      ) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+    return `hosted:${type}`;
+  }
+  const name = readCodeModePayloadToolName(tool);
+  return typeof name === "string" && isCodeModeModelVisibleToolName(name, visibleToolNames)
+    ? `client:${name}`
+    : undefined;
+}
+
+export function filterCodeModePayloadTools(
+  payload: unknown,
+  visibleToolNames: ReadonlySet<string>,
+  allowedHostedToolTypes?: ReadonlySet<string>,
+): void {
+  if (!isRecord(payload)) {
     return;
   }
-  payload.tools = payload.tools.filter((tool) => {
-    const name = transportPayloadToolName(tool);
-    return typeof name === "string" && isCodeModeModelVisibleToolName(name);
+  const tools = readToolPayloadField(payload, "tools");
+  if (!Array.isArray(tools)) {
+    return;
+  }
+  payload.tools = tools.flatMap((tool) => {
+    const identity = readCodeModePayloadToolIdentity(
+      tool,
+      visibleToolNames,
+      allowedHostedToolTypes,
+    );
+    if (identity) {
+      return [tool];
+    }
+    if (identity === false) {
+      return [];
+    }
+    if (!isRecord(tool)) {
+      return [];
+    }
+    const filteredGroups: Record<string, unknown> = {};
+    for (const key of ["functionDeclarations", "function_declarations"] as const) {
+      const declarations = readToolPayloadField(tool, key);
+      if (!Array.isArray(declarations)) {
+        continue;
+      }
+      const filtered = declarations.filter((declaration) => {
+        const declarationName = readCodeModePayloadToolName(declaration);
+        return (
+          typeof declarationName === "string" &&
+          isCodeModeModelVisibleToolName(declarationName, visibleToolNames)
+        );
+      });
+      if (filtered.length > 0) {
+        filteredGroups[key] = filtered;
+      }
+    }
+    return Object.keys(filteredGroups).length > 0 ? [filteredGroups] : [];
   });
 }
 
-export function assertCodeModeResponsesToolSurface(payload: unknown): void {
-  if (!isRecord(payload) || !Array.isArray(payload.tools)) {
+export function resolveCodeModeResponsesVisibleToolNames(
+  context: Pick<Context, "tools">,
+): ReadonlySet<string> {
+  return new Set(
+    (context.tools ?? [])
+      .map(readCodeModePayloadToolName)
+      .filter((name): name is string => typeof name === "string"),
+  );
+}
+
+export function enforceCodeModeResponsesToolSurface(
+  payload: unknown,
+  visibleToolNames: ReadonlySet<string>,
+  allowedHostedToolTypes?: ReadonlySet<string>,
+): void {
+  if (!isRecord(payload)) {
+    return;
+  }
+  const tools = readToolPayloadField(payload, "tools");
+  if (!Array.isArray(tools)) {
+    return;
+  }
+  payload.tools = tools.filter((tool) =>
+    Boolean(readCodeModePayloadToolIdentity(tool, visibleToolNames, allowedHostedToolTypes)),
+  );
+}
+
+export function assertCodeModeResponsesToolSurface(
+  payload: unknown,
+  visibleToolNames: ReadonlySet<string>,
+  allowedHostedToolTypes?: ReadonlySet<string>,
+): void {
+  const tools = isRecord(payload) ? readToolPayloadField(payload, "tools") : undefined;
+  if (!Array.isArray(tools)) {
     throw new Error("Code mode payload tool surface violation: expected exec,wait; got no tools");
   }
-  const names = payload.tools
-    .map(transportPayloadToolName)
-    .filter((name): name is string => typeof name === "string" && name.length > 0)
+  const identities = tools.map((tool) =>
+    readCodeModePayloadToolIdentity(tool, visibleToolNames, allowedHostedToolTypes),
+  );
+  const names = identities
+    .flatMap((identity) =>
+      typeof identity === "string" && identity.startsWith("client:")
+        ? [identity.slice("client:".length)]
+        : [],
+    )
     .toSorted((left, right) => left.localeCompare(right));
   if (
     names.length >= 2 &&
-    new Set(names).size === names.length &&
-    names.filter((name) => name === "exec").length === 1 &&
-    names.filter((name) => name === "wait").length === 1 &&
-    names.every(isCodeModeModelVisibleToolName)
+    identities.every((identity): identity is string => typeof identity === "string") &&
+    new Set(identities).size === identities.length &&
+    names.includes("exec") &&
+    names.includes("wait")
   ) {
     return;
   }

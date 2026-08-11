@@ -84,7 +84,6 @@ export function shouldSkipTelegramGroupMessage(
     senderUsername,
     resolveGroupPolicy: runtime.resolveGroupPolicy,
     enforcePolicy: true,
-    useTopicAndGroupOverrides: true,
     enforceAllowlistAuthorization: true,
     allowEmptyAllowlistEntries: false,
     requireSenderForAllowlistAuthorization: true,

@@ -1,5 +1,6 @@
 // Status summary tests cover aggregate status text for channels, sessions, tasks, and audit findings.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import type { TaskAuditFinding } from "../tasks/task-registry.audit.js";
@@ -70,7 +71,7 @@ vi.mock("../plugins/channel-plugin-ids.js", () => ({
   hasConfiguredChannelsForReadOnlyScope: statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope,
 }));
 
-vi.mock("./status.summary.runtime.js", () => ({
+vi.mock("../status/summary.runtime.js", () => ({
   statusSummaryRuntime: {
     classifySessionKey: vi.fn(() => "direct"),
     resolveConfiguredStatusModelRef: vi.fn(() => ({
@@ -170,12 +171,18 @@ vi.mock("../tasks/task-registry.maintenance.js", () => ({
   getInspectableTaskAuditFindings: statusSummaryMocks.getInspectableTaskAuditFindings,
 }));
 
-vi.mock("../routing/session-key.js", () => ({
-  LEGACY_IMPLICIT_AGENT_ID: "main",
-  normalizeAgentId: vi.fn((value: string) => value),
-  normalizeMainKey: vi.fn((value?: string) => value ?? "main"),
-  parseAgentSessionKey: vi.fn(() => null),
-}));
+vi.mock("../routing/session-key.js", async () => {
+  const actual = await vi.importActual<typeof import("../routing/session-key.js")>(
+    "../routing/session-key.js",
+  );
+  return {
+    ...actual,
+    LEGACY_IMPLICIT_AGENT_ID: "main",
+    normalizeAgentId: vi.fn((value: string) => value),
+    normalizeMainKey: vi.fn((value?: string) => value ?? "main"),
+    parseAgentSessionKey: vi.fn(() => null),
+  };
+});
 
 vi.mock("../version.js", async () => {
   const actual = await vi.importActual<typeof import("../version.js")>("../version.js");
@@ -185,16 +192,16 @@ vi.mock("../version.js", async () => {
   };
 });
 
-vi.mock("./status.link-channel.js", () => ({
+vi.mock("../status/link-channel.js", () => ({
   resolveLinkChannelContext: vi.fn(async () => undefined),
 }));
 
 const { buildChannelSummary } = await import("../infra/channel-summary.js");
 const { resolveStorePath } = await import("../config/sessions/paths.js");
 const { listGatewayAgentsBasic } = await import("../gateway/agent-list.js");
-const { resolveLinkChannelContext } = await import("./status.link-channel.js");
-let getStatusSummary: typeof import("./status.summary.js").getStatusSummary;
-let statusSummaryRuntime: typeof import("./status.summary.runtime.js").statusSummaryRuntime;
+const { resolveLinkChannelContext } = await import("../status/link-channel.js");
+let getStatusSummary: typeof import("../status/summary.js").getStatusSummary;
+let statusSummaryRuntime: typeof import("../status/summary.runtime.js").statusSummaryRuntime;
 
 function toSessionEntrySummaries(store: Record<string, Record<string, unknown>>) {
   return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
@@ -202,8 +209,8 @@ function toSessionEntrySummaries(store: Record<string, Record<string, unknown>>)
 
 describe("getStatusSummary", () => {
   beforeAll(async () => {
-    ({ getStatusSummary } = await import("./status.summary.js"));
-    ({ statusSummaryRuntime } = await import("./status.summary.runtime.js"));
+    ({ getStatusSummary } = await import("../status/summary.js"));
+    ({ statusSummaryRuntime } = await import("../status/summary.runtime.js"));
   });
 
   beforeEach(() => {
@@ -278,6 +285,52 @@ describe("getStatusSummary", () => {
     expect(summary.channelSummary).toEqual(["ok"]);
     expect(summary.tasks.active).toBe(0);
     expect(summary.taskAudit.warnings).toBe(1);
+  });
+
+  it("redacts collected session details when sensitive output is disabled", async () => {
+    statusSummaryMocks.listSessionEntries.mockReturnValue([
+      {
+        sessionKey: "agent:main:main",
+        entry: {
+          sessionId: "session-1",
+          updatedAt: 100,
+          model: "gpt-5.5",
+          modelProvider: "openai",
+          totalTokens: 42,
+        },
+      },
+    ]);
+
+    const summary = await getStatusSummary({ includeSensitive: false });
+
+    expect(summary.sessions).toMatchObject({
+      paths: [],
+      count: 1,
+      defaults: { model: null, contextTokens: null },
+      recent: [],
+      byAgent: [{ agentId: "main", path: "[redacted]", count: 1, recent: [] }],
+    });
+  });
+
+  it("keeps resolved and source config roles distinct for channel summaries", async () => {
+    const config = { channels: { discord: { enabled: true } } };
+    const sourceConfig = { channels: { discord: { token: "source-secret" } } };
+
+    await getStatusSummary({
+      config: config as never,
+      sourceConfig: sourceConfig as never,
+    });
+
+    expect(statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope).toHaveBeenCalledWith({
+      config,
+      activationSourceConfig: sourceConfig,
+    });
+    expect(resolveLinkChannelContext).toHaveBeenCalledWith(config, { sourceConfig });
+    expect(buildChannelSummary).toHaveBeenCalledWith(config, {
+      colorize: true,
+      includeAllowFrom: true,
+      sourceConfig,
+    });
   });
 
   it("reports degraded SecretRef owners without exposing ref identifiers", async () => {
@@ -507,6 +560,74 @@ describe("getStatusSummary", () => {
         .mocked(statusSummaryRuntime.resolveContextTokensForModel)
         .mock.calls.some((call) => call[0]?.contextTokensOverride === 1_000_000),
     ).toBe(false);
+  });
+
+  it.each([
+    {
+      name: "fresh v1",
+      checkpoint: {
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      },
+      expected: {
+        totalTokensFresh: true,
+        remainingTokens: 150_000,
+        percentUsed: 25,
+      },
+    },
+    {
+      name: "stale v1",
+      checkpoint: {
+        totalTokensFresh: false,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      },
+      expected: {
+        totalTokensFresh: false,
+        remainingTokens: null,
+        percentUsed: null,
+      },
+    },
+    {
+      name: "fresh unversioned",
+      checkpoint: {
+        totalTokensFresh: true,
+      },
+      expected: {
+        totalTokensFresh: false,
+        remainingTokens: null,
+        percentUsed: null,
+      },
+    },
+    {
+      name: "wrong-version",
+      checkpoint: {
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION + 1,
+      },
+      expected: {
+        totalTokensFresh: false,
+        remainingTokens: null,
+        percentUsed: null,
+      },
+    },
+  ])("handles $name checkpoint usage provenance", async ({ checkpoint, expected }) => {
+    statusSummaryMocks.listSessionEntries.mockReturnValue(
+      toSessionEntrySummaries({
+        "agent:main:main": {
+          sessionId: "checkpoint-total",
+          updatedAt: Date.now(),
+          totalTokens: 50_000,
+          ...checkpoint,
+        },
+      }),
+    );
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.recent[0]).toMatchObject({
+      totalTokens: 50_000,
+      ...expected,
+    });
   });
 
   it("uses bundled provider static catalogs for cold status context", async () => {

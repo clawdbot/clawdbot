@@ -133,6 +133,7 @@ type SessionLifecycleArtifactsCleanupParams = {
   archiveRemovedEntryTranscripts?: boolean;
   env?: NodeJS.ProcessEnv;
   orphanTranscriptMinAgeMs: number;
+  pluginOwnerId?: string;
   sessionStore?: string;
   sessionKeySegmentPrefix: string;
   storePath?: string;
@@ -572,6 +573,7 @@ export async function cleanupSessionLifecycleArtifacts(
     storePath,
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
     archiveRemovedEntryTranscripts: params.archiveRemovedEntryTranscripts,
+    ...(params.pluginOwnerId !== undefined ? { pluginOwnerId: params.pluginOwnerId } : {}),
     sessionKeySegmentPrefix: params.sessionKeySegmentPrefix,
     transcriptContentMarker: params.transcriptContentMarker,
     orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,

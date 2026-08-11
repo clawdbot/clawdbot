@@ -5,14 +5,13 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import {
+  acquireBoardProviderForSession,
   boardProviderForSession,
   type BoardCommandEvent,
   type BoardProvider,
 } from "../../lib/board/provider.ts";
-import type { ObserverDigestHistory } from "../../lib/observer-digest.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import type { SessionObserverDigest } from "./chat-pane-deps.ts";
 import "./chat-pane.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -31,10 +30,11 @@ type TestChatPane = HTMLElement & {
   context: ApplicationContext;
   state: ChatPageHost;
   createSession: () => Promise<boolean>;
+  paneId: string;
+  sessionKey: string;
   resetConfirmationOpen: boolean;
   routeFace: "chat" | "dashboard";
-  onFaceChange?: (face: "chat" | "dashboard") => void;
-  observerDigestHistory: ObserverDigestHistory;
+  onFaceChange?: (paneId: string, sessionKey: string, face: "chat" | "dashboard") => void;
   confirmConversationReset: () => Promise<boolean>;
   settleResetConfirmation: (confirmed: boolean) => void;
   updated: () => void;
@@ -52,10 +52,7 @@ type TestChatPane = HTMLElement & {
   ) => void;
   syncChatSidebarForDock: (dock: "bottom" | "hidden" | "left" | "right") => boolean;
   persistBoardSessionView: (patch: { face?: "chat" | "dashboard"; activeTabId?: string }) => void;
-  recordObserverDigest: (digest: SessionObserverDigest) => void;
   resolveBoardProvider: () => BoardProvider;
-  resolveObserverDigestHistoryKey: (sessionKey?: string, agentId?: string) => string;
-  refreshBuiltinBoardSnapshot: () => void;
   resolveBoardView: () => ResolvedBoardView;
 };
 
@@ -81,6 +78,7 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
   pane.state = {
     chatError: null,
     chatLoading: false,
+    chatMessages: [],
     chatQueue: [],
     chatRunId: null,
     chatSending: false,
@@ -110,6 +108,42 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
   return pane;
 }
 
+function createGatewayBoardPane(params: {
+  sessionKey: string;
+  methods?: readonly string[];
+  scopes?: readonly string[];
+  capabilities?: readonly string[];
+  lifecycleConnected?: boolean;
+}) {
+  window.history.replaceState({}, "", "/");
+  const pane = createTestPane();
+  const snapshot = { sessionKey: params.sessionKey, revision: 1, tabs: [], widgets: [] };
+  const removeListener = vi.fn();
+  const request = vi.fn(async () => snapshot);
+  const addEventListener = vi.fn(() => removeListener);
+  const client = { request, addEventListener } as unknown as GatewayBrowserClient;
+  pane.state.sessionKey = params.sessionKey;
+  pane.state.client = client;
+  Reflect.set(pane, "boardProviderLifecycleConnected", params.lifecycleConnected ?? true);
+  pane.context = {
+    ...pane.context,
+    gateway: {
+      snapshot: {
+        client,
+        phase: "connected",
+        hello: {
+          ...(params.scopes ? { auth: { role: "operator", scopes: params.scopes } } : {}),
+          features: {
+            methods: params.methods ?? ["board.get"],
+            ...(params.capabilities ? { capabilities: params.capabilities } : {}),
+          },
+        },
+      },
+    },
+  } as unknown as ApplicationContext;
+  return { pane, snapshot, client, request, addEventListener, removeListener };
+}
+
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
   vi.stubGlobal("sessionStorage", createStorageMock());
@@ -124,99 +158,6 @@ afterEach(() => {
 });
 
 describe("chat pane board shell", () => {
-  it("adds the observer-only board face without replacing the default chat face", async () => {
-    const pane = createTestPane();
-    pane.boardProvider = nullBoardProvider("agent:main:observer-only");
-    pane.state.sessionKey = "agent:main:observer-only";
-    pane.observerDigestHistory.record({
-      sessionKey: "agent:main:observer-only",
-      runId: "run-1",
-      revision: 1,
-      updatedAt: 1_000,
-      headline: "Reviewing the board tests",
-      health: "on-track",
-    });
-
-    pane.refreshBuiltinBoardSnapshot();
-
-    await vi.waitFor(() =>
-      expect(pane.resolveBoardView()).toMatchObject({
-        activeTabId: "builtin-observer",
-        face: "chat",
-        hasBoard: true,
-      }),
-    );
-    const onFaceChange = vi.fn((face: "chat" | "dashboard") => {
-      pane.routeFace = face;
-    });
-    pane.onFaceChange = onFaceChange;
-    pane.persistBoardSessionView({ face: "dashboard" });
-    expect(onFaceChange).toHaveBeenCalledWith("dashboard");
-    expect(pane.resolveBoardView().face).toBe("dashboard");
-  });
-
-  it("shares observer history between a global session and its explicit agent alias", async () => {
-    const pane = createTestPane();
-    pane.context = {
-      ...pane.context,
-      agents: {
-        state: {
-          agentsList: {
-            defaultId: "main",
-            mainKey: "main",
-            scope: "global",
-            agents: [{ id: "main" }, { id: "work" }],
-          },
-        },
-      },
-      agentSelection: { state: { selectedId: "work", scopeId: "work" } },
-      gateway: {
-        ...pane.context.gateway,
-        snapshot: {
-          ...pane.context.gateway.snapshot,
-          hello: {
-            snapshot: {
-              sessionDefaults: {
-                defaultAgentId: "main",
-                mainKey: "main",
-                mainSessionKey: "global",
-                scope: "global",
-              },
-            },
-          } as never,
-        },
-      },
-    } as unknown as ApplicationContext;
-    pane.state.sessionKey = "agent:work:main";
-    pane.boardProvider = nullBoardProvider("agent:work:main");
-    pane.observerDigestHistory.record({
-      sessionKey: "agent:work:global",
-      agentId: "work",
-      runId: "run-work",
-      revision: 1,
-      updatedAt: 1_000,
-      headline: "Reviewing the work agent",
-      health: "on-track",
-    });
-
-    expect(pane.resolveObserverDigestHistoryKey("global", "work")).toBe("agent:work:global");
-    expect(pane.resolveObserverDigestHistoryKey("agent:work:main")).toBe("agent:work:global");
-    pane.recordObserverDigest({
-      sessionKey: "global",
-      runId: "run-ownerless",
-      revision: 2,
-      updatedAt: 2_000,
-      headline: "Ownerless global status",
-      health: "stuck",
-    });
-    expect(pane.observerDigestHistory.get("agent:work:global").at(-1)?.headline).toBe(
-      "Reviewing the work agent",
-    );
-    pane.refreshBuiltinBoardSnapshot();
-
-    await vi.waitFor(() => expect(pane.resolveBoardView().hasBoard).toBe(true));
-  });
-
   it("gates New Chat when the current session has a board", async () => {
     const sessions = {
       create: vi.fn(async () => "agent:main:new"),
@@ -263,6 +204,33 @@ describe("chat pane board shell", () => {
     await expect(pending).resolves.toBe(true);
     expect(reset).toHaveBeenCalledWith("agent:main:current", {});
     expect(sessions.create).not.toHaveBeenCalled();
+  });
+
+  it("rechecks reset scope after board confirmation", async () => {
+    const reset = vi.fn(async () => "completed" as const);
+    const sessions = {
+      create: vi.fn(async () => "agent:main:new"),
+      reset,
+    } as unknown as SessionCapability;
+    const pane = createTestPane(sessions);
+    pane.context.gateway.snapshot.hello = {
+      auth: { role: "operator", scopes: ["operator.admin"] },
+      features: { methods: ["sessions.reset"] },
+    } as ApplicationContext["gateway"]["snapshot"]["hello"];
+    pane.boardProvider = mockBoardProvider("agent:main:current");
+
+    const pending = pane.createSession();
+    await Promise.resolve();
+    pane.context.gateway.snapshot.hello = {
+      auth: { role: "operator", scopes: ["operator.write"] },
+      features: { methods: ["sessions.reset"] },
+    } as ApplicationContext["gateway"]["snapshot"]["hello"];
+    pane.settleResetConfirmation(true);
+
+    await expect(pending).resolves.toBe(false);
+    expect(reset).not.toHaveBeenCalled();
+    expect(pane.state.lastError).toContain("operator.admin");
+    expect(pane.state.chatError).toBe(pane.state.lastError);
   });
 
   it("does not reset when a run starts during confirmation", async () => {
@@ -448,6 +416,18 @@ describe("chat pane board shell", () => {
     });
   });
 
+  it("routes face changes through the owning retained presentation", () => {
+    const pane = createTestPane();
+    pane.paneId = "pane-1";
+    pane.sessionKey = "agent:main:retained";
+    const onFaceChange = vi.fn();
+    pane.onFaceChange = onFaceChange;
+
+    pane.persistBoardSessionView({ face: "dashboard" });
+
+    expect(onFaceChange).toHaveBeenCalledWith("pane-1", "agent:main:retained", "dashboard");
+  });
+
   it("uses in-memory tab preferences while the route owns the face", () => {
     const pane = createTestPane();
     pane.routeFace = "dashboard";
@@ -533,8 +513,70 @@ describe("chat pane board shell", () => {
     expect(pane.resolveBoardProvider().snapshot$.value.sessionKey).toBe("agent:work:primary");
   });
 
+  it("does not subscribe to a gateway board before the pane owns a lifecycle lease", async () => {
+    const sessionKey = "agent:main:board-lifecycle-ownership";
+    const { pane, snapshot, request, addEventListener, removeListener } = createGatewayBoardPane({
+      sessionKey,
+      scopes: ["operator.read", "operator.write"],
+      lifecycleConnected: false,
+    });
+
+    expect(pane.resolveBoardProvider().snapshot$.value.sessionKey).toBe(sessionKey);
+    expect(request).not.toHaveBeenCalled();
+    expect(addEventListener).not.toHaveBeenCalled();
+
+    Reflect.set(pane, "boardProviderLifecycleConnected", true);
+    const provider = pane.resolveBoardProvider();
+    try {
+      await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(snapshot));
+      expect(request).toHaveBeenCalledOnce();
+      expect(addEventListener).toHaveBeenCalledOnce();
+    } finally {
+      const release = Reflect.get(pane, "releaseBoardProviderLease") as () => void;
+      release.call(pane);
+    }
+
+    expect(removeListener).toHaveBeenCalledOnce();
+  });
+
+  it("keeps gateways without board support on the null provider", () => {
+    const { pane, request, addEventListener } = createGatewayBoardPane({
+      sessionKey: "agent:main:board-unsupported",
+      methods: ["chat.history"],
+    });
+
+    expect(pane.resolveBoardProvider()).toMatchObject({
+      canMutate: false,
+      canGrant: false,
+      canPinWidgets: false,
+      canPinMcpApps: false,
+    });
+    expect(request).not.toHaveBeenCalled();
+    expect(addEventListener).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse another board lease after gateway board support disappears", () => {
+    const sessionKey = "agent:main:board-support-revoked";
+    const { pane, client, addEventListener } = createGatewayBoardPane({
+      sessionKey,
+      methods: ["chat.history"],
+    });
+
+    const otherConsumer = acquireBoardProviderForSession(sessionKey, client);
+    try {
+      expect(pane.resolveBoardProvider()).toMatchObject({
+        canMutate: false,
+        canGrant: false,
+        canPinWidgets: false,
+        canPinMcpApps: false,
+      });
+      expect(addEventListener).toHaveBeenCalledOnce();
+    } finally {
+      otherConsumer.release();
+    }
+  });
+
   it("enables MCP App pinning only when app-view and put methods are both advertised", () => {
-    window.history.replaceState({}, "", "/");
     const cases = [
       { suffix: "put-only", methods: ["board.get", "board.widget.put"], expected: false },
       { suffix: "view-only", methods: ["board.get", "board.widget.appView"], expected: false },
@@ -546,26 +588,88 @@ describe("chat pane board shell", () => {
     ];
 
     for (const testCase of cases) {
-      const pane = createTestPane();
-      const sessionKey = `agent:main:${testCase.suffix}`;
-      const client = {
-        request: vi.fn(async () => ({ sessionKey, revision: 0, tabs: [], widgets: [] })),
-        addEventListener: vi.fn(() => () => {}),
-      } as unknown as GatewayBrowserClient;
-      pane.state.sessionKey = sessionKey;
+      const { pane } = createGatewayBoardPane({
+        sessionKey: `agent:main:${testCase.suffix}`,
+        methods: testCase.methods,
+      });
+      expect(pane.resolveBoardProvider().canPinMcpApps).toBe(testCase.expected);
+    }
+  });
+
+  it("updates chat authorization without changing another consumer of the same board", async () => {
+    const sessionKey = "agent:main:chat-lease-scope-change";
+    const features = {
+      methods: ["board.get", "board.widget.appView", "board.widget.put"],
+      capabilities: ["board-widget-put-canvas-doc"],
+    };
+    const { pane, snapshot, client, request, addEventListener, removeListener } =
+      createGatewayBoardPane({
+        sessionKey,
+        scopes: ["operator.read", "operator.write"],
+        methods: features.methods,
+        capabilities: features.capabilities,
+      });
+    const chat = pane.resolveBoardProvider();
+    const approvals = acquireBoardProviderForSession(
+      sessionKey,
+      client,
+      true,
+      false,
+      false,
+      false,
+      true,
+    );
+
+    try {
+      await vi.waitFor(() => expect(chat.snapshot$.value).toEqual(snapshot));
+      expect(chat).toMatchObject({
+        canPinWidgets: true,
+        canPinMcpApps: true,
+        canMutate: true,
+        canGrant: false,
+      });
+      expect(approvals.provider).toMatchObject({
+        canPinWidgets: false,
+        canPinMcpApps: false,
+        canMutate: false,
+        canGrant: true,
+      });
+
       pane.context = {
         ...pane.context,
         gateway: {
-          ...pane.context.gateway,
           snapshot: {
             client,
             phase: "connected",
-            hello: { features: { methods: testCase.methods } },
-          } as never,
+            hello: {
+              auth: { role: "operator", scopes: ["operator.read"] },
+              features,
+            },
+          },
         },
-      };
+      } as unknown as ApplicationContext;
 
-      expect(pane.resolveBoardProvider().canPinMcpApps).toBe(testCase.expected);
+      expect(pane.resolveBoardProvider()).toBe(chat);
+      expect(chat).toMatchObject({
+        canPinWidgets: false,
+        canPinMcpApps: false,
+        canMutate: false,
+        canGrant: false,
+      });
+      expect(approvals.provider.canGrant).toBe(true);
+      expect(approvals.provider.canMutate).toBe(false);
+      expect(request).toHaveBeenCalledOnce();
+      expect(addEventListener).toHaveBeenCalledOnce();
+
+      approvals.release();
+      expect(removeListener).not.toHaveBeenCalled();
+      const release = Reflect.get(pane, "releaseBoardProviderLease") as () => void;
+      release.call(pane);
+      expect(removeListener).toHaveBeenCalledOnce();
+    } finally {
+      approvals.release();
+      const release = Reflect.get(pane, "releaseBoardProviderLease") as () => void;
+      release.call(pane);
     }
   });
 
@@ -583,32 +687,12 @@ describe("chat pane board shell", () => {
       canGrant: true,
     },
   ])("derives board actions from the $profile connection scopes", (profile) => {
-    window.history.replaceState({}, "", "/");
-    const pane = createTestPane();
-    const sessionKey = `agent:main:scope-${profile.profile.replaceAll(" ", "-")}`;
-    const client = {
-      request: vi.fn(async () => ({ sessionKey, revision: 0, tabs: [], widgets: [] })),
-      addEventListener: vi.fn(() => () => {}),
-    } as unknown as GatewayBrowserClient;
-    pane.state.sessionKey = sessionKey;
-    pane.context = {
-      ...pane.context,
-      gateway: {
-        ...pane.context.gateway,
-        snapshot: {
-          client,
-          phase: "connected",
-          hello: {
-            auth: { role: "operator", scopes: profile.scopes },
-            features: {
-              methods: ["board.get", "board.widget.appView", "board.widget.put"],
-              capabilities: ["board-widget-put-canvas-doc"],
-            },
-          },
-        } as never,
-      },
-    };
-
+    const { pane } = createGatewayBoardPane({
+      sessionKey: `agent:main:scope-${profile.profile.replaceAll(" ", "-")}`,
+      scopes: profile.scopes,
+      methods: ["board.get", "board.widget.appView", "board.widget.put"],
+      capabilities: ["board-widget-put-canvas-doc"],
+    });
     const provider = pane.resolveBoardProvider();
     expect(provider.canMutate).toBe(profile.canMutate);
     expect(provider.canGrant).toBe(profile.canGrant);

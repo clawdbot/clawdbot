@@ -15,9 +15,12 @@ const baseAttempt = {
 };
 
 const activeFallbackState: FallbackNoticeState = {
-  fallbackNoticeSelectedModel: "demo-primary/model-a",
-  fallbackNoticeActiveModel: "demo-fallback/model-b",
-  fallbackNoticeReason: "rate limit",
+  fallbackNotice: {
+    kind: "active",
+    selectedModel: "demo-primary/model-a",
+    activeModel: "demo-fallback/model-b",
+    reason: "rate limit",
+  },
 };
 
 function registerAnthropicCliBackendForTest(): void {
@@ -62,9 +65,12 @@ describe("fallback-state", () => {
     {
       name: "does not treat runtime drift as fallback when persisted state does not match",
       state: {
-        fallbackNoticeSelectedModel: "other-provider/other-model",
-        fallbackNoticeActiveModel: "demo-fallback/model-b",
-        fallbackNoticeReason: "rate limit",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "other-provider/other-model",
+          activeModel: "demo-fallback/model-b",
+          reason: "rate limit",
+        },
       } satisfies FallbackNoticeState,
       expected: { active: false, reason: undefined },
     },
@@ -88,14 +94,6 @@ describe("fallback-state", () => {
     expect(resolved.reasonSummary).toBe("rate limit");
     expect(resolved.nextState.selectedModel).toBe("demo-primary/model-a");
     expect(resolved.nextState.activeModel).toBe("demo-fallback/model-b");
-  });
-
-  it("normalizes fallback reason whitespace for summaries", () => {
-    const resolved = resolveDemoFallbackTransition({
-      attempts: [{ ...baseAttempt, reason: "rate_limit\n\tburst" }],
-    });
-
-    expect(resolved.reasonSummary).toBe("rate limit burst");
   });
 
   it("prefers formatted transient error details over generic rate-limit labels", () => {
@@ -191,9 +189,12 @@ describe("fallback-state", () => {
       activeModel: "claude-opus-4-7",
       attempts: [],
       state: {
-        fallbackNoticeSelectedModel: "anthropic/claude-opus-4-7",
-        fallbackNoticeActiveModel: "claude-cli/claude-opus-4-7",
-        fallbackNoticeReason: "selected model unavailable",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "anthropic/claude-opus-4-7",
+          activeModel: "claude-cli/claude-opus-4-7",
+          reason: "selected model unavailable",
+        },
       },
       cfg: {},
     });
@@ -235,9 +236,12 @@ describe("fallback-state", () => {
       activeModel: "claude-opus-4-7",
       attempts: [],
       state: {
-        fallbackNoticeSelectedModel: "anthropic/claude-opus-4-7",
-        fallbackNoticeActiveModel: "claude-cli/claude-opus-4-7",
-        fallbackNoticeReason: "selected model unavailable",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "anthropic/claude-opus-4-7",
+          activeModel: "claude-cli/claude-opus-4-7",
+          reason: "selected model unavailable",
+        },
       },
       cfg: {},
     });

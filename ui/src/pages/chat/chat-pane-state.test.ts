@@ -86,13 +86,13 @@ describe("applySelectedSessionProjection", () => {
 
 describe("resolveChatArtifactDownload", () => {
   it("returns a trimmed ticket without exposing a gateway bearer credential", async () => {
-    const requests: Array<{ method: string; params: unknown }> = [];
+    const requests: Array<{ method: string; params: unknown; options: unknown }> = [];
     const result = await resolveChatArtifactDownload(
       {
         connected: true,
         client: {
-          request: async (method: string, params: unknown) => {
-            requests.push({ method, params });
+          request: async (method: string, params: unknown, options: unknown) => {
+            requests.push({ method, params, options });
             return {
               artifact: {
                 id: "artifact-1",
@@ -113,6 +113,7 @@ describe("resolveChatArtifactDownload", () => {
       {
         method: "artifacts.download",
         params: { sessionKey: "agent:main:main", artifactId: "artifact-1" },
+        options: { timeoutMs: 30_000 },
       },
     ]);
     expect(result).toEqual({
