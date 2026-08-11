@@ -10,7 +10,6 @@ import {
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
   ensureDir,
-  isExplicitExtraMarkdownFilePath,
   isMemoryPath,
   listMemoryFiles,
   normalizeExtraMemoryPathEntries,
@@ -95,13 +94,6 @@ const multimodal: MemoryMultimodalSettings = normalizeMemoryMultimodalSettings({
 
 describe("memory host SDK package internals", () => {
   const getTmpDir = setupTempDirLifecycle("memory-package-");
-
-  it("keeps explicit extra-file Markdown suffix admission host-aware", () => {
-    expect(isExplicitExtraMarkdownFilePath("notes.md", "linux")).toBe(true);
-    expect(isExplicitExtraMarkdownFilePath("notes.MD", "linux")).toBe(false);
-    expect(isExplicitExtraMarkdownFilePath("notes.MD", "darwin")).toBe(false);
-    expect(isExplicitExtraMarkdownFilePath("notes.MD", "win32")).toBe(true);
-  });
 
   it.skipIf(process.platform === "win32")(
     "rejects an uppercase explicit extra file on case-sensitive hosts",

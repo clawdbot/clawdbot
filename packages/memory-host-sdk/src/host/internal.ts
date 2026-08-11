@@ -8,6 +8,7 @@ import { runWithConcurrency as runWithConcurrencyImpl } from "./concurrency.js";
 import { MEMORY_HOST_ROOT_FILENAME, normalizeConfiguredMemoryExtraPaths } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs.js";
+import { isExplicitExtraMarkdownFilePath } from "./explicit-extra-markdown.js";
 import {
   isFileMissingError,
   readRegularFile,
@@ -166,15 +167,6 @@ function isAllowedMemoryFilePath(filePath: string, multimodal?: MemoryMultimodal
   }
   return (
     classifyMemoryMultimodalPath(filePath, multimodal ?? DISABLED_MULTIMODAL_SETTINGS) !== null
-  );
-}
-
-export function isExplicitExtraMarkdownFilePath(
-  filePath: string,
-  platform: NodeJS.Platform = process.platform,
-): boolean {
-  return (
-    filePath.endsWith(".md") || (platform === "win32" && filePath.toLowerCase().endsWith(".md"))
   );
 }
 

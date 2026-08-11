@@ -218,6 +218,7 @@ describe("detectChangedScope Windows routing", () => {
 
   it("routes explicit memory extra-file owners and native coverage to Windows", () => {
     for (const memoryPath of [
+      "packages/memory-host-sdk/src/host/explicit-extra-markdown.ts",
       "packages/memory-host-sdk/src/host/internal.ts",
       "packages/memory-host-sdk/src/host/internal.test.ts",
       "packages/memory-host-sdk/src/host/read-file.ts",

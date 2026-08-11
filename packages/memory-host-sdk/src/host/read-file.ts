@@ -7,6 +7,7 @@ import {
   resolveMemoryHostSearchPathConfig,
   type OpenClawConfig,
 } from "./config-utils.js";
+import { isExplicitExtraMarkdownFilePath } from "./explicit-extra-markdown.js";
 import {
   assertNoSymlinkParents,
   isFileMissingError,
@@ -17,7 +18,6 @@ import {
   statRegularFile,
 } from "./fs-utils.js";
 import {
-  isExplicitExtraMarkdownFilePath,
   isMemoryPath,
   matchesExtraMemoryPathEntry,
   normalizeExtraMemoryPathEntries,
