@@ -30,7 +30,7 @@ import type {
   CronCreatorToolAllowlistEntry,
   CronToolsAllowCaptureRef,
 } from "../../tools/cron-tool.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import { resolveAttemptToolPolicyMessageProvider } from "./attempt-run-decisions.js";
 import { resolveAttemptSpawnWorkspaceDir } from "./attempt-thread-helpers.js";
 import {
@@ -339,7 +339,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     ? constructedToolsRaw.filter((tool) => isAgentToolRestartSafe(tool, restartSafetyOptions))
     : constructedToolsRaw;
   if (attempt.forceRestartSafeTools) {
-    log.info(
+    embeddedAgentLog.info(
       `restart-safe recovery tool policy retained ${toolsRaw.length}/${constructedToolsRaw.length} concrete tools`,
     );
   }

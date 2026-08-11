@@ -9,7 +9,7 @@ import { revokeRuntimeAuthMaterializations } from "../../auth-profiles/runtime-m
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { isConfigBackedInlineProviderApiKey, type ResolvedProviderAuth } from "../../model-auth.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import {
@@ -88,7 +88,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
     advanceRateLimitAuthProfile: async (context: RateLimitAuthProfileContext): Promise<boolean> => {
       if (rateLimitProfileRotations >= rateLimitProfileRotationLimit && fallbackConfigured) {
         const status = resolveFailoverStatus("rate_limit");
-        log.warn(
+        embeddedAgentLog.warn(
           `rate-limit profile rotation cap reached for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${rateLimitProfileRotations} rotations; escalating to model fallback`,
         );
         context.logFallbackDecision("fallback_model", { status });
@@ -185,7 +185,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
       if (reason !== "overloaded" || overloadFailoverBackoffMs <= 0) {
         return;
       }
-      log.warn(
+      embeddedAgentLog.warn(
         `overload backoff before failover for ${provider}/${modelId}: delayMs=${overloadFailoverBackoffMs}`,
       );
       await sleepForRetry(overloadFailoverBackoffMs);
@@ -203,7 +203,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
         retriesSoFar: consecutiveSameModelRateLimitRetries,
         retryAfterSeconds: retry?.retryAfterSeconds,
       });
-      log.warn(
+      embeddedAgentLog.warn(
         `rate-limit same-model retry ${consecutiveSameModelRateLimitRetries + 1}/${MAX_SAME_MODEL_RATE_LIMIT_RETRIES} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)}: delayMs=${delayMs}`,
       );
       await sleepForRetry(delayMs);

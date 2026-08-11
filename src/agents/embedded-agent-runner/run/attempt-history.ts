@@ -30,7 +30,7 @@ import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import { buildActiveSubagentSystemPromptAddition } from "../../subagents/registry/subagent-active-context.js";
 import { resolveTranscriptPolicy, type TranscriptPolicy } from "../../transcript-policy.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
 import {
   assembleAttemptContextEngine,
@@ -615,12 +615,14 @@ export async function prepareEmbeddedAttemptHistory(input: {
             systemPromptAddition: assembled.systemPromptAddition,
           }),
         );
-        log.debug(
+        embeddedAgentLog.debug(
           `context engine: prepended system prompt addition (${assembled.systemPromptAddition.length} chars)`,
         );
       }
     } catch (error) {
-      log.warn(`context engine assemble failed, using pipeline messages: ${String(error)}`);
+      embeddedAgentLog.warn(
+        `context engine assemble failed, using pipeline messages: ${String(error)}`,
+      );
     }
   }
 

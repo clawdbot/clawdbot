@@ -34,7 +34,7 @@ import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { deriveContextPromptTokens, type NormalizedUsage } from "../../usage.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -131,7 +131,7 @@ export async function resolvePromptBuildHookResult(params: {
             params.hookCtx,
           )
           .catch((hookErr: unknown) => {
-            log.warn(`agent_turn_prepare hook failed: ${String(hookErr)}`);
+            embeddedAgentLog.warn(`agent_turn_prepare hook failed: ${String(hookErr)}`);
             return undefined;
           })
       : undefined;
@@ -149,7 +149,7 @@ export async function resolvePromptBuildHookResult(params: {
             params.hookCtx,
           )
           .catch((hookErr: unknown) => {
-            log.warn(`heartbeat_prompt_contribution hook failed: ${String(hookErr)}`);
+            embeddedAgentLog.warn(`heartbeat_prompt_contribution hook failed: ${String(hookErr)}`);
             return undefined;
           })
       : undefined;
@@ -163,7 +163,7 @@ export async function resolvePromptBuildHookResult(params: {
           params.hookCtx,
         )
         .catch((hookErr: unknown) => {
-          log.warn(`before_prompt_build hook failed: ${String(hookErr)}`);
+          embeddedAgentLog.warn(`before_prompt_build hook failed: ${String(hookErr)}`);
           return undefined;
         })
     : undefined;

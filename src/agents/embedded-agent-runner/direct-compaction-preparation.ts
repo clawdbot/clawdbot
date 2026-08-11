@@ -41,7 +41,7 @@ import {
   prepareCompactionHarnessAuth,
   resolveCompactionRuntimeSelection,
 } from "./compaction-runtime-preparation.js";
-import { log } from "./logger.js";
+import { embeddedAgentLog } from "./logger.js";
 import { resolveModelAsync } from "./model.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
@@ -114,7 +114,7 @@ export async function prepareDirectCompactionAttempt(
     const detail =
       failureReason === "unknown" ? formatUnknownCompactionReasonDetail(reason) : undefined;
     const detailSuffix = detail ? ` detail=${detail}` : "";
-    log.warn(
+    embeddedAgentLog.warn(
       `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
         `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
         `attempt=${attempt} maxAttempts=${maxAttempts} outcome=failed reason=${failureReason}${detailSuffix} ` +

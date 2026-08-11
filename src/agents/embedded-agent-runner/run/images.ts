@@ -25,7 +25,7 @@ import {
 } from "../../sandbox-media-paths.js";
 import type { SandboxFsBridge } from "../../sandbox/fs-bridge.js";
 import { sanitizeImageBlocks } from "../../tool-images.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import {
   collectIdentitylessMediaImageFactIndexes,
   collectMediaImageRefs,
@@ -187,7 +187,9 @@ async function sanitizeImageEntriesWithLog(
     }
   }
   if (dropped > 0) {
-    log.warn(`Native image: dropped ${dropped} image(s) after sanitization (${label}).`);
+    embeddedAgentLog.warn(
+      `Native image: dropped ${dropped} image(s) after sanitization (${label}).`,
+    );
   }
   return { entries: sanitized, failedMediaCount };
 }
@@ -309,7 +311,7 @@ async function loadImageFromRef(
         });
         targetPath = resolved.resolved;
       } catch (err) {
-        log.debug(
+        embeddedAgentLog.debug(
           `Native image: sandbox validation failed for ${ref.resolved}: ${formatErrorMessage(err)}`,
         );
         return null;
@@ -332,7 +334,7 @@ async function loadImageFromRef(
         );
 
     if (media.kind !== "image") {
-      log.debug(`Native image: not an image file: ${targetPath} (got ${media.kind})`);
+      embeddedAgentLog.debug(`Native image: not an image file: ${targetPath} (got ${media.kind})`);
       return null;
     }
 
@@ -341,7 +343,9 @@ async function loadImageFromRef(
 
     return { type: "image", data, mimeType };
   } catch (err) {
-    log.debug(`Native image: failed to load ${ref.resolved}: ${formatErrorMessage(err)}`);
+    embeddedAgentLog.debug(
+      `Native image: failed to load ${ref.resolved}: ${formatErrorMessage(err)}`,
+    );
     return null;
   }
 }
@@ -513,7 +517,7 @@ export async function detectAndLoadPromptImages(params: {
     };
   }
 
-  log.debug(
+  embeddedAgentLog.debug(
     `Native image: prepared ${attachmentRefs.length} attachment ref(s) and ${promptRefs.length} explicit prompt ref(s)`,
   );
   let loadedCount = 0;
@@ -530,7 +534,7 @@ export async function detectAndLoadPromptImages(params: {
     });
     if (image) {
       loadedCount++;
-      log.debug(`Native image: loaded ${ref.type} ${ref.resolved}`);
+      embeddedAgentLog.debug(`Native image: loaded ${ref.type} ${ref.resolved}`);
     } else {
       skippedCount++;
     }

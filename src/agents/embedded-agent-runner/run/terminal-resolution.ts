@@ -7,7 +7,7 @@ import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
 import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import type { EmbeddedRunReplayState } from "../replay-state.js";
 import type {
   EmbeddedAgentMeta,
@@ -264,7 +264,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   ) {
     retryState.reasoningOnlyAttempts += 1;
     input.activateInternalPrompt(nextReasoningOnlyRetryInstruction, false);
-    log.warn(
+    embeddedAgentLog.warn(
       `reasoning-only assistant turn detected: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} — retrying ${retryState.reasoningOnlyAttempts}/${input.maxReasoningOnlyRetryAttempts} ` +
         `with visible-answer continuation`,
@@ -288,7 +288,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   ) {
     retryState.missingAssistantAttempts += 1;
     input.setSuppressNextUserMessagePersistence(input.activePromptPersisted);
-    log.warn(
+    embeddedAgentLog.warn(
       `missing assistant terminal message detected: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} — retrying ${retryState.missingAssistantAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} with same prompt`,
     );
@@ -302,7 +302,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   ) {
     retryState.emptyResponseAttempts += 1;
     input.activateInternalPrompt(nextEmptyResponseRetryInstruction, false);
-    log.warn(
+    embeddedAgentLog.warn(
       `empty response detected: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} — retrying ${retryState.emptyResponseAttempts}/${input.maxEmptyResponseRetryAttempts} ` +
         `with visible-answer continuation`,
@@ -347,7 +347,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   ) {
     retryState.compactionContinuationAttempts += 1;
     retryState.compactionContinuationInstruction = COMPACTION_CONTINUATION_RETRY_INSTRUCTION;
-    log.warn(
+    embeddedAgentLog.warn(
       `compaction interrupted visible final answer: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `compactions=${input.attemptCompactionCount} — retrying ${retryState.compactionContinuationAttempts}/1 with compacted-transcript continuation`,
     );
@@ -358,7 +358,7 @@ export async function resolveEmbeddedRunTerminal(input: {
 
   if (reasoningOnlyRetriesExhausted && !input.finalAssistantVisibleText) {
     const incompletePayloadText = "⚠️ Agent couldn't generate a response. Please try again.";
-    log.warn(
+    embeddedAgentLog.warn(
       `reasoning-only retries exhausted: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} attempts=${retryState.reasoningOnlyAttempts}/${input.maxReasoningOnlyRetryAttempts} — surfacing incomplete-turn error`,
     );
@@ -375,7 +375,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     nextEmptyResponseRetryInstruction &&
     retryState.emptyResponseAttempts >= input.maxEmptyResponseRetryAttempts
   ) {
-    log.warn(
+    embeddedAgentLog.warn(
       `empty response retries exhausted: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} attempts=${retryState.emptyResponseAttempts}/${input.maxEmptyResponseRetryAttempts} — surfacing incomplete-turn error`,
     );
@@ -383,7 +383,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   if (incompleteTurnText) {
     const incompleteStopReason =
       attempt.currentAttemptAssistant?.stopReason ?? attempt.lastAssistant?.stopReason;
-    log.warn(
+    embeddedAgentLog.warn(
       `incomplete turn detected: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} ` +
         `stopReason=${incompleteStopReason ?? "missing"} hasLastAssistant=${attempt.lastAssistant ? "yes" : "no"} ` +
@@ -421,7 +421,7 @@ export async function resolveEmbeddedRunTerminal(input: {
       true,
     );
     retryState.compactionContinuationInstruction = null;
-    log.warn(
+    embeddedAgentLog.warn(
       `before_agent_finalize requested one more pass: ` +
         `runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `attempt=${retryState.beforeFinalizeRevisionAttempts}/${MAX_BEFORE_AGENT_FINALIZE_REVISIONS}`,
@@ -508,7 +508,7 @@ function completeEmbeddedRun(
 ): TerminalResolution {
   const terminalAborted = isEmbeddedRunTerminalAbort(input.terminalState.outcome);
   const terminalTimedOut = isEmbeddedRunTerminalTimeout(input.terminalState.outcome);
-  log.debug(
+  embeddedAgentLog.debug(
     `embedded run done: runId=${input.runParams.runId} sessionId=${input.runParams.sessionId} durationMs=${Date.now() - input.startedAtMs} aborted=${terminalAborted}`,
   );
   markEmbeddedRunAuthProfileSuccess({

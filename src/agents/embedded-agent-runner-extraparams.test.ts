@@ -245,7 +245,7 @@ import {
   resolveExplicitSettingsTransport,
   resolvePreparedExtraParams,
 } from "./embedded-agent-runner/extra-params.js";
-import { log } from "./embedded-agent-runner/logger.js";
+import { embeddedAgentLog } from "./embedded-agent-runner/logger.js";
 
 type WrapProviderStreamFnParams = Parameters<
   typeof import("../plugins/provider-hook-runtime.js").wrapProviderStreamFn
@@ -1291,7 +1291,7 @@ describe("applyExtraParamsToAgent", () => {
       missingProperty,
       warning,
     }) => {
-      const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+      const warnSpy = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
       try {
         const payload = runResponsesPayloadMutationCase({
           applyProvider,
@@ -1476,7 +1476,7 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("warns and skips invalid parallel_tool_calls values", () => {
-    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     try {
       const payload = runParallelToolCallsPayloadMutationCase({
         applyProvider: "nvidia-nim",
@@ -2925,7 +2925,7 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("warns and skips invalid OpenAI text verbosity values", () => {
-    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     try {
       const payload = runResponsesPayloadMutationCase({
         applyProvider: "openai",
@@ -2988,7 +2988,7 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("ignores OpenAI text verbosity params for non-OpenAI providers without warning", () => {
-    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     try {
       const payload = runResponsesPayloadMutationCase({
         applyProvider: "anthropic",
@@ -3253,7 +3253,7 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("does not warn for valid Anthropic serviceTier values", () => {
-    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     try {
       const payload = runResponsesPayloadMutationCase({
         applyProvider: "anthropic",
@@ -3366,7 +3366,7 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("does not warn for valid OpenAI serviceTier values", () => {
-    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     try {
       const payload = runResponsesPayloadMutationCase({
         applyProvider: "openai",

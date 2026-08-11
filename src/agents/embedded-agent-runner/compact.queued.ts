@@ -55,7 +55,7 @@ import { resolveContextEngineCompactionSuccessor } from "./compaction-successor.
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
-import { log } from "./logger.js";
+import { embeddedAgentLog } from "./logger.js";
 import { resolveModelAsync } from "./model.js";
 import type { EmbeddedAgentQueueHandle } from "./run-state.js";
 import {
@@ -146,7 +146,7 @@ async function disposeContextEngine(contextEngine: ContextEngine): Promise<void>
   try {
     await contextEngine.dispose?.();
   } catch (err) {
-    log.warn("context engine dispose failed", {
+    embeddedAgentLog.warn("context engine dispose failed", {
       errorMessage: formatErrorMessage(err),
     });
   }
@@ -180,13 +180,13 @@ async function deferOwningContextEngineBudgetCompaction(params: {
       },
     });
   } catch (err) {
-    log.warn("failed to defer context-engine budget compaction", {
+    embeddedAgentLog.warn("failed to defer context-engine budget compaction", {
       errorMessage: formatErrorMessage(err),
     });
   }
 
   if (!deferredScheduled || deferredScheduleFailure) {
-    log.warn(
+    embeddedAgentLog.warn(
       `[compaction] failed to schedule context-engine-owned budget compaction background maintenance ` +
         `(sessionKey=${params.compactParams.sessionKey ?? params.compactParams.sessionId}` +
         `${deferredScheduleFailure ? ` error=${formatErrorMessage(deferredScheduleFailure)}` : ""})`,
@@ -199,7 +199,7 @@ async function deferOwningContextEngineBudgetCompaction(params: {
     };
   }
 
-  log.info(
+  embeddedAgentLog.info(
     `[compaction] deferred context-engine-owned budget compaction to background maintenance ` +
       `(sessionKey=${params.compactParams.sessionKey ?? params.compactParams.sessionId} ` +
       `scheduled=${String(deferredScheduled)})`,
@@ -575,7 +575,7 @@ async function compactResolvedContextEngine(
     if (!shouldFallbackAfterHarnessCompaction(harnessResult)) {
       return harnessResult;
     }
-    log.warn(
+    embeddedAgentLog.warn(
       `native harness compaction could not use its session binding; falling back to context engine: ${harnessResult.reason ?? "unknown"}`,
     );
   }
@@ -651,7 +651,7 @@ async function compactResolvedContextEngine(
               hookCtx,
             );
           } catch (err) {
-            log.warn("before_compaction hook failed", {
+            embeddedAgentLog.warn("before_compaction hook failed", {
               errorMessage: formatErrorMessage(err),
             });
           }
@@ -700,7 +700,7 @@ async function compactResolvedContextEngine(
             params.abortSignal,
           );
         } catch (compactErr) {
-          log.warn("context-engine compaction failed", {
+          embeddedAgentLog.warn("context-engine compaction failed", {
             errorMessage: formatErrorMessage(compactErr),
           });
           result = {
@@ -782,7 +782,7 @@ async function compactResolvedContextEngine(
               afterHookCtx,
             );
           } catch (err) {
-            log.warn("after_compaction hook failed", {
+            embeddedAgentLog.warn("after_compaction hook failed", {
               errorMessage: formatErrorMessage(err),
             });
           }
@@ -811,7 +811,7 @@ async function compactResolvedContextEngine(
               { nativeCompactionRequest: "after_context_engine" },
             );
             if (secondaryNativeHarnessCompaction && !secondaryNativeHarnessCompaction.ok) {
-              log.warn(
+              embeddedAgentLog.warn(
                 "secondary native harness compaction failed after context-engine compaction",
                 {
                   reason: secondaryNativeHarnessCompaction.reason,
@@ -824,9 +824,12 @@ async function compactResolvedContextEngine(
               compacted: false,
               reason: formatErrorMessage(err),
             };
-            log.warn("secondary native harness compaction threw after context-engine compaction", {
-              errorMessage: formatErrorMessage(err),
-            });
+            embeddedAgentLog.warn(
+              "secondary native harness compaction threw after context-engine compaction",
+              {
+                errorMessage: formatErrorMessage(err),
+              },
+            );
           }
         }
         const secondaryNativeDetailsKey =

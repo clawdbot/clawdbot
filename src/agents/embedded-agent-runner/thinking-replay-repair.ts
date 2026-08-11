@@ -3,7 +3,7 @@
  */
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { AgentMessage } from "../runtime/index.js";
-import { log } from "./logger.js";
+import { embeddedAgentLog } from "./logger.js";
 import { stripThinkingBlocksFromMessage } from "./thinking.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
 
@@ -57,7 +57,7 @@ export function repairRejectedThinkingReplayInSessionManager(params: {
       ...(params.agentId ? { agentId: params.agentId } : {}),
     });
   }
-  log.warn(
+  embeddedAgentLog.warn(
     `[session-recovery] stripped thinking blocks after provider rejected replay: ` +
       `repaired=${rewriteResult.rewrittenEntries} sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
   );

@@ -9,7 +9,7 @@ import type {
 } from "../../context-engine/types.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
-import { log } from "./logger.js";
+import { embeddedAgentLog } from "./logger.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./run/midturn-precheck.js";
 import { shouldPreemptivelyCompactBeforePrompt } from "./run/preemptive-compaction.js";
 import {
@@ -512,7 +512,7 @@ export function installToolResultContextGuard(params: {
           toolResultMaxChars: params.midTurnPrecheck.toolResultMaxChars,
         });
         const request = toMidTurnPrecheckRequest(precheck);
-        log.debug(
+        embeddedAgentLog.debug(
           `[context-overflow-midturn-precheck] tool-result-guard check route=${precheck.route} ` +
             `messages=${contextMessages.length} prePromptMessageCount=${prePromptMessageCount} ` +
             `estimatedPromptTokens=${precheck.estimatedPromptTokens} ` +

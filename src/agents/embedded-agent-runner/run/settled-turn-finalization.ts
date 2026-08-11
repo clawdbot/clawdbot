@@ -4,7 +4,7 @@ import type {
   AgentHarness,
   AgentHarnessSettledTurnFinalizationResult,
 } from "../../harness/types.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import {
   mergeAttemptRunStatsIntoAccumulator,
   mergeUsageIntoAccumulator,
@@ -94,7 +94,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
 
   const runParams = input.terminalBase.runParams;
   const errorContext = input.terminalBase.activeErrorContext;
-  log.warn(
+  embeddedAgentLog.warn(
     `settled post-tool turn lacked a final answer: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
       `provider=${errorContext.provider}/${errorContext.model} — running isolated finalization`,
   );
@@ -109,7 +109,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     if (finalization.outcome === "empty") {
       mergeUsageIntoAccumulator(input.terminalBase.usageAccumulator, finalization.result.usage);
       lastRunPromptUsage = finalization.result.usage ?? lastRunPromptUsage;
-      log.warn(
+      embeddedAgentLog.warn(
         `settled-turn finalization completed without a visible answer: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
           `provider=${errorContext.provider}/${errorContext.model} — recording completed-empty outcome`,
       );
@@ -166,7 +166,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       finalizationOutcome: "answered" as const,
     };
   } catch (error) {
-    log.warn(
+    embeddedAgentLog.warn(
       `settled-turn finalization failed closed: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `provider=${errorContext.provider}/${errorContext.model} error=${formatErrorMessage(error)}`,
     );

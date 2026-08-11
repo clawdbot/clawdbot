@@ -19,7 +19,7 @@ import {
 } from "../../execution-auth-binding.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
 import { modelMatchesProviderModelRoute } from "../../provider-model-route.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 const POST_RUN_AUTH_PROFILE_SUCCESS_SLOW_MS = 1_000;
@@ -53,20 +53,20 @@ export function markEmbeddedRunAuthProfileSuccess(input: {
     .then(() => {
       const durationMs = Date.now() - successStarted;
       if (durationMs >= POST_RUN_AUTH_PROFILE_SUCCESS_SLOW_MS) {
-        log.warn(
+        embeddedAgentLog.warn(
           `post-run auth-profile success bookkeeping completed after ${durationMs}ms: ` +
             `runId=${input.runId} sessionId=${input.sessionId} ` +
             `provider=${sanitizeForLog(successProvider)} profileId=${safeSuccessProfileId}`,
         );
-      } else if (log.isEnabled("trace")) {
-        log.trace(
+      } else if (embeddedAgentLog.isEnabled("trace")) {
+        embeddedAgentLog.trace(
           `post-run auth-profile success bookkeeping completed: ` +
             `runId=${input.runId} sessionId=${input.sessionId} durationMs=${durationMs}`,
         );
       }
     })
     .catch((error: unknown) => {
-      log.warn(
+      embeddedAgentLog.warn(
         `post-run auth-profile success bookkeeping failed: ` +
           `runId=${input.runId} sessionId=${input.sessionId} ` +
           `provider=${sanitizeForLog(successProvider)} profileId=${safeSuccessProfileId} ` +

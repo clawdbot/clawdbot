@@ -1,13 +1,13 @@
 // Failover observation tests pin the warning payloads emitted when embedded
 // runs decide whether to retry, rotate profiles, fall back, or surface errors.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import { createFailoverDecisionLogger } from "./failover-observation.js";
 
 function observeDecision(overrides: Partial<Parameters<typeof createFailoverDecisionLogger>[0]>) {
   // Keep the base case boring so each test only states the failure dimension
   // whose log metadata should change.
-  const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+  const warnSpy = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
   const logDecision = createFailoverDecisionLogger({
     stage: "assistant",
     runId: "run:base",
@@ -94,7 +94,7 @@ describe("createFailoverDecisionLogger timeout normalization", () => {
 
 describe("createFailoverDecisionLogger", () => {
   it("includes from and to model refs when the source differs from the selected target", () => {
-    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
     const logDecision = createFailoverDecisionLogger({
       stage: "assistant",
       runId: "run:failover",
@@ -125,7 +125,7 @@ describe("createFailoverDecisionLogger", () => {
   });
 
   it("omits to model refs when the source matches the selected target", () => {
-    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
     const logDecision = createFailoverDecisionLogger({
       stage: "assistant",
       runId: "run:same-model",
@@ -149,7 +149,7 @@ describe("createFailoverDecisionLogger", () => {
   });
 
   it("omits raw HTML auth bodies from consoleMessage for HTML 401 auth failures", () => {
-    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
     const logDecision = createFailoverDecisionLogger({
       stage: "assistant",
       runId: "run:auth-html",
@@ -180,7 +180,7 @@ describe("createFailoverDecisionLogger", () => {
   });
 
   it("omits raw HTML Cloudflare challenge bodies from consoleMessage for upstream_html 403", () => {
-    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
     const cfChallengeHtml =
       "403 <!DOCTYPE html><html><head><title>403 Forbidden</title></head>" +
       "<body>Enable JavaScript and cookies to continue." +

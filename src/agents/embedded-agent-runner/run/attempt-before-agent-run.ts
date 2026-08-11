@@ -4,7 +4,7 @@
 import { resolveBlockMessage } from "../../../plugins/hook-decision-types.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import { flushSessionManagerTranscript } from "./attempt-transcript-helpers.js";
 import { sessionMessagesContainIdempotencyKey } from "./pre-persisted-user-turn.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -75,7 +75,7 @@ export async function runEmbeddedAttemptBeforeAgentRun(input: {
         input.sessionManager.buildSessionContext().messages;
       return true;
     } catch (err) {
-      log.warn(
+      embeddedAgentLog.warn(
         `before_agent_run block: failed to persist redacted user message: ${
           (err as Error)?.message ?? String(err)
         }`,
@@ -100,7 +100,7 @@ export async function runEmbeddedAttemptBeforeAgentRun(input: {
       input.hookContext,
     );
   } catch {
-    log.warn("before_agent_run hook failed; blocking request");
+    embeddedAgentLog.warn("before_agent_run hook failed; blocking request");
     const blockedBy = "before_agent_run";
     const message = resolveBlockMessage(
       { outcome: "block", reason: "before_agent_run hook failed" },
@@ -116,7 +116,7 @@ export async function runEmbeddedAttemptBeforeAgentRun(input: {
   }
   const blockedBy = beforeRunResult?.pluginId ?? "unknown";
   const message = resolveBlockMessage(beforeRunDecision, { blockedBy });
-  log.warn(`before_agent_run hook blocked by ${blockedBy}`);
+  embeddedAgentLog.warn(`before_agent_run hook blocked by ${blockedBy}`);
   await persistBlockedBeforeAgentRun({ message, pluginId: blockedBy });
   return { blockedBy, promptError: new Error(message) };
 }

@@ -1,7 +1,7 @@
 // Coverage for ordered cleanup of embedded attempt subscriptions and resources.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt-finalize.js";
 import { cleanupEmbeddedAttemptResources } from "./attempt-subscription-cleanup.js";
 
@@ -49,7 +49,7 @@ describe("cleanupEmbeddedAttemptResources", () => {
 
   it("continues cleanup after the aborted settle timeout", async () => {
     vi.useFakeTimers();
-    vi.spyOn(log, "warn").mockImplementation(() => {});
+    vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
     const order: string[] = [];
 
     const cleanupPromise = cleanupEmbeddedAttemptResources({

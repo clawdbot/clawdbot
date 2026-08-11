@@ -5,7 +5,7 @@ import { extractBalancedJsonPrefix } from "@openclaw/normalization-core";
 import { normalizeProviderId } from "../../model-selection.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import { createHtmlEntityToolCallArgumentDecodingWrapper } from "../tool-call-argument-decoding.js";
 import { isRunnerToolCallBlockType } from "./attempt-tool-call-block-type.js";
 import { wrapStreamObjectEvents } from "./stream-wrapper.js";
@@ -726,7 +726,7 @@ function wrapStreamRepairMalformedToolCallArguments(
           repairToolCallArgumentsInMessage(event.message, event.contentIndex, repair.args);
           if (!loggedRepairIndices.has(event.contentIndex) && repair.kind === "repaired") {
             loggedRepairIndices.add(event.contentIndex);
-            log.warn(
+            embeddedAgentLog.warn(
               `repairing malformed tool call arguments with ${repair.leadingPrefix.length} leading chars and ${repair.trailingSuffix.length} trailing chars`,
             );
           }

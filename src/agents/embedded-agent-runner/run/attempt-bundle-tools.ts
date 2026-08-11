@@ -12,7 +12,7 @@ import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import { captureFinalEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool.js";
 import { applyFinalEffectiveToolPolicy } from "../effective-tool-policy.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import type { prepareEmbeddedAttemptSetup } from "./attempt-setup.js";
 import {
   applyEmbeddedAttemptToolsAllow,
@@ -157,7 +157,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       workspaceDir: params.effectiveWorkspace,
       metadataSnapshot: bundleMetadataSnapshot,
       conversationCapabilityProfile: runtimeCapabilityProfile,
-      warn: (message) => log.warn(message),
+      warn: (message) => embeddedAgentLog.warn(message),
     });
     if (bundleMcpRuntime?.restrictAppTools) {
       const runtimeAllowedAppTools = applyEmbeddedAttemptToolsAllow(
@@ -171,7 +171,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         workspaceDir: params.effectiveWorkspace,
         metadataSnapshot: bundleMetadataSnapshot,
         conversationCapabilityProfile: runtimeCapabilityProfile,
-        warn: (message) => log.warn(message),
+        warn: (message) => embeddedAgentLog.warn(message),
       });
       // The view outlives this attempt; capture policy against the complete MCP catalog now.
       bundleMcpRuntime.restrictAppTools(allowedAppTools);

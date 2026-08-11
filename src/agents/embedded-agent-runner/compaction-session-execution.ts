@@ -51,7 +51,7 @@ import {
 import { prepareCompactionSessionAgent } from "./compaction-session-agent.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
-import { log } from "./logger.js";
+import { embeddedAgentLog } from "./logger.js";
 import type { PreparedCompactionRuntime } from "./prepared-compaction-runtime.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
 import { createEmbeddedAgentResourceLoader } from "./resource-loader.js";
@@ -361,25 +361,25 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             onHookMessages: params.onCompactionHookMessages,
           });
           const { messageCountOriginal } = beforeHookMetrics;
-          const diagEnabled = log.isEnabled("debug");
+          const diagEnabled = embeddedAgentLog.isEnabled("debug");
           const preMetrics = diagEnabled
             ? summarizeCompactionMessages(session.messages)
             : undefined;
           if (diagEnabled && preMetrics) {
-            log.debug(
+            embeddedAgentLog.debug(
               `[compaction-diag] start runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
                 `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
                 `attempt=${attempt} maxAttempts=${maxAttempts} ` +
                 `pre.messages=${preMetrics.messages} pre.historyTextChars=${preMetrics.historyTextChars} ` +
                 `pre.toolResultChars=${preMetrics.toolResultChars} pre.estTokens=${preMetrics.estTokens ?? "unknown"}`,
             );
-            log.debug(
+            embeddedAgentLog.debug(
               `[compaction-diag] contributors diagId=${diagId} top=${JSON.stringify(preMetrics.contributors)}`,
             );
           }
 
           if (!containsRealConversationMessages(session.messages)) {
-            log.info(
+            embeddedAgentLog.info(
               `[compaction] skipping — no real conversation messages (sessionKey=${params.sessionKey ?? params.sessionId})`,
             );
             return {
@@ -468,7 +468,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             ? summarizeCompactionMessages(session.messages)
             : undefined;
           if (diagEnabled && preMetrics && postMetrics) {
-            log.debug(
+            embeddedAgentLog.debug(
               `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
                 `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
                 `attempt=${attempt} maxAttempts=${maxAttempts} outcome=compacted reason=none ` +
@@ -523,7 +523,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             // Near-term provider fix: when compaction hits a reasoning-mandatory
             // endpoint with `off`, retry once with `minimal` instead of surfacing
             // a user-visible failure.
-            log.warn(
+            embeddedAgentLog.warn(
               `[compaction] request rejected for ${provider}/${modelId}; retrying with ${fallbackThinking}`,
             );
             thinkLevel = fallbackThinking;

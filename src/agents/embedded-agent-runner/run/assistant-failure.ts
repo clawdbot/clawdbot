@@ -20,7 +20,7 @@ import {
   resolveSessionSuspensionReason,
   type SessionSuspensionParams,
 } from "../../session-suspension.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import type { TraceAttempt } from "../types.js";
 import { handleAssistantFailover, isShortWindowRateLimitMessage } from "./assistant-failover.js";
 import { createFailoverDecisionLogger } from "./failover-observation.js";
@@ -111,7 +111,7 @@ export async function handleEmbeddedAssistantFailure(input: {
     attempted: input.attemptedThinking,
   });
   if (fallbackThinking && !terminalInterrupted) {
-    log.warn(
+    embeddedAgentLog.warn(
       `unsupported thinking level for ${input.provider}/${input.modelId}; retrying with ${fallbackThinking}`,
     );
     return buildOutcome(input, {
@@ -172,7 +172,7 @@ export async function handleEmbeddedAssistantFailure(input: {
     });
   if (replaySafeSilentErrorFailure && input.emptyErrorRetries < MAX_EMPTY_ERROR_RETRIES) {
     const emptyErrorRetries = input.emptyErrorRetries + 1;
-    log.warn(
+    embeddedAgentLog.warn(
       `[empty-error-retry] stopReason=error non-visible-output; resubmitting ` +
         `attempt=${emptyErrorRetries}/${MAX_EMPTY_ERROR_RETRIES} ` +
         `provider=${input.attemptAssistant?.provider ?? input.provider} ` +
@@ -244,7 +244,7 @@ export async function handleEmbeddedAssistantFailure(input: {
     ]
       .filter(Boolean)
       .join(" ");
-    log.warn(
+    embeddedAgentLog.warn(
       `Profile ${input.authProfileId} rejected image payload${details ? ` (${details})` : ""}.`,
     );
   }
@@ -298,7 +298,7 @@ export async function handleEmbeddedAssistantFailure(input: {
     overloadProfileRotationLimit: input.overloadProfileRotationLimit,
     previousRetryFailoverReason: input.previousRetryFailoverReason,
     logAssistantFailoverDecision: logFailoverDecision,
-    warn: (message) => log.warn(message),
+    warn: (message) => embeddedAgentLog.warn(message),
     maybeMarkAuthProfileFailure: input.maybeMarkAuthProfileFailure,
     maybeRetrySameModelRateLimit: input.maybeRetrySameModelRateLimit,
     maybeBackoffBeforeOverloadFailover: input.maybeBackoffBeforeOverloadFailover,

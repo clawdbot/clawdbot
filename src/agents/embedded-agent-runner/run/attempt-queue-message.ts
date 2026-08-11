@@ -14,7 +14,7 @@ import {
   getSteeringMessageIdentity,
   subscribeSteeringMessagePersistenceFailure,
 } from "../../sessions/steering-message-identity.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import type {
   EmbeddedAgentQueueMessageOptions,
   EmbeddedAgentQueueMessageResult,
@@ -255,7 +255,7 @@ async function steerAndWaitForTranscriptCommit(
       cancellation ??= cancelQueuedSteeringMessage(activeSession, text, queueIdentity).then(
         (removed) => {
           if (!removed) {
-            log.warn("failed to find queued steering message for cancellation");
+            embeddedAgentLog.warn("failed to find queued steering message for cancellation");
             throw new EmbeddedSteeringAcceptedUnconfirmedError(message);
           }
         },
@@ -264,7 +264,7 @@ async function steerAndWaitForTranscriptCommit(
         () => finish(new Error(message)),
         (error: unknown) => {
           if (!(error instanceof EmbeddedSteeringAcceptedUnconfirmedError)) {
-            log.warn(`failed to cancel queued steering message: ${String(error)}`);
+            embeddedAgentLog.warn(`failed to cancel queued steering message: ${String(error)}`);
           }
           finish(
             error instanceof EmbeddedSteeringAcceptedUnconfirmedError
@@ -387,7 +387,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     try {
       await cancelPendingAgentQuestionForSession({ sessionKey, resolvedBy: "image-reply" });
     } catch (error) {
-      log.warn(`failed to cancel ask_user before image steering: ${String(error)}`);
+      embeddedAgentLog.warn(`failed to cancel ask_user before image steering: ${String(error)}`);
     }
   }
   if (

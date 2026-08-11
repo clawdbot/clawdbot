@@ -20,7 +20,7 @@ import {
 } from "../../agent-run-terminal-outcome.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../../stream-message-shared.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import { setActiveEmbeddedRun } from "../runs.js";
 import { testing as runsTesting } from "../runs.test-support.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
@@ -54,7 +54,7 @@ describe("embedded run durable writer admission", () => {
   });
 
   it("supersedes the live prior writer, claims the row, and rejects its late append", async () => {
-    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
     await replaceSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }, {
       activeWriterRunId: "run-a",
       lifecycleRevision,
@@ -197,7 +197,7 @@ describe("embedded run durable writer admission", () => {
       sessionId,
       updatedAt: 1,
     } as InternalSessionEntry);
-    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
 
     await claimAgentSessionWriter({
       agentId: "main",

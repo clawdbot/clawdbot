@@ -5,7 +5,7 @@ import {
   resolveAgentRunSessionTarget,
   type AgentRunSessionTarget,
 } from "../../run-session-target.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import { buildContextEngineCompactionSessionTarget } from "./session-bootstrap.js";
 
@@ -123,7 +123,7 @@ export function createEmbeddedRunSessionPromptState(input: {
     const observedPersistence = canonicalPersistence
       .then(markWhenPersisted)
       .catch((persistError: unknown) => {
-        log.warn(
+        embeddedAgentLog.warn(
           `failed to persist canonical ${blockedBeforeAgentRun !== undefined ? "blocked " : ""}embedded user turn transcript: ${formatErrorMessage(persistError)}`,
         );
       });

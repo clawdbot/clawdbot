@@ -28,7 +28,7 @@ import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper
 import { resolveToolSearchCatalogTool } from "../../tool-search.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import { createEmbeddedAgentResourceLoader } from "../resource-loader.js";
 import { applySystemPromptToSession } from "../system-prompt.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
@@ -177,7 +177,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
             : undefined;
           const hydratedTool = definition ? wrapToolDefinition(definition) : undefined;
           if (hydratedTool) {
-            log.info(`tool-search: hydrated deferred directory tool ${toolCall.name}`);
+            embeddedAgentLog.info(`tool-search: hydrated deferred directory tool ${toolCall.name}`);
             const originalExecute = hydratedTool.execute;
             hydratedTool.execute = (async (...args: Parameters<typeof originalExecute>) => {
               const interval = setInterval(() => notifyToolActivity(attempt.runId), 60_000);
@@ -509,7 +509,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
           config: attempt.config,
           agentId: input.sessionAgentId,
         }),
-      warn: (message) => log.warn(message),
+      warn: (message) => embeddedAgentLog.warn(message),
     });
   });
   // Bootstrap may repair or migrate transcript rows. Only user writes after

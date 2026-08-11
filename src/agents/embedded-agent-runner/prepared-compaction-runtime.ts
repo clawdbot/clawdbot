@@ -64,7 +64,7 @@ import { prepareWatchedSessionsPrompt } from "../watched-sessions-prompt.js";
 import { resolveCompactionContextTokenBudget } from "./compaction-runtime-context.js";
 import type { DirectCompactionPreparation } from "./direct-compaction-preparation.js";
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
-import { log } from "./logger.js";
+import { embeddedAgentLog } from "./logger.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-discovery-input.js";
 import { resolveAttemptSpawnWorkspaceDir } from "./run/attempt-thread-helpers.js";
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "./sandbox-info.js";
@@ -194,7 +194,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
             agentId: effectiveSkillAgentId,
             warn: makeBootstrapWarn({
               sessionLabel,
-              warn: (message) => log.warn(message),
+              warn: (message) => embeddedAgentLog.warn(message),
             }),
           });
     // Apply contextTokens cap to model so session runtime's auto-compaction
@@ -386,7 +386,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       // bundled tools cannot disagree about policy inputs (agentId included:
       // both resolve it from the session key inside the profile).
       conversationCapabilityProfile: runtimeCapabilityProfile,
-      warn: (message) => log.warn(message),
+      warn: (message) => embeddedAgentLog.warn(message),
     });
     const normalizableBundledToolProjection = filterProviderNormalizableTools(filteredBundledTools);
     if (normalizableBundledToolProjection.diagnostics.length > 0) {

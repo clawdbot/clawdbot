@@ -12,7 +12,7 @@ import {
   resolveCompactionTimeoutMs,
 } from "../compaction-safety-timeout.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -239,7 +239,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
         resolveActiveHookContext(),
       );
     } catch (error) {
-      log.warn(`before_compaction hook failed during ${reason}: ${String(error)}`);
+      embeddedAgentLog.warn(`before_compaction hook failed during ${reason}: ${String(error)}`);
     }
   };
   const runOwnsCompactionAfterHook = async (
@@ -269,7 +269,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
         resolveActiveHookContext(),
       );
     } catch (error) {
-      log.warn(`after_compaction hook failed during ${reason}: ${String(error)}`);
+      embeddedAgentLog.warn(`after_compaction hook failed during ${reason}: ${String(error)}`);
     }
   };
 

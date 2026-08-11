@@ -8,7 +8,7 @@ import {
 } from "../../runtime/internal-hooks.js";
 import { admitToolCallBatch } from "../../tool-loop-admission.js";
 import { hashToolCall } from "../../tool-loop-detection.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 
 /** Build the embedded-runner's private bridge into agent-core loop recovery. */
 export function createToolLoopBatchAdmission(
@@ -35,7 +35,7 @@ export function createToolLoopBatchAdmission(
         : result;
     } catch (error) {
       const first = canonicalCalls[0];
-      log.error(`tool-loop batch admission failed: ${String(error)}`);
+      embeddedAgentLog.error(`tool-loop batch admission failed: ${String(error)}`);
       return first
         ? {
             intervention: {

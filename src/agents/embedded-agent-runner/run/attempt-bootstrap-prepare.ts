@@ -17,7 +17,7 @@ import {
   isWorkspaceBootstrapPending,
   type WorkspaceBootstrapFile,
 } from "../../workspace.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import { resolveAttemptBootstrapContext } from "./attempt-context-engine-helpers.js";
 import { remapInjectedContextFilesToWorkspace } from "./attempt-setup.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -39,7 +39,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
   const bootstrapWarn = makeBootstrapWarn({
     sessionLabel: params.sessionLabel,
     workspaceDir: params.resolvedWorkspace,
-    warn: (message) => log.warn(message),
+    warn: (message) => embeddedAgentLog.warn(message),
   });
   let completedBootstrapTurn: boolean | undefined;
   const hasCompletedBootstrapTurnForAttempt = async () => {

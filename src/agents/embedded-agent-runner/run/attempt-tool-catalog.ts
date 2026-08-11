@@ -20,7 +20,7 @@ import {
   type ToolSearchCatalogToolExecutor,
 } from "../../tool-search.js";
 import { applyAgentToolSurfaceCatalog } from "../../tool-surface-plan.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import { collectAttemptExplicitToolAllowlistSources } from "./attempt-tool-allowlist.js";
 import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
@@ -129,7 +129,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
   );
   if (toolSearch.compacted && !toolSearch.catalogReused) {
     input.markStage(codeModeControlsEnabledForRun ? "code-mode" : "tool-search");
-    log.info(
+    embeddedAgentLog.info(
       codeModeControlsEnabledForRun
         ? `code-mode: cataloged ${toolSearch.catalogToolCount} tools behind exec/wait`
         : toolSearchConfig.mode === "directory"

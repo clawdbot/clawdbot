@@ -3,7 +3,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyExtraParamsToAgent } from "./extra-params.js";
 import { testing as extraParamsTesting } from "./extra-params.test-support.js";
-import { log } from "./logger.js";
+import { embeddedAgentLog } from "./logger.js";
 import { resolveCacheRetention } from "./prompt-cache-retention.js";
 
 function applyAndExpectWrapped(params: {
@@ -36,14 +36,14 @@ function applyAndExpectWrapped(params: {
 
 // Keep cache-retention warning/debug output out of assertion logs.
 vi.mock("./logger.js", () => ({
-  log: {
+  embeddedAgentLog: {
     debug: vi.fn(),
     warn: vi.fn(),
   },
 }));
 
 beforeEach(() => {
-  vi.mocked(log.warn).mockClear();
+  vi.mocked(embeddedAgentLog.warn).mockClear();
   extraParamsTesting.setProviderRuntimeDepsForTest({
     prepareProviderExtraParams: () => undefined,
     resolveProviderExtraParamsForTransport: () => undefined,
@@ -275,8 +275,8 @@ describe("cacheRetention default behavior", () => {
       provider: "amazon-bedrock",
     });
 
-    expect(log.warn).toHaveBeenCalledOnce();
-    expect(log.warn).toHaveBeenCalledWith(
+    expect(embeddedAgentLog.warn).toHaveBeenCalledOnce();
+    expect(embeddedAgentLog.warn).toHaveBeenCalledWith(
       'ignoring invalid cacheRetention param; expected "none", "short", or "long"',
     );
   });

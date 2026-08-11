@@ -5,7 +5,7 @@ import type { SessionManager } from "../../sessions/index.js";
  * Handles sessions-yield interruption, persistence, and artifact cleanup.
  */
 import { isRunnerAbortError } from "../abort.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt-finalize.js";
 
 const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
@@ -32,7 +32,7 @@ export async function waitForSessionsYieldAbortSettle(params: {
     params.settlePromise
       .then(() => "settled" as const)
       .catch((err: unknown) => {
-        log.warn(
+        embeddedAgentLog.warn(
           `sessions_yield abort settle failed: runId=${params.runId} sessionId=${params.sessionId} err=${String(err)}`,
         );
         return "errored" as const;
@@ -45,7 +45,7 @@ export async function waitForSessionsYieldAbortSettle(params: {
     clearTimeout(timeout);
   }
   if (outcome === "timed_out") {
-    log.warn(
+    embeddedAgentLog.warn(
       `sessions_yield abort settle timed out: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${SESSIONS_YIELD_ABORT_SETTLE_TIMEOUT_MS}`,
     );
   }

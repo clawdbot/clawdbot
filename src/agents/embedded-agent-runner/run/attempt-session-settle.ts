@@ -7,7 +7,7 @@ import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtim
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { clearToolSearchCatalog, type ToolSearchCatalogRef } from "../../tool-search.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-finalize.js";
 import type { EmitDiagnosticRunCompleted } from "./attempt-setup.js";
@@ -122,7 +122,7 @@ export async function cleanupEmbeddedAttemptSessionPhase(
   await flushEmbeddedAttemptTrajectoryRecorder({
     runId: attempt.runId,
     sessionId: attempt.sessionId,
-    log,
+    log: embeddedAgentLog,
     trajectoryRecorder: input.trajectoryRecorder,
   });
 

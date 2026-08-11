@@ -12,7 +12,7 @@ import {
 import type { AgentMessage } from "../../runtime/index.js";
 import { settleRequesterAfterSessionSpawns } from "../../subagents/registry/subagent-registry.js";
 import type { NormalizedUsage } from "../../usage.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import type { PromptCacheBreak, PromptCacheChange } from "../prompt-cache-observability.js";
 import { clearActiveEmbeddedRun } from "../runs.js";
 import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
@@ -69,7 +69,7 @@ function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): Error
     (terminal.aborted || terminal.timedOut) &&
     !terminal.timedOutDuringCompaction
   ) {
-    log.debug(
+    embeddedAgentLog.debug(
       `run cleanup: runId=${attempt.runId} sessionId=${attempt.sessionId} aborted=${terminal.aborted} timedOut=${terminal.timedOut}`,
     );
   }
@@ -94,7 +94,7 @@ function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): Error
       cleanup();
     } catch (error) {
       firstCleanupError ??= error instanceof Error ? error : new Error(String(error));
-      log.error(
+      embeddedAgentLog.error(
         `CRITICAL: ${name} failed, possible resource leak: runId=${attempt.runId} ${String(error)}`,
       );
     }

@@ -13,7 +13,7 @@ import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transc
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import { canContinueFromMessage, trimToContinuableTail } from "./compaction-timeout.js";
 import { MID_TURN_PRECHECK_ERROR_MESSAGE } from "./midturn-precheck.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -64,7 +64,7 @@ export function removeTrailingMidTurnPrecheckAssistantError(params: {
       },
     ) > 0;
   if (removedActiveError && !removedPersistedError) {
-    log.warn(
+    embeddedAgentLog.warn(
       "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but could not locate matching persisted SessionManager entry",
     );
   }

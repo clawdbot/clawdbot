@@ -19,7 +19,7 @@ import {
   resolveSessionSuspensionReason,
   type SessionSuspensionParams,
 } from "../../session-suspension.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import type { EmbeddedAgentMeta, EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
 import { isShortWindowRateLimitMessage } from "./assistant-failover.js";
 import { buildEmbeddedRunBlockedResult } from "./blocked-run-result.js";
@@ -190,7 +190,7 @@ export async function handleEmbeddedPromptFailure(input: {
           modelId: input.modelId,
         })
         .catch((error: unknown) => {
-          log.warn(`prompt profile failure mark failed: ${String(error)}`);
+          embeddedAgentLog.warn(`prompt profile failure mark failed: ${String(error)}`);
         });
     }
     input.traceAttempts.push({
@@ -236,7 +236,7 @@ export async function handleEmbeddedPromptFailure(input: {
         modelId: input.modelId,
       });
     } catch (error) {
-      log.warn(`prompt profile failure mark failed: ${String(error)}`);
+      embeddedAgentLog.warn(`prompt profile failure mark failed: ${String(error)}`);
     }
   }
   const fallbackThinking = pickFallbackThinkingLevel({
@@ -244,7 +244,7 @@ export async function handleEmbeddedPromptFailure(input: {
     attempted: input.attemptedThinking,
   });
   if (fallbackThinking) {
-    log.warn(
+    embeddedAgentLog.warn(
       `unsupported thinking level for ${input.provider}/${input.modelId}; retrying with ${fallbackThinking}`,
     );
     return {

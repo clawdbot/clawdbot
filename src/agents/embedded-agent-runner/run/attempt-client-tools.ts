@@ -9,7 +9,7 @@ import { addClientToolsToCodeModeCatalog } from "../../code-mode.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { collectReplaySafeToolNames, isAgentToolReplaySafe } from "../../tool-replay-safety.js";
 import { addClientToolsToToolSearchCatalog, type ToolSearchCatalogRef } from "../../tool-search.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import {
   AGENT_RESERVED_TOOL_NAMES,
   collectCoreBuiltinToolNames,
@@ -149,7 +149,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
   });
   clientToolDefs = clientToolSearch.tools;
   if (clientToolSearch.compacted) {
-    log.info(
+    embeddedAgentLog.info(
       params.codeModeControlsEnabledForRun
         ? `code-mode: cataloged ${clientToolSearch.catalogToolCount} client tools behind exec/wait`
         : `tool-search: cataloged ${clientToolSearch.catalogToolCount} client tools behind compact prompt surface`,

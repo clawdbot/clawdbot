@@ -47,7 +47,7 @@ import type { guardSessionManager } from "../../session-tool-result-guard-wrappe
 import type { AgentSession } from "../../sessions/index.js";
 import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import {
   mapSandboxSkillEntriesForPrompt,
   mapSandboxSkillUsagePaths,
@@ -157,13 +157,13 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
   const proactiveSubagentOrchestration = params.thinkLevel === "ultra";
   configureEmbeddedAttemptHttpRuntime({ timeoutMs: params.timeoutMs });
 
-  log.debug(
+  embeddedAgentLog.debug(
     `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${params.provider} model=${params.modelId} thinking=${params.thinkLevel} messageChannel=${params.messageChannel ?? params.messageProvider ?? "unknown"}`,
   );
   const prepStages = createEmbeddedRunStageTracker();
   const emitPrepStageSummary = createEmbeddedRunStageSummaryEmitter({
     label: "prep stages",
-    log,
+    log: embeddedAgentLog,
     runId: params.runId,
     sessionId: params.sessionId,
     tracker: prepStages,
@@ -179,7 +179,7 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
       totalThresholdMs: 5_000,
       stageThresholdMs: 2_000,
     });
-    if (!shouldWarn && !log.isEnabled("trace")) {
+    if (!shouldWarn && !embeddedAgentLog.isEnabled("trace")) {
       return;
     }
     const message = formatEmbeddedRunStageSummary(
@@ -187,9 +187,9 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
       summary,
     );
     if (shouldWarn) {
-      log.warn(message);
+      embeddedAgentLog.warn(message);
     } else {
-      log.trace(message);
+      embeddedAgentLog.trace(message);
     }
   };
 

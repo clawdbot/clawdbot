@@ -21,7 +21,7 @@ import {
   type ToolSearchCatalogRef,
   type ToolSearchCatalogToolExecutor,
 } from "../../tool-search.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import { runEmbeddedAttemptExecutionPhase } from "./attempt-execution-phase.js";
@@ -168,8 +168,8 @@ export async function runEmbeddedAttempt(
     prepStages.mark("skills");
 
     const isRawModelRun = params.modelRun === true || params.promptMode === "none";
-    if (isRawModelRun && log.isEnabled("debug")) {
-      log.debug(
+    if (isRawModelRun && embeddedAgentLog.isEnabled("debug")) {
+      embeddedAgentLog.debug(
         `raw model run enabled: modelRun=${params.modelRun === true} promptMode=${params.promptMode ?? "unset"}`,
       );
     }
@@ -541,7 +541,7 @@ export async function runEmbeddedAttempt(
     try {
       await cleanupEmbeddedPrepResourcesAfterEarlyExit();
     } catch (cleanupErr) {
-      log.warn(
+      embeddedAgentLog.warn(
         `failed to clean up embedded prep resources after early attempt exit: runId=${params.runId} ${String(cleanupErr)}`,
       );
     }

@@ -5,7 +5,7 @@ import { collectErrorGraphCandidates, formatErrorMessage } from "../../infra/err
 import type { AssistantMessageEvent } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import type { AgentMessage, StreamFn } from "../runtime/index.js";
-import { log } from "./logger.js";
+import { embeddedAgentLog } from "./logger.js";
 
 type AssistantContentBlock = Extract<AgentMessage, { role: "assistant" }>["content"][number];
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
@@ -568,7 +568,7 @@ function shouldRecoverAnthropicThinkingErrorMessage(
     return false;
   }
   if (sessionMeta.recoveredAnthropicThinking) {
-    log.warn(
+    embeddedAgentLog.warn(
       `[session-recovery] Anthropic thinking recovery already attempted: sessionId=${sessionMeta.id}`,
     );
     return false;
@@ -591,7 +591,7 @@ async function notifyRecoveredAnthropicThinking(
   try {
     await sessionMeta.onRecoveredAnthropicThinking?.(recovery);
   } catch (error: unknown) {
-    log.warn(
+    embeddedAgentLog.warn(
       `[session-recovery] Anthropic thinking transcript repair hook failed: sessionId=${sessionMeta.id} error=${formatErrorMessage(error)}`,
     );
   }
@@ -663,12 +663,12 @@ async function pumpStreamWithRecovery(
       if (isAssistantMessageErrorEvent(chunk)) {
         if (shouldRecoverAnthropicThinkingError(chunk.error, sessionMeta)) {
           if (yieldedOutput) {
-            log.warn(
+            embeddedAgentLog.warn(
               `[session-recovery] Anthropic thinking error occurred after streaming began; skipping retry to avoid duplicate chunks: sessionId=${sessionMeta.id}`,
             );
           } else {
             sessionMeta.recoveredAnthropicThinking = true;
-            log.warn(
+            embeddedAgentLog.warn(
               `[session-recovery] Anthropic thinking stream error; retrying once without thinking blocks: sessionId=${sessionMeta.id}`,
             );
             return retryStreamWithoutThinking(outer, retry, notify);
@@ -686,13 +686,13 @@ async function pumpStreamWithRecovery(
       throw error;
     }
     if (yieldedOutput) {
-      log.warn(
+      embeddedAgentLog.warn(
         `[session-recovery] Anthropic thinking error occurred after streaming began; skipping retry to avoid duplicate chunks: sessionId=${sessionMeta.id}`,
       );
       throw error;
     }
     sessionMeta.recoveredAnthropicThinking = true;
-    log.warn(
+    embeddedAgentLog.warn(
       `[session-recovery] Anthropic thinking error during stream; retrying once without thinking blocks: sessionId=${sessionMeta.id}`,
     );
     return retryStreamWithoutThinking(outer, retry, notify);
@@ -755,7 +755,7 @@ export function wrapAnthropicStreamWithRecovery(
             throw error;
           }
           requestMeta.recoveredAnthropicThinking = true;
-          log.warn(
+          embeddedAgentLog.warn(
             `[session-recovery] Anthropic thinking request rejected; retrying once without thinking blocks: sessionId=${requestMeta.id}`,
           );
           return wrapRetryStreamWithRecoveryNotification(retry(), notify);

@@ -32,7 +32,7 @@ import {
   type ToolSearchCatalogToolExecutor,
   type ToolSearchTargetTranscriptProjection,
 } from "../../tool-search.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import { setActiveEmbeddedRunLifecycleGeneration } from "../run-state.js";
 import {
   clearActiveEmbeddedRun,
@@ -154,7 +154,7 @@ export function prepareEmbeddedAttemptStream(input: {
           maxRevisionAttempts > 0 &&
           (attempt.beforeAgentFinalizeRevisionAttempts ?? 0) >= maxRevisionAttempts
         ) {
-          log.warn(
+          embeddedAgentLog.warn(
             `before_agent_finalize revision limit reached; finalizing ` +
               `runId=${attempt.runId} sessionId=${attempt.sessionId} ` +
               `attempts=${attempt.beforeAgentFinalizeRevisionAttempts ?? 0}/${maxRevisionAttempts}`,
@@ -213,14 +213,14 @@ export function prepareEmbeddedAttemptStream(input: {
             return;
           }
           if (event.hadDeterministicSideEffect) {
-            log.warn(
+            embeddedAgentLog.warn(
               `before_agent_finalize requested revision after potential side effects; finalizing ` +
                 `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
             );
             return;
           }
           if (!event.assistantEntryId) {
-            log.warn(
+            embeddedAgentLog.warn(
               `before_agent_finalize revision lacks a persisted assistant entry; finalizing ` +
                 `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
             );

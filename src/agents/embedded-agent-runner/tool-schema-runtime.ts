@@ -12,7 +12,7 @@ import {
 import type { ProviderToolSchemaDiagnostic } from "../../plugins/types.js";
 import type { AgentTool } from "../runtime/index.js";
 import type { AnyAgentTool } from "../tools/common.js";
-import { log } from "./logger.js";
+import { embeddedAgentLog } from "./logger.js";
 
 type ProviderToolSchemaParams<TSchemaType extends TSchema = TSchema, TResult = unknown> = {
   tools: AgentTool<TSchemaType, TResult>[];
@@ -88,7 +88,7 @@ export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParam
   }
 
   const summary = summarizeProviderToolSchemaDiagnostics(diagnostics);
-  log.warn(
+  embeddedAgentLog.warn(
     `provider tool schema diagnostics: ${diagnostics.length} ${diagnostics.length === 1 ? "tool" : "tools"} for ${params.provider}: ${summary}`,
     {
       provider: params.provider,

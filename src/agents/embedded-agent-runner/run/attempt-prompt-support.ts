@@ -34,7 +34,7 @@ import {
   type ToolSearchCatalogRef,
 } from "../../tool-search.js";
 import type { AnyAgentTool } from "../../tools/common.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import { summarizeSessionContext } from "./attempt-context-summary.js";
 import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-submit.js";
 import {
@@ -270,9 +270,11 @@ export function observeEmbeddedAttemptPrompt(input: {
       `runId=${attempt.runId} sessionId=${attempt.sessionId} trigger=${attempt.trigger} ` +
       `provider=${attempt.provider}/${attempt.modelId}`;
     if (promptSkipReason === "blank_user_prompt") {
-      log.warn(`embedded run prompt skipped: blank user prompt ${skipContext}`);
+      embeddedAgentLog.warn(`embedded run prompt skipped: blank user prompt ${skipContext}`);
     } else {
-      log.info(`embedded run prompt skipped: empty prompt/history/images ${skipContext}`);
+      embeddedAgentLog.info(
+        `embedded run prompt skipped: empty prompt/history/images ${skipContext}`,
+      );
     }
     input.trajectoryRecorder?.recordEvent("prompt.skipped", {
       reason: promptSkipReason,
@@ -311,8 +313,8 @@ export function observeEmbeddedAttemptPrompt(input: {
     model: attempt.modelId,
   });
 
-  if (log.isEnabled("debug")) {
-    log.debug(
+  if (embeddedAgentLog.isEnabled("debug")) {
+    embeddedAgentLog.debug(
       `[context-diag] pre-prompt: sessionKey=${attempt.sessionKey ?? attempt.sessionId} ` +
         `messages=${input.sessionMessages.length} roleCounts=${sessionSummary.roleCounts} ` +
         `historyTextChars=${sessionSummary.totalTextChars} ` +
@@ -365,7 +367,7 @@ export function observeEmbeddedAttemptPrompt(input: {
         },
       )
       .catch((err: unknown) => {
-        log.warn(`llm_input hook failed: ${String(err)}`);
+        embeddedAgentLog.warn(`llm_input hook failed: ${String(err)}`);
       });
   }
 

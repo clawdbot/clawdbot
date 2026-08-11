@@ -20,7 +20,7 @@ import {
   resolveLiveToolResultMaxChars,
 } from "../tool-result-limits.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
-import { log } from "./logger.js";
+import { embeddedAgentLog } from "./logger.js";
 import type { ToolResultPromptProjectionState } from "./session-prompt-state.js";
 import { dropThinkingBlocks } from "./thinking.js";
 import {
@@ -279,10 +279,10 @@ function logToolResultSessionTruncation(params: {
     params.aggregateReplacementCount <= 0 ||
     toolResultWarningDedupe.sessionRecovery.check(sessionLogKey)
   ) {
-    log.info(message);
+    embeddedAgentLog.info(message);
     return;
   }
-  log.warn(
+  embeddedAgentLog.warn(
     `${message}; aggregate tool-result pressure detected; consider /compact or /new if pressure persists`,
   );
 }
@@ -1325,7 +1325,7 @@ export function truncateOversizedToolResultsInSessionManager(params: {
     return truncateOversizedToolResultsInExistingSessionManager(params);
   } catch (err) {
     const errMsg = formatErrorMessage(err);
-    log.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);
+    embeddedAgentLog.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);
     return { truncated: false, truncatedCount: 0, reason: errMsg };
   }
 }
@@ -1355,7 +1355,7 @@ export async function truncateOversizedToolResultsInActiveTarget(params: {
     });
   } catch (err) {
     const errMsg = formatErrorMessage(err);
-    log.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);
+    embeddedAgentLog.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);
     return { truncated: false, truncatedCount: 0, reason: errMsg };
   }
 }

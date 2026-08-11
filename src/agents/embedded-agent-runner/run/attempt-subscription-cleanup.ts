@@ -1,5 +1,5 @@
 /** Cleans up embedded attempt subscription resources. */
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt-finalize.js";
 
 /** Shared timeout for waiting on aborted model/prompt cleanup before releasing resources. */
@@ -30,7 +30,7 @@ async function waitForEmbeddedAbortSettle(params: {
     params.promise
       .then(() => "settled" as const)
       .catch((err: unknown) => {
-        log.warn(
+        embeddedAgentLog.warn(
           `embedded abort settle failed: runId=${params.runId} sessionId=${params.sessionId} err=${String(err)}`,
         );
         return "errored" as const;
@@ -43,7 +43,7 @@ async function waitForEmbeddedAbortSettle(params: {
     clearTimeout(timeout);
   }
   if (outcome === "timed_out") {
-    log.warn(
+    embeddedAgentLog.warn(
       `embedded abort settle timed out: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${EMBEDDED_ABORT_SETTLE_TIMEOUT_MS}`,
     );
   }

@@ -1,7 +1,7 @@
 /** Serializes run-owned transcript callbacks and bounds teardown settlement. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { toErrorObject } from "../../../infra/errors.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 
 const TRANSCRIPT_TEARDOWN_BUDGET_MS = 30_000;
 
@@ -132,7 +132,7 @@ export function createEmbeddedAttemptTranscriptLifecycle(params: {
       return;
     }
     teardownBudgetLogged = true;
-    log.error(
+    embeddedAgentLog.error(
       `transcript teardown budget expired: runId=${params.runId ?? "unknown"} ` +
         `sessionId=${params.sessionId ?? "unknown"} pendingWrites=${pendingWrites} ` +
         `timeoutMs=${TRANSCRIPT_TEARDOWN_BUDGET_MS}`,

@@ -28,7 +28,7 @@ import {
   AGENT_RUN_SUPERSEDED_STOP_REASON,
 } from "../../run-termination.js";
 import { redactRunIdentifier } from "../../workspace-run.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import { supersedeEmbeddedAgentRunByRunId } from "../runs.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { resolveAgentHarnessRunAdmissionError } from "./setup.js";
@@ -163,7 +163,7 @@ export async function resetNoRealConversationTokenSnapshot(params: {
       },
     );
   } catch (err) {
-    log.warn(
+    embeddedAgentLog.warn(
       `[context-overflow-precheck] failed to reset stale context snapshot for ` +
         `${params.sessionKey}: ${String(err)}`,
     );
@@ -198,7 +198,7 @@ export function backfillSessionKey(params: {
         });
     return normalizeOptionalString(resolved.sessionKey);
   } catch (err) {
-    log.warn(
+    embeddedAgentLog.warn(
       `[backfillSessionKey] Failed to resolve sessionKey for sessionId=${redactRunIdentifier(sanitizeForLog(params.sessionId))}: ${formatErrorMessage(err)}`,
     );
     return undefined;
@@ -318,7 +318,7 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
       }
     });
     if (superseded) {
-      log.warn(
+      embeddedAgentLog.warn(
         `[session-writer] replacing claim session=${sanitizeForLog(snapshot.sessionKey)} ` +
           `previousRunId=${redactRunIdentifier(sanitizeForLog(previousWriterRunId))} ` +
           `nextRunId=${redactRunIdentifier(sanitizeForLog(params.runId))} live=true`,

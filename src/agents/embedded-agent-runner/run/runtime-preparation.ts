@@ -18,7 +18,7 @@ import {
 } from "../../runtime-plan/prepare-auth.js";
 import type { AgentRuntimeAuthPlan } from "../../runtime-plan/types.js";
 import { resolveCandidateThinkingLevel } from "../../thinking-runtime.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import {
   createEmbeddedRunStageTracker,
   formatEmbeddedRunStageSummary,
@@ -153,7 +153,9 @@ export async function prepareEmbeddedRunRuntime(input: {
 
   agentHarness = selectHarnessForModel(effectiveModel);
   pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
-  const authStages = log.isEnabled("trace") ? createEmbeddedRunStageTracker() : undefined;
+  const authStages = embeddedAgentLog.isEnabled("trace")
+    ? createEmbeddedRunStageTracker()
+    : undefined;
   const preparedAuthPlan = await prepareEmbeddedRunAuthPlan({
     runParams: params,
     provider,
@@ -361,7 +363,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     setThinkLevel: (next) => {
       thinkLevel = next;
     },
-    log,
+    log: embeddedAgentLog,
   });
   authStages?.mark("controller");
   const advancePluginHarnessAuthAttempt = async (): Promise<boolean> => {
@@ -448,7 +450,7 @@ export async function prepareEmbeddedRunRuntime(input: {
       }
     } else {
       if (initialProfileInCooldown) {
-        log.warn(
+        embeddedAgentLog.warn(
           `probing cooldowned auth profile for ${provider}/${modelId} due to ${cooldownProbePolicy.unavailableReason ?? "transient"} unavailability`,
         );
       }
@@ -458,7 +460,7 @@ export async function prepareEmbeddedRunRuntime(input: {
   }
   authStages?.mark("initialize");
   if (authStages) {
-    log.trace(
+    embeddedAgentLog.trace(
       formatEmbeddedRunStageSummary(
         `[trace:embedded-run] auth stages: runId=${params.runId} sessionId=${params.sessionId} phase=auth`,
         authStages.snapshot(),

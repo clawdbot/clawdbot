@@ -10,7 +10,7 @@ import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
 import type { AgentMessage } from "../runtime/index.js";
-import { log } from "./logger.js";
+import { embeddedAgentLog } from "./logger.js";
 
 function resolvePostCompactionIndexSyncMode(config?: OpenClawConfig): "off" | "async" | "await" {
   const mode = config?.agents?.defaults?.compaction?.postIndexSync;
@@ -70,7 +70,7 @@ async function runPostCompactionSessionMemorySync(params: {
         : { archiveFiles: [sessionFile] }),
     });
   } catch (err) {
-    log.warn(`memory sync skipped (post-compaction): ${formatErrorMessage(err)}`);
+    embeddedAgentLog.warn(`memory sync skipped (post-compaction): ${formatErrorMessage(err)}`);
   }
 }
 
@@ -242,7 +242,7 @@ export async function runBeforeCompactionHooks(params: {
       });
     }
   } catch (err) {
-    log.warn("session:compact:before hook failed", {
+    embeddedAgentLog.warn("session:compact:before hook failed", {
       errorMessage: formatErrorMessage(err),
       errorStack: err instanceof Error ? err.stack : undefined,
     });
@@ -263,7 +263,7 @@ export async function runBeforeCompactionHooks(params: {
         },
       );
     } catch (err) {
-      log.warn("before_compaction hook failed", {
+      embeddedAgentLog.warn("before_compaction hook failed", {
         errorMessage: formatErrorMessage(err),
         errorStack: err instanceof Error ? err.stack : undefined,
       });
@@ -343,7 +343,7 @@ export async function runAfterCompactionHooks(params: {
       });
     }
   } catch (err) {
-    log.warn("session:compact:after hook failed", {
+    embeddedAgentLog.warn("session:compact:after hook failed", {
       errorMessage: formatErrorMessage(err),
       errorStack: err instanceof Error ? err.stack : undefined,
     });
@@ -367,7 +367,7 @@ export async function runAfterCompactionHooks(params: {
         },
       );
     } catch (err) {
-      log.warn("after_compaction hook failed", {
+      embeddedAgentLog.warn("after_compaction hook failed", {
         errorMessage: formatErrorMessage(err),
         errorStack: err instanceof Error ? err.stack : undefined,
       });

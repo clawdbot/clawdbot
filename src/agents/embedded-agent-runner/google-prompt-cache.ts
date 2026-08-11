@@ -29,7 +29,7 @@ import {
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
 import type { StreamFn } from "../runtime/index.js";
-import { log } from "./logger.js";
+import { embeddedAgentLog } from "./logger.js";
 import { isGooglePromptCacheEligible, resolveCacheRetention } from "./prompt-cache-retention.js";
 
 const GOOGLE_PROMPT_CACHE_CUSTOM_TYPE = "openclaw.google-prompt-cache";
@@ -611,7 +611,7 @@ export async function prepareGooglePromptCacheStreamFn(
       deps,
     );
     if (!cachedContent) {
-      log.debug(
+      embeddedAgentLog.debug(
         `google prompt cache unavailable for ${params.provider}/${params.modelId}; continuing without cachedContent`,
       );
       return inner(model, context, options);

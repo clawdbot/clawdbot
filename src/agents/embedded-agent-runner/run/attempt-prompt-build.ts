@@ -35,7 +35,7 @@ import {
   buildModelIdentityPromptLine,
 } from "../../system-prompt.js";
 import { normalizeToolName } from "../../tool-policy.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import {
   beginPromptCacheObservation,
   type PromptCacheChange,
@@ -192,16 +192,20 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
 
   if (hookResult?.prependContext) {
     effectivePrompt = `${hookResult.prependContext}\n\n${effectivePrompt}`;
-    log.debug(`hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`);
+    embeddedAgentLog.debug(
+      `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
+    );
   }
   if (hookResult?.appendContext) {
     effectivePrompt = `${effectivePrompt}\n\n${hookResult.appendContext}`;
-    log.debug(`hooks: appended context to prompt (${hookResult.appendContext.length} chars)`);
+    embeddedAgentLog.debug(
+      `hooks: appended context to prompt (${hookResult.appendContext.length} chars)`,
+    );
   }
   const legacySystemPrompt = normalizeOptionalString(hookResult?.systemPrompt) ?? "";
   if (legacySystemPrompt) {
     setSystemPrompt(legacySystemPrompt);
-    log.debug(`hooks: applied systemPrompt (${legacySystemPrompt.length} chars)`);
+    embeddedAgentLog.debug(`hooks: applied systemPrompt (${legacySystemPrompt.length} chars)`);
   }
   const composedSystemPrompt = composeSystemPromptWithHookContext({
     baseSystemPrompt: systemPromptText,
@@ -210,7 +214,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   });
   if (composedSystemPrompt) {
     setSystemPrompt(composedSystemPrompt);
-    log.debug(
+    embeddedAgentLog.debug(
       `hooks: applied prependSystemContext/appendSystemContext ` +
         `(${hookResult?.prependSystemContext?.trim().length ?? 0}+${hookResult?.appendSystemContext?.trim().length ?? 0} chars)`,
     );
@@ -280,7 +284,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     capability: "llm",
     transport: "stream",
   });
-  log.debug(
+  embeddedAgentLog.debug(
     `embedded run prompt start: runId=${attempt.runId} sessionId=${attempt.sessionId} ${routingSummary}`,
   );
 
@@ -323,9 +327,9 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
         : " without removing the active session leaf. ") +
       `runId=${attempt.runId} sessionId=${attempt.sessionId} trigger=${attempt.trigger}`;
     if (shouldWarnOnOrphanedUserRepair(attempt.trigger)) {
-      log.warn(message);
+      embeddedAgentLog.warn(message);
     } else {
-      log.debug(message);
+      embeddedAgentLog.debug(message);
     }
   }
 
@@ -354,7 +358,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
           prompt: transcriptPromptForRuntimeSplit,
         });
       }
-      log.debug(
+      embeddedAgentLog.debug(
         `agent steering: injected ${leased.runIds.length} queued item(s) into parent turn ` +
           `runId=${attempt.runId} sessionKey=${attempt.sessionKey}`,
       );
@@ -506,12 +510,12 @@ export function prepareEmbeddedAttemptPromptContext(input: {
       `sessionKey=${sessionLogKey}`;
     if (aggregatePressureEngaged) {
       if (!toolResultWarningDedupe.promptPressure.check(sessionLogKey)) {
-        log.warn(
+        embeddedAgentLog.warn(
           `${truncationLog}; aggregate tool-result pressure detected; final provider-bound projection will determine whether recovery is needed`,
         );
       }
     } else {
-      log.info(truncationLog);
+      embeddedAgentLog.info(truncationLog);
     }
   }
 

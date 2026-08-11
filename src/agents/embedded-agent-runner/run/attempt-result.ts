@@ -12,7 +12,7 @@ import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome
 import type { createCacheTrace } from "../../cache-trace.js";
 import { isCloudCodeAssistFormatError } from "../../embedded-agent-helpers.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import type { PromptCacheBreak, PromptCacheChange } from "../prompt-cache-observability.js";
 import { observeReplayMetadata, replayMetadataFromState } from "../replay-state.js";
 import { finalizeEmbeddedAttempt } from "./attempt-finalize.js";
@@ -178,7 +178,7 @@ export function completeEmbeddedAttemptResult(
       const changeSummary =
         cacheBreak.changes?.map((change) => `${change.code}(${change.detail})`).join(", ") ??
         "no tracked cache input change";
-      log.warn(
+      embeddedAgentLog.warn(
         `[prompt-cache] cache read dropped ${cacheBreak.previousCacheRead} -> ${cacheBreak.cacheRead} ` +
           `for ${attempt.provider}/${attempt.modelId} via ${input.cache.streamStrategy}; ${changeSummary}`,
       );
@@ -269,7 +269,7 @@ export function completeEmbeddedAttemptResult(
         },
       )
       .catch((err: unknown) => {
-        log.warn(`llm_output hook failed: ${String(err)}`);
+        embeddedAgentLog.warn(`llm_output hook failed: ${String(err)}`);
       });
   }
 

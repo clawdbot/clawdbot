@@ -5,7 +5,7 @@ import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { LiveSessionModelSwitchError } from "../../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../../live-model-switch.js";
 import type { normalizeUsage } from "../../usage.js";
-import { log } from "../logger.js";
+import { embeddedAgentLog } from "../logger.js";
 import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
@@ -155,7 +155,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       sessionKey: runInput.resolvedSessionKey,
       agentId: params.agentId,
     });
-    log.info(
+    embeddedAgentLog.info(
       `live session model switch requested during active attempt for ${params.sessionId}: ` +
         `${preparedRuntime.provider}/${preparedRuntime.modelId} -> ${requestedSelection.provider}/${requestedSelection.model}`,
     );
@@ -290,7 +290,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     if (recoveryRetry.retry) {
       runInput.laneController.throwIfAborted();
       sessionPromptState.suppressNextUserMessagePersistence = true;
-      log.warn(
+      embeddedAgentLog.warn(
         `codex app-server replay-safe failure; retrying once failureKind=${attempt.codexAppServerFailure?.kind} ` +
           `runId=${params.runId} sessionId=${params.sessionId}`,
       );
