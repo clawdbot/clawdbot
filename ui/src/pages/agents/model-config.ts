@@ -6,7 +6,10 @@ import {
   resolveEffectiveModelFallbacks,
   resolveModelPrimary,
 } from "../../lib/agents/display.ts";
-import { currentConfigObject, type AgentConfigEntryTarget } from "../../lib/config/index.ts";
+import {
+  currentConfigObject,
+  type AgentConfigEntryTarget,
+} from "../../lib/config/config-state-model.ts";
 import { normalizeStringEntries } from "../../lib/string-coerce.ts";
 
 type RuntimeConfig = ApplicationContext["runtimeConfig"];
