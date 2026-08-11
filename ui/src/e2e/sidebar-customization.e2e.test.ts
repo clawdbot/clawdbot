@@ -20,6 +20,7 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const hiddenSessionCatalogsStorageKey = "openclaw:sidebar:sessions:hidden-catalogs";
 const uiProofArtifactDir = path.join(
   process.cwd(),
   ".artifacts",
@@ -107,6 +108,48 @@ async function openSidebarTestPage() {
 }
 
 suite.define(() => {
+  it("uses catalog labels in the hidden-section recovery rows", async () => {
+    const page = await suite.browser.newPage({ viewport: { height: 900, width: 1440 } });
+    await page.addInitScript(
+      ({ key, value }) => localStorage.setItem(key, JSON.stringify(value)),
+      { key: hiddenSessionCatalogsStorageKey, value: ["claude"] },
+    );
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["sessions.catalog.list"],
+      methodResponses: {
+        "sessions.catalog.list": {
+          catalogs: [
+            {
+              id: "claude",
+              label: "Claude Code",
+              capabilities: { continueSession: true, archive: false },
+              hosts: [],
+            },
+          ],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      await gateway.waitForRequest("sessions.catalog.list");
+      const recovery = page
+        .getByRole("heading", { name: "Hidden session sections" })
+        .locator("xpath=following-sibling::*[1]");
+      const row = recovery.locator(".settings-row", { hasText: "Claude Code" });
+      await expect.poll(() => row.isVisible()).toBe(true);
+      expect(await recovery.getByText("claude", { exact: true }).count()).toBe(0);
+
+      await row.getByRole("button", { name: "Show" }).click();
+      await expect.poll(() => row.count()).toBe(0);
+      expect(
+        await page.evaluate((key) => localStorage.getItem(key), hiddenSessionCatalogsStorageKey),
+      ).toBe("[]");
+    } finally {
+      await page.close();
+    }
+  });
+
   it("pins routes, restores defaults, and persists navigation state across reloads", async () => {
     if (captureUiProofEnabled) {
       await mkdir(uiProofArtifactDir, { recursive: true });
