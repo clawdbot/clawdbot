@@ -164,7 +164,10 @@ Meeting transcript capture is enabled by default. To opt out globally:
   Configure auto-start sources with `transcripts.autoStart`. Each entry is
   enabled by being present; omit an entry to disable that source. `discord-voice`
   is the bundled auto-start-capable source and requires `guildId` and
-  `channelId`:
+  `channelId`. When exactly one configured Discord account has credentials and
+  voice enabled, OpenClaw selects it automatically. When multiple accounts are
+  voice-capable, set `accountId` to the corresponding key under
+  `channels.discord.accounts`; an omitted account is rejected as ambiguous:
 
 ```json
 {
@@ -173,6 +176,7 @@ Meeting transcript capture is enabled by default. To opt out globally:
     "autoStart": [
       {
         "providerId": "discord-voice",
+        "accountId": "work",
         "guildId": "1234567890",
         "channelId": "2345678901"
       }
