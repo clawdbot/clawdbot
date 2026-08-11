@@ -571,17 +571,19 @@ export async function startGatewayCoreRuntime(input: {
       workspaceDir: defaultWorkspaceDir,
     });
     replaceAttachedPluginRuntime(loaded);
-    runtimeState.pluginServices = null;
+    kernel.setPluginServices(null);
     if (previousPluginServices) {
       await previousPluginServices.stop();
     }
     await refreshAttachedGatewayDiscovery(loaded.pluginRegistry);
-    runtimeState.pluginServices = await startPluginServices({
-      registry: loaded.pluginRegistry,
-      config: params.nextConfig,
-      workspaceDir: defaultWorkspaceDir,
-      broadcastPluginEvent,
-    });
+    kernel.setPluginServices(
+      await startPluginServices({
+        registry: loaded.pluginRegistry,
+        config: params.nextConfig,
+        workspaceDir: defaultWorkspaceDir,
+        broadcastPluginEvent,
+      }),
+    );
     const afterChannelTargets = listAttachedChannelConfigTargets();
     const afterChannelIds = new Set(afterChannelTargets.keys());
     const restartChannels = new Set<ChannelId>();
@@ -606,6 +608,10 @@ export async function startGatewayCoreRuntime(input: {
 
   return {
     ...runtime,
+    kernel: {
+      ...kernel,
+      reloadPlugins: reloadAttachedGatewayPlugins,
+    },
     earlyRuntime,
     sessionCompanion,
     sessionObserver,
@@ -622,7 +628,6 @@ export async function startGatewayCoreRuntime(input: {
     getAttachedGatewayMethodRegistry: () => attachedGatewayMethodRegistry,
     replaceAttachedPluginRuntime,
     refreshAttachedGatewayDiscovery,
-    reloadAttachedGatewayPlugins,
     loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot,
     readPreparedGatewayModelCatalog,

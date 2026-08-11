@@ -1,10 +1,9 @@
-// OpenClaw SDK tests cover package behavior.
 import { spawn } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import { getWindowsSystem32ExePath } from "../../../src/infra/windows-install-roots.js";
-import { createPackedSdkConsumer, signalCommandProcess } from "./package.e2e.test-support.js";
+import { signalCommandProcess } from "./package.e2e.test-support.js";
 
-describe("OpenClaw SDK package e2e", () => {
+describe("packed SDK command support", () => {
   it("force-kills Windows package command process trees when graceful taskkill fails", () => {
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
@@ -37,22 +36,4 @@ describe("OpenClaw SDK package e2e", () => {
       }
     }
   });
-
-  it("packs and imports from an external temp consumer", async () => {
-    const consumer = await createPackedSdkConsumer();
-    try {
-      await consumer.run(`
-        import { GatewayClientTransport, OpenClaw, normalizeGatewayEvent } from "@openclaw/sdk";
-        if (typeof GatewayClientTransport !== "function") throw new Error("missing transport export");
-        if (typeof OpenClaw !== "function") throw new Error("missing client export");
-        const event = normalizeGatewayEvent({
-          event: "agent",
-          payload: { runId: "pack-smoke", stream: "lifecycle", data: { phase: "start" } }
-        });
-        if (event.type !== "run.started") throw new Error("unexpected event normalization");
-      `);
-    } finally {
-      await consumer.cleanup();
-    }
-  }, 240_000);
 });

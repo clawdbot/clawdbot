@@ -10,6 +10,14 @@ import {
 import { handleEmbeddedAssistantFailure } from "./assistant-failure.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 
+const providerRuntimeMocks = vi.hoisted(() => ({
+  classifyProviderFailoverSignalWithPlugin: vi.fn(),
+}));
+
+vi.mock("../../../logging/node-require.js", () => ({
+  resolveNodeRequireFromMeta: () => () => providerRuntimeMocks,
+}));
+
 const CREDENTIAL_FILE_ENOENT_MESSAGE =
   "ENOENT: no such file or directory, open '/home/operator/.claude/.credentials.json'";
 
@@ -46,6 +54,7 @@ function makeExhaustedCredentialFailureInput(options?: { replaySafe?: boolean })
     }),
     activeErrorContext: { provider: "anthropic", model: "mock-1" },
     provider: "anthropic",
+    providerOwner: undefined,
     modelId: "mock-1",
     model: "mock-1",
     thinkLevel: "off",
@@ -102,6 +111,52 @@ function makeExhaustedCredentialFailureInput(options?: { replaySafe?: boolean })
 }
 
 describe("handleEmbeddedAssistantFailure", () => {
+  it("uses prepared OpenRouter ownership for custom-provider billing failures", async () => {
+    const fixture = makeExhaustedCredentialFailureInput();
+    const provider = "custom-openrouter";
+    const modelId = "anthropic/claude-sonnet-4";
+    const errorMessage = "HTTP 403: API key budget limit exceeded";
+    const assistant = buildEmbeddedRunnerAssistant({
+      provider,
+      model: modelId,
+      stopReason: "error",
+      errorMessage,
+    });
+    fixture.input.attemptAssistant = assistant;
+    fixture.input.currentAttemptAssistant = assistant;
+    fixture.input.provider = provider;
+    fixture.input.modelId = modelId;
+    fixture.input.model = modelId;
+    fixture.input.activeErrorContext = { provider, model: modelId };
+    fixture.input.authProfileId = undefined;
+    fixture.input.providerOwner = { id: "openrouter" };
+    fixture.input.resolveAuthProfileFailureReason = vi.fn((reason) =>
+      reason === "billing" ? "billing" : null,
+    );
+    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockImplementation(
+      ({ provider: classifiedProvider, context }) =>
+        classifiedProvider === "openrouter" && context.errorMessage === errorMessage
+          ? "billing"
+          : undefined,
+    );
+
+    const outcome = await handleEmbeddedAssistantFailure(fixture.input);
+
+    expect(outcome).toMatchObject({
+      action: "retry",
+      lastRetryFailoverReason: "billing",
+    });
+    expect(fixture.traceAttempts).toEqual([
+      {
+        provider,
+        model: modelId,
+        result: "rotate_profile",
+        reason: "billing",
+        stage: "assistant",
+      },
+    ]);
+  });
+
   it("does not rotate profiles or models after an ambiguous post-dispatch failure", async () => {
     const fixture = makeExhaustedCredentialFailureInput();
     fixture.input.emptyErrorRetries = 0;

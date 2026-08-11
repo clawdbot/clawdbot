@@ -25,6 +25,7 @@ import {
 import { resolveAuthProfileOrderWithMetadata } from "../../agents/auth-profiles/order.js";
 import { resolveAuthProfileDatabasePath } from "../../agents/auth-profiles/sqlite.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
+import type { FailoverReason } from "../../agents/failover/signal.js";
 import {
   prepareInternalSessionEffectsSession,
   removeInternalSessionEffectsSession,
@@ -147,32 +148,30 @@ export type AuthProbeOptions = {
   maxTokens: number;
 };
 
+const PROBE_STATUS_BY_FAILOVER_REASON = {
+  auth: "auth",
+  auth_permanent: "auth",
+  format: "format",
+  rate_limit: "rate_limit",
+  overloaded: "rate_limit",
+  billing: "billing",
+  server_error: "unknown",
+  timeout: "timeout",
+  tls_certificate: "unknown",
+  context_overflow: "unknown",
+  model_not_found: "format",
+  session_expired: "unknown",
+  empty_response: "unknown",
+  no_error_details: "unknown",
+  unclassified: "unknown",
+  unknown: "unknown",
+} satisfies Record<FailoverReason, AuthProbeStatus>;
+
 /** Maps runtime failover reasons into stable auth probe status buckets. */
 export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProbeStatus {
-  if (!reason) {
-    return "unknown";
-  }
-  if (reason === "auth" || reason === "auth_permanent") {
-    // Keep probe output backward-compatible: permanent auth failures still
-    // surface in the auth bucket instead of showing as unknown.
-    return "auth";
-  }
-  if (reason === "rate_limit" || reason === "overloaded") {
-    return "rate_limit";
-  }
-  if (reason === "billing") {
-    return "billing";
-  }
-  if (reason === "timeout") {
-    return "timeout";
-  }
-  if (reason === "model_not_found") {
-    return "format";
-  }
-  if (reason === "format") {
-    return "format";
-  }
-  return "unknown";
+  return reason
+    ? (PROBE_STATUS_BY_FAILOVER_REASON[reason as FailoverReason] ?? "unknown")
+    : "unknown";
 }
 
 function mapEligibilityReasonToProbeReasonCode(

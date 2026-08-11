@@ -7,6 +7,7 @@ import type { AuthProfileStore } from "../../auth-profiles.js";
 import { isProfileInCooldown } from "../../auth-profiles.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
+import { resolveProviderEndpoint } from "../../provider-attribution.js";
 import {
   hasPreparedAuthAttemptModelMetadata,
   resolveCredentialScopedAuthAttemptModelDecision,
@@ -477,9 +478,17 @@ export async function prepareEmbeddedRunRuntime(input: {
     })
       ? pluginMetadataSnapshot
       : undefined;
+  const endpointClass = resolveProviderEndpoint(
+    effectiveModel.baseUrl,
+    compatibleMetadataSnapshot?.owners,
+  ).endpointClass;
+  const providerOwner = ["default", "invalid", "local", "custom"].includes(endpointClass)
+    ? undefined
+    : endpointClass;
   const providerRuntimeHandle = {
     ...resolveProviderRuntimePluginHandle({
       provider,
+      providerOwner,
       modelId,
       config: params.config,
       workspaceDir: input.workspaceDir,

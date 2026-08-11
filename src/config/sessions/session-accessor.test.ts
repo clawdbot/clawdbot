@@ -65,7 +65,6 @@ import {
   resolveSessionEntryCandidateTarget,
   resolveSessionEntrySelection,
   resolveSessionTranscriptReadTarget,
-  resolveSessionTranscriptRuntimeReadTarget,
   resolveSessionTranscriptRuntimeTarget,
   trimSessionTranscriptForManualCompact,
   updateSessionEntry,
@@ -73,21 +72,16 @@ import {
   upsertSessionEntry,
 } from "./session-accessor.js";
 import {
-  readSqliteSessionEntryCount,
-  readSqliteSessionEntryKeys,
+  readSessionEntryCount,
+  readSessionEntryKeys,
 } from "./session-accessor.sqlite-entry-store.js";
-import {
-  loadExactSqliteSessionEntry,
-  replaceSqliteSessionEntrySync,
-} from "./session-accessor.sqlite-entry.js";
+import { loadExactSessionEntry, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { importSqliteSessionRows } from "./session-accessor.sqlite-import.js";
-import { deleteSqliteSessionEntryLifecycle } from "./session-accessor.sqlite-lifecycle.js";
-import { applySqliteSessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
-import { applySqliteSessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
+import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import {
-  appendSqliteTranscriptEventSync,
-  replaceSqliteTranscriptEvents,
-  trimSqliteTranscriptForManualCompact,
+  appendTranscriptEventSync,
+  replaceTranscriptEvents,
+  trimTranscriptForManualCompact,
 } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
@@ -180,11 +174,6 @@ describe("session accessor seam", () => {
     });
   });
 
-  it("exposes the canonical SQLite session lifecycle owners", () => {
-    expect(applySessionEntryLifecycleMutation).toBe(applySqliteSessionEntryLifecycleMutation);
-    expect(deleteSessionEntryLifecycle).toBe(deleteSqliteSessionEntryLifecycle);
-  });
-
   it("returns typed sync event append outcomes for missing, rebound, and duplicate rows", async () => {
     const scope = {
       agentId: "main",
@@ -194,7 +183,7 @@ describe("session accessor seam", () => {
     };
     const event = { type: "custom", id: "typed-event", timestamp: 1 };
 
-    expect(appendSqliteTranscriptEventSync(scope, event)).toEqual({
+    expect(appendTranscriptEventSync(scope, event)).toEqual({
       ok: false,
       error: {
         code: "session-entry-missing",
@@ -204,7 +193,7 @@ describe("session accessor seam", () => {
     });
 
     await upsertSessionEntry(scope, { sessionId: "replacement-session", updatedAt: 1 });
-    expect(appendSqliteTranscriptEventSync(scope, event)).toEqual({
+    expect(appendTranscriptEventSync(scope, event)).toEqual({
       ok: false,
       error: {
         actualSessionId: "replacement-session",
@@ -215,8 +204,8 @@ describe("session accessor seam", () => {
     });
 
     await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 2 });
-    expect(appendSqliteTranscriptEventSync(scope, event)).toEqual({ ok: true, value: true });
-    expect(appendSqliteTranscriptEventSync(scope, event)).toEqual({ ok: true, value: false });
+    expect(appendTranscriptEventSync(scope, event)).toEqual({ ok: true, value: true });
+    expect(appendTranscriptEventSync(scope, event)).toEqual({ ok: true, value: false });
   });
 
   it("loads, lists, and patches session entries without exposing the file store shape", async () => {
@@ -290,7 +279,7 @@ describe("session accessor seam", () => {
       { sessionKey: "agent:main:logical-entry", storePath },
       { sessionId: "logical-entry-session", updatedAt: 10 },
     );
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       {
         agentId: "main",
         sessionId: "transcript-only-session",
@@ -305,8 +294,8 @@ describe("session accessor seam", () => {
     );
     const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
 
-    expect(readSqliteSessionEntryCount(database)).toBe(1);
-    expect(readSqliteSessionEntryKeys(database)).toEqual(["agent:main:logical-entry"]);
+    expect(readSessionEntryCount(database)).toBe(1);
+    expect(readSessionEntryKeys(database)).toEqual(["agent:main:logical-entry"]);
     expect(countSessionEntryRowsReadOnly({ agentId: "main", storePath })).toBe(2);
   });
 
@@ -571,7 +560,7 @@ describe("session accessor seam", () => {
       { sessionKey: "agent:main:main", storePath },
       { sessionId: "session-events", updatedAt: 10 },
     );
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       { agentId: "main", sessionId: "session-events", sessionKey: "agent:main:main", storePath },
       [header, message],
     );
@@ -598,7 +587,7 @@ describe("session accessor seam", () => {
       { sessionKey: "agent:main:main", storePath },
       { sessionId: "session-find", updatedAt: 10 },
     );
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       { agentId: "main", sessionId: "session-find", sessionKey: "agent:main:main", storePath },
       [header, older, newer],
     );
@@ -615,7 +604,7 @@ describe("session accessor seam", () => {
     expect(found).toEqual({ event: newer });
     expect(seen).toEqual([newer]);
 
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       { agentId: "main", sessionId: "session-falsy", sessionKey: "agent:main:falsy", storePath },
       [false],
     );
@@ -1389,7 +1378,7 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:telegram:group:1:topic:4",
       storePath,
     };
-    await replaceSqliteTranscriptEvents(scope, [
+    await replaceTranscriptEvents(scope, [
       { type: "session", version: 3, id: scope.sessionId },
       {
         type: "message",
@@ -2212,7 +2201,7 @@ describe("session accessor seam", () => {
 
   it("inserts and canonically rekeys through the bulk replacement owner", async () => {
     const insertedKey = "agent:main:replacement-insert";
-    await applySqliteSessionEntryCanonicalReplacements({
+    await applySessionEntryCanonicalReplacements({
       sessionKeys: [insertedKey],
       storePath,
       update: () => ({
@@ -2251,7 +2240,7 @@ describe("session accessor seam", () => {
       .run(previousKey, "member-1", "test", 1);
     const identityListener = vi.fn();
     const unsubscribe = onSessionIdentityMutation(identityListener);
-    await applySqliteSessionEntryCanonicalReplacements({
+    await applySessionEntryCanonicalReplacements({
       sessionKeys: [canonicalKey, previousKey],
       storePath,
       update: (entries) => ({
@@ -2300,7 +2289,7 @@ describe("session accessor seam", () => {
     );
     const snapshot = () =>
       [visibleKey, internalKey].map((sessionKey) =>
-        loadExactSqliteSessionEntry({ sessionKey, storePath }),
+        loadExactSessionEntry({ sessionKey, storePath }),
       );
     const before = snapshot();
     const identityListener = vi.fn();
@@ -2320,7 +2309,7 @@ describe("session accessor seam", () => {
         },
       ]) {
         await expect(
-          applySqliteSessionEntryCanonicalReplacements({
+          applySessionEntryCanonicalReplacements({
             sessionKeys: [visibleKey, internalKey],
             storePath,
             update: () => ({ replacements: [replacement], result: undefined }),
@@ -2378,7 +2367,7 @@ describe("session accessor seam", () => {
 
     try {
       await expect(
-        applySqliteSessionEntryCanonicalReplacements({
+        applySessionEntryCanonicalReplacements({
           sessionKeys: [exactKey, canonicalKey, previousKey],
           storePath,
           update: (entries) => ({
@@ -2452,7 +2441,7 @@ describe("session accessor seam", () => {
     await plannerStarted;
     let replacementError: unknown;
     try {
-      replaceSqliteSessionEntrySync(scope, {
+      replaceSessionEntrySync(scope, {
         model: "newer",
         sessionId: "replacement-prepare",
         updatedAt: 20,
@@ -2553,7 +2542,7 @@ describe("session accessor seam", () => {
     await builderStarted;
     let replacementError: unknown;
     try {
-      replaceSqliteSessionEntrySync(scope, {
+      replaceSessionEntrySync(scope, {
         model: "newer",
         sessionId: "lifecycle-stale",
         updatedAt: 20,
@@ -2590,7 +2579,7 @@ describe("session accessor seam", () => {
       sessionId: scope.sessionId,
       updatedAt: 10,
     });
-    await replaceSqliteTranscriptEvents(scope, [
+    await replaceTranscriptEvents(scope, [
       {
         id: "event-1",
         message: { role: "user", content: "keep me" },
@@ -2768,9 +2757,9 @@ describe("session accessor seam", () => {
         message: { role: "user", content: `message ${index}`, timestamp: index },
       })),
     ];
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       scope,
-      transcriptRecords as Parameters<typeof replaceSqliteTranscriptEvents>[1],
+      transcriptRecords as Parameters<typeof replaceTranscriptEvents>[1],
     );
     const updates: unknown[] = [];
     const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
@@ -2823,10 +2812,7 @@ describe("session accessor seam", () => {
     };
     const records = createManualCompactRecords(sessionId);
     await upsertSessionEntry(scope, { sessionId, updatedAt: 1 });
-    await replaceSqliteTranscriptEvents(
-      scope,
-      records as Parameters<typeof replaceSqliteTranscriptEvents>[1],
-    );
+    await replaceTranscriptEvents(scope, records as Parameters<typeof replaceTranscriptEvents>[1]);
     const archiveDirPath = path.join(stateDir, "agents", "main", "sessions");
     fs.writeFileSync(archiveDirPath, "not a directory");
 
@@ -2838,7 +2824,7 @@ describe("session accessor seam", () => {
 
   it("keeps no-op manual compaction tolerant of a missing current session entry", async () => {
     await expect(
-      trimSqliteTranscriptForManualCompact(
+      trimTranscriptForManualCompact(
         {
           agentId: "main",
           sessionId: "99999999-9999-4999-8999-999999999999",
@@ -2868,10 +2854,7 @@ describe("session accessor seam", () => {
       totalTokensFresh: true,
       updatedAt: 100,
     });
-    await replaceSqliteTranscriptEvents(
-      scope,
-      records as Parameters<typeof replaceSqliteTranscriptEvents>[1],
-    );
+    await replaceTranscriptEvents(scope, records as Parameters<typeof replaceTranscriptEvents>[1]);
     const entryBeforeCompact = loadSessionEntry(scope);
     const databasePath = expectDefined(
       resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
@@ -2932,10 +2915,7 @@ describe("session accessor seam", () => {
         ? { sessionId, totalTokens: 30, totalTokensFresh: true, updatedAt: 100 }
         : { sessionId, updatedAt: 1 },
     );
-    await replaceSqliteTranscriptEvents(
-      scope,
-      records as Parameters<typeof replaceSqliteTranscriptEvents>[1],
-    );
+    await replaceTranscriptEvents(scope, records as Parameters<typeof replaceTranscriptEvents>[1]);
     const existingArchive = path.join(tempDir, `${sessionId}.jsonl.bak.preexisting`);
     if (reuseArchive) {
       fs.writeFileSync(existingArchive, archiveContent);
@@ -2946,11 +2926,11 @@ describe("session accessor seam", () => {
         ? "SQLite session state changed while preparing session.transcript.manual-compact"
         : `SQLite transcript changed while preparing rewrite for ${sessionId}`;
     await expect(
-      trimSqliteTranscriptForManualCompact(
+      trimTranscriptForManualCompact(
         scope,
         (lines) => {
           if (conflict === "metadata") {
-            replaceSqliteSessionEntrySync(scope, {
+            replaceSessionEntrySync(scope, {
               label: "concurrent metadata",
               sessionId,
               totalTokens: 40,
@@ -2958,7 +2938,7 @@ describe("session accessor seam", () => {
               updatedAt: 200,
             });
           } else {
-            appendSqliteTranscriptEventSync(scope, {
+            appendTranscriptEventSync(scope, {
               type: "custom",
               id: "late-append",
               timestamp: "2026-06-19T12:00:09.000Z",
@@ -3056,10 +3036,7 @@ describe("session accessor seam", () => {
       },
     ];
     await upsertSessionEntry(scope, { sessionFile, sessionId, updatedAt: 1 });
-    await replaceSqliteTranscriptEvents(
-      scope,
-      records as Parameters<typeof replaceSqliteTranscriptEvents>[1],
-    );
+    await replaceTranscriptEvents(scope, records as Parameters<typeof replaceTranscriptEvents>[1]);
 
     await expect(
       trimSessionTranscriptForManualCompact(scope, { maxLines: 5 }),
@@ -3162,7 +3139,7 @@ describe("session accessor seam", () => {
         sessionId: scope.sessionId,
         updatedAt: 10,
       });
-      await replaceSqliteTranscriptEvents(scope, [
+      await replaceTranscriptEvents(scope, [
         { type: "session", version: 3, id: scope.sessionId },
         {
           type: "message",
@@ -3949,7 +3926,7 @@ describe("session accessor seam", () => {
     await predicateStarted;
     let replacementError: unknown;
     try {
-      replaceSqliteSessionEntrySync(scope, {
+      replaceSessionEntrySync(scope, {
         lifecycleRevision: "replacement-revision",
         sessionId: "session-predicate-replacement",
         updatedAt: 20,
@@ -4060,7 +4037,7 @@ describe("session accessor seam", () => {
     });
 
     await predicateStarted;
-    replaceSqliteSessionEntrySync(scope, {
+    replaceSessionEntrySync(scope, {
       abortedLastRun: false,
       restartRecoveryDeliveryRunId: "new-run",
       restartRecoveryDeliverySourceRunId: "new-run",
@@ -4171,7 +4148,7 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:owned-fence",
       storePath,
     };
-    replaceSqliteSessionEntrySync(scope, {
+    replaceSessionEntrySync(scope, {
       activeWriterRunId: "current-run",
       sessionId: scope.sessionId,
       updatedAt: 1,
@@ -4216,7 +4193,7 @@ describe("session accessor seam", () => {
       updatedAt: 10,
     });
 
-    const readTarget = await resolveSessionTranscriptRuntimeReadTarget(scope);
+    const readTarget = await resolveSessionTranscriptRuntimeTarget(scope);
     const writeTarget = await resolveSessionTranscriptRuntimeTarget(scope);
 
     expect(readTarget).toEqual(scope);
@@ -4238,7 +4215,7 @@ describe("session accessor seam", () => {
     });
 
     expect(
-      loadExactSqliteSessionEntry({
+      loadExactSessionEntry({
         agentId: "main",
         sessionKey,
         storePath,
@@ -4258,7 +4235,7 @@ describe("session accessor seam", () => {
       sessionId: scope.sessionId,
       updatedAt: 10,
     });
-    await replaceSqliteTranscriptEvents(scope, [
+    await replaceTranscriptEvents(scope, [
       { sessionId: scope.sessionId, type: "session" },
       { timestamp: "1970-01-01T00:00:00.001Z", type: "custom" },
     ]);
@@ -4284,7 +4261,7 @@ describe("session accessor seam", () => {
     expect(imported.lastMutationAtMs).toBe(replaced.lastMutationAtMs);
     expect(imported.lastObservedMutationAtMs).toBe(replaced.lastMutationAtMs);
 
-    await replaceSqliteTranscriptEvents(scope, []);
+    await replaceTranscriptEvents(scope, []);
 
     const cleared = readTranscriptStatsSync(scope);
     dateNow.mockRestore();
@@ -4322,7 +4299,7 @@ describe("session accessor seam", () => {
     });
     expect(readGeneration()?.generation).toBe(first);
 
-    await replaceSqliteTranscriptEvents(scope, [
+    await replaceTranscriptEvents(scope, [
       { sessionId: scope.sessionId, type: "session" },
       { id: "replacement", parentId: null, type: "custom" },
     ]);
@@ -4330,7 +4307,7 @@ describe("session accessor seam", () => {
     expect(replaced).toMatch(/^[0-9a-f]{32}$/);
     expect(replaced).not.toBe(first);
 
-    await replaceSqliteTranscriptEvents(scope, []);
+    await replaceTranscriptEvents(scope, []);
     expect(readGeneration()?.generation).not.toBe(replaced);
   });
 

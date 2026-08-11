@@ -84,6 +84,14 @@
     ]
   },
   {
+    "name": "cleanupSessionLifecycleArtifacts",
+    "files": [
+      "src/config/sessions/session-accessor.sqlite-lifecycle.ts",
+      "src/plugin-sdk/session-store-runtime.ts"
+    ],
+    "sdk": true
+  },
+  {
     "name": "clearPluginRegistryLoadCache",
     "files": [
       "src/cli/plugins-cli-test-helpers.ts",
@@ -515,6 +523,14 @@
     ]
   },
   {
+    "name": "patchSessionEntry",
+    "files": [
+      "src/config/sessions/session-accessor.sqlite-entry.ts",
+      "src/plugin-sdk/session-store-runtime.ts"
+    ],
+    "sdk": true
+  },
+  {
     "name": "pathExists",
     "files": [
       "src/agents/worktrees/git.ts",
@@ -593,6 +609,14 @@
     "files": [
       "src/config/sessions/session-accessor.sqlite-active-events.ts",
       "src/plugin-sdk/session-transcript-runtime.ts"
+    ],
+    "sdk": true
+  },
+  {
+    "name": "readSessionUpdatedAt",
+    "files": [
+      "src/config/sessions/session-accessor.sqlite-entry.ts",
+      "src/plugin-sdk/session-store-runtime.ts"
     ],
     "sdk": true
   },
@@ -965,6 +989,14 @@
       "src/cli/plugins-cli-test-helpers.ts",
       "src/plugins/update-installed.ts"
     ]
+  },
+  {
+    "name": "upsertSessionEntry",
+    "files": [
+      "src/config/sessions/session-accessor.sqlite-entry.ts",
+      "src/plugin-sdk/session-store-runtime.ts"
+    ],
+    "sdk": true
   },
   {
     "name": "VERSION",

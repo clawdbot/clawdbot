@@ -302,6 +302,38 @@ export async function prepareGatewayLifecycle(params: {
     setConfigReloaderHandle: (configReloader: typeof runtimeState.configReloader) => {
       runtimeState.configReloader = configReloader;
     },
+    getReloadState: () => ({
+      hooksConfig: runtimeState.hooksConfig,
+      hookClientIpConfig: runtimeState.hookClientIpConfig,
+      heartbeatRunner: runtimeState.heartbeatRunner,
+      cronState: runtimeState.cronState,
+      channelHealthMonitor: runtimeState.channelHealthMonitor,
+    }),
+    setReloadHookState: (next: {
+      hooksConfig: typeof runtimeState.hooksConfig;
+      hookClientIpConfig: typeof runtimeState.hookClientIpConfig;
+    }) => {
+      runtimeState.hooksConfig = next.hooksConfig;
+      runtimeState.hookClientIpConfig = next.hookClientIpConfig;
+    },
+    swapHeartbeatRunner: (next: typeof runtimeState.heartbeatRunner) => {
+      const previous = runtimeState.heartbeatRunner;
+      runtimeState.heartbeatRunner = next;
+      return previous;
+    },
+    swapCronState: (next: typeof runtimeState.cronState) => {
+      const previous = runtimeState.cronState;
+      runtimeState.cronState = next;
+      deps.cron = next.cron;
+      return previous;
+    },
+    setChannelHealthMonitor: (next: typeof runtimeState.channelHealthMonitor) => {
+      runtimeState.channelHealthMonitor = next;
+    },
+    notifyPluginMetadataChanged: () => {
+      runtimeState.configReloader.notifyPluginMetadataChanged();
+    },
+    getConfigReloaderHotReloadStatus: () => runtimeState.configReloader.hotReloadStatus?.(),
     setPostReadySidecars: (sidecars: typeof runtimeState.postReadySidecars) => {
       runtimeState.postReadySidecars = sidecars;
     },
@@ -461,7 +493,7 @@ export async function prepareGatewayLifecycle(params: {
       ...optsResult,
       getRuntimeSnapshot,
       getEventLoopHealth: readinessEventLoopHealth.snapshot,
-      getConfigReloaderHotReloadStatus: () => runtimeState?.configReloader.hotReloadStatus?.(),
+      getConfigReloaderHotReloadStatus: kernel.getConfigReloaderHotReloadStatus,
     });
   const stopRegisteredPostReadySidecars = async () => {
     const postReadySidecars = runtimeState.postReadySidecars;

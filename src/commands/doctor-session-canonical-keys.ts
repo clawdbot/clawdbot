@@ -11,12 +11,12 @@ import {
   rehomeSessionDeliveryReferencesForCanonicalRepairBatch,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntryLifecycleRemoval } from "../config/sessions/session-accessor.lifecycle-types.js";
-import { writeSqliteTranscriptArchive } from "../config/sessions/session-accessor.sqlite-archive.js";
+import { writeTranscriptArchive } from "../config/sessions/session-accessor.sqlite-archive.js";
 import {
   copySessionNodeArtifactsForRepair,
   deleteSessionMembersForRepair,
 } from "../config/sessions/session-accessor.sqlite-node-artifacts.js";
-import { collectSqliteSessionStateIdsForEntry } from "../config/sessions/session-accessor.sqlite-references.js";
+import { collectSessionStateIdsForEntry } from "../config/sessions/session-accessor.sqlite-references.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { setCanonicalSqliteSessionMainKey } from "../config/sessions/session-canonical-key.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "../config/sessions/store-entry.js";
@@ -521,7 +521,7 @@ async function repairCanonicalSessionGroup(
         sourceKeys: [winner.sessionKey],
         storePath: winner.storePath,
       }),
-      ...collectSqliteSessionStateIdsForEntry(winner.entry),
+      ...collectSessionStateIdsForEntry(winner.entry),
     ]);
     for (const sessionId of generationIds) {
       if (!sessionId) {
@@ -556,7 +556,7 @@ async function repairCanonicalSessionGroup(
         env: params.env,
         path: destination.sqlitePath,
       });
-      writeSqliteTranscriptArchive({
+      writeTranscriptArchive({
         archiveDirectory,
         content: destinationContent,
         reason: "deleted",

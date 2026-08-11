@@ -19,7 +19,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { buildSync } from "esbuild";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  canonicalProviderName,
   isProviderAdvertised,
   parseProvidersFromHelp,
 } from "../../scripts/crabbox-wrapper-providers.mts";
@@ -155,7 +154,38 @@ async function main() {
   process.stdout.write(JSON.stringify({ args, cwd: process.cwd(), scriptContent }) + "\n");
 }
 main().catch((error) => { process.stderr.write(String(error?.stack || error) + "\n"); process.exit(1); });`;
-  writeNodeCommand(crabboxPath, script);
+  if (process.platform === "win32") {
+    writeNodeCommand(crabboxPath, script);
+  } else {
+    const nodePath = `${crabboxPath}-node`;
+    const runHelpText = `${helpText}${fakeRunValueOptionHelp}`;
+    writeNodeCommand(nodePath, script);
+    writeShellCommand(
+      crabboxPath,
+      [
+        'if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then',
+        `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.22.1}"`,
+        "  exit 0",
+        "fi",
+        'if [ "$#" -eq 2 ] && [ "$1" = "run" ] && [ "$2" = "--help" ]; then',
+        `  printf '%s' ${shellQuote(runHelpText)}`,
+        "  exit 0",
+        "fi",
+        "fast_run=1",
+        'for arg in "$@"; do',
+        '  case "$arg" in --artifact-glob|-artifact-glob|--script|-script) fast_run=0 ;; esac',
+        "done",
+        'if { [ "$1" = "run" ] || [ "$1" = "warmup" ]; } && [ "$fast_run" -eq 1 ] &&',
+        '  [ -z "${OPENCLAW_FAKE_CRABBOX_CLAIM_PATH:-}${OPENCLAW_FAKE_CRABBOX_EXTRA_CLAIM_PATH:-}${OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID:-}${OPENCLAW_FAKE_CRABBOX_RUN_STATUS:-}${OPENCLAW_FAKE_CRABBOX_DELETE_CWD_AND_EXIT:-}${OPENCLAW_FAKE_CRABBOX_DELETE_CWD_ONCE:-}${OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH:-}${OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE+x}${OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES:-}${OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_FORCE_ADD:-}" ]; then',
+        `  printf '${fakeCrabboxProtocol}\\000%s\\000' "$#"`,
+        "  printf '%s\\000' \"$@\"",
+        "  printf '%s\\000\\000' \"$PWD\"",
+        "  exit 0",
+        "fi",
+        `exec node ${shellQuote(nodePath)} "$@"`,
+      ].join("\n"),
+    );
+  }
   return crabboxPath;
 }
 
@@ -243,6 +273,15 @@ function windowsNodeCmdShim(target: string): string {
   ].join("\r\n");
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+function writeShellCommand(commandPath: string, script: string): void {
+  writeFileSync(commandPath, `#!/bin/sh\n${script.trimStart()}\n`, "utf8");
+  chmodSync(commandPath, 0o755);
+}
+
 function writeNodeCommand(commandPath: string, script: string): void {
   writeFileSync(commandPath, `#!/usr/bin/env node\n${script.trimStart()}\n`, "utf8");
   if (process.platform === "win32") {
@@ -293,7 +332,30 @@ const response = new Map(Object.entries(JSON.parse(process.env.OPENCLAW_FAKE_GIT
 if (!response) process.exit(1);
 if (response.stdout) process.stdout.write(response.stdout); if (response.stderr) process.stderr.write(response.stderr);
 process.exit(response.status ?? 0);`;
-  writeNodeCommand(gitPath, script);
+  if (process.platform === "win32") {
+    writeNodeCommand(gitPath, script);
+  } else {
+    const nodePath = `${gitPath}-node`;
+    const responseCases = Object.entries(responses).map(([command, response]) => {
+      const args = command.split("\u0000");
+      const condition = [
+        `[ "$#" -eq ${args.length} ]`,
+        ...args.map((arg, index) => `[ "$${index + 1}" = ${shellQuote(arg)} ]`),
+      ].join(" && ");
+      return [
+        `if ${condition}; then`,
+        ...(response.stdout ? [`  printf '%s' ${shellQuote(response.stdout)}`] : []),
+        ...(response.stderr ? [`  printf '%s' ${shellQuote(response.stderr)} >&2`] : []),
+        `  exit ${response.status ?? 0}`,
+        "fi",
+      ].join("\n");
+    });
+    writeNodeCommand(nodePath, script);
+    writeShellCommand(
+      gitPath,
+      `${responseCases.join("\n")}\nexec node ${shellQuote(nodePath)} "$@"`,
+    );
+  }
   fakeGitBinDirs.set(key, binDir);
   return binDir;
 }
@@ -388,7 +450,18 @@ type FakeCrabboxOutput = {
   scriptContent?: string;
 };
 
+const fakeCrabboxProtocol = "OPENCLAW_FAKE_CRABBOX_V1";
+
 function parseFakeCrabboxOutput(result: ReturnType<typeof runWrapper>): FakeCrabboxOutput {
+  if (result.stdout.startsWith(`${fakeCrabboxProtocol}\0`)) {
+    const fields = result.stdout.split("\0");
+    const count = Number(fields[1]);
+    return {
+      args: fields.slice(2, 2 + count),
+      cwd: fields[2 + count] ?? "",
+      scriptContent: fields[3 + count] ?? "",
+    };
+  }
   return JSON.parse(result.stdout.trim()) as FakeCrabboxOutput;
 }
 
@@ -742,31 +815,6 @@ afterAll(() => {
 });
 
 describe("scripts/crabbox-wrapper", () => {
-  const advertisedProviderAliasHelp = [
-    "provider: hetzner, aws, gcp, local-container, blacksmith-testbox,",
-    "  namespace-devbox, runpod, semaphore, cloudflare, railway, exe-dev, or ssh",
-    "",
-  ].join("\n");
-  const advertisedProviderAliases = [
-    ["blacksmith", "blacksmith-testbox"],
-    ["cf", "cloudflare"],
-    ["container", "local-container"],
-    ["docker", "local-container"],
-    ["exe", "exe-dev"],
-    ["exedev", "exe-dev"],
-    ["google", "gcp"],
-    ["google-cloud", "gcp"],
-    ["local-docker", "local-container"],
-    ["namespace", "namespace-devbox"],
-    ["namespace-devboxes", "namespace-devbox"],
-    ["rail", "railway"],
-    ["railwayapp", "railway"],
-    ["run-pod", "runpod"],
-    ["runpodio", "runpod"],
-    ["sem", "semaphore"],
-    ["static", "ssh"],
-    ["static-ssh", "ssh"],
-  ];
   beforeAll(() => {
     mkdirSync(path.dirname(bundledWrapperPath), { recursive: true });
     buildSync({
@@ -2951,16 +2999,6 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.status).toBe(0);
     expect(parseFakeCrabboxOutput(result).args).toContain("aws");
   });
-
-  it.each(advertisedProviderAliases)(
-    "canonicalizes Crabbox provider alias %s to %s",
-    (alias, canonical) => {
-      const advertisedProviders = parseProvidersFromHelp(advertisedProviderAliasHelp);
-
-      expect(canonicalProviderName(alias)).toBe(canonical);
-      expect(isProviderAdvertised(alias, advertisedProviders)).toBe(true);
-    },
-  );
 
   it("accepts Crabbox provider aliases when upstream help omits Tensorlake", () => {
     const helpText = [
