@@ -1,7 +1,6 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -9,8 +8,10 @@ import {
 } from "./openclaw-state-db.js";
 import { getUserPreferences, setUserPreferences } from "./user-preferences.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 function stateOptions() {
-  return { path: join(mkdtempSync(join(tmpdir(), "openclaw-user-prefs-")), "openclaw.sqlite") };
+  return { path: join(tempDirs.make("openclaw-user-prefs-"), "openclaw.sqlite") };
 }
 
 afterEach(() => {
