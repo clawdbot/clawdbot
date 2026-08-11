@@ -38,7 +38,7 @@ describe("isRetryableAssistantError", () => {
       const message = signal.message
         ? errorMessage(signal.message)
         : ({ ...errorMessage(""), errorMessage: undefined } as AssistantMessage);
-      message.provider = signal.provider ?? "test-provider";
+      message.provider = ("provider" in signal ? signal.provider : undefined) ?? "test-provider";
 
       expect(isRetryableAssistantError(message)).toBe(
         failoverRetryExpectations[id as keyof typeof failoverRetryExpectations],
