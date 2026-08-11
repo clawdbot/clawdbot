@@ -47,7 +47,8 @@ vi.mock("../../agents/delegate-artifacts.js", async (importOriginal) => ({
   removeUnacceptedDelegateArtifactPolicy: removeUnacceptedDelegateArtifactPolicyMock,
 }));
 
-vi.mock("../../agents/subagents/registry/subagent-registry-read.js", () => ({
+vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   getSubagentRunByChildSessionKey: (childSessionKey: string) =>
     activeRegistryChildSessionKeys.has(childSessionKey)
       ? { runId: "run-active", childSessionKey }

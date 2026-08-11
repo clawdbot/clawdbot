@@ -98,7 +98,8 @@ const { subagentRegistryMocks, subagentRegistryDeps } = vi.hoisted(() => {
 vi.mock("../../agents/subagents/registry/subagent-registry.js", () => ({
   markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
 }));
-vi.mock("../../agents/subagents/registry/subagent-registry-read.js", () => ({
+vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   getLatestSubagentRunByChildSessionKey: subagentRegistryDeps.getLatestSubagentRunByChildSessionKey,
   listSubagentRunsForController: subagentRegistryDeps.listSubagentRunsForRequester,
 }));
