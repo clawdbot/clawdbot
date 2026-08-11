@@ -7,13 +7,13 @@ import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import JSZip from "jszip";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { createSolidPngBuffer, createTinyJpegBuffer } from "../../test/helpers/image-fixtures.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { resizeToJpeg } from "./media-services.js";
+import { createImageProcessor, resizeToJpeg } from "./media-services.js";
 import { encodePngRgba, fillPixel } from "./png-encode.js";
 
 let effectiveImageBytesCap: typeof import("./web-media.js").effectiveImageBytesCap;
@@ -486,6 +486,130 @@ describe("loadWebMedia", () => {
       expect(result.buffer.subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]));
       expect(readJpegDimensions(result.buffer)).toEqual({ width: 32, height: 32 });
     }
+  });
+
+  it("renames transparent WebP images converted to PNG across direct, local, and remote owners", async () => {
+    const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
+    const imageProcessor = createImageProcessor();
+    const sourceWebp = (
+      await imageProcessor.encode(createLargeTransparentColorBlockPng(64), { format: "webp" })
+    ).data;
+    expect(sourceWebp.toString("ascii", 8, 12)).toBe("WEBP");
+    expect((await imageProcessor.transparency(sourceWebp)).hasTransparentPixels).toBe(true);
+    const imageCompression = { models: [{ maxSidePx: 32, preferredSidePx: 32 }] };
+
+    const direct = await optimizeImageBufferForWebMedia({
+      buffer: sourceWebp,
+      contentType: "image/webp",
+      fileName: String.raw`C:\images\transparent.webp`,
+      maxBytes: 1024 * 1024,
+      imageCompression,
+    });
+    const unnamed = await optimizeImageBufferForWebMedia({
+      buffer: sourceWebp,
+      contentType: "image/webp",
+      maxBytes: 1024 * 1024,
+      imageCompression,
+    });
+    const convertedPath = path.join(fixtureRoot, "transparent.webp");
+    await fs.writeFile(convertedPath, sourceWebp);
+    const loaded = await loadWebMedia(convertedPath, {
+      maxBytes: 1024 * 1024,
+      localRoots: [fixtureRoot],
+      imageCompression,
+    });
+    const remote = await loadWebMedia("https://93.184.216.34/transparent.webp", {
+      maxBytes: 1024 * 1024,
+      imageCompression,
+      fetchImpl: async () =>
+        new Response(new Uint8Array(sourceWebp), {
+          status: 200,
+          headers: { "content-type": "image/webp" },
+        }),
+    });
+
+    for (const result of [direct, loaded, remote]) {
+      expect(result.kind).toBe("image");
+      expect(result.contentType).toBe("image/png");
+      expect(result.fileName).toBe("transparent.png");
+      expect(result.buffer.subarray(0, 8)).toEqual(
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      );
+      expect(readPngDimensions(result.buffer)).toEqual({ width: 32, height: 32 });
+    }
+    expect(unnamed.contentType).toBe("image/png");
+    expect(unnamed.fileName).toBeUndefined();
+
+    const unchanged = await optimizeImageBufferForWebMedia({
+      buffer: sourceWebp,
+      contentType: "image/webp",
+      fileName: "transparent.webp",
+      maxBytes: 1024 * 1024,
+    });
+    expect(unchanged.contentType).toBe("image/webp");
+    expect(unchanged.fileName).toBe("transparent.webp");
+    expect(unchanged.buffer).toBe(sourceWebp);
+  });
+
+  it("reconciles sniffed image filenames without optimization while preserving raw metadata", async () => {
+    const disguisedPng = path.join(fixtureRoot, "converted.webp");
+    await fs.writeFile(disguisedPng, TINY_PNG_BUFFER);
+    const options = {
+      maxBytes: 1024 * 1024,
+      localRoots: [fixtureRoot],
+      optimizeImages: false,
+    };
+
+    const publicImage = await loadWebMedia(disguisedPng, options);
+    expect(publicImage.contentType).toBe("image/png");
+    expect(publicImage.fileName).toBe("converted.png");
+    expect(publicImage.buffer).toEqual(TINY_PNG_BUFFER);
+
+    const rawImage = await loadWebMediaRaw(disguisedPng, options);
+    expect(rawImage.contentType).toBe("image/png");
+    expect(rawImage.fileName).toBe("converted.webp");
+    expect(rawImage.buffer).toEqual(TINY_PNG_BUFFER);
+  });
+
+  it("preserves equivalent JPEG aliases and unknown image MIME types", async () => {
+    const jpegAlias = path.join(fixtureRoot, "portrait.JpEg");
+    await fs.writeFile(jpegAlias, createTinyJpegBuffer());
+    const aliasedImage = await loadWebMedia(jpegAlias, {
+      maxBytes: 1024 * 1024,
+      localRoots: [fixtureRoot],
+      optimizeImages: false,
+    });
+    expect(aliasedImage.contentType).toBe("image/jpeg");
+    expect(aliasedImage.fileName).toBe("portrait.JpEg");
+
+    const unknownImage = await loadWebMedia("https://93.184.216.34/portrait.mystery", {
+      maxBytes: 1024 * 1024,
+      optimizeImages: false,
+      fetchImpl: async () =>
+        new Response("unrecognized image bytes", {
+          status: 200,
+          headers: { "content-type": "image/x-private-format" },
+        }),
+    });
+    expect(unknownImage.kind).toBe("image");
+    expect(unknownImage.contentType).toBe("image/x-private-format");
+    expect(unknownImage.fileName).toBe("portrait.mystery");
+  });
+
+  it("strips matching image filename paths without changing equivalent extensions", async () => {
+    const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
+    const sourceJpeg = createTinyJpegBuffer();
+
+    const result = await optimizeImageBufferForWebMedia({
+      buffer: sourceJpeg,
+      contentType: "image/jpeg",
+      fileName: String.raw`C:\Users\alice\portrait.JpEg`,
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result.contentType).toBe("image/jpeg");
+    expect(result.fileName).toBe("portrait.JpEg");
+    expect(result.buffer).toBe(sourceJpeg);
   });
 
   it("applies model image maxBytes to the effective image cap", async () => {

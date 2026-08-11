@@ -36,6 +36,8 @@
 
 import * as crypto from "node:crypto";
 import type { FileHandle } from "node:fs/promises";
+import * as nodePath from "node:path";
+import { detectMime, extensionForMime, mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -144,6 +146,8 @@ const MAX_PART_FINISH_RETRY_TIMEOUT_MS = 10 * 60 * 1000;
 /** Per-part PUT timeout (5 minutes). Matches the low-bandwidth tolerance. */
 const PART_UPLOAD_TIMEOUT_MS = 300_000;
 const PART_UPLOAD_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+// file-type's reasonableDetectionSizeInBytes bounds probes on the already verified descriptor.
+const IMAGE_MIME_SNIFF_BYTES = 4100;
 
 /**
  * Boundary used by `md5_10m` — first 10,002,432 bytes.
@@ -189,7 +193,10 @@ export class ChunkedMediaApi {
     const input = await resolveSource(opts.source, opts.fileName);
 
     try {
-      const displayName = input.fileName;
+      const displayName =
+        opts.fileType === MediaFileType.IMAGE
+          ? await resolveChunkedImageFileName(input)
+          : input.fileName;
       const fileSize = input.size;
       const pathLabel = input.kind === "localPath" ? input.path : "<buffer>";
 
@@ -471,6 +478,22 @@ async function readPart(input: ChunkedInput, offset: number, length: number): Pr
   const buf = Buffer.alloc(length);
   const { bytesRead } = await input.opened.handle.read(buf, 0, length, offset);
   return bytesRead < length ? buf.subarray(0, bytesRead) : buf;
+}
+
+async function resolveChunkedImageFileName(input: ChunkedInput): Promise<string> {
+  const fileName = input.fileName.split(/[/\\]/).pop() || input.fileName;
+  const contentType = await detectMime({
+    buffer: await readPart(input, 0, Math.min(input.size, IMAGE_MIME_SNIFF_BYTES)),
+  });
+  if (!contentType?.startsWith("image/") || mimeTypeFromFilePath(fileName) === contentType) {
+    return fileName;
+  }
+  const extension = extensionForMime(contentType);
+  if (!extension) {
+    return fileName;
+  }
+  const parsed = nodePath.parse(fileName);
+  return nodePath.format({ name: parsed.name || fileName, ext: extension });
 }
 
 // ============ Hash computation ============

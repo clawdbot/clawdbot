@@ -3,6 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
+import { createImageProcessor } from "../../media/media-services.js";
+import { loadWebMedia } from "../../media/web-media.js";
 
 const storeSpy = vi.hoisted(() => ({
   onMove: null as ((from: string, to: string, rootDir: string) => void) | null,
@@ -246,6 +249,67 @@ describe("staging", () => {
     expect(await fs.readFile(staged, "utf8")).toBe("opus-bytes");
     expect(livePayload.mediaUrl).toBe(source);
     expect(result.artifacts).toEqual([staged]);
+  });
+
+  it("replays converted transparent images with encoded filenames and unchanged custody", async () => {
+    const imageProcessor = createImageProcessor();
+    const sourceBytes = (
+      await imageProcessor.encode(createSolidPngBuffer(2050, 2, { r: 40, g: 90, b: 180, a: 96 }), {
+        format: "webp",
+      })
+    ).data;
+    expect(sourceBytes.toString("ascii", 8, 12)).toBe("WEBP");
+    expect((await imageProcessor.transparency(sourceBytes)).hasTransparentPixels).toBe(true);
+    const source = path.join(sourceDir, "transparent.webp");
+    await fs.writeFile(source, sourceBytes);
+
+    const staged = await stageQueuePayloadMedia({
+      payloads: [{ mediaUrl: source }],
+      mediaAccess: mediaAccessFor([sourceDir]),
+      maxBytes: 1024 * 1024,
+      stateDir,
+    });
+    expect(staged.status).toBe("staged");
+    if (staged.status !== "staged") {
+      return;
+    }
+    await enqueueDelivery(
+      {
+        channel: "matrix",
+        to: "!room:example",
+        payloads: staged.payloads,
+      },
+      stateDir,
+      staged.mediaStageId,
+    );
+    await fs.rm(source);
+
+    const queued = await loadPendingDeliveries(stateDir);
+    const queuedEntry = queued[0]?.preparedBatch.entries[0];
+    expect(queuedEntry?.status).toBe("accepted");
+    if (!queuedEntry || queuedEntry.status !== "accepted") {
+      throw new Error("Expected queued prepared media");
+    }
+    const replayPath = queuedEntry.payload.mediaUrl;
+    expect(replayPath).toBe(staged.artifacts[0]);
+    if (!replayPath) {
+      throw new Error("Expected queued media artifact");
+    }
+    // SQLite owns this preplanned path; only public image metadata changes.
+    expect(path.extname(replayPath)).toBe(".webp");
+    const encodedBytes = await fs.readFile(replayPath);
+    expect(encodedBytes.subarray(0, 8)).toEqual(
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    );
+
+    const replayed = await loadWebMedia(replayPath, {
+      maxBytes: 1024 * 1024,
+      localRoots: [spoolRoot],
+    });
+    expect(replayed.kind).toBe("image");
+    expect(replayed.contentType).toBe("image/png");
+    expect(replayed.fileName).toBe(`${path.basename(replayPath, ".webp")}.png`);
+    expect(replayed.buffer).toEqual(encodedBytes);
   });
 
   it("leaves replayable remote media untouched without creating the spool", async () => {
