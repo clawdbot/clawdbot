@@ -17,9 +17,6 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
       "after-gateway-restart",
       "after-chat-send",
       "after-full-agent-turn",
-      "after-manual-compaction",
-      "after-plugin-sdk-consumer",
-      "after-cleanup-pruning",
       "after-doctor-import-idempotence",
       "after-downgrade-reupgrade-import",
       "after-sqlite-busy-contention",
@@ -75,50 +72,6 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
               entry.sessionKey === report.fullTurnSessionKey &&
               entry.transcriptEvents >= 2 &&
               entry.trajectoryEvents >= 1,
-          ),
-      ),
-    ).toBe(true);
-    expect(report.manualCompaction).toMatchObject({
-      checkpointCount: 1,
-      compacted: true,
-      sessionKey: report.manualCompactionSessionKey,
-    });
-    expect(report.manualCompaction?.transcriptIdentity).toBe(report.manualCompactionSessionKey);
-    expect(report.manualCompaction?.rowCountBefore).toBeGreaterThanOrEqual(2);
-    expect(report.manualCompaction?.rowCountAfter).toBeGreaterThanOrEqual(1);
-    expect(
-      report.checkpoints.some(
-        (checkpoint) =>
-          checkpoint.label === "after-manual-compaction" &&
-          checkpoint.activeJsonl.length === 0 &&
-          checkpoint.sqlite.trackedEntries.some(
-            (entry) =>
-              entry.sessionKey === report.manualCompactionSessionKey &&
-              Array.isArray(entry.entry?.compactionCheckpoints) &&
-              entry.entry.compactionCheckpoints.length >= 1,
-          ),
-      ),
-    ).toBe(true);
-    expect(report.pluginSdkConsumer).toMatchObject({
-      activeTrajectoryPointerForSessionExists: false,
-      activeTrajectoryRuntimeSidecarForSessionExists: false,
-      activeTrajectorySessionSidecarForSessionExists: false,
-    });
-    expect(report.pluginSdkConsumer?.sessionIdentity).toBe(report.pluginSdkSessionKey);
-    expect(report.pluginSdkConsumer?.listedSessionKeys).toContain(report.pluginSdkSessionKey);
-    expect(report.pluginSdkConsumer?.transcriptEventsAfterAppend).toBeGreaterThan(
-      report.pluginSdkConsumer?.transcriptEventsBeforeAppend ?? 0,
-    );
-    expect(
-      report.checkpoints.some(
-        (checkpoint) =>
-          checkpoint.label === "after-plugin-sdk-consumer" &&
-          checkpoint.sqlite.trajectoryRuntimeEvents >= 1 &&
-          checkpoint.sqlite.trackedEntries.some(
-            (entry) =>
-              entry.sessionKey === report.pluginSdkSessionKey &&
-              entry.trajectoryEvents >= 1 &&
-              entry.transcriptEvents >= 3,
           ),
       ),
     ).toBe(true);

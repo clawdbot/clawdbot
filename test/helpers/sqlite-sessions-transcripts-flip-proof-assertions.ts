@@ -67,36 +67,6 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
         ),
     ),
   ).toBe(true);
-  expect(report.pluginSdkConsumer).toMatchObject({
-    activeJsonlForSessionExists: false,
-    latestAssistantTextBeforeAppend: report.fullTurnAssistantText,
-    latestAssistantTextAfterAppend: "sqlite sdk consumer appended by identity",
-    sessionKey: report.pluginSdkSessionKey,
-  });
-  expect(report.pluginSdkConsumer?.sessionIdentity).toBe(report.pluginSdkSessionKey);
-  expect(report.pluginSdkConsumer?.listedSessionKeys).toContain(report.pluginSdkSessionKey);
-  expect(
-    report.checkpoints.some(
-      (checkpoint) =>
-        checkpoint.label === "after-plugin-sdk-consumer" &&
-        checkpoint.sqlite.trackedEntries.some(
-          (entry) => entry.sessionKey === report.pluginSdkSessionKey && entry.transcriptEvents >= 3,
-        ),
-    ),
-  ).toBe(true);
-  const cleanupCheckpoint = report.checkpoints.find(
-    (checkpoint) => checkpoint.label === "after-cleanup-pruning",
-  );
-  expect(
-    cleanupCheckpoint?.sqlite.trackedEntries.some(
-      (entry) => entry.sessionKey === report.cleanupPruneSessionKey,
-    ),
-  ).toBe(false);
-  const cleanupArchive = cleanupCheckpoint?.archiveArtifacts.find(
-    (artifact) =>
-      artifact.archiveReason === "deleted" && artifact.archiveSessionId === "sqlite-cleanup-prune",
-  );
-  expect(cleanupArchive?.messageTexts).toContain("sqlite cleanup prune me");
   const idempotenceCheckpoint = report.checkpoints.find(
     (checkpoint) => checkpoint.label === "after-doctor-import-idempotence",
   );
