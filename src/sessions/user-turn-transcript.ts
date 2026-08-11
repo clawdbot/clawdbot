@@ -269,12 +269,23 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const provenance = normalizeInputProvenance(
     (message as unknown as { provenance?: unknown }).provenance,
   );
-  const senderIsOwner = readOpenClawMessageMeta(message)?.senderIsOwner;
-  const originalTransport = readOpenClawMessageMeta(message)?.transport;
-  const lateMedia = readOpenClawMessageMeta(message)?.lateMedia === true;
-  const originalMedia = readOpenClawMessageMeta(message)?.media;
+  const originalMeta = readOpenClawMessageMeta(message);
+  const senderIsOwner = originalMeta?.senderIsOwner;
+  const replyToId = normalizeOptionalString(originalMeta?.replyToId);
+  const originalReplyPreview = asOptionalRecord(originalMeta?.replyToPreview);
+  const replyPreviewText = normalizeOptionalString(originalReplyPreview?.text);
+  const replyPreviewSender = normalizeOptionalString(originalReplyPreview?.senderLabel);
+  const replyToPreview = replyPreviewText
+    ? {
+        text: replyPreviewText,
+        ...(replyPreviewSender ? { senderLabel: replyPreviewSender } : {}),
+      }
+    : undefined;
+  const originalTransport = originalMeta?.transport;
+  const lateMedia = originalMeta?.lateMedia === true;
+  const originalMedia = originalMeta?.media;
   const media = Array.isArray(originalMedia) ? structuredClone(originalMedia) : undefined;
-  const originalMediaImageLayout = readOpenClawMessageMeta(message)?.mediaImageLayout;
+  const originalMediaImageLayout = originalMeta?.mediaImageLayout;
   const mediaImageLayout =
     originalMediaImageLayout === undefined ? undefined : structuredClone(originalMediaImageLayout);
   // Hooks receive the original message object and may mutate nested metadata in
@@ -295,6 +306,8 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   if (
     !idempotencyKey &&
     typeof senderIsOwner !== "boolean" &&
+    !replyToId &&
+    !replyToPreview &&
     !transport &&
     !lateMedia &&
     media === undefined &&
@@ -305,6 +318,8 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const protectedMeta = {
     ...readOpenClawMessageMeta(nextUserMessage),
     ...(typeof senderIsOwner === "boolean" ? { senderIsOwner } : {}),
+    ...(replyToId ? { replyToId } : {}),
+    ...(replyToPreview ? { replyToPreview } : {}),
     ...(transport ? { transport } : {}),
     ...(lateMedia ? { lateMedia: true } : {}),
     ...(media === undefined ? {} : { media }),

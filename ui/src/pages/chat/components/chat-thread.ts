@@ -113,7 +113,10 @@ type ChatThreadState = {
   searchReturnFocusOwner: HTMLElement | null;
   pinnedExpanded: boolean;
   transcriptRenderDependencies: readonly unknown[];
-  transcriptRenderContext: { onSetReply?: ChatThreadProps["onSetReply"] };
+  transcriptRenderContext: {
+    onSetReply?: ChatThreadProps["onSetReply"];
+    onOpenReply?: (replyToId: string) => void;
+  };
 };
 
 export type ChatReplyMessageAccess = {
@@ -1751,14 +1754,7 @@ function renderChatThreadContents(
         : undefined,
       resolveReplyPreview,
       onResolveReply: props.replyMessageAccess?.request,
-      onOpenReply: (replyToId: string) => {
-        const source = loadedReplySources.get(replyToId);
-        if (source) {
-          transcript.revealMessage(replyToId);
-          return;
-        }
-        props.replyMessageAccess?.open(replyToId);
-      },
+      onOpenReply: (replyToId: string) => state.transcriptRenderContext.onOpenReply?.(replyToId),
       replyNavigationId: props.replyMessageAccess?.navigationId,
       onRewind:
         rewindEntryId && props.onRewindMessage
@@ -2008,6 +2004,16 @@ function renderChatThreadContents(
     turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,
   ]);
   state.transcriptRenderContext.onSetReply = props.onSetReply;
+  state.transcriptRenderContext.onOpenReply = (replyToId) => {
+    if (loadedReplySources.has(replyToId)) {
+      transcript.revealMessage(replyToId);
+      return;
+    }
+    if (searchFiltering) {
+      closeChatThreadSearch(state, requestUpdate);
+    }
+    props.replyMessageAccess?.open(replyToId);
+  };
   const transcriptContents =
     showLoadingSkeleton || isEmpty
       ? html`
