@@ -38,7 +38,8 @@ describe("settleDefaultedChannelSchemas", () => {
       },
     });
 
-    expect(settled.get("osc")?.pluginId).toBe("acme-inc");
+    expect(settled.converged).toBe(true);
+    expect(settled.schemas.get("osc")?.pluginId).toBe("acme-inc");
     // One rebuild at the hydrated record, then the fixpoint equality exits.
     expect(builds).toEqual([JSON.stringify({ osc: { opt: "v" } })]);
   });
@@ -60,6 +61,9 @@ describe("settleDefaultedChannelSchemas", () => {
           : schemasOf({ schema: PLAIN_SCHEMA, pluginId: "acme-rep" }),
     });
 
-    expect(settled.get("osc")?.pluginId).toBe("acme-inc");
+    // Non-convergence is REPORTED: the caller must keep the returned config on the authored
+    // record instead of applying the settled owners' defaults right back.
+    expect(settled.converged).toBe(false);
+    expect(settled.schemas.get("osc")?.pluginId).toBe("acme-inc");
   });
 });

@@ -13,9 +13,10 @@ type ChannelSchemaOwnerEntry = { schema?: Record<string, unknown>; pluginId?: st
  * at least one channel, so the authored channel count bounds convergence. Schemas are accepted
  * only at a true fixpoint — built from the very record they hydrate to. When hydration
  * oscillates (a revisited record, or the pass bound expires without equality), no fixpoint
- * exists and the loop settles DETERMINISTICALLY on the authored record's owners — the config
- * the gateway consumes before any default sticks — instead of whichever parity the bound
- * happened to land on.
+ * exists: the loop settles DETERMINISTICALLY on the authored record's owners and reports
+ * `converged: false` — the caller must then keep the runtime config on the authored record
+ * (no downstream default application), or applying the settled owners' defaults would hand the
+ * gateway the very hydrated record whose plan contradicts them.
  */
 export function settleDefaultedChannelSchemas(params: {
   /** Authored channel entries whose values the current owners' defaults hydrate. */
@@ -24,7 +25,7 @@ export function settleDefaultedChannelSchemas(params: {
   compatChannels: Record<string, unknown>;
   initialSchemas: Map<string, ChannelSchemaOwnerEntry>;
   buildSchemas: (channels: Record<string, unknown>) => Map<string, ChannelSchemaOwnerEntry>;
-}): Map<string, ChannelSchemaOwnerEntry> {
+}): { schemas: Map<string, ChannelSchemaOwnerEntry>; converged: boolean } {
   const maxPasses = Object.keys(params.channelsRecord).length + 1;
   let schemas = params.initialSchemas;
   const authoredSource = JSON.stringify(params.compatChannels);
@@ -65,5 +66,5 @@ export function settleDefaultedChannelSchemas(params: {
   if (!converged && schemasSource !== authoredSource) {
     schemas = params.buildSchemas(params.compatChannels);
   }
-  return schemas;
+  return { schemas, converged };
 }

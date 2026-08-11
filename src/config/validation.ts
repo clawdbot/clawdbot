@@ -396,6 +396,11 @@ function validateConfigObjectWithPluginsBase(
     return schemas;
   };
 
+  // False only when default hydration oscillated: the settled schemas are the AUTHORED
+  // record's, and the returned config must STAY on the authored record — applying the settled
+  // owners' defaults would hand the gateway the very hydrated record whose plan contradicts
+  // them (see `settleDefaultedChannelSchemas`).
+  let channelDefaultsConverged = true;
   const ensureChannelSchemas = (): Map<
     string,
     { schema?: Record<string, unknown>; pluginId?: string }
@@ -410,13 +415,22 @@ function validateConfigObjectWithPluginsBase(
       const channelsRecord = isRecord(config.channels) ? config.channels : undefined;
       if (channelsRecord) {
         const compatChannels = isRecord(planBaseConfig.channels) ? planBaseConfig.channels : {};
-        schemas = settleDefaultedChannelSchemas({
+        const settled = settleDefaultedChannelSchemas({
           channelsRecord,
           compatChannels,
           initialSchemas: schemas,
           buildSchemas: (channels) =>
             buildChannelSchemas({ ...planBaseConfig, channels } as OpenClawConfig),
         });
+        schemas = settled.schemas;
+        if (!settled.converged) {
+          channelDefaultsConverged = false;
+          warnings.push({
+            path: "channels",
+            message:
+              "channel schema ownership does not converge under schema defaults; validating and returning the authored channel config without applying defaults",
+          });
+        }
       }
       info.channelSchemas = schemas;
     }
@@ -699,8 +713,11 @@ function validateConfigObjectWithPluginsBase(
         schema: channelSchema.schema,
         cacheKey: `channel:${trimmed}`,
         value: config.channels[trimmed],
-        applyDefaults: true, // Always apply defaults for AJV schema validation;
-        // writeConfigFile persists persistCandidate, not validated.config (#61841)
+        // Apply defaults for AJV schema validation (writeConfigFile persists persistCandidate,
+        // not validated.config — #61841) UNLESS ownership settlement did not converge: the
+        // settled schemas are the authored record's, and hydrating the returned config would
+        // hand the gateway the contradicting record the settlement rejected.
+        applyDefaults: channelDefaultsConverged,
       });
       if (!result.ok) {
         for (const error of result.errors) {
@@ -712,7 +729,7 @@ function validateConfigObjectWithPluginsBase(
             allowedValuesHiddenCount: error.allowedValuesHiddenCount,
           });
         }
-      } else {
+      } else if (channelDefaultsConverged) {
         replaceChannelConfig(trimmed, result.value);
       }
     }
