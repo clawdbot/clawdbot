@@ -1,6 +1,5 @@
 /** Runs the ordered model fallback execution state machine. */
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitFailoverEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -42,13 +41,9 @@ import {
   isTranscriptNotContinuableError,
   type ModelFallbackAuthRuntime,
   type ModelFallbackClassifiedResult,
-  type ModelFallbackErrorHandler,
   type ModelFallbackExhaustionResult,
-  type ModelFallbackResultClassifier,
-  type ModelFallbackRunFn,
   type ModelFallbackRunOptions,
   type ModelFallbackRunResult,
-  type ModelFallbackStepHandler,
   recordFailedCandidateAttempt,
   resolveFallbackSoonestCooldownExpiry,
   resolveModelFallbackCandidateAgentRuntime,
@@ -77,17 +72,14 @@ import {
   type ModelFallbackDecisionParams,
 } from "./model-fallback-observation.js";
 import { gateModelCircuitForCandidate } from "./model-fallback-route-eligibility.js";
-import type {
-  FallbackAttempt,
-  ModelFallbackCandidate,
-  ModelFallbackRouteResolution,
-} from "./model-fallback.types.js";
-import type { ModelManifestNormalizationContext } from "./model-ref-shared.js";
 import {
-  resolveSessionSuspensionReason,
-  suspendSession,
-  type SessionSuspensionParams,
-} from "./session-suspension.js";
+  type DeferredSessionSuspensionState,
+  flushDeferredSessionSuspension,
+  resolveFallbackAuthScope,
+  type RunWithModelFallbackParams,
+} from "./model-fallback-runner-support.js";
+import type { FallbackAttempt } from "./model-fallback.types.js";
+import { resolveSessionSuspensionReason, suspendSession } from "./session-suspension.js";
 
 const log = createSubsystemLogger("model-fallback");
 const modelFallbackAuthRuntimeLoader = createLazyImportLoader<ModelFallbackAuthRuntime>(
@@ -96,68 +88,6 @@ const modelFallbackAuthRuntimeLoader = createLazyImportLoader<ModelFallbackAuthR
 
 async function loadModelFallbackAuthRuntime() {
   return await modelFallbackAuthRuntimeLoader.load();
-}
-
-function resolveFallbackAuthScope(params: {
-  userLockedAuthProfileId?: string;
-  profileIds?: readonly string[];
-}): string | undefined {
-  if (params.userLockedAuthProfileId) {
-    return params.userLockedAuthProfileId;
-  }
-  // resolveAuthProfileOrder places the profile selected for this model first.
-  return params.profileIds?.find((id) => id.trim())?.trim();
-}
-
-type RunWithModelFallbackParams<T> = {
-  cfg: OpenClawConfig | undefined;
-  provider: string;
-  model: string;
-  runId?: string;
-  sessionId?: string;
-  agentId?: string;
-  sessionKey?: string;
-  userLockedAuthProfileId?: string;
-  resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
-  prepareAgentHarnessRuntime?: (params: {
-    provider: string;
-    model: string;
-    agentHarnessRuntimeOverride?: string;
-  }) => Promise<void> | void;
-  prepareCandidateChain?: (candidates: readonly ModelFallbackCandidate[]) => Promise<void> | void;
-  lane?: string;
-  agentDir?: string;
-  /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
-  fallbacksOverride?: string[];
-  requestedRouteResolution?: ModelFallbackRouteResolution;
-  run: ModelFallbackRunFn<T>;
-  onError?: ModelFallbackErrorHandler;
-  onFallbackStep?: ModelFallbackStepHandler;
-  classifyResult?: ModelFallbackResultClassifier<T>;
-  /** Return false when a thrown attempt committed work that must not be replayed. */
-  canFallbackAfterError?: (params: {
-    provider: string;
-    model: string;
-    error: unknown;
-    attempt: number;
-    total: number;
-  }) => boolean | Promise<boolean>;
-  mergeExhaustedResult?: (params: { latestResult: T; preferredResult: T }) => T;
-  skipAuthProfileRuntime?: boolean;
-  abortSignal?: AbortSignal;
-} & ModelManifestNormalizationContext;
-
-type DeferredSessionSuspensionState = {
-  pending?: SessionSuspensionParams;
-};
-
-function flushDeferredSessionSuspension(state: DeferredSessionSuspensionState): void {
-  const pending = state.pending;
-  if (!pending) {
-    return;
-  }
-  state.pending = undefined;
-  void suspendSession(pending);
 }
 
 export async function runWithModelFallback<T>(
