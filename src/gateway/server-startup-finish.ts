@@ -12,7 +12,6 @@ import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
-import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import { collectGatewayProcessMemoryUsageMb, finishGatewayRestartTrace } from "./restart-trace.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
@@ -70,6 +69,8 @@ export async function finishGatewayStartup(params: {
     minimalTestGateway,
     deps,
     runtimeState,
+    unavailableGatewayMethods,
+    kernel,
     sessionCompanion,
     sessionObserver,
     getMcpAppSandboxPort,
@@ -195,9 +196,6 @@ export async function finishGatewayStartup(params: {
     stopRegisteredPostReadySidecars,
     clearFallbackGatewayContextForServer,
   } = runtime;
-  const unavailableGatewayMethods = new Set<string>(
-    minimalTestGateway ? [] : STARTUP_UNAVAILABLE_GATEWAY_METHODS,
-  );
   const chatMetadataLifecycle = await createGatewayChatMetadataLifecycle({
     getConfig: getRuntimeConfig,
     minimalTestGateway,
@@ -369,7 +367,7 @@ export async function finishGatewayStartup(params: {
     }),
   );
   await startupTrace.measure("http.listen", () => startListening());
-  startupState.dispatchReady = true;
+  kernel.setDispatchReady(true);
   startupTrace.mark("http.bound");
   const sessionDeliveryRecoveryMaxEnqueuedAt = Date.now();
   let postAttachRuntimeReturned = false;
@@ -447,7 +445,7 @@ export async function finishGatewayStartup(params: {
           recoveryRuntime: gatewayInstanceRuntimeLocal.recovery,
           logHooks,
           logChannels,
-          unavailableGatewayMethods,
+          unlockStartupMethods: kernel.unlockStartupMethods,
           refreshChatMetadata: chatMetadataLifecycle.refresh,
           loadStartupPlugins: async () => {
             const { loadGatewayStartupPluginRuntime } = await loadStartupPluginsModule();
@@ -516,7 +514,7 @@ export async function finishGatewayStartup(params: {
               }
             : {}),
           onSidecarsReady: () => {
-            startupState.sidecarsReady = true;
+            kernel.markSidecarsReady();
             activateScheduledServicesWhenReady();
           },
           isClosing: () => lifecycle.closePreludeStarted,

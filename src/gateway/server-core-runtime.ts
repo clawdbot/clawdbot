@@ -112,6 +112,7 @@ export async function startGatewayCoreRuntime(input: {
     agentRunSeq,
     nodeSendToSession,
     runtimeState,
+    kernel,
     startupTrace,
     activeTaskCount,
     channelManager,
@@ -361,11 +362,7 @@ export async function startGatewayCoreRuntime(input: {
     methods.push(...listStartupChannelGatewayMethods());
     return uniqueStrings(methods);
   };
-  runtimeState.gatewayMethods.splice(
-    0,
-    runtimeState.gatewayMethods.length,
-    ...listAttachedGatewayMethods(),
-  );
+  kernel.publishMethodSurface(listAttachedGatewayMethods());
   const replaceAttachedPluginRuntime = (loaded: {
     pluginRegistry: typeof pluginRuntime.registry;
     gatewayMethods: string[];
@@ -378,11 +375,7 @@ export async function startGatewayCoreRuntime(input: {
     Object.assign(attachedGatewayExtraHandlers, pluginRuntime.registry.gatewayHandlers);
     attachedPluginGatewayHandlerKeys = new Set(Object.keys(pluginRuntime.registry.gatewayHandlers));
     attachedGatewayMethodRegistry = buildAttachedGatewayMethodRegistry(pluginRuntime.registry);
-    runtimeState.gatewayMethods.splice(
-      0,
-      runtimeState.gatewayMethods.length,
-      ...listAttachedGatewayMethods(),
-    );
+    kernel.publishMethodSurface(listAttachedGatewayMethods());
     nodeRegistry.refreshNodePluginTools();
   };
   const refreshAttachedGatewayDiscovery = async (

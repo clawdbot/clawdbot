@@ -27,7 +27,6 @@ import {
   projectUpdateAvailable,
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
-import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
 import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
@@ -1076,7 +1075,7 @@ export async function startGatewayPostAttachRuntime(
       error: (msg: string) => void;
     };
     logChannels: { info: (msg: string) => void; error: (msg: string) => void };
-    unavailableGatewayMethods: Set<string>;
+    unlockStartupMethods: () => void;
     loadStartupPlugins?: () => Awaitable<{
       pluginRegistry: PluginRegistry;
       gatewayMethods: string[];
@@ -1318,9 +1317,7 @@ export async function startGatewayPostAttachRuntime(
         }
         // Capture the orphan-recovery cutoff before new startup-gated agent
         // work can create sessions that the recovery scan must leave alone.
-        for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
-          params.unavailableGatewayMethods.delete(method);
-        }
+        params.unlockStartupMethods();
         if (!pluginServicesReported) {
           reportPluginServices(result.pluginServices);
         }

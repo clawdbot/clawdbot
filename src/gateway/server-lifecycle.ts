@@ -21,6 +21,7 @@ import {
 } from "../skills/runtime/remote.js";
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
+import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import { disposeNodeConnectionNotifications } from "./node-connection-notifications.js";
 import { clearNodeWakeState } from "./node-wake-state.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
@@ -65,6 +66,7 @@ export async function prepareGatewayLifecycle(params: {
     stopTaskRegistryMaintenanceOnDemand,
   } = params;
   const {
+    minimalTestGateway,
     controlUiDeviceAuthMigration,
     completeControlUiDeviceAuthMigration,
     workerGatewayEndpoint,
@@ -245,6 +247,27 @@ export async function prepareGatewayLifecycle(params: {
     gatewayMethods: listActiveGatewayMethods(pluginRuntime.baseGatewayMethods),
   });
   const runtimeState = runtimeStateRef.current;
+  const unavailableGatewayMethods = new Set<string>(
+    minimalTestGateway ? [] : STARTUP_UNAVAILABLE_GATEWAY_METHODS,
+  );
+  // Kernel methods are the only writers for readiness and advertised-method state.
+  // Residents use this surface so later ownership splits cannot mutate shared state directly.
+  const kernel = {
+    setDispatchReady: (ready: boolean) => {
+      startupState.dispatchReady = ready;
+    },
+    markSidecarsReady: () => {
+      startupState.sidecarsReady = true;
+    },
+    unlockStartupMethods: () => {
+      for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
+        unavailableGatewayMethods.delete(method);
+      }
+    },
+    publishMethodSurface: (methods: readonly string[]) => {
+      runtimeState.gatewayMethods.splice(0, runtimeState.gatewayMethods.length, ...methods);
+    },
+  };
   runtimeState.controlUiSessionPullRequests = createControlUiSessionPullRequestSubscriptions({
     broadcastToConnIds,
   });
@@ -317,7 +340,7 @@ export async function prepareGatewayLifecycle(params: {
     runtimeState.controlUiSessionPullRequests?.stop();
     runtimeState.sessionViewerPresence?.stop();
     unsubscribeEffectiveOperatorPairing();
-    startupState.dispatchReady = false;
+    kernel.setDispatchReady(false);
     gatewayInstanceRuntimeRef.current?.close();
     cronReconciliation.invalidate();
     clearPostReadyMaintenanceTimer();
@@ -519,6 +542,8 @@ export async function prepareGatewayLifecycle(params: {
     watchNodeHttpRuntime,
     terminalSessions,
     runtimeState,
+    unavailableGatewayMethods,
+    kernel,
     pluginHostServices,
     lifecycle,
     postReadyState,
