@@ -42,7 +42,7 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const { announceSpy } = vi.hoisted(() => ({
-  announceSpy: vi.fn(async () => "delivered" as const),
+  announceSpy: vi.fn(async (): Promise<"delivered" | "retryable"> => "delivered"),
 }));
 vi.mock("../announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,

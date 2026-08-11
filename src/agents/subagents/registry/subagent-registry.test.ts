@@ -176,7 +176,7 @@ const mocks = vi.hoisted(() => ({
   ),
   captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
   cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
-  runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
+  runSubagentAnnounceFlow: vi.fn(async (): Promise<"delivered" | "retryable"> => "delivered"),
   maybeWakeRequesterAfterAllChildrenSettled: vi.fn(
     async (wakeParams: {
       settledEntry: { runId: string };

@@ -2778,7 +2778,7 @@ describe("subagent registry lifecycle hardening", () => {
     const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
       async (announceParams) => {
         announceParams.onDeliveryResult?.(delivery);
-        return "delivered";
+        return "delivered" as const;
       },
     );
 
@@ -2818,7 +2818,7 @@ describe("subagent registry lifecycle hardening", () => {
           deliveredAt: 12_300,
         });
         await announcePending;
-        return "delivered";
+        return "delivered" as const;
       },
     );
     const controller = createLifecycleController({ entry, persist, runSubagentAnnounceFlow });
@@ -2855,7 +2855,7 @@ describe("subagent registry lifecycle hardening", () => {
     const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
       async (announceParams) => {
         onDeliveryResult = announceParams.onDeliveryResult;
-        return "delivered";
+        return "delivered" as const;
       },
     );
     let releaseRetirement = () => {};
@@ -2906,7 +2906,7 @@ describe("subagent registry lifecycle hardening", () => {
           error: "prompt lock failed after visible send",
           terminal: true,
         });
-        return "delivered";
+        return "delivered" as const;
       },
     );
 
@@ -4425,7 +4425,7 @@ describe("requester settle wake trigger", () => {
           terminal: true,
           disposition: "intentional_non_delivery",
         });
-        return "intentional_non_delivery";
+        return "intentional_non_delivery" as const;
       },
     );
     const controller = createLifecycleController({
@@ -4492,7 +4492,7 @@ describe("requester settle wake trigger", () => {
           terminal: true,
           disposition: "intentional_non_delivery",
         });
-        return "intentional_non_delivery";
+        return "intentional_non_delivery" as const;
       },
     );
     const controller = createLifecycleController({

@@ -206,7 +206,7 @@ async function configureSpawnRuntime(
       return undefined;
     },
     cleanupBrowserSessionsForLifecycleEnd: async () => {},
-    runSubagentAnnounceFlow: async () => false,
+    runSubagentAnnounceFlow: async () => "retryable" as const,
     maybeWakeRequesterAfterAllChildrenSettled: async () => false,
     ensureContextEnginesInitialized: () => {},
     loadAgentRuntimePluginRegistryHandle: () => undefined,

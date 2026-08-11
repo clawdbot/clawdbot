@@ -3035,7 +3035,7 @@ describe("spawnAcpDirect", () => {
         expect(waited.terminalReply).toEqual(expected);
         const entry = createRegisteredRunEntry(registration);
         const captureSubagentCompletionReply = vi.fn(async () => undefined);
-        const runSubagentAnnounceFlow = vi.fn(async () => true);
+        const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
         await createBoundaryLifecycleController({
           entry,
           captureSubagentCompletionReply,
