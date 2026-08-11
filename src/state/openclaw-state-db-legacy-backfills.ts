@@ -4,8 +4,11 @@ import { normalizeAgentRunTerminalReplySnapshot } from "../agents/agent-run-term
 import { selectDeliverableSessionsReply } from "../agents/tools/sessions-send-tokens.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
 import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+
+const legacyBackfillLog = createSubsystemLogger("state/legacy-backfill");
 
 export function ensureOperatorApprovalResolutionRefs(db: DatabaseSync): void {
   if (!tableExists(db, "operator_approvals")) {
@@ -136,6 +139,7 @@ export function retireLegacySubagentAttachmentCleanup(db: DatabaseSync): void {
     payload_json: string;
   }>;
   const update = db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?");
+  const warnedRoots = new Set<string>();
   for (const row of rows) {
     const payload = parseJsonRecord(row.payload_json);
     const storedRoot = payload ? textField(payload, "attachmentsRootDir") : null;
@@ -162,8 +166,16 @@ export function retireLegacySubagentAttachmentCleanup(db: DatabaseSync): void {
     ) {
       continue;
     }
+    if (!warnedRoots.has(rootDir) && warnedRoots.size < 4) {
+      warnedRoots.add(rootDir);
+      legacyBackfillLog.warn(
+        warnedRoots.size < 4
+          ? `Legacy subagent attachments may remain at ${rootDir}; inspect and remove them manually. Unsafe cleanup metadata is being retired.`
+          : "Additional legacy subagent attachment roots were omitted from this warning.",
+      );
+    }
     // v2026.7.x stored no sandbox cleanup boundary. A host removal can race a
-    // writable sandbox, so retire this transient receipt without touching its path.
+    // writable sandbox. Warn before retiring the receipt without touching its path.
     delete payload.attachmentsDir;
     delete payload.attachmentsRootDir;
     delete payload.retainAttachmentsOnKeep;

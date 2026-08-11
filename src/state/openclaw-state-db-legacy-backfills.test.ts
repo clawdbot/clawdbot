@@ -2,6 +2,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
   repairLegacySubagentExecutionPayloads,
   repairLegacySubagentRetainedResults,
@@ -22,7 +23,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 const ATTACHMENT_ID = "12345678-1234-4123-8123-123456789abc";
 
 describe("retireLegacySubagentAttachmentCleanup", () => {
-  it("retires only shipped unconfined generated attachment receipts", () => {
+  it("warns operators and retires only shipped unconfined generated attachment receipts", async () => {
     const db = new DatabaseSync(":memory:");
     db.exec(`
       CREATE TABLE subagent_runs (
@@ -57,14 +58,23 @@ describe("retireLegacySubagentAttachmentCleanup", () => {
       }),
     );
 
-    retireLegacySubagentAttachmentCleanup(db);
-    const firstPass = db
-      .prepare("SELECT run_id, payload_json FROM subagent_runs ORDER BY run_id")
-      .all();
-    retireLegacySubagentAttachmentCleanup(db);
-    const secondPass = db
-      .prepare("SELECT run_id, payload_json FROM subagent_runs ORDER BY run_id")
-      .all();
+    const logCapture = createWarnLogCapture("legacy-subagent-attachments");
+    let firstPass: Array<Record<string, unknown>>;
+    let secondPass: Array<Record<string, unknown>>;
+    try {
+      retireLegacySubagentAttachmentCleanup(db);
+      firstPass = db
+        .prepare("SELECT run_id, payload_json FROM subagent_runs ORDER BY run_id")
+        .all() as Array<Record<string, unknown>>;
+      retireLegacySubagentAttachmentCleanup(db);
+      secondPass = db
+        .prepare("SELECT run_id, payload_json FROM subagent_runs ORDER BY run_id")
+        .all() as Array<Record<string, unknown>>;
+      expect(await logCapture.findText(`attachments may remain at ${legacyRootDir}`)).toBeDefined();
+      expect(await logCapture.findText("inspect and remove them manually")).toBeDefined();
+    } finally {
+      logCapture.cleanup();
+    }
 
     expect(secondPass).toEqual(firstPass);
     const payloads = Object.fromEntries(
