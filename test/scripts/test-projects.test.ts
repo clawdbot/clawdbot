@@ -1061,7 +1061,7 @@ describe("scripts/test-projects changed-target routing", () => {
         {
           config: "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
           forwardedArgs: [],
-          includePatterns: [`${root}/run.incomplete-turn.*.test.ts`],
+          includePatterns: agentVitestProjectOwners.embeddedIncompleteTurn.include,
           watchMode: false,
         },
         {
