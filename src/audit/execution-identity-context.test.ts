@@ -155,6 +155,60 @@ describe("execution identity context storage", () => {
     expect(afterRestart.identity).toEqual({ state: "present", context: first });
   });
 
+  it("keeps explicit unknown invoker evidence distinct from omission across restart", () => {
+    const database = databaseOptions();
+    const unknown = prepareExecutionIdentityContextAtAdmission(
+      facts("run-unknown", { invoker: { state: "unknown" } }),
+      {
+        ...database,
+        now: 100,
+        contextId: "context-unknown",
+        executionId: "execution-unknown",
+        runtimeInstanceId: "runtime-unknown",
+      },
+    );
+    const absent = prepareExecutionIdentityContextAtAdmission(facts("run-absent"), {
+      ...database,
+      now: 101,
+      contextId: "context-absent",
+      executionId: "execution-absent",
+      runtimeInstanceId: "runtime-absent",
+    });
+
+    expect(unknown).toMatchObject({
+      invoker: { state: "unknown" },
+      coverageState: "unknown",
+      missingEvidence: ["invoker.principal"],
+    });
+    expect(unknown.invoker).not.toHaveProperty("principal");
+    expect(absent).toMatchObject({
+      invoker: { state: "absent" },
+      coverageState: "unattributed",
+      missingEvidence: ["invoker.principal"],
+    });
+
+    closeOpenClawStateDatabaseForTest();
+    const unknownAfterRestart = inspectExecutionIdentityRun(
+      { executionId: "execution-unknown" },
+      { ...database, now: 101 },
+    );
+    expect(unknownAfterRestart.identity).toEqual({ state: "present", context: unknown });
+    expect(unknownAfterRestart.coverage).toEqual({
+      state: "unknown",
+      missingEvidence: ["invoker.principal"],
+    });
+    expect(unknownAfterRestart.decisions).toEqual([
+      expect.objectContaining({
+        enforcement: expect.objectContaining({ coverageState: "unknown" }),
+        missingEvidence: ["invoker.principal"],
+      }),
+    ]);
+    expect(
+      inspectExecutionIdentityRun({ executionId: "execution-absent" }, { ...database, now: 101 })
+        .identity,
+    ).toEqual({ state: "present", context: absent });
+  });
+
   it.each([
     {
       difference: "contextId",
@@ -391,6 +445,7 @@ describe("execution identity context storage", () => {
     const context = prepareExecutionIdentityContextAtAdmission(
       facts("run-attributed", {
         invoker: {
+          state: "present",
           kind: "local-account",
           rawPrincipalRef: "private-local-account",
           displayLabel: "Operator OPENAI_API_KEY=sk-1234567890abcdef",

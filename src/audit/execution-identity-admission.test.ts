@@ -58,6 +58,7 @@ describe("execution identity admission envelope", () => {
     const envelope = captureEnvelope(
       facts({
         invoker: {
+          state: "present",
           kind: "local-account",
           rawPrincipalRef: "raw-principal",
           displayLabel: "Operator OPENAI_API_KEY=sk-1234567890abcdef",
@@ -101,7 +102,11 @@ describe("execution identity admission envelope", () => {
       { rawGrantRef: "a", state: "present" },
       { rawGrantRef: "z", state: "present" },
     ]);
-    expect(envelope.invoker?.displayLabel).not.toContain("sk-1234567890abcdef");
+    expect(envelope.invoker?.state).toBe("present");
+    if (envelope.invoker?.state !== "present") {
+      throw new Error("expected present invoker");
+    }
+    expect(envelope.invoker.displayLabel).not.toContain("sk-1234567890abcdef");
     expect(Object.isFrozen(envelope)).toBe(true);
     expect(Object.isFrozen(envelope.ingress)).toBe(true);
     expect(Object.isFrozen(envelope.assurance)).toBe(true);
@@ -109,6 +114,129 @@ describe("execution identity admission envelope", () => {
     expect(Buffer.byteLength(JSON.stringify(envelope), "utf8")).toBeLessThanOrEqual(
       ADMISSION_MAX_BYTES,
     );
+  });
+
+  it("captures exact present, unknown, and omitted invoker variants", () => {
+    const present = captureEnvelope(
+      facts({
+        invoker: {
+          state: "present",
+          kind: "local-account",
+          rawPrincipalRef: "raw-principal",
+        },
+      }),
+      { contextId: "context-present", executionId: "execution-present", now: 1 },
+    );
+    const unknown = captureEnvelope(facts({ invoker: { state: "unknown" } }), {
+      contextId: "context-unknown",
+      executionId: "execution-unknown",
+      now: 2,
+    });
+    const absent = captureEnvelope(facts(), {
+      contextId: "context-absent",
+      executionId: "execution-absent",
+      now: 3,
+    });
+
+    expect(present.invoker).toEqual({
+      state: "present",
+      kind: "local-account",
+      rawPrincipalRef: "raw-principal",
+    });
+    expect(unknown.invoker).toEqual({ state: "unknown" });
+    expect(absent).not.toHaveProperty("invoker");
+    for (const envelope of [present, unknown, absent]) {
+      expect(parseExecutionIdentityAdmissionEnvelope(structuredClone(envelope))).toEqual(envelope);
+    }
+  });
+
+  it("rejects malformed, ambiguous, oversized, and noncanonical invoker variants", () => {
+    const present = captureEnvelope(
+      facts({
+        invoker: {
+          state: "present",
+          kind: "local-account",
+          rawPrincipalRef: "raw-principal",
+        },
+      }),
+      { contextId: "context-present", executionId: "execution-present", now: 1 },
+    );
+    const invalidInvokers: unknown[] = [
+      { kind: "local-account", rawPrincipalRef: "legacy-untagged" },
+      { state: "invalid" },
+      { state: "present", kind: "local-account" },
+      { state: "present", rawPrincipalRef: "missing-kind" },
+      { state: "unknown", kind: "local-account" },
+      { state: "unknown", rawPrincipalRef: "raw-substitute-secret" },
+      { state: "unknown", displayLabel: "replacement label" },
+      { state: "unknown", extra: true },
+      { state: "present", kind: "local-account", rawPrincipalRef: "x".repeat(4_097) },
+      [{ state: "unknown" }],
+    ];
+
+    for (const invoker of invalidInvokers) {
+      expect(() =>
+        parseExecutionIdentityAdmissionEnvelope({ ...present, invoker } as never),
+      ).toThrow("execution identity admission envelope violates its bounded contract");
+    }
+    expect(() =>
+      parseExecutionIdentityAdmissionEnvelope({
+        ...present,
+        invoker: {
+          kind: "local-account",
+          state: "present",
+          rawPrincipalRef: "raw-principal",
+        },
+      }),
+    ).toThrow("execution identity admission envelope is not canonical");
+  });
+
+  it("rejects non-plain or lossy clone data without invoking accessors", () => {
+    const envelope = captureEnvelope(facts({ invoker: { state: "unknown" } }), {
+      contextId: "context-unknown",
+      executionId: "execution-unknown",
+      now: 1,
+    });
+    let accessorReads = 0;
+    const accessorEnvelope = { ...envelope };
+    Object.defineProperty(accessorEnvelope, "invoker", {
+      enumerable: true,
+      get: () => {
+        accessorReads += 1;
+        return { state: "unknown" };
+      },
+    });
+    const symbolEnvelope = { ...envelope, [Symbol("private")]: "raw-symbol-secret" };
+    const customPrototypeEnvelope = Object.assign(Object.create({ inherited: true }), envelope);
+    const undefinedEnvelope = {
+      ...envelope,
+      invoker: { state: "unknown", displayLabel: undefined },
+    };
+    const proxyEnvelope = new Proxy({ ...envelope }, {});
+    const customPrototypeFacts = Object.assign(Object.create({ inherited: true }), facts());
+    const accessorFacts = facts();
+    Object.defineProperty(accessorFacts, "invoker", {
+      enumerable: true,
+      get: () => {
+        accessorReads += 1;
+        return { state: "unknown" };
+      },
+    });
+
+    for (const invalid of [
+      accessorEnvelope,
+      symbolEnvelope,
+      customPrototypeEnvelope,
+      undefinedEnvelope,
+      proxyEnvelope,
+    ]) {
+      expect(() => parseExecutionIdentityAdmissionEnvelope(invalid)).toThrow(
+        "execution identity admission data must be clone-safe plain data",
+      );
+    }
+    expect(() => captureEnvelope(customPrototypeFacts)).toThrow("expected admission envelope");
+    expect(() => captureEnvelope(accessorFacts)).toThrow("expected admission envelope");
+    expect(accessorReads).toBe(0);
   });
 
   it("rejects invalid owned facts, excess items, and oversized encoded envelopes", () => {
@@ -137,6 +265,7 @@ describe("execution identity admission envelope", () => {
             rawSourceRef: "a".repeat(4_096),
           },
           invoker: {
+            state: "present",
             kind: "local-account",
             rawPrincipalRef: "b".repeat(4_096),
           },

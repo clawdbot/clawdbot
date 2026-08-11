@@ -1,5 +1,6 @@
 /** Bounded execution-identity facts captured at authoritative run admission. */
 import { randomUUID } from "node:crypto";
+import { isProxy } from "node:util/types";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
@@ -62,20 +63,24 @@ const ExecutionIdentityAdmissionEnvelopeSchema = closedObject({
     ]),
   }),
   invoker: Type.Optional(
-    closedObject({
-      kind: Type.Union([
-        Type.Literal("person"),
-        Type.Literal("agent"),
-        Type.Literal("service"),
-        Type.Literal("schedule"),
-        Type.Literal("webhook"),
-        Type.Literal("system"),
-        Type.Literal("local-account"),
-        Type.Literal("runtime"),
-      ]),
-      rawPrincipalRef: rawRef(),
-      displayLabel: Type.Optional(Type.String({ maxLength: 128 })),
-    }),
+    Type.Union([
+      closedObject({
+        state: Type.Literal("present"),
+        kind: Type.Union([
+          Type.Literal("person"),
+          Type.Literal("agent"),
+          Type.Literal("service"),
+          Type.Literal("schedule"),
+          Type.Literal("webhook"),
+          Type.Literal("system"),
+          Type.Literal("local-account"),
+          Type.Literal("runtime"),
+        ]),
+        rawPrincipalRef: rawRef(),
+        displayLabel: Type.Optional(Type.String({ maxLength: 128 })),
+      }),
+      closedObject({ state: Type.Literal("unknown") }),
+    ]),
   ),
   applicableGrants: Type.Array(closedObject({ rawGrantRef: rawRef(), state: evidenceState() }), {
     maxItems: EXECUTION_IDENTITY_ADMISSION_MAX_ITEMS,
@@ -161,7 +166,51 @@ function freezeEnvelope<T>(value: T, seen = new WeakSet<object>()): T {
   return Object.freeze(value);
 }
 
+function assertPlainCloneData(value: unknown, ancestors = new WeakSet<object>()): void {
+  if (value === null || ["string", "number", "boolean"].includes(typeof value)) {
+    return;
+  }
+  if (typeof value !== "object" || isProxy(value)) {
+    throw new Error("execution identity admission data must be clone-safe plain data");
+  }
+  if (ancestors.has(value)) {
+    throw new Error("execution identity admission data must be clone-safe plain data");
+  }
+  ancestors.add(value);
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    const keys = Reflect.ownKeys(value);
+    if (Array.isArray(value)) {
+      if (
+        prototype !== Array.prototype ||
+        keys.length !== value.length + 1 ||
+        keys.at(-1) !== "length"
+      ) {
+        throw new Error("execution identity admission data must be clone-safe plain data");
+      }
+    } else if (prototype !== Object.prototype && prototype !== null) {
+      throw new Error("execution identity admission data must be clone-safe plain data");
+    }
+    for (const [index, key] of keys.entries()) {
+      if (key === "length" && Array.isArray(value)) {
+        continue;
+      }
+      if (typeof key !== "string" || (Array.isArray(value) && key !== String(index))) {
+        throw new Error("execution identity admission data must be clone-safe plain data");
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor?.enumerable || !("value" in descriptor)) {
+        throw new Error("execution identity admission data must be clone-safe plain data");
+      }
+      assertPlainCloneData(descriptor.value, ancestors);
+    }
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
 function validateEnvelope(value: unknown): asserts value is ExecutionIdentityAdmissionEnvelope {
+  assertPlainCloneData(value);
   if (
     !Value.Check(ExecutionIdentityAdmissionEnvelopeSchema, value) ||
     !Number.isSafeInteger(value.createdAt)
@@ -255,16 +304,20 @@ function captureExecutionIdentityAdmissionEnvelope(
     agentId: facts.agentId,
     ingress: { ...facts.ingress, state: facts.ingress.state ?? "present" },
     runtime: { ...facts.runtime },
-    ...(facts.invoker
+    ...(facts.invoker?.state === "present"
       ? {
           invoker: {
-            ...facts.invoker,
+            state: "present" as const,
+            kind: facts.invoker.kind,
+            rawPrincipalRef: facts.invoker.rawPrincipalRef,
             ...(facts.invoker.displayLabel !== undefined
               ? { displayLabel: redactDisplayLabel(facts.invoker.displayLabel) }
               : {}),
           },
         }
-      : {}),
+      : facts.invoker?.state === "unknown"
+        ? { invoker: { state: "unknown" as const } }
+        : {}),
     applicableGrants: uniqueSorted(
       facts.applicableGrants ?? [],
       (grant) => `${grant.rawGrantRef}\0${grant.state}`,
@@ -365,6 +418,7 @@ export function enqueueExecutionIdentityContextAtAdmission(
     return undefined;
   }
   try {
+    assertPlainCloneData(facts);
     const token =
       options.token ??
       createExecutionIdentityAdmissionToken(facts.runId, {
