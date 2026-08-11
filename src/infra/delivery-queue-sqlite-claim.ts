@@ -11,11 +11,24 @@ type PlatformClaimParams = {
   queueName: string;
   id: string;
   stateDir?: string;
+  requiresProducerClaim?: boolean;
   reconciledPlatformSendAttemptId?: string;
   reconciledPlatformSendStartedAt?: number;
 };
 
-const PLATFORM_SEND_OWNER_LEASE_MS = 30_000;
+export const PLATFORM_SEND_OWNER_LEASE_MS = 30_000;
+
+/** Creates the owner published atomically with an immediate live delivery. */
+export function createInitialDeliveryProducerClaim(now = Date.now()) {
+  return {
+    requiresProducerClaim: true,
+    availableAt: now + PLATFORM_SEND_OWNER_LEASE_MS,
+    producerClaimId: generateSecureUuid(),
+    recoveryState: "producer_claimed",
+  } as const;
+}
+
+export type InitialDeliveryProducerClaim = ReturnType<typeof createInitialDeliveryProducerClaim>;
 
 /** Runs an existing queue mutation only while its exact platform owner survives. */
 export function transitionOwnedDeliveryQueueEntry(
@@ -119,6 +132,7 @@ export function claimDeliveryQueueEntryPlatformSend(
     }
     return {
       ...entry,
+      ...(params.requiresProducerClaim === true ? { requiresProducerClaim: true } : {}),
       availableAt: now + PLATFORM_SEND_OWNER_LEASE_MS,
       producerClaimId: claimId,
       platformSendAttemptId: undefined,
@@ -128,6 +142,52 @@ export function claimDeliveryQueueEntryPlatformSend(
   })
     ? claimId
     : undefined;
+}
+
+/** Renew only the exact unexpired producer that already owns the row. */
+export function renewDeliveryQueueEntryPlatformSendLease(
+  params: Pick<PlatformClaimParams, "queueName" | "id" | "stateDir"> & {
+    claimId: string;
+  },
+): number | undefined {
+  const database = openOpenClawStateDatabase({
+    env: params.stateDir ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } : process.env,
+  });
+  return runSqliteImmediateTransactionSync(
+    database.db,
+    () => {
+      const entry = loadDeliveryQueueEntry(params.queueName, params.id, params.stateDir);
+      const now = Date.now();
+      const exactOwner =
+        entry?.recoveryState === "producer_claimed"
+          ? entry.producerClaimId === params.claimId
+          : (entry?.recoveryState === "send_attempt_started" ||
+              entry?.recoveryState === "unknown_after_send") &&
+            entry.platformSendAttemptId === params.claimId;
+      if (
+        !entry ||
+        entry.requiresProducerClaim !== true ||
+        !exactOwner ||
+        typeof entry.availableAt !== "number" ||
+        entry.availableAt <= now
+      ) {
+        return undefined;
+      }
+      const expiresAt = now + PLATFORM_SEND_OWNER_LEASE_MS;
+      return upsertDeliveryQueueEntry({
+        queueName: params.queueName,
+        entry: { ...entry, availableAt: expiresAt },
+        stateDir: params.stateDir,
+        updatePendingOnly: true,
+      })
+        ? expiresAt
+        : undefined;
+    },
+    {
+      databaseLabel: "openclaw-state",
+      operationLabel: `renew ${params.queueName} delivery platform send`,
+    },
+  );
 }
 
 /** Atomically fence the exact unexpired owner at the real provider boundary. */
@@ -144,7 +204,7 @@ export function promoteDeliveryQueueEntryPlatformSend(
     entry.availableAt > now
       ? {
           ...entry,
-          // Only an explicitly reusable owner keeps its cross-process fence;
+          // Only an explicitly leased owner keeps its cross-process fence;
           // legacy recovery must remain immediately eligible after a crash.
           availableAt:
             entry.requiresProducerClaim === true ? now + PLATFORM_SEND_OWNER_LEASE_MS : undefined,

@@ -1,5 +1,6 @@
 /** Tests foreground reply freshness fencing for buffered inbound dispatch. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createChannelPartialDeliveryError } from "../channels/turn/delivery-result.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OutboundDeliveryError } from "../infra/outbound/deliver-types.js";
@@ -30,14 +31,6 @@ type Delivery = {
   kind: "tool" | "block" | "final";
   text: string | undefined;
 };
-
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
 
 function queuedFinalResult() {
   return {
@@ -94,7 +87,7 @@ async function runDelayedOlderFinalRace(
   olderOptions: DispatcherOptions = {},
 ) {
   const deliveries: Delivery[] = [];
-  const beforeDeliverStarted = createDeferred<void>();
+  const beforeDeliverStarted = createDeferred();
   const releaseBeforeDeliver = createDeferred<ReplyPayload | null>();
   const beforeDeliver = vi.fn(() => {
     beforeDeliverStarted.resolve();
@@ -144,8 +137,8 @@ describe("foreground reply freshness", () => {
   it("suppresses an older foreground final after a newer inbound event starts for the same session target", async () => {
     const deliveries: Delivery[] = [];
     const cancellationReasons: Array<string | undefined> = [];
-    const olderStarted = createDeferred<void>();
-    const releaseOlderFinal = createDeferred<void>();
+    const olderStarted = createDeferred();
+    const releaseOlderFinal = createDeferred();
 
     hoisted.dispatchReplyFromConfigMock.mockImplementation(
       async (params: DispatchReplyFromConfigParams) => {
@@ -228,7 +221,7 @@ describe("foreground reply freshness", () => {
     vi.useFakeTimers();
     try {
       const deliveries: Delivery[] = [];
-      const hookStarted = createDeferred<void>();
+      const hookStarted = createDeferred();
       const onSettled = vi.fn();
       let hookCalls = 0;
       const beforeDeliver = vi.fn((payload: ReplyPayload) => {
@@ -275,7 +268,7 @@ describe("foreground reply freshness", () => {
     vi.useFakeTimers();
     try {
       const deliveries: Delivery[] = [];
-      const hookStarted = createDeferred<void>();
+      const hookStarted = createDeferred();
       hoisted.dispatchReplyFromConfigMock.mockImplementation(
         async (params: DispatchReplyFromConfigParams) => {
           params.dispatcher.sendFinalReply({ text: "budgeted final" });
@@ -308,7 +301,7 @@ describe("foreground reply freshness", () => {
 
   it("keeps an older foreground final when a newer inbound has no visible delivery while beforeDeliver is pending", async () => {
     const deliveries: Delivery[] = [];
-    const beforeDeliverStarted = createDeferred<void>();
+    const beforeDeliverStarted = createDeferred();
     const releaseBeforeDeliver = createDeferred<ReplyPayload | null>();
     const beforeDeliver = vi.fn(() => {
       beforeDeliverStarted.resolve();
@@ -360,10 +353,10 @@ describe("foreground reply freshness", () => {
 
   it("does not fence an older final behind a newer inbound waiting for its delivery", async () => {
     const deliveries: Delivery[] = [];
-    const olderStarted = createDeferred<void>();
-    const newerStarted = createDeferred<void>();
-    const releaseOlderFinal = createDeferred<void>();
-    const olderDelivered = createDeferred<void>();
+    const olderStarted = createDeferred();
+    const newerStarted = createDeferred();
+    const releaseOlderFinal = createDeferred();
+    const olderDelivered = createDeferred();
 
     hoisted.dispatchReplyFromConfigMock.mockImplementation(
       async (params: DispatchReplyFromConfigParams) => {
@@ -420,10 +413,10 @@ describe("foreground reply freshness", () => {
 
   it("keeps an older final fenced while a newer independent turn resolves", async () => {
     const deliveries: Delivery[] = [];
-    const olderBeforeDeliverStarted = createDeferred<void>();
+    const olderBeforeDeliverStarted = createDeferred();
     const releaseOlderBeforeDeliver = createDeferred<ReplyPayload | null>();
-    const newerStarted = createDeferred<void>();
-    const releaseNewerFinal = createDeferred<void>();
+    const newerStarted = createDeferred();
+    const releaseNewerFinal = createDeferred();
 
     hoisted.dispatchReplyFromConfigMock.mockImplementation(
       async (params: DispatchReplyFromConfigParams) => {
@@ -473,10 +466,10 @@ describe("foreground reply freshness", () => {
 
   it("keeps an older foreground final fenced while a newer visible delivery is unresolved", async () => {
     const deliveries: Delivery[] = [];
-    const beforeDeliverStarted = createDeferred<void>();
+    const beforeDeliverStarted = createDeferred();
     const releaseBeforeDeliver = createDeferred<ReplyPayload | null>();
-    const newerDeliverStarted = createDeferred<void>();
-    const releaseNewerDeliver = createDeferred<void>();
+    const newerDeliverStarted = createDeferred();
+    const releaseNewerDeliver = createDeferred();
     const beforeDeliver = vi.fn(() => {
       beforeDeliverStarted.resolve();
       return releaseBeforeDeliver.promise;
@@ -709,8 +702,8 @@ describe("foreground reply freshness", () => {
 
   it("keeps concurrent foreground finals isolated for different targets sharing a session", async () => {
     const deliveries: Delivery[] = [];
-    const firstStarted = createDeferred<void>();
-    const releaseFirstFinal = createDeferred<void>();
+    const firstStarted = createDeferred();
+    const releaseFirstFinal = createDeferred();
 
     hoisted.dispatchReplyFromConfigMock.mockImplementation(
       async (params: DispatchReplyFromConfigParams) => {

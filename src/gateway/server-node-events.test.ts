@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
@@ -16,7 +17,6 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import { createDeferred } from "../test-utils/deferred.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import type { loadSessionEntry as loadSessionEntryType } from "./session-utils.js";
@@ -1324,8 +1324,7 @@ describe("voice transcript events", () => {
     const [runId, runMetadata] = mockCall(addChatRun) ?? [];
     expect(runId).toBe(optsRecord.runId);
     const clientRunId = (runMetadata as { clientRunId?: unknown } | undefined)?.clientRunId;
-    expect(typeof clientRunId).toBe("string");
-    expect(clientRunId).toMatch(/^voice-/);
+    expect(clientRunId).toBe(runId);
   });
 
   it("does not block agent dispatch when session-store touch fails", async () => {
@@ -1896,6 +1895,25 @@ describe("agent request events", () => {
     });
     const optsRecord = opts as Record<string, unknown>;
     expect(optsRecord.runId).toBe(optsRecord.sessionId);
+  });
+
+  it("preserves session-scoped routing across two distinct agent.request turns", async () => {
+    loadSessionEntryMock.mockReturnValue(
+      buildSessionLookup("agent:main:node-repeat", { sessionId: "node-session-1" }),
+    );
+
+    for (const message of ["first turn", "second turn"]) {
+      await handleNodeEvent(buildCtx(), "node-repeat", {
+        event: "agent.request",
+        payloadJSON: JSON.stringify({ message, sessionKey: "agent:main:node-repeat" }),
+      });
+    }
+
+    expect(agentCommandMock).toHaveBeenCalledTimes(2);
+    const calls = agentCommandMock.mock.calls.map(([opts]) => opts as Record<string, unknown>);
+    expect(calls.map((opts) => opts.message)).toEqual(["first turn", "second turn"]);
+    expect(calls.map((opts) => opts.runId)).toEqual(["node-session-1", "node-session-1"]);
+    expect(calls.map((opts) => opts.sessionId)).toEqual(["node-session-1", "node-session-1"]);
   });
 
   it("passes supportsInlineImages false for text-only node-session models", async () => {

@@ -23,6 +23,17 @@ const DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+export const CLAWROUTER_REASONING_EFFORT_LEVELS = [
+  ["none", "off"],
+  ["minimal", "minimal"],
+  ["low", "low"],
+  ["medium", "medium"],
+  ["high", "high"],
+  ["xhigh", "xhigh"],
+  ["max", "max"],
+] as const;
+type CatalogReasoningEffort = (typeof CLAWROUTER_REASONING_EFFORT_LEVELS)[number][0];
+
 type CatalogRoute = {
   path: string;
   requestFormat: string;
@@ -43,6 +54,7 @@ type CatalogModel = {
   id: string;
   upstream: string;
   capabilities: string[];
+  supportedReasoningEfforts?: CatalogReasoningEffort[];
   pricing?: CatalogPricing;
 };
 
@@ -75,6 +87,19 @@ function readStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.map(readString).filter((entry): entry is string => Boolean(entry))
     : [];
+}
+
+export function normalizeClawRouterReasoningEfforts(
+  value: unknown,
+): CatalogReasoningEffort[] | undefined {
+  if (!Array.isArray(value) || value.length > CLAWROUTER_REASONING_EFFORT_LEVELS.length) {
+    return undefined;
+  }
+  const advertised = new Set(value);
+  const efforts = CLAWROUTER_REASONING_EFFORT_LEVELS.filter(([effort]) =>
+    advertised.has(effort),
+  ).map(([effort]) => effort);
+  return efforts.length > 0 ? efforts : undefined;
 }
 
 function readNonNegativeNumber(value: unknown): number | undefined {
@@ -134,6 +159,7 @@ function parseCatalogModel(value: unknown): CatalogModel | undefined {
     id,
     upstream,
     capabilities: readStringArray(row?.capabilities),
+    supportedReasoningEfforts: normalizeClawRouterReasoningEfforts(row?.supportedReasoningEfforts),
     pricing: parseCatalogPricing(row?.pricing),
   };
 }
@@ -221,6 +247,17 @@ function modelCost(pricing: CatalogPricing | undefined): ModelDefinitionConfig["
   };
 }
 
+function buildThinkingLevelMap(
+  efforts: readonly CatalogReasoningEffort[],
+): NonNullable<ModelDefinitionConfig["thinkingLevelMap"]> {
+  const supported = new Set(efforts);
+  const levelMap: NonNullable<ModelDefinitionConfig["thinkingLevelMap"]> = {};
+  for (const [effort, level] of CLAWROUTER_REASONING_EFFORT_LEVELS) {
+    levelMap[level] = supported.has(effort) ? effort : null;
+  }
+  return levelMap;
+}
+
 function buildRoutedModel(
   rootUrl: string,
   provider: CatalogProvider,
@@ -268,7 +305,17 @@ function buildRoutedModel(
     name: `${provider.displayName} · ${model.id}`,
     api,
     baseUrl,
-    reasoning: inferReasoning(provider.id, model.id),
+    reasoning:
+      model.supportedReasoningEfforts !== undefined || inferReasoning(provider.id, model.id),
+    ...(model.supportedReasoningEfforts
+      ? {
+          thinkingLevelMap: buildThinkingLevelMap(model.supportedReasoningEfforts),
+          compat: {
+            supportsReasoningEffort: true,
+            supportedReasoningEfforts: model.supportedReasoningEfforts,
+          },
+        }
+      : {}),
     input: inferInput(provider.id, model.id),
     cost: modelCost(model.pricing),
     contextWindow: model.pricing?.maxInputTokens ?? DEFAULT_CONTEXT_WINDOW,

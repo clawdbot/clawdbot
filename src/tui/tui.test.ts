@@ -1,5 +1,6 @@
 // Covers core TUI state transitions and backend event rendering.
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../infra/parse-finite-number.js";
@@ -22,10 +23,9 @@ import {
   resolveInitialTuiAgentId,
   resolveTuiToolsToggleActivityStatus,
   isTuiBusyActivityStatus,
-  resolveLocalAuthCliInvocation,
-  resolveLocalAuthSpawnCwd,
   resolveLocalAuthSpawnInvocation,
   resolveTuiCtrlCAction,
+  resolveTuiLocalAuthCliInvocation,
   resolveTuiShutdownHardExitMs,
   resolveTuiSessionKey,
   scheduleProcessExitAfterTuiReturn,
@@ -64,6 +64,44 @@ describe("resolveFinalAssistantText", () => {
         errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
       }),
     ).toBe("LLM streaming response contained a malformed fragment. Please try again.");
+  });
+});
+
+describe("resolveTuiLocalAuthCliInvocation", () => {
+  it("filters inspector flags while preserving the current CLI runtime context", () => {
+    const originalArgv = [...process.argv];
+    try {
+      const cliEntry = path.resolve("openclaw.mjs");
+      process.argv[1] = cliEntry;
+
+      expect(
+        resolveTuiLocalAuthCliInvocation({
+          provider: "test-provider",
+          execArgv: [
+            "--import",
+            "/repo/node_modules/tsx/dist/loader.mjs",
+            "--inspect-brk=0",
+            "--trace-warnings",
+          ],
+        }),
+      ).toStrictEqual({
+        command: process.execPath,
+        args: [
+          "--import",
+          "/repo/node_modules/tsx/dist/loader.mjs",
+          "--trace-warnings",
+          cliEntry,
+          "models",
+          "auth",
+          "login",
+          "--provider",
+          "test-provider",
+        ],
+        cwd: path.resolve("."),
+      });
+    } finally {
+      process.argv = originalArgv;
+    }
   });
 });
 
@@ -186,6 +224,17 @@ describe("resolveTuiSessionKey", () => {
     ).toBe("agent:ops:incident");
   });
 
+  it("unwraps an agent-qualified global key after agent selection", () => {
+    expect(
+      resolveTuiSessionKey({
+        raw: "AGENT:Work:GLOBAL",
+        sessionScope: "per-sender",
+        currentAgentId: "work",
+        sessionMainKey: "main",
+      }),
+    ).toBe("global");
+  });
+
   it.each([
     {
       raw: "agent:main:matrix:channel:!MixedRoomAbCdEf:example.org",
@@ -279,9 +328,22 @@ describe("resolveInitialTuiAgentId", () => {
         cfg,
         fallbackAgentId: "main",
         initialSessionInput: "agent:main:incident",
+        agentId: "ops",
         cwd: "/tmp/openclaw/projects/ops/src",
       }),
     ).toBe("main");
+  });
+
+  it("keeps an explicit global-session agent ahead of workspace inference", () => {
+    expect(
+      resolveInitialTuiAgentId({
+        cfg,
+        fallbackAgentId: "main",
+        initialSessionInput: "global",
+        agentId: "ops",
+        cwd: "/tmp/openclaw",
+      }),
+    ).toBe("ops");
   });
 
   it("falls back when cwd has no matching workspace", () => {
@@ -310,30 +372,56 @@ describe("resolveInitialTuiAgentId", () => {
 
 describe("resolveGatewayDisconnectState", () => {
   it("returns scope-upgrade recovery guidance when disconnect reason requires pairing", () => {
-    const state = resolveGatewayDisconnectState("gateway closed (1008): pairing required");
+    const state = resolveGatewayDisconnectState({
+      reason: "gateway closed (1008): pairing required",
+    });
     expect(state.connectionStatus).toContain("pairing required");
     expect(state.activityStatus).toBe("device approval needed: preview latest request");
-    expect(state.pairingHint).toContain("openclaw devices approve --latest");
-    expect(state.pairingHint).toContain("openclaw devices approve <requestId>");
-    expect(state.pairingHint).toContain("--token");
+    expect(state.remediation).toContain("openclaw devices approve --latest");
+    expect(state.remediation).toContain("openclaw devices approve <requestId>");
+    expect(state.remediation).toContain("--url");
+    expect(state.remediation).toContain("--token/--password");
     // Must steer users to `devices`, not the unrelated chat-DM `pairing` command.
-    expect(state.pairingHint).not.toContain("openclaw pairing");
+    expect(state.remediation).not.toContain("openclaw pairing");
   });
 
-  it("returns the same guidance when the gateway reports a pending scope upgrade", () => {
-    const state = resolveGatewayDisconnectState(
-      "gateway closed (1008): scope upgrade pending approval",
-    );
+  it("uses structured pairing details before the generic close reason", () => {
+    const state = resolveGatewayDisconnectState({
+      details: { code: "PAIRING_REQUIRED", reason: "scope-upgrade" },
+      reason: "connect failed",
+    });
     expect(state.activityStatus).toBe("device approval needed: preview latest request");
-    expect(state.pairingHint).toContain("openclaw devices approve --latest");
-    expect(state.pairingHint).toContain("openclaw devices approve <requestId>");
+    expect(state.connectionStatus).toContain("scope upgrade pending approval");
+    expect(state.remediation).toContain("openclaw devices approve --latest");
+  });
+
+  it("shows the device-token rotation command for structured token mismatch", () => {
+    const state = resolveGatewayDisconnectState({
+      details: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
+      reason: "device token mismatch",
+    });
+    expect(state.activityStatus).toBe("gateway authentication needs attention");
+    expect(state.remediation).toContain(
+      "openclaw devices rotate --device <deviceId> --role operator",
+    );
+  });
+
+  it("shows wait-and-retry guidance for a temporary authentication lockout", () => {
+    const state = resolveGatewayDisconnectState({
+      details: { code: "AUTH_RATE_LIMITED" },
+      reason: "unauthorized: too many failed authentication attempts (retry later)",
+    });
+    expect(state.activityStatus).toBe("gateway authentication temporarily rate-limited");
+    expect(state.remediation).toContain("temporary authentication lockout");
+    expect(state.remediation).not.toContain("gateway.remote.token");
+    expect(state.remediation).not.toContain("devices rotate");
   });
 
   it("falls back to idle for generic disconnect reasons", () => {
-    const state = resolveGatewayDisconnectState("network timeout");
+    const state = resolveGatewayDisconnectState({ reason: "network timeout" });
     expect(state.connectionStatus).toBe("gateway disconnected: network timeout");
     expect(state.activityStatus).toBe("idle");
-    expect(state.pairingHint).toBeUndefined();
+    expect(state.remediation).toBeUndefined();
   });
 });
 
@@ -935,38 +1023,6 @@ describe("resolveCodexCliBin", () => {
   });
 });
 
-describe("resolveLocalAuthCliInvocation", () => {
-  it("uses the source runner when dist is unavailable", () => {
-    expect(
-      resolveLocalAuthCliInvocation({
-        execPath: "/usr/bin/node",
-        wrapperPath: "/repo/openclaw.mjs",
-        runNodePath: "/repo/scripts/run-node.mjs",
-        hasDistEntry: false,
-        hasRunNodeScript: true,
-      }),
-    ).toEqual({
-      command: "/usr/bin/node",
-      args: ["/repo/scripts/run-node.mjs", "models", "auth", "login"],
-    });
-  });
-
-  it("uses the packaged wrapper when dist is available", () => {
-    expect(
-      resolveLocalAuthCliInvocation({
-        execPath: "/usr/bin/node",
-        wrapperPath: "/repo/openclaw.mjs",
-        runNodePath: "/repo/scripts/run-node.mjs",
-        hasDistEntry: true,
-        hasRunNodeScript: true,
-      }),
-    ).toEqual({
-      command: "/usr/bin/node",
-      args: ["/repo/openclaw.mjs", "models", "auth", "login"],
-    });
-  });
-});
-
 describe("resolveLocalAuthSpawnInvocation", () => {
   it("wraps Windows cmd shims through cmd.exe", () => {
     expect(
@@ -1011,34 +1067,5 @@ describe("resolveLocalAuthSpawnInvocation", () => {
         platform: "win32",
       }),
     ).toStrictEqual({ command: "C:\\tools\\codex.exe", args: ["login"], options: {} });
-  });
-});
-
-describe("resolveLocalAuthSpawnCwd", () => {
-  it("runs the packaged wrapper from the repo root", () => {
-    expect(
-      resolveLocalAuthSpawnCwd({
-        args: ["/repo/openclaw.mjs", "models", "auth", "login"],
-        defaultCwd: "/worktree/subdir",
-      }),
-    ).toBe("/repo");
-  });
-
-  it("runs the source fallback helper from the repo root", () => {
-    expect(
-      resolveLocalAuthSpawnCwd({
-        args: ["/repo/scripts/run-node.mjs", "models", "auth", "login"],
-        defaultCwd: "/worktree/subdir",
-      }),
-    ).toBe("/repo");
-  });
-
-  it("keeps the caller cwd for direct codex exec", () => {
-    expect(
-      resolveLocalAuthSpawnCwd({
-        args: ["login"],
-        defaultCwd: "/worktree/subdir",
-      }),
-    ).toBe("/worktree/subdir");
   });
 });

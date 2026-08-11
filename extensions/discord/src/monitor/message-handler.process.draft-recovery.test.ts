@@ -86,7 +86,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
 
     const ctx = await createAutomaticSourceDeliveryContext({
       baseSessionKey: BASE_CHANNEL_ROUTE.sessionKey,
-      discordConfig: { maxLinesPerMessage: 120 },
+      discordConfig: { streaming: { mode: "progress" }, maxLinesPerMessage: 120 },
       route: BASE_CHANNEL_ROUTE,
     });
 
@@ -450,7 +450,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
     expect(firstDispatchParams().replyOptions?.disableBlockStreaming).toBe(true);
   });
 
-  it("shows the agent status above the tool lines in the default Discord progress draft", async () => {
+  it("shows the agent status above the tool lines in an opted-in Discord progress draft", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
 
@@ -481,7 +481,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
     expect(draftStream.update).toHaveBeenCalledWith(
       "Claiming my square footage. Tastefully, but with claws.\n\n🛠️ Exec\n• exec done",
     );
-    // No config, so the implicit label stays hidden under the status headline.
+    // With no label override, the implicit label stays hidden under the status headline.
     expect(String(draftStream.update.mock.calls[0]?.[0])).not.toMatch(/Working/);
     expect(draftStream.flush).toHaveBeenCalledTimes(1);
     expect(

@@ -25,7 +25,7 @@ export const WizardStartParamsSchema = closedObject({
 });
 
 /** Client answer payload for the current wizard step. */
-const WizardAnswerSchema = closedObject({
+export const WizardAnswerSchema = closedObject({
   stepId: NonEmptyString,
   value: Type.Optional(Type.Unknown()),
 });
@@ -102,6 +102,9 @@ const WizardResultFields = {
   // real outcome rather than the preselection.
   channels: Type.Optional(Type.Array(NonEmptyString)),
   accounts: Type.Optional(Type.Array(WizardConfiguredAccountSchema)),
+  // Exact model prepared by provider-owned setup. Clients must still run the
+  // live activation step before presenting the route as ready.
+  preparedModelRef: Type.Optional(NonEmptyString),
 };
 
 /** Result after advancing a wizard session. */
@@ -122,6 +125,7 @@ export const WizardStatusResultSchema = closedObject({
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
 export type WizardStartParams = Static<typeof WizardStartParamsSchema>;
+export type WizardAnswer = Static<typeof WizardAnswerSchema>;
 export type WizardNextParams = Static<typeof WizardNextParamsSchema>;
 export type WizardCancelParams = Static<typeof WizardCancelParamsSchema>;
 export type WizardStatusParams = Static<typeof WizardStatusParamsSchema>;

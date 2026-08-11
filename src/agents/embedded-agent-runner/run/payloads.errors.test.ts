@@ -74,7 +74,6 @@ describe("buildEmbeddedRunPayloads", () => {
   function expectNoSyntheticCompletionForSession(sessionKey: string) {
     expectNoPayloads({
       sessionKey,
-      toolMetas: [{ toolName: "write", meta: "/tmp/out.md" }],
       lastAssistant: makeAssistant({
         stopReason: "stop",
         errorMessage: undefined,
@@ -127,7 +126,6 @@ describe("buildEmbeddedRunPayloads", () => {
     const payloads = buildPayloads({
       assistantTexts: [errorJsonPretty],
       lastAssistant: makeAssistant({ errorMessage: errorJson }),
-      inlineToolResultsAllowed: true,
       verboseLevel: "on",
     });
 
@@ -512,14 +510,6 @@ describe("buildEmbeddedRunPayloads", () => {
     expectSinglePayloadText(payloads, "All good");
   });
 
-  it("does not add synthetic completion text when tools run without final assistant text", () => {
-    expectNoPayloads({
-      sessionKey: "agent:main:discord:direct:u123",
-      toolMetas: [{ toolName: "write", meta: "/tmp/out.md" }],
-      lastAssistant: makeStoppedAssistant(),
-    });
-  });
-
   it("does not add synthetic completion text for channel sessions", () => {
     expectNoSyntheticCompletionForSession("agent:main:discord:channel:c123");
   });
@@ -531,7 +521,6 @@ describe("buildEmbeddedRunPayloads", () => {
   it("does not add synthetic completion text when messaging tool already delivered output", () => {
     expectNoPayloads({
       sessionKey: "agent:main:discord:direct:u123",
-      toolMetas: [{ toolName: "message_send", meta: "sent to #ops" }],
       didSendViaMessagingTool: true,
       lastAssistant: makeAssistant({
         stopReason: "stop",
@@ -543,7 +532,6 @@ describe("buildEmbeddedRunPayloads", () => {
 
   it("does not add synthetic completion text when the run still has a tool error", () => {
     expectNoPayloads({
-      toolMetas: [{ toolName: "browser", meta: "open https://example.com" }],
       lastToolError: { toolName: "browser", error: "url required" },
     });
   });
@@ -910,7 +898,25 @@ describe("buildEmbeddedRunPayloads", () => {
     expectSinglePayloadSummary(payloads, { text: warningText ?? "" });
   });
 
-  it("keeps exec failure labels outside markdown command text", () => {
+  it("hides exec command and cwd metadata without full verbosity", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec",
+        meta: "run python3 /path/to/daily-cost-audit.py (in /private/workspace)",
+        error: "Command exited with code 1",
+        mutatingAction: true,
+      },
+      toolResultFormat: "markdown",
+      verboseLevel: "off",
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "⚠️ 🛠️ Exec failed (exit 1)",
+      isError: true,
+    });
+  });
+
+  it("keeps full-verbose exec failure labels outside markdown command text", () => {
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "exec",
@@ -919,79 +925,81 @@ describe("buildEmbeddedRunPayloads", () => {
         mutatingAction: true,
       },
       toolResultFormat: "markdown",
+      verboseLevel: "full",
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "⚠️ 🛠️ Exec failed: `python3 /path/to/daily-cost-audit.py` (exit 1)",
+      text: "⚠️ 🛠️ Exec failed: `python3 /path/to/daily-cost-audit.py`: Command exited with code 1",
       isError: true,
     });
     expect(payloads[0]?.text).not.toContain("`run python3");
   });
 
-  it("prefers raw exec metadata when tool progress detail includes it", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run python3 /tmp/audit.py · `python3 /tmp/audit.py`",
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
+  it.each([
+    {
+      title: "prefers raw exec metadata when tool progress detail includes it",
+      meta: "run python3 /tmp/audit.py · `python3 /tmp/audit.py`",
       toolResultFormat: "markdown",
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: "⚠️ 🛠️ Exec failed: `python3 /tmp/audit.py` (exit 1)",
-      isError: true,
-    });
-  });
-
-  it("prefers raw exec metadata when the literal command contains backticks", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run node inline script, `node -e 'console.log(1, `x`)'`",
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
+      expected: "⚠️ 🛠️ Exec failed: `python3 /tmp/audit.py`: Command exited with code 1",
+    },
+    {
+      title: "prefers raw exec metadata when the literal command contains backticks",
+      meta: "run node inline script, `node -e 'console.log(1, `x`)'`",
       toolResultFormat: "markdown",
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: "⚠️ 🛠️ Exec failed: ``node -e 'console.log(1, `x`)'`` (exit 1)",
-      isError: true,
-    });
-  });
-
-  it("leaves exec metadata unwrapped for plain tool results", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run node inline script, `node -e 'console.log(1, `x`)'`",
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
+      expected: "⚠️ 🛠️ Exec failed: ``node -e 'console.log(1, `x`)'``: Command exited with code 1",
+    },
+    {
+      title: "leaves exec metadata unwrapped for plain tool results",
+      meta: "run node inline script, `node -e 'console.log(1, `x`)'`",
       toolResultFormat: "plain",
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: "⚠️ 🛠️ Exec failed: node -e 'console.log(1, `x`)' (exit 1)",
-      isError: true,
-    });
-  });
-
-  it("preserves raw exec context before trailing raw command metadata", () => {
+      expected: "⚠️ 🛠️ Exec failed: node -e 'console.log(1, `x`)': Command exited with code 1",
+    },
+    {
+      title: "preserves raw exec context before trailing raw command metadata",
+      meta: "run python3 /tmp/audit.py, node: mac-1, `python3 /tmp/audit.py`",
+      toolResultFormat: "markdown",
+      expected:
+        "⚠️ 🛠️ Exec failed: `node: mac-1 · python3 /tmp/audit.py`: Command exited with code 1",
+    },
+    {
+      title: "does not promote display-summary commas into raw exec context",
+      meta: 'search "foo,bar" in src, `rg "foo,bar" src`',
+      toolResultFormat: "markdown",
+      expected: '⚠️ 🛠️ Exec failed: `rg "foo,bar" src`: Command exited with code 1',
+    },
+    {
+      title: "does not treat parenthesized raw command arguments as cwd context",
+      meta: 'list files in (in progress) · `ls "(in progress)"`',
+      toolResultFormat: "markdown",
+      expected: '⚠️ 🛠️ Exec failed: `ls "(in progress)"`: Command exited with code 1',
+    },
+    {
+      title: "does not duplicate compact cwd labels already present in raw command arguments",
+      meta: 'print text (repo) · `printf "%s" "(repo)"`',
+      toolResultFormat: "markdown",
+      expected: '⚠️ 🛠️ Exec failed: `printf "%s" "(repo)"`: Command exited with code 1',
+    },
+    {
+      title: "keeps arbitrary exec cwd suffixes inside markdown command text",
+      meta: "run python3 /tmp/audit.py (in /tmp/build @everyone)",
+      toolResultFormat: "markdown",
+      expected:
+        "⚠️ 🛠️ Exec failed: `python3 /tmp/audit.py (in /tmp/build @everyone)`: Command exited with code 1",
+    },
+  ] as const)("$title", ({ meta, toolResultFormat, expected }) => {
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "exec",
-        meta: "run python3 /tmp/audit.py, node: mac-1, `python3 /tmp/audit.py`",
+        meta,
         error: "Command exited with code 1",
         mutatingAction: true,
       },
-      toolResultFormat: "markdown",
+      toolResultFormat,
+      verboseLevel: "full",
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "⚠️ 🛠️ Exec failed: `node: mac-1 · python3 /tmp/audit.py` (exit 1)",
+      text: expected,
       isError: true,
     });
   });
@@ -1005,6 +1013,7 @@ describe("buildEmbeddedRunPayloads", () => {
         mutatingAction: true,
       },
       toolResultFormat: "markdown",
+      verboseLevel: "full",
     });
     const workspaceNodePayloads = buildPayloads({
       lastToolError: {
@@ -1014,6 +1023,7 @@ describe("buildEmbeddedRunPayloads", () => {
         mutatingAction: true,
       },
       toolResultFormat: "markdown",
+      verboseLevel: "full",
     });
     const semanticCompactPayloads = buildPayloads({
       lastToolError: {
@@ -1023,196 +1033,88 @@ describe("buildEmbeddedRunPayloads", () => {
         mutatingAction: true,
       },
       toolResultFormat: "markdown",
+      verboseLevel: "full",
     });
 
     expectSinglePayloadSummary(cwdPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `python3 audit.py (in /tmp/build)` (exit 1)",
+      text: "⚠️ 🛠️ Exec failed: `python3 audit.py (in /tmp/build)`: Command exited with code 1",
       isError: true,
     });
     expectSinglePayloadSummary(workspaceNodePayloads, {
-      text: "⚠️ 🛠️ Exec failed: `node: mac-1 · python3 audit.py (workspace)` (exit 1)",
+      text: "⚠️ 🛠️ Exec failed: `node: mac-1 · python3 audit.py (workspace)`: Command exited with code 1",
       isError: true,
     });
     expectSinglePayloadSummary(semanticCompactPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `git status (repo)` (exit 1)",
+      text: "⚠️ 🛠️ Exec failed: `git status (repo)`: Command exited with code 1",
       isError: true,
     });
   });
 
-  it("does not promote display-summary commas into raw exec context", () => {
+  it.each([
+    {
+      name: "strips a literal synthetic run prefix",
+      meta: "run make build",
+      error: "Command failed with exit code 2",
+      expected: "⚠️ 🛠️ Exec failed: `make build`: Command failed with exit code 2",
+    },
+    {
+      name: "preserves a semantic test summary",
+      meta: "run tests",
+      error: "Command failed with exit code 1",
+      expected: "⚠️ 🛠️ Exec failed: `run tests`: Command failed with exit code 1",
+    },
+    {
+      name: "preserves a semantic deploy summary",
+      meta: "run deploy",
+      error: "Command failed with exit code 1",
+      expected: "⚠️ 🛠️ Exec failed: `run deploy`: Command failed with exit code 1",
+    },
+    {
+      name: "preserves a compound summary",
+      meta: "run tests → install dependencies",
+      error: "Command failed with exit code 1",
+      expected:
+        "⚠️ 🛠️ Exec failed: `run tests → install dependencies`: Command failed with exit code 1",
+    },
+    {
+      name: "preserves an inline-script summary",
+      meta: "run node inline script",
+      error: "Command failed with exit code 1",
+      expected: "⚠️ 🛠️ Exec failed: `run node inline script`: Command failed with exit code 1",
+    },
+    {
+      name: "preserves a heredoc summary",
+      meta: "run python3 inline script (heredoc)",
+      error: "Command failed with exit code 1",
+      expected:
+        "⚠️ 🛠️ Exec failed: `run python3 inline script (heredoc)`: Command failed with exit code 1",
+    },
+    {
+      name: "preserves a sed summary",
+      meta: "run sed on file",
+      error: "Command failed with exit code 1",
+      expected: "⚠️ 🛠️ Exec failed: `run sed on file`: Command failed with exit code 1",
+    },
+    {
+      name: "preserves a pipeline summary",
+      meta: "run tests -> show first 3 lines",
+      error: "Command failed with exit code 1",
+      expected:
+        "⚠️ 🛠️ Exec failed: `run tests -> show first 3 lines`: Command failed with exit code 1",
+    },
+  ])("formats exec metadata: $name", ({ meta, error, expected }) => {
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "exec",
-        meta: 'search "foo,bar" in src, `rg "foo,bar" src`',
-        error: "Command exited with code 1",
+        meta,
+        error,
         mutatingAction: true,
       },
       toolResultFormat: "markdown",
+      verboseLevel: "full",
     });
 
-    expectSinglePayloadSummary(payloads, {
-      text: '⚠️ 🛠️ Exec failed: `rg "foo,bar" src` (exit 1)',
-      isError: true,
-    });
-  });
-
-  it("does not treat parenthesized raw command arguments as cwd context", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: 'list files in (in progress) · `ls "(in progress)"`',
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: '⚠️ 🛠️ Exec failed: `ls "(in progress)"` (exit 1)',
-      isError: true,
-    });
-  });
-
-  it("does not duplicate compact cwd labels already present in raw command arguments", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: 'print text (repo) · `printf "%s" "(repo)"`',
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: '⚠️ 🛠️ Exec failed: `printf "%s" "(repo)"` (exit 1)',
-      isError: true,
-    });
-  });
-
-  it("strips literal synthetic run prefixes without stripping semantic run summaries", () => {
-    const genericPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run make build",
-        error: "Command failed with exit code 2",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-    const semanticPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run tests",
-        error: "Command failed with exit code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-    const scriptPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run deploy",
-        error: "Command failed with exit code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-    const compoundPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run tests → install dependencies",
-        error: "Command failed with exit code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-    const inlineScriptPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run node inline script",
-        error: "Command failed with exit code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-    const heredocPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run python3 inline script (heredoc)",
-        error: "Command failed with exit code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-    const sedSummaryPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run sed on file",
-        error: "Command failed with exit code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-    const pipelineSummaryPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run tests -> show first 3 lines",
-        error: "Command failed with exit code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-
-    expectSinglePayloadSummary(genericPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `make build` (exit 2)",
-      isError: true,
-    });
-    expectSinglePayloadSummary(semanticPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `run tests` (exit 1)",
-      isError: true,
-    });
-    expectSinglePayloadSummary(scriptPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `run deploy` (exit 1)",
-      isError: true,
-    });
-    expectSinglePayloadSummary(compoundPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `run tests → install dependencies` (exit 1)",
-      isError: true,
-    });
-    expectSinglePayloadSummary(inlineScriptPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `run node inline script` (exit 1)",
-      isError: true,
-    });
-    expectSinglePayloadSummary(heredocPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `run python3 inline script (heredoc)` (exit 1)",
-      isError: true,
-    });
-    expectSinglePayloadSummary(sedSummaryPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `run sed on file` (exit 1)",
-      isError: true,
-    });
-    expectSinglePayloadSummary(pipelineSummaryPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `run tests -> show first 3 lines` (exit 1)",
-      isError: true,
-    });
-  });
-
-  it("keeps arbitrary exec cwd suffixes inside markdown command text", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run python3 /tmp/audit.py (in /tmp/build @everyone)",
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: "⚠️ 🛠️ Exec failed: `python3 /tmp/audit.py (in /tmp/build @everyone)` (exit 1)",
-      isError: true,
-    });
+    expectSinglePayloadSummary(payloads, { text: expected, isError: true });
   });
 
   it("wraps markdown-capable mutating tool warnings so mention-looking names stay inert", () => {
@@ -1226,10 +1128,11 @@ describe("buildEmbeddedRunPayloads", () => {
         mutatingAction: true,
       },
       toolResultFormat: "markdown",
+      verboseLevel: "full",
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "⚠️ 🛠️ Bash failed: `show matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt` (workspace) (exit 1)",
+      text: "⚠️ 🛠️ Bash failed: `show matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt` (workspace): Command exited with code 1",
       isError: true,
     });
   });

@@ -2,9 +2,18 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { MeetingAudioBackendSelection, MeetingAudioRuntime } from "./audio-backend.js";
 import { decodeMeetingAudioBase64 } from "./audio-base64.js";
 import { terminateMeetingBridgeProcess } from "./bridge-process.js";
+import {
+  prepareMeetingNodeAudio,
+  readMeetingNodeCommand,
+  type MeetingNodeAudioConfig,
+} from "./node-audio-config.js";
 import { MeetingNodeAudioPullWaiters } from "./node-audio-pull-waiters.js";
+import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
+
+export type { MeetingNodeAudioConfig } from "./node-audio-config.js";
 
 const NODE_BRIDGE_TERMINATION_GRACE_MS = 2_000;
 const NODE_BRIDGE_INPUT_DRAIN_MS = NODE_BRIDGE_TERMINATION_GRACE_MS + 1_000;
@@ -52,11 +61,17 @@ export type MeetingNodeHostOptions = {
   bridgeIdPrefix: string;
   defaultAudioInputCommand: readonly string[];
   defaultAudioOutputCommand: readonly string[];
+  defaultAudio?: {
+    backend?: MeetingAudioBackendSelection;
+    bufferBytes: number;
+    format: MeetingRealtimeAudioFormat;
+  };
   talkBackModes: ReadonlySet<string>;
   agentMode: string;
   normalizeUrl(input: unknown): string;
   normalizeMeetingKey(url?: string): string | undefined;
-  assertAudioAvailable(timeoutMs: number): void;
+  assertAudioAvailable(timeoutMs: number): void | Promise<void>;
+  prepareAudio?(config: MeetingNodeAudioConfig, timeoutMs: number): Promise<MeetingAudioRuntime>;
   browser: {
     application: string;
     buildProfileArgs(profile: string): string[];
@@ -64,16 +79,6 @@ export type MeetingNodeHostOptions = {
     openedNotes: string[];
   };
 };
-
-function readStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const result = value.filter(
-    (entry): entry is string => typeof entry === "string" && entry.length > 0,
-  );
-  return result.length > 0 ? result : undefined;
-}
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
@@ -496,18 +501,19 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     return { bridgeId, ok: true, clearCount: session.clearCount };
   };
 
-  const startBrowser = (params: Record<string, unknown>) => {
+  const startBrowser = async (params: Record<string, unknown>) => {
     const url = options.normalizeUrl(params.url);
     const timeoutMs = readNumber(params.joinTimeoutMs, 30_000);
     const mode = readString(params.mode);
+    let audioRuntime: MeetingAudioRuntime | undefined;
     let bridgeId: string | undefined;
     let audioBridge:
       | { type: "external-command" }
       | { type: "node-command-pair"; outputGeneration: true }
       | undefined;
     if (mode && options.talkBackModes.has(mode)) {
-      options.assertAudioAvailable(Math.min(timeoutMs, 10_000));
-      const healthCommand = readStringArray(params.audioBridgeHealthCommand);
+      audioRuntime = await prepareMeetingNodeAudio(params, Math.min(timeoutMs, 10_000), options);
+      const healthCommand = readMeetingNodeCommand(params.audioBridgeHealthCommand);
       if (healthCommand) {
         const health = runCommandWithTimeout(healthCommand, timeoutMs);
         if (health.code !== 0) {
@@ -516,7 +522,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
           );
         }
       }
-      const bridgeCommand = readStringArray(params.audioBridgeCommand);
+      const bridgeCommand = readMeetingNodeCommand(params.audioBridgeCommand);
       if (bridgeCommand) {
         if (mode === options.agentMode) {
           throw new Error(
@@ -532,12 +538,8 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
         audioBridge = { type: "external-command" };
       } else {
         const session = startCommandPair({
-          inputCommand: readStringArray(params.audioInputCommand) ?? [
-            ...options.defaultAudioInputCommand,
-          ],
-          outputCommand: readStringArray(params.audioOutputCommand) ?? [
-            ...options.defaultAudioOutputCommand,
-          ],
+          inputCommand: audioRuntime.inputCommand,
+          outputCommand: audioRuntime.outputCommand,
           url,
           mode,
         });
@@ -571,6 +573,8 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     }
     return {
       launched: params.launch !== false,
+      audioBackend: audioRuntime?.backend,
+      audioDeviceLabel: audioRuntime?.deviceLabel,
       bridgeId,
       audioBridge,
       browser:
@@ -689,11 +693,17 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
       let result: unknown;
       switch (action) {
         case "setup":
-          options.assertAudioAvailable(10_000);
-          result = { ok: true };
+          {
+            const audioRuntime = await prepareMeetingNodeAudio(params, 10_000, options);
+            result = {
+              ok: true,
+              audioBackend: audioRuntime.backend,
+              audioDeviceLabel: audioRuntime.deviceLabel,
+            };
+          }
           break;
         case "start":
-          result = startBrowser(params);
+          result = await startBrowser(params);
           break;
         case "status":
           result = bridgeStatus(params);

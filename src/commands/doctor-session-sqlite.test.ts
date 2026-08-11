@@ -9,10 +9,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../agents/sessions/session-manager.js";
 import {
   loadExactSqliteSessionEntry,
+  upsertSqliteSessionEntry,
+} from "../config/sessions/session-accessor.sqlite-entry.js";
+import {
   loadSqliteTranscriptEventsSync,
   readSqliteTranscriptStatsSync,
-  upsertSqliteSessionEntry,
-} from "../config/sessions/session-accessor.sqlite.js";
+} from "../config/sessions/session-accessor.sqlite-read.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import * as replaceFile from "../infra/replace-file.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
@@ -1246,6 +1248,8 @@ describe("runDoctorSessionSqlite", () => {
     });
 
     expect(restore.totals.issues).toBe(0);
+    expect(restore.totals).not.toHaveProperty("archivedLegacyStoreFiles");
+    expect(restore.totals).not.toHaveProperty("reclaimedBytes");
     expect(restore.targets[0]?.restore).toMatchObject({
       conflicts: [],
       restoredFiles: expect.arrayContaining(sourcePaths),
@@ -2256,6 +2260,8 @@ describe("runDoctorSessionSqlite", () => {
     });
 
     expect(recover.mode).toBe("recover");
+    expect(recover.totals).not.toHaveProperty("archivedLegacyStoreFiles");
+    expect(recover.totals).not.toHaveProperty("reclaimedBytes");
     expect(recover.targets[0]?.issues).toMatchObject([
       { code: "active_sqlite_transcript_jsonl", sessionKey: "agent:main:main" },
     ]);
@@ -2691,6 +2697,7 @@ describe("runDoctorSessionSqlite", () => {
         issues: 0,
         sqliteEntries: 2,
       });
+      expect(report.totals).toHaveProperty("reclaimedBytes");
       const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
       for (const target of manifest.targets) {
         expect(target.completedMoves.some((move) => move.kind === "legacy-store")).toBe(true);

@@ -1,3 +1,18 @@
+import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import {
+  hasConfiguredSecretInput,
+  normalizeResolvedSecretInputString,
+  normalizeSecretInputString,
+} from "openclaw/plugin-sdk/secret-input";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import {
+  registerPlatformAdapter,
+  registerPlatformAdapterFactory,
+  hasPlatformAdapter,
+  type PlatformAdapter,
+} from "../engine/adapter/index.js";
+import type { FetchMediaOptions, FetchMediaResult } from "../engine/adapter/types.js";
 /**
  * Bootstrap the PlatformAdapter for the built-in version.
  *
@@ -22,22 +37,6 @@
  * statically at the top level so they work reliably in both production and
  * vitest (which resolves bare specifiers via `resolve.alias`, not Node CJS).
  */
-
-import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
-import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import {
-  hasConfiguredSecretInput,
-  normalizeResolvedSecretInputString,
-  normalizeSecretInputString,
-} from "openclaw/plugin-sdk/secret-input";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import {
-  registerPlatformAdapter,
-  registerPlatformAdapterFactory,
-  hasPlatformAdapter,
-  type PlatformAdapter,
-} from "../engine/adapter/index.js";
-import type { FetchMediaOptions, FetchMediaResult } from "../engine/adapter/types.js";
 import { getBridgeLogger } from "./logger.js";
 
 const loadReadRemoteMediaBuffer = createLazyRuntimeNamedExport(
@@ -113,6 +112,9 @@ function createBuiltinAdapter(): PlatformAdapter {
           approvalId: params.approvalId,
           approvalKind: params.approvalKind,
           decision: params.decision,
+          channel: "qqbot",
+          accountId: params.accountId,
+          senderId: params.senderId,
           clientDisplayName: "QQBot Approval Handler",
         });
       } catch (err) {

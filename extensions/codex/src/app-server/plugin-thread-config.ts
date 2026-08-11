@@ -509,7 +509,7 @@ function emptyPluginThreadConfig(params: {
   };
 }
 
-function buildDisabledAppsConfigPatch(): JsonObject {
+export function buildDisabledAppsConfigPatch(): JsonObject {
   return {
     apps: {
       _default: {

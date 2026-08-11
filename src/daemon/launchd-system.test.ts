@@ -1,12 +1,17 @@
 // System launchd ownership tests cover loaded, installed, and unverifiable states.
+import { execFileSync } from "node:child_process";
+import { chmodSync, constants, mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const state = vi.hoisted(() => ({
   launchctl: { stdout: "", stderr: "Could not find service", code: 113 },
   files: new Map<string, string>(),
   accessErrors: new Map<string, string>(),
   readdirError: "",
-  plutilLabels: new Map<string, string>(),
+  plutilValues: new Map<string, unknown>(),
+  plutilErrors: new Map<string, string>(),
 }));
 
 function fsError(code: string, target: string): NodeJS.ErrnoException {
@@ -15,9 +20,10 @@ function fsError(code: string, target: string): NodeJS.ErrnoException {
 
 vi.mock("node:fs/promises", () => {
   const mocked = {
-    access: vi.fn(async (target: string) => {
+    constants,
+    access: vi.fn(async (target: string, mode?: number) => {
       const code = state.accessErrors.get(target);
-      if (code) {
+      if (code && mode === constants.R_OK) {
         throw fsError(code, target);
       }
       if (!state.files.has(target)) {
@@ -57,10 +63,10 @@ vi.mock("./launchd-exec.js", () => ({
 const execFileUtf8 = vi.hoisted(() =>
   vi.fn(async (_command: string, args: string[]) => {
     const target = args.at(-1) ?? "";
-    const label = state.plutilLabels.get(target);
-    return label
-      ? { stdout: `${label}\n`, stderr: "", code: 0 }
-      : { stdout: "", stderr: "missing Label", code: 1 };
+    const error = state.plutilErrors.get(target);
+    return error
+      ? { stdout: "", stderr: error, code: 1 }
+      : { stdout: JSON.stringify(state.plutilValues.get(target) ?? {}), stderr: "", code: 0 };
   }),
 );
 
@@ -72,6 +78,69 @@ import {
   renderSystemLaunchDaemonOwnershipShellProbe,
 } from "./launchd-system.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const hostPlatform = process.platform;
+
+function runRenderedProbe(
+  plistName: string,
+  plistMode: "unlabeled" | "same-label" | "malformed" | "unreadable",
+) {
+  const root = tempDirs.make("openclaw-launchd-probe-");
+  const daemonsDir = path.join(root, "daemons");
+  const binDir = path.join(root, "bin");
+  mkdirSync(daemonsDir);
+  mkdirSync(binDir);
+  writeFileSync(path.join(daemonsDir, plistName), `${plistMode}\n`);
+  const plutilShim = path.join(binDir, "plutil");
+  writeFileSync(
+    plutilShim,
+    `#!/bin/sh
+mode=$1
+for last; do :; done
+case "$last" in
+  *unreadable*)
+    printf '%s\\n' "Operation not permitted" >&2
+    exit 1
+    ;;
+esac
+fixture=$(cat "$last")
+if [ "$mode" = "-extract" ]; then
+  if [ "$fixture" = "same-label" ]; then
+    printf '%s\\n' "ai.openclaw.gateway"
+    exit 0
+  fi
+  printf '%s\\n' "No value at that key path: Label" >&2
+  exit 1
+fi
+if [ "$mode" = "-lint" ] && [ "$fixture" != "malformed" ]; then
+  exit 0
+fi
+exit 1
+`,
+    { mode: 0o700 },
+  );
+  const launchctlShim = path.join(binDir, "launchctl");
+  writeFileSync(
+    launchctlShim,
+    '#!/bin/sh\nprintf "%s\\n" "Could not find service" >&2\nexit 113\n',
+    { mode: 0o700 },
+  );
+  chmodSync(plutilShim, 0o700);
+  chmodSync(launchctlShim, 0o700);
+  if (plistMode === "unreadable") {
+    chmodSync(path.join(daemonsDir, plistName), 0o000);
+  }
+  const script = renderSystemLaunchDaemonOwnershipShellProbe("ai.openclaw.gateway")
+    .replaceAll("/Library/LaunchDaemons", daemonsDir)
+    .replaceAll("/usr/bin/plutil", plutilShim)
+    .concat('printf "conflict=%s\\n" "$openclaw_system_launchd_conflict"\n');
+  const shell = hostPlatform === "darwin" ? "/bin/sh" : "/bin/bash";
+  return execFileSync(shell, ["-c", script], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+  }).match(/^conflict=(.*)$/m)?.[1];
+}
+
 describe("system LaunchDaemon ownership", () => {
   const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
@@ -81,7 +150,8 @@ describe("system LaunchDaemon ownership", () => {
     state.files.clear();
     state.accessErrors.clear();
     state.readdirError = "";
-    state.plutilLabels.clear();
+    state.plutilValues.clear();
+    state.plutilErrors.clear();
     if (originalPlatformDescriptor) {
       Object.defineProperty(process, "platform", {
         ...originalPlatformDescriptor,
@@ -120,7 +190,7 @@ describe("system LaunchDaemon ownership", () => {
   it("detects the canonical unloaded plist by its structural Label", async () => {
     const plistPath = "/Library/LaunchDaemons/ai.openclaw.gateway.plist";
     state.files.set(plistPath, "bplist00-binary-payload");
-    state.plutilLabels.set(plistPath, "ai.openclaw.gateway");
+    state.plutilValues.set(plistPath, { Label: "ai.openclaw.gateway" });
 
     await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
       status: "installed",
@@ -135,7 +205,7 @@ describe("system LaunchDaemon ownership", () => {
       plistPath,
       "<plist><dict><key>Label</key><string>ai.openclaw.gateway</string></dict></plist>",
     );
-    state.plutilLabels.set(plistPath, "ai.openclaw.gateway");
+    state.plutilValues.set(plistPath, { Label: "ai.openclaw.gateway" });
 
     const ownership = await inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway");
 
@@ -149,7 +219,7 @@ describe("system LaunchDaemon ownership", () => {
       plistPath,
       "<plist><dict><key>EnvironmentVariables</key><dict><key>Label</key><string>nested</string></dict><key>Label</key><string>ai.openclaw.gateway</string></dict></plist>",
     );
-    state.plutilLabels.set(plistPath, "ai.openclaw.gateway");
+    state.plutilValues.set(plistPath, { Label: "ai.openclaw.gateway" });
 
     await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toMatchObject({
       status: "installed",
@@ -160,15 +230,14 @@ describe("system LaunchDaemon ownership", () => {
   it("uses native plutil for binary and non-XML plist formats", async () => {
     const plistPath = "/Library/LaunchDaemons/binary-openclaw.plist";
     state.files.set(plistPath, "bplist00-binary-payload");
-    state.plutilLabels.set(plistPath, "ai.openclaw.gateway");
+    state.plutilValues.set(plistPath, { Label: "ai.openclaw.gateway" });
 
     const ownership = await inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway");
 
     expect(ownership).toMatchObject({ status: "installed", plistPath });
     expect(execFileUtf8).toHaveBeenCalledWith("/usr/bin/plutil", [
-      "-extract",
-      "Label",
-      "raw",
+      "-convert",
+      "json",
       "-o",
       "-",
       "--",
@@ -176,16 +245,62 @@ describe("system LaunchDaemon ownership", () => {
     ]);
   });
 
-  it("fails closed on an unreadable noncanonical vendor plist", async () => {
+  it("skips a valid plist without a string Label and detects a later owner", async () => {
+    const unrelated = "/Library/LaunchDaemons/com.google.keystone.daemon.plist";
+    const owner = "/Library/LaunchDaemons/vendor-openclaw.plist";
+    state.files.set(unrelated, "<plist><dict><key>RunAtLoad</key><true/></dict></plist>");
+    state.plutilValues.set(unrelated, { RunAtLoad: true });
+    state.files.set(owner, "<plist/>");
+    state.plutilValues.set(owner, { Label: "ai.openclaw.gateway" });
+
+    await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
+      status: "installed",
+      serviceTarget: "system/ai.openclaw.gateway",
+      plistPath: owner,
+    });
+    expect(execFileUtf8).toHaveBeenCalledTimes(2);
+  });
+
+  it("treats a valid non-string Label as unable to own the gateway label", async () => {
+    const unrelated = "/Library/LaunchDaemons/com.vendor.numeric-label.plist";
+    state.files.set(unrelated, "<plist/>");
+    state.plutilValues.set(unrelated, { Label: 42 });
+
+    await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
+      status: "absent",
+      serviceTarget: "system/ai.openclaw.gateway",
+    });
+    expect(execLaunchctl).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips an unreadable foreign plist", async () => {
     const unrelated = "/Library/LaunchDaemons/com.vendor.locked.plist";
     state.files.set(unrelated, "<plist/>");
     state.accessErrors.set(unrelated, "EACCES");
+    state.plutilErrors.set(unrelated, "Operation not permitted");
 
     await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
-      status: "unverifiable",
+      status: "absent",
       serviceTarget: "system/ai.openclaw.gateway",
-      operation: "filesystem",
-      detail: `${unrelated}: EACCES: ${unrelated}`,
+    });
+    await expect(
+      assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway"),
+    ).resolves.toBeUndefined();
+  });
+
+  it("detects a readable owner after an unreadable foreign plist", async () => {
+    const unrelated = "/Library/LaunchDaemons/com.vendor.locked.plist";
+    const owner = "/Library/LaunchDaemons/vendor-openclaw.plist";
+    state.files.set(unrelated, "<plist/>");
+    state.accessErrors.set(unrelated, "EACCES");
+    state.plutilErrors.set(unrelated, "Operation not permitted");
+    state.files.set(owner, "<plist/>");
+    state.plutilValues.set(owner, { Label: "ai.openclaw.gateway" });
+
+    await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
+      status: "installed",
+      serviceTarget: "system/ai.openclaw.gateway",
+      plistPath: owner,
     });
   });
 
@@ -241,14 +356,29 @@ describe("system LaunchDaemon ownership", () => {
       '/usr/bin/plutil -extract Label raw -o - -- "$openclaw_system_launchd_plist"',
     );
     expect(script).toContain(
+      '/usr/bin/plutil -lint -- "$openclaw_system_launchd_plist" >/dev/null 2>&1',
+    );
+    expect(script).toContain(
       "/usr/bin/find \"$openclaw_system_launchd_dir\" -mindepth 1 -maxdepth 1 -name '*.plist' -print0",
     );
     expect(script).toContain("while IFS= read -r -d '' openclaw_system_launchd_plist");
+    expect(script).toContain('[ ! -r "$openclaw_system_launchd_plist" ]');
     expect(script).toContain('[ ! -x "$openclaw_system_launchd_dir" ]');
     expect(script).not.toContain('"$openclaw_system_launchd_dir"/*.plist');
     expect(script).toContain(
       'if [ "$openclaw_system_launchd_plist_label" != "$openclaw_system_launchd_label" ]',
     );
     expect(script).not.toContain("|| true");
+  });
+
+  it("executes the rendered probe across readable and unreadable plists", () => {
+    expect(runRenderedProbe("com.google.keystone.daemon.plist", "unlabeled")).toBe("");
+    expect(runRenderedProbe("com.vendor.unreadable.plist", "unreadable")).toBe("");
+    expect(runRenderedProbe("vendor-openclaw.plist", "same-label")).toContain(
+      "vendor-openclaw.plist",
+    );
+    expect(runRenderedProbe("com.vendor.broken.plist", "malformed")).toContain(
+      "com.vendor.broken.plist",
+    );
   });
 });

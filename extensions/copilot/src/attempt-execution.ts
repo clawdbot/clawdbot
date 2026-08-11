@@ -1,6 +1,5 @@
 import type { Tool as SdkTool } from "@github/copilot-sdk";
 import type {
-  AgentHarnessAttemptParams,
   AgentMessage,
   AnyAgentTool,
   SandboxContext,
@@ -33,12 +32,14 @@ import {
   createAttemptTranscriptJournal,
   type AttemptTranscriptJournal,
 } from "./attempt-transcript-journal.js";
+import { assertCopilotAttemptHostCapabilities } from "./attempt-types.js";
 import type {
   AgentHarnessAttemptResult,
   AttemptParamsLike,
   CopilotAttemptDeps,
   CopilotAgentEndHookParams,
   ModelRef,
+  CopilotAttemptParams,
 } from "./attempt-types.js";
 import { createCopilotByokProxy } from "./byok-proxy.js";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
@@ -47,7 +48,7 @@ import { classifyResumeFailure, decideReplayAction } from "./replay-shim.js";
 import type { PooledClient } from "./runtime.js";
 import type { CopilotUserInputBridge } from "./user-input-bridge.js";
 export async function runCopilotExecution(context: {
-  params: AgentHarnessAttemptParams;
+  params: CopilotAttemptParams;
   deps: CopilotAttemptDeps;
   now: () => number;
   attemptStartedAt: number;
@@ -108,12 +109,13 @@ export async function runCopilotExecution(context: {
   let session: SessionLike | undefined;
   let bridge: ReturnType<typeof attachEventBridge> | undefined;
   let transcriptJournal: AttemptTranscriptJournal | undefined;
+  let initialSdkUserValidated = false;
   const nativeSubagentTaskMirror = createCopilotNativeSubagentTaskMirror({
     agentId: sessionAgentId,
     now,
     scope: input.agentHarnessTaskRuntimeScope,
   });
-  let activeRunHandleRef: Parameters<typeof clearActiveEmbeddedRun>[1] | undefined;
+  let activeRunHandleRef: ReturnType<typeof registerCopilotActiveRun> | undefined;
   let userInputBridgeRef: CopilotUserInputBridge | undefined;
   let cleanupToolBridge: (() => void) | undefined;
   let releaseError: Error | undefined;
@@ -258,6 +260,7 @@ export async function runCopilotExecution(context: {
     >();
     if (!settledToolFinalization) {
       try {
+        assertCopilotAttemptHostCapabilities(input);
         const toolBridge = await createToolBridge({
           allowModelTools: poolAcquire.provider.mode === "byok",
           modelProvider: modelRef.provider,
@@ -403,6 +406,15 @@ export async function runCopilotExecution(context: {
         });
       } catch {}
     }
+    transcriptJournal = createAttemptTranscriptJournal({
+      abortSession: () => session?.abort() ?? Promise.resolve(),
+      attempt: input,
+      messages,
+      onInitialSdkUserValidated: () => {
+        initialSdkUserValidated = true;
+      },
+      sdkSessionId,
+    });
     bridge = attachEventBridge(session, {
       onAssistantDelta: settledToolFinalization ? undefined : input.onAssistantDelta,
       onAgentEvent: settledToolFinalization ? undefined : input.onAgentEvent,
@@ -442,25 +454,29 @@ export async function runCopilotExecution(context: {
       getSdkSessionId: () => sdkSessionId,
       isAborted: () => aborted || transcriptJournal?.hasFailed() === true,
       transcriptProjection: {
-        journal: (transcriptJournal = createAttemptTranscriptJournal({
-          abortSession: () => session?.abort() ?? Promise.resolve(),
-          attempt: input,
-          messages,
-          sdkSessionId,
-        })),
+        journal: transcriptJournal,
         modelRef,
         now,
         resultContentSourceByToolName,
       },
     });
-    activeRunHandleRef = registerCopilotActiveRun({
-      abortActiveSession,
-      bridge,
-      input,
-      isAborted: () => aborted,
-      isSettled: () => settled,
-      userInputBridge,
-    });
+    if (!settledToolFinalization) {
+      assertCopilotAttemptHostCapabilities(input);
+      if (!userInputBridge) {
+        throw new Error("[copilot-attempt] ordinary attempts require a user-input bridge");
+      }
+      activeRunHandleRef = registerCopilotActiveRun({
+        abortActiveSession,
+        bridge,
+        canAcceptSteering: () => initialSdkUserValidated,
+        input,
+        isAborted: () => aborted,
+        isSettled: () => settled,
+        session,
+        transcriptJournal,
+        userInputBridge,
+      });
+    }
     const messageOptions = await createMessageOptions(attemptInput, {
       effectiveCwd,
       effectiveWorkspaceDir,
@@ -531,6 +547,7 @@ export async function runCopilotExecution(context: {
     }
     userInputBridgeRef?.cancelPending();
     if (activeRunHandleRef) {
+      input.replyOperation?.detachBackend(activeRunHandleRef);
       clearActiveEmbeddedRun(
         input.sessionId,
         activeRunHandleRef,

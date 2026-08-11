@@ -73,4 +73,24 @@ describe("session activity assistant buffering", () => {
 
     expect(state.notes.at(-1)?.text).toBe("Run failed");
   });
+
+  it("records the normalized terminal reply as the final assistant activity fact", () => {
+    const state = createSessionActivityNoteState();
+    noteSessionActivityEvent(state, {
+      runId: "run-complete",
+      seq: 1,
+      stream: "lifecycle",
+      ts: 1_000,
+      data: {
+        phase: "end",
+        terminalReply: { disposition: "visible", text: "Final answer from the run." },
+      },
+    });
+
+    expect(state.notes.at(-1)?.text).toBe("Assistant: Final answer from the run.");
+    expect(state.terminalReply).toEqual({
+      disposition: "visible",
+      text: "Final answer from the run.",
+    });
+  });
 });

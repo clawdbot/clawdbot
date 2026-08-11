@@ -165,6 +165,9 @@ Example:
 - Scope group/channel replies by listing teams and channels under `channels.msteams.teams`.
 - Use stable Teams conversation IDs from Teams links as keys, not mutable display names (see [Team and Channel IDs](#team-and-channel-ids-common-gotcha)).
 - When `groupPolicy="allowlist"` and a teams allowlist is present, only listed teams/channels are accepted (mention-gated).
+- `groupAllowFrom` authorizes group senders, not delegated Graph reads of other channels. If an existing configuration only sets `groupAllowFrom`, keep the default `groupPolicy: "allowlist"` and configure the target under `channels.msteams.teams.<team>.channels`.
+- Alternatively, deliberately set `groupPolicy: "open"` for broader delegated reads. This also admits **any group sender** (still mention-gated by default), so it is less restrictive than a scoped team/channel route.
+- Direct-operator reads and reads in the current conversation do not require an additional team/channel route.
 - The configure wizard accepts `Team/Channel` entries and stores them for you.
 - On startup, OpenClaw resolves team/channel and user allowlist names to IDs (when Graph permissions allow) and logs the mapping. Unresolved names are kept as typed but ignored for routing unless `channels.msteams.dangerouslyAllowNameMatching: true` is set.
 
@@ -175,10 +178,11 @@ Example:
   channels: {
     msteams: {
       groupPolicy: "allowlist",
+      groupAllowFrom: ["00000000-0000-0000-0000-000000000000"],
       teams: {
-        "My Team": {
+        "19:team-id@thread.tacv2": {
           channels: {
-            General: { requireMention: true },
+            "19:channel-id@thread.tacv2": { requireMention: true },
           },
         },
       },

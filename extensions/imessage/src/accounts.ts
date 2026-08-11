@@ -1,4 +1,5 @@
 import { statSync } from "node:fs";
+import path from "node:path";
 import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { normalizeAccountId, type OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
@@ -7,7 +8,12 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { IMessageAccountConfig } from "./account-types.js";
-import { resolveLocalIMessageChatDbPath } from "./cli-path.js";
+import {
+  expandIMessageUserPath,
+  resolveIMessageHomeDir,
+  resolveLocalIMessageChatDbPath,
+} from "./cli-path.js";
+import { getCachedIMessageRemoteHost } from "./remote-host.js";
 
 export type ResolvedIMessageAccount = {
   accountId: string;
@@ -96,6 +102,7 @@ export function resolveIMessageAccount(params: {
   const merged = mergeIMessageAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const configured = Boolean(
+    merged.enabled === true ||
     merged.cliPath?.trim() ||
     merged.dbPath?.trim() ||
     merged.service ||
@@ -133,10 +140,24 @@ function normalizeIMessageDbPath(value: string | undefined | null): string {
 // Two enabled accounts that share a signature watch the same source, which
 // caused duplicate inbound handling in openclaw/openclaw#65141.
 function resolveIMessageAccountSourceSignature(account: ResolvedIMessageAccount): string {
-  return JSON.stringify([
-    normalizeIMessageCliPath(account.config.cliPath),
-    normalizeIMessageDbPath(account.config.dbPath),
-  ]);
+  const cliPath = normalizeIMessageCliPath(account.config.cliPath);
+  const dbPath = normalizeIMessageDbPath(account.config.dbPath);
+  const remoteHost = getCachedIMessageRemoteHost({
+    cliPath,
+    remoteHost: account.config.remoteHost,
+  });
+  // A remote path belongs to the SSH host and must not expand against the local home.
+  if (remoteHost) {
+    return JSON.stringify([cliPath, dbPath, remoteHost]);
+  }
+  const home = resolveIMessageHomeDir();
+  const localDbPath = dbPath
+    ? expandIMessageUserPath(dbPath)
+    : home
+      ? path.join(home, "Library", "Messages", "chat.db")
+      : undefined;
+  // Preserve the exact executable: same-basename SSH wrappers can target different hosts.
+  return JSON.stringify([cliPath, localDbPath ? path.resolve(localDbPath) : "", ""]);
 }
 
 function resolveIMessageAccountSourceOwner(params: {
@@ -151,7 +172,7 @@ function resolveIMessageAccountSourceOwner(params: {
       cfg: params.cfg,
       accountId: candidateAccountId,
     });
-    if (!candidate.enabled) {
+    if (!candidate.enabled || !candidate.configured) {
       continue;
     }
     if (resolveIMessageAccountSourceSignature(candidate) !== params.signature) {
@@ -187,7 +208,7 @@ export function resolveIMessageDuplicateSourceOwner(params: {
   cfg: OpenClawConfig;
   account: ResolvedIMessageAccount;
 }): string | undefined {
-  if (!params.account.enabled) {
+  if (!params.account.enabled || !params.account.configured) {
     return undefined;
   }
   const owner = resolveIMessageAccountSourceOwner({
@@ -208,7 +229,11 @@ export function hasExclusiveIMessageLocalDatabase(params: {
   account: ResolvedIMessageAccount;
   cliPath: string;
   dbPath?: string;
+  remoteHost?: string;
 }): boolean {
+  if (params.remoteHost?.trim()) {
+    return false;
+  }
   const otherAccounts = listEnabledIMessageAccounts(params.cfg).filter(
     (candidate) => candidate.accountId !== params.account.accountId,
   );
@@ -219,7 +244,7 @@ export function hasExclusiveIMessageLocalDatabase(params: {
   const selectedDbPath = resolveLocalIMessageChatDbPath({
     cliPath: params.cliPath,
     dbPath: params.dbPath,
-    remoteHost: params.account.config.remoteHost,
+    remoteHost: params.remoteHost ?? params.account.config.remoteHost,
   });
   if (!selectedDbPath) {
     return false;
@@ -255,7 +280,7 @@ export function collectIMessageDuplicateAccountSourceWarnings(params: {
   const groups = new Map<string, ResolvedIMessageAccount[]>();
   for (const accountId of listIMessageAccountIds(params.cfg)) {
     const account = resolveIMessageAccount({ cfg: params.cfg, accountId });
-    if (!account.enabled) {
+    if (!account.enabled || !account.configured) {
       continue;
     }
     const signature = resolveIMessageAccountSourceSignature(account);

@@ -9,7 +9,7 @@ import {
   normalizeOptionalStringifiedId,
 } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings, uniqueValues } from "@openclaw/normalization-core/string-normalization";
-import { Type, type TSchema } from "typebox";
+import { Type, type TObject, type TSchema } from "typebox";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -23,7 +23,6 @@ import {
 } from "../../auto-reply/reply/strip-inbound-meta.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
-import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import {
   getChannelPlugin,
@@ -61,16 +60,15 @@ import {
   resolveMessageBroadcastAccountPlan,
   validateExplicitMessageAccountSelection,
 } from "../../infra/outbound/message-account-selection.js";
+import type {
+  MessageActionGateway,
+  MessageActionResult,
+} from "../../infra/outbound/message-action-contracts.js";
 import {
   parseInteractiveParam,
   parseJsonMessageParam,
 } from "../../infra/outbound/message-action-params.js";
-import {
-  getToolResult,
-  runMessageAction,
-  type MessageActionRunResult,
-  type MessageActionRunnerGateway,
-} from "../../infra/outbound/message-action-runner.js";
+import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { resolveActionDeliveryTargetAlias } from "../../infra/outbound/message-action-spec.js";
 import {
   resolveAllowedMessageActions,
@@ -97,7 +95,7 @@ import {
   stringEnum,
 } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringArrayParam, readStringParam } from "./common.js";
+import { jsonResult, readStringArrayParam, readToolStringParam } from "./common.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import {
   readGatewayCallOptions,
@@ -516,7 +514,7 @@ function sanitizePresentationTextFieldsResult(
 
 function readFirstStringParam(params: Record<string, unknown>, keys: readonly string[]): string {
   for (const key of keys) {
-    const value = readStringParam(params, key);
+    const value = readToolStringParam(params, key);
     if (value) {
       return value;
     }
@@ -535,7 +533,7 @@ function readStructuredAttachmentMediaParams(value: unknown): string[] {
     }
     const record = attachment as Record<string, unknown>;
     for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl", "url"]) {
-      const candidate = readStringParam(record, key);
+      const candidate = readToolStringParam(record, key);
       if (candidate) {
         values.push(candidate);
       }
@@ -1096,6 +1094,22 @@ const SOURCE_REPLY_ONLY_MESSAGE_SCHEMA = Type.Object({
   threadId: Type.Optional(Type.String()),
 });
 const SOURCE_REPLY_ONLY_RUNTIME_ARG_NAMES = new Set(["to", "channelId", "final"]);
+const SOURCE_REPLY_FINAL_PROPERTY = Type.Optional(
+  Type.Boolean({
+    description:
+      "Set false for progress. Set true, or omit, for the completed current-source reply.",
+  }),
+);
+
+function addSourceReplyFinalControl<T extends TObject>(
+  schema: T,
+  sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined,
+): T | TObject {
+  if (sourceReplyDeliveryMode !== "message_tool_only") {
+    return schema;
+  }
+  return Type.Object({ ...schema.properties, final: SOURCE_REPLY_FINAL_PROPERTY });
+}
 
 function enforceSourceReplyOnlyTextDirectives(args: Record<string, unknown>): void {
   if (typeof args.message !== "string" || !args.message.trim()) {
@@ -1185,12 +1199,12 @@ function enforceSourceReplyOnlyMessageAction(params: {
     throw new Error("Completion source replies require an authoritative current conversation.");
   }
 
-  const requestedChannel = readStringParam(params.args, "channel");
+  const requestedChannel = readToolStringParam(params.args, "channel");
   if (requestedChannel && normalizeMessageChannel(requestedChannel) !== sourceChannel) {
     throw new Error("Completion source replies cannot target another channel.");
   }
 
-  const requestedAccountId = readStringParam(params.args, "accountId");
+  const requestedAccountId = readToolStringParam(params.args, "accountId");
   const sourceAccountId = params.trustedTurnContext
     ? params.trustedTurnContext.requesterAccountId
     : params.currentAccountId;
@@ -1207,7 +1221,7 @@ function enforceSourceReplyOnlyMessageAction(params: {
     throw new Error("Completion source replies cannot target another thread.");
   }
 
-  const requestedReplyTo = readStringParam(params.args, "replyTo");
+  const requestedReplyTo = readToolStringParam(params.args, "replyTo");
   const sourceMessageId = normalizeOptionalStringifiedId(sourceContext.currentMessageId);
   if (
     requestedReplyTo &&
@@ -1445,14 +1459,16 @@ function resolveIncludeBestEffort(params: MessageToolDiscoveryParams): boolean {
     return false;
   }
   const prepared = params.preparedMessageToolCatalog?.getChannel(currentChannel);
-  if (prepared) {
-    return prepared.reconcilesUnknownSend;
+  if (params.preparedMessageToolCatalog) {
+    // The prepared catalog is the exact runtime-registry generation for this
+    // turn. A missing channel is an authoritative absence, not permission to
+    // rediscover bundled plugins on the request path.
+    return prepared?.reconcilesUnknownSend ?? false;
   }
-  const adapter = params.preparedMessageToolCatalog
-    ? getBundledChannelPlugin(currentChannel)?.message
-    : (getLoadedChannelPlugin(currentChannel as Parameters<typeof getLoadedChannelPlugin>[0])
-        ?.message ??
-      getChannelPlugin(currentChannel as Parameters<typeof getChannelPlugin>[0])?.message);
+  const adapter =
+    getLoadedChannelPlugin(currentChannel as Parameters<typeof getLoadedChannelPlugin>[0])
+      ?.message ??
+    getChannelPlugin(currentChannel as Parameters<typeof getChannelPlugin>[0])?.message;
   return (
     adapter?.durableFinal?.capabilities?.reconcileUnknownSend === true &&
     typeof adapter.durableFinal.reconcileUnknownSend === "function"
@@ -1575,11 +1591,12 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const actions = messageToolDiscoveryParams
     ? resolveMessageToolActionSchemaActions(messageToolDiscoveryParams)
     : undefined;
-  const schema = options?.sourceReplyOnly
+  const baseSchema = options?.sourceReplyOnly
     ? SOURCE_REPLY_ONLY_MESSAGE_SCHEMA
     : messageToolDiscoveryParams
       ? buildMessageToolSchema(messageToolDiscoveryParams, actions ?? [])
       : MessageToolSchema;
+  const schema = addSourceReplyFinalControl(baseSchema, sourceReplySinkDeliveryMode);
   const description = options?.sourceReplyOnly
     ? appendMessageToolVisibleReplyHint(
         "Send a message to the current source conversation. Supports actions: send.",
@@ -1604,7 +1621,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }
       // Shallow-copy so we don't mutate the original event args (used for logging/dedup).
       const params = { ...(args as Record<string, unknown>) };
-      const action = readStringParam(params, "action", {
+      const action = readToolStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
       const trustedTurnContext =
@@ -1722,7 +1739,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
 
       const gatewayOpts = readGatewayCallOptions(params);
       const rawConfig = options?.config ?? loadConfigForTool();
-      const requestedAccountId = readStringParam(params, "accountId");
+      const requestedAccountId = readToolStringParam(params, "accountId");
       validateExplicitMessageAccountSelection({
         cfg: rawConfig,
         accountId: requestedAccountId,
@@ -1823,9 +1840,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           const vote = recentPollVote;
           recentPollVoteBySession.delete(pollEchoSessionKey);
           const outboundText =
-            readStringParam(params, "text") ??
-            readStringParam(params, "message") ??
-            readStringParam(params, "content");
+            readToolStringParam(params, "text") ??
+            readToolStringParam(params, "message") ??
+            readToolStringParam(params, "content");
           if (outboundText && isPollVoteEchoText(vote.option, outboundText)) {
             return jsonResult({
               status: "suppressed",
@@ -1845,7 +1862,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       // Gateway request. Keep their authority operation-local by dispatching
       // channel actions in-process instead of laundering it through a new
       // backend connection.
-      const gateway: MessageActionRunnerGateway | undefined =
+      const gateway: MessageActionGateway | undefined =
         options?.conversationReadOrigin === "direct-operator"
           ? undefined
           : {
@@ -1925,12 +1942,13 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         action === "send" &&
         sourceReplySinkDeliveryMode === "message_tool_only" &&
         normalizeOptionalString(trustedTurnContext?.toolContext?.currentSourceTurnId) !== undefined;
-      let result: MessageActionRunResult;
+      let result: MessageActionResult;
       try {
         result = await runMessageActionForTool({
           cfg,
           action,
           params: actionParams,
+          actionOrigin: "message-tool",
           defaultAccountId: accountId ?? undefined,
           requesterAccountId: trustedTurnContext?.requesterAccountId,
           requesterSenderId: trustedTurnContext?.requesterSenderId,
@@ -1975,6 +1993,14 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         failedAutogeneratedIdempotencyKeys.delete(autogeneratedDeliveryFingerprint);
       }
       const toolResult = getToolResult(result);
+      const normalizationNotice = result.kind === "send" ? result.normalization?.notice : undefined;
+      if (normalizationNotice) {
+        const normalizedResult = toolResult ?? jsonResult(result.payload);
+        return {
+          ...normalizedResult,
+          content: [...normalizedResult.content, { type: "text", text: normalizationNotice }],
+        };
+      }
       if (
         action === "poll-vote" &&
         pollVoteEchoRoute &&

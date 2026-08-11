@@ -24,16 +24,6 @@ private final class DashboardWindow: NSWindow {
     }
 }
 
-private final class DashboardWindowDragRegionView: NSView {
-    override var mouseDownCanMoveWindow: Bool {
-        true
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        window?.performDrag(with: event)
-    }
-}
-
 private final class DashboardLinkSplitView: NSSplitView {
     var onDividerDragEnded: (() -> Void)?
 
@@ -475,7 +465,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     private func persistedLinkBrowserWidth() -> CGFloat? {
-        guard let number = UserDefaults.standard.object(
+        guard let number = AppDefaults.standard.object(
             forKey: DashboardWindowLayout.linkBrowserWidthDefaultsKey) as? NSNumber
         else { return nil }
         let width = CGFloat(number.doubleValue)
@@ -502,7 +492,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         guard !self.linkBrowserItem.isCollapsed else { return }
         let width = self.linkBrowser.frame.width
         guard width.isFinite, width >= DashboardWindowLayout.linkBrowserMinWidth else { return }
-        UserDefaults.standard.set(Double(width), forKey: DashboardWindowLayout.linkBrowserWidthDefaultsKey)
+        AppDefaults.standard.set(Double(width), forKey: DashboardWindowLayout.linkBrowserWidthDefaultsKey)
     }
 
     private func requestBrowserProfileImportOfferIfNeeded() {
@@ -597,7 +587,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         else {
             return
         }
-        window.performDrag(with: event)
+        DashboardWindowDragGesture.handle(event, in: window)
     }
 
     static func isWindowDragRequest(_ body: Any) -> Bool {

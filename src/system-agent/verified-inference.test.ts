@@ -14,6 +14,7 @@ import type { PluginOrigin } from "../plugins/types.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { resolvePersistentApplyInference } from "./setup-inference.js";
 import {
+  installSystemAgentClaudeCliBackendTestFixture,
   installSystemAgentPluginMetadataTestSnapshot,
   type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
@@ -81,12 +82,15 @@ const profile = {
 
 const runtime = { log: () => {}, error: () => {}, exit: () => {} } as never;
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
+let restoreCliBackendFixture: (() => void) | undefined;
 
 beforeAll(() => {
   pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot(config());
+  restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
 });
 
 afterAll(() => {
+  restoreCliBackendFixture?.();
   pluginMetadataSnapshot?.restore();
 });
 
@@ -218,7 +222,7 @@ async function bindingFor(
     route.runner === "embedded"
       ? route.agentHarnessRuntimeOverride === "auto"
         ? "openclaw"
-        : route.agentHarnessRuntimeOverride
+        : (route.agentHarnessRuntimeOverride ?? "codex")
       : undefined;
   return createBinding(
     route,
@@ -864,7 +868,7 @@ describe("verified OpenClaw inference binding", () => {
     const fingerprint = () =>
       fingerprintAwsSdkRuntimeOwner({
         provider: route.provider,
-        backendId: route.agentHarnessRuntimeOverride,
+        backendId: route.agentHarnessRuntimeOverride ?? "openclaw",
         auth,
       });
     try {
@@ -1043,7 +1047,8 @@ describe("verified OpenClaw inference binding", () => {
     const route = await revalidate(binding, changed, authDeps());
 
     expect(route).toBe(binding.execution);
-    expect(route?.runConfig).toEqual(baseConfig);
+    expect(route?.runConfig).toMatchObject(baseConfig);
+    expect(route?.runConfig.agents?.entries).toEqual({ openclaw: {} });
     expect(route?.runConfig).not.toBe(baseConfig);
   });
 

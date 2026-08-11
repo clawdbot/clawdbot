@@ -13,11 +13,13 @@ import {
   constrainRestartRecoveryDeliveryPayloads,
   shouldPersistCurrentRunSessionCleanup,
 } from "../agent-command-restart-recovery.js";
+import { normalizeAgentRunTerminalDeliverySnapshot } from "../agent-run-terminal-delivery.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
 import { persistAssistantTranscriptRepairRecord } from "./assistant-transcript-repair.js";
+import { persistAgentSession } from "./attempt-execution.shared.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
 import type { EmbeddedAgentAttempt } from "./run-embedded-attempt.js";
 import {
@@ -25,7 +27,7 @@ import {
   loadDeliveryRuntime,
   loadSessionStoreRuntime,
 } from "./runtime-loaders.js";
-import { clearPendingFinalDelivery, persistSessionEntry } from "./session-helpers.js";
+import { clearPendingFinalDelivery } from "./session-helpers.js";
 import type { EmbeddedSessionState } from "./session-preparation.js";
 import type { AgentCommandOpts } from "./types.js";
 
@@ -340,6 +342,16 @@ export async function finalizeEmbeddedAgentCommand(params: {
           NonNullable<Parameters<typeof deliverAgentCommandResult>[0]["onDeliveryResult"]>
         >[0],
       ) => {
+        const deliveryStatus = deliveryResult.deliveryStatus;
+        const terminalDelivery = normalizeAgentRunTerminalDeliverySnapshot(
+          deliveryStatus && {
+            status: deliveryStatus.status,
+            resultCount: deliveryStatus.resultCount ?? 0,
+          },
+        );
+        if (terminalDelivery) {
+          terminal.metadata.terminalDelivery = terminalDelivery;
+        }
         params.onTerminalDeliveryEvidenceChanged(
           buildRestartRecoveryTerminalDeliveryEvidence(deliveryResult),
         );
@@ -372,7 +384,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
         !pendingFinalDeliveryMarker.hasSendableFinalPayload &&
         entry.pendingFinalDelivery?.kind === "transport-only";
       if (deliveryResult?.deliverySucceeded === true || clearStaleTransportOnly) {
-        sessionEntry = await persistSessionEntry({
+        sessionEntry = await persistAgentSession({
           sessionStore,
           sessionKey,
           storePath,
@@ -396,7 +408,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
       sessionReboundDuringRun,
     };
   } catch (error) {
-    lifecycle.emitPostTurnError(error);
+    lifecycle.emitPostTurnError(error, terminal);
     throw error;
   }
 }

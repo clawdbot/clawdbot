@@ -372,7 +372,7 @@ describe("gateway server agent", () => {
     expect(res.error?.code).toBe("INVALID_REQUEST");
   });
 
-  test("agent downgrades to session-only when multiple channels are configured but no external target resolves", async () => {
+  test("agent preserves requested delivery when no external target resolves", async () => {
     const registry = createRegistry([
       {
         pluginId: "discord",
@@ -399,7 +399,7 @@ describe("gateway server agent", () => {
     expect(res.ok).toBe(true);
     await expectAgentRoutingCall({
       channel: "webchat",
-      deliver: false,
+      deliver: true,
       runId: "idem-agent-multi-configured-best-effort",
     });
   });

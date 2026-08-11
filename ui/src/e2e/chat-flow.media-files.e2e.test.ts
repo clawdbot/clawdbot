@@ -60,7 +60,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      const link = page.getByRole("link", { name: "测试 report.pdf" });
+      const link = page.getByRole("link", { name: "测试 report.pdf", exact: true });
       await link.waitFor({ state: "visible", timeout: 10_000 });
       const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
 
@@ -531,6 +531,10 @@ suite.define(() => {
       const id = String(index + 1).padStart(12, "0");
       return `/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-${id}/full`;
     });
+    const managedImageBody = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=",
+      "base64",
+    );
     const fetchedMedia: Array<{
       authorization: string | undefined;
       pathname: string;
@@ -545,8 +549,8 @@ suite.define(() => {
         requesterSessionKey: request.headers()["x-openclaw-requester-session-key"],
       });
       await route.fulfill({
-        body: '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><rect width="160" height="90" rx="12" fill="#0f766e"/><text x="80" y="50" text-anchor="middle" fill="white" font-family="sans-serif" font-size="14">managed preview</text></svg>',
-        contentType: "image/svg+xml",
+        body: managedImageBody,
+        contentType: "image/png",
       });
     });
 
@@ -617,9 +621,7 @@ suite.define(() => {
               (images) =>
                 images.filter(
                   (image) =>
-                    image instanceof HTMLImageElement &&
-                    image.complete &&
-                    image.naturalWidth === 160,
+                    image instanceof HTMLImageElement && image.complete && image.naturalWidth === 1,
                 ).length,
             ),
         )
@@ -643,19 +645,21 @@ suite.define(() => {
       const overflowProof = await readBlobProof();
       // Concurrent image fetches can resolve in any order. Find the real LRU
       // rather than assuming that creation order matches transcript order.
+      expect(overflowProof.revoked).toHaveLength(1);
       const evictedBlobUrl = expectDefined(
-        overflowProof.created.find((blobUrl) => blobUrl !== retainedRecentBlobUrl),
+        overflowProof.revoked.find((blobUrl) => blobUrl !== retainedRecentBlobUrl),
         "evicted managed image Blob URL",
       );
+      expect(overflowProof.created).toContain(evictedBlobUrl);
       const evictedImageIndex = initialBlobUrls.indexOf(evictedBlobUrl);
       expect(evictedImageIndex).toBeGreaterThanOrEqual(0);
-      expect(overflowProof.revoked).toContain(evictedBlobUrl);
       expect(overflowProof.revoked).not.toContain(retainedRecentBlobUrl);
 
-      const evictedPath = new URL(
+      const evictedUrl = new URL(
         expectDefined(imageUrls[evictedImageIndex], "evicted managed image URL"),
         suite.server.baseUrl,
-      ).pathname;
+      );
+      const evictedPath = evictedUrl.pathname.replace(/\/full$/u, "/thumbnail");
       const fetchesBeforeRevisit = fetchedMedia.filter(
         (request) => request.pathname === evictedPath,
       ).length;
@@ -671,7 +675,7 @@ suite.define(() => {
             image instanceof HTMLImageElement && image.complete ? image.naturalWidth : 0,
           ),
         )
-        .toBe(160);
+        .toBe(1);
       await expect.poll(async () => (await readBlobProof()).created.length).toBe(66);
       const finalProof = await readBlobProof();
       const evictedImageFetches = fetchedMedia.filter(

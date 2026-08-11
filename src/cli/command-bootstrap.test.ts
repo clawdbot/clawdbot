@@ -68,15 +68,16 @@ describe("ensureCliCommandBootstrap", () => {
   it("skips config guard without skipping plugin loading", async () => {
     await ensureCliCommandBootstrap({
       runtime: {} as never,
-      commandPath: ["status"],
+      commandPath: ["memory", "search"],
       suppressDoctorStdout: true,
       skipConfigGuard: true,
       loadPlugins: true,
+      pluginRegistry: { scope: "memory" },
     });
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
-      scope: "channels",
+      scope: "memory",
       routeLogsToStderr: true,
     });
   });

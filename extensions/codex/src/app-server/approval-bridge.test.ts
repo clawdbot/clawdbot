@@ -1,18 +1,21 @@
-// Codex tests cover approval bridge plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { reviewExecRequestWithConfiguredModel } from "openclaw/plugin-sdk/agent-harness-exec-review-runtime";
 import {
   callGatewayTool,
+  buildAgentHookContextChannelFields,
   hasNativeHookRelayInvocation,
   invokeNativeHookRelay,
   resolveNativeHookRelayDeferredToolApproval,
   runBeforeToolCallHook,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+// Codex tests cover approval bridge plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
+import { codexTestTurnIds } from "./codex-app-server.test-fixtures.js";
 import {
   requestPluginApproval,
   waitForPluginApprovalDecision,
@@ -46,12 +49,8 @@ const mockResolveNativeHookRelayDeferredToolApproval = vi.mocked(
 const mockReviewExecRequestWithConfiguredModel = vi.mocked(reviewExecRequestWithConfiguredModel);
 const mockRunBeforeToolCallHook = vi.mocked(runBeforeToolCallHook);
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-capitalized");
+type AgentHarnessHostCapabilities = EmbeddedRunAttemptParams["hostCapabilities"];
 
 function gatewayCallAt(callIndex = 0) {
   const call = mockCallGatewayTool.mock.calls[callIndex];
@@ -108,7 +107,7 @@ function findApprovalEvent(
 }
 
 function createParams(): EmbeddedRunAttemptParams {
-  return {
+  const params = {
     sessionKey: "agent:main:session-1",
     agentId: "main",
     messageChannel: "telegram",
@@ -117,6 +116,58 @@ function createParams(): EmbeddedRunAttemptParams {
     currentThreadTs: "thread-ts",
     onAgentEvent: vi.fn(),
   } as unknown as EmbeddedRunAttemptParams;
+  const hostCapabilities: AgentHarnessHostCapabilities = {
+    kind: "agent-harness-host-capability",
+    version: 1,
+    assertActive: () => {},
+    bindToolSurface: (tools) => tools,
+    runBeforeToolCall: async ({ approvalMode = "request", ...request }) => {
+      const requester = {
+        ...((params.messageChannel ?? params.messageProvider)
+          ? { channel: params.messageChannel ?? params.messageProvider ?? undefined }
+          : {}),
+        ...(params.agentAccountId ? { accountId: params.agentAccountId } : {}),
+        ...(params.senderId ? { senderId: params.senderId } : {}),
+        ...(params.senderIsOwner !== undefined ? { senderIsOwner: params.senderIsOwner } : {}),
+        ...(params.memberRoleIds?.length ? { roleIds: [...params.memberRoleIds] } : {}),
+      };
+      return await runBeforeToolCallHook({
+        ...request,
+        approvalMode,
+        ctx: {
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          ...buildAgentHookContextChannelFields(params),
+          ...(Object.keys(requester).length > 0 ? { requester } : {}),
+          turnSourceChannel: params.messageChannel,
+          turnSourceTo: params.currentChannelId,
+          turnSourceAccountId: params.agentAccountId,
+          turnSourceThreadId: params.currentThreadTs,
+        },
+      });
+    },
+    requestApproval: async (request) =>
+      (await callGatewayTool(
+        "plugin.approval.request",
+        { timeoutMs: request.timeoutMs },
+        {
+          pluginId: "codex",
+          ...request,
+          timeoutMs: 120_000,
+          twoPhase: true,
+        },
+        { expectFinal: false },
+      )) as Awaited<ReturnType<AgentHarnessHostCapabilities["requestApproval"]>>,
+    waitForApproval: async (request) => {
+      const result = (await callGatewayTool(
+        "plugin.approval.waitDecision",
+        { timeoutMs: request.timeoutMs },
+        { id: request.approvalId },
+      )) as { id?: string; decision?: "allow-once" | "allow-always" | "deny" | null };
+      return result?.id === request.approvalId ? result.decision : undefined;
+    },
+  };
+  return Object.assign(params, { hostCapabilities });
 }
 
 describe("Codex app-server approval bridge", () => {
@@ -146,14 +197,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-yolo",
         command: "/bin/bash -lc 'node -v'",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       autoApprove: true,
     });
 
@@ -177,14 +226,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/fileChange/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "patch-yolo",
         reason: "needs write access",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       autoApprove: true,
     });
 
@@ -212,14 +259,12 @@ describe("Codex app-server approval bridge", () => {
       const result = await handleCodexAppServerApprovalRequest({
         method,
         requestParams: {
-          threadId: "thread-1",
-          turnId: "turn-1",
+          ...codexTestTurnIds(),
           itemId,
           ...requestFields,
         },
         paramsForRun: params,
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         autoApproveOpenClawToolPolicy: true,
       });
 
@@ -246,13 +291,11 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/fileChange/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "patch-owner-policy",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       autoApproveOpenClawToolPolicy: true,
     });
 
@@ -289,8 +332,7 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/permissions/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "permission-policy-allow",
         permissions: {
           network: { enabled: true },
@@ -298,8 +340,7 @@ describe("Codex app-server approval bridge", () => {
         },
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       ...policy,
     });
 
@@ -328,14 +369,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-1",
         command: "pnpm test extensions/codex/src/app-server",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({ decision: "accept" });
@@ -346,41 +385,41 @@ describe("Codex app-server approval bridge", () => {
     expect(gatewayCallMethod()).toBe("plugin.approval.request");
     expect(typeof gatewayCallAt(0)[1]).toBe("object");
     const requestPayload = gatewayRequestPayload();
-    expect(requestPayload.pluginId).toBe("openclaw-codex-app-server");
+    expect(requestPayload.pluginId).toBe("codex");
     expect(requestPayload.title).toBe("Codex app-server command approval");
     expect(requestPayload.twoPhase).toBe(true);
-    expect(requestPayload.turnSourceChannel).toBe("telegram");
-    expect(requestPayload.turnSourceTo).toBe("chat-1");
+    expect(requestPayload.turnSourceChannel).toBeUndefined();
+    expect(requestPayload.turnSourceTo).toBeUndefined();
     expect(gatewayCallOptions()).toEqual({ expectFinal: false });
-    expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith({
-      toolName: "exec",
-      params: {
-        command: "pnpm test extensions/codex/src/app-server",
-        approval: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          itemId: "cmd-1",
+    expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "exec",
+        params: {
           command: "pnpm test extensions/codex/src/app-server",
+          approval: {
+            ...codexTestTurnIds(),
+            itemId: "cmd-1",
+            command: "pnpm test extensions/codex/src/app-server",
+          },
         },
-      },
-      toolCallId: "cmd-1",
-      approvalMode: "request",
-      signal: undefined,
-      ctx: {
-        agentId: "main",
-        sessionKey: "agent:main:session-1",
-        channelId: "chat-1",
-        requester: {
-          channel: "telegram",
-          accountId: "default",
-        },
-        workspaceDir: undefined,
-        turnSourceChannel: "telegram",
-        turnSourceTo: "chat-1",
-        turnSourceAccountId: "default",
-        turnSourceThreadId: "thread-ts",
-      },
-    });
+        toolCallId: "cmd-1",
+        approvalMode: "request",
+        signal: undefined,
+        ctx: expect.objectContaining({
+          agentId: "main",
+          sessionKey: "agent:main:session-1",
+          channelId: "chat-1",
+          requester: {
+            channel: "telegram",
+            accountId: "default",
+          },
+          turnSourceChannel: "telegram",
+          turnSourceTo: "chat-1",
+          turnSourceAccountId: "default",
+          turnSourceThreadId: "thread-ts",
+        }),
+      }),
+    );
     findApprovalEvent(params, { status: "pending", approvalId: "plugin:approval-1" });
     findApprovalEvent(params, { status: "approved", approvalId: "plugin:approval-1" });
   });
@@ -410,14 +449,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-auto-review",
         command: "node --version",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({ decision: "decline" });
@@ -445,14 +482,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-auto-review-missing",
         command: "node --version",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({ decision: "accept" });
@@ -487,8 +522,7 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-auto-review-network",
         command: "curl https://example.test",
         networkApprovalContext: {
@@ -498,8 +532,7 @@ describe("Codex app-server approval bridge", () => {
         },
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({ decision: "accept" });
@@ -536,14 +569,12 @@ describe("Codex app-server approval bridge", () => {
       const result = await handleCodexAppServerApprovalRequest({
         method: "item/commandExecution/requestApproval",
         requestParams: {
-          threadId: "thread-1",
-          turnId: "turn-1",
+          ...codexTestTurnIds(),
           itemId: "cmd-auto-review-local",
           command: "node --version",
         },
         paramsForRun: params,
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
       });
 
       expect(result).toEqual({ decision: "accept" });
@@ -643,14 +674,12 @@ describe("Codex app-server approval bridge", () => {
       const result = await handleCodexAppServerApprovalRequest({
         method: "item/commandExecution/requestApproval",
         requestParams: {
-          threadId: "thread-1",
-          turnId: "turn-1",
+          ...codexTestTurnIds(),
           itemId: "cmd-auto-review-custom-openai",
           command: "node --version",
         },
         paramsForRun: params,
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
       });
 
       expect(result).toEqual({ decision: "accept" });
@@ -695,14 +724,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-auto-review-aliased-openai",
         command: "node --version",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({ decision: "accept" });
@@ -749,14 +776,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-auto-review-agent-alias",
         command: "node --version",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({ decision: "accept" });
@@ -792,14 +817,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-auto-review-env-openai",
         command: "node --version",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({ decision: "accept" });
@@ -842,14 +865,12 @@ describe("Codex app-server approval bridge", () => {
       const result = await handleCodexAppServerApprovalRequest({
         method: "item/commandExecution/requestApproval",
         requestParams: {
-          threadId: "thread-1",
-          turnId: "turn-1",
+          ...codexTestTurnIds(),
           itemId: "cmd-auto-review-native-openai",
           command: "node --version",
         },
         paramsForRun: params,
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
       });
 
       expect(result).toEqual({ decision: "accept" });
@@ -887,8 +908,7 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-auto-review-amendment",
         command: "node --version",
         additionalPermissions: {
@@ -898,8 +918,7 @@ describe("Codex app-server approval bridge", () => {
         },
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({ decision: "accept" });
@@ -935,8 +954,7 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-auto-review-execpolicy-object",
         command: "node --version",
         proposedExecpolicyAmendment: {
@@ -944,8 +962,7 @@ describe("Codex app-server approval bridge", () => {
         },
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({ decision: "acceptForSession" });
@@ -980,14 +997,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-auto-review-unbound",
         command: "node --version && echo ok",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({ decision: "accept" });
@@ -1027,14 +1042,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-auto-review-control-command",
         command,
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({ decision: "accept" });
@@ -1072,14 +1085,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-auto-review-security-suppression",
         command: "openclaw config set security.audit.suppressions '[]'",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({ decision: "accept" });
@@ -1114,8 +1125,7 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-auto-review-amendment-only",
         command: "node --version",
         availableDecisions: [
@@ -1127,8 +1137,7 @@ describe("Codex app-server approval bridge", () => {
         ],
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({
@@ -1169,14 +1178,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-auto-review-ask",
         command: "git status",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({ decision: "accept" });
@@ -1199,14 +1206,12 @@ describe("Codex app-server approval bridge", () => {
     await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-prefixed",
         command: "pnpm test extensions/codex/src/app-server",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith(
@@ -1216,7 +1221,7 @@ describe("Codex app-server approval bridge", () => {
         }),
       }),
     );
-    expect(gatewayRequestPayload().turnSourceTo).toBe("telegram:-100123");
+    expect(gatewayRequestPayload().turnSourceTo).toBeUndefined();
   });
 
   it("denies command approvals before prompting when OpenClaw tool policy blocks", async () => {
@@ -1231,19 +1236,50 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-blocked",
         command: "cat /tmp/private_key",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({ decision: "decline" });
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
     findApprovalEvent(params, { status: "denied" });
+  });
+
+  it("passes the exact native command cwd to the host policy capability", async () => {
+    const params = createParams();
+    params.cwd = "/attempt/worktree";
+    const runBeforeToolCall: AgentHarnessHostCapabilities["runBeforeToolCall"] = vi.fn(
+      async ({ params: toolParams }) => ({
+        blocked: true as const,
+        kind: "veto" as const,
+        deniedReason: "plugin-before-tool-call" as const,
+        reason: "blocked by policy",
+        params: toolParams,
+      }),
+    );
+    params.hostCapabilities = { ...params.hostCapabilities, runBeforeToolCall };
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        ...codexTestTurnIds(),
+        itemId: "cmd-native-cwd",
+        command: "pwd",
+        cwd: "/native/action/worktree",
+      },
+      paramsForRun: params,
+      ...codexTestTurnIds(),
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(runBeforeToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({ nativeOperation: { cwd: "/native/action/worktree" } }),
+    );
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
   it("routes command approvals through the active native hook relay before prompting", async () => {
@@ -1263,15 +1299,13 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-native-relay",
         command: "cat /tmp/private_key",
         cwd: "/workspace",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       autoApprove: true,
       nativeHookRelay: {
         relayId: "relay-1",
@@ -1299,8 +1333,7 @@ describe("Codex app-server approval bridge", () => {
           command: "cat /tmp/private_key",
           cwd: "/workspace",
           approval: {
-            threadId: "thread-1",
-            turnId: "turn-1",
+            ...codexTestTurnIds(),
             itemId: "cmd-native-relay",
             command: "cat /tmp/private_key",
             cwd: "/workspace",
@@ -1314,6 +1347,82 @@ describe("Codex app-server approval bridge", () => {
       status: "denied",
       message: "blocked by native relay",
     });
+  });
+
+  it("fails closed when native relay policy resolves after host capability closure", async () => {
+    const params = createParams();
+    let active = true;
+    params.hostCapabilities = {
+      ...params.hostCapabilities,
+      assertActive: () => {
+        if (!active) {
+          throw new Error("agent harness host capability is no longer active");
+        }
+      },
+    };
+    mockInvokeNativeHookRelay.mockImplementationOnce(async () => {
+      active = false;
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    mockHasNativeHookRelayInvocation.mockReturnValueOnce(false).mockReturnValueOnce(true);
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        ...codexTestTurnIds(),
+        itemId: "cmd-native-relay-late",
+        command: "git status",
+      },
+      paramsForRun: params,
+      ...codexTestTurnIds(),
+      autoApprove: true,
+      nativeHookRelay: {
+        relayId: "relay-late",
+        generation: "generation-late",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, { status: "denied" });
+  });
+
+  it("fails closed when deferred native approval resolves after host capability closure", async () => {
+    const params = createParams();
+    let active = true;
+    params.hostCapabilities = {
+      ...params.hostCapabilities,
+      assertActive: () => {
+        if (!active) {
+          throw new Error("agent harness host capability is no longer active");
+        }
+      },
+    };
+    mockHasNativeHookRelayInvocation.mockReturnValueOnce(true);
+    mockResolveNativeHookRelayDeferredToolApproval.mockImplementationOnce(async () => {
+      active = false;
+      return { handled: true, outcome: "approved-once" };
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        ...codexTestTurnIds(),
+        itemId: "cmd-native-relay-deferred-late",
+        command: "git status",
+      },
+      paramsForRun: params,
+      ...codexTestTurnIds(),
+      nativeHookRelay: {
+        relayId: "relay-deferred-late",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, { status: "unavailable" });
   });
 
   it("correlates distinct execve approvals by approvalId instead of parent itemId", async () => {
@@ -1347,16 +1456,14 @@ describe("Codex app-server approval bridge", () => {
       await handleCodexAppServerApprovalRequest({
         method: "item/commandExecution/requestApproval",
         requestParams: {
-          threadId: "thread-1",
-          turnId: "turn-1",
+          ...codexTestTurnIds(),
           itemId: "parent-command-item",
           approvalId,
           command,
           cwd: "/workspace",
         },
         paramsForRun: params,
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         nativeHookRelay,
       });
     }
@@ -1393,15 +1500,13 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-native-relay-noop",
         command: "pnpm test extensions/codex/src/app-server",
         cwd: "/workspace",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       nativeHookRelay: {
         relayId: "relay-1",
         generation: "generation-1",
@@ -1441,15 +1546,13 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-native-relay-observed",
         command: "pnpm test extensions/codex/src/app-server",
         cwd: "/workspace",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       nativeHookRelay: {
         relayId: "relay-1",
         generation: "generation-1",
@@ -1486,15 +1589,13 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-native-relay-deferred",
         command: "pnpm test extensions/codex/src/app-server",
         cwd: "/workspace",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       nativeHookRelay: {
         relayId: "relay-1",
         allowedEvents: ["pre_tool_use"],
@@ -1525,15 +1626,13 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-native-relay-deferred-failure",
         command: "pnpm test extensions/codex/src/app-server",
         cwd: "/workspace",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       nativeHookRelay: {
         relayId: "relay-1",
         allowedEvents: ["pre_tool_use"],
@@ -1559,15 +1658,13 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-native-relay-unreadable",
         command: "pnpm test extensions/codex/src/app-server",
         cwd: "/workspace",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       autoApprove: true,
       nativeHookRelay: {
         relayId: "relay-1",
@@ -1604,15 +1701,13 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-native-relay-allow",
         command: "pnpm test extensions/codex/src/app-server",
         cwd: "/workspace",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       nativeHookRelay: {
         relayId: "relay-1",
         generation: "generation-1",
@@ -1641,15 +1736,13 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-native-relay-exit",
         command: "pnpm test extensions/codex/src/app-server",
         cwd: "/workspace",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       nativeHookRelay: {
         relayId: "relay-1",
         generation: "generation-1",
@@ -1674,14 +1767,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-native-relay-missing",
         command: "cat /tmp/private_key",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       nativeHookRelay: {
         relayId: "relay-missing",
         generation: "generation-1",
@@ -1707,14 +1798,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-native-relay-full-auto-missing",
         command: "pwd",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       autoApprove: true,
       nativeHookRelay: {
         relayId: "relay-missing",
@@ -1741,14 +1830,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-native-relay-handler-failure",
         command: "pwd",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       autoApprove: true,
       nativeHookRelay: {
         relayId: "relay-1",
@@ -1783,29 +1870,25 @@ describe("Codex app-server approval bridge", () => {
     await handleCodexAppServerApprovalRequest({
       method: "item/fileChange/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "patch-native-relay-registered",
         reason: "needs write access",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       nativeHookRelay,
     });
     await handleCodexAppServerApprovalRequest({
       method: "item/permissions/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "permission-native-relay-registered",
         permissions: {
           network: { allowHosts: ["example.com"] },
         },
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       nativeHookRelay,
     });
 
@@ -1824,8 +1907,7 @@ describe("Codex app-server approval bridge", () => {
       params: {
         command: "echo rewritten",
         approval: {
-          threadId: "thread-1",
-          turnId: "turn-1",
+          ...codexTestTurnIds(),
           itemId: "cmd-rewritten",
           command: "echo rewritten",
         },
@@ -1835,14 +1917,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-rewritten",
         command: "cat /tmp/private_key",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({ decision: "decline" });
@@ -1861,8 +1941,7 @@ describe("Codex app-server approval bridge", () => {
       params: {
         command: "pnpm test",
         approval: {
-          threadId: "thread-1",
-          turnId: "turn-1",
+          ...codexTestTurnIds(),
           itemId: "cmd-needs-approval",
           command: "pnpm test",
         },
@@ -1873,14 +1952,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-needs-approval",
         command: "pnpm test",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({ decision: "accept" });
@@ -1903,14 +1980,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-needs-approval",
         command: "pnpm test",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({ decision: "decline" });
@@ -1937,14 +2012,12 @@ describe("Codex app-server approval bridge", () => {
       const result = await handleCodexAppServerApprovalRequest({
         method: "item/commandExecution/requestApproval",
         requestParams: {
-          threadId: "thread-1",
-          turnId: "turn-1",
+          ...codexTestTurnIds(),
           itemId: "cmd-policy-failure",
           command: "pnpm test",
         },
         paramsForRun: params,
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         onNativeToolFailureDisposition,
       });
 
@@ -1979,14 +2052,12 @@ describe("Codex app-server approval bridge", () => {
       await handleCodexAppServerApprovalRequest({
         method: "item/commandExecution/requestApproval",
         requestParams: {
-          threadId: "thread-1",
-          turnId: "turn-1",
+          ...codexTestTurnIds(),
           itemId: "cmd-aborted-policy",
           command: "pnpm test",
         },
         paramsForRun: params,
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         signal: controller.signal,
         onNativeToolFailureDisposition,
       });
@@ -2007,15 +2078,13 @@ describe("Codex app-server approval bridge", () => {
     await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-actions",
         command: "bash -lc 'pnpm test extensions/codex'",
         commandActions: [{ command: "pnpm test extensions/codex" }],
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     const requestPayload = gatewayRequestPayload();
@@ -2042,8 +2111,7 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-permissions",
         command: "npm install",
         additionalPermissions: {
@@ -2056,8 +2124,7 @@ describe("Codex app-server approval bridge", () => {
         proposedNetworkPolicyAmendments: [{ host: "registry.npmjs.org", action: "allow" }],
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({ decision: "acceptForSession" });
@@ -2083,8 +2150,7 @@ describe("Codex app-server approval bridge", () => {
     await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-long-permissions",
         command: `${"npm install ".repeat(500)} --unsafe-perm`,
         additionalPermissions: {
@@ -2095,8 +2161,7 @@ describe("Codex app-server approval bridge", () => {
         },
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     const description = String(gatewayRequestPayload().description);
@@ -2114,14 +2179,12 @@ describe("Codex app-server approval bridge", () => {
     await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-sanitized",
         command: ["pnpm", "test\n--watch", "\u001b[31mextensions/codex/src/app-server\u001b[0m"],
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(gatewayRequestPayload().description).toBe(
@@ -2142,14 +2205,12 @@ describe("Codex app-server approval bridge", () => {
     await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-escaped",
         command: "printf '<@U123> [trusted](https://evil) @here'",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     const description = String(gatewayRequestPayload().description);
@@ -2174,14 +2235,12 @@ describe("Codex app-server approval bridge", () => {
     await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-osc",
         command: `prefix ${esc}]8;;https://example.com${esc}\\VISIBLE${esc}]8;;${esc}\\ suffix`,
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(gatewayRequestPayload().description).toBe(
@@ -2199,14 +2258,12 @@ describe("Codex app-server approval bridge", () => {
     await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-bidi",
         command: "echo safe\u202e cod.exe\u2066 hidden\u2069 \ufeffdone\u{e0100}",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(gatewayRequestPayload().description).toBe(
@@ -2226,14 +2283,12 @@ describe("Codex app-server approval bridge", () => {
     await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-omitted",
         command: [oversizedPrefix, "TAIL"],
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(gatewayRequestPayload().description).toBe(
@@ -2252,14 +2307,12 @@ describe("Codex app-server approval bridge", () => {
     await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-clipped",
         command: `${"a".repeat(5000)} tail`,
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     const description = String(gatewayRequestPayload().description);
@@ -2281,14 +2334,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-untrusted",
         command: "pnpm test",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({ decision: "decline" });
@@ -2315,14 +2366,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-inherited",
         command: "pnpm test",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({ decision: "accept" });
@@ -2348,14 +2397,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-accessor",
         command: "pnpm test",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({ decision: "accept" });
@@ -2381,14 +2428,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-proxy",
         command: "pnpm test",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({ decision: "accept" });
@@ -2405,14 +2450,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/fileChange/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "patch-1",
         reason: "needs write access",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       onNativeToolFailureDisposition,
     });
 
@@ -2431,14 +2474,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/fileChange/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "patch-stale",
         reason: "needs write access",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({ decision: "decline" });
@@ -2459,6 +2500,7 @@ describe("Codex app-server approval bridge", () => {
     mockCallGatewayTool.mockImplementationOnce(() => new Promise(() => {}));
 
     const pending = waitForPluginApprovalDecision({
+      hostCapabilities: createParams().hostCapabilities,
       approvalId: "plugin:approval-abort",
       signal: controller.signal,
     });
@@ -2478,14 +2520,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-expired",
         command: "pnpm test",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       onNativeToolFailureDisposition,
     });
 
@@ -2507,14 +2547,12 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-mismatch",
         command: "pnpm test",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
       onNativeToolFailureDisposition,
     });
 
@@ -2537,14 +2575,12 @@ describe("Codex app-server approval bridge", () => {
     await handleCodexAppServerApprovalRequest({
       method: "item/fileChange/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "patch-sanitized",
         reason: "needs write access\nfor \u001b[31m/tmp\u001b[0m\tplease",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(gatewayRequestPayload().description).toBe(
@@ -2565,13 +2601,11 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "future/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "future-1",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({
@@ -2597,8 +2631,7 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/permissions/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "perm-1",
         permissions: {
           network: { allowHosts: ["example.com", "*.internal"] },
@@ -2606,8 +2639,7 @@ describe("Codex app-server approval bridge", () => {
         },
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({
@@ -2642,8 +2674,7 @@ describe("Codex app-server approval bridge", () => {
     await handleCodexAppServerApprovalRequest({
       method: "item/permissions/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "perm-2",
         permissions: {
           network: {
@@ -2662,8 +2693,7 @@ describe("Codex app-server approval bridge", () => {
         },
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     const description = String(gatewayRequestPayload().description);
@@ -2686,8 +2716,7 @@ describe("Codex app-server approval bridge", () => {
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/permissions/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "perm-current",
         permissions: {
           network: { enabled: true },
@@ -2703,8 +2732,7 @@ describe("Codex app-server approval bridge", () => {
         },
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toEqual({
@@ -2738,8 +2766,7 @@ describe("Codex app-server approval bridge", () => {
     await handleCodexAppServerApprovalRequest({
       method: "item/permissions/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "perm-windows-home",
         permissions: {
           fileSystem: {
@@ -2749,8 +2776,7 @@ describe("Codex app-server approval bridge", () => {
         },
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     const description = String(gatewayRequestPayload().description);
@@ -2767,8 +2793,7 @@ describe("Codex app-server approval bridge", () => {
     await handleCodexAppServerApprovalRequest({
       method: "item/permissions/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "perm-controls",
         permissions: {
           network: { allowHosts: ["exa\u009b31mmple.com", "safe\u202e.example.com"] },
@@ -2776,8 +2801,7 @@ describe("Codex app-server approval bridge", () => {
         },
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     const description = String(gatewayRequestPayload().description);
@@ -2799,8 +2823,7 @@ describe("Codex app-server approval bridge", () => {
         command: "pnpm test",
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     expect(result).toBeUndefined();
@@ -2822,14 +2845,12 @@ describe("Codex app-server approval bridge", () => {
     await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
       requestParams: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
         itemId: "cmd-utf16",
         command,
       },
       paramsForRun: params,
-      threadId: "thread-1",
-      turnId: "turn-1",
+      ...codexTestTurnIds(),
     });
 
     const event = findApprovalEvent(params, { status: "pending" });
@@ -2860,14 +2881,12 @@ describe("Codex app-server approval bridge", () => {
       await handleCodexAppServerApprovalRequest({
         method: "item/commandExecution/requestApproval",
         requestParams: {
-          threadId: "thread-1",
-          turnId: "turn-1",
+          ...codexTestTurnIds(),
           itemId: "cmd-utf16-scan",
           ...input,
         },
         paramsForRun: params,
-        threadId: "thread-1",
-        turnId: "turn-1",
+        ...codexTestTurnIds(),
       });
 
       const event = findApprovalEvent(params, { status: "pending" });
@@ -2883,7 +2902,7 @@ describe("Codex app-server approval bridge", () => {
     mockCallGatewayTool.mockResolvedValueOnce({ id: "plugin:approval-utf16-gateway" });
 
     await requestPluginApproval({
-      paramsForRun: createParams(),
+      hostCapabilities: createParams().hostCapabilities,
       title: `${"t".repeat(76)}😀tail`,
       description: `${"d".repeat(252)}😀tail`,
       severity: "warning",

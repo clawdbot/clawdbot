@@ -111,29 +111,8 @@ vi.mock("../../infra/channel-summary.js", () => ({
   buildChannelSummary: channelSummaryMocks.buildChannelSummary,
 }));
 
-// Perf: session-store locks are exercised elsewhere; most session tests don't need FS lock files.
-vi.mock("../../agents/session-write-lock.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/session-write-lock.js")>(
-    "../../agents/session-write-lock.js",
-  );
-  return {
-    ...actual,
-    acquireSessionWriteLock: vi.fn(async () => ({ release: async () => {} })),
-    resolveSessionLockMaxHoldFromTimeout: vi.fn(
-      ({
-        timeoutMs,
-        graceMs = 2 * 60 * 1000,
-        minMs = 5 * 60 * 1000,
-      }: {
-        timeoutMs: number;
-        graceMs?: number;
-        minMs?: number;
-      }) => Math.max(minMs, timeoutMs + graceMs),
-    ),
-  };
-});
-
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalog: vi.fn(async () => [
     { provider: "minimax", id: "m2.7", name: "M2.7" },
     { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
@@ -1291,6 +1270,7 @@ describe("initSessionState RawBody", () => {
     await expect(
       drainFormattedSystemEvents({
         cfg,
+        agentId: "main",
         sessionKey,
         isMainSession: false,
         isNewSession: true,
@@ -2141,6 +2121,7 @@ describe("initSessionState reset policy", () => {
     await expect(
       drainFormattedSystemEvents({
         cfg,
+        agentId: "main",
         sessionKey,
         isMainSession: false,
         isNewSession: true,
@@ -2751,6 +2732,63 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
       },
     } as OpenClawConfig;
   }
+
+  it("requires canonical command authorization before rotating durable session state", async () => {
+    const sessionKey = "agent:main:whatsapp:group:owner-only-reset";
+    const storePath = await createStorePath("openclaw-group-reset-owner-only-");
+    const existingSessionId = "existing-owner-session";
+    await seedSessionStore({ storePath, sessionKey, sessionId: existingSessionId });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "whatsapp",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "whatsapp", label: "WhatsApp" }),
+            commands: { enforceOwnerForCommands: true },
+          },
+        },
+      ]),
+    );
+
+    try {
+      const cfg = {
+        session: { store: storePath, idleMinutes: 999 },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        commands: { ownerAllowFrom: ["owner"] },
+      } as OpenClawConfig;
+      const baseContext = {
+        Body: "/new /model openai/gpt-5",
+        RawBody: "/new /model openai/gpt-5",
+        CommandBody: "/new /model openai/gpt-5",
+        From: "120363406150318674@g.us",
+        To: "bot",
+        ChatType: "group",
+        SessionKey: sessionKey,
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+      };
+
+      const denied = await initSessionState({
+        ctx: { ...baseContext, SenderId: "non-owner" },
+        cfg,
+        // Ingress admission alone must not bypass the channel's owner-only command policy.
+        commandAuthorized: true,
+      });
+      expect(denied.resetTriggered).toBe(false);
+      expect(denied.sessionId).toBe(existingSessionId);
+
+      const owner = await initSessionState({
+        ctx: { ...baseContext, SenderId: "owner" },
+        cfg,
+        commandAuthorized: true,
+      });
+      expect(owner.resetTriggered).toBe(true);
+      expect(owner.isNewSession).toBe(true);
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
+  });
 
   it("applies WhatsApp group reset authorization across sender variants", async () => {
     const sessionKey = "agent:main:whatsapp:group:120363406150318674@g.us";
@@ -4269,6 +4307,7 @@ describe("drainFormattedSystemEvents", () => {
 
       const result = await drainFormattedSystemEvents({
         cfg: {} as OpenClawConfig,
+        agentId: "main",
         sessionKey: "agent:main:main",
         isMainSession: true,
         isNewSession: false,
@@ -4289,6 +4328,7 @@ describe("drainFormattedSystemEvents", () => {
 
     const result = await drainFormattedSystemEvents({
       cfg: { channels: {} } as OpenClawConfig,
+      agentId: "main",
       sessionKey: "agent:main:main",
       isMainSession: true,
       isNewSession: true,
@@ -4314,6 +4354,7 @@ describe("drainFormattedSystemEvents", () => {
 
       const result = await drainFormattedSystemEvents({
         cfg: {} as OpenClawConfig,
+        agentId: "main",
         sessionKey: "agent:main:main",
         isMainSession: true,
         isNewSession: false,
@@ -4338,6 +4379,7 @@ describe("drainFormattedSystemEvents", () => {
 
       const result = await drainFormattedSystemEvents({
         cfg: {} as OpenClawConfig,
+        agentId: "main",
         sessionKey: "agent:main:main",
         isMainSession: true,
         isNewSession: false,
@@ -4492,7 +4534,7 @@ describe("persistSessionUsageUpdate", () => {
       update: {
         isHeartbeat: true,
         usage: { input: 1_200, output: 100 },
-        usageIsContextSnapshot: true,
+        lastCallUsage: { input: 1_200, output: 100 },
         providerUsed: "claude-cli",
         modelUsed: "claude-sonnet-4-6",
         cliSessionBinding: {
@@ -4532,7 +4574,7 @@ describe("persistSessionUsageUpdate", () => {
       update: {
         isHeartbeat: true,
         usage: { input: 1_200, output: 100 },
-        usageIsContextSnapshot: true,
+        lastCallUsage: { input: 1_200, output: 100 },
         providerUsed: "claude-cli",
         modelUsed: "claude-sonnet-4-6",
         clearCliSessionBinding: true,
@@ -4547,11 +4589,11 @@ describe("persistSessionUsageUpdate", () => {
       },
     },
     {
-      name: "treats CLI usage as a fresh context snapshot when requested",
+      name: "treats CLI last-call usage as a fresh context snapshot",
       seed: {},
       update: {
         usage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
-        usageIsContextSnapshot: true,
+        lastCallUsage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
         providerUsed: "claude-cli",
         cliSessionBinding: {
           sessionId: "cli-session-1",
@@ -4586,7 +4628,7 @@ describe("persistSessionUsageUpdate", () => {
       },
       update: {
         usage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
-        usageIsContextSnapshot: true,
+        lastCallUsage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
         providerUsed: "claude-cli",
         clearCliSessionBinding: true,
       },
@@ -4609,7 +4651,6 @@ describe("persistSessionUsageUpdate", () => {
       update: {
         usage: { input: 20, output: 10_855, cacheRead: 1_761_324, cacheWrite: 33_047 },
         lastCallUsage: { input: 20, output: 10_855, cacheRead: 1_761_324, cacheWrite: 33_047 },
-        usageIsContextSnapshot: true,
         providerUsed: "claude-cli",
         contextTokensUsed: 1_048_576,
         compactionTokensAfter: 0,
@@ -4720,7 +4761,7 @@ describe("persistSessionUsageUpdate", () => {
       },
     },
     {
-      name: "keeps the prior total stale when last-call context is unavailable",
+      name: "clears the prior total when last-call context is unavailable",
       seed: { totalTokens: 148_874, totalTokensFresh: true },
       update: {
         usage: { input: 12, output: 15_104, cacheRead: 819_661, cacheWrite: 93_130 },
@@ -4734,7 +4775,7 @@ describe("persistSessionUsageUpdate", () => {
         },
       },
       expected: {
-        totalTokens: 148_874,
+        totalTokens: undefined,
         totalTokensFresh: false,
         inputTokens: 12,
         cacheRead: 819_661,
@@ -4783,10 +4824,10 @@ describe("persistSessionUsageUpdate", () => {
       expected: { totalTokens: 42_000, totalTokensFresh: true },
     },
     {
-      name: "marks older fresh totalTokens stale when no compaction preservation is requested",
+      name: "clears older totalTokens when no compaction preservation is requested",
       seed: { totalTokens: 42_000, totalTokensFresh: true },
       update: { usage: { input: 50_000, output: 5_000, total: 55_000 } },
-      expected: { totalTokens: 42_000, totalTokensFresh: false },
+      expected: { totalTokens: undefined, totalTokensFresh: false },
     },
     {
       name: "uses promptTokens when available without lastCallUsage",
@@ -5052,6 +5093,75 @@ describe("initSessionState stale threadId fallback", () => {
 
     expect(result.sessionEntry.lastThreadId).toBe("650.000");
     expect(result.sessionEntry.deliveryContext?.threadId).toBe("650.000");
+  });
+
+  it("preserves external thread routing for internal turns and clears it for external non-thread turns", async () => {
+    const storePath = await createStorePath("internal-thread-route-");
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const sessionKey = "agent:main:main";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "session-internal-thread-route",
+        updatedAt: Date.now(),
+        delivery: {
+          kind: "external",
+          route: {
+            channel: "imessage",
+            accountId: "imessage-default",
+            target: { to: "+15551234567", chatType: "direct" },
+            thread: { id: "thread-42", kind: "thread", source: "session" },
+          },
+          context: {
+            channel: "imessage",
+            to: "+15551234567",
+            accountId: "imessage-default",
+            threadId: "thread-42",
+          },
+          origin: {
+            provider: "webchat",
+            to: "+15551234567",
+            accountId: "imessage-default",
+            threadId: "thread-42",
+            chatType: "direct",
+            surface: "webchat",
+          },
+        },
+      },
+    });
+
+    const internal = await initSessionState({
+      ctx: {
+        Body: "internal control-ui turn",
+        SessionKey: sessionKey,
+        OriginatingChannel: "webchat",
+      },
+      cfg,
+    });
+    expect(internal.sessionEntry.lastThreadId).toBe("thread-42");
+    expect(internal.sessionEntry.deliveryContext).toEqual({
+      channel: "imessage",
+      to: "+15551234567",
+      accountId: "imessage-default",
+      threadId: "thread-42",
+    });
+
+    const plainExternal = await initSessionState({
+      ctx: {
+        Body: "plain external turn",
+        SessionKey: sessionKey,
+        OriginatingChannel: "imessage",
+        OriginatingTo: "+15551234567",
+        AccountId: "imessage-default",
+      },
+      cfg,
+    });
+    expect(plainExternal.sessionEntry.lastThreadId).toBeUndefined();
+    expect(plainExternal.sessionEntry.deliveryContext).toEqual({
+      channel: "imessage",
+      to: "+15551234567",
+      accountId: "imessage-default",
+    });
   });
 
   it("preserves lastThreadId within the same thread session", async () => {

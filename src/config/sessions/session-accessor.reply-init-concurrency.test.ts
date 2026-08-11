@@ -14,7 +14,7 @@ import {
   upsertSessionEntry,
   withTranscriptWriteLock,
 } from "./session-accessor.js";
-import { replaceSqliteTranscriptEvents } from "./session-accessor.sqlite.js";
+import { replaceSqliteTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 
 vi.mock("../config.js", async () => ({
   ...(await vi.importActual<typeof import("../config.js")>("../config.js")),

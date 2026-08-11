@@ -116,9 +116,9 @@ export type {
 } from "../agents/auth-profiles.js";
 
 export { buildConfiguredModelCatalog } from "../agents/model-selection-shared.js";
-export { extractAssistantText } from "../agents/embedded-agent-utils.js";
+export { extractEmbeddedAssistantText as extractAssistantText } from "../agents/embedded-agent-utils.js";
 export { jsonResult } from "../agents/tools/tool-results.js";
-export { readStringParam } from "../agents/tools/common.js";
+export { readToolStringParam as readStringParam } from "../agents/tools/common.js";
 export {
   resolveAgentConfig,
   resolveAgentDir,

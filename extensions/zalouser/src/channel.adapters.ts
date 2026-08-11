@@ -49,6 +49,7 @@ import {
   parseZalouserOutboundTarget,
   resolveZalouserOutboundSessionRoute,
 } from "./session-route.js";
+import { resolveZalouserDmSessionScope } from "./session-scope.js";
 import type { ZaloSendResult } from "./types.js";
 
 const loadZalouserChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
@@ -435,6 +436,9 @@ export const zalouserAuthAdapter = {
 
 export const zalouserSecurityAdapter = {
   resolveDmPolicy: resolveZalouserDmPolicy,
+  dmRouting: {
+    resolveDmScope: ({ cfg }: { cfg: OpenClawConfig }) => resolveZalouserDmSessionScope(cfg),
+  },
   collectAuditFindings: async (params: {
     accountId?: string | null;
     account: ResolvedZalouserAccount;

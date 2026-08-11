@@ -8,7 +8,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
-import { persistSessionEntry } from "./command/attempt-execution.shared.js";
+import { persistAgentSession } from "./command/attempt-execution.shared.js";
 
 type PersistPendingFinalDeliveryMarkerParams = {
   deliver: boolean;
@@ -45,7 +45,8 @@ export async function persistPendingFinalDeliveryMarker(
     params.payloads.length === 0 ||
     isSubagentSessionKey(params.sessionKey) ||
     !recoverableText ||
-    !hasSendableFinalPayload
+    !hasSendableFinalPayload ||
+    !params.deliveryContext
   ) {
     return {
       sessionEntry: params.sessionEntry,
@@ -64,7 +65,7 @@ export async function persistPendingFinalDeliveryMarker(
   }
 
   const now = Date.now();
-  const persisted = await persistSessionEntry({
+  const persisted = await persistAgentSession({
     sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
@@ -75,7 +76,7 @@ export async function persistPendingFinalDeliveryMarker(
         kind: "replayable",
         text: recoverableText,
         createdAt: now,
-        ...(params.deliveryContext ? { context: params.deliveryContext } : {}),
+        context: params.deliveryContext,
       },
       updatedAt: now,
     },

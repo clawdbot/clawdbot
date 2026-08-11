@@ -11,6 +11,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -21,6 +22,7 @@ import {
   hookMocks,
   messageAuditMocks,
   mocks,
+  replyMediaPathMocks,
   sessionBindingMocks,
   sessionStoreMocks,
   ttsMocks,
@@ -28,14 +30,17 @@ import {
 import {
   automaticGroupReplyConfig,
   dispatchReplyFromConfig,
+  installCaptionedVoiceTestPlugin,
   setNoAbort,
+  firstFinalReplyPayload,
   firstMockArg,
   dispatchTwiceWithFreshDispatchers,
   messageAuditEvents,
   globalBeforeAll0,
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
-import { usesFullReplyRuntime, usesPublishedReplyRuntime } from "./reply-config-runtime-mode.js";
+import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
+import { usesFullReplyRuntime } from "./reply-config-runtime-mode.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -967,32 +972,53 @@ describe("dispatchReplyFromConfig", () => {
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({ Provider: "msteams", Surface: "msteams" });
-    setRuntimeConfigSnapshot({
+    const runtimeCfg = {
       agents: { defaults: { userTimezone: "UTC" } },
       messages: { suppressToolErrors: true },
-    });
+    } satisfies OpenClawConfig;
+    const preparedRuntimeModule = await import("../../agents/prepared-model-runtime.js");
+    const preparedLookup = vi
+      .spyOn(preparedRuntimeModule, "loadPublishedGatewayReplyDispatchRuntime")
+      .mockResolvedValue(
+        Object.freeze({
+          agentId: "main",
+          agentDir: "/tmp/prepared-agent",
+          workspaceDir: "/tmp/prepared-workspace",
+          config: runtimeCfg,
+          modelCatalog: { entries: [], routeVariants: [] },
+          inboundPluginRegistry: createTestRegistry([]),
+        }),
+      );
 
     const overrideCfg = {
       agents: { defaults: { userTimezone: "America/New_York" } },
     } as OpenClawConfig;
 
     let receivedCfg: OpenClawConfig | undefined;
+    let receivedPreparedRuntime: unknown;
     const replyResolver = async (
       _ctx: MsgContext,
       _opts?: GetReplyOptions,
       cfgArg?: OpenClawConfig,
+      preparedRuntime?: unknown,
     ) => {
       receivedCfg = cfgArg;
+      receivedPreparedRuntime = preparedRuntime;
       return { text: "hi" } satisfies ReplyPayload;
     };
 
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher,
-      replyResolver,
-      configOverride: overrideCfg,
-    });
+    try {
+      await dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher,
+        replyResolver,
+        configOverride: overrideCfg,
+        usePublishedModelRuntime: true,
+      });
+    } finally {
+      preparedLookup.mockRestore();
+    }
 
     expect(receivedCfg).not.toBe(cfg);
     expect(receivedCfg).not.toBe(overrideCfg);
@@ -1000,6 +1026,7 @@ describe("dispatchReplyFromConfig", () => {
       agents: { defaults: { userTimezone: "America/New_York" } },
       messages: { suppressToolErrors: true },
     });
+    expect(receivedPreparedRuntime).toBeUndefined();
   });
 
   it("keeps the caller config exact before a runtime snapshot is published", async () => {
@@ -1021,10 +1048,9 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(receivedCfg).toBe(cfg);
     expect(usesFullReplyRuntime(receivedCfg)).toBe(true);
-    expect(usesPublishedReplyRuntime(receivedCfg)).toBe(false);
   });
 
-  it("marks the committed runtime snapshot for published-owner reply resolution", async () => {
+  it("does not independently reread the committed runtime config snapshot", async () => {
     setNoAbort();
     const runtimeCfg = {
       agents: { defaults: { userTimezone: "America/New_York" } },
@@ -1042,11 +1068,12 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
 
-    expect(receivedCfg).toBe(runtimeCfg);
-    expect(usesPublishedReplyRuntime(receivedCfg)).toBe(true);
+    expect(receivedCfg).toBe(emptyConfig);
+    expect(receivedCfg).not.toBe(runtimeCfg);
+    expect(usesFullReplyRuntime(receivedCfg)).toBe(true);
   });
 
-  it("marks a channel-captured config for published-owner resolution before a snapshot exists", async () => {
+  it("keeps a channel-captured config full when no prepared runtime exists", async () => {
     setNoAbort();
     const cfg = {
       agents: { defaults: { userTimezone: "America/Los_Angeles" } },
@@ -1065,7 +1092,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(receivedCfg).toBe(cfg);
-    expect(usesPublishedReplyRuntime(receivedCfg)).toBe(true);
+    expect(usesFullReplyRuntime(receivedCfg)).toBe(true);
   });
 
   it("drops a removed Firecrawl SecretRef from Discord replies after config reload", async () => {
@@ -1090,7 +1117,19 @@ describe("dispatchReplyFromConfig", () => {
     const runtimeCfg = {
       agents: { defaults: { userTimezone: "America/Edmonton" } },
     } as OpenClawConfig;
-    setRuntimeConfigSnapshot(runtimeCfg);
+    const preparedRuntimeModule = await import("../../agents/prepared-model-runtime.js");
+    const preparedLookup = vi
+      .spyOn(preparedRuntimeModule, "loadPublishedGatewayReplyDispatchRuntime")
+      .mockResolvedValue(
+        Object.freeze({
+          agentId: "main",
+          agentDir: "/tmp/prepared-agent",
+          workspaceDir: "/tmp/prepared-workspace",
+          config: runtimeCfg,
+          modelCatalog: { entries: [], routeVariants: [] },
+          inboundPluginRegistry: createTestRegistry([]),
+        }),
+      );
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({ Provider: "discord", Surface: "discord" });
 
@@ -1100,14 +1139,24 @@ describe("dispatchReplyFromConfig", () => {
       _opts?: GetReplyOptions,
       cfgArg?: OpenClawConfig,
     ) => {
-      receivedCfg = cfgArg;
-      if (cfgArg?.plugins?.entries?.firecrawl) {
+      receivedCfg = getPreparedReplyDispatchRuntime()?.config ?? cfgArg;
+      if (receivedCfg?.plugins?.entries?.firecrawl) {
         throw new Error("stale Firecrawl SecretRef reached reply resolution");
       }
       return { text: "hi" } satisfies ReplyPayload;
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    try {
+      await dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher,
+        replyResolver,
+        usePublishedModelRuntime: true,
+      });
+    } finally {
+      preparedLookup.mockRestore();
+    }
 
     expect(receivedCfg).toBe(runtimeCfg);
     expect(receivedCfg?.plugins?.entries?.firecrawl).toBeUndefined();
@@ -1459,7 +1508,7 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
-  it("signals block boundaries before async block delivery is queued", async () => {
+  it("signals block boundaries after async block delivery is admitted", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({ Provider: "whatsapp" });
@@ -1491,7 +1540,7 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
 
-    expect(callOrder).toEqual(["queued:The answer is 42", "dispatch:The answer is 42"]);
+    expect(callOrder).toEqual(["dispatch:The answer is 42", "queued:The answer is 42"]);
   });
 
   it("does not wait for same-channel block dispatcher delivery before resolving block replies", async () => {
@@ -1638,7 +1687,9 @@ describe("dispatchReplyFromConfig", () => {
       toolProgressPromise = Promise.resolve(opts?.onToolStart?.({ name: "lookup" })).then(() => {
         toolProgressSettled = true;
       });
-      partialProgressPromise = Promise.resolve(opts?.onPartialReply?.({ text: "after tool" }));
+      partialProgressPromise = Promise.resolve(opts?.onPartialReply?.({ text: "after tool" })).then(
+        () => undefined,
+      );
       return { text: "final" };
     };
 
@@ -1773,6 +1824,303 @@ describe("dispatchReplyFromConfig", () => {
     expect(deliveredPayload ? getReplyPayloadMetadata(deliveredPayload) : undefined).toMatchObject({
       assistantMessageIndex: 7,
     });
+  });
+
+  it("delivers final-mode Telegram TTS as one captioned voice reply", async () => {
+    setNoAbort();
+    installCaptionedVoiceTestPlugin("telegram");
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "Hello from block streaming." });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(firstFinalReplyPayload(dispatcher)).toMatchObject({
+      text: "Hello from block streaming.",
+      mediaUrl: "https://example.com/tts-synth.opus",
+      audioAsVoice: true,
+    });
+  });
+
+  it("delivers deferred Telegram text when synthesis produces no audio", async () => {
+    setNoAbort();
+    installCaptionedVoiceTestPlugin("telegram");
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "Fallback text content." });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(firstFinalReplyPayload(dispatcher)).toEqual({ text: "Fallback text content." });
+  });
+
+  it("delivers deferred Telegram text when final synthesis throws", async () => {
+    setNoAbort();
+    installCaptionedVoiceTestPlugin("telegram");
+    ttsMocks.maybeApplyTtsToPayload.mockRejectedValueOnce(new Error("provider unavailable"));
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "Streamed text." });
+      return { text: "Final text." };
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(firstFinalReplyPayload(dispatcher)).toEqual({ text: "Streamed text.\nFinal text." });
+  });
+
+  it("delivers deferred Telegram text when media normalization throws", async () => {
+    setNoAbort();
+    installCaptionedVoiceTestPlugin("telegram");
+    ttsMocks.state.synthesizeFinalAudio = true;
+    replyMediaPathMocks.createReplyMediaPathNormalizer.mockReturnValue(async () => {
+      throw new Error("normalizer unavailable");
+    });
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "Streamed text." });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(firstFinalReplyPayload(dispatcher)).toEqual({ text: "Streamed text." });
+  });
+
+  it("delivers deferred Telegram text when generation fails after a block", async () => {
+    setNoAbort();
+    installCaptionedVoiceTestPlugin("telegram");
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "Partial useful answer." });
+      throw new Error("provider unavailable");
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(firstFinalReplyPayload(dispatcher)).toEqual({ text: "Partial useful answer." });
+    expect(
+      vi.mocked(dispatcher.sendFinalReply).mock.calls.map(([payload]) => payload.text),
+    ).toEqual(["Partial useful answer.", expect.stringContaining("Something went wrong")]);
+  });
+
+  it.each([
+    { resolverOutcome: "throws", shouldThrow: true },
+    { resolverOutcome: "returns", shouldThrow: false },
+  ])(
+    "delivers deferred Telegram text when the run aborts and the resolver $resolverOutcome",
+    async ({ shouldThrow }) => {
+      setNoAbort();
+      installCaptionedVoiceTestPlugin("telegram");
+      const abortController = new AbortController();
+      const dispatcher = createDispatcher();
+      const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+      const replyResolver = async (
+        _ctx: MsgContext,
+        opts?: GetReplyOptions,
+      ): Promise<ReplyPayload | undefined> => {
+        await opts?.onBlockReply?.({ text: "Partial answer before cancellation." });
+        abortController.abort();
+        if (shouldThrow) {
+          throw new Error("run cancelled");
+        }
+        return undefined;
+      };
+
+      await dispatchReplyFromConfig({
+        ctx,
+        cfg: emptyConfig,
+        dispatcher,
+        replyOptions: { abortSignal: abortController.signal },
+        replyResolver,
+      });
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+
+      expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+      expect(firstFinalReplyPayload(dispatcher)).toEqual({
+        text: "Partial answer before cancellation.",
+      });
+    },
+  );
+
+  it("delivers deferred Telegram text after an unrelated final status notice", async () => {
+    setNoAbort();
+    installCaptionedVoiceTestPlugin("telegram");
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "Actual answer." });
+      return { text: "Runtime status.", isStatusNotice: true };
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(vi.mocked(dispatcher.sendFinalReply).mock.calls).toEqual([
+      [{ text: "Runtime status.", isStatusNotice: true }],
+      [
+        expect.objectContaining({
+          text: "Actual answer.",
+          mediaUrl: "https://example.com/tts-synth.opus",
+        }),
+      ],
+    ]);
+  });
+
+  it("keeps Telegram TTS-only directive text out of the voice caption", async () => {
+    setNoAbort();
+    installCaptionedVoiceTestPlugin("telegram");
+    ttsMocks.maybeApplyTtsToPayload.mockResolvedValueOnce({
+      mediaUrl: "https://example.com/tts-synth.opus",
+      audioAsVoice: true,
+      spokenText: "Private speech text.",
+      trustedLocalMedia: true,
+    });
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({
+        text: "[[tts:text]]Private speech text.[[/tts:text]]",
+      });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(firstFinalReplyPayload(dispatcher)?.text).toBeUndefined();
+  });
+
+  it("keeps streamed TTS-only text out of a later Telegram final caption", async () => {
+    setNoAbort();
+    installCaptionedVoiceTestPlugin("telegram");
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({
+        text: "Visible block. [[tts:text]]Private speech.[[/tts:text]]",
+      });
+      return { text: "Visible final." };
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(firstFinalReplyPayload(dispatcher)).toMatchObject({
+      text: "Visible block.\nVisible final.",
+      mediaUrl: "https://example.com/tts-synth.opus",
+    });
+  });
+
+  it("keeps a cross-boundary TTS-only region out of the Telegram caption", async () => {
+    setNoAbort();
+    installCaptionedVoiceTestPlugin("telegram");
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "Visible. [[tts:text]]Private" });
+      return { text: " speech.[[/tts:text]] Done." };
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(firstFinalReplyPayload(dispatcher)).toMatchObject({
+      text: "Visible.  Done.",
+      mediaUrl: "https://example.com/tts-synth.opus",
+    });
+  });
+
+  it("keeps distinct streamed and final text in the caption", async () => {
+    setNoAbort();
+    installCaptionedVoiceTestPlugin("telegram");
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "First paragraph." });
+      return { text: "Second paragraph." };
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(firstFinalReplyPayload(dispatcher)).toMatchObject({
+      text: "First paragraph.\nSecond paragraph.",
+      mediaUrl: "https://example.com/tts-synth.opus",
+    });
+  });
+
+  it("keeps tagged-mode Telegram block text visible", async () => {
+    setNoAbort();
+    installCaptionedVoiceTestPlugin("telegram");
+    ttsMocks.state.statusSnapshot = {
+      autoMode: "tagged",
+      provider: "auto",
+      maxLength: 1500,
+      summarize: true,
+    };
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "Plain tagged text." });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({ text: "Plain tagged text." });
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,4 +1,7 @@
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
+import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import {
   chatThreadDistanceFromBottom,
   createChatFlowE2eSuite,
@@ -13,6 +16,172 @@ import {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("keeps streamed audio and video metadata pinned without overriding manual scroll", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const baseTs = Date.now() - 100_000;
+    const historyMessages = Array.from({ length: 50 }, (_, index) => ({
+      content: [
+        {
+          text: `Existing transcript message ${index}\n${"Existing streamed history.\n".repeat(5)}`,
+          type: "text",
+        },
+      ],
+      role: index % 2 === 0 ? "user" : "assistant",
+      timestamp: baseTs + index,
+    }));
+    const gateway = await installMockGateway(page, { historyMessages });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.getByText("Existing transcript message 49", { exact: false }).waitFor({
+        timeout: 10_000,
+      });
+      await waitForChatScrollIdle(page);
+
+      const prompt = "stream a voice note and video";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const runId = requireString(
+        requireRecord(sendRequest.params).idempotencyKey,
+        "chat send idempotency key",
+      );
+      const mediaText =
+        "Here is the narrated update.\n" +
+        "MEDIA:https://example.com/voice.ogg\n" +
+        "MEDIA:https://example.com/clip.mp4";
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: mediaText,
+        message: {
+          content: [{ text: mediaText, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+
+      const thread = page.locator(".chat-thread");
+      const activeStream = thread.locator(".chat-bubble.streaming");
+      await activeStream.waitFor({ state: "visible", timeout: 10_000 });
+      const stopGenerating = page.getByRole("button", { name: "Stop generating" });
+      await stopGenerating.waitFor({ state: "visible", timeout: 10_000 });
+      const growMedia = async (
+        selector: "audio" | "video",
+        height: number,
+        presentation: "active" | "committed" = "active",
+      ) => {
+        const media = (presentation === "active" ? activeStream : thread).locator(selector);
+        await media.waitFor({ state: "attached", timeout: 10_000 });
+        await waitForChatScrollIdle(page);
+        const scrollHeightBefore = await thread.evaluate((element) => element.scrollHeight);
+        await media.evaluate(
+          (element, { mediaKind, nextHeight }) => {
+            const layoutOwner =
+              mediaKind === "video"
+                ? element.closest<HTMLElement>(".chat-assistant-video-frame")
+                : element.closest<HTMLElement>("openclaw-chat-audio-player");
+            if (!layoutOwner) {
+              throw new Error(`expected assistant ${mediaKind} layout owner`);
+            }
+            layoutOwner.style.display = "block";
+            layoutOwner.style.height = `${nextHeight}px`;
+            layoutOwner.style.minHeight = `${nextHeight}px`;
+            if (mediaKind === "video") {
+              layoutOwner.style.maxHeight = "none";
+              element.style.height = "100%";
+              element.style.maxHeight = "none";
+            }
+            element.dispatchEvent(new Event("loadedmetadata", { bubbles: true }));
+          },
+          { mediaKind: selector, nextHeight: height },
+        );
+        await expect
+          .poll(() => thread.evaluate((element) => element.scrollHeight), { timeout: 10_000 })
+          .toBeGreaterThan(scrollHeightBefore);
+        await waitForChatScrollIdle(page);
+      };
+
+      await growMedia("audio", 320);
+      await stopGenerating.waitFor({ state: "visible", timeout: 10_000 });
+      await expect
+        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+        .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+      expect(await page.getByRole("button", { name: "Scroll to latest" }).count()).toBe(0);
+
+      await growMedia("video", 480);
+      await stopGenerating.waitFor({ state: "visible", timeout: 10_000 });
+      await expect
+        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+        .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+      expect(await page.getByRole("button", { name: "Scroll to latest" }).count()).toBe(0);
+
+      if (artifactDir) {
+        await mkdir(artifactDir, { recursive: true });
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(artifactDir, "streamed-media-pinned.png"),
+        });
+      }
+
+      await thread.hover();
+      await page.mouse.wheel(0, -600);
+      await expect
+        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+        .toBeGreaterThan(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+      const scrollToLatest = page.getByRole("button", { name: "Scroll to latest" });
+      await scrollToLatest.waitFor({ state: "visible", timeout: 10_000 });
+      await waitForChatScrollIdle(page);
+      const readingScrollTop = await thread.evaluate((element) => element.scrollTop);
+
+      await growMedia("audio", 720);
+      await stopGenerating.waitFor({ state: "visible", timeout: 10_000 });
+      await expect
+        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+        .toBeGreaterThan(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+      await expect
+        .poll(
+          async () =>
+            Math.abs((await thread.evaluate((element) => element.scrollTop)) - readingScrollTop),
+          { timeout: 10_000 },
+        )
+        .toBeLessThanOrEqual(1);
+      await scrollToLatest.waitFor({ state: "visible", timeout: 10_000 });
+
+      if (artifactDir) {
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(artifactDir, "streamed-media-manual-scroll.png"),
+        });
+      }
+
+      await scrollToLatest.click();
+      await expect
+        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+        .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+      await scrollToLatest.waitFor({ state: "detached", timeout: 10_000 });
+      await stopGenerating.waitFor({ state: "visible", timeout: 10_000 });
+
+      await gateway.emitChatFinal({ runId, text: mediaText });
+      await activeStream.waitFor({ state: "detached", timeout: 10_000 });
+      await stopGenerating.waitFor({ state: "detached", timeout: 10_000 });
+      await growMedia("video", 800, "committed");
+      await expect
+        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+        .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+      expect(await scrollToLatest.count()).toBe(0);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("renders stable markdown during a streaming chat turn and finalizes the tail", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -352,7 +521,7 @@ suite.define(() => {
         .poll(async () =>
           (await page.locator(".chat-working-indicator__tokens").textContent())?.trim(),
         )
-        .toBe("2.4k output tokens");
+        .toBe("2.4k tokens");
 
       const response = "The streamed response is now visible.";
       await gateway.emitGatewayEvent("chat", {
@@ -373,7 +542,7 @@ suite.define(() => {
         (row, visibleResponse) => ({
           connected: row.isConnected,
           hasResponse: row.textContent?.includes(visibleResponse) ?? false,
-          hasTokens: row.textContent?.includes("2.4k output tokens") ?? false,
+          hasTokens: row.textContent?.includes("2.4k tokens") ?? false,
           key: row.getAttribute("data-virtual-row-key"),
         }),
         response,

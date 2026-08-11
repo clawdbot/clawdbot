@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { formatBillingErrorMessage } from "../../agents/embedded-agent-helpers.js";
+import { resolveMaxRunRetryIterations } from "../../agents/embedded-agent-runner/run/helpers.js";
 import { FailoverError } from "../../agents/failover-error.js";
+import { BILLING_ERROR_USER_MESSAGE } from "../../agents/failover/user-copy.js";
+import { ProviderAuthError } from "../../agents/model-auth.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -17,6 +20,7 @@ import {
   NON_DIRECT_FAILURE_SURFACE_CASES,
   createNonDirectFailureSessionCtx,
   type EmbeddedAgentParams,
+  createTestFallbackSummaryError,
 } from "./agent-runner-execution.test-support.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
@@ -41,8 +45,8 @@ function createDirectFailureSessionCtx(provider: "discord" | "telegram" = "disco
 }
 
 function createOverloadSummaryError() {
-  return Object.assign(new Error("All models failed (1): anthropic/claude-opus-4-1: overloaded"), {
-    name: "FallbackSummaryError",
+  return createTestFallbackSummaryError({
+    message: "All models failed (1): anthropic/claude-opus-4-1: overloaded",
     attempts: [
       {
         provider: "anthropic",
@@ -187,7 +191,11 @@ describe("executeAgentTurn: provider failures", () => {
     "keeps classified non-transient failures visible in $label chats",
     async (testCase) => {
       state.runEmbeddedAgentMock.mockRejectedValueOnce(
-        new Error('No API key found for provider "openai"'),
+        new ProviderAuthError(
+          "missing-provider-auth",
+          "openai",
+          'No API key found for provider "openai"',
+        ),
       );
 
       const result = await executeTestTurn({
@@ -361,8 +369,8 @@ describe("executeAgentTurn: provider failures", () => {
 
   it("scopes fallback exhaustion copy to the attempted models", () => {
     const payload = buildKnownAgentRunFailureReplyPayload({
-      err: Object.assign(new Error("fallback exhausted"), {
-        name: "FallbackSummaryError",
+      err: createTestFallbackSummaryError({
+        message: "fallback exhausted",
         attempts: [
           {
             provider: "anthropic",
@@ -425,6 +433,8 @@ describe("executeAgentTurn: provider failures", () => {
       const result = await resultPromise;
 
       expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(11);
+      const wholeTurnReruns = state.runEmbeddedAgentMock.mock.calls.length - 1;
+      expect(wholeTurnReruns * resolveMaxRunRetryIterations(17)).toBe(1_600);
       expect(result.kind).toBe("final");
       if (result.kind === "final") {
         expect(result.payload.isError).toBe(true);
@@ -874,7 +884,7 @@ describe("executeAgentTurn: provider failures", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toBe("billing");
+      expect(result.payload.text).toBe(BILLING_ERROR_USER_MESSAGE);
       expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
     }
   });
@@ -901,8 +911,8 @@ describe("executeAgentTurn: provider failures", () => {
 
   it("preserves neutral billing guidance after fallback exhaustion", async () => {
     state.runWithModelFallbackMock.mockRejectedValueOnce(
-      Object.assign(new Error("All models failed (1): openai/gpt-5.5: billing"), {
-        name: "FallbackSummaryError",
+      createTestFallbackSummaryError({
+        message: "All models failed (1): openai/gpt-5.5: billing",
         attempts: [
           {
             provider: "openai",

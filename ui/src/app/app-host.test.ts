@@ -240,7 +240,7 @@ type ShellSessionNavigationState = {
   routeState: { routeId?: RouteId };
   navigate: (routeId: RouteId) => void;
   handleCommandPaletteSlashCommand: (command: string) => void;
-  replaceChatWithCurrentSession: () => void;
+  replaceChatWithCurrentSession: () => boolean;
 };
 
 function committedRouterState(
@@ -494,11 +494,11 @@ describe("OpenClaw shell route session commits", () => {
     shell.activeSessionKey = "main";
     shell.routeState = { routeId: "chat" };
 
-    shell.replaceChatWithCurrentSession();
+    expect(shell.replaceChatWithCurrentSession()).toBe(false);
     expect(replace).not.toHaveBeenCalled();
 
     snapshot.phase = "connected";
-    shell.replaceChatWithCurrentSession();
+    expect(shell.replaceChatWithCurrentSession()).toBe(true);
     expect(replace).toHaveBeenCalledWith("chat", { pathname: "/chat/research" });
   });
 

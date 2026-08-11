@@ -436,25 +436,25 @@ export const en = {
         "OpenClaw is an open-source assistant that learns and grows with you, by the OpenClaw Foundation (a non-profit).",
       baselineDmSessions:
         "Shared inboxes: isolate DM sessions (session.dmScope: per-channel-peer) and keep tool access minimal.",
-      baselinePairing: "Pairing/allowlists + mention gating.",
-      baselineSandbox: "Sandbox + least-privilege tools.",
-      baselineSecrets: "Keep secrets out of the agent's reachable filesystem.",
+      baselinePairing: "Use pairing or allowlists; require mentions in group chats.",
+      baselineSandbox: "Use a sandbox and give tools only the permissions they need.",
+      baselineSecrets: "Keep secrets outside the agent's reachable filesystem.",
       baselineSharedInbox:
-        "Multi-user/shared inbox: split trust boundaries (separate gateway/credentials, ideally separate OS users/hosts).",
+        "Shared inboxes: use separate gateways and credentials; separate OS users or hosts provide stronger isolation.",
       baselineStrongModel:
-        "Use the strongest available model for any bot with tools or untrusted inboxes.",
+        "Use the strongest available model for bots with tools or shared/public inboxes.",
       confirm:
         "I understand this is personal-by-default and shared/multi-user use requires lock-down. Continue?",
       hardeningRequired:
-        "If you're not comfortable with security hardening and access control, don't run OpenClaw.",
-      learnMore: "Learn more",
-      notMultitenant: "OpenClaw is not a hostile multi-tenant boundary by default.",
-      personalAgent: "By default, OpenClaw is a personal agent: one trusted operator boundary.",
+        "If you're not comfortable managing access controls and security hardening, don't run OpenClaw without help.",
+      learnMore: "Learn more at",
+      notMultitenant: "OpenClaw is not designed to safely separate multiple users by default.",
+      personalAgent: "By default, OpenClaw is a personal agent for one operator.",
       promptRisk: "A bad prompt can trick it into doing unsafe things.",
-      recommendedBaseline: "Recommended baseline",
+      recommendedBaseline: "Recommended safer setup",
       runRegularly: "Run regularly",
       sharedAuthority:
-        "If multiple users can message one tool-enabled agent, they share that delegated tool authority.",
+        "If multiple users can message one tool-enabled agent, they can all influence how it uses its tools.",
       title: "Security disclaimer",
       toolAccess: "This bot can read files and run actions if tools are enabled.",
     },
@@ -899,6 +899,7 @@ export const en = {
       helpNeedsUrlCode: "You need your Urbit ship URL and login code.",
       helpPrivateNetwork:
         "If your ship URL is on a private network (LAN/localhost), you must explicitly allow it during setup.",
+      loginCodeKeep: "Login code already configured. Keep it?",
       loginCodePrompt: "Login code",
       privateNetworkPrompt:
         "Ship URL looks like a private/internal host. Allow private network access? (SSRF risk)",
@@ -921,7 +922,7 @@ export const en = {
       helpPointWebhook: "3) Point the outgoing webhook to https://<gateway-host>{path}",
       incomingWebhookHelpReplies: "This is the URL OpenClaw uses to send replies back to Chat.",
       incomingWebhookHelpUseUrl: "Use the incoming webhook URL from Synology Chat integrations.",
-      incomingWebhookKeep: "Incoming webhook URL set ({value}). Keep it?",
+      incomingWebhookKeep: "Incoming webhook URL already configured. Keep it?",
       incomingWebhookTitle: "Synology Chat incoming webhook",
       incomingWebhookUrlPrompt: "Incoming webhook URL",
       multipleEntries: "Multiple entries: comma-separated.",
@@ -1014,6 +1015,7 @@ export const en = {
       botUsernamePrompt: "Twitch bot username",
       channelJoinPrompt: "Channel to join",
       clientIdPrompt: "Twitch Client ID",
+      clientSecretKeep: "Client secret already configured. Keep it?",
       clientSecretPrompt: "Twitch Client Secret (for token refresh)",
       envPrompt: "Twitch env var OPENCLAW_TWITCH_ACCESS_TOKEN detected. Use env token?",
       helpCopyToken: "3. Copy the token (starts with 'oauth:') and Client ID",
@@ -1024,6 +1026,7 @@ export const en = {
       helpTokenTools: "   Use https://twitchtokengenerator.com/ or https://twitchapps.com/tmi/",
       oauthTokenPrompt: "Twitch OAuth token (oauth:...)",
       refreshTokenInputPrompt: "Twitch Refresh Token",
+      refreshTokenKeep: "Refresh token already configured. Keep it?",
       refreshTokenPrompt:
         "Enable automatic token refresh (requires client secret and refresh token)?",
       setupTitle: "Twitch setup",

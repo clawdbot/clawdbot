@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalString as readStringParam } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveMergedModelProviderConfig,
   resolveMergedModelProviderModels,
@@ -256,10 +257,6 @@ function isSupportedHarness(entry: {
   support: AgentHarnessSupport & { supported: true };
 } {
   return entry.support.supported;
-}
-
-function readStringParam(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function normalizeModelId(provider: string, modelId: string): string {

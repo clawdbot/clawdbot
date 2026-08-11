@@ -123,6 +123,7 @@ async function runParallelSearch(params: {
   sessionId?: string;
   clientModel?: string;
   timeoutSeconds: number;
+  signal?: AbortSignal;
 }): Promise<ParallelSearchResponse> {
   const body: Record<string, unknown> = {
     search_queries: [...params.searchQueries],
@@ -142,6 +143,7 @@ async function runParallelSearch(params: {
     {
       url: params.endpoint,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "POST",
         headers: {
@@ -170,6 +172,7 @@ async function runParallelSearch(params: {
 export async function executeParallelWebSearchProviderTool(
   ctx: { config?: Record<string, unknown>; searchConfig?: SearchConfigRecord },
   args: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const searchConfig = mergeScopedSearchConfig(
     ctx.searchConfig,
@@ -234,7 +237,9 @@ export async function executeParallelWebSearchProviderTool(
     sessionId,
     clientModel,
     timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
+    signal,
   });
+  signal?.throwIfAborted();
   const results = mapParallelResults(response);
 
   const payload: Record<string, unknown> = {
@@ -274,7 +279,6 @@ export async function executeParallelWebSearchProviderTool(
 
 export const testing = {
   buildParallelCacheKey,
-  invalidSearchQueriesPayload,
   missingParallelKeyPayload,
   normalizeParallelClientModel,
   normalizeParallelObjective,
@@ -282,12 +286,8 @@ export const testing = {
   normalizeParallelSearchQueries,
   normalizeParallelSessionId,
   resolveParallelApiKey,
-  resolveParallelConfig,
   resolveParallelSearchCount,
   resolveParallelSearchEndpoint,
-  PARALLEL_ERROR_BODY_LIMIT_BYTES,
   PARALLEL_SEARCH_RESPONSE_LIMIT_BYTES,
   USER_AGENT,
 } as const;
-
-export { testing as __testing };

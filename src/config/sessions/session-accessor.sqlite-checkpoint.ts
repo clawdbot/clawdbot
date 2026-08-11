@@ -27,7 +27,11 @@ import {
   readTranscriptIdentityByEventId,
 } from "./session-accessor.sqlite-transcript-store.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
-import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
+import {
+  SESSION_TOTAL_TOKENS_VERSION,
+  type InternalSessionEntry as SessionEntry,
+  type SessionCompactionCheckpoint,
+} from "./types.js";
 
 // Compaction checkpoint branch/restore owner.
 
@@ -45,6 +49,8 @@ type SqliteCompactionCheckpointLegacySource = {
   totalTokens?: number;
 };
 
+type SessionEntryExpectedState = Pick<SessionEntry, "lifecycleRevision" | "sessionId">;
+
 /** Result from SQLite compaction checkpoint branch or restore operations. */
 type SqliteCompactionCheckpointSessionMutationResult =
   | {
@@ -57,6 +63,7 @@ type SqliteCompactionCheckpointSessionMutationResult =
   | { status: "missing-checkpoint" }
   | { status: "missing-boundary" }
   | { status: "model-selection-locked" }
+  | { status: "conflict" }
   | { status: "failed" };
 
 /** Parameters for branching a SQLite session from a compaction checkpoint. */
@@ -68,6 +75,7 @@ type SqliteBranchCheckpointSessionParams = {
   sourceStoreKey?: string;
   nextKey: string;
   checkpointId: string;
+  expectedState: SessionEntryExpectedState;
   legacySource?: SqliteCompactionCheckpointLegacySource;
 };
 
@@ -79,6 +87,7 @@ type SqliteRestoreCheckpointSessionParams = {
   sessionKey: string;
   sessionStoreKey?: string;
   checkpointId: string;
+  expectedState: SessionEntryExpectedState;
   legacySource?: SqliteCompactionCheckpointLegacySource;
 };
 
@@ -106,6 +115,7 @@ export async function branchSqliteCompactionCheckpointSession(
       previousIdentity = readSqliteSessionIdentitySnapshot(database, identityKeys);
       result = branchSqliteCompactionCheckpointSessionInTransaction(database, {
         checkpointId: params.checkpointId,
+        expectedState: params.expectedState,
         parentSessionKey: requestedSourceKey,
         legacySource: params.legacySource,
         resolved,
@@ -143,6 +153,7 @@ export async function restoreSqliteCompactionCheckpointSession(
       previousIdentity = readSqliteSessionIdentitySnapshot(database, identityKeys);
       result = restoreSqliteCompactionCheckpointSessionInTransaction(database, {
         checkpointId: params.checkpointId,
+        expectedState: params.expectedState,
         legacySource: params.legacySource,
         resolved,
         sourceKey: sessionKey,
@@ -161,6 +172,7 @@ function branchSqliteCompactionCheckpointSessionInTransaction(
   database: OpenClawAgentDatabase,
   params: {
     checkpointId: string;
+    expectedState: SessionEntryExpectedState;
     legacySource?: SqliteCompactionCheckpointLegacySource;
     parentSessionKey: string;
     resolved: ResolvedSqliteScope;
@@ -171,6 +183,12 @@ function branchSqliteCompactionCheckpointSessionInTransaction(
   const currentEntry = readSessionEntryRow(database, params.sourceKey)?.entry;
   if (!currentEntry?.sessionId) {
     return { status: "missing-session" };
+  }
+  if (
+    currentEntry.sessionId !== params.expectedState.sessionId ||
+    currentEntry.lifecycleRevision !== params.expectedState.lifecycleRevision
+  ) {
+    return { status: "conflict" };
   }
   if (currentEntry.modelSelectionLocked === true) {
     return { status: "model-selection-locked" };
@@ -211,6 +229,7 @@ function restoreSqliteCompactionCheckpointSessionInTransaction(
   database: OpenClawAgentDatabase,
   params: {
     checkpointId: string;
+    expectedState: SessionEntryExpectedState;
     legacySource?: SqliteCompactionCheckpointLegacySource;
     resolved: ResolvedSqliteScope;
     sourceKey: string;
@@ -220,6 +239,12 @@ function restoreSqliteCompactionCheckpointSessionInTransaction(
   const currentEntry = readSessionEntryRow(database, params.sourceKey)?.entry;
   if (!currentEntry?.sessionId) {
     return { status: "missing-session" };
+  }
+  if (
+    currentEntry.sessionId !== params.expectedState.sessionId ||
+    currentEntry.lifecycleRevision !== params.expectedState.lifecycleRevision
+  ) {
+    return { status: "conflict" };
   }
   if (currentEntry.modelSelectionLocked === true) {
     return { status: "model-selection-locked" };
@@ -340,12 +365,13 @@ function resolveSqliteCheckpointTranscriptForkSources(
   checkpoint: SessionCompactionCheckpoint,
 ): SqliteCheckpointTranscriptForkSource[] {
   const sources: SqliteCheckpointTranscriptForkSource[] = [];
+  const checkpointTokensTrusted = checkpoint.tokensVersion === SESSION_TOTAL_TOKENS_VERSION;
   if (checkpoint.preCompaction.sessionId) {
     const preLeafId = checkpoint.preCompaction.entryId ?? checkpoint.preCompaction.leafId;
     sources.push({
       sessionId: checkpoint.preCompaction.sessionId,
       ...(preLeafId ? { leafId: preLeafId } : {}),
-      ...(typeof checkpoint.tokensBefore === "number"
+      ...(checkpointTokensTrusted && typeof checkpoint.tokensBefore === "number"
         ? { totalTokens: checkpoint.tokensBefore }
         : {}),
     });
@@ -356,7 +382,7 @@ function resolveSqliteCheckpointTranscriptForkSources(
     sources.push({
       sessionId: checkpoint.postCompaction.sessionId,
       leafId: postLeafId,
-      ...(typeof checkpoint.tokensAfter === "number"
+      ...(checkpointTokensTrusted && typeof checkpoint.tokensAfter === "number"
         ? { totalTokens: checkpoint.tokensAfter }
         : {}),
     });
@@ -428,6 +454,7 @@ function cloneSqliteCheckpointSessionEntry(params: {
     updatedAt: Date.now(),
     systemSent: false,
     abortedLastRun: false,
+    lifecycleRunId: undefined,
     startedAt: undefined,
     endedAt: undefined,
     runtimeMs: undefined,
@@ -439,6 +466,7 @@ function cloneSqliteCheckpointSessionEntry(params: {
     estimatedCostUsd: undefined,
     totalTokens: hasTotalTokens ? params.totalTokens : undefined,
     totalTokensFresh: hasTotalTokens ? true : undefined,
+    totalTokensVersion: hasTotalTokens ? SESSION_TOTAL_TOKENS_VERSION : undefined,
     label: params.label ?? params.currentEntry.label,
     parentSessionKey: params.parentSessionKey ?? params.currentEntry.parentSessionKey,
     compactionCheckpoints: params.preserveCompactionCheckpoints

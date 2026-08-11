@@ -14,7 +14,7 @@ import {
   listMissingPluginNpmRuntimeHostExports,
   listPublishablePluginPackageDirs,
   resolvePluginNpmRuntimeBuildPlan,
-} from "../scripts/lib/plugin-npm-runtime-build.mjs";
+} from "../scripts/lib/plugin-npm-runtime-build.mts";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -93,7 +93,7 @@ describe("plugin npm runtime build planning", () => {
       expectDistRelativePaths(plan.runtimeBuildOutputs);
       expect(plan.packageFiles).toContain("dist/**");
       expect(plan.packagePeerMetadata.peerDependencies.openclaw).toBe(
-        plan.packageJson.openclaw.compat.pluginApi,
+        plan.packageJson.openclaw?.compat?.pluginApi,
       );
       expect(plan.packagePeerMetadata.peerDependenciesMeta.openclaw.optional).toBe(true);
     }

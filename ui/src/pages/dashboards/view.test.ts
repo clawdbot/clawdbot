@@ -50,6 +50,6 @@ describe("dashboards index", () => {
 
     const empty = container.querySelector("[data-dashboards-empty]");
     expect(empty?.textContent).toContain("No dashboards yet");
-    expect(empty?.textContent).toContain("Open a thread and switch to the Dashboard face");
+    expect(empty?.textContent).toContain("Open a session and switch to the Dashboard face");
   });
 });

@@ -14,17 +14,15 @@ import {
   resolveCliRuntimeOwnerFingerprint,
 } from "../cli-auth-epoch.js";
 import { resolveCliExecutableIdentity } from "../cli-executable-identity.js";
-import type { CliOutput } from "../cli-output.js";
+import type { CliOutput } from "../cli-output-contracts.js";
 import {
   detectImageReferences,
   hasHydratableMediaImages,
 } from "../embedded-agent-runner/run/images.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
-import {
-  closeClaudeLiveSessionForContext,
-  shouldUseClaudeLiveSession,
-} from "./claude-live-session.js";
+import { buildClaudeOwnerKey, closeClaudeSession } from "./claude-live-registry.js";
+import { acceptsClaudeLive } from "./claude-live-session-policy.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { executeDeps } from "./execute-deps.js";
 import { createCliEventHandlers } from "./execute-events.js";
@@ -40,13 +38,12 @@ import {
 } from "./execute-logging.js";
 import {
   createCliAbortError,
-  resolveNodeClaudePlacement,
+  resolveNodeClaudeTarget,
   stripGatewayLocalClaudeArgs,
 } from "./execute-node-claude.js";
 import { executeCliProcess } from "./execute-process.js";
 import { createCliToolTracking } from "./execute-tool-tracking.js";
 import {
-  buildClaudeOwnerKey,
   buildCliArgs,
   enqueueCliRun,
   prepareCliPromptImagePayload,
@@ -141,7 +138,7 @@ export async function executePreparedCliRun(
     throw createCliAbortError();
   }
   const backend = context.preparedBackend.backend;
-  const nodePlacement = resolveNodeClaudePlacement(context);
+  const nodePlacement = resolveNodeClaudeTarget(context);
   const { sessionId: resolvedSessionId, isNew } = resolveSessionIdToSend({
     backend,
     cliSessionId: cliSessionIdToUse,
@@ -276,8 +273,7 @@ export async function executePreparedCliRun(
     cliSessionId: useResume ? resolvedSessionId : undefined,
     ownerKey: claudeOwnerKey,
   });
-  const useManagedClaudeLiveSession =
-    shouldUseClaudeLiveSession(context) && !params.onSuccessfulAuthBinding;
+  const useManagedClaudeLiveSession = acceptsClaudeLive(context) && !params.onSuccessfulAuthBinding;
   // Fresh-session retries invoke this function again. Keep one helper per
   // observable CLI attempt so every started call retains its own terminal event.
   const diagnostics = createClaudeCliModelCallDiagnostics({
@@ -610,7 +606,7 @@ export async function executePreparedCliRun(
         }
         // The fork argument only applies at process startup; a cached warm child
         // would run inside the source session. Force a fresh spawn.
-        await closeClaudeLiveSessionForContext(context);
+        await closeClaudeSession(context, "restart");
       }
       return await executeAttempt();
     });

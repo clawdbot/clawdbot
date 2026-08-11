@@ -33,7 +33,7 @@ describe("AppSidebar agent chip", () => {
       {
         defaultId: "main",
         mainKey: "main",
-        scope: "agent",
+        scope: "per-sender",
         agents: [{ id: "main" }],
       },
       [],
@@ -66,7 +66,7 @@ describe("AppSidebar agent chip", () => {
       {
         defaultId: "main",
         mainKey: "main",
-        scope: "agent",
+        scope: "per-sender",
         agents: [{ id: "main" }],
       },
       [],
@@ -262,7 +262,7 @@ describe("AppSidebar agent chip", () => {
       {
         defaultId: "main",
         mainKey: "main",
-        scope: "agent",
+        scope: "per-sender",
         agents: [{ id: "main", identity: { name: "Molty", emoji: "🦞" } }],
       },
     );

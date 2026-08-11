@@ -8,9 +8,9 @@ import {
   validateNodeSkillsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { projectNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing, resolveNodePairingState } from "../../infra/device-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { projectNodePairing } from "../../infra/node-pairing.js";
 import { resolveLocalNodeId } from "../../node-host/local-id.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { replaceRemoteNodeSkills } from "../../skills/runtime/remote-skills.js";

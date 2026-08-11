@@ -46,11 +46,11 @@ Optional default skill allowlist for agents that do not set
 {
   agents: {
     defaults: { skills: ["github", "weather"] },
-    list: [
-      { id: "writer" }, // inherits github, weather
-      { id: "docs", skills: ["docs-search"] }, // replaces defaults
-      { id: "locked-down", skills: [] }, // no skills
-    ],
+    entries: {
+      writer: { default: true }, // inherits github, weather
+      docs: { skills: ["docs-search"] }, // replaces defaults
+      "locked-down": { skills: [] }, // no skills
+    },
   },
 }
 ```
@@ -141,36 +141,26 @@ injection behavior from the shared defaults. Omitted fields inherit from
       bootstrapMaxChars: 20000,
       bootstrapTotalMaxChars: 60000,
     },
-    list: [
-      {
-        id: "strict-worker",
+    entries: {
+      "strict-worker": {
+        default: true,
         contextInjection: "always",
         bootstrapMaxChars: 50000,
         bootstrapTotalMaxChars: 300000,
       },
-    ],
+    },
   },
 }
 ```
 
-### `agents.defaults.bootstrapPromptTruncationWarning`
+### Bootstrap truncation notice
 
-Controls the agent-visible system-prompt notice when bootstrap context is truncated.
-Default: `"always"`.
-
-- `"off"`: never inject truncation notice text into the system prompt.
-- `"once"`: inject a concise notice once per unique truncation signature.
-- `"always"`: inject a concise notice on every run when truncation exists (recommended).
-
-Detailed raw/injected counts and config tuning fields stay in diagnostics such
-as context/status reports and logs; routine WebChat user/runtime context only
-gets the concise recovery notice.
-
-```json5
-{
-  agents: { defaults: { bootstrapPromptTruncationWarning: "always" } }, // off | once | always
-}
-```
+When bootstrap context is truncated, OpenClaw always injects a concise
+agent-visible notice into the system prompt saying some bootstrap files were
+truncated and to read the affected files directly. This notice is built in
+and not configurable, and it deliberately omits per-file diagnostics: file
+names, raw vs injected counts, and limit causes stay in diagnostics such as
+context/status reports and logs.
 
 ### Context budget ownership map
 
@@ -184,7 +174,6 @@ knob.
 | `agents.defaults.startupContext.*`                             | One-shot reset/startup model-run prelude, including recent daily `memory/*.md` files. Bare chat `/new` and `/reset` are acknowledged without invoking the model |
 | `skills.limits.*`                                              | The compact skills list injected into the system prompt                                                                                                         |
 | `agents.defaults.contextLimits.*`                              | Bounded runtime excerpts and injected runtime-owned blocks                                                                                                      |
-| `memory.qmd.limits.*`                                          | Indexed memory-search snippet and injection sizing                                                                                                              |
 
 Matching per-agent overrides:
 
@@ -254,14 +243,14 @@ from `agents.defaults.contextLimits`.
     defaults: {
       contextLimits: { memoryGetMaxChars: 12000 },
     },
-    list: [
-      {
-        id: "tiny-local",
+    entries: {
+      "tiny-local": {
+        default: true,
         contextLimits: {
           memoryGetMaxChars: 6000,
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -284,7 +273,9 @@ Per-agent override for the skills prompt budget.
 ```json5
 {
   agents: {
-    list: [{ id: "tiny-local", skillsLimits: { maxSkillsPromptChars: 6000 } }],
+    entries: {
+      "tiny-local": { default: true, skillsLimits: { maxSkillsPromptChars: 6000 } },
+    },
   },
 }
 ```
@@ -371,6 +362,7 @@ date context. Falls back to the host timezone.
       pdfMaxMb: 10,
       pdfMaxPages: 20,
       thinkingDefault: "low",
+      fastModeDefault: false,
       verboseDefault: "off",
       toolProgressDetail: "explain",
       reasoningDefault: "off",
@@ -413,6 +405,7 @@ date context. Falls back to the host timezone.
   - If omitted, the PDF tool falls back to `imageModel`, then to the resolved session/default model.
 - `pdfMaxMb`: default PDF size limit for the `pdf` tool when `maxBytesMb` is not passed at call time.
 - `pdfMaxPages`: default maximum pages considered by extraction fallback mode in the `pdf` tool.
+- `fastModeDefault`: default fast mode for agents. Values: `"auto"`, `true`, `false`. Per-agent `agents.entries.*.fastModeDefault` overrides it when no per-message or session fast-mode override is set.
 - `verboseDefault`: default verbose level for agents. Values: `"off"`, `"on"`, `"full"`. Default: `"off"`.
 - `toolProgressDetail`: detail mode for `/verbose` tool summaries and progress-draft tool lines. Values: `"explain"` (default, compact human labels) or `"raw"` (append raw command/detail when available). Per-agent `agents.entries.*.toolProgressDetail` overrides this default.
 - `reasoningDefault`: default reasoning visibility for agents. Values: `"off"`, `"on"`, `"stream"`. Per-agent `agents.entries.*.reasoningDefault` overrides this default. Configured reasoning defaults are only applied for owners, authorized senders, or operator-admin gateway contexts when no per-message or session reasoning override is set.
@@ -502,16 +495,16 @@ as shown above. See [CLI backends](/gateway/cli-backends) for operations and
 [building CLI backend plugins](/plugins/cli-backend-plugins) for command,
 session, image, and parser registration.
 
-### `agents.defaults.promptOverlays`
+### OpenAI GPT-5 personality
 
-Provider-independent prompt overlays applied by model family on OpenClaw-assembled prompt surfaces. GPT-5-family model ids receive the shared behavior contract across OpenClaw/provider routes; `personality` controls only the friendly interaction-style layer. Native Codex app-server routes keep Codex-owned base/model instructions instead of this OpenClaw GPT-5 overlay, and OpenClaw disables Codex's built-in personality for native threads.
+The bundled OpenAI plugin owns the GPT-5 friendly interaction-style setting. Matching GPT-5-family prompts receive the shared behavior contract; `personality` controls only the friendly style layer. Native Codex app-server routes keep Codex-owned base/model instructions instead of this OpenClaw GPT-5 contribution, and OpenClaw disables Codex's built-in personality for native threads.
 
 ```json5
 {
-  agents: {
-    defaults: {
-      promptOverlays: {
-        gpt5: {
+  plugins: {
+    entries: {
+      openai: {
+        config: {
           personality: "friendly", // friendly | on | off
         },
       },
@@ -522,7 +515,8 @@ Provider-independent prompt overlays applied by model family on OpenClaw-assembl
 
 - `"friendly"` (default) and `"on"` enable the friendly interaction-style layer.
 - `"off"` disables only the friendly layer; the tagged GPT-5 behavior contract remains enabled.
-- Legacy `plugins.entries.openai.config.personality` is still read when this shared setting is unset.
+
+See [OpenAI GPT-5 prompt contribution](/providers/openai#gpt-5-prompt-contribution) for provider and native Codex behavior.
 
 ### `agents.defaults.heartbeat`
 
@@ -970,9 +964,8 @@ for provider examples and precedence.
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "main",
+    entries: {
+      main: {
         default: true,
         name: "Main Agent",
         workspace: "~/.openclaw/workspace",
@@ -1014,13 +1007,13 @@ for provider examples and precedence.
           elevated: { enabled: true },
         },
       },
-    ],
+    },
   },
 }
 ```
 
-- `id`: stable agent id (required).
-- `default`: when multiple are set, first wins (warning logged). If none set, first list entry is default.
+- Each key in `agents.entries` is the stable agent id.
+- `default`: exactly one agent entry must set `default: true`.
 - `model`: string form sets a strict per-agent primary with no model fallback; object form `{ primary }` is also strict unless you add `fallbacks`. Use `{ primary, fallbacks: [...] }` to opt that agent into fallback, or `{ primary, fallbacks: [] }` to make strict behavior explicit. Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `utilityModel`: optional per-agent override for short internal tasks such as generated session and thread titles. Falls back to `agents.defaults.utilityModel`, then the effective session provider's declared small-model default. Dashboard titles retry once with the effective regular session model. An empty string skips the alternate utility route for this agent without disabling dashboard title generation.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
@@ -1028,7 +1021,7 @@ for provider examples and precedence.
 - `skills`: optional per-agent skill allowlist. If omitted, the agent inherits `agents.defaults.skills` when set; an explicit list replaces defaults instead of merging, and `[]` means no skills.
 - `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive | max`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set. The selected provider/model profile controls which values are valid; for Google Gemini, `adaptive` keeps provider-owned dynamic thinking (`thinkingLevel` omitted on Gemini 3/3.1, `thinkingBudget: -1` on Gemini 2.5).
 - `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Overrides `agents.defaults.reasoningDefault` for this agent when no per-message or session reasoning override is set.
-- `fastModeDefault`: optional per-agent default for fast mode (`"auto" | true | false`). Applies when no per-message or session fast-mode override is set.
+- `fastModeDefault`: optional per-agent default for fast mode (`"auto" | true | false`). Overrides `agents.defaults.fastModeDefault` for this agent when no per-message or session fast-mode override is set.
 - `models`: optional per-agent model catalog/runtime overrides keyed by full `provider/model` ids. Use `models["provider/model"].agentRuntime` for per-agent runtime exceptions.
 - `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
@@ -1051,10 +1044,10 @@ Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/mul
 ```json5
 {
   agents: {
-    list: [
-      { id: "home", default: true, workspace: "~/.openclaw/workspace-home" },
-      { id: "work", workspace: "~/.openclaw/workspace-work" },
-    ],
+    entries: {
+      home: { default: true, workspace: "~/.openclaw/workspace-home" },
+      work: { workspace: "~/.openclaw/workspace-work" },
+    },
   },
   bindings: [
     { agentId: "home", match: { channel: "whatsapp", accountId: "personal" } },
@@ -1092,13 +1085,13 @@ For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`ma
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "personal",
+    entries: {
+      personal: {
+        default: true,
         workspace: "~/.openclaw/workspace-personal",
         sandbox: { mode: "off" },
       },
-    ],
+    },
   },
 }
 ```
@@ -1110,9 +1103,9 @@ For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`ma
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "family",
+    entries: {
+      family: {
+        default: true,
         workspace: "~/.openclaw/workspace-family",
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "ro" },
         tools: {
@@ -1127,7 +1120,7 @@ For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`ma
           deny: ["write", "edit", "apply_patch", "exec", "process", "browser"],
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -1139,9 +1132,9 @@ For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`ma
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "public",
+    entries: {
+      public: {
+        default: true,
         workspace: "~/.openclaw/workspace-public",
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "none" },
         tools: {
@@ -1173,7 +1166,7 @@ For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`ma
           ],
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -1259,7 +1252,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   - Short-lived gateway model-run probe sessions use fixed `24h` retention, but cleanup is pressure-gated: it only removes stale strict model-run probe rows when session-entry maintenance/cap pressure is reached. Only strict explicit probe keys matching `agent:*:explicit:model-run-<uuid>` are eligible; normal direct, group, thread, cron, hook, heartbeat, ACP, and sub-agent sessions do not inherit this 24h retention. When model-run cleanup runs, it runs before the broader `pruneAfter` stale-entry cleanup and `maxEntries` cap.
   - Legacy `rotateBytes` is rejected by the current schema; `openclaw doctor --fix` removes it from older configs.
   - `resetArchiveRetention`: age-based retention for reset/deleted transcript archives. By default, archives remain until disk-budget eviction; set a duration to opt into wall-clock deletion, or `false` to disable it explicitly.
-  - `maxDiskBytes`: optional sessions-directory disk budget. In `warn` mode it logs warnings; in `enforce` mode it removes oldest artifacts/sessions first.
+  - `maxDiskBytes`: optional sessions-directory disk budget. In `warn` mode it logs warnings; in `enforce` mode it removes oldest artifacts/sessions first. Set `false`, `0`, or `"0"` to disable the budget entirely.
   - `highWaterBytes`: optional target after budget cleanup. Defaults to `80%` of `maxDiskBytes`.
 - **`threadBindings`**: global defaults for thread-bound session features.
   - `enabled`: master switch for supported channel thread bindings
@@ -1288,7 +1281,6 @@ Membership and visibility changes are written into the session transcript as sys
     ackReactionScope: "group-mentions", // group-mentions | group-all | direct | all | off | none
     queue: {
       mode: "steer", // steer (default) | followup | collect | interrupt
-      debounceMs: 500,
       cap: 20,
       drop: "summarize", // old | new | summarize (default)
       byChannel: {
@@ -1344,11 +1336,13 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
   - `followup`: run the new prompt after the active run finishes.
   - `collect`: batch compatible messages and run them together later.
   - `interrupt`: abort the active run before starting the newest prompt.
-- `debounceMs`: delay before dispatching a queued/steered message. Default: `500`.
+- The queue uses a built-in 500ms debounce for steer, followup, and collect batching.
 - `cap`: maximum queued messages before the drop policy applies. Default: `20`.
 - `drop`: strategy when the cap is exceeded. `"summarize"` (default) drops oldest entries but keeps compact summaries; `"old"` drops oldest without summaries; `"new"` rejects the newest item.
 - `byChannel`: per-channel `mode` overrides keyed by provider id.
-- `debounceMsByChannel`: per-channel `debounceMs` overrides keyed by provider id.
+- `debounceMsByChannel`: per-channel debounce overrides in milliseconds, keyed by provider id.
+
+Use `messages.inbound.debounceMs` for the global pre-queue debounce window.
 
 ### Inbound debounce
 

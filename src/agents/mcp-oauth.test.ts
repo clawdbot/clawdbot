@@ -754,11 +754,16 @@ describe("MCP OAuth provider", () => {
   it("persists localhost redirect for a later code exchange login", async () => {
     await withTempHome(
       async () => {
+        let finalAuthorizationUrl: URL | undefined;
         authMock.mockReset();
         authMock
           .mockRejectedValueOnce(new Error("invalid_client_metadata: redirect_uri rejected"))
           .mockImplementationOnce(async (provider) => {
             await provider.saveCodeVerifier?.("verifier");
+            const authorizationUrl = new URL("https://auth.example.com/authorize");
+            authorizationUrl.searchParams.set("redirect_uri", String(provider.redirectUrl));
+            authorizationUrl.searchParams.set("state", "state-1234567890");
+            await provider.redirectToAuthorization?.(authorizationUrl);
             return "REDIRECT";
           });
 
@@ -766,9 +771,15 @@ describe("MCP OAuth provider", () => {
           runMcpOAuthLogin({
             serverName: "Calendly",
             serverUrl: "https://mcp.calendly.com/",
-            onAuthorizationUrl: () => {},
+            onAuthorizationUrl: (url) => {
+              finalAuthorizationUrl = url;
+            },
           }),
         ).resolves.toBe("redirect");
+
+        expect(finalAuthorizationUrl?.searchParams.get("redirect_uri")).toBe(
+          "http://localhost:8989/oauth/callback",
+        );
 
         const store = readMcpOAuthStore(
           resolveMcpOAuthStoreKey("Calendly", "https://mcp.calendly.com/"),
@@ -777,7 +788,12 @@ describe("MCP OAuth provider", () => {
         expect(store.codeVerifier).toBe("verifier");
 
         authMock.mockReset();
-        authMock.mockResolvedValueOnce("AUTHORIZED");
+        authMock.mockImplementationOnce(async (provider, options) => {
+          expect(options.authorizationCode).toBe("code-123");
+          expect(provider.redirectUrl).toBe("http://localhost:8989/oauth/callback");
+          expect(await provider.codeVerifier?.()).toBe("verifier");
+          return "AUTHORIZED";
+        });
         await runMcpOAuthLogin({
           serverName: "Calendly",
           serverUrl: "https://mcp.calendly.com/",
@@ -789,6 +805,74 @@ describe("MCP OAuth provider", () => {
       },
       {
         prefix: "openclaw-mcp-oauth-localhost-persist-",
+        skipSessionCleanup: true,
+        env: {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+      },
+    );
+  });
+
+  it("keeps a captured verifier bound to its login when another login overlaps", async () => {
+    await withTempHome(
+      async () => {
+        let firstSession: { codeVerifier: string; redirectUrl: string } | undefined;
+        authMock.mockReset();
+        authMock.mockImplementationOnce(async (provider) => {
+          await provider.saveCodeVerifier?.("verifier-first");
+          return "REDIRECT";
+        });
+
+        await runMcpOAuthLogin({
+          serverName: "Calendly",
+          serverUrl: "https://mcp.calendly.com/",
+          onAuthorizationUrl: () => {},
+          onAuthorizationSession: (session) => {
+            firstSession = session;
+          },
+        });
+        expect(firstSession).toEqual({
+          codeVerifier: "verifier-first",
+          redirectUrl: "http://127.0.0.1:8989/oauth/callback",
+        });
+
+        authMock.mockImplementationOnce(async (provider) => {
+          await provider.saveCodeVerifier?.("verifier-second");
+          return "REDIRECT";
+        });
+        await runMcpOAuthLogin({
+          serverName: "Calendly",
+          serverUrl: "https://mcp.calendly.com/",
+          onAuthorizationUrl: () => {},
+        });
+        expect(
+          readMcpOAuthStore(resolveMcpOAuthStoreKey("Calendly", "https://mcp.calendly.com/"))
+            .codeVerifier,
+        ).toBe("verifier-second");
+
+        const captured = firstSession;
+        if (!captured) {
+          throw new Error("first login did not capture its authorization session");
+        }
+        authMock.mockImplementationOnce(async (provider, options) => {
+          expect(options.authorizationCode).toBe("code-first");
+          expect(await provider.codeVerifier()).toBe("verifier-first");
+          expect(provider.redirectUrl).toBe("http://127.0.0.1:8989/oauth/callback");
+          return "AUTHORIZED";
+        });
+        await expect(
+          runMcpOAuthLogin({
+            serverName: "Calendly",
+            serverUrl: "https://mcp.calendly.com/",
+            config: { redirectUrl: captured.redirectUrl },
+            authorizationCode: "code-first",
+            codeVerifier: captured.codeVerifier,
+          }),
+        ).resolves.toBe("authorized");
+      },
+      {
+        prefix: "openclaw-mcp-oauth-overlap-",
         skipSessionCleanup: true,
         env: {
           OPENCLAW_CONFIG_PATH: undefined,

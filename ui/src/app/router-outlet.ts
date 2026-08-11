@@ -1,4 +1,4 @@
-import type { Router } from "@openclaw/uirouter";
+import type { RouteMatch, Router } from "@openclaw/uirouter";
 import { html, nothing } from "lit";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { property } from "lit/decorators.js";
@@ -22,6 +22,10 @@ export { selectRenderedRouteMatch } from "./router-outlet-controller.ts";
 
 type RenderableModule<TData> = {
   render: (data: TData | undefined) => unknown;
+  renderOwnerKey?: (
+    match: Pick<RouteMatch<string, unknown, TData>, "data" | "location">,
+    settled: Pick<RouteMatch<string, unknown, TData>, "data" | "location"> | undefined,
+  ) => string | undefined;
 };
 
 type RouterOutletOptions<TLoadContext = unknown> = {
@@ -139,10 +143,9 @@ function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
 function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TData = unknown>(
   router: Router<TRouteId, TLoadContext, TModule, TData>,
   selection: RouterOutletSnapshot<TRouteId, TModule, TData>,
+  renderedMatch: RouteMatch<TRouteId, TModule, TData> | undefined,
   options: RouterOutletOptions<TLoadContext> = {},
 ): unknown {
-  const pending = selection.pending;
-  const renderedMatch = selectRenderedRouteMatch(selection.active, pending);
   if (renderedMatch?.status === "notFound") {
     return nothing;
   }
@@ -192,7 +195,8 @@ function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TDat
 
 type RouterOutletInputs<TRouteId extends string, TLoadContext, TModule, TData> = {
   router?: Router<TRouteId, TLoadContext, TModule, TData>;
-  onNotFound?: () => void;
+  onNotFound?: () => boolean | void;
+  notFoundRecoveryReady?: boolean;
 };
 
 class LitRouterOutletController<
@@ -237,10 +241,12 @@ class OpenClawRouterOutlet<
 > extends OpenClawLightDomElement {
   @property({ attribute: false }) router?: Router<TRouteId, TLoadContext, TModule, TData>;
   @property({ attribute: false }) retryContext?: TLoadContext;
-  @property({ attribute: false }) onNotFound?: () => void;
+  @property({ attribute: false }) onNotFound?: () => boolean | void;
+  @property({ attribute: false }) notFoundRecoveryReady?: boolean;
   private readonly outlet = new LitRouterOutletController(this, () => ({
     router: this.router,
     onNotFound: this.onNotFound,
+    notFoundRecoveryReady: this.notFoundRecoveryReady,
   }));
   private readonly mcpAppUnmountGate = new McpAppUnmountGate(this);
 
@@ -250,14 +256,23 @@ class OpenClawRouterOutlet<
     }
     const snapshot = this.outlet.snapshot;
     const renderedMatch = selectRenderedRouteMatch(snapshot.active, snapshot.pending);
-    const rendered = renderRouterOutlet(this.router, snapshot, {
+    const rendered = renderRouterOutlet(this.router, snapshot, renderedMatch, {
       retryContext: this.retryContext,
     });
-    return this.mcpAppUnmountGate.render(
-      renderedMatch ? `${renderedMatch.routeId}:${renderedMatch.status}` : "empty",
-      rendered,
-      () => [this],
-    );
+    const routeKey = renderedMatch ? `${renderedMatch.routeId}:${renderedMatch.status}` : "empty";
+    const routeModule = renderedMatch?.module;
+    const declaredOwnerKey =
+      renderedMatch && isRenderableModule<TData>(routeModule)
+        ? routeModule.renderOwnerKey?.(renderedMatch, snapshot.settled)
+        : undefined;
+    const explicitOwnerKey = renderedMatch?.error === undefined ? declaredOwnerKey : undefined;
+    const retainCurrent =
+      explicitOwnerKey !== undefined &&
+      renderedMatch?.status === "pending" &&
+      renderedMatch.data === undefined;
+    return this.mcpAppUnmountGate.render(explicitOwnerKey ?? routeKey, rendered, () => [this], {
+      retainRenderedValue: retainCurrent,
+    });
   }
 }
 

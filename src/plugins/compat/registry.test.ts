@@ -40,7 +40,7 @@ const deprecationMarkingCodes = [
 const deprecationMarkingSurfaceCounts: Record<(typeof deprecationMarkingCodes)[number], number> = {
   "plugin-sdk-channel-setup-input-fields": 22,
   "plugin-sdk-broad-runtime-barrels": 12,
-  "plugin-sdk-provider-owned-helper-shims": 35,
+  "plugin-sdk-provider-owned-helper-shims": 34,
   "message-presentation-legacy-bridges": 21,
   "plugin-sdk-focused-compat-aliases": 23,
   "agent-harness-terminal-result-aliases": 10,
@@ -57,9 +57,11 @@ function expectNonEmptyStringList(values: readonly string[], label: string) {
 }
 
 function listTrackedSourceFiles(): string[] {
-  return (listGitTrackedFiles({ pathspecs: sourceRootsForDeprecatedCallGuard }) ?? []).filter(
-    (file) => /\.(?:ts|tsx|mts|cts)$/u.test(file),
-  );
+  const files = listGitTrackedFiles({ pathspecs: sourceRootsForDeprecatedCallGuard });
+  if (!files) {
+    throw new Error("unable to list tracked source files for the deprecated-call guard");
+  }
+  return files.filter((file) => /\.(?:ts|tsx|mts|cts)$/u.test(file));
 }
 
 describe("plugin compatibility registry", () => {

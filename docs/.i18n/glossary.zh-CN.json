@@ -388,6 +388,10 @@
     "target": "微信"
   },
   {
+    "source": "WeCom",
+    "target": "企业微信"
+  },
+  {
     "source": "Weixin",
     "target": "微信"
   },
@@ -670,6 +674,10 @@
   {
     "source": "Memory overview",
     "target": "记忆概览"
+  },
+  {
+    "source": "QMD memory backend removal",
+    "target": "QMD 记忆后端移除"
   },
   {
     "source": "Active memory",
@@ -1662,6 +1670,26 @@
   {
     "source": "Baseten (Inkling + Model APIs)",
     "target": "Baseten（Inkling + Model APIs）"
+  },
+  {
+    "source": "ChromeOS",
+    "target": "ChromeOS"
+  },
+  {
+    "source": "ChromeOS (Crostini)",
+    "target": "ChromeOS (Crostini)"
+  },
+  {
+    "source": "Linux guide",
+    "target": "Linux 指南"
+  },
+  {
+    "source": "Node install guidance",
+    "target": "Node 安装指南"
+  },
+  {
+    "source": "Gateway runbook",
+    "target": "Gateway 运行手册"
   },
   {
     "source": "Multi-user mode",

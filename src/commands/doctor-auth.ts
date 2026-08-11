@@ -24,6 +24,7 @@ import {
 import { CLAUDE_CLI_PROFILE_ID } from "../agents/auth-profiles/constants.js";
 import { formatAuthDoctorHint } from "../agents/auth-profiles/doctor.js";
 import {
+  buildAuthProfileUnusableHint,
   buildOAuthRefreshFailureLoginCommand,
   classifyOAuthRefreshFailure,
   formatOAuthRefreshFailureLoginCommandMarkdown,
@@ -135,12 +136,6 @@ function legacyCodexProviderOverrideToHealthFinding(providerOverride: unknown): 
   };
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.doctorAuthTestApi")] = {
-    legacyCodexProviderOverrideToHealthFinding,
-  };
-}
-
 /** Emits a warning when legacy Codex transport overrides can shadow configured Codex OAuth. */
 export function noteLegacyCodexProviderOverride(cfg: OpenClawConfig): void {
   const providerOverride = cfg.models?.providers?.[LEGACY_CODEX_PROVIDER_ID];
@@ -199,22 +194,6 @@ function listAuthProfileHealthTargets(cfg: OpenClawConfig): AuthProfileHealthTar
   }
 
   return [...targets.values()];
-}
-
-/** Returns the short doctor hint for disabled or cooldown auth profiles. */
-function resolveUnusableProfileHint(params: {
-  kind: "cooldown" | "disabled";
-  reason?: string;
-}): string {
-  if (params.kind === "disabled") {
-    if (params.reason === "billing") {
-      return "Top up credits (provider billing) or switch provider.";
-    }
-    if (params.reason === "auth_permanent" || params.reason === "auth") {
-      return "Refresh or replace credentials, then retry.";
-    }
-  }
-  return "Wait for cooldown or switch provider.";
 }
 
 function formatOAuthRefreshFailureReason(reason: OAuthRefreshFailureReason | null): string {
@@ -386,12 +365,13 @@ async function collectAuthProfileHealthFindingsForTarget(params: {
     const stats = store.usageStats?.[profileId];
     const remaining = formatRemainingShort(until - now);
     const disabledActive = typeof stats?.disabledUntil === "number" && now < stats.disabledUntil;
-    const kind = disabledActive
-      ? `disabled${stats.disabledReason ? `:${stats.disabledReason}` : ""}`
-      : "cooldown";
-    const hint = resolveUnusableProfileHint({
+    const reason = disabledActive ? stats?.disabledReason : stats?.cooldownReason;
+    const kind = `${disabledActive ? "disabled" : "cooldown"}${reason ? `:${reason}` : ""}`;
+    const hint = buildAuthProfileUnusableHint({
       kind: disabledActive ? "disabled" : "cooldown",
-      reason: stats?.disabledReason,
+      reason,
+      provider: store.profiles[profileId]?.provider ?? profileId,
+      profileId,
     });
     findings.push(
       authProfileCooldownToHealthFinding({
@@ -491,12 +471,13 @@ async function noteAuthProfileHealthForTarget(params: {
       const stats = store.usageStats?.[profileId];
       const remaining = formatRemainingShort(until - now);
       const disabledActive = typeof stats?.disabledUntil === "number" && now < stats.disabledUntil;
-      const kind = disabledActive
-        ? `disabled${stats.disabledReason ? `:${stats.disabledReason}` : ""}`
-        : "cooldown";
-      const hint = resolveUnusableProfileHint({
+      const reason = disabledActive ? stats?.disabledReason : stats?.cooldownReason;
+      const kind = `${disabledActive ? "disabled" : "cooldown"}${reason ? `:${reason}` : ""}`;
+      const hint = buildAuthProfileUnusableHint({
         kind: disabledActive ? "disabled" : "cooldown",
-        reason: stats?.disabledReason,
+        reason,
+        provider: store.profiles[profileId]?.provider ?? profileId,
+        profileId,
       });
       out.push(`- ${profileId}: ${kind} (${remaining})${hint ? ` — ${hint}` : ""}`);
     }

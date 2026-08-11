@@ -747,4 +747,14 @@ describe("mergeRetryFailoverReason", () => {
       }),
     ).toBe("timeout");
   });
+
+  it("preserves a previous concrete reason over a later coarse timeout", () => {
+    expect(
+      mergeRetryFailoverReason({
+        previous: "server_error",
+        failoverReason: null,
+        timedOut: true,
+      }),
+    ).toBe("server_error");
+  });
 });

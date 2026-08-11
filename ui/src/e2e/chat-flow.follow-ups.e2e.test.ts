@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -77,8 +78,19 @@ suite.define(() => {
       });
       await gateway.resolveDeferred("taskSuggestions.list", { suggestions: [] });
 
-      const startButton = page.getByRole("button", { name: "Start in worktree" });
+      const startButton = page.getByRole("button", { name: "Start with worktree" });
       await startButton.waitFor({ state: "visible", timeout: 10_000 });
+      const moreActions = page.getByRole("button", { name: "More ways to start this task" });
+      expect(await moreActions.count()).toBe(1);
+      await moreActions.click();
+      await page
+        .getByText("Copy prompt", { exact: true })
+        .waitFor({ state: "visible", timeout: 10_000 });
+      expect(await page.getByText("Start locally", { exact: true }).count()).toBe(0);
+      expect(await page.getByText("Fix in this session", { exact: true }).count()).toBe(0);
+      expect(await page.getByText("Send to cloud", { exact: true }).count()).toBe(0);
+      await page.keyboard.press("Escape");
+      await page.getByText("Show instructions", { exact: true }).click();
       await page
         .getByText("/projects/example", { exact: true })
         .waitFor({ state: "visible", timeout: 10_000 });
@@ -96,6 +108,59 @@ suite.define(() => {
     }
   });
 
+  it("fixes a model-suggested follow-up in the source session", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const suggestion = {
+      id: "task_session",
+      title: "Repair the active flow",
+      prompt: "Fix the active flow and keep this transcript selected.",
+      tldr: "The follow-up belongs in this session.",
+      cwd: "/projects/example",
+      sessionKey: "main",
+      agentId: "main",
+      createdAt: Date.now(),
+    };
+    const gateway = await installMockGateway(page, {
+      featureCapabilities: [GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "environments.list",
+        "taskSuggestions.list",
+        "taskSuggestions.accept",
+      ],
+      methodResponses: {
+        "environments.list": { environments: [], profiles: [] },
+        "taskSuggestions.list": { suggestions: [suggestion] },
+        "taskSuggestions.accept": { taskId: suggestion.id, key: suggestion.sessionKey },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const card = page.locator(`.task-suggestion[data-task-id="${suggestion.id}"]`);
+      await card.waitFor({ state: "visible", timeout: 10_000 });
+      await gateway.waitForRequest("environments.list");
+      const routeBeforeAccept = page.url();
+      await card.getByRole("button", { name: "More ways to start this task" }).click();
+      const sessionItem = card.locator('wa-dropdown-item[value="session"]');
+      await sessionItem.waitFor({ state: "visible", timeout: 10_000 });
+      await sessionItem.click();
+
+      const acceptRequest = await gateway.waitForRequest("taskSuggestions.accept");
+      expect(acceptRequest.params).toEqual({ taskId: suggestion.id, mode: "session" });
+      await expect.poll(() => card.count()).toBe(0);
+      expect(page.url()).toBe(routeBeforeAccept);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("clears model-suggested follow-ups while switching sessions", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -104,7 +169,13 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "taskSuggestions.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "taskSuggestions.list",
+        "taskSuggestions.accept",
+        "taskSuggestions.dismiss",
+      ],
       methodResponses: {
         "sessions.list": chatSessionListResponse(),
         "taskSuggestions.list": {
@@ -127,7 +198,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      const startButton = page.getByRole("button", { name: "Start in worktree" });
+      const startButton = page.getByRole("button", { name: "Start with worktree" });
       await startButton.waitFor({ state: "visible", timeout: 10_000 });
       await gateway.deferNext("taskSuggestions.list");
       await page
@@ -144,6 +215,65 @@ suite.define(() => {
     }
   });
 
+  it("keeps copy available when only listing is advertised", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "taskSuggestions.list"],
+      methodResponses: {
+        "taskSuggestions.list": {
+          suggestions: [
+            {
+              id: "task_list_only",
+              title: "Read-only follow-up",
+              prompt: "Copy this suggestion without mutating it.",
+              tldr: "Listing alone still exposes the client-local copy action.",
+              cwd: "/projects/example",
+              sessionKey: "main",
+              agentId: "main",
+              createdAt: Date.now(),
+            },
+          ],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("taskSuggestions.list");
+      await expect
+        .poll(() =>
+          page
+            .locator("openclaw-chat-pane")
+            .evaluate(
+              (pane) =>
+                (pane as HTMLElement & { taskSuggestions?: unknown[] }).taskSuggestions?.length ??
+                0,
+            ),
+        )
+        .toBe(1);
+
+      await page
+        .locator(".agent-chat__composer-shell")
+        .waitFor({ state: "visible", timeout: 10_000 });
+      const card = page.locator('.task-suggestion[data-task-id="task_list_only"]');
+      await card.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await card.getByRole("button", { name: "Start with worktree" }).isDisabled()).toBe(
+        true,
+      );
+      await card.getByRole("button", { name: "More ways to start this task" }).click();
+      await card
+        .getByText("Copy prompt", { exact: true })
+        .waitFor({ state: "visible", timeout: 10_000 });
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("keeps the composer visible when follow-up suggestions overflow", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -152,7 +282,13 @@ suite.define(() => {
     });
     const page = await context.newPage();
     await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "taskSuggestions.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "taskSuggestions.list",
+        "taskSuggestions.accept",
+        "taskSuggestions.dismiss",
+      ],
       methodResponses: {
         "taskSuggestions.list": {
           suggestions: Array.from({ length: 12 }, (_, index) => ({
@@ -355,7 +491,9 @@ suite.define(() => {
         sessionKey: "main",
       });
       const queue = page.locator(".chat-queue");
-      await queue.getByText("Steered").waitFor({ timeout: 10_000 });
+      await queue.locator(".chat-queue__badge--steered", { hasText: "Steering" }).waitFor({
+        timeout: 10_000,
+      });
       await queue.getByText(followUp).waitFor({ timeout: 10_000 });
       if (artifactDir) {
         await page.screenshot({
@@ -544,7 +682,8 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
       await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}chat?session=main`);
+      await expect.poll(() => new URL(page.url()).pathname).toMatch(/\/chat\/main$/);
 
       await page.locator(".agent-chat__composer-combobox textarea").fill("keep this run active");
       await page.getByRole("button", { name: "Send message" }).click();
@@ -560,6 +699,17 @@ suite.define(() => {
         "sessions.list",
         chatSessionListResponse([
           {
+            activeLeafEntryId: "leaf-active",
+            activeRunIds: ["active-run"],
+            hasActiveRun: true,
+            key: "global",
+            kind: "global",
+            label: "Global",
+            updatedAt: Date.now(),
+          },
+          {
+            activeLeafEntryId: "leaf-active",
+            activeRunIds: ["active-run"],
             hasActiveRun: true,
             key: "main",
             kind: "direct",
@@ -569,6 +719,7 @@ suite.define(() => {
         ]),
       );
       await page.reload();
+      await gateway.waitForRequest("sessions.list");
 
       const queue = page.locator(".chat-queue");
       await queue.getByText(queuedPrompt).waitFor({ timeout: 10_000 });
@@ -578,10 +729,15 @@ suite.define(() => {
       const steerParams = requireRecord(steerRequest.params);
       expect(steerParams).toMatchObject({
         deliver: false,
+        expectedLeafEntryId: "leaf-active",
+        expectedRunId: "active-run",
         message: queuedPrompt,
+        queueMode: "steer",
         sessionKey: "main",
       });
-      await queue.getByText("Steered").waitFor({ timeout: 10_000 });
+      await queue.locator(".chat-queue__badge--steered", { hasText: "Steering" }).waitFor({
+        timeout: 10_000,
+      });
       await gateway.emitChatFinal({
         runId: requireString(steerParams.idempotencyKey, "restored steer idempotency key"),
         text: "Restored steer completed.",

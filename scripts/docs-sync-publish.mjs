@@ -4,12 +4,12 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { renderDocsHeadingMap } from "./docs-list.js";
 import { repairMintlifyAccordionIndentation } from "./lib/mintlify-accordion.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(HERE, "..");
+const ROOT = resolveRepoRoot(import.meta.url);
 const SOURCE_DOCS_DIR = path.join(ROOT, "docs");
 const SOURCE_CONFIG_PATH = path.join(SOURCE_DOCS_DIR, "docs.json");
 const INTERNAL_DOCS_DIRS = ["internal"];
@@ -24,6 +24,14 @@ const SYNC_SUPPORT_FILES = [
   {
     source: path.join(ROOT, "scripts", "check-docs-mdx.mjs"),
     target: path.join(".openclaw-sync", "check-docs-mdx.mjs"),
+  },
+  {
+    source: path.join(ROOT, "scripts", "check-docs-mdx.mts"),
+    target: path.join(".openclaw-sync", "check-docs-mdx.mts"),
+  },
+  {
+    source: path.join(ROOT, "scripts", "lib", "tsx-cli-shim.mjs"),
+    target: path.join(".openclaw-sync", "lib", "tsx-cli-shim.mjs"),
   },
   {
     source: path.join(ROOT, "scripts", "lib", "mintlify-accordion.mjs"),

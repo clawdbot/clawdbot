@@ -32,6 +32,7 @@ import {
   runWorkspaceSuggestionsHealth,
 } from "./doctor-health-contribution-runners.workspace.js";
 import type {
+  DoctorHealthCheckContext,
   DoctorHealthContribution,
   DoctorHealthFlowContext,
 } from "./doctor-health-contribution-types.js";
@@ -184,7 +185,12 @@ export function resolveFinalDoctorHealthContributions(params: {
             cfg: ctx.cfg,
             options: { nonInteractive: true, allowExec: ctx.allowExecSecretRefs === true },
           });
-          return collectWorkspaceStatusHealthFindings(ctx.cfg, { pluginVersionDrift });
+          const runWithPluginMetadataSnapshot = (ctx as DoctorHealthCheckContext)
+            .runWithPluginMetadataSnapshot;
+          return collectWorkspaceStatusHealthFindings(ctx.cfg, {
+            pluginVersionDrift,
+            ...(runWithPluginMetadataSnapshot ? { runWithPluginMetadataSnapshot } : {}),
+          });
         },
       },
       run: runWorkspaceStatusHealth,
@@ -199,31 +205,6 @@ export function resolveFinalDoctorHealthContributions(params: {
           }),
         ]
       : []),
-    createDoctorHealthContribution({
-      id: "doctor:skill-curator",
-      label: "Skill curator",
-      healthChecks: {
-        description: "Stalled skill lifecycle curation is reported as a warning.",
-        defaultEnabled: false,
-        async detect() {
-          const { getSkillCuratorDoctorWarning } = await import("../skills/workshop/curator.js");
-          const warning = getSkillCuratorDoctorWarning();
-          return warning
-            ? [
-                {
-                  checkId: "core/doctor/skill-curator",
-                  severity: "warning" as const,
-                  source: "doctor",
-                  message: warning,
-                  target: "skill-curator",
-                  requirement:
-                    "latest sweep succeeds and attempts do not trail success by seven days",
-                },
-              ]
-            : [];
-        },
-      },
-    }),
     createDoctorHealthContribution({
       id: "doctor:skills",
       label: "Skills",

@@ -21,7 +21,6 @@ import {
 import type { ReplyPayload } from "../types.js";
 import {
   buildSilentFallbackFailurePayload,
-  enqueueCommitmentExtractionForTurn,
   hasSuccessfulSourceReplyDelivery,
   hasSuccessfulTerminalSourceReplyDelivery,
   refreshSessionEntryFromStore,
@@ -55,7 +54,6 @@ export async function prepareReplyAgentPayloads(state: {
     blockReplyPipeline,
     blockStreamingEnabled,
     cfg,
-    commandBody,
     followupRun,
     isHeartbeat,
     opts,
@@ -81,7 +79,6 @@ export async function prepareReplyAgentPayloads(state: {
     fallbackAttempts,
     fallbackExhausted,
     fallbackTransition,
-    hasBillableUsageBuckets,
     modelUsed,
     payloadArray,
     preserveUserFacingSessionState,
@@ -100,6 +97,11 @@ export async function prepareReplyAgentPayloads(state: {
   const deliberateSilentTerminalReply = hasDeliberateSilentTerminalReply(runResult);
   if (deliberateSilentTerminalReply) {
     opts?.onDeliberateSilentTerminalReply?.();
+  }
+  const pendingContinuation =
+    runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0;
+  if (pendingContinuation) {
+    opts?.onPendingContinuation?.();
   }
 
   const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
@@ -144,8 +146,7 @@ export async function prepareReplyAgentPayloads(state: {
         isMessageToolOnly:
           (opts?.sourceReplyDeliveryMode ?? followupRun.run.sourceReplyDeliveryMode) ===
           "message_tool_only",
-        hasPendingContinuation:
-          runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0,
+        hasPendingContinuation: pendingContinuation,
         hasExplicitSilentReply: deliberateSilentTerminalReply,
         hasCommittedDelivery: successfulTerminalDelivery,
         sessionCtx,
@@ -465,27 +466,16 @@ export async function prepareReplyAgentPayloads(state: {
       ? appendUnscheduledReminderNote(replyPayloads)
       : replyPayloads;
 
-  enqueueCommitmentExtractionForTurn({
-    cfg,
-    commandBody,
-    isHeartbeat,
-    followupRun,
-    sessionCtx,
-    sessionKey,
-    replyToChannel,
-    payloads: replyPayloads,
-    runId,
-  });
-
   await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 
-  if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
-    const input = usage.input ?? 0;
-    const output = usage.output ?? 0;
-    const cacheRead = usage.cacheRead ?? 0;
-    const cacheWrite = usage.cacheWrite ?? 0;
+  const diagnosticUsage = runResult.meta?.agentMeta?.diagnosticUsage ?? usage;
+  if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(diagnosticUsage)) {
+    const input = diagnosticUsage.input ?? 0;
+    const output = diagnosticUsage.output ?? 0;
+    const cacheRead = diagnosticUsage.cacheRead ?? 0;
+    const cacheWrite = diagnosticUsage.cacheWrite ?? 0;
     const usagePromptTokens = input + cacheRead + cacheWrite;
-    const totalTokens = usage.total ?? usagePromptTokens + output;
+    const totalTokens = diagnosticUsage.total ?? usagePromptTokens + output;
     const contextUsedTokens = deriveContextPromptTokens({
       lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
       promptTokens,
@@ -496,8 +486,13 @@ export async function prepareReplyAgentPayloads(state: {
       model: modelUsed,
       config: cfg,
     });
-    const costUsd = hasBillableUsageBuckets
-      ? estimateUsageCost({ usage, cost: costConfig })
+    const hasDiagnosticBillableUsageBuckets =
+      diagnosticUsage.input !== undefined ||
+      diagnosticUsage.output !== undefined ||
+      diagnosticUsage.cacheRead !== undefined ||
+      diagnosticUsage.cacheWrite !== undefined;
+    const costUsd = hasDiagnosticBillableUsageBuckets
+      ? estimateUsageCost({ usage: diagnosticUsage, cost: costConfig })
       : undefined;
     emitTrustedDiagnosticEvent({
       type: "model.usage",

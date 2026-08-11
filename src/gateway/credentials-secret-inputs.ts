@@ -5,6 +5,7 @@ import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveSecretInputString } from "../secrets/resolve-secret-input-string.js";
 import {
   GatewaySecretRefUnavailableError,
+  resolveExplicitGatewayAuth,
   resolveGatewayCredentialsFromConfig,
   trimToUndefined,
   type ExplicitGatewayAuth,
@@ -43,16 +44,6 @@ type NormalizedGatewayCredentialSecretInputOptions = Omit<
 > & {
   explicitAuth: ExplicitGatewayAuth;
 };
-
-function resolveExplicitGatewayAuth(opts?: ExplicitGatewayAuth): ExplicitGatewayAuth {
-  const token =
-    typeof opts?.token === "string" && opts.token.trim().length > 0 ? opts.token.trim() : undefined;
-  const password =
-    typeof opts?.password === "string" && opts.password.trim().length > 0
-      ? opts.password.trim()
-      : undefined;
-  return { token, password };
-}
 
 async function resolveGatewaySecretInputString(params: {
   config: OpenClawConfig;

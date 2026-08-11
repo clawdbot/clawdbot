@@ -7,6 +7,7 @@ import {
   formatDateTimeMs,
   formatDateMs,
   formatCompactTokenCount,
+  formatContextTokenCapacity,
   formatDurationCompact,
   formatDurationHuman,
   formatMs,
@@ -65,8 +66,13 @@ describe("formatAgo", () => {
 });
 
 describe("localized durations", () => {
-  it("preserves compact day and remainder-hour units", () => {
-    expect(formatDurationCompact(49 * 60 * 60 * 1000, { spaced: true })).toBe("2d 1h");
+  it.each([
+    { durationMs: 59_000, expected: "59s" },
+    { durationMs: 92_000, expected: "1m 32s" },
+    { durationMs: 3_660_000, expected: "1h 1m" },
+    { durationMs: 49 * 60 * 60 * 1000, expected: "2d 1h" },
+  ])("formats $durationMs ms with separated compact units", ({ durationMs, expected }) => {
+    expect(formatDurationCompact(durationMs)).toBe(expected);
   });
 
   it("switches human durations to days at 24 hours", () => {
@@ -209,6 +215,7 @@ describe("formatCompactTokenCount", () => {
 
   it("formats millions with one decimal, trimming a trailing .0", () => {
     expect(formatCompactTokenCount(1_000_000)).toBe("1M");
+    expect(formatCompactTokenCount(1_050_000)).toBe("1.1M");
     expect(formatCompactTokenCount(1_500_000)).toBe("1.5M");
   });
 
@@ -232,6 +239,21 @@ describe("formatCompactTokenCount", () => {
       "1.0K",
     );
     expect(formatCompactTokenCount(1_000_000, { trimTrailingZero: false })).toBe("1.0M");
+  });
+});
+
+describe("formatContextTokenCapacity", () => {
+  it("truncates million-scale capacity to at most one decimal", () => {
+    expect(formatContextTokenCapacity(1_000_000)).toBe("1M");
+    expect(formatContextTokenCapacity(1_050_000)).toBe("1M");
+    expect(formatContextTokenCapacity(1_100_000)).toBe("1.1M");
+  });
+
+  it("preserves shared compact formatting below one million", () => {
+    expect(formatContextTokenCapacity(999)).toBe("999");
+    expect(formatContextTokenCapacity(1_000)).toBe("1k");
+    expect(formatContextTokenCapacity(32_768)).toBe("32.8k");
+    expect(formatContextTokenCapacity(999_999)).toBe("1M");
   });
 });
 

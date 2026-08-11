@@ -1,3 +1,4 @@
+import { normalizeUsage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -71,6 +72,7 @@ describe("CodexAppServerEventProjector assistant projection", () => {
       promptTokens: 5,
       totalTokens: 12,
     });
+    expect(result.attemptUsage?.reasoningTokens).toBe(3);
     expectUsageFields(result.lastAssistant?.usage, {
       input: 2,
       output: 7,
@@ -83,7 +85,31 @@ describe("CodexAppServerEventProjector assistant projection", () => {
       promptTokens: 5,
       totalTokens: 12,
     });
+    expect(normalizeUsage(result.lastAssistant?.usage)?.reasoningTokens).toBe(3);
+    expect(normalizeUsage(result.currentAttemptAssistant?.usage)?.reasoningTokens).toBe(3);
     expect(result.replayMetadata.replaySafe).toBe(true);
+  });
+
+  it("projects a current-turn model reroute onto the terminal assistant", async () => {
+    const projector = await createProjector();
+    await projector.handleNotification(
+      forCurrentTurn("model/rerouted", {
+        fromModel: "gpt-5.4-codex",
+        toModel: "gpt-5.4-codex-mini",
+        reason: "high_risk_cyber_activity",
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([{ type: "agentMessage", id: "msg-rerouted", text: "done" }]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.currentAttemptAssistant?.responseModel).toBe("gpt-5.4-codex-mini");
+    expect(result.lastAssistant?.responseModel).toBe("gpt-5.4-codex-mini");
+    expect(result).toMatchObject({
+      terminalTurnId: "turn-1",
+    });
   });
 
   it("keeps reopened final answers as Activity candidates until turn completion selects one", async () => {

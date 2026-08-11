@@ -294,8 +294,13 @@ export type LlmCompleteResult = {
   };
 };
 
+type RuntimeRunEmbeddedAgentParams = Omit<
+  import("../../agents/embedded-agent-runner/run/params.js").RunEmbeddedAgentParams,
+  "admittedRunContext" | "preparedRunAdmission" | "skillWorkshopCollectionReconcile"
+>;
+
 type RuntimeRunEmbeddedAgent = (
-  params: import("../../agents/embedded-agent-runner/run/params.js").RunEmbeddedAgentParams,
+  params: RuntimeRunEmbeddedAgentParams,
 ) => Promise<import("../../agents/embedded-agent-runner/types.js").EmbeddedAgentRunResult>;
 
 /** Core runtime helpers exposed to trusted native plugins. */
@@ -327,6 +332,8 @@ export type PluginRuntimeCore = {
     resolveAgentDir: typeof import("../../agents/agent-scope.js").resolveAgentDir;
     resolveAgentWorkspaceDir: typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir;
     resolveAgentIdentity: typeof import("../../agents/identity.js").resolveAgentIdentity;
+    /** Resolve an allowed catalog create target through canonical agent model/runtime policy. */
+    resolveSessionCatalogCreateTarget: typeof import("./runtime-agent-session-catalog.js").resolveSessionCatalogCreateTarget;
     resolveThinkingDefault: (params: {
       cfg: import("../../config/types.openclaw.js").OpenClawConfig;
       provider: string;
@@ -467,7 +474,6 @@ export type PluginRuntimeCore = {
     openSyncKeyedStore: <T>(
       options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateSyncKeyedStore<T>;
-    withLease: import("../../plugin-state/plugin-state-lease.types.js").PluginStateLeaseRunner;
     openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
       options?: Omit<CreateChannelIngressQueueOptions, "channelId">,
     ) => import("../../channels/message/ingress-queue.js").ChannelIngressQueue<

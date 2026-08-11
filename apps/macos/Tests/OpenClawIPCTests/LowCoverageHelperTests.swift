@@ -403,10 +403,6 @@ struct LowCoverageHelperTests {
     }
 
     @Test @MainActor func `canvas window helper functions`() throws {
-        #expect(CanvasWindowController._testSanitizeSessionKey("  main ") == "main")
-        #expect(CanvasWindowController._testSanitizeSessionKey("bad/..") == "bad___")
-        #expect(CanvasWindowController._testJSOptionalStringLiteral(nil) == "null")
-
         let rect = NSRect(x: 10, y: 12, width: 400, height: 420)
         let key = CanvasWindowController._testStoredFrameKey(sessionKey: "test")
         let loaded = CanvasWindowController._testStoreAndLoadFrame(sessionKey: "test", frame: rect)

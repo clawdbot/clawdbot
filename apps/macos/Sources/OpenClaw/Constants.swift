@@ -3,7 +3,10 @@ import Foundation
 // Stable identifier used for both the macOS LaunchAgent label and Nix-managed defaults suite.
 // nix-openclaw writes app defaults into this suite to survive app bundle identifier churn.
 let launchdLabel = "ai.openclaw.mac"
-let gatewayLaunchdLabel = "ai.openclaw.gateway"
+var gatewayLaunchdLabel: String {
+    AppProfile.current.gatewayLaunchAgentLabel
+}
+
 let nodeLaunchdLabel = "ai.openclaw.node"
 let onboardingVersionKey = "openclaw.onboardingVersion"
 let onboardingSeenKey = "openclaw.onboardingSeen"
@@ -41,7 +44,7 @@ let quickChatEnabledKey = "openclaw.quickChatEnabled"
 let cameraEnabledKey = "openclaw.cameraEnabled"
 let computerControlEnabledKey = "openclaw.computerControlEnabled"
 
-func isComputerControlEnabled(defaults: UserDefaults = .standard) -> Bool {
+func isComputerControlEnabled(defaults: UserDefaults = AppDefaults.standard) -> Bool {
     // object(forKey:) preserves an explicit false; bool(forKey:) would conflate it with an unset default.
     defaults.object(forKey: computerControlEnabledKey) as? Bool ?? true
 }

@@ -14,7 +14,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
   findAcpUnsupportedInheritedToolDeny,
@@ -23,19 +22,19 @@ import {
 } from "../inherited-tool-deny.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
-import { resolveAcpSessionsSpawnImageAttachments } from "../subagent-attachments.js";
-import { getSubagentDeliveryBacklogPressure } from "../subagent-registry.js";
+import { getSubagentDeliveryBacklogPressure } from "../subagents/registry/subagent-registry.js";
+import { resolveAcpSessionsSpawnImageAttachments } from "../subagents/spawn/subagent-attachments.js";
 import {
   SUBAGENT_SPAWN_CONTEXT_MODES,
   SUBAGENT_SPAWN_MODES,
   spawnSubagentDirect,
-} from "../subagent-spawn.js";
-import { normalizeSubagentTaskName } from "../subagent-task-name.js";
+} from "../subagents/spawn/subagent-spawn.js";
+import { normalizeSubagentTaskName } from "../subagents/spawn/subagent-task-name.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
-} from "../swarm-code-mode.js";
-import { resolveSwarmConfig } from "../swarm-config.js";
+} from "../subagents/swarm/swarm-code-mode.js";
+import { resolveSwarmConfig } from "../subagents/swarm/swarm-config.js";
 import {
   describeSessionsSpawnTool,
   SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY,
@@ -46,7 +45,7 @@ import {
   jsonResult,
   normalizeToolModelOverride,
   readNonNegativeIntegerParam,
-  readStringParam,
+  readToolStringParam,
   ToolInputError,
 } from "./common.js";
 import {
@@ -73,10 +72,10 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "replyTo",
   "reply_to",
 ] as const;
-type AcpSpawnModule = typeof import("../acp-spawn.js");
+type AcpSpawnModule = typeof import("../subagents/spawn/acp-spawn.js");
 
 const acpSpawnModuleLoader = createLazyImportLoader<AcpSpawnModule>(
-  () => import("../acp-spawn.js"),
+  () => import("../subagents/spawn/acp-spawn.js"),
 );
 
 async function loadAcpSpawnModule(): Promise<AcpSpawnModule> {
@@ -104,7 +103,7 @@ function hasAnyThreadAvailability(availability: SessionsSpawnThreadAvailability)
 
 function resolveSessionsSpawnThreadAvailability(opts?: {
   config?: OpenClawConfig;
-  agentChannel?: GatewayMessageChannel;
+  agentChannel?: string;
   agentAccountId?: string;
 }): SessionsSpawnThreadAvailability {
   const channel = opts?.agentChannel;
@@ -269,7 +268,7 @@ export function createSessionsSpawnTool(
     requesterTurnRunId?: string;
     /** Separate key used only for completion routing (registerSubagentRun requesterSessionKey). */
     completionOwnerKey?: string;
-    agentChannel?: GatewayMessageChannel;
+    agentChannel?: string;
     agentAccountId?: string;
     agentTo?: string;
     agentThreadId?: string | number;
@@ -368,7 +367,7 @@ export function createSessionsSpawnTool(
           `sessions_spawn does not support "${unsupportedTimeoutParam}". Use "runTimeoutSeconds" for a per-run timeout.`,
         );
       }
-      const task = readStringParam(params, "task", { required: true });
+      const task = readToolStringParam(params, "task", { required: true });
       const runTimeoutSeconds = readNonNegativeIntegerParam(params, "runTimeoutSeconds");
       const taskNameResult = normalizeSubagentTaskName(params.taskName);
       if (taskNameResult.error) {
@@ -378,16 +377,16 @@ export function createSessionsSpawnTool(
         });
       }
       const taskName = taskNameResult.taskName;
-      const label = readStringParam(params, "label") ?? "";
+      const label = readToolStringParam(params, "label") ?? "";
       const runtime = params.runtime === "acp" ? "acp" : "subagent";
       if (collect && runtime === "acp") {
         throw new ToolInputError('sessions_spawn collect=true supports runtime="subagent" only.');
       }
-      const requestedAgentId = readStringParam(params, "agentId");
-      const resumeSessionId = readStringParam(params, "resumeSessionId");
-      const modelOverride = normalizeToolModelOverride(readStringParam(params, "model"));
-      const thinkingOverrideRaw = readStringParam(params, "thinking");
-      const cwd = readStringParam(params, "cwd");
+      const requestedAgentId = readToolStringParam(params, "agentId");
+      const resumeSessionId = readToolStringParam(params, "resumeSessionId");
+      const modelOverride = normalizeToolModelOverride(readToolStringParam(params, "model"));
+      const thinkingOverrideRaw = readToolStringParam(params, "thinking");
+      const cwd = readToolStringParam(params, "cwd");
       const mode = params.mode === "run" || params.mode === "session" ? params.mode : undefined;
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
@@ -540,7 +539,7 @@ export function createSessionsSpawnTool(
             params.fastMode === true || params.fastMode === false || params.fastMode === "auto"
               ? params.fastMode
               : undefined,
-          groupId: readStringParam(params, "groupId"),
+          groupId: readToolStringParam(params, "groupId"),
           swarmLaunchReplayKey:
             typeof params[SWARM_CODE_MODE_IDEMPOTENCY_KEY] === "string"
               ? params[SWARM_CODE_MODE_IDEMPOTENCY_KEY]
@@ -560,7 +559,7 @@ export function createSessionsSpawnTool(
           attachments,
           attachMountPath:
             params.attachAs && typeof params.attachAs === "object"
-              ? readStringParam(params.attachAs as Record<string, unknown>, "mountPath")
+              ? readToolStringParam(params.attachAs as Record<string, unknown>, "mountPath")
               : undefined,
         },
         {

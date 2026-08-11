@@ -1,7 +1,10 @@
 // Control UI module implements app tool stream behavior.
+import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeNullableString as toTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/directive-tags.js";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { ChatQueueItem, ChatStreamSegment } from "../../lib/chat/chat-types.ts";
+import type { DiffStat } from "../../lib/chat/tool-call-diff.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
@@ -43,6 +46,8 @@ export type ToolStreamEntry = {
   output?: string;
   /** Structured result details (e.g. edit diff) captured from the result event. */
   details?: unknown;
+  /** Monotonic edit counts received while the tool arguments stream. */
+  liveDiffStat?: DiffStat;
   isError?: boolean;
   /** True once a result event landed, even when the output text is empty. */
   resultReceived?: boolean;
@@ -74,14 +79,6 @@ type ToolStreamHost = {
   requestUpdate?: () => void;
   sessions: Pick<SessionCapability, "setModelOverride">;
 };
-
-function toTrimmedString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
 
 function resolveModelLabel(provider: unknown, model: unknown): string | null {
   const modelValue = toTrimmedString(model);
@@ -212,8 +209,18 @@ function formatToolOutput(value: unknown): string | null {
   return `${truncated.text}\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`;
 }
 
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+function readLiveDiffStat(value: unknown): DiffStat | undefined {
+  const diff = readRecord(value);
+  const added = diff?.added;
+  const removed = diff?.removed;
+  return typeof added === "number" &&
+    Number.isInteger(added) &&
+    added >= 0 &&
+    typeof removed === "number" &&
+    Number.isInteger(removed) &&
+    removed >= 0
+    ? { added, removed }
+    : undefined;
 }
 
 function resolveSessionStatusModelOverride(result: unknown): string | null | undefined {
@@ -277,6 +284,9 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
     // so historical output-less calls (aborted runs) stay inert.
     __openclawToolStreamLive: true,
     __openclawToolStreamResultReceived: entry.resultReceived === true,
+    ...(entry.resultReceived !== true && entry.liveDiffStat
+      ? { __openclawToolStreamDiffStat: entry.liveDiffStat }
+      : {}),
     __openclawToolStreamReceivedAt: entry.receivedAt,
   };
 }
@@ -874,7 +884,7 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
     ...host.chatStreamSegments,
     {
       text: progress.text,
-      ts: Date.now(),
+      ts: payload.ts,
       runId: payload.runId,
       ...(progress.itemId ? { itemId: progress.itemId } : {}),
     },
@@ -1041,6 +1051,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   const resultDetails = phase === "result" ? readRecord(data.result)?.details : undefined;
   const resultIsError =
     phase === "result" && typeof data.isError === "boolean" ? data.isError : undefined;
+  const liveDiffStat = phase === "input_delta" ? readLiveDiffStat(data.diff) : undefined;
   if (name === "session_status" && phase === "result") {
     syncSessionStatusModelOverride(host, data);
   }
@@ -1055,11 +1066,14 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       host.chatStream &&
       host.chatStream.trim().length > 0
     ) {
+      const segmentStartedAt = host.chatStreamStartedAt ?? now;
       host.chatStreamSegments = [
         ...host.chatStreamSegments,
-        { text: host.chatStream, ts: now, runId: payload.runId, toolCallId },
+        { text: host.chatStream, ts: segmentStartedAt, runId: payload.runId, toolCallId },
       ];
       host.chatStream = null;
+      // The segment becomes the elapsed-time owner after the live tail is flushed.
+      // Preserve the run start or replaying a tool event resets the working timer.
       host.chatStreamStartedAt = null;
     }
     entry = {
@@ -1071,6 +1085,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       output: output || undefined,
       ...(resultDetails !== undefined ? { details: resultDetails } : {}),
       ...(resultIsError !== undefined ? { isError: resultIsError } : {}),
+      ...(liveDiffStat ? { liveDiffStat } : {}),
       ...(phase === "result" ? { resultReceived: true } : {}),
       startedAt: typeof payload.ts === "number" ? payload.ts : now,
       receivedAt: now,
@@ -1092,7 +1107,11 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     if (resultIsError !== undefined) {
       entry.isError = resultIsError;
     }
+    if (liveDiffStat) {
+      entry.liveDiffStat = liveDiffStat;
+    }
     if (phase === "result") {
+      entry.liveDiffStat = undefined;
       entry.resultReceived = true;
     }
   }

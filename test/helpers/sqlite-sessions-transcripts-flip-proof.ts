@@ -19,7 +19,7 @@ import {
   appendTranscriptMessage,
   type TranscriptEvent,
 } from "../../src/config/sessions/session-accessor.js";
-import { importSqliteSessionRows } from "../../src/config/sessions/session-accessor.sqlite.js";
+import { importSqliteSessionRows } from "../../src/config/sessions/session-accessor.sqlite-import.js";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
 import {
   connectGatewayClient,
@@ -36,6 +36,8 @@ import {
   readSessionTranscriptEvents,
   resolveSessionTranscriptIdentity,
 } from "../../src/plugin-sdk/session-transcript-runtime.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../src/state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../src/state/openclaw-state-db.js";
 import { sleep } from "../../src/utils.js";
 import { normalizeSessionDeliveryState } from "../../src/utils/delivery-context.shared.js";
 import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
@@ -114,9 +116,14 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
     name: `sqlite-sessions-transcripts-flip-${randomUUID()}`,
     config: buildMockOpenAiConfig(mockOpenAiPort),
     env: {
+      ALL_PROXY: undefined,
+      HTTP_PROXY: undefined,
+      HTTPS_PROXY: undefined,
+      NO_PROXY: "127.0.0.1,localhost",
       OPENAI_API_KEY: "sk-openclaw-e2e-mock",
       OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
       OPENCLAW_SKIP_PROVIDERS: undefined,
+      no_proxy: "127.0.0.1,localhost",
     },
     startTimeoutMs: 90_000,
     stopTimeoutMs: 3_000,
@@ -340,6 +347,9 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
     await record("failure");
   } finally {
     await stopChildProcess(mockOpenAi);
+    await inst.stopGateway();
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
     await inst.cleanup();
   }
 
@@ -2098,8 +2108,13 @@ function readTrackedEntries(db: DatabaseSync, trackedSessionKeys: readonly strin
     .map((row) => {
       const sessionId = typeof row.sessionId === "string" ? row.sessionId : "";
       const entry = typeof row.entryJson === "string" ? parseEntryJson(row.entryJson) : undefined;
-      return {
-        ...(entry ? { entry } : {}),
+      const trackedEntry: {
+        entry?: Record<string, unknown>;
+        sessionId: string;
+        sessionKey: string;
+        trajectoryEvents: number;
+        transcriptEvents: number;
+      } = {
         sessionId,
         sessionKey: typeof row.sessionKey === "string" ? row.sessionKey : "",
         trajectoryEvents: scalarNumber(
@@ -2113,6 +2128,10 @@ function readTrackedEntries(db: DatabaseSync, trackedSessionKeys: readonly strin
           [sessionId],
         ),
       };
+      if (entry) {
+        trackedEntry.entry = entry;
+      }
+      return trackedEntry;
     });
 }
 

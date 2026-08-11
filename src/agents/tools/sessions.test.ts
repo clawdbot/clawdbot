@@ -1,16 +1,22 @@
-// Sessions tool tests cover list/send helpers, announce-target resolution,
-// and assistant-visible text sanitization.
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+// Sessions tool tests cover list/send helpers, announce-target resolution,
+// and assistant-visible text sanitization.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
+import {
+  getOwnedSessionTranscriptWriterFence,
+  withOwnedSessionTranscriptWrites,
+} from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { extractAssistantText, sanitizeTextContent } from "./chat-history-text.js";
+import { extractStoredAssistantText, sanitizeTextContent } from "./chat-history-text.js";
 
 const callGatewayMock = vi.fn();
+const inProcessGatewayRequestMock = vi.fn((opts: unknown) => callGatewayMock(opts));
 const inProcessCreationMock = vi.fn(
   async (..._args: [unknown, unknown, unknown]): Promise<unknown> => ({}),
 );
@@ -33,6 +39,7 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 vi.mock("./in-process-gateway.js", () => ({
+  callAgentToolGatewayRequest: (opts: unknown) => inProcessGatewayRequestMock(opts),
   callInProcessGatewayToolWithCreation: (method: unknown, params: unknown, creation: unknown) =>
     inProcessCreationMock(method, params, creation),
   hasInProcessGatewayToolContext: () => inProcessGatewayContextAvailable,
@@ -109,12 +116,7 @@ const resolveSessionTargetStub: NonNullable<ChannelMessagingAdapter["resolveSess
   threadId,
 }) => (threadId ? `${kind}:${id}:thread:${threadId}` : `${kind}:${id}`);
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 function requireDetails(result: { details?: unknown }, label = "result details") {
   return requireRecord(result.details, label);
@@ -386,6 +388,8 @@ describe("sanitizeTextContent", () => {
 
 beforeEach(() => {
   facadeRuntimeMock.sessionKeyResolvers.clear();
+  inProcessGatewayRequestMock.mockReset();
+  inProcessGatewayRequestMock.mockImplementation((opts: unknown) => callGatewayMock(opts));
   loadConfigMock.mockReset();
   loadConfigMock.mockReturnValue({
     session: { scope: "per-sender", mainKey: "main" },
@@ -398,7 +402,7 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
 });
 
-describe("extractAssistantText", () => {
+describe("extractStoredAssistantText", () => {
   it("sanitizes blocks without injecting newlines", () => {
     const message = {
       role: "assistant",
@@ -407,7 +411,7 @@ describe("extractAssistantText", () => {
         { type: "text", text: "<think>secret</think>there" },
       ],
     };
-    expect(extractAssistantText(message)).toBe("Hi there");
+    expect(extractStoredAssistantText(message)).toBe("Hi there");
   });
 
   it("rewrites error-ish assistant text only when the transcript marks it as an error", () => {
@@ -417,7 +421,7 @@ describe("extractAssistantText", () => {
       errorMessage: "500 Internal Server Error",
       content: [{ type: "text", text: "500 Internal Server Error" }],
     };
-    expect(extractAssistantText(message)).toBe("HTTP 500: Internal Server Error");
+    expect(extractStoredAssistantText(message)).toBe("HTTP 500: Internal Server Error");
   });
 
   it("keeps normal status text that mentions billing", () => {
@@ -430,7 +434,7 @@ describe("extractAssistantText", () => {
         },
       ],
     };
-    expect(extractAssistantText(message)).toBe(
+    expect(extractStoredAssistantText(message)).toBe(
       "Firebase downgraded us to the free Spark plan. Check whether billing should be re-enabled.",
     );
   });
@@ -442,7 +446,7 @@ describe("extractAssistantText", () => {
       errorMessage: "insufficient credits for embedding model",
       content: [{ type: "text", text: "Handle payment required errors in your API." }],
     };
-    expect(extractAssistantText(message)).toBe("Handle payment required errors in your API.");
+    expect(extractStoredAssistantText(message)).toBe("Handle payment required errors in your API.");
   });
 
   it("prefers final_answer text when phased assistant history is present", () => {
@@ -461,7 +465,7 @@ describe("extractAssistantText", () => {
         },
       ],
     };
-    expect(extractAssistantText(message)).toBe("Done.");
+    expect(extractStoredAssistantText(message)).toBe("Done.");
   });
 });
 
@@ -475,6 +479,7 @@ describe("resolveAnnounceTarget", () => {
     const target = await resolveAnnounceTarget({
       sessionKey: "agent:main:discord:group:dev",
       displayKey: "agent:main:discord:group:dev",
+      callGateway: callGatewayMock,
     });
     expect(target).toEqual({ channel: "discord", to: "group:dev" });
     expect(callGatewayMock).not.toHaveBeenCalled();
@@ -498,6 +503,7 @@ describe("resolveAnnounceTarget", () => {
     const target = await resolveAnnounceTarget({
       sessionKey: "agent:main:whatsapp:group:123@g.us",
       displayKey: "agent:main:whatsapp:group:123@g.us",
+      callGateway: callGatewayMock,
     });
     expect(target).toEqual({
       channel: "whatsapp",
@@ -527,6 +533,7 @@ describe("resolveAnnounceTarget", () => {
     const target = await resolveAnnounceTarget({
       sessionKey: "agent:main:whatsapp:group:123@g.us",
       displayKey: "agent:main:whatsapp:group:123@g.us",
+      callGateway: callGatewayMock,
     });
     expect(target).toEqual({
       channel: "whatsapp",
@@ -554,6 +561,7 @@ describe("resolveAnnounceTarget", () => {
     const target = await resolveAnnounceTarget({
       sessionKey: "agent:main:whatsapp:group:123@g.us",
       displayKey: "agent:main:whatsapp:group:123@g.us",
+      callGateway: callGatewayMock,
     });
     expect(target).toEqual({
       channel: "whatsapp",
@@ -581,6 +589,7 @@ describe("resolveAnnounceTarget", () => {
     const target = await resolveAnnounceTarget({
       sessionKey: "agent:main:feishu:direct:ou_user",
       displayKey: "agent:main:feishu:direct:ou_user",
+      callGateway: callGatewayMock,
     });
     expect(target).toEqual({
       channel: "feishu",
@@ -607,6 +616,7 @@ describe("resolveAnnounceTarget", () => {
     const target = await resolveAnnounceTarget({
       sessionKey: "agent:main:slack:channel:C123:thread:1710000000.000100",
       displayKey: "agent:main:slack:channel:C123:thread:1710000000.000100",
+      callGateway: callGatewayMock,
     });
     expect(target).toEqual({
       channel: "slack",
@@ -840,7 +850,6 @@ describe("sessions_send gating", () => {
       status: "accepted",
       sessionKey: MAIN_AGENT_SESSION_KEY,
     });
-    expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.list" });
     expect(callGatewayMock.mock.calls).toContainEqual([
       expect.objectContaining({
         method: "agent",
@@ -1173,6 +1182,37 @@ describe("sessions_send gating", () => {
     const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
     expect(flowParams?.waitRunId).toBe("run-fire-and-forget");
     expect(flowParams?.baseline?.text).toBe("older reply from a previous run");
+  });
+
+  it("detaches fire-and-forget A2A work from parent transcript ownership", async () => {
+    const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
+    let inheritedFence: ReturnType<typeof getOwnedSessionTranscriptWriterFence>;
+    vi.mocked(runSessionsSendA2AFlow).mockImplementationOnce(async () => {
+      inheritedFence = getOwnedSessionTranscriptWriterFence();
+    });
+    let parentTranscriptWriteCalls = 0;
+    const parentTranscriptWrite = async <T>(run: () => Promise<T> | T): Promise<T> => {
+      parentTranscriptWriteCalls += 1;
+      return await run();
+    };
+
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionKey: MAIN_AGENT_SESSION_KEY,
+        sessionTarget: {
+          expectedWriterRunId: "disposed-parent-run",
+          sessionKey: MAIN_AGENT_SESSION_KEY,
+        },
+        withTranscriptWrite: parentTranscriptWrite,
+      },
+      async () => {
+        await executeFireAndForgetA2AFrom(MAIN_AGENT_SESSION_KEY);
+      },
+    );
+    await vi.waitFor(() => expect(runSessionsSendA2AFlow).toHaveBeenCalledOnce());
+
+    expect(inheritedFence).toBeUndefined();
+    expect(parentTranscriptWriteCalls).toBe(0);
   });
 
   it("canonicalizes aliased requester keys for same-session A2A delivery", async () => {

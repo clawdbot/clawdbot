@@ -16,10 +16,10 @@ import {
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
 } from "./constants.js";
 import { log } from "./constants.js";
+import { hasUsableOAuthCredential } from "./credential-state.js";
 import { isSafeToCopyOAuthIdentity } from "./oauth-identity.js";
 import {
   areOAuthCredentialsEquivalent,
-  hasUsableOAuthCredential,
   isSafeToAdoptBootstrapOAuthIdentity,
   shouldBootstrapFromExternalCliCredential,
 } from "./oauth-shared.js";
@@ -276,12 +276,11 @@ function listScopedExternalCliProfileIds(params: {
   const requestedProfileIds = Array.from(options?.profileIds ?? [])
     .map((value) => value.trim())
     .filter((value) => value.length > 0);
-  if (requestedProfileIds.length > 0) {
-    return requestedProfileIds.filter((profileId) =>
-      externalCliProfileIdMatches(providerConfig, profileId, {
-        allowLegacyNamespace: true,
-      }),
-    );
+  const matchingRequestedProfileIds = requestedProfileIds.filter((profileId) =>
+    externalCliProfileIdMatches(providerConfig, profileId, { allowLegacyNamespace: true }),
+  );
+  if (matchingRequestedProfileIds.length > 0) {
+    return matchingRequestedProfileIds;
   }
 
   const existingProfileIds = Object.keys(store.profiles).filter((profileId) =>
@@ -360,7 +359,7 @@ export function resolveExternalCliAuthProfiles(
       if (
         existingOAuth &&
         !providerConfig.bootstrapOnly &&
-        hasUsableOAuthCredential(existingOAuth, now)
+        hasUsableOAuthCredential(existingOAuth, { now })
       ) {
         // Profiles synced before identity capture carry no email; backfill the
         // non-secret metadata once the CLI read proves it is the same login.

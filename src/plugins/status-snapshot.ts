@@ -3,7 +3,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import {
   loadPluginRegistrySnapshotWithMetadata,
   type PluginRegistrySnapshotDiagnostic,
@@ -153,7 +153,7 @@ export function buildPluginRegistrySnapshotReport(
       }),
     { surface: "status" },
   );
-  const metadataSnapshot = loadPluginMetadataSnapshot({
+  const metadataSnapshot = resolvePluginMetadataSnapshot({
     index: result.snapshot,
     config,
     env,

@@ -3,12 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   resolveTelegramMessageCachePersistentScopeKey,
   TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
+  type TelegramResolvedMedia,
 } from "./message-cache-persistence.js";
 import {
   buildTelegramConversationContext,
   buildTelegramReplyChain,
   createTelegramMessageCache,
   hasProviderObservedTelegramThreadBinding,
+  resolveProviderObservedTelegramThreadSpec,
 } from "./message-cache.js";
 import { resetTelegramMessageCacheForTest as resetCache } from "./runtime.test-support.js";
 
@@ -22,7 +24,11 @@ type PersistedValue = {
   sourceMessage: Message;
   botUserId?: number;
   promptContextProjection?: unknown;
-  threadBinding?: { kind: "provider-observed-v1"; threadId: string };
+  resolvedMedia?: TelegramResolvedMedia;
+  threadBinding?: {
+    kind: "provider-observed-v1";
+    threadSpec: { scope: "direct-messages" | "dm" | "forum"; id: number };
+  };
   threadId?: string;
 };
 
@@ -140,6 +146,37 @@ const projection = (transcriptMessageId: string) => ({
 });
 
 describe("telegram message cache", () => {
+  it("persists resolved media with its source message and drops it when the media changes", async () => {
+    const { bucketKey, entries, store } = createMemoryStore();
+    const cache = cacheFor(bucketKey, store);
+    await record(cache, message(9000, "Kesava", { photo: photo("photo-1") }));
+    await cache.recordResolvedMedia({
+      accountId: "default",
+      chatId: 7,
+      messageId: "9000",
+      media: {
+        id: "saved-photo.png",
+        fileUniqueId: "photo-1-unique",
+        size: 4,
+        savedAt: 1_736_380_700_000,
+        kind: "image",
+        contentType: "image/png",
+      },
+    });
+
+    expect(onlyEntry(entries)[1].resolvedMedia?.id).toBe("saved-photo.png");
+    const reloaded = await reloadGet(bucketKey, store, "9000");
+    expect(reloaded?.resolvedMedia).toMatchObject({
+      id: "saved-photo.png",
+      fileUniqueId: "photo-1-unique",
+      kind: "image",
+    });
+
+    const reloadedCache = cacheFor(bucketKey, store);
+    await record(reloadedCache, message(9000, "Kesava", { photo: photo("photo-2") }));
+    expect((await get(reloadedCache, "9000"))?.resolvedMedia).toBeUndefined();
+  });
+
   it("persists provider-observed topic bindings for messages and same-topic replies", async () => {
     const { bucketKey, entries, store } = createMemoryStore();
     const forum = { id: -1001, type: "supergroup", title: "QA", is_forum: true };
@@ -161,7 +198,11 @@ describe("telegram message cache", () => {
         is_topic_message: true,
         reply_to_message: parent,
       }),
-      { chatId: -1001, threadId: 77, providerObservedThreadId: 77 },
+      {
+        chatId: -1001,
+        threadId: 77,
+        providerObservedThread: { scope: "forum", id: 77 },
+      },
     );
 
     expect(entries.size).toBe(2);
@@ -169,7 +210,8 @@ describe("telegram message cache", () => {
       Array.from(entries.values()).every(
         (value) =>
           value.threadBinding?.kind === "provider-observed-v1" &&
-          value.threadBinding.threadId === "77",
+          value.threadBinding.threadSpec.scope === "forum" &&
+          value.threadBinding.threadSpec.id === 77,
       ),
     ).toBe(true);
 
@@ -178,7 +220,96 @@ describe("telegram message cache", () => {
     for (const messageId of ["901", "902"]) {
       const node = await get(reloaded, messageId, { chatId: -1001 });
       expect(hasProviderObservedTelegramThreadBinding(node, 77)).toBe(true);
+      expect(resolveProviderObservedTelegramThreadSpec(node)).toEqual({ scope: "forum", id: 77 });
     }
+  });
+
+  it("keeps an authoritative supplied thread ahead of conflicting root message metadata", async () => {
+    const { bucketKey, entries, store } = createMemoryStore();
+    const forum = { id: -1001, type: "supergroup", title: "QA", is_forum: true };
+    const ancestor = message(904, "Lin", {
+      chat: forum,
+      text: "Ancestor without its own thread metadata",
+    });
+    const reply = message(905, "Ada", {
+      chat: forum,
+      text: "Reply with embedded thread metadata",
+      message_thread_id: 88,
+      reply_to_message: ancestor,
+    });
+    const root = message(906, "Grace", {
+      chat: forum,
+      text: "Authoritative root",
+      message_thread_id: 999,
+      reply_to_message: reply,
+    });
+    const cache = cacheFor(bucketKey, store);
+
+    const recorded = await record(cache, root, {
+      chatId: -1001,
+      threadId: 77,
+      providerObservedThread: { scope: "forum", id: 77 },
+    });
+
+    expect(recorded.threadId).toBe("77");
+    expect(resolveProviderObservedTelegramThreadSpec(recorded)).toEqual({
+      scope: "forum",
+      id: 77,
+    });
+    expect((await get(cache, "905", { chatId: -1001 }))?.threadId).toBe("88");
+    expect((await get(cache, "904", { chatId: -1001 }))?.threadId).toBe("88");
+    const persistedRoot = Array.from(entries.values()).find(
+      (entry) => entry.sourceMessage.message_id === 906,
+    );
+    expect(persistedRoot?.threadId).toBe("77");
+  });
+
+  it("persists a channel Direct Messages binding ahead of conflicting raw thread metadata", async () => {
+    const { bucketKey, store } = createMemoryStore();
+    const cache = cacheFor(bucketKey, store);
+    await record(
+      cache,
+      message(904, "Ada", {
+        chat: {
+          id: -1002,
+          type: "supergroup",
+          title: "Channel replies",
+          is_direct_messages: true,
+        },
+        direct_messages_topic: { topic_id: 77 },
+        message_thread_id: 999,
+        is_topic_message: true,
+      }),
+      {
+        chatId: -1002,
+        threadId: 999,
+        providerObservedThread: { scope: "direct-messages", id: 77 },
+      },
+    );
+
+    resetCache();
+    const reloaded = await get(cacheFor(bucketKey, store), "904", { chatId: -1002 });
+    expect(reloaded?.threadId).toBe("77");
+    expect(resolveProviderObservedTelegramThreadSpec(reloaded)).toEqual({
+      scope: "direct-messages",
+      id: 77,
+    });
+  });
+
+  it("does not resolve caller-only topic metadata as a provider-observed binding", async () => {
+    const cache = createTelegramMessageCache();
+    await record(
+      cache,
+      message(903, "Ada", {
+        chat: { id: -1001, type: "supergroup", title: "QA", is_forum: true },
+        message_thread_id: 77,
+        is_topic_message: true,
+      }),
+      { chatId: -1001, threadId: 77 },
+    );
+
+    const node = await get(cache, "903", { chatId: -1001 });
+    expect(resolveProviderObservedTelegramThreadSpec(node)).toBeUndefined();
   });
 
   it("hydrates reply chains from persisted cached messages", async () => {

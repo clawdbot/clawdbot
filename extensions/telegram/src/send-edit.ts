@@ -1,5 +1,6 @@
-import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
+import type { Message } from "grammy/types";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
@@ -25,48 +26,26 @@ import {
   withTelegramApiContextLease,
   withTelegramHtmlParseFallback,
   type TelegramApiContext,
-  type TelegramApiOverride,
 } from "./send-context.js";
+import type { TelegramApiCallOpts, TelegramSendOpts } from "./send-message-types.js";
 import { prepareTelegramOutbound } from "./send-outbound.js";
-import type { OpenClawConfig } from "./send.runtime.js";
 import { resolveMarkdownTableMode } from "./send.runtime.js";
-import { resolveTelegramBotUserIdFromToken } from "./token.js";
+import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
 
 type TelegramEditMessageTextParams = Parameters<TelegramApiContext["api"]["editMessageText"]>[3];
 type TelegramEditMessageCaptionParams = Parameters<
   TelegramApiContext["api"]["editMessageCaption"]
 >[2];
 
-type TelegramEditOpts = {
-  token?: string;
-  accountId?: string;
-  verbose?: boolean;
-  api?: TelegramApiOverride;
-  retry?: RetryConfig;
-  gatewayClientScopes?: readonly string[];
-  textMode?: "markdown" | "html";
-  /** Controls whether link previews are shown in the edited message. */
-  linkPreview?: boolean;
-  /** Inline keyboard buttons (reply markup). Pass empty array to remove buttons. */
-  buttons?: TelegramInlineButtons;
-  /** Use Telegram's media-caption edit endpoint, or fall back to it when text edits target media. */
-  editMode?: "text" | "caption" | "auto";
-  /** Resolved runtime config from the command or gateway boundary. */
-  cfg: OpenClawConfig;
-};
+type TelegramEditReplyMarkupOpts = TelegramApiCallOpts & Pick<TelegramSendOpts, "buttons">;
 
-type TelegramEditReplyMarkupOpts = {
-  token?: string;
-  accountId?: string;
-  verbose?: boolean;
-  api?: TelegramApiOverride;
-  retry?: RetryConfig;
-  gatewayClientScopes?: readonly string[];
-  /** Inline keyboard buttons (reply markup). Pass empty array to remove buttons. */
-  buttons?: TelegramInlineButtons;
-  /** Resolved runtime config from the command or gateway boundary. */
-  cfg: OpenClawConfig;
-};
+type TelegramEditOpts = TelegramEditReplyMarkupOpts &
+  Pick<TelegramSendOpts, "textMode"> & {
+    /** Controls whether link previews are shown in the edited message. */
+    linkPreview?: boolean;
+    /** Use Telegram's media-caption edit endpoint, or fall back to it when text edits target media. */
+    editMode?: "text" | "caption" | "auto";
+  };
 
 export async function editMessageReplyMarkupTelegram(
   chatIdInput: string | number,
@@ -319,6 +298,7 @@ async function editMessageTelegramWithContext(
 
   if (editedMessage && editedMessage !== true && typeof editedMessage.message_id === "number") {
     const botUserId = resolveTelegramBotUserIdFromToken(opts.token || account.token);
+    const successfulSendThread = resolveTelegramMessageThreadSpec(editedMessage as Message);
     await recordOutboundMessageForPromptContext({
       cfg,
       account,
@@ -326,6 +306,7 @@ async function editMessageTelegramWithContext(
       message: editedMessage,
       messageId: editedMessage.message_id,
       recordGroupHistory: false,
+      successfulSendThread,
       ...(botUserId !== undefined ? { botUserId } : {}),
       ...(editedMessage.message_thread_id !== undefined
         ? { messageThreadId: editedMessage.message_thread_id }

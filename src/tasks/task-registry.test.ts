@@ -1,8 +1,8 @@
 // Covers task registry lifecycle, delivery, notification, and query behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
-import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
 import { emitAcpLifecycleStart } from "../agents/command/attempt-execution.js";
+import { startAcpSpawnParentStreamRelay } from "../agents/subagents/spawn/acp-spawn-parent-stream.js";
 import { resetCronActiveJobs } from "../cron/active-jobs.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
@@ -36,7 +36,7 @@ import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   cancelTaskById,
   deleteTaskRecordById,
-  finalizeTaskRunByRunId,
+  finalizeTaskRecordByRunId,
   findTaskByRunId,
   getTaskById,
   isParentFlowLinkError,
@@ -139,7 +139,7 @@ vi.mock("../acp/control-plane/manager.js", () => ({
   }),
 }));
 
-vi.mock("../agents/subagent-control.js", () => ({
+vi.mock("../agents/subagents/registry/subagent-control.js", () => ({
   killSubagentRunAdmin: (params: unknown) => hoisted.killSubagentRunAdminMock(params),
 }));
 
@@ -364,9 +364,9 @@ const cancelTask = (taskId: string) => cancelTaskById({ cfg: {} as never, taskId
 
 function finalizeSubagentTask(
   task: TaskRecord,
-  params: Omit<Parameters<typeof finalizeTaskRunByRunId>[0], "runId" | "runtime">,
+  params: Omit<Parameters<typeof finalizeTaskRecordByRunId>[0], "runId" | "runtime">,
 ) {
-  return finalizeTaskRunByRunId({ runId: task.runId!, runtime: "subagent", ...params });
+  return finalizeTaskRecordByRunId({ runId: task.runId!, runtime: "subagent", ...params });
 }
 
 function createInMemoryTaskRegistryStore() {
@@ -589,6 +589,74 @@ describe("task-registry", () => {
     });
   });
 
+  it("bounds durable liveness writes for live activity deltas", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      const store = createInMemoryTaskRegistryStore();
+      const upsert = vi.spyOn(store, "upsertTaskWithDeliveryState");
+      configureTaskRegistryRuntime({ store });
+      createTaskFixture("subagent", {
+        childSessionKey: "agent:main:subagent:ephemeral",
+        runId: "run-ephemeral-activity",
+        task: "Keep streaming state in memory",
+      });
+      const initialLastEventAt = requireTaskByRunId("run-ephemeral-activity").lastEventAt!;
+      upsert.mockClear();
+
+      emitAgentEvent({
+        runId: "run-ephemeral-activity",
+        stream: "thinking",
+        data: { text: "Planning" },
+      });
+      emitAgentEvent({
+        runId: "run-ephemeral-activity",
+        stream: "assistant",
+        data: { text: "Editing" },
+      });
+      expect(upsert).not.toHaveBeenCalled();
+      const dateNow = vi.spyOn(Date, "now").mockReturnValue(initialLastEventAt + 60_000);
+      try {
+        emitAgentEvent({
+          runId: "run-ephemeral-activity",
+          stream: "assistant",
+          data: { text: "Still editing" },
+        });
+      } finally {
+        dateNow.mockRestore();
+      }
+      expect(upsert).toHaveBeenCalledOnce();
+      expect(requireTaskByRunId("run-ephemeral-activity").lastEventAt).toBe(
+        initialLastEventAt + 60_000,
+      );
+      upsert.mockClear();
+      emitAgentEvent({
+        runId: "run-ephemeral-activity",
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: "write",
+          toolCallId: "write-1",
+          args: { path: "src/example.ts", content: "one\ntwo" },
+        },
+      });
+      expect(upsert).toHaveBeenCalledOnce();
+      upsert.mockClear();
+      emitAgentEvent({
+        runId: "run-ephemeral-activity",
+        stream: "tool",
+        data: { phase: "result", name: "write", toolCallId: "write-1", isError: false },
+      });
+
+      expect(upsert).not.toHaveBeenCalled();
+      emitAgentEvent({
+        runId: "run-ephemeral-activity",
+        stream: "lifecycle",
+        data: { phase: "end", endedAt: 200 },
+      });
+      expect(upsert).toHaveBeenCalledOnce();
+    });
+  });
+
   it.each([
     {
       name: "persists an ACP producer timestamp across lifecycle projection and SQLite reload",
@@ -693,6 +761,16 @@ describe("task-registry", () => {
       emitAgentEvent({
         runId: "run-tools",
         stream: "tool",
+        data: {
+          phase: "input_delta",
+          name: "edit",
+          toolCallId: "call-streaming",
+          diff: { added: 3, removed: 1 },
+        },
+      });
+      emitAgentEvent({
+        runId: "run-tools",
+        stream: "tool",
         data: { phase: "end", name: "read", toolCallId: "call-1" },
       });
       emitAgentEvent({
@@ -734,7 +812,7 @@ describe("task-registry", () => {
         error: SUBAGENT_KILL_TASK_ERROR,
       });
 
-      finalizeTaskRunByRunId({
+      finalizeTaskRecordByRunId({
         runId: "run-subagent-abort-race",
         runtime: "subagent",
         status: "succeeded",
@@ -746,6 +824,48 @@ describe("task-registry", () => {
         endedAt: 201,
         error: undefined,
         terminalSummary: "finished",
+      });
+    });
+  });
+
+  it("keeps a superseded subagent terminal outcome sticky over late success", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      createTaskFixture("subagent", {
+        childSessionKey: "agent:main:subagent:superseded",
+        runId: "run-subagent-superseded",
+        task: "Do not outlive the replacement",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId: "run-subagent-superseded",
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          aborted: true,
+          status: "superseded",
+          stopReason: "superseded",
+          error: "agent run superseded by a newer session writer",
+          endedAt: 200,
+        },
+      });
+      expectRecordFields(requireTaskByRunId("run-subagent-superseded"), {
+        status: "cancelled",
+        error: "agent run superseded by a newer session writer",
+      });
+
+      finalizeTaskRecordByRunId({
+        runId: "run-subagent-superseded",
+        runtime: "subagent",
+        status: "succeeded",
+        endedAt: 201,
+        terminalSummary: "late success",
+      });
+      expectRecordFields(requireTaskByRunId("run-subagent-superseded"), {
+        status: "cancelled",
+        endedAt: 200,
+        terminalSummary: undefined,
       });
     });
   });
@@ -762,7 +882,7 @@ describe("task-registry", () => {
         startedAt: 100,
       });
 
-      finalizeTaskRunByRunId({
+      finalizeTaskRecordByRunId({
         runId: "cron:provisional:100",
         runtime: "cron",
         childSessionKey: null,
@@ -936,14 +1056,14 @@ describe("task-registry", () => {
           runId: entry.runId,
           task: entry.runId,
         });
-        finalizeTaskRunByRunId({
+        finalizeTaskRecordByRunId({
           runId: entry.runId,
           runtime: entry.runtime,
           status: "cancelled",
           endedAt: 200,
           error: entry.error,
         });
-        finalizeTaskRunByRunId({
+        finalizeTaskRecordByRunId({
           runId: entry.runId,
           runtime: entry.runtime,
           status: entry.terminalStatus,
@@ -979,7 +1099,7 @@ describe("task-registry", () => {
           aborted: true,
         },
       });
-      finalizeTaskRunByRunId({
+      finalizeTaskRecordByRunId({
         runId: "run-timeout-then-success",
         runtime: "cli",
         status: "succeeded",
@@ -1120,14 +1240,14 @@ describe("task-registry", () => {
         startedAt: 100,
       });
 
-      finalizeTaskRunByRunId({
+      finalizeTaskRecordByRunId({
         runId: "run-fail-then-success",
         runtime: "cli",
         status: "failed",
         endedAt: 200,
         error: "delivery failed",
       });
-      finalizeTaskRunByRunId({
+      finalizeTaskRecordByRunId({
         runId: "run-fail-then-success",
         runtime: "cli",
         status: "succeeded",
@@ -1162,7 +1282,7 @@ describe("task-registry", () => {
           endedAt: 200,
         },
       });
-      finalizeTaskRunByRunId({
+      finalizeTaskRecordByRunId({
         runId: "run-success-then-fail",
         runtime: "cli",
         status: "failed",
@@ -2659,47 +2779,65 @@ describe("task-registry", () => {
     });
   });
 
-  it("retains live background exec tasks and marks missing process sessions lost", async () => {
-    await withTaskRegistryTempDir(async () => {
-      resetTaskRegistryMemoryForTest();
-      const task = createTaskFixture("cli", {
-        taskKind: "exec",
-        sourceId: "amber-reef",
-        runId: "exec:amber-reef",
-        task: "Background CLI command",
-        lastEventAt: Date.now() - 10 * 60_000,
-      });
-      const currentTasks = new Map([[task.taskId, task]]);
-      configureTaskRegistryMaintenanceRuntimeForTest({
-        currentTasks,
-        snapshotTasks: [task],
-        isBackgroundExecSessionActive: () => true,
-      });
+  it("retains removed background exec tasks until the process exits", async () => {
+    const [
+      { isBackgroundExecSessionActive },
+      { addSession, deleteSession, markBackgrounded, markExited },
+      { createProcessSessionFixture },
+      { resetProcessRegistryForTests },
+    ] = await Promise.all([
+      import("../agents/bash-process-control.js"),
+      import("../agents/bash-process-registry.js"),
+      import("../agents/bash-process-registry.test-helpers.js"),
+      import("../agents/bash-process-registry.test-support.js"),
+    ]);
+    resetProcessRegistryForTests();
+    try {
+      await withTaskRegistryTempDir(async () => {
+        resetTaskRegistryMemoryForTest();
+        const session = createProcessSessionFixture({ id: "amber-reef" });
+        addSession(session);
+        markBackgrounded(session);
+        deleteSession(session.id);
 
-      expect(await runTaskRegistryMaintenance()).toEqual({
-        reconciled: 0,
-        recovered: 0,
-        cleanupStamped: 0,
-        pruned: 0,
-      });
-      expectRecordFields(currentTasks.get(task.taskId), { status: "running" });
+        const task = createTaskFixture("cli", {
+          taskKind: "exec",
+          sourceId: session.id,
+          runId: `exec:${session.id}`,
+          task: "Background CLI command",
+          lastEventAt: Date.now() - 10 * 60_000,
+        });
+        const currentTasks = new Map([[task.taskId, task]]);
+        configureTaskRegistryMaintenanceRuntimeForTest({
+          currentTasks,
+          snapshotTasks: [task],
+          isBackgroundExecSessionActive,
+        });
 
-      configureTaskRegistryMaintenanceRuntimeForTest({
-        currentTasks,
-        snapshotTasks: [task],
-        isBackgroundExecSessionActive: () => false,
+        expect(await runTaskRegistryMaintenance()).toEqual({
+          reconciled: 0,
+          recovered: 0,
+          cleanupStamped: 0,
+          pruned: 0,
+        });
+        expectRecordFields(currentTasks.get(task.taskId), { status: "running" });
+
+        markExited(session, null, "SIGTERM", "killed");
+
+        expect(await runTaskRegistryMaintenance()).toEqual({
+          reconciled: 1,
+          recovered: 0,
+          cleanupStamped: 0,
+          pruned: 0,
+        });
+        expectRecordFields(currentTasks.get(task.taskId), {
+          status: "lost",
+          error: "backing session missing",
+        });
       });
-      expect(await runTaskRegistryMaintenance()).toEqual({
-        reconciled: 1,
-        recovered: 0,
-        cleanupStamped: 0,
-        pruned: 0,
-      });
-      expectRecordFields(currentTasks.get(task.taskId), {
-        status: "lost",
-        error: "backing session missing",
-      });
-    });
+    } finally {
+      resetProcessRegistryForTests();
+    }
   });
 
   it("projects inspection-time orphaned tasks as lost without mutating the registry", async () => {
@@ -2926,7 +3064,7 @@ describe("task-registry", () => {
           deliveryStatus,
           lastEventAt: now - 60_000,
         });
-        finalizeTaskRunByRunId({
+        finalizeTaskRecordByRunId({
           runId,
           runtime: "acp",
           status,
@@ -3133,7 +3271,7 @@ describe("task-registry", () => {
         startedAt: Date.now() - 9 * 24 * 60 * 60_000,
         lastEventAt: Date.now() - 8 * 24 * 60 * 60_000,
       });
-      finalizeTaskRunByRunId({
+      finalizeTaskRecordByRunId({
         runId: "run-prune",
         runtime: "cli",
         status: "succeeded",

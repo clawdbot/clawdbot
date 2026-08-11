@@ -1,5 +1,9 @@
 // Daemon status print tests cover user-facing service status formatting.
+import fs from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withEnv } from "../../test-utils/env.js";
 import { formatCliCommand } from "../command-format.js";
 import { printDaemonStatus } from "./status.print.js";
 
@@ -130,6 +134,41 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.log, "adaptive default 4096 MiB");
     expectMockLineContains(runtime.log, "8192 MiB constrained memory");
   });
+
+  it.skipIf(process.platform !== "win32")(
+    "shortens real Windows home casing aliases in human status",
+    async () => {
+      await withTempDir({ prefix: "openclaw-home-display-" }, async (home) => {
+        const logFile = path.join(home, "logs", "gateway.log");
+        await fs.promises.mkdir(path.dirname(logFile), { recursive: true });
+        await fs.promises.writeFile(logFile, "ready", "utf8");
+        const logFileAlias = logFile.toUpperCase();
+        expect(fs.statSync(logFileAlias).isFile()).toBe(true);
+
+        await withEnv({ OPENCLAW_HOME: home }, async () => {
+          printDaemonStatus(
+            {
+              service: {
+                label: "Scheduled Task",
+                loaded: true,
+                loadedText: "registered",
+                notLoadedText: "not registered",
+              },
+              logFile: logFileAlias,
+              extraServices: [],
+            },
+            { json: false },
+          );
+        });
+
+        expectMockLineContains(
+          runtime.log,
+          `File logs: $OPENCLAW_HOME${path.sep}LOGS${path.sep}GATEWAY.LOG`,
+        );
+        expect(runtime.log.mock.calls.flat().join("\n")).not.toContain(home.toUpperCase());
+      });
+    },
+  );
 
   it("prints stale gateway pid guidance when runtime does not own the listener", () => {
     printDaemonStatus(
@@ -380,6 +419,45 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.error, "Errors: suppressed");
     const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
     expect(errors.match(/Last gateway error:/g)).toHaveLength(1);
+  });
+
+  it("does not claim an indeterminate port is not listening", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "Scheduled Task",
+          loaded: true,
+          loadedText: "registered",
+          notLoadedText: "not registered",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18789,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18789",
+        },
+        port: {
+          port: 18789,
+          status: "unknown",
+          listeners: [],
+          hints: [],
+        },
+        rpc: {
+          ok: false,
+          kind: "connect",
+          capability: "unknown",
+          error: "gateway closed (1000): ",
+          url: "ws://127.0.0.1:18789",
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
+    expect(errors).not.toContain("Gateway port 18789 is not listening");
   });
 
   it("prints GUI-session wording before generic missing-supervision wording", () => {
@@ -1034,6 +1112,46 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.log, "Check the probe credentials/config");
     const logged = runtime.log.mock.calls.map(([line]) => line).join("\n");
     expect(logged).not.toContain("Warm-up: launch agents");
+  });
+
+  it("does not combine diagnostic-only service state with the active probe target", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          targetRole: "diagnostic-only",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18900,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18900",
+        },
+        port: {
+          port: 18900,
+          status: "free",
+          listeners: [],
+          hints: [],
+        },
+        rpc: {
+          ok: false,
+          error: "connect ECONNREFUSED 127.0.0.1:18900",
+          url: "ws://127.0.0.1:18900",
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(runtime.log, "Runtime: running");
+    const output = [...runtime.log.mock.calls, ...runtime.error.mock.calls].flat().join("\n");
+    expect(output).not.toContain("Warm-up: launch agents");
+    expect(output).not.toContain("service appears running");
   });
 
   it("keeps the warm-up hint (not owns-port guidance) when healthy is reachability-only and a stale gateway PID is still held", () => {

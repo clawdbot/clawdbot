@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Register the PlatformAdapter before any core/ module is used.
 import "./bridge/bootstrap.js";
@@ -227,6 +228,42 @@ function persistAccountCredentialSnapshot(account: ResolvedQQBotAccount): void {
   }
 }
 
+type QQBotCredentialRecoveryState =
+  | { kind: "configured" }
+  | { kind: "recoverable"; appId: string; clientSecret: string }
+  | { kind: "partial" }
+  | { kind: "missing" };
+
+function hasConfiguredQQBotSecretInput(account: ResolvedQQBotAccount): boolean {
+  const configuredSecret = account.config.clientSecret;
+  return (
+    account.secretSource !== "none" ||
+    Boolean(normalizeOptionalString(account.clientSecret)) ||
+    (typeof configuredSecret === "string"
+      ? Boolean(normalizeOptionalString(configuredSecret))
+      : configuredSecret !== undefined && configuredSecret !== null) ||
+    Boolean(normalizeOptionalString(account.config.clientSecretFile))
+  );
+}
+
+function resolveQQBotCredentialRecoveryState(
+  account: ResolvedQQBotAccount | undefined,
+): QQBotCredentialRecoveryState {
+  if (!account) {
+    return { kind: "missing" };
+  }
+  if (qqbotConfigAdapter.isConfigured(account)) {
+    return { kind: "configured" };
+  }
+  if (normalizeOptionalString(account.appId) || hasConfiguredQQBotSecretInput(account)) {
+    return { kind: "partial" };
+  }
+  const backup = loadCredentialBackup(account.accountId);
+  return backup?.appId && backup.clientSecret
+    ? { kind: "recoverable", appId: backup.appId, clientSecret: backup.clientSecret }
+    : { kind: "missing" };
+}
+
 function shouldSuppressLocalQQBotApprovalPrompt(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -265,21 +302,18 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
   doctor: qqbotDoctor,
   config: {
     ...qqbotConfigAdapter,
-    /**
-     * Treat an account as configured when either the live config has
-     * credentials OR a recoverable credential backup exists. This mirrors
-     * the standalone plugin and lets the gateway survive a hot upgrade
-     * that wiped openclaw.json mid-flight.
-     */
+    /** A backup is eligible only after complete credential loss, never partial edits. */
     isConfigured: (account: ResolvedQQBotAccount | undefined) => {
-      if (qqbotConfigAdapter.isConfigured(account)) {
-        return true;
-      }
-      if (!account) {
-        return false;
-      }
-      const backup = loadCredentialBackup(account.accountId);
-      return Boolean(backup?.appId && backup?.clientSecret);
+      const state = resolveQQBotCredentialRecoveryState(account);
+      return state.kind === "configured" || state.kind === "recoverable";
+    },
+    describeAccount: (account: ResolvedQQBotAccount | undefined) => {
+      const description = qqbotConfigAdapter.describeAccount(account);
+      const state = resolveQQBotCredentialRecoveryState(account);
+      return {
+        ...description,
+        configured: state.kind === "configured" || state.kind === "recoverable",
+      };
     },
   },
   setupContract: qqbotSetupContract,
@@ -338,29 +372,25 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       let { account, cfg } = ctx;
       const { abortSignal, log } = ctx;
 
-      // Recover credentials from the per-account backup if the live
-      // config is missing appId/secret (e.g. a hot-upgrade wiped
-      // openclaw.json). We only restore when both fields are empty so a
-      // user's intentional clear isn't silently undone.
-      if (!account.appId || !account.clientSecret) {
-        const backup = loadCredentialBackup(account.accountId);
-        if (backup?.appId && backup?.clientSecret) {
-          try {
-            const nextCfg = applyQQBotAccountConfig(cfg, account.accountId, {
-              appId: backup.appId,
-              clientSecret: backup.clientSecret,
-            });
-            await writeOpenClawConfigThroughRuntime(getQQBotRuntime(), nextCfg);
-            cfg = nextCfg;
-            account = resolveQQBotAccount(nextCfg, account.accountId);
-            log?.info(
-              `[qqbot:${account.accountId}] Restored credentials from backup (appId=${account.appId})`,
-            );
-          } catch (err) {
-            log?.error(
-              `[qqbot:${account.accountId}] Failed to restore credentials from backup: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
+      // Recover only after complete credential loss. A partially edited live
+      // identity is authoritative and must never be replaced by a stale backup.
+      const credentialState = resolveQQBotCredentialRecoveryState(account);
+      if (credentialState.kind === "recoverable") {
+        try {
+          const nextCfg = applyQQBotAccountConfig(cfg, account.accountId, {
+            appId: credentialState.appId,
+            clientSecret: credentialState.clientSecret,
+          });
+          await writeOpenClawConfigThroughRuntime(getQQBotRuntime(), nextCfg);
+          cfg = nextCfg;
+          account = resolveQQBotAccount(nextCfg, account.accountId);
+          log?.info(
+            `[qqbot:${account.accountId}] Restored credentials from backup (appId=${account.appId})`,
+          );
+        } catch (err) {
+          log?.error(
+            `[qqbot:${account.accountId}] Failed to restore credentials from backup: ${err instanceof Error ? err.message : String(err)}`,
+          );
         }
       }
 
@@ -381,28 +411,14 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         channelRuntime: ctx.channelRuntime as GatewayContext["channelRuntime"],
         onReady: () => {
           log?.info(`[qqbot:${account.accountId}] Gateway ready`);
-          ctx.setStatus({
-            ...ctx.getStatus(),
-            running: true,
-            connected: true,
-            lastConnectedAt: Date.now(),
-            lastError: null,
-            lifecycle: "ready",
-          });
+          ctx.setStatus(channelReadyPatch({ accountId: account.accountId }));
           // Snapshot credentials so we can recover from the next hot
           // upgrade that might wipe openclaw.json mid-flight.
           persistAccountCredentialSnapshot(account);
         },
         onResumed: () => {
           log?.info(`[qqbot:${account.accountId}] Gateway resumed`);
-          ctx.setStatus({
-            ...ctx.getStatus(),
-            running: true,
-            connected: true,
-            lastConnectedAt: Date.now(),
-            lastError: null,
-            lifecycle: "ready",
-          });
+          ctx.setStatus(channelReadyPatch({ accountId: account.accountId }));
           persistAccountCredentialSnapshot(account);
         },
         onError: (error) => {

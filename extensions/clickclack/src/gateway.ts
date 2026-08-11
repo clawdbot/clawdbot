@@ -4,7 +4,9 @@
  */
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import type { RawData } from "ws";
 import { resolveClickClackInboundAccess } from "./access.js";
 import { resolveClickClackAccount } from "./accounts.js";
@@ -52,22 +54,9 @@ async function resolveEventMessage(params: {
   }
 }
 
-function decodeSocketMessage(data: RawData): string {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data).toString("utf8");
-  }
-  return Buffer.concat(data).toString("utf8");
-}
-
 function parseSocketEvent(data: RawData): ClickClackEvent | null {
   try {
-    return JSON.parse(decodeSocketMessage(data)) as ClickClackEvent;
+    return JSON.parse(rawDataToString(data)) as ClickClackEvent;
   } catch {
     return null;
   }
@@ -106,9 +95,6 @@ async function processEvent(params: {
     return;
   }
   if (message.author_id === params.botUserId) {
-    return;
-  }
-  if (message.author?.kind === "bot") {
     return;
   }
   const access = await resolveClickClackInboundAccess({
@@ -289,14 +275,7 @@ export async function startClickClackGatewayAccount(
         ctx.abortSignal.addEventListener("abort", abort, { once: true });
         removeAbortListener = () => ctx.abortSignal.removeEventListener("abort", abort);
         socket.on("open", () => {
-          ctx.setStatus({
-            accountId: account.accountId,
-            connected: true,
-            lifecycle: "ready",
-            lastConnectedAt: Date.now(),
-            lastError: null,
-            terminalDisconnect: undefined,
-          });
+          ctx.setStatus(channelReadyPatch({ accountId: account.accountId }));
         });
         socket.on("message", (data) => {
           if (closing || settled) {
@@ -364,11 +343,6 @@ export async function startClickClackGatewayAccount(
       }
     }
   } finally {
-    ctx.setStatus({
-      accountId: account.accountId,
-      running: false,
-      connected: false,
-      lifecycle: "stopped",
-    });
+    ctx.setStatus(channelStoppedPatch({ accountId: account.accountId }));
   }
 }

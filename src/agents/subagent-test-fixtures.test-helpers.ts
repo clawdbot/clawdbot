@@ -4,8 +4,8 @@ import type { SessionOrigin } from "../config/sessions/types.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { AgentInternalEvent } from "./internal-events.js";
-import type { RegisterSubagentRunParams } from "./subagent-registry-run-manager.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { RegisterSubagentRunParams } from "./subagents/registry/subagent-registry-run-manager.js";
+import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 
 type GatewayRequest = { method?: string };
 type GatewayResponse<TRequest, TResult> =

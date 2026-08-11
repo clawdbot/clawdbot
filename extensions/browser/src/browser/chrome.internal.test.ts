@@ -7,9 +7,9 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import { rawDataToString } from "../infra/ws.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 

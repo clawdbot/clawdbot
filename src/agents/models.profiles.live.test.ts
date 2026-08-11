@@ -21,10 +21,9 @@ import {
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
-import { isRateLimitErrorMessage } from "./embedded-agent-helpers/errors.js";
-import { extractAssistantText } from "./embedded-agent-utils.js";
+import { extractEmbeddedAssistantText } from "./embedded-agent-utils.js";
+import { isRateLimitErrorMessage } from "./failover/classify.js";
 import { collectProviderApiKeys } from "./live-auth-keys.js";
-import { appendPrioritizedDynamicLiveModels } from "./live-model-dynamic-candidates.js";
 import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 import {
   DEFAULT_SMALL_LIVE_MODEL_LIMIT,
@@ -37,22 +36,6 @@ import {
   selectSmallLiveItems,
   shouldExcludeProviderFromDefaultHighSignalLiveSweep,
 } from "./live-model-filter.js";
-import {
-  buildLiveModelFileProbeContext,
-  buildLiveModelFileProbeRetryContext,
-  buildLiveModelImageProbeContext,
-  fileProbeTextMatches,
-  isLiveModelProbeEnabled,
-  LIVE_MODEL_FILE_PROBE_ENV,
-  LIVE_MODEL_FILE_PROBE_TOKEN,
-  LIVE_MODEL_IMAGE_PROBE_ENV,
-  modelSupportsImageInput,
-  runLiveModelImageProbeWithRetry,
-  shouldSkipLiveModelExtraProbes,
-  shouldSkipLiveModelFileProbe,
-  shouldSkipLiveModelImageProbe,
-} from "./live-model-turn-probes.js";
-import { createLiveTargetMatcher } from "./live-target-matcher.js";
 import {
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
@@ -73,6 +56,23 @@ import {
 import { shouldSuppressBuiltInModel } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import type { StreamFn } from "./runtime/index.js";
+import { appendPrioritizedDynamicLiveModels } from "./test-helpers/live-model-dynamic-candidates.js";
+import {
+  buildLiveModelFileProbeContext,
+  buildLiveModelFileProbeRetryContext,
+  buildLiveModelImageProbeContext,
+  fileProbeTextMatches,
+  isLiveModelProbeEnabled,
+  LIVE_MODEL_FILE_PROBE_ENV,
+  LIVE_MODEL_FILE_PROBE_TOKEN,
+  LIVE_MODEL_IMAGE_PROBE_ENV,
+  modelSupportsImageInput,
+  runLiveModelImageProbeWithRetry,
+  shouldSkipLiveModelExtraProbes,
+  shouldSkipLiveModelFileProbe,
+  shouldSkipLiveModelImageProbe,
+} from "./test-helpers/live-model-turn-probes.js";
+import { createLiveTargetMatcher } from "./test-helpers/live-target-matcher.js";
 
 const LIVE = isLiveTestEnabled();
 const DIRECT_ENABLED = Boolean(process.env.OPENCLAW_LIVE_MODELS?.trim());
@@ -1597,7 +1597,7 @@ async function runDeepSeekV4ReplayRegression(params: {
   if (second.stopReason === "error") {
     throw new Error(second.errorMessage || "DeepSeek V4 replay followup returned error");
   }
-  expect(extractAssistantText(second).length).toBeGreaterThan(0);
+  expect(extractEmbeddedAssistantText(second).length).toBeGreaterThan(0);
 }
 
 async function runExtraTurnProbes(params: {
@@ -1627,7 +1627,7 @@ async function runExtraTurnProbes(params: {
     if (file.stopReason === "error") {
       throw new Error(file.errorMessage || "file-read probe returned error with no message");
     }
-    let fileText = extractAssistantText(file);
+    let fileText = extractEmbeddedAssistantText(file);
     if (!fileProbeTextMatches(fileText)) {
       logProgress(`${params.progressLabel}: file-read probe retry`);
       const retry = await completeSimpleWithTimeout(
@@ -1644,7 +1644,7 @@ async function runExtraTurnProbes(params: {
           retry.errorMessage || "file-read probe retry returned error with no message",
         );
       }
-      fileText = extractAssistantText(retry);
+      fileText = extractEmbeddedAssistantText(retry);
     }
     if (!fileProbeTextMatches(fileText)) {
       if (fileText.length === 0) {
@@ -1689,7 +1689,7 @@ async function runExtraTurnProbes(params: {
             : `${attemptLabel} returned error with no message`;
         throw new Error(image.errorMessage || fallback);
       }
-      return extractAssistantText(image);
+      return extractEmbeddedAssistantText(image);
     },
     onRetry: (firstText) => {
       const reason = firstText.length === 0 ? "was empty" : "did not return ok";

@@ -1,12 +1,13 @@
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 /**
  * Exec approval id routing tests.
  * Covers approval registration ids, follow-up idempotency, and approved
  * node/gateway invocation behavior.
  */
-import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadExecApprovals,
@@ -73,7 +74,7 @@ vi.mock("../utils/message-channel.js", () => {
   };
 });
 
-vi.mock("../utils/delivery-context.js", () => ({
+vi.mock("../utils/delivery-context.shared.js", () => ({
   normalizeDeliveryContext: (context?: {
     channel?: string | null;
     to?: string | number | null;
@@ -378,12 +379,7 @@ function mockNoApprovalRouteRegistration() {
   });
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 function expectRecordFields(
   record: Record<string, unknown> | undefined,

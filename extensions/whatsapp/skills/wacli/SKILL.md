@@ -20,7 +20,7 @@ metadata:
             {
               "id": "go",
               "kind": "go",
-              "module": "github.com/steipete/wacli/cmd/wacli@latest",
+              "module": "github.com/openclaw/wacli/cmd/wacli@latest",
               "bins": ["wacli"],
               "label": "Install wacli (go)",
             },

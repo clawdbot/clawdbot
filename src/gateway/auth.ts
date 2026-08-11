@@ -50,6 +50,8 @@ export type GatewayAuthResult = {
     | "bootstrap-token"
     | "trusted-proxy";
   user?: string;
+  /** Full verified Tailscale identity; present only after header + WhoIs agreement. */
+  tailscaleIdentity?: VerifiedTailscaleIdentity;
   reason?: string;
   /** Present when the request was blocked by the rate limiter. */
   rateLimited?: boolean;
@@ -96,7 +98,7 @@ type AuthorizeGatewayConnectParams = {
   };
 };
 
-type TailscaleUser = {
+type VerifiedTailscaleIdentity = {
   login: string;
   name: string;
   profilePic?: string;
@@ -180,7 +182,7 @@ function resolveTailscaleClientIp(req?: IncomingMessage): string | undefined {
   });
 }
 
-function getTailscaleUser(req?: IncomingMessage): TailscaleUser | null {
+function getTailscaleUser(req?: IncomingMessage): VerifiedTailscaleIdentity | null {
   if (!req) {
     return null;
   }
@@ -219,7 +221,7 @@ function isTailscaleProxyRequest(req?: IncomingMessage): boolean {
 async function resolveVerifiedTailscaleUser(params: {
   req?: IncomingMessage;
   tailscaleWhois: TailscaleWhoisLookup;
-}): Promise<{ ok: true; user: TailscaleUser } | { ok: false; reason: string }> {
+}): Promise<{ ok: true; user: VerifiedTailscaleIdentity } | { ok: false; reason: string }> {
   const { req, tailscaleWhois } = params;
   const tailscaleUser = getTailscaleUser(req);
   if (!tailscaleUser) {
@@ -630,6 +632,7 @@ async function authorizeGatewayConnectCore(
         ok: true,
         method: "tailscale",
         user: tailscaleCheck.user.login,
+        tailscaleIdentity: tailscaleCheck.user,
       };
     }
   }

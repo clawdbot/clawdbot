@@ -95,34 +95,86 @@ async function withNewSessionPage(
 }
 
 suite.define(() => {
-  it("keeps the mobile incognito and model controls separated", async () => {
+  it("keeps the mobile footer controls separated and reveals session modes on hover or focus", async () => {
     await withNewSessionPage(MOBILE_CONTEXT, async (page) => {
       await installMockGateway(page, {
         models: [{ id: "gpt-5.6-sol", name: "GPT 5.6 Sol", provider: "openai" }],
+        hasMultipleSessionSharingIdentities: true,
       });
       await page.goto(`${suite.server.baseUrl}new`);
       const footer = page.locator(".new-session-page__composer .agent-chat__composer-footer");
+      const attach = page.getByRole("button", { name: "Add attachment" });
+      const takePhoto = page.getByRole("menuitem", { name: "Take photo" });
+      const draft = page.getByRole("switch", { name: "Draft" });
       const incognito = page.getByRole("switch", { name: "Incognito" });
       const model = page.locator(".new-session-page__composer .chat-composer-model-control");
-      await Promise.all([footer.waitFor(), incognito.waitFor(), model.waitFor()]);
+      const message = page.locator(".new-session-page__message");
+      await Promise.all([
+        footer.waitFor(),
+        attach.waitFor(),
+        draft.waitFor({ state: "attached" }),
+        incognito.waitFor(),
+        model.waitFor(),
+      ]);
 
-      const [footerBox, incognitoBox, modelBox] = await Promise.all([
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await page.mouse.move(0, 0);
+      await expect
+        .poll(() => incognito.evaluate((element) => getComputedStyle(element).opacity))
+        .toBe("0");
+      await footer.hover();
+      await expect
+        .poll(() => incognito.evaluate((element) => getComputedStyle(element).opacity))
+        .toBe("1");
+      await page.mouse.move(0, 0);
+      await expect
+        .poll(() => incognito.evaluate((element) => getComputedStyle(element).opacity))
+        .toBe("0");
+      await message.focus();
+      await expect
+        .poll(() => incognito.evaluate((element) => getComputedStyle(element).opacity))
+        .toBe("1");
+
+      const [footerBox, attachBox, draftBox, incognitoBox, modelBox] = await Promise.all([
         footer.boundingBox(),
+        attach.boundingBox(),
+        draft.boundingBox(),
         incognito.boundingBox(),
         model.boundingBox(),
       ]);
       expect(footerBox).not.toBeNull();
+      expect(attachBox).not.toBeNull();
+      expect(draftBox).not.toBeNull();
       expect(incognitoBox).not.toBeNull();
       expect(modelBox).not.toBeNull();
+      expect((attachBox?.x ?? 0) + (attachBox?.width ?? 0)).toBeLessThanOrEqual(draftBox?.x ?? 0);
+      expect((draftBox?.x ?? 0) + (draftBox?.width ?? 0)).toBeLessThanOrEqual(incognitoBox?.x ?? 0);
       expect((incognitoBox?.x ?? 0) + (incognitoBox?.width ?? 0)).toBeLessThanOrEqual(
         modelBox?.x ?? 0,
       );
-      for (const control of [incognitoBox, modelBox]) {
+      for (const control of [attachBox, draftBox, incognitoBox, modelBox]) {
         expect(control?.x ?? 0).toBeGreaterThanOrEqual(footerBox?.x ?? 0);
         expect((control?.x ?? 0) + (control?.width ?? 0)).toBeLessThanOrEqual(
           (footerBox?.x ?? 0) + (footerBox?.width ?? 0),
         );
       }
+      // The new-session footer keeps flex (not the shared chat mobile grid), so
+      // all four controls share one 320px row; wrap or overflow here means the
+      // new-session.css mobile override regressed.
+      const controlsOverflow = await footer.evaluate(
+        (element) => element.scrollWidth - element.clientWidth,
+      );
+      expect(controlsOverflow).toBe(0);
+
+      await attach.click();
+      await expect.poll(() => takePhoto.isVisible()).toBe(true);
+      await page.keyboard.press("Escape");
+      await incognito.click();
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await page.mouse.move(0, 0);
+      await expect
+        .poll(() => incognito.evaluate((element) => getComputedStyle(element).opacity))
+        .toBe("1");
     });
   });
 
@@ -149,22 +201,16 @@ suite.define(() => {
           (element) => element.closest("details")?.hasAttribute("open") ?? false,
         );
       const modelTriggerBox = await modelSelect.boundingBox();
-      const modelMenuBox = await page
-        .locator(".chat-controls__inline-select-menu--combined")
-        .boundingBox();
+      const modelMenuBox = await page.locator(".chat-controls__model-menu").boundingBox();
       expect(modelTriggerBox).not.toBeNull();
       expect(modelMenuBox).not.toBeNull();
-      expect(modelMenuBox?.x ?? 0).toBeLessThan(modelTriggerBox?.x ?? 0);
-      expect((modelMenuBox?.x ?? 0) + (modelMenuBox?.width ?? 0)).toBeCloseTo(
-        (modelTriggerBox?.x ?? 0) + (modelTriggerBox?.width ?? 0),
-        0,
+      expect(modelMenuBox?.x ?? 0).toBeLessThanOrEqual(modelTriggerBox?.x ?? 0);
+      expect((modelMenuBox?.x ?? 0) + (modelMenuBox?.width ?? 0)).toBeLessThanOrEqual(
+        await page.evaluate(() => window.innerWidth),
       );
-      await page.locator('[data-chat-model-provider="anthropic"]').click();
       await expect.poll(pickerOpen).toBe(true);
       await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
-      // Inside changes stay grouped; only explicit light-dismissal closes the picker.
-      await expect.poll(pickerOpen).toBe(true);
-      await page.keyboard.press("Escape");
+      // Model selection commits immediately and closes the model popover.
       await expect.poll(pickerOpen).toBe(false);
       await expect
         .poll(() => modelSelect.evaluate((element) => element === document.activeElement))
@@ -174,7 +220,7 @@ suite.define(() => {
       await page.mouse.click(8, 8);
       await expect.poll(pickerOpen).toBe(false);
       await page.locator(".new-session-page__message").fill("use this model");
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
 
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
@@ -204,11 +250,12 @@ suite.define(() => {
 
       const modelSelect = page.locator('[data-chat-model-select="true"]');
       await modelSelect.click();
-      await page.locator('[data-chat-model-provider="anthropic"]').click();
       await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+      const effortSelect = page.locator('[data-chat-thinking-select="true"]');
+      await effortSelect.click();
       const thinkingSlider = page.locator('[data-chat-thinking-slider="true"]');
       await thinkingSlider.press("End");
-      await expect.poll(() => modelSelect.getAttribute("data-chat-thinking-value")).toBe("high");
+      await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("high");
 
       await page.goto(`${suite.server.baseUrl}new`);
       await pollLocatorText(placeTrigger.locator(".new-session-page__trigger-label")).toBe(
@@ -218,7 +265,7 @@ suite.define(() => {
       await expect
         .poll(() => modelSelect.getAttribute("data-chat-select-value"))
         .toBe("anthropic/claude-sonnet-4-6");
-      await expect.poll(() => modelSelect.getAttribute("data-chat-thinking-value")).toBe("high");
+      await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("high");
       await captureUiProof(page, "new-session-preferences-restored.png");
 
       const branchRequests = await gateway.getRequests("worktrees.branches");
@@ -272,7 +319,6 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       const modelSelect = page.locator('[data-chat-model-select="true"]');
       await modelSelect.click();
-      await page.locator('[data-chat-model-provider="anthropic"]').click();
       await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
 
       await navigateInApp(page, "chat");
@@ -291,7 +337,7 @@ suite.define(() => {
         .toBe(branchRequests + 1);
 
       await page.locator(".new-session-page__message").fill("keep both remembered choices");
-      const start = page.getByRole("button", { name: "Start thread" });
+      const start = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => start.isDisabled()).toBe(true);
 
       await gateway.resolveDeferred("chat.metadata", { models });
@@ -358,7 +404,6 @@ suite.define(() => {
 
       const modelSelect = page.locator('[data-chat-model-select="true"]');
       await modelSelect.click();
-      await page.locator('[data-chat-model-provider="anthropic"]').click();
       await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
       const storedPreference = await readMainPreference(page);
       expect(storedPreference).toMatchObject({
@@ -374,6 +419,14 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         workspace: WORKSPACE,
         workspaceGit: true,
+        operatorScopes: ["operator.read", "operator.write"],
+        featureMethods: [
+          "chat.metadata",
+          "chat.startup",
+          "fs.listDir",
+          "sessions.create",
+          "worktrees.branches",
+        ],
         methodResponses: {
           "agents.list": mainAgentList(),
           "worktrees.branches": GIT_BRANCHES,
@@ -395,7 +448,7 @@ suite.define(() => {
       const message = page.locator(".new-session-page__message");
       await message.fill("use a safe folder");
       await expect
-        .poll(() => page.getByRole("button", { name: "Start thread" }).isDisabled())
+        .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
         .toBe(true);
 
       await gateway.rejectDeferred("fs.listDir", {
@@ -436,9 +489,9 @@ suite.define(() => {
 
       await message.fill("use the repaired preference");
       await expect
-        .poll(() => page.getByRole("button", { name: "Start thread" }).isDisabled())
+        .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
         .toBe(false);
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).not.toHaveProperty("cwd");
     });
@@ -484,7 +537,7 @@ suite.define(() => {
       );
 
       await page.locator(".new-session-page__message").fill("keep the newer choice");
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).not.toHaveProperty("cwd");
     });
@@ -515,7 +568,7 @@ suite.define(() => {
 
       await page.locator(".new-session-page__message").fill("keep my early folder choice");
       await expect
-        .poll(() => page.getByRole("button", { name: "Start thread" }).isDisabled())
+        .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
         .toBe(false);
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toContain(
         "target-repo",

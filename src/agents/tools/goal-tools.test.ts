@@ -56,6 +56,7 @@ describe("goal tools", () => {
         updatedAt: 1,
         totalTokens: 125,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         goal: {
           schemaVersion: 1,
           id: "goal-1",

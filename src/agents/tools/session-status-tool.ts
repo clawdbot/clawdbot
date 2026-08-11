@@ -30,7 +30,7 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
-import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { applyModelOverrideWithAuthProfileCompatibility } from "../../sessions/auth-profile-preservation.js";
 import {
   getSessionStateVersion,
   listSessionStateEventsSince,
@@ -70,8 +70,12 @@ import type { AnyAgentTool } from "./common.js";
 import {
   normalizeToolModelOverride,
   readNonNegativeIntegerParam,
-  readStringParam,
+  readToolStringParam,
 } from "./common.js";
+import {
+  callAgentToolGatewayRequest,
+  type AgentToolGatewayRequestCaller,
+} from "./in-process-gateway.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
   listImplicitDefaultDirectFallbackKeys,
@@ -553,6 +557,7 @@ export function createSessionStatusTool(opts?: {
   activeModelProvider?: string;
   activeModelId?: string;
   metadataSnapshot?: PluginMetadataSnapshot;
+  callGateway?: AgentToolGatewayRequestCaller;
   /** Active live-run route, kept separate from the persisted/origin delivery route. */
   activeDeliveryContext?: DeliveryContext;
 }): AnyAgentTool {
@@ -565,6 +570,7 @@ export function createSessionStatusTool(opts?: {
     outputSchema: SessionStatusOutputSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
+      const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
       const changesSince = readNonNegativeIntegerParam(params, "changesSince");
       const cfg = opts?.config ?? getRuntimeConfig();
       const { mainKey, alias, effectiveRequesterKey } = resolveSandboxedSessionToolContext({
@@ -625,9 +631,10 @@ export function createSessionStatusTool(opts?: {
           sandboxed: opts?.sandboxed === true,
         }),
         a2aPolicy,
+        callGateway: gatewayCall,
       });
 
-      const requestedKeyParam = readStringParam(params, "sessionKey");
+      const requestedKeyParam = readToolStringParam(params, "sessionKey");
       const isImplicitRunSessionStatus =
         requestedKeyParam === undefined && Boolean(opts?.runSessionKey?.trim());
       let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
@@ -694,9 +701,11 @@ export function createSessionStatusTool(opts?: {
           configuredDefaultAgentId,
         );
         ensureAgentAccess(requestedAgentId);
-        const access = visibilityGuard.check(
-          normalizeVisibilityTargetSessionKey(requestedKeyInput, requestedAgentId),
+        const visibilityTargetKey = normalizeVisibilityTargetSessionKey(
+          requestedKeyInput,
+          requestedAgentId,
         );
+        const access = visibilityGuard.check(visibilityTargetKey);
         if (!access.allowed) {
           throw new Error(access.error);
         }
@@ -734,6 +743,7 @@ export function createSessionStatusTool(opts?: {
           mainKey,
           requesterInternalKey: effectiveRequesterKey,
           restrictToSpawned: opts?.sandboxed === true,
+          callGateway: gatewayCall,
         });
         if (resolvedSession.ok && resolvedSession.resolvedViaSessionId) {
           const visibleSession = await resolveVisibleSessionReference({
@@ -742,6 +752,7 @@ export function createSessionStatusTool(opts?: {
             requesterSessionKey: effectiveRequesterKey,
             restrictToSpawned: opts?.sandboxed === true,
             visibilitySessionKey: requestedKeyInput,
+            callGateway: gatewayCall,
           });
           if (!visibleSession.ok) {
             // The resolver's copy already names the denying policy (including the
@@ -867,7 +878,7 @@ export function createSessionStatusTool(opts?: {
           const configured = resolveDefaultModelForAgent({ cfg, agentId });
           const selectedAgentDir = resolveAgentDir(cfg, agentId);
           const selectedWorkspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-          const modelRaw = readStringParam(params, "model");
+          const modelRaw = readToolStringParam(params, "model");
           let changedModel = false;
           if (typeof modelRaw === "string") {
             const selection = await resolveModelOverride({
@@ -892,8 +903,15 @@ export function createSessionStatusTool(opts?: {
                     isDefault: selection.isDefault,
                   };
             const nextEntry: SessionEntry = { ...scopedResolved.entry };
-            const applied = applyModelOverrideToSessionEntry({
+            const currentProvider =
+              scopedResolved.entry.providerOverride?.trim() ||
+              scopedResolved.entry.modelProvider?.trim() ||
+              configured.provider;
+            const applied = applyModelOverrideWithAuthProfileCompatibility({
+              cfg,
+              agentDir: selectedAgentDir,
               entry: nextEntry,
+              currentProvider,
               selection: modelSelection,
               markLiveSwitchPending: true,
             });
@@ -906,8 +924,14 @@ export function createSessionStatusTool(opts?: {
                 },
                 (entry, context) => {
                   const persistedEntryPatch: SessionEntry = { ...entry };
-                  applyModelOverrideToSessionEntry({
+                  applyModelOverrideWithAuthProfileCompatibility({
+                    cfg,
+                    agentDir: selectedAgentDir,
                     entry: persistedEntryPatch,
+                    currentProvider:
+                      entry.providerOverride?.trim() ||
+                      entry.modelProvider?.trim() ||
+                      configured.provider,
                     selection: modelSelection,
                     markLiveSwitchPending: true,
                   });

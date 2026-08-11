@@ -1,8 +1,12 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isUsageCountedSessionTranscriptFileName } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
-import type { PluginStateLeaseRunner } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { isUsageCountedSessionTranscriptFileName } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+import {
+  normalizeExtraMemoryPathEntries,
+  type MemoryExtraPath,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   defaultRuntime,
@@ -148,21 +152,19 @@ function resolveAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
   if (trimmed) {
     return [trimmed];
   }
-  const list = cfg.agents?.list ?? [];
-  if (list.length > 0) {
-    return list.map((entry) => entry.id).filter(Boolean);
-  }
-  return [resolveDefaultAgentId(cfg)];
+  return listAgentIds(cfg);
 }
-export function formatExtraPaths(workspaceDir: string, extraPaths: string[]): string[] {
-  return normalizeExtraMemoryPaths(workspaceDir, extraPaths).map((entry) => shortenHomePath(entry));
+export function formatExtraPaths(workspaceDir: string, extraPaths: MemoryExtraPath[]): string[] {
+  return normalizeExtraMemoryPathEntries(workspaceDir, extraPaths).map((entry) => {
+    const root = shortenHomePath(entry.path);
+    return entry.pattern ? `${root} (pattern: ${entry.pattern})` : root;
+  });
 }
 async function withMemoryManagerForAgent(params: {
   cfg: OpenClawConfig;
   agentId: string;
   purpose?: MemoryManagerPurpose;
   acquireLocalService?: MemoryCoreAcquireLocalService;
-  withLease?: PluginStateLeaseRunner;
   run: (manager: MemoryManager) => Promise<void>;
 }): Promise<void> {
   const managerParams: Parameters<typeof getMemorySearchManager>[0] = {
@@ -174,9 +176,6 @@ async function withMemoryManagerForAgent(params: {
   }
   if (params.acquireLocalService) {
     managerParams.acquireLocalService = params.acquireLocalService;
-  }
-  if (params.withLease) {
-    managerParams.withLease = params.withLease;
   }
   await withManager<MemoryManager>({
     getManager: () => getMemorySearchManager(managerParams),
@@ -196,7 +195,6 @@ export async function withMemoryCommand(params: {
   diagnosticsToStderr?: boolean;
   purpose?: MemoryManagerPurpose;
   acquireLocalService?: MemoryCoreAcquireLocalService;
-  withLease?: PluginStateLeaseRunner;
   run: (context: { manager: MemoryManager; cfg: OpenClawConfig; agentId: string }) => Promise<void>;
 }): Promise<OpenClawConfig> {
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig(
@@ -213,7 +211,6 @@ export async function withMemoryCommand(params: {
       agentId,
       purpose: params.purpose,
       acquireLocalService: params.acquireLocalService,
-      withLease: params.withLease,
       run: async (manager) => params.run({ manager, cfg, agentId }),
     });
   }
@@ -268,7 +265,7 @@ async function scanSessionFiles(agentId: string): Promise<SourceScan> {
 }
 async function scanMemoryFiles(
   workspaceDir: string,
-  extraPaths: string[] = [],
+  extraPaths: MemoryExtraPath[] = [],
 ): Promise<SourceScan> {
   const issues: string[] = [];
   const memoryFile = path.join(workspaceDir, "MEMORY.md");
@@ -318,7 +315,7 @@ async function scanMemoryFiles(
   let listed: string[] = [];
   let listedOk = false;
   try {
-    listed = await listMemoryFiles(workspaceDir, resolvedExtraPaths);
+    listed = await listMemoryFiles(workspaceDir, extraPaths);
     listedOk = true;
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
@@ -350,7 +347,7 @@ export async function scanMemorySources(params: {
   workspaceDir: string;
   agentId: string;
   sources: MemorySourceName[];
-  extraPaths?: string[];
+  extraPaths?: MemoryExtraPath[];
 }): Promise<MemorySourceScan> {
   const scans: SourceScan[] = [];
   const extraPaths = params.extraPaths ?? [];

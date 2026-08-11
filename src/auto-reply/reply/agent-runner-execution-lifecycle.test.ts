@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
 import { updateMcpAppModelContext } from "../../agents/mcp-app-model-context.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
-import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions } from "../types.js";
@@ -548,41 +547,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     expect(state.runCliAgentMock.mock.calls[0]?.[0]?.prompt).toContain("CLI selection");
     expect(state.runCliAgentMock.mock.calls[0]?.[0]?.transcriptPrompt).toBe("fix it");
     expect(runtime.pendingMcpAppModelContext).toBeUndefined();
-  });
-
-  it("propagates commitment-only bootstrap scope to CLI runs", async () => {
-    state.isCliProviderMock.mockReturnValue(true);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("claude-cli", "sonnet-4.6"),
-      provider: "claude-cli",
-      model: "sonnet-4.6",
-      attempts: [],
-    }));
-    state.runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "final" }],
-      meta: {},
-    });
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "claude-cli";
-    followupRun.run.model = "sonnet-4.6";
-    const params = createMinimalRunAgentTurnParams({
-      followupRun,
-      opts: {
-        isHeartbeat: true,
-        bootstrapContextMode: "lightweight",
-        [HEARTBEAT_RUN_SCOPE]: "commitment-only",
-      },
-    });
-    params.isHeartbeat = true;
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await executeAgentTurn(params);
-
-    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
-      trigger: "heartbeat",
-      bootstrapContextMode: "lightweight",
-      bootstrapContextRunKind: "commitment-only",
-    });
   });
 
   it("registers run ownership before asynchronous image preflight", async () => {

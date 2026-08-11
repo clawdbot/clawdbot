@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   readQaScenarioById,
   readQaScenarioExecutionConfig,
+  readQaScenarioPack,
   validateQaScenarioExecutionConfig,
 } from "./scenario-catalog.js";
 
@@ -20,6 +21,15 @@ function requireFlowScenario(scenario: CatalogScenario): FlowCatalogScenario {
 
 describe("qa scenario catalog channel contracts", () => {
   const agentRuntime = "agent-runtime";
+
+  it("classifies every current module flow intrinsically", () => {
+    const moduleFlows = readQaScenarioPack().scenarios.filter(
+      (scenario) => scenario.execution.flowKind === "module",
+    );
+
+    expect(moduleFlows).toHaveLength(143);
+    expect(moduleFlows.every((scenario) => scenario.execution.flow)).toBe(true);
+  });
 
   it("routes native command session targeting through Crabline Telegram", () => {
     const scenario = readQaScenarioById("native-command-session-target");
@@ -67,6 +77,7 @@ describe("qa scenario catalog channel contracts", () => {
 
     expect(scenario.coverage?.primary).toEqual(["media.inbound-media-store"]);
     expect(scenario.coverage?.secondary).toEqual(["channels.inbound-media-normalization"]);
+    expect(scenario.plugins).toContain("openai");
     expect(scenario.execution.channel).toBe("qa-channel");
     expect(scenario.execution.providerMode).toBe("mock-openai");
     expect(flow).toContain('"sendInbound"');
@@ -82,16 +93,19 @@ describe("qa scenario catalog channel contracts", () => {
     expect(flow).not.toContain('"call":"runAgentPrompt"');
   });
 
-  it("marks live transport modules as live-driver-only", () => {
+  it("preserves module flow identity without mutating the driver contract", () => {
     for (const scenarioId of [
       "matrix-approval-exec-metadata-single-event",
       "matrix-mxid-prefixed-command-block",
       "slack-codex-approval-exec-native",
       "slack-codex-approval-plugin-native",
     ]) {
-      expect(readQaScenarioExecutionConfig(scenarioId)?.requiredChannelDriver, scenarioId).toBe(
-        "live",
-      );
+      const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
+      expect(scenario.execution.flowKind, scenarioId).toBe("module");
+      expect(
+        readQaScenarioExecutionConfig(scenarioId)?.requiredChannelDriver,
+        scenarioId,
+      ).toBeUndefined();
     }
   });
 
@@ -147,16 +161,25 @@ describe("qa scenario catalog channel contracts", () => {
     const scenario = requireFlowScenario(readQaScenarioById("subagent-completion-direct-fallback"));
     const flow = JSON.stringify(scenario.execution.flow);
     const config = scenario.execution.config as
-      | { cases?: Array<{ name?: string; marker?: string; expectedSendCount?: number }> }
+      | {
+          requiredProviderMode?: string;
+          cases?: Array<{ name?: string; marker?: string; expectedSendCount?: number }>;
+        }
       | undefined;
 
+    expect(scenario.execution.providerMode).toBe("mock-openai");
+    expect(config?.requiredProviderMode).toBe("mock-openai");
     expect(config?.cases).toEqual([
       {
         name: "visible",
         marker: "QA-SUBAGENT-TERMINAL-VISIBLE-OK",
         expectedSendCount: 1,
       },
-      { name: "silent", marker: "NO_REPLY", expectedSendCount: 0 },
+      {
+        name: "silent",
+        marker: "QA-SUBAGENT-TERMINAL-SILENT-REPRESENTED",
+        expectedSendCount: 1,
+      },
       {
         name: "fallback",
         marker: "QA-SUBAGENT-TERMINAL-FALLBACK-OK",
@@ -169,6 +192,9 @@ describe("qa scenario catalog channel contracts", () => {
     expect(flow).toContain("task.deliveryStatus === 'delivered'");
     expect(flow).toContain("readSettledTerminalTask('restart')");
     expect(flow).toContain("readSettledTerminalTask('empty')");
+    expect(flow).toContain("postRestartUnexpectedPayloads.length === 0");
+    expect(flow).toContain("env.providerMode === config.requiredProviderMode");
+    expect(flow).not.toContain("interrupted by a gateway restart");
     expect(flow).toContain("verdicts.length === 5");
     expect(flow).not.toContain('"call":"sleep"');
   });
@@ -178,12 +204,19 @@ describe("qa scenario catalog channel contracts", () => {
 
     expect(scenario.execution.channel).toBeUndefined();
     expect(scenario.execution.channels).toEqual(["qa-channel", "telegram"]);
+    expect(scenario.execution.retryCount).toBe(0);
     expect(scenario.coverage?.primary).toEqual(["channels.streaming-final-reply"]);
     expect(scenario.coverage?.secondary).toEqual([`${agentRuntime}.streaming-replies-delivery`]);
     expect(scenario.gatewayConfigPatch).toMatchObject({
       channels: { telegram: { streaming: { mode: "partial" } } },
     });
     expect(scenario.gatewayConfigPatch).not.toHaveProperty("channels.telegram.groups");
+  });
+
+  it("keeps the shared channel canary eligible for QA Channel and Telegram", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("channel-canary"));
+
+    expect(scenario.execution.channels).toEqual(["qa-channel", "telegram"]);
   });
 
   it("keeps transcript-role delivery on the Crabline driver", () => {

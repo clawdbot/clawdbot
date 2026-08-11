@@ -28,6 +28,7 @@ import os from "node:os";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { ApiClient } from "../api/api-client.js";
+import { isQQBotTokenAuthenticationFailure } from "../api/auth-errors.js";
 import { ChunkedMediaApi as ChunkedMediaApiClass } from "../api/media-chunked.js";
 import { downloadDirectUploadUrl, MediaApi as MediaApiClass } from "../api/media.js";
 import type { Credentials } from "../api/messages.js";
@@ -320,9 +321,9 @@ interface AccountCreds {
 // ============ Token retry ============
 
 /**
- * Execute an API call with automatic token-retry on 401 errors.
+ * Execute an API call with automatic retry when QQ rejects the access token.
  *
- * Primary signal is structured: `ApiError.httpStatus === 401`. A string
+ * Primary signals are the structured HTTP status and QQ business code. A string
  * fallback remains for non-`ApiError` paths (e.g. synthetic errors from
  * custom adapters), but logs a warning so such cases can be surfaced.
  */
@@ -336,9 +337,10 @@ export async function withTokenRetry<T>(
     const token = await getAccessToken(creds.appId, creds.clientSecret);
     return await sendFn(token);
   } catch (err) {
-    const isStructured401 = err instanceof ApiError && err.httpStatus === 401;
-    if (isStructured401) {
-      log?.debug?.(`Token expired (ApiError 401), refreshing...`);
+    const isStructuredAuthFailure =
+      err instanceof ApiError && isQQBotTokenAuthenticationFailure(err.httpStatus, err.bizCode);
+    if (isStructuredAuthFailure) {
+      log?.debug?.(`QQBot access token rejected, refreshing...`);
       clearTokenCache(creds.appId);
       const newToken = await getAccessToken(creds.appId, creds.clientSecret);
       return await sendFn(newToken);

@@ -1,4 +1,5 @@
 // Command queue serializes and limits process execution for shared command lanes.
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   diagnosticLogger as diag,
   logLaneDequeue,
@@ -12,6 +13,7 @@ import {
   isGatewayWorkAdmissionClosed,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
+  runWithGatewayRootWorkReadmission,
 } from "./gateway-work-admission.js";
 export { GatewayDrainingError } from "./gateway-work-admission.js";
 import {
@@ -586,12 +588,13 @@ export function enqueueCommandInLane<T>(
   if (isGatewaySubordinateWorkAdmissionClosed()) {
     return Promise.reject(new GatewayDrainingError());
   }
+  const runInAsyncContext = AsyncLocalStorage.snapshot();
   const cleaned = normalizeLane(lane);
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
   const state = getLaneState(cleaned);
   return new Promise<T>((resolve, reject) => {
     enqueueLaneEntry(state, {
-      task: (marker) => task(marker),
+      task: (marker) => runInAsyncContext(runWithGatewayRootWorkReadmission, () => task(marker)),
       resolve: (value) => resolve(value as T),
       reject,
       enqueuedAt: Date.now(),

@@ -1,9 +1,12 @@
 // Googlechat API module exposes the plugin public contract.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
+  MediaFetchError,
   parseMediaContentLength,
   readResponseTextSnippet,
 } from "openclaw/plugin-sdk/media-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
@@ -31,29 +34,26 @@ function resolveGoogleChatMediaTimeoutMs(maxBytes?: number): number {
 }
 
 async function readGoogleChatJsonResponse<T>(response: Response, label: string): Promise<T> {
-  const bytes = await readResponseWithLimit(response, GOOGLECHAT_JSON_RESPONSE_MAX_BYTES, {
+  return readProviderJsonResponse<T>(response, label, {
+    maxBytes: GOOGLECHAT_JSON_RESPONSE_MAX_BYTES,
     chunkTimeoutMs: GOOGLECHAT_RESPONSE_READ_IDLE_TIMEOUT_MS,
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`${label}: response body stalled after ${chunkTimeoutMs}ms`),
-    onOverflow: ({ maxBytes }) => new Error(`${label}: JSON response exceeds ${maxBytes} bytes`),
   });
-  try {
-    return JSON.parse(new TextDecoder().decode(bytes)) as T;
-  } catch (cause) {
-    throw new Error(`${label}: malformed JSON response`, { cause });
-  }
 }
 
 async function readGoogleChatErrorResponse(response: Response, label: string): Promise<string> {
-  return (
+  const text =
     (await readResponseTextSnippet(response, {
       maxBytes: GOOGLECHAT_ERROR_BODY_MAX_BYTES,
       maxChars: GOOGLECHAT_ERROR_BODY_MAX_BYTES,
       chunkTimeoutMs: GOOGLECHAT_RESPONSE_READ_IDLE_TIMEOUT_MS,
       onIdleTimeout: ({ chunkTimeoutMs }) =>
         new Error(`${label} error response stalled after ${chunkTimeoutMs}ms`),
-    })) ?? ""
-  );
+    })) ?? "";
+  // Remote API errors can reflect the request's Authorization header. Force
+  // tool-payload redaction before the text enters any surfaced error message.
+  return redactToolPayloadText(text);
 }
 
 const headersToObject = (headers?: HeadersInit): Record<string, string> =>
@@ -165,12 +165,16 @@ async function fetchBuffer(
       if (lengthHeader) {
         const length = parseMediaContentLength(lengthHeader);
         if (length !== null && length > maxBytes) {
-          throw new Error(`Google Chat media exceeds max bytes (${maxBytes})`);
+          throw new MediaFetchError(
+            "max_bytes",
+            `Google Chat media exceeds max bytes (${maxBytes})`,
+          );
         }
       }
       const buffer = await readResponseWithLimit(res, maxBytes, {
         chunkTimeoutMs: GOOGLECHAT_RESPONSE_READ_IDLE_TIMEOUT_MS,
-        onOverflow: () => new Error(`Google Chat media exceeds max bytes (${maxBytes})`),
+        onOverflow: () =>
+          new MediaFetchError("max_bytes", `Google Chat media exceeds max bytes (${maxBytes})`),
       });
       const contentType = res.headers.get("content-type") ?? undefined;
       return { buffer, contentType };

@@ -26,13 +26,14 @@ import {
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { resolveApprovalDocumentMode, type ApprovalDocumentMode } from "./approval-deep-link.ts";
 import { createBrowserHistory, resolveControlUiBasePath } from "./browser.ts";
+import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
+import { createApplicationCloudStartup } from "./cloud-session-startup.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 import type {
   ApplicationNavigationOptions,
   ApplicationContext,
   ApplicationNavigationPreferences,
   ApplicationNavigationPreferencesSnapshot,
-  ApplicationSkillWorkshopRevisionHandoff,
   ApplicationTheme,
   ApplicationThemeServerSelection,
 } from "./context.ts";
@@ -51,8 +52,10 @@ import {
   saveSettings,
   type UiSettings,
 } from "./settings.ts";
+import { createSkillWorkshopRevisionHandoff } from "./skill-workshop-revision-handoff.ts";
 import { createStartupLifecycle, type StartupStep } from "./startup-lifecycle.ts";
 import { resolveApplicationStartupSettings } from "./startup-settings.ts";
+import { isTerminalDocumentPath } from "./terminal-document-mode.ts";
 import { startThemeTransition } from "./theme-transition.ts";
 import { resolveTheme, type ThemeMode } from "./theme.ts";
 import { createWebPushCapability } from "./web-push.ts";
@@ -204,26 +207,6 @@ function createApplicationNavigationPreferences(
   };
 }
 
-function createSkillWorkshopRevisionHandoff(): ApplicationSkillWorkshopRevisionHandoff {
-  let pending: Parameters<ApplicationSkillWorkshopRevisionHandoff["prepare"]>[0] | null = null;
-  return {
-    prepare: (handoff) => {
-      pending = handoff;
-    },
-    consume: (sessionKey) => {
-      if (!pending || pending.sessionKey !== sessionKey) {
-        return null;
-      }
-      const handoff = pending;
-      pending = null;
-      return handoff;
-    },
-    clear: () => {
-      pending = null;
-    },
-  };
-}
-
 export type ApplicationRuntime = {
   readonly context: ApplicationContext<RouteId>;
   readonly router: ApplicationRouter;
@@ -280,6 +263,7 @@ export function bootstrapApplication(
   const basePath = resolveControlUiBasePath(
     startup.location.pathname || globalThis.location?.pathname || "/",
   );
+  const terminalDocument = isTerminalDocumentPath(startup.location.pathname, basePath);
   const firstRunDefaultLanding =
     documentMode === null && isDefaultChatLanding(startup.location, basePath, routeIdFromPath);
   const sessionPathBuilderReady =
@@ -296,7 +280,13 @@ export function bootstrapApplication(
     startup.password ?? "",
     startup.pendingBootstrapToken ?? "",
     undefined,
-    { persistDefaultConnectionSettings: documentMode === null },
+    {
+      persistDefaultConnectionSettings: documentMode === null,
+      basePath,
+      ...(startup.pendingBootstrapProfile
+        ? { bootstrapProfile: startup.pendingBootstrapProfile }
+        : {}),
+    },
   );
   const agents = createAgentCapability(gateway);
   const startupLifecycle = createStartupLifecycle();
@@ -309,7 +299,6 @@ export function bootstrapApplication(
     documentMode === null &&
     !releasedSessionQuery &&
     firstRunDefaultLanding &&
-    settings.sessionKey.trim() !== "" &&
     !parseAgentSessionKey(settings.sessionKey);
   const initialLocationReady = (
     documentMode
@@ -366,8 +355,13 @@ export function bootstrapApplication(
   const webPush = createWebPushCapability(gateway);
   const skillWorkshopRevision = createSkillWorkshopRevisionHandoff();
   const initialUserMessage = createInitialUserMessageHandoff();
+  const cloudStartup = createApplicationCloudStartup({ gateway, sessions, initialUserMessage });
+  const chatAttachmentHandoff = createChatAttachmentHandoff();
   applyThemePresentation(settings);
   const router = createApplicationRouter();
+  // /terminal is served by the Gateway's SPA fallback but renders before the
+  // shell; starting the page router would rewrite this special document to /chat.
+  const startsApplicationRouter = documentMode === null && !terminalDocument;
   let routerStarted = false;
   // Pre-start navigations are invisible to history; retain the latest request so
   // router.start() cannot resolve the stale browser URL over the user's route.
@@ -378,29 +372,39 @@ export function bootstrapApplication(
           gatewayUrl: startup.pendingGatewayUrl,
           token: startup.pendingGatewayToken ?? "",
           bootstrapToken: startup.pendingBootstrapToken ?? "",
+          ...(startup.pendingBootstrapProfile
+            ? { bootstrapProfile: startup.pendingBootstrapProfile }
+            : {}),
         }
       : null;
   let lastPostConnectClient: GatewayBrowserClient | null = null;
+  let lastRecoveryClient: GatewayBrowserClient | null = null;
   const stopPostConnect = gateway.subscribe((snapshot) => {
     if (snapshot.phase !== "connected" || !snapshot.client) {
       lastPostConnectClient = null;
+      lastRecoveryClient = null;
       return;
     }
-    if (lastPostConnectClient === snapshot.client) {
+    if (lastPostConnectClient !== snapshot.client) {
+      lastPostConnectClient = snapshot.client;
+      void config.refresh({
+        auth: {
+          hello: snapshot.hello,
+          settings: { token: gateway.connection.token },
+          password: gateway.connection.password,
+        },
+      });
+      void sendSessionObserverVisibility(
+        snapshot.client,
+        loadChatObserverDisplayPreference() !== "off",
+      ).catch(() => undefined);
+    }
+    // Recovery scope resolves after hello, so dedupe its later publication independently.
+    if (!snapshot.client.recoveryScopeReady || lastRecoveryClient === snapshot.client) {
       return;
     }
-    lastPostConnectClient = snapshot.client;
-    void config.refresh({
-      auth: {
-        hello: snapshot.hello,
-        settings: { token: gateway.connection.token },
-        password: gateway.connection.password,
-      },
-    });
-    void sendSessionObserverVisibility(
-      snapshot.client,
-      loadChatObserverDisplayPreference() !== "off",
-    ).catch(() => undefined);
+    lastRecoveryClient = snapshot.client;
+    cloudStartup.resumeRecovery();
   });
   const routeLocation = (routeId: RouteId, options?: ApplicationNavigationOptions) => {
     const location = locationForRoute(routeId, basePath);
@@ -433,6 +437,7 @@ export function bootstrapApplication(
       gatewayUrl: pending.gatewayUrl,
       token: pending.token,
       bootstrapToken: pending.bootstrapToken,
+      bootstrapProfile: pending.bootstrapProfile,
     });
   };
   const cancelPendingGatewayConnection = () => {
@@ -448,6 +453,7 @@ export function bootstrapApplication(
     config,
     runtimeConfig,
     sessions,
+    cloudStartup,
     workboard,
     overlays,
     navigation,
@@ -457,6 +463,7 @@ export function bootstrapApplication(
     webPush,
     skillWorkshopRevision,
     initialUserMessage,
+    chatAttachmentHandoff,
     navigate: (routeId, options) => {
       const location = routeLocation(routeId, options);
       if (!routerStarted) {
@@ -493,7 +500,7 @@ export function bootstrapApplication(
     cancelPendingGatewayConnection,
     start: () => {
       const stopRouter = () => router.stop();
-      if (!documentMode) {
+      if (startsApplicationRouter) {
         startupLifecycle.addDisposer(stopRouter);
       }
       const steps: StartupStep[] = [
@@ -516,7 +523,7 @@ export function bootstrapApplication(
       steps.push(() => {
         void config.refresh({ skipWithoutAuthCandidate: true });
       });
-      if (!documentMode) {
+      if (startsApplicationRouter) {
         steps.push(async () => {
           const pendingNavigation = pendingRouterStartNavigation;
           pendingRouterStartNavigation = null;
@@ -562,6 +569,7 @@ export function bootstrapApplication(
       stopPostConnect();
       agents.dispose();
       channels.dispose();
+      cloudStartup.dispose();
       sessions.dispose();
       workboard.dispose();
       stopConfigWriteSuspension();
@@ -574,6 +582,7 @@ export function bootstrapApplication(
       webPush.dispose();
       skillWorkshopRevision.clear();
       initialUserMessage.clear();
+      chatAttachmentHandoff.dispose();
     },
   };
 }

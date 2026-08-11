@@ -14,6 +14,7 @@ import {
 import { bootstrapApplication } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
 import { loadSettings, saveSettings } from "./settings.ts";
+import { createSkillWorkshopRevisionHandoff } from "./skill-workshop-revision-handoff.ts";
 
 // Startup progress (dynamic imports, gateway subscribe, router start) is not a
 // performance assertion, so these waits must not inherit vi.waitFor's 1s default:
@@ -27,6 +28,51 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
+
+describe("createSkillWorkshopRevisionHandoff", () => {
+  it("survives session selection but not a same-client reconnect", () => {
+    const owner = {};
+    const replacementConnection = {};
+    const handoff = {
+      sessionKey: "agent:main:revision",
+      instructions: "Revise the skill.",
+      owner,
+      proposalId: "proposal-1",
+      proposalAgentId: "main",
+    };
+    const revisions = createSkillWorkshopRevisionHandoff();
+
+    revisions.prepare(handoff);
+
+    expect(revisions.consume(handoff.sessionKey, owner)).toEqual(handoff);
+    revisions.prepare(handoff);
+    expect(revisions.consume(handoff.sessionKey, replacementConnection)).toBeNull();
+  });
+
+  it("clears only the handoff that became stale", () => {
+    const owner = {};
+    const stale = {
+      sessionKey: "agent:main:stale",
+      instructions: "Stale revision.",
+      owner,
+      proposalId: "proposal-stale",
+      proposalAgentId: "main",
+    };
+    const current = {
+      ...stale,
+      sessionKey: "agent:main:current",
+      instructions: "Current revision.",
+      proposalId: "proposal-current",
+    };
+    const revisions = createSkillWorkshopRevisionHandoff();
+
+    revisions.prepare(stale);
+    revisions.prepare(current);
+    revisions.clear(stale);
+
+    expect(revisions.consume(current.sessionKey, owner)).toEqual(current);
+  });
+});
 
 describe("normalizeInitialApplicationLocation", () => {
   it("routes an opaque persisted key without aborting bootstrap", () => {
@@ -47,75 +93,89 @@ describe("normalizeInitialApplicationLocation", () => {
     );
   });
 
-  it("waits for the configured default agent before normalizing a persisted alias", async () => {
-    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
-    let listener: GatewayListener | null = null;
-    let snapshot = {
-      phase: "connecting",
-      client: null,
-      hello: null,
-    } as unknown as ApplicationContext<RouteId>["gateway"]["snapshot"];
-    const gateway = {
-      get snapshot() {
-        return snapshot;
-      },
-      subscribe: (next: GatewayListener) => {
-        listener = next;
-        return () => undefined;
-      },
-    };
-    const pending = resolveInitialApplicationLocation({
-      location: { pathname: "/", search: "", hash: "" },
-      basePath: "",
-      sessionKey: "main",
-      gateway,
-      agentsList: () => null,
-      signal: new AbortController().signal,
-    });
-    let settled = false;
-    void pending.then(() => {
-      settled = true;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    snapshot = {
-      phase: "connected",
-      client: {},
-      hello: {
-        snapshot: {
-          sessionDefaults: { defaultAgentId: "research", mainKey: "workspace" },
+  it.each([
+    { persistedSessionKey: "main", connectedSessionKey: "main" },
+    { persistedSessionKey: "", connectedSessionKey: "agent:research:workspace" },
+  ])(
+    "waits for gateway defaults before normalizing '$persistedSessionKey'",
+    async ({ persistedSessionKey, connectedSessionKey }) => {
+      type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
+      let listener: GatewayListener | null = null;
+      let snapshot = {
+        phase: "connecting",
+        client: null,
+        hello: null,
+      } as unknown as ApplicationContext<RouteId>["gateway"]["snapshot"];
+      const gateway = {
+        get snapshot() {
+          return snapshot;
         },
-      },
-    } as unknown as ApplicationContext<RouteId>["gateway"]["snapshot"];
-    const connectedListener = listener as GatewayListener | null;
-    if (!connectedListener) {
-      throw new Error("expected gateway readiness subscription");
-    }
-    connectedListener(snapshot);
-
-    await expect(pending).resolves.toEqual({ pathname: "/chat/research", search: "", hash: "" });
-  });
-
-  it("does not wait for gateway defaults on an explicit startup route", async () => {
-    const subscribe = vi.fn(() => () => undefined);
-    const location = { pathname: "/settings/appearance", search: "", hash: "" };
-
-    await expect(
-      resolveInitialApplicationLocation({
-        location,
+        subscribe: (next: GatewayListener) => {
+          listener = next;
+          return () => undefined;
+        },
+      };
+      const pending = resolveInitialApplicationLocation({
+        location: { pathname: "/", search: "", hash: "" },
         basePath: "",
-        sessionKey: "main",
-        gateway: {
-          snapshot: { phase: "connecting", client: null, hello: null },
-          subscribe,
-        } as unknown as ApplicationContext<RouteId>["gateway"],
+        sessionKey: persistedSessionKey,
+        gateway,
         agentsList: () => null,
         signal: new AbortController().signal,
-      }),
-    ).resolves.toBe(location);
-    expect(subscribe).not.toHaveBeenCalled();
-  });
+      });
+      let settled = false;
+      void pending.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      snapshot = {
+        phase: "connected",
+        client: {},
+        sessionKey: connectedSessionKey,
+        hello: {
+          snapshot: {
+            sessionDefaults: { defaultAgentId: "research", mainKey: "workspace" },
+          },
+        },
+      } as unknown as ApplicationContext<RouteId>["gateway"]["snapshot"];
+      const connectedListener = listener as GatewayListener | null;
+      if (!connectedListener) {
+        throw new Error("expected gateway readiness subscription");
+      }
+      connectedListener(snapshot);
+
+      await expect(pending).resolves.toEqual({
+        pathname: "/chat/research",
+        search: "",
+        hash: "",
+      });
+    },
+  );
+
+  it.each(["main", ""])(
+    "does not wait for gateway defaults on an explicit startup route with '%s'",
+    async (sessionKey) => {
+      const subscribe = vi.fn(() => () => undefined);
+      const location = { pathname: "/settings/appearance", search: "", hash: "" };
+
+      await expect(
+        resolveInitialApplicationLocation({
+          location,
+          basePath: "",
+          sessionKey,
+          gateway: {
+            snapshot: { phase: "connecting", client: null, hello: null },
+            subscribe,
+          } as unknown as ApplicationContext<RouteId>["gateway"],
+          agentsList: () => null,
+          signal: new AbortController().signal,
+        }),
+      ).resolves.toBe(location);
+      expect(subscribe).not.toHaveBeenCalled();
+    },
+  );
 
   it("canonicalizes a scoped persisted main key when defaults are already known", async () => {
     const subscribe = vi.fn(() => () => undefined);
@@ -400,9 +460,10 @@ describe("normalizeInitialApplicationLocation", () => {
   it.each([
     {
       name: "bootstrap token on the deferred default landing",
-      initialUrl: "/?keep=yes#bootstrapToken=boot-default&tab=keep",
+      initialUrl: "/?keep=yes#bootstrapToken=boot-default&bootstrapProfile=owner&tab=keep",
       expectedUrl: "/?keep=yes#tab=keep",
       expectedBootstrapToken: "boot-default",
+      expectedBootstrapProfile: "owner",
       expectedToken: "",
       expectedDocumentMode: null,
     },
@@ -411,6 +472,7 @@ describe("normalizeInitialApplicationLocation", () => {
       initialUrl: "/operator/settings/appearance?keep=yes#tab=keep&bootstrapToken=boot-route",
       expectedUrl: "/operator/settings/appearance?keep=yes#tab=keep",
       expectedBootstrapToken: "boot-route",
+      expectedBootstrapProfile: undefined,
       expectedToken: "",
       expectedDocumentMode: null,
     },
@@ -419,6 +481,7 @@ describe("normalizeInitialApplicationLocation", () => {
       initialUrl: "/approve/exec%3A1?keep=yes#bootstrapToken=boot-approval&tab=keep",
       expectedUrl: "/approve/exec%3A1?keep=yes#tab=keep",
       expectedBootstrapToken: "boot-approval",
+      expectedBootstrapProfile: undefined,
       expectedToken: "",
       expectedDocumentMode: { kind: "approval", approvalId: "exec:1" },
     },
@@ -427,6 +490,7 @@ describe("normalizeInitialApplicationLocation", () => {
       initialUrl: "/settings/appearance?keep=yes&password=discard#token=shared-fragment&tab=keep",
       expectedUrl: "/settings/appearance?keep=yes#tab=keep",
       expectedBootstrapToken: "",
+      expectedBootstrapProfile: undefined,
       expectedToken: "shared-fragment",
       expectedDocumentMode: null,
     },
@@ -435,6 +499,7 @@ describe("normalizeInitialApplicationLocation", () => {
       initialUrl: "/settings/appearance?keep=yes&token=shared-query#password=discard&tab=keep",
       expectedUrl: "/settings/appearance?keep=yes#tab=keep",
       expectedBootstrapToken: "",
+      expectedBootstrapProfile: undefined,
       expectedToken: "shared-query",
       expectedDocumentMode: null,
     },
@@ -461,6 +526,9 @@ describe("normalizeInitialApplicationLocation", () => {
       expect(replaceState).toHaveBeenCalledExactlyOnceWith({}, "", testCase.expectedUrl);
       expect(runtime.context.gateway.connection.bootstrapToken).toBe(
         testCase.expectedBootstrapToken,
+      );
+      expect(runtime.context.gateway.connection.bootstrapProfile).toBe(
+        testCase.expectedBootstrapProfile,
       );
       expect(runtime.context.gateway.connection.token).toBe(testCase.expectedToken);
       expect(runtime.documentMode).toEqual(testCase.expectedDocumentMode);
@@ -490,6 +558,25 @@ describe("normalizeInitialApplicationLocation", () => {
     } finally {
       replaceState.mockRestore();
       runtime?.stop();
+      window.history.replaceState({}, "", previousUrl);
+      saveSettings(previousSettings);
+    }
+  });
+
+  it("keeps the terminal document route outside the application router", async () => {
+    const previousSettings = loadSettings();
+    const previousUrl = window.location.href;
+    window.history.replaceState({}, "", "/terminal");
+    const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
+    const routerStart = vi.spyOn(runtime.router, "start");
+
+    try {
+      await runtime.start();
+
+      expect(window.location.pathname).toBe("/terminal");
+      expect(routerStart).not.toHaveBeenCalled();
+    } finally {
+      runtime.stop();
       window.history.replaceState({}, "", previousUrl);
       saveSettings(previousSettings);
     }
@@ -661,6 +748,30 @@ describe("normalizeInitialApplicationLocation", () => {
       routerStarted.resolve();
       await start;
       expect(routerStop).toHaveBeenCalledTimes(2);
+    } finally {
+      runtime.stop();
+      saveSettings(previousSettings);
+      window.history.replaceState({}, "", previousUrl);
+    }
+  });
+
+  it("resolves runtime startup when the bare default route is not found", async () => {
+    const previousSettings = loadSettings();
+    const previousUrl = window.location.href;
+    saveSettings({
+      ...previousSettings,
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+    });
+    window.history.replaceState({}, "", "/");
+    const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
+    const routerStart = vi
+      .spyOn(runtime.router, "start")
+      .mockRejectedValue({ type: "notFound", data: { routeId: "chat" } });
+
+    try {
+      await expect(runtime.start()).resolves.toBeUndefined();
+      expect(routerStart).toHaveBeenCalledOnce();
     } finally {
       runtime.stop();
       saveSettings(previousSettings);

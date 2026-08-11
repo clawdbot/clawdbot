@@ -24,6 +24,36 @@
       "translated": "Ikuti Android · $systemLanguageTag"
     },
     {
+      "id": "native.android.0eb613765dffd7d5",
+      "source": "Chat failed",
+      "translated": "Chat gagal"
+    },
+    {
+      "id": "native.android.49b641d61b32710e",
+      "source": "Reply to OpenClaw…",
+      "translated": "Balas ke OpenClaw…"
+    },
+    {
+      "id": "native.android.c17863b62b70d822",
+      "source": "Reply",
+      "translated": "Balas"
+    },
+    {
+      "id": "native.android.8700c1dee5524079",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.2028e1559e760da1",
+      "source": "You",
+      "translated": "Anda"
+    },
+    {
+      "id": "native.android.38a6e56b90d42b9f",
+      "source": "Chat",
+      "translated": "Chat"
+    },
+    {
       "id": "native.android.2932b1c5134668df",
       "source": "Every ${days}d",
       "translated": "Setiap ${days} hari"
@@ -1259,11 +1289,6 @@
       "translated": "Koneksi Gateway berubah. Mulai ulang OpenClaw untuk menyambung kembali."
     },
     {
-      "id": "native.android.356609f717b92350",
-      "source": "$preview…",
-      "translated": "$preview…"
-    },
-    {
       "id": "native.android.cc8d2e1456629a59",
       "source": "Home canvas",
       "translated": "Kanvas beranda"
@@ -1564,6 +1589,11 @@
       "translated": "Utas OpenClaw"
     },
     {
+      "id": "native.android.5f06e4d6a59f7a59",
+      "source": "now",
+      "translated": "sekarang"
+    },
+    {
       "id": "native.android.d83f82a1e4a5ed99",
       "source": "Open thread",
       "translated": "Buka utas"
@@ -1592,26 +1622,6 @@
       "id": "native.android.8a1c5365c0538908",
       "source": "Main thread",
       "translated": "Utas utama"
-    },
-    {
-      "id": "native.android.5f06e4d6a59f7a59",
-      "source": "now",
-      "translated": "sekarang"
-    },
-    {
-      "id": "native.android.7e5d256de226152e",
-      "source": "${minutes}m",
-      "translated": "${minutes}m"
-    },
-    {
-      "id": "native.android.c584c22ed959206f",
-      "source": "${hours}h",
-      "translated": "${hours}j"
-    },
-    {
-      "id": "native.android.28416620013afa41",
-      "source": "${days}d",
-      "translated": "${days}h"
     },
     {
       "id": "native.android.936714892af1b0f9",
@@ -6369,26 +6379,6 @@
       "translated": "Buka ${row.title}"
     },
     {
-      "id": "native.android.56bd0ad4eb7d0f2e",
-      "source": "now",
-      "translated": "sekarang"
-    },
-    {
-      "id": "native.android.46363d9a775b4f46",
-      "source": "${minutes}m",
-      "translated": "${minutes} mnt"
-    },
-    {
-      "id": "native.android.4d91d1f25b481ad7",
-      "source": "${hours}h",
-      "translated": "${hours}j"
-    },
-    {
-      "id": "native.android.0c07416f9575a1e1",
-      "source": "${days}d",
-      "translated": "${days}h"
-    },
-    {
       "id": "native.android.28a1a1acc5a0959f",
       "source": "Main thread",
       "translated": "Utas utama"
@@ -7884,21 +7874,6 @@
       "translated": "Tidak ada aplikasi yang dapat membagikan pesan ini"
     },
     {
-      "id": "native.android.9ab1dd78954fc3c2",
-      "source": "Preparing audio…",
-      "translated": "Menyiapkan audio…"
-    },
-    {
-      "id": "native.android.0ee4d153c4e592d3",
-      "source": "Speaking…",
-      "translated": "Berbicara…"
-    },
-    {
-      "id": "native.android.010f1a1fdd158ba0",
-      "source": "Image",
-      "translated": "Gambar"
-    },
-    {
       "id": "native.android.71ef7f8dbe2b0dbe",
       "source": "Preview · $domain",
       "translated": "Pratinjau · $domain"
@@ -7919,6 +7894,16 @@
       "translated": "Pratinjau tidak tersedia"
     },
     {
+      "id": "native.android.5d4f893886312f82",
+      "source": "assistant",
+      "translated": "asisten"
+    },
+    {
+      "id": "native.android.82e9fe45e93909b6",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
       "id": "native.android.66aef4de5e07438f",
       "source": "Working",
       "translated": "Sedang bekerja"
@@ -7927,26 +7912,6 @@
       "id": "native.android.6e7be1773c946de3",
       "source": "· $phrase",
       "translated": "· $phrase"
-    },
-    {
-      "id": "native.android.ff4a092a02bd5d17",
-      "source": "Tools",
-      "translated": "Alat"
-    },
-    {
-      "id": "native.android.3788802f6c138c8b",
-      "source": "Running tools...",
-      "translated": "Menjalankan alat..."
-    },
-    {
-      "id": "native.android.5f93173e06eda5c0",
-      "source": "${display.emoji} ${display.label}",
-      "translated": "${display.emoji} ${display.label}"
-    },
-    {
-      "id": "native.android.29021f925bf290c7",
-      "source": "... +${toolCalls.size - 6} more",
-      "translated": "... +${toolCalls.size - 6} lagi"
     },
     {
       "id": "native.android.4367fbf22b9ac649",
@@ -7984,6 +7949,11 @@
       "translated": "pengguna"
     },
     {
+      "id": "native.android.b3ff30d4e0b3ce58",
+      "source": "You",
+      "translated": "Anda"
+    },
+    {
       "id": "native.android.10d8391dea9f334b",
       "source": "📎 ${attachment.fileName}",
       "translated": "📎 ${attachment.fileName}"
@@ -7997,31 +7967,6 @@
       "id": "native.android.b728b15914267f57",
       "source": "Delete",
       "translated": "Hapus"
-    },
-    {
-      "id": "native.android.5d4f893886312f82",
-      "source": "assistant",
-      "translated": "asisten"
-    },
-    {
-      "id": "native.android.dfbd755eb43b4d26",
-      "source": "OpenClaw · Live",
-      "translated": "OpenClaw · Langsung"
-    },
-    {
-      "id": "native.android.b3ff30d4e0b3ce58",
-      "source": "You",
-      "translated": "Anda"
-    },
-    {
-      "id": "native.android.d29098025118ce4b",
-      "source": "System",
-      "translated": "Sistem"
-    },
-    {
-      "id": "native.android.82e9fe45e93909b6",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
     },
     {
       "id": "native.android.02b4598277aca860",
@@ -8737,11 +8682,6 @@
       "id": "native.android.fb327cd3030aae44",
       "source": "Finish voice note",
       "translated": "Selesaikan catatan suara"
-    },
-    {
-      "id": "native.android.e9d238668cb46e71",
-      "source": "Voice note",
-      "translated": "Catatan suara"
     },
     {
       "id": "native.android.64459adde73e63f2",
@@ -16414,46 +16354,6 @@
       "translated": "\\(urlText.prefix(500))…"
     },
     {
-      "id": "native.apple.9dcd64ab340a6c15",
-      "source": "Allow access",
-      "translated": "Izinkan akses"
-    },
-    {
-      "id": "native.apple.933a2ac28d1d2aec",
-      "source": "Choose what your agent can use on this iPhone. Nothing is on until you allow it.",
-      "translated": "Pilih apa yang dapat digunakan agen Anda di iPhone ini. Tidak ada yang aktif sampai Anda mengizinkannya."
-    },
-    {
-      "id": "native.apple.47114a39f7a71c3b",
-      "source": "You can change any of these later in Settings.",
-      "translated": "Anda dapat mengubah semua ini nanti di Pengaturan."
-    },
-    {
-      "id": "native.apple.eabf54e2b640a4a1",
-      "source": "Continue",
-      "translated": "Lanjutkan"
-    },
-    {
-      "id": "native.apple.5f425282ece878eb",
-      "source": "Limited",
-      "translated": "Terbatas"
-    },
-    {
-      "id": "native.apple.c5db9e6eae115f7a",
-      "source": "Allow",
-      "translated": "Izinkan"
-    },
-    {
-      "id": "native.apple.f591e16105268e99",
-      "source": "Open Settings",
-      "translated": "Buka Pengaturan"
-    },
-    {
-      "id": "native.apple.12ed416835c36555",
-      "source": "Manage",
-      "translated": "Kelola"
-    },
-    {
       "id": "native.apple.11687a3d87afd0d7",
       "source": "Home Network",
       "translated": "Jaringan Rumah"
@@ -16934,21 +16834,6 @@
       "translated": "Dinonaktifkan di Pengaturan"
     },
     {
-      "id": "native.apple.96d65a5563690719",
-      "source": "Notifications",
-      "translated": "Notifikasi"
-    },
-    {
-      "id": "native.apple.d290a46515add091",
-      "source": "Camera",
-      "translated": "Kamera"
-    },
-    {
-      "id": "native.apple.0eeedbc8aaafcd2c",
-      "source": "Microphone",
-      "translated": "Mikrofon"
-    },
-    {
       "id": "native.apple.14fadad23dd36e44",
       "source": "Photos",
       "translated": "Foto"
@@ -16967,51 +16852,6 @@
       "id": "native.apple.9ed5c19cf1e84490",
       "source": "Reminders",
       "translated": "Pengingat"
-    },
-    {
-      "id": "native.apple.866b9df8afcadf07",
-      "source": "Location",
-      "translated": "Lokasi"
-    },
-    {
-      "id": "native.apple.f205ac6778705a7d",
-      "source": "Pairing approvals and replies from your agent.",
-      "translated": "Persetujuan pemasangan dan balasan dari agen Anda."
-    },
-    {
-      "id": "native.apple.061a17077ee3be94",
-      "source": "Scan setup codes and take photos on request.",
-      "translated": "Pindai kode penyiapan dan ambil foto sesuai permintaan."
-    },
-    {
-      "id": "native.apple.c735ac6b282765f9",
-      "source": "Talk with your agent using voice.",
-      "translated": "Bicara dengan agen Anda menggunakan suara."
-    },
-    {
-      "id": "native.apple.ebe8aadcf512ecdb",
-      "source": "Share recent photos when you ask.",
-      "translated": "Bagikan foto terbaru saat Anda memintanya."
-    },
-    {
-      "id": "native.apple.4c4bc12c0787383c",
-      "source": "Look up and add people you mention.",
-      "translated": "Cari dan tambahkan orang yang Anda sebutkan."
-    },
-    {
-      "id": "native.apple.5a4006fbb9b23db1",
-      "source": "Check and add calendar events.",
-      "translated": "Periksa dan tambahkan acara kalender."
-    },
-    {
-      "id": "native.apple.2b2a4f1aab6a12ec",
-      "source": "List, add, and complete reminders.",
-      "translated": "Lihat, tambahkan, dan selesaikan pengingat."
-    },
-    {
-      "id": "native.apple.3854ae1f0606bafe",
-      "source": "Answer location and nearby questions.",
-      "translated": "Jawab pertanyaan tentang lokasi dan tempat di sekitar."
     },
     {
       "id": "native.apple.e5f6435b9cb5a2d8",
@@ -17394,9 +17234,9 @@
       "translated": "Hanya Tambah"
     },
     {
-      "id": "native.apple.0b10201d7e452dc4",
-      "source": "Allow",
-      "translated": "Izinkan"
+      "id": "native.apple.856d1960275796ef",
+      "source": "Continue",
+      "translated": "Lanjutkan"
     },
     {
       "id": "native.apple.3cb9ed2ae352f95c",
@@ -18809,6 +18649,11 @@
       "translated": "Periksa Pembaruan…"
     },
     {
+      "id": "native.apple.2318ba3118a022eb",
+      "source": "App updates are unavailable while a profile is active.",
+      "translated": "Pembaruan aplikasi tidak tersedia saat profil aktif."
+    },
+    {
       "id": "native.apple.ddec1d4e5e5b43cb",
       "source": "Updates unavailable in this build.",
       "translated": "Pembaruan tidak tersedia dalam build ini."
@@ -20004,11 +19849,6 @@
       "translated": "OpenClaw Belum Dikonfigurasi"
     },
     {
-      "id": "native.apple.293bf9a6e721036d",
-      "source": "Remote OpenClaw Active",
-      "translated": "OpenClaw Jarak Jauh Aktif"
-    },
-    {
       "id": "native.apple.a7b0d4e6bf5796c0",
       "source": "OpenClaw Active",
       "translated": "OpenClaw Aktif"
@@ -20019,14 +19859,39 @@
       "translated": "OpenClaw Belum Dikonfigurasi — \\(primaryName)"
     },
     {
-      "id": "native.apple.adee4bfd71731d2d",
-      "source": "Remote OpenClaw Active — \\(primaryName)",
-      "translated": "OpenClaw Jarak Jauh Aktif — \\(primaryName)"
-    },
-    {
       "id": "native.apple.2be6d3dd1a0d2699",
       "source": "OpenClaw Active — \\(primaryName)",
       "translated": "OpenClaw Aktif — \\(primaryName)"
+    },
+    {
+      "id": "native.apple.293bf9a6e721036d",
+      "source": "Remote OpenClaw Active",
+      "translated": "OpenClaw Jarak Jauh Aktif"
+    },
+    {
+      "id": "native.apple.6d4e4047b0278805",
+      "source": "Remote OpenClaw Active — \\(name)",
+      "translated": "Remote OpenClaw Aktif — \\(name)"
+    },
+    {
+      "id": "native.apple.9ca38f6a779263eb",
+      "source": "Remote OpenClaw Connecting",
+      "translated": "Remote OpenClaw Menghubungkan"
+    },
+    {
+      "id": "native.apple.9a0da573f4e61f2f",
+      "source": "Remote OpenClaw Connecting — \\(name)",
+      "translated": "Remote OpenClaw Menghubungkan — \\(name)"
+    },
+    {
+      "id": "native.apple.6f9a4c4e67ef0bd8",
+      "source": "Remote OpenClaw Needs Attention",
+      "translated": "Remote OpenClaw Perlu Perhatian"
+    },
+    {
+      "id": "native.apple.4953d4c2dba0f324",
+      "source": "Remote OpenClaw Needs Attention — \\(name)",
+      "translated": "Remote OpenClaw Perlu Perhatian — \\(name)"
     },
     {
       "id": "native.apple.179c8c2ce733969f",
@@ -20379,6 +20244,11 @@
       "translated": "Catatan: macOS mungkin perlu memulai ulang OpenClaw setelah mengaktifkan Accessibility atau Screen Recording."
     },
     {
+      "id": "native.apple.974d1478dd99ffb0",
+      "source": "Login-agent restart is unavailable under a profile.",
+      "translated": "Restart login-agent tidak tersedia di bawah profil."
+    },
+    {
       "id": "native.apple.e52d463773aef1e1",
       "source": "Restart OpenClaw",
       "translated": "Mulai ulang OpenClaw"
@@ -20492,11 +20362,6 @@
       "id": "native.apple.e7d1ee5662c1d646",
       "source": "Degraded",
       "translated": "Terdegradasi"
-    },
-    {
-      "id": "native.apple.0397fa643df26663",
-      "source": "Test",
-      "translated": "Uji"
     },
     {
       "id": "native.apple.a8af393b84d63ab8",
@@ -20647,6 +20512,81 @@
       "id": "native.apple.eab4dbc3ca4a9352",
       "source": "Keep my edits",
       "translated": "Pertahankan editan saya"
+    },
+    {
+      "id": "native.apple.1f2d7f5633608ce9",
+      "source": "Connected",
+      "translated": "Terhubung"
+    },
+    {
+      "id": "native.apple.575daf240b3e88c2",
+      "source": "Connected to your remote Gateway.",
+      "translated": "Terhubung ke Gateway jarak jauh Anda."
+    },
+    {
+      "id": "native.apple.24bfbc7bdb1bf0a2",
+      "source": "Connecting…",
+      "translated": "Menghubungkan…"
+    },
+    {
+      "id": "native.apple.ace257e298e5bf46",
+      "source": "OpenClaw connecting",
+      "translated": "OpenClaw menghubungkan"
+    },
+    {
+      "id": "native.apple.083ea354ad2d8e22",
+      "source": "Connecting to your remote Gateway…",
+      "translated": "Menghubungkan ke Gateway jarak jauh Anda…"
+    },
+    {
+      "id": "native.apple.0129bd7fc497f461",
+      "source": "Disconnected",
+      "translated": "Terputus"
+    },
+    {
+      "id": "native.apple.3117686baaeec464",
+      "source": "Disconnected from your remote Gateway. Open Connection settings to fix it.",
+      "translated": "Terputus dari Gateway jarak jauh Anda. Buka pengaturan Koneksi untuk memperbaikinya."
+    },
+    {
+      "id": "native.apple.c5f245b99f434c79",
+      "source": "Gateway connection failed.",
+      "translated": "Koneksi Gateway gagal."
+    },
+    {
+      "id": "native.apple.412b40dec8b94e09",
+      "source": "Open Connection settings to fix it.",
+      "translated": "Buka pengaturan Koneksi untuk memperbaikinya."
+    },
+    {
+      "id": "native.apple.8a9259535246e7cf",
+      "source": "OpenClaw needs attention",
+      "translated": "OpenClaw perlu perhatian"
+    },
+    {
+      "id": "native.apple.0bec3829fd3ff778",
+      "source": "OpenClaw paused",
+      "translated": "OpenClaw dijeda"
+    },
+    {
+      "id": "native.apple.af4a1c5f1eca9c8a",
+      "source": "Gateway work is paused; incoming messages will wait.",
+      "translated": "Pekerjaan Gateway dijeda; pesan masuk akan menunggu."
+    },
+    {
+      "id": "native.apple.682abb7a64cb3a51",
+      "source": "Processing messages through the local Gateway on this Mac.",
+      "translated": "Memproses pesan melalui Gateway lokal di Mac ini."
+    },
+    {
+      "id": "native.apple.18c46b3643479d39",
+      "source": "OpenClaw active",
+      "translated": "OpenClaw aktif"
+    },
+    {
+      "id": "native.apple.448e954d678c2fff",
+      "source": "Ready to run after you choose a Gateway connection.",
+      "translated": "Siap dijalankan setelah Anda memilih koneksi Gateway."
     },
     {
       "id": "native.apple.db0fa6b60bd859f8",
@@ -20844,16 +20784,6 @@
       "translated": "Luncurkan saat login"
     },
     {
-      "id": "native.apple.405e74c96498b7c0",
-      "source": "Automatically start OpenClaw after you sign in.",
-      "translated": "Mulai OpenClaw secara otomatis setelah Anda masuk."
-    },
-    {
-      "id": "native.apple.8b74758a60f78642",
-      "source": "Move OpenClaw to Applications before enabling launch at login.",
-      "translated": "Pindahkan OpenClaw ke Applications sebelum mengaktifkan luncurkan saat login."
-    },
-    {
       "id": "native.apple.927819c087ca3520",
       "source": "Show Dock icon",
       "translated": "Tampilkan ikon Dock"
@@ -20994,29 +20924,14 @@
       "translated": "Keluar"
     },
     {
-      "id": "native.apple.64e197a4a8b384ef",
-      "source": "OpenClaw paused",
-      "translated": "OpenClaw dijeda"
+      "id": "native.apple.2dbff050b62629f4",
+      "source": "Open Connection Settings",
+      "translated": "Buka Pengaturan Koneksi"
     },
     {
       "id": "native.apple.7fe6df69d8050832",
       "source": "OpenClaw active",
       "translated": "OpenClaw aktif"
-    },
-    {
-      "id": "native.apple.2f4258fa73e04344",
-      "source": "Processing messages through the local Gateway on this Mac.",
-      "translated": "Memproses pesan melalui Gateway lokal di Mac ini."
-    },
-    {
-      "id": "native.apple.82bbee94fd6c9afd",
-      "source": "Connected to a remote Gateway configuration.",
-      "translated": "Terhubung ke konfigurasi Gateway jarak jauh."
-    },
-    {
-      "id": "native.apple.57c062682e2a1b08",
-      "source": "Ready to run after you choose a Gateway connection.",
-      "translated": "Siap dijalankan setelah Anda memilih koneksi Gateway."
     },
     {
       "id": "native.apple.eac861e2d1da4745",
@@ -21309,6 +21224,21 @@
       "translated": "Buka log"
     },
     {
+      "id": "native.apple.39f0173209fd7e74",
+      "source": "Launch at login is unavailable while an app profile is active.",
+      "translated": "Luncurkan saat login tidak tersedia saat profil aplikasi aktif."
+    },
+    {
+      "id": "native.apple.405e74c96498b7c0",
+      "source": "Automatically start OpenClaw after you sign in.",
+      "translated": "Mulai OpenClaw secara otomatis setelah Anda masuk."
+    },
+    {
+      "id": "native.apple.8b74758a60f78642",
+      "source": "Move OpenClaw to Applications before enabling launch at login.",
+      "translated": "Pindahkan OpenClaw ke Applications sebelum mengaktifkan luncurkan saat login."
+    },
+    {
       "id": "native.apple.4d96b20de25a9ddf",
       "source": "probe degraded",
       "translated": "probe menurun"
@@ -21422,21 +21352,6 @@
       "id": "native.apple.12d83e5f01c98fc0",
       "source": "\\(status.label) presence",
       "translated": "kehadiran \\(status.label)"
-    },
-    {
-      "id": "native.apple.ee499f632a5076c5",
-      "source": "Android",
-      "translated": "Android"
-    },
-    {
-      "id": "native.apple.57ca2baac54a05fc",
-      "source": "Sparkles",
-      "translated": "Kilauan"
-    },
-    {
-      "id": "native.apple.c9a63d0f5247185d",
-      "source": "Plain",
-      "translated": "Polos"
     },
     {
       "id": "native.apple.3f4378c2de189ec9",
@@ -21894,6 +21809,11 @@
       "translated": "\\(self.label):"
     },
     {
+      "id": "native.apple.5ca13315339f6c15",
+      "source": "Persistent Mac node service unavailable under app profile; runtime node remains available.",
+      "translated": "Layanan node Mac persisten tidak tersedia di bawah profil aplikasi; node runtime tetap tersedia."
+    },
+    {
       "id": "native.apple.800d9fd07f5dde85",
       "source": "Finish",
       "translated": "Selesai"
@@ -21982,31 +21902,6 @@
       "id": "native.apple.51a8291ef11e844d",
       "source": "The details are listed on each option above. You can fix the login and retry, or connect with an API key or token below.",
       "translated": "Detailnya tercantum pada setiap opsi di atas. Anda dapat memperbaiki login dan mencoba lagi, atau terhubung dengan kunci API atau token di bawah."
-    },
-    {
-      "id": "native.apple.a0431b20c0650139",
-      "source": "Need help? Chat with OpenClaw",
-      "translated": "Butuh bantuan? Chat dengan OpenClaw"
-    },
-    {
-      "id": "native.apple.6526ced182e1fe50",
-      "source": "Your AI is ready",
-      "translated": "AI Anda siap"
-    },
-    {
-      "id": "native.apple.5d8998398be53d6f",
-      "source": "Setup details",
-      "translated": "Detail penyiapan"
-    },
-    {
-      "id": "native.apple.1967fcaeb9e74257",
-      "source": "Copy setup details",
-      "translated": "Salin detail penyiapan"
-    },
-    {
-      "id": "native.apple.c90ec3f0f60d21bc",
-      "source": "Choose a different AI…",
-      "translated": "Pilih AI lain…"
     },
     {
       "id": "native.apple.e0458fcb8c0536ea",
@@ -22207,16 +22102,6 @@
       "id": "native.apple.953d477f3f3f2efa",
       "source": "That key didn’t work",
       "translated": "Kunci itu tidak berfungsi"
-    },
-    {
-      "id": "native.apple.e874bd0fad63f012",
-      "source": "OpenClaw — setup helper",
-      "translated": "OpenClaw — asisten penyiapan"
-    },
-    {
-      "id": "native.apple.bea852c8622c8214",
-      "source": "Done",
-      "translated": "Selesai"
     },
     {
       "id": "native.apple.f91347240d07008f",
@@ -22559,16 +22444,6 @@
       "translated": " · ssh \\(parsed.port)"
     },
     {
-      "id": "native.apple.4bad86566d023a64",
-      "source": "Grant permissions",
-      "translated": "Berikan izin"
-    },
-    {
-      "id": "native.apple.ce0d1241d7417406",
-      "source": "These macOS permissions let OpenClaw automate apps and capture context on this Mac. Status updates automatically.",
-      "translated": "Izin macOS ini memungkinkan OpenClaw mengotomatiskan aplikasi dan menangkap konteks di Mac ini. Status diperbarui secara otomatis."
-    },
-    {
       "id": "native.apple.42af85cdf91d0264",
       "source": "Getting things ready",
       "translated": "Menyiapkan semuanya"
@@ -22619,6 +22494,11 @@
       "translated": "Gateway tidak dimulai"
     },
     {
+      "id": "native.apple.f0b128f895130fef",
+      "source": "OpenClaw installation failed",
+      "translated": "Instalasi OpenClaw gagal"
+    },
+    {
       "id": "native.apple.f36edc58238aa8ce",
       "source": "Try again",
       "translated": "Coba lagi"
@@ -22629,11 +22509,6 @@
       "translated": "Anda sudah siap!"
     },
     {
-      "id": "native.apple.9f73f753266a9fa2",
-      "source": "Finish opens the chat — say hi to your new agent.",
-      "translated": "Selesai akan membuka obrolan — sapa agen baru Anda."
-    },
-    {
       "id": "native.apple.678dee9dedd72ce4",
       "source": "Configure later",
       "translated": "Konfigurasikan nanti"
@@ -22642,16 +22517,6 @@
       "id": "native.apple.f87bc67e676d1289",
       "source": "Pick Local or Remote in Settings → General whenever you’re ready.",
       "translated": "Pilih Local atau Remote di Settings → General kapan pun Anda siap."
-    },
-    {
-      "id": "native.apple.2eb061cd9d5f19fe",
-      "source": "Remote gateway checklist",
-      "translated": "Daftar periksa gateway jarak jauh"
-    },
-    {
-      "id": "native.apple.952e85bfb2d4b4f5",
-      "source": "On your gateway host: install/update the `openclaw` package and make sure credentials exist\n(typically `~/.openclaw/credentials/oauth.json`). Then connect again if needed.",
-      "translated": "Di host gateway Anda: instal/perbarui paket `openclaw` dan pastikan kredensial tersedia\n(biasanya `~/.openclaw/credentials/oauth.json`). Lalu hubungkan lagi jika diperlukan."
     },
     {
       "id": "native.apple.4e5ccb411db3e80f",
@@ -22717,36 +22582,6 @@
       "id": "native.apple.e54dfc2913c56f6f",
       "source": "Launch at login",
       "translated": "Luncurkan saat login"
-    },
-    {
-      "id": "native.apple.040f2884f928f376",
-      "source": "Skills included",
-      "translated": "Skills disertakan"
-    },
-    {
-      "id": "native.apple.e38ea89bafb6b75d",
-      "source": "Refresh",
-      "translated": "Segarkan"
-    },
-    {
-      "id": "native.apple.38fc7e2b80c4e0fa",
-      "source": "Couldn’t load skills from the Gateway.",
-      "translated": "Tidak dapat memuat skills dari Gateway."
-    },
-    {
-      "id": "native.apple.3b06694a81edc126",
-      "source": "Make sure the Gateway is running and connected, then hit Refresh (or open Settings → Skills).",
-      "translated": "Pastikan Gateway berjalan dan terhubung, lalu tekan Segarkan (atau buka Settings → Skills)."
-    },
-    {
-      "id": "native.apple.b6de2a51e5fb8397",
-      "source": "Details: \\(error)",
-      "translated": "Detail: \\(error)"
-    },
-    {
-      "id": "native.apple.b82621bc28d4c6e3",
-      "source": "No skills reported yet.",
-      "translated": "Belum ada skills yang dilaporkan."
     },
     {
       "id": "native.apple.048e9cc88fb7af55",
@@ -24004,6 +23839,11 @@
       "translated": "Perlu penyiapan"
     },
     {
+      "id": "native.apple.5bea2c67b8d4ccf9",
+      "source": "Bundled",
+      "translated": "Dibundel"
+    },
+    {
       "id": "native.apple.1b2cab26853b1074",
       "source": "Managed",
       "translated": "Dikelola"
@@ -24107,11 +23947,6 @@
       "id": "native.apple.6b59063df92d2991",
       "source": "Skill enabled",
       "translated": "Skill diaktifkan"
-    },
-    {
-      "id": "native.apple.5bea2c67b8d4ccf9",
-      "source": "Bundled",
-      "translated": "Dibundel"
     },
     {
       "id": "native.apple.4b27b3be5f3f1f66",

@@ -26,6 +26,7 @@ import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.
 import type { AgentRunTimeoutPhase } from "../../run-timeout-attribution.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import type { SandboxContext } from "../../sandbox/types.js";
 import type { AuthStorage, ModelRegistry } from "../../sessions/index.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
@@ -45,6 +46,8 @@ type EmbeddedRunAttemptBase = Omit<
   | "lane"
   | "enqueue"
   | "sessionFile"
+  | "preparedRunAdmission"
+  | "admittedRunContext"
 >;
 
 type EmbeddedRunContextWindowInfo = {
@@ -95,8 +98,15 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 };
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
+  admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
+  /** Host-resolved sandbox snapshot for plugin harness tool construction. */
+  sandbox?: SandboxContext | null;
+  /** Host-created authority available only after harness selection. */
+  hostCapabilities?: import("../../harness/host-capability-types.js").AgentHarnessHostCapabilities;
   /** Sticky operation identity used to suppress ordinary retry and hook policy. */
   operation?: EmbeddedRunAttemptOperation;
+  /** Core-prepared fact that explicit requester/config policy restricts plugin-native tools. */
+  pluginHarnessToolPolicyRestricted?: boolean;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   /** Active file-backed artifact target resolved by the run/session target seam. */
   sessionFile: string;
@@ -175,6 +185,8 @@ export type EmbeddedRunAttemptResult = {
   assistantTranscriptOwned?: boolean;
   /** Exact idempotency key for the runtime-owned final-assistant transcript row. */
   assistantTranscriptIdempotencyKey?: string;
+  /** Host-private terminal identity used to close the accepted transcript turn. */
+  contextEngineTerminalAnchor?: import("../../../config/sessions/transcript-entry-anchor.js").TranscriptEntryAnchor;
   preflightRecovery?:
     | {
         route: Exclude<PreemptiveCompactionRoute, "fits">;
@@ -269,6 +281,10 @@ export type EmbeddedRunAttemptResult = {
   }>;
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
   lastAssistant: AssistantMessage | undefined;
+  /**
+   * Omission preserves the legacy `lastAssistant` fallback; explicit `undefined`
+   * means this attempt produced no assistant response.
+   */
   currentAttemptAssistant?: AssistantMessage | undefined;
   /** Completed message_end snapshot owned by this model attempt. */
   currentAttemptCompletedAssistant?: AssistantMessage | undefined;
@@ -292,6 +308,8 @@ export type EmbeddedRunAttemptResult = {
   hasToolMediaBlockReply?: boolean;
   successfulCronAdds?: number;
   cloudCodeAssistFormatError: boolean;
+  /** Effective context window reported by the harness during this attempt. */
+  contextTokens?: number;
   attemptUsage?: NormalizedUsage;
   promptCache?: ContextEnginePromptCacheInfo;
   contextBudgetStatus?: SessionContextBudgetStatus;

@@ -10,13 +10,16 @@ const client = {
 };
 
 describe("GatewayBrowserDeviceAuthLifecycle", () => {
-  it("signs v3 device proof and reuses only an issued device token", async () => {
+  it("preserves stored scopes for the same token and uses hello scopes after rotation", async () => {
     const sign = vi.fn(async () => "signature");
     const store = vi.fn();
     const lifecycle = new GatewayBrowserDeviceAuthLifecycle({
       loadIdentity: async () => ({ deviceId: "device", publicKey: "public", sign }),
       tokenStore: {
-        load: () => ({ token: "test-token-placeholder", scopes: ["operator.read"] }),
+        load: () => ({
+          token: "test-token-placeholder",
+          scopes: ["operator.admin", "operator.write"],
+        }),
         store,
         clear: vi.fn(),
       },
@@ -39,21 +42,40 @@ describe("GatewayBrowserDeviceAuthLifecycle", () => {
       approvalRuntimeToken: undefined,
       agentRuntimeIdentityToken: undefined,
     });
-    expect(plan.scopes).toEqual(["operator.read"]);
+    expect(plan.scopes).toEqual(["operator.admin", "operator.write"]);
     expect(sign).toHaveBeenCalledWith(
-      "v3|device|openclaw-browser-copilot|ui|operator|operator.read|456|test-token-placeholder|nonce|chrome|extension",
+      "v3|device|openclaw-browser-copilot|ui|operator|operator.admin,operator.write|456|test-token-placeholder|nonce|chrome|extension",
     );
 
     await lifecycle.acceptHello(
-      { auth: { deviceToken: "test-auth-token", role: "operator", scopes: ["operator.write"] } },
+      {
+        auth: {
+          deviceToken: "test-token-placeholder",
+          role: "operator",
+          scopes: ["operator.read"],
+        },
+      },
       plan,
     );
     expect(store).toHaveBeenCalledWith({
       clientId: "openclaw-browser-copilot",
       deviceId: "device",
       role: "operator",
-      token: "test-auth-token",
-      scopes: ["operator.write"],
+      token: "test-token-placeholder",
+      scopes: ["operator.admin", "operator.write"],
+    });
+
+    store.mockClear();
+    await lifecycle.acceptHello(
+      { auth: { deviceToken: "rotated-token", role: "operator", scopes: ["operator.read"] } },
+      plan,
+    );
+    expect(store).toHaveBeenCalledWith({
+      clientId: "openclaw-browser-copilot",
+      deviceId: "device",
+      role: "operator",
+      token: "rotated-token",
+      scopes: ["operator.read"],
     });
   });
 

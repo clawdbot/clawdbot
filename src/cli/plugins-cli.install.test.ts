@@ -30,7 +30,7 @@ import {
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
   parseClawHubPluginSpec,
-  promptYesNo,
+  promptYesNoMock,
   reportClawHubPluginInstallTelemetry,
   recordHookInstall,
   recordPluginInstall,
@@ -38,9 +38,9 @@ import {
   replaceConfigFile,
   runPluginsCommand,
   runtimeErrors,
-  runtimeLogs,
+  pluginsCliRuntimeLogs,
   writeConfigFile,
-  writePersistedInstalledPluginIndexInstallRecords,
+  writePersistedInstalledPluginIndexInstallRecordsWithLease,
 } from "./plugins-cli-test-helpers.js";
 
 const CLI_STATE_ROOT = "/tmp/openclaw-state";
@@ -430,10 +430,10 @@ function hookNpmInstallCall(callIndex = 0): PluginInstallCall {
 }
 
 function persistedInstallRecords(callIndex = 0): Record<string, PersistedInstallRecord> {
-  return mockCallArg(writePersistedInstalledPluginIndexInstallRecords, callIndex) as Record<
-    string,
-    PersistedInstallRecord
-  >;
+  return mockCallArg(
+    writePersistedInstalledPluginIndexInstallRecordsWithLease,
+    callIndex,
+  ) as Record<string, PersistedInstallRecord>;
 }
 
 function persistedInstallRecord(pluginId: string, callIndex = 0): PersistedInstallRecord {
@@ -456,7 +456,7 @@ function recordHookInstallCall(callIndex = 0): PersistedInstallRecord {
 }
 
 function runtimeLogsContain(fragment: string): boolean {
-  return runtimeLogs.some((line) => line.includes(fragment));
+  return pluginsCliRuntimeLogs.some((line) => line.includes(fragment));
 }
 
 function setTty(value: boolean): void {
@@ -1273,8 +1273,23 @@ describe("plugins cli install", () => {
       plugins: [{ id: "alpha", kind: "provider" }],
       diagnostics: [],
     });
+    const alphaRoot = cliInstallPath("alpha");
     loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "alpha", kind: "memory" }],
+      plugins: [
+        {
+          id: "alpha",
+          kind: "memory",
+          origin: "global",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          rootDir: alphaRoot,
+          source: `${alphaRoot}/index.js`,
+          manifestPath: `${alphaRoot}/openclaw.plugin.json`,
+        },
+      ],
       diagnostics: [],
     });
     applyExclusiveSlotSelection.mockReturnValue({
@@ -1429,14 +1444,14 @@ describe("plugins cli install", () => {
       fs.rmSync(localPath, { recursive: true, force: true });
     }
 
-    expect(promptYesNo).not.toHaveBeenCalled();
+    expect(promptYesNoMock).not.toHaveBeenCalled();
     expect(runtimeErrors.join("\n")).not.toContain("outside ClawHub review");
     expect(installPluginFromPath).toHaveBeenCalledTimes(1);
   });
 
   it("prompts interactive users before non-ClawHub plugin installs and cancels on no", async () => {
     setTty(true);
-    promptYesNo.mockResolvedValueOnce(false);
+    promptYesNoMock.mockResolvedValueOnce(false);
     primeSuccessfulPluginPersistence("demo");
     installPluginFromNpmSpec.mockResolvedValue(createNpmPluginInstallResult("demo"));
 
@@ -1444,7 +1459,7 @@ describe("plugins cli install", () => {
       "__exit__:1",
     );
 
-    expect(promptYesNo).toHaveBeenCalledWith("Install this non-ClawHub plugin source?");
+    expect(promptYesNoMock).toHaveBeenCalledWith("Install this non-ClawHub plugin source?");
     expect(runtimeLogsContain("Installing plugin from npm registry")).toBe(true);
     expect(runtimeLogsContain("outside ClawHub review")).toBe(true);
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
@@ -1452,13 +1467,13 @@ describe("plugins cli install", () => {
 
   it("prompts interactive users before non-ClawHub plugin installs and proceeds on yes", async () => {
     setTty(true);
-    promptYesNo.mockResolvedValueOnce(true);
+    promptYesNoMock.mockResolvedValueOnce(true);
     primeSuccessfulPluginPersistence("demo");
     installPluginFromNpmSpec.mockResolvedValue(createNpmPluginInstallResult("demo"));
 
     await runPluginsCommand(["plugins", "install", "npm:demo"]);
 
-    expect(promptYesNo).toHaveBeenCalledWith("Install this non-ClawHub plugin source?");
+    expect(promptYesNoMock).toHaveBeenCalledWith("Install this non-ClawHub plugin source?");
     expect(runtimeLogsContain("Installing plugin from npm registry")).toBe(true);
     expect(runtimeLogsContain("outside ClawHub review")).toBe(true);
     expect(installPluginFromNpmSpec).toHaveBeenCalledTimes(1);

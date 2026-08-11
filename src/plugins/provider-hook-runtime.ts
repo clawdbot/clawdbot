@@ -43,7 +43,6 @@ type ProviderRuntimePluginLookupParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   applyAutoEnable?: boolean;
-  bundledProviderVitestCompat?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 };
 
@@ -51,9 +50,36 @@ export type ProviderRuntimePluginHandle = ProviderRuntimePluginLookupParams & {
   plugin?: ProviderPlugin;
 };
 
+const MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL = Symbol.for(
+  "openclaw.modelProviderRuntimePluginHandle",
+);
+
+type ModelWithProviderRuntimePluginHandle = {
+  [MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL]?: ProviderRuntimePluginHandle;
+};
+
 type ProviderRuntimePluginHandleParams = ProviderRuntimePluginLookupParams & {
   runtimeHandle?: ProviderRuntimePluginHandle;
 };
+
+/** Carries one attempt's prepared provider plugin through the model transport boundary. */
+export function attachModelProviderRuntimePluginHandle<TModel extends object>(
+  model: TModel,
+  runtimeHandle: ProviderRuntimePluginHandle,
+): TModel {
+  const next = { ...model } as TModel & ModelWithProviderRuntimePluginHandle;
+  next[MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL] = runtimeHandle;
+  return next;
+}
+
+/** Reads the provider plugin handle attached to a prepared attempt model. */
+export function getModelProviderRuntimePluginHandle(
+  model: object | undefined,
+): ProviderRuntimePluginHandle | undefined {
+  return model
+    ? (model as ModelWithProviderRuntimePluginHandle)[MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL]
+    : undefined;
+}
 
 export function clearProviderRuntimePluginCacheForTest(): void {
   providerRuntimePluginCache = new WeakMap();
@@ -76,7 +102,6 @@ function resolveProviderRuntimePluginCacheKey(
     models: params.config?.models?.providers,
     workspaceDir: params.workspaceDir ?? "",
     applyAutoEnable: params.applyAutoEnable ?? null,
-    bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? null,
     pluginMetadata:
       params.pluginMetadataSnapshot?.manifestRegistry.plugins
         .map((plugin) => plugin.id)
@@ -189,7 +214,6 @@ export function resolveProviderPluginsForHooks(params: {
   providerRefs?: readonly string[];
   modelRefs?: readonly string[];
   applyAutoEnable?: boolean;
-  bundledProviderVitestCompat?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
@@ -200,7 +224,6 @@ export function resolveProviderPluginsForHooks(params: {
     env,
     activate: false,
     applyAutoEnable: params.applyAutoEnable,
-    bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
     skipIfLoadInFlight: true,
   });
 }
@@ -231,7 +254,6 @@ export function resolveProviderRuntimePlugin(
       providerRefs,
       activate: false,
       applyAutoEnable: params.applyAutoEnable,
-      bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
     })
   ) {
     return undefined;
@@ -249,7 +271,6 @@ export function resolveProviderRuntimePlugin(
         providerRefs: lookupScope.providerRefs,
         modelRefs: lookupScope.modelRefs,
         applyAutoEnable: params.applyAutoEnable,
-        bundledProviderVitestCompat: params.bundledProviderVitestCompat,
         pluginMetadataSnapshot: params.pluginMetadataSnapshot,
       }).find((plugin) => {
         if (apiOwnerHint) {
@@ -351,7 +372,6 @@ export function ensureProviderRuntimePluginHandle(
       workspaceDir: params.workspaceDir ?? params.runtimeHandle?.workspaceDir,
       env: params.env ?? params.runtimeHandle?.env,
       applyAutoEnable: params.runtimeHandle?.applyAutoEnable,
-      bundledProviderVitestCompat: params.runtimeHandle?.bundledProviderVitestCompat,
       pluginMetadataSnapshot:
         params.pluginMetadataSnapshot ?? params.runtimeHandle?.pluginMetadataSnapshot,
     });

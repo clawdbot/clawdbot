@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { dispatchInboundDirectDm } from "./direct-dm.js";
 
 const mocks = vi.hoisted(() => ({
-  dispatchChannelInboundTurn: vi.fn(async () => undefined),
+  dispatchRoutedChannelTurn: vi.fn(async () => undefined),
   onModelSelected: vi.fn(),
 }));
 
@@ -29,9 +29,8 @@ vi.mock("./message/reply-pipeline.js", () => ({
   })),
 }));
 
-vi.mock("./turn/kernel.js", () => ({
-  dispatchChannelInboundTurn: mocks.dispatchChannelInboundTurn,
-  runPreparedInboundReply: vi.fn(),
+vi.mock("./turn/lifecycle.js", () => ({
+  dispatchRoutedChannelTurn: mocks.dispatchRoutedChannelTurn,
 }));
 
 describe("dispatchInboundDirectDm", () => {
@@ -53,7 +52,7 @@ describe("dispatchInboundDirectDm", () => {
       onDispatchError: vi.fn(),
     });
 
-    expect(mocks.dispatchChannelInboundTurn).toHaveBeenCalledWith(
+    expect(mocks.dispatchRoutedChannelTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         replyPipeline: { humanDelay: { minMs: 1, maxMs: 2 } },
         replyOptions: { onModelSelected: mocks.onModelSelected },
@@ -88,7 +87,7 @@ describe("dispatchInboundDirectDm", () => {
       onDispatchError: vi.fn(),
     });
 
-    expect(mocks.dispatchChannelInboundTurn).toHaveBeenLastCalledWith(
+    expect(mocks.dispatchRoutedChannelTurn).toHaveBeenLastCalledWith(
       expect.objectContaining({
         replyOptions: expect.objectContaining({ turnAdoptionLifecycle }),
       }),

@@ -223,7 +223,7 @@ async function loadState(baseDir?: string): Promise<DevicePairingStateFile> {
 }
 
 /**
- * Internal seam for the node-surface module (node-pairing.ts): run one
+ * Internal seam for the paired-device node-surface module: run one
  * operation against the paired-device records under the shared pairing lock.
  * Return `persist: true` to write the paired store after the mutation. Not a
  * public API — node surface state lives inside device records, and both

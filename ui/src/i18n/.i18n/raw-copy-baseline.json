@@ -34,6 +34,13 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
+      "text": "desktop panel"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/lazy-custom-element.ts",
       "text": "terminal panel"
     },
     {
@@ -168,13 +175,6 @@
       "name": "text",
       "path": "ui/src/components/settings-sidebar.ts",
       "text": "esc"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/components/sidebar-update-card.ts",
-      "text": "· v"
     },
     {
       "count": 1,
@@ -600,7 +600,7 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/nodes/view-exec-approvals.ts",
+      "path": "ui/src/pages/devices/view-exec-approvals.ts",
       "text": "exec host=gateway/node"
     },
     {

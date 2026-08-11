@@ -34,8 +34,8 @@ OpenClaw handles failures in two stages:
   <Step title="Retry safe pure overload exhaustion">
     If every candidate fails only because providers are overloaded, retry the full turn-local chain up to 10 times with exponential backoff while no tool execution or assistant output has started. After 30 seconds, send one status notice so the user is not left waiting silently.
   </Step>
-  <Step title="Throw FallbackSummaryError if exhausted">
-    If every candidate fails, throw a `FallbackSummaryError` with per-attempt detail and the soonest cooldown expiry when one is known.
+  <Step title="Throw FailoverError if exhausted">
+    If every candidate fails, throw a `FailoverError` with structured per-attempt detail and the soonest cooldown expiry when one is known.
   </Step>
 </Steps>
 
@@ -64,7 +64,7 @@ Opt in to suppress repeat auth failures with:
 OPENCLAW_FALLBACK_SKIP_TTL_MS=60000
 ```
 
-When enabled, OpenClaw records an in-memory, session-scoped skip marker for a non-primary fallback candidate after an auth-class failure, keyed by session id, provider, and model. Primary candidates are never skipped, so an explicit user model selection still surfaces the real auth error. The cache is process-local and clears on Gateway restart.
+When enabled, OpenClaw records an in-memory, session-scoped skip marker for a non-primary fallback candidate after an auth-class failure. The key includes the session, provider, model, and selected automatic or explicit profile ID. Switching profiles does not inherit another profile's failure marker. Primary candidates are never skipped, so an explicit user model selection still surfaces the real auth error. The cache is process-local and clears on Gateway restart.
 
 The value is a TTL in milliseconds. `0` or unset disables the cache. Positive values are clamped between 1 second and 10 minutes.
 
@@ -82,7 +82,7 @@ When a later probe succeeds and the session returns to the selected primary, Ope
 ↪️ Model Fallback cleared: <primary> (was <fallback>)
 ```
 
-These notices are operational messages, not assistant content. They deliver once per state change, including side-effect-only turns when feasible, but repeated turn-local fallback transitions do not repeat them. Delivery bypasses normal source-reply suppression, does not consume the first assistant reply slot for threaded channels, and is excluded from text-to-speech and commitment extraction.
+These notices are operational messages, not assistant content. They deliver once per state change, including side-effect-only turns when feasible, but repeated turn-local fallback transitions do not repeat them. Delivery bypasses normal source-reply suppression, does not consume the first assistant reply slot for threaded channels, and is excluded from text-to-speech.
 
 ## Auth storage (keys + OAuth)
 
@@ -139,16 +139,16 @@ If no explicit order is configured, OpenClaw uses a round-robin order:
 
 ### Session stickiness (cache-friendly)
 
-OpenClaw **pins the chosen auth profile per session** to keep provider caches warm. It does **not** rotate on every request. The pinned profile is reused until:
+OpenClaw **pins the automatically chosen auth profile per session** to keep provider caches warm. It does **not** rotate on every request. An automatic pin may rotate or clear when:
 
 - the session is reset (`/new` / `/reset`)
 - a compaction completes (compaction count increments)
 - the profile is in cooldown/disabled
 
-Manual selection via `/model …@<profileId>` sets a **user override** for that session and is not auto-rotated until a new session starts.
+Manual selection via `/model …@<profileId> -s` sets a **user override**. A valid user pin survives `/new`, `/reset`, session rollover, compaction, and cooldown windows. OpenClaw clears it when the profile disappears, no longer matches the selected provider, or the user selects another explicit profile. `/model default -s` clears the model override while retaining a compatible auth pin and clearing an incompatible one.
 
 <Note>
-Auto-pinned profiles (selected by the session router) are treated as a **preference**: they are tried first, but OpenClaw may rotate to another profile on rate limits/timeouts. When the original profile becomes available again, new runs can prefer it again without changing the selected model or runtime. User-pinned profiles stay locked to that profile; if it fails and model fallbacks are configured, OpenClaw moves to the next model instead of switching profiles.
+Auto-pinned profiles (selected by the session router) are treated as a **preference**: they are tried first, but OpenClaw may rotate to another profile on rate limits/timeouts. When the original profile becomes available again, new runs can prefer it again without changing the selected model or runtime. User-pinned profiles stay locked on eligible same-provider candidates. A retained pin on the configured default can still move through configured model fallbacks; an explicit user model selection remains strict and reports failure instead.
 </Note>
 
 ### OpenAI Codex subscription plus API-key backup
@@ -174,6 +174,8 @@ Use a user-pinned profile only when you want to force one account/key for that s
 ## Cooldowns
 
 When a profile fails due to auth/rate-limit errors (or a timeout that looks like rate limiting), OpenClaw marks it in cooldown and moves to the next profile.
+
+CLI-backed runtimes settle profile health only after their resume, fork, and fresh-session recovery attempts finish. A terminal credential failure cools down the exact selected profile before model fallback; a successful run clears stale failure state. Transcript, format, context, pre-provider timeout, and ambient CLI failures without a selected profile do not change shared profile health.
 
 <AccordionGroup>
   <Accordion title="What lands in the rate-limit / timeout bucket">
@@ -342,7 +344,7 @@ The active run carries its chosen candidate directly. Live reconciliation change
 
 Structured `model_fallback_decision` logs also include flat `fallbackStep*` fields when a candidate fails, is skipped, or a later fallback succeeds. These fields make the attempted transition explicit (`fallbackStepFromModel`, `fallbackStepToModel`, `fallbackStepFromFailureReason`, `fallbackStepFromFailureDetail`, `fallbackStepFinalOutcome`) so log and diagnostic exporters can reconstruct the primary failure even when the terminal fallback also fails.
 
-When every candidate fails, OpenClaw throws `FallbackSummaryError`. The outer reply runner can use that to build a more specific message such as "all models are temporarily rate-limited" and include the soonest cooldown expiry when one is known.
+When every candidate fails, OpenClaw throws `FailoverError` with structured attempt records. The outer reply runner can use those records to build a more specific message such as "all models are temporarily rate-limited" and include the soonest cooldown expiry when one is known.
 
 That cooldown summary is model-aware:
 

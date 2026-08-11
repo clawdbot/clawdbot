@@ -4,22 +4,19 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveWindowsTaskkillPath } from "../../../../scripts/lib/windows-taskkill.mjs";
-import { createTempDirTracker } from "../../../helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
+  assertInspectDisabled,
   assertInspectLoaded,
   assertUninstalled,
   parseDurationMs,
   testing as probeTesting,
 } from "./plugin-lifecycle-probe-runtime.js";
 
-const tempDirs = createTempDirTracker();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function expectedTaskkillPath(): string {
   return resolveWindowsTaskkillPath();
-}
-
-function makeTempDir(): string {
-  return tempDirs.make("openclaw-plugin-lifecycle-probe-");
 }
 
 function isProcessRunning(pid: number): boolean {
@@ -60,11 +57,9 @@ class FakeCommandChild extends EventEmitter {
   }
 }
 
-afterEach(() => tempDirs.cleanup());
-
 describe("plugin lifecycle matrix probe", () => {
   it("accepts inspect JSON for an enabled loaded plugin", async () => {
-    const dir = makeTempDir();
+    const dir = tempDirs.make("openclaw-plugin-lifecycle-probe-");
     const inspectPath = path.join(dir, "inspect.json");
     writeFileSync(
       inspectPath,
@@ -75,8 +70,34 @@ describe("plugin lifecycle matrix probe", () => {
     expect(() => assertInspectLoaded("lifecycle-claw", inspectPath)).not.toThrow();
   });
 
+  it("accepts inspect JSON for a disabled plugin", async () => {
+    const dir = tempDirs.make("openclaw-plugin-lifecycle-probe-");
+    const inspectPath = path.join(dir, "inspect.json");
+    writeFileSync(
+      inspectPath,
+      `${JSON.stringify({ plugin: { enabled: false, id: "lifecycle-claw", status: "disabled" } })}\n`,
+      "utf8",
+    );
+
+    expect(() => assertInspectDisabled("lifecycle-claw", inspectPath)).not.toThrow();
+  });
+
+  it("rejects disabled inspect JSON that still reports a loaded plugin", async () => {
+    const dir = tempDirs.make("openclaw-plugin-lifecycle-probe-");
+    const inspectPath = path.join(dir, "inspect.json");
+    writeFileSync(
+      inspectPath,
+      `${JSON.stringify({ plugin: { enabled: false, id: "lifecycle-claw", status: "loaded" } })}\n`,
+      "utf8",
+    );
+
+    expect(() => assertInspectDisabled("lifecycle-claw", inspectPath)).toThrow(
+      "expected lifecycle-claw inspect status disabled, got loaded",
+    );
+  });
+
   it("rejects inspect JSON that does not prove the runtime loaded", async () => {
-    const dir = makeTempDir();
+    const dir = tempDirs.make("openclaw-plugin-lifecycle-probe-");
     const inspectPath = path.join(dir, "inspect.json");
     writeFileSync(
       inspectPath,
@@ -90,7 +111,7 @@ describe("plugin lifecycle matrix probe", () => {
   });
 
   it("rejects missing inspect JSON instead of treating it as an empty object", async () => {
-    const dir = makeTempDir();
+    const dir = tempDirs.make("openclaw-plugin-lifecycle-probe-");
     const inspectPath = path.join(dir, "missing.json");
 
     expect(() => assertInspectLoaded("lifecycle-claw", inspectPath)).toThrow(
@@ -99,7 +120,7 @@ describe("plugin lifecycle matrix probe", () => {
   });
 
   it("rejects unreadable config during uninstall proof", async () => {
-    const dir = makeTempDir();
+    const dir = tempDirs.make("openclaw-plugin-lifecycle-probe-");
     const configFile = path.join(dir, ".openclaw", "openclaw.json");
     mkdirSync(path.dirname(configFile), { recursive: true });
     writeFileSync(configFile, "{ malformed\n", "utf8");
@@ -200,7 +221,7 @@ describe("plugin lifecycle matrix probe", () => {
       return;
     }
 
-    const dir = makeTempDir();
+    const dir = tempDirs.make("openclaw-plugin-lifecycle-probe-");
     const descendantPidPath = path.join(dir, "descendant.pid");
     let descendantPid: number | undefined;
     try {

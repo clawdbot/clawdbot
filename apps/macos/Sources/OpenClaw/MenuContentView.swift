@@ -24,9 +24,11 @@ struct MenuContent: View {
     @State private var micObserver = AudioInputDeviceObserver()
     @State private var micRefreshTask: Task<Void, Never>?
     @State private var browserControlEnabled = true
-    @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
-    @AppStorage(appLogLevelKey) private var appLogLevelRaw: String = Logger.Level.info.rawValue
-    @AppStorage(debugFileLogEnabledKey) private var appFileLoggingEnabled: Bool = false
+    @AppStorage(cameraEnabledKey, store: AppDefaults.standard) private var cameraEnabled: Bool = false
+    @AppStorage(appLogLevelKey, store: AppDefaults.standard)
+    private var appLogLevelRaw: String = Logger.Level.info.rawValue
+    @AppStorage(debugFileLogEnabledKey, store: AppDefaults.standard)
+    private var appFileLoggingEnabled: Bool = false
 
     init(state: AppState, updater: UpdaterProviding?) {
         self._state = Bindable(wrappedValue: state)
@@ -207,6 +209,7 @@ struct MenuContent: View {
     private var connectionLabel: String {
         DashboardGatewayMenuModel.connectionLabel(
             mode: self.state.connectionMode,
+            controlState: self.controlChannel.state,
             entries: self.dashboardManager.gatewayEntries)
     }
 
@@ -386,6 +389,23 @@ struct MenuContent: View {
     }
 
     private var healthStatus: (label: String, color: Color) {
+        if self.state.connectionMode == .local,
+           let failure = GatewayProcessManager.shared.lastFailureReason
+        {
+            return (failure, .red)
+        }
+        if self.state.connectionMode == .remote {
+            let live = GatewayConnectionPresentation(state: self.controlChannel.state)
+            switch live.tone {
+            case .healthy:
+                break
+            case .transient:
+                return (live.generalSubtitle, .orange)
+            case .attention:
+                return (live.generalSubtitle, .red)
+            }
+        }
+
         if let activity = self.activityStore.current {
             let color: Color = activity.role == .main ? .accentColor : .gray
             let roleLabel = activity.role == .main ? "Main" : "Other"

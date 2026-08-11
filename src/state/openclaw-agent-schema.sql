@@ -399,6 +399,21 @@ CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_parent
 CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_sequence
   ON transcript_event_identities(session_id, event_type, seq DESC);
 
+CREATE TABLE IF NOT EXISTS context_engine_turn_outbox (
+  advancement_key TEXT NOT NULL PRIMARY KEY,
+  engine_id TEXT NOT NULL,
+  owner_plugin_id TEXT,
+  session_id TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  last_attempt_at INTEGER,
+  last_error TEXT,
+  created_at INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_context_engine_turn_outbox_engine
+  ON context_engine_turn_outbox(engine_id, created_at);
+
 CREATE TABLE IF NOT EXISTS cache_entries (
   scope TEXT NOT NULL,
   key TEXT NOT NULL,

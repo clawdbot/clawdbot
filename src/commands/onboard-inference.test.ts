@@ -8,7 +8,6 @@ import {
   OPENAI_API_DEFAULT_MODEL_REF,
   detectInferenceBackends,
 } from "./onboard-inference.js";
-import { detectNativeCodexAppServer } from "./onboard-inference.test-support.js";
 
 function probeDeps(found: Record<string, boolean>) {
   return async (command: string): Promise<LocalCommandProbe> => ({
@@ -150,6 +149,36 @@ describe("detectInferenceBackends", () => {
       "claude-cli",
     ]);
     expect(candidates[1]?.credentials).toBeUndefined();
+  });
+
+  it("keeps a lower-version Claude wrapper selectable with capability guidance", async () => {
+    const candidates = await detectInferenceBackends({
+      env: {},
+      platform: "linux",
+      deps: {
+        probeLocalCommand: async (command) => ({
+          command,
+          found: command === "claude",
+          ...(command === "claude" ? { version: "2.1.205 (Claude Code)" } : {}),
+        }),
+        readClaudeCliCredentials: () => ({ type: "oauth" }),
+        resolveClaudeLiveSessionRequirement: () => ({
+          capability: "msg_lifecycle_v1",
+          minimumVersion: "2.1.206",
+          versionArgs: ["--version"],
+          updateCommand: "claude update",
+        }),
+      },
+    });
+
+    expect(candidates).toMatchObject([
+      {
+        kind: "claude-cli",
+        credentials: true,
+        detail:
+          "logged in; Claude Code 2.1.206 is the first published build known to advertise msg_lifecycle_v1; found 2.1.205. OpenClaw verifies this capability at runtime. If this build is rejected, run `claude update`, restart OpenClaw, and retry.",
+      },
+    ]);
   });
 
   it("keeps a logged-in Gemini CLI after environment keys", async () => {
@@ -383,18 +412,6 @@ describe("detectInferenceBackends", () => {
     expect(candidates[0]?.kind).toBe("claude-cli");
     expect(candidates[0]?.credentials).toBeUndefined();
     expect(candidates[0]?.detail).toBe("installed");
-  });
-
-  it("detects a native Codex App Server independently of inference ranking", async () => {
-    const command = "/Applications/ChatGPT.app/Contents/Resources/codex";
-
-    await expect(
-      detectNativeCodexAppServer({
-        env: { HOME: "/Users/tester" },
-        platform: "darwin",
-        probeLocalCommand: probeDeps({ [command]: true }),
-      }),
-    ).resolves.toEqual({ command, found: true });
   });
 
   it("checks login status with the Codex executable discovered in a macOS app", async () => {

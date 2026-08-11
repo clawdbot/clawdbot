@@ -48,8 +48,8 @@ public final class OpenClawChatViewModel {
     var prefersExplicitVerboseLevel: Bool
     public private(set) var modelSelectionID: String = "__default__"
     public private(set) var modelChoices: [OpenClawChatModelChoice] = []
-    private var modelPickerFavorites: [String]
-    private var modelPickerRecents: [String]
+    var modelPickerFavorites: [String]
+    var modelPickerRecents: [String]
     /// Setters are module-internal for the sending extension's command catalog.
     public internal(set) var slashCommands: [OpenClawChatCommandChoice] = []
     public internal(set) var isLoadingSlashCommands = false
@@ -111,6 +111,8 @@ public final class OpenClawChatViewModel {
     public private(set) var streamingAssistantText: String?
 
     public private(set) var pendingToolCalls: [OpenClawChatPendingToolCall] = []
+    var subagentActivities: [ChatSubagentActivity] = []
+    var hiddenWorkingSubagentCount = 0
     public internal(set) var planSteps: [OpenClawChatPlanStep] = []
     public internal(set) var planExplanation: String?
     var planRunId: String?
@@ -153,7 +155,7 @@ public final class OpenClawChatViewModel {
     let transcriptCache: (any OpenClawChatTranscriptCache)?
     let outbox: (any OpenClawChatCommandOutbox)?
     @ObservationIgnored
-    private let modelPickerStore: ChatModelPickerStore
+    let modelPickerStore: ChatModelPickerStore
     /// Per-message outbox display state; rows without an entry are normal
     /// transcript rows. Observable so bubbles update when flush progresses.
     public internal(set) var outboxStatesByMessageID: [UUID: OpenClawChatOutboxMessageState] = [:]
@@ -444,6 +446,11 @@ public final class OpenClawChatViewModel {
         }
     }
 
+    @ObservationIgnored
+    var subagentActivityState = ChatSubagentActivityState()
+    @ObservationIgnored
+    var subagentActivityCleanupTask: Task<Void, Never>?
+
     var lastHealthPollAt: Date?
 
     public init(
@@ -544,6 +551,7 @@ public final class OpenClawChatViewModel {
         }
         self.outboxChangesTask?.cancel()
         self.activeSessionRunIndicatorTimeoutTask?.cancel()
+        self.subagentActivityCleanupTask?.cancel()
         self.questionRefreshRetryTask?.cancel()
         for (_, task) in self.questionExpiryTasks {
             task.cancel()
@@ -559,35 +567,6 @@ public final class OpenClawChatViewModel {
 
     public func refresh() {
         startBootstrap()
-    }
-
-    public var modelPickerSections: ChatModelPickerSections {
-        let defaultProvider = ChatModelPickerStore.resolvedDefaultProvider(
-            provider: self.sessionDefaults?.modelProvider,
-            model: self.sessionDefaults?.model)
-        return ChatModelPickerStore.sections(
-            choices: self.modelChoices,
-            favorites: self.modelPickerFavorites,
-            recents: self.modelPickerRecents,
-            defaultProvider: defaultProvider)
-    }
-
-    public func isDefaultModel(_ model: OpenClawChatModelChoice) -> Bool {
-        ChatModelPickerStore.isDefaultModel(
-            model,
-            defaultProvider: self.sessionDefaults?.modelProvider,
-            defaultModel: self.sessionDefaults?.model)
-    }
-
-    public var isSelectedModelPinned: Bool {
-        self.modelSelectionID != Self.defaultModelSelectionID &&
-            self.modelPickerFavorites.contains(self.modelSelectionID)
-    }
-
-    public func toggleSelectedModelPinned() {
-        guard self.modelSelectionID != Self.defaultModelSelectionID else { return }
-        self.modelPickerStore.toggleFavorite(self.modelSelectionID)
-        self.modelPickerFavorites = self.modelPickerStore.favorites
     }
 
     public func resumeFromForeground() {
@@ -957,6 +936,7 @@ extension OpenClawChatViewModel {
 
             Task { [weak self] in await self?.refreshQuestions() }
             Task { [weak self] in await self?.refreshSwarmCapability(sessionSnapshot: context.session) }
+            Task { [weak self] in await self?.refreshSubagentActivities(sessionSnapshot: context.session) }
 
             let payload = try await transport.requestHistory(sessionKey: context.session.key)
             guard self.isCurrentBootstrap(context) else { return }
@@ -1277,6 +1257,7 @@ extension OpenClawChatViewModel {
         resetOutboxPresentationForSessionSwitch()
         self.sessionId = nil
         self.pendingToolCallsById = [:]
+        self.clearSubagentActivities()
         self.updateStreamingAssistantText(nil)
         clearPlan()
         self.updateActiveSessionRunWithoutChatSnapshot(false)

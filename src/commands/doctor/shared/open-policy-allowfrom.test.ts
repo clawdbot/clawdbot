@@ -1,19 +1,12 @@
 // Open policy allow-from tests cover doctor handling of open allowlist policy.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import type { GoogleChatConfig } from "../../../config/types.googlechat.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { GoogleChatConfigSchema } from "../../../config/zod-schema.providers-googlechat.js";
 import {
   collectOpenPolicyAllowFromWarnings,
   maybeRepairOpenPolicyAllowFrom,
 } from "./open-policy-allowfrom.js";
-
-vi.mock("../channel-capabilities.js", () => ({
-  getDoctorChannelCapabilities: (channelName?: string) => ({
-    dmAllowFromMode: channelName === "matrix" ? "nestedOnly" : "topOnly",
-    groupModel: "sender",
-    groupAllowFromFallbackToAllowFrom: true,
-    warnOnEmptyGroupSenderAllowlist: true,
-  }),
-}));
 
 describe("doctor open-policy allowFrom repair", () => {
   it('adds top-level wildcard when dmPolicy="open" has no allowFrom', () => {
@@ -44,6 +37,60 @@ describe("doctor open-policy allowFrom repair", () => {
       '- channels.googlechat.allowFrom: set to ["*"] (required by dmPolicy="open")',
     ]);
     expect(result.config.channels?.googlechat?.allowFrom).toEqual(["*"]);
+    expect(GoogleChatConfigSchema.safeParse(result.config.channels?.googlechat).success).toBe(true);
+  });
+
+  it("repairs a named googlechat account with canonical top-level allowFrom", () => {
+    const result = maybeRepairOpenPolicyAllowFrom({
+      channels: {
+        googlechat: {
+          accounts: {
+            work: { dmPolicy: "open" },
+          },
+        },
+      },
+    });
+
+    expect(result.config.channels?.googlechat?.accounts?.work).toEqual({
+      dmPolicy: "open",
+      allowFrom: ["*"],
+    });
+    expect(GoogleChatConfigSchema.safeParse(result.config.channels?.googlechat).success).toBe(true);
+  });
+
+  it.each<{ label: string; config: GoogleChatConfig }>([
+    {
+      label: "root",
+      config: { dmPolicy: "open", allowFrom: ["*"] },
+    },
+    {
+      label: "root inherited by a named account",
+      config: { dmPolicy: "open", allowFrom: ["*"], accounts: { work: {} } },
+    },
+    {
+      label: "named account",
+      config: { accounts: { work: { dmPolicy: "open", allowFrom: ["*"] } } },
+    },
+    {
+      label: "default account",
+      config: { accounts: { default: { dmPolicy: "open", allowFrom: ["*"] } } },
+    },
+    {
+      label: "root and named override",
+      config: {
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        accounts: { work: { dmPolicy: "open", allowFrom: ["*"] } },
+      },
+    },
+  ])("preserves schema-valid googlechat $label DM access", ({ config }) => {
+    expect(GoogleChatConfigSchema.safeParse(config).success).toBe(true);
+
+    const result = maybeRepairOpenPolicyAllowFrom({ channels: { googlechat: config } });
+
+    expect(result.changes).toEqual([]);
+    expect(result.config.channels?.googlechat).toEqual(config);
+    expect(GoogleChatConfigSchema.safeParse(result.config.channels?.googlechat).success).toBe(true);
   });
 
   it("repairs nested-only matrix dm allowFrom", () => {

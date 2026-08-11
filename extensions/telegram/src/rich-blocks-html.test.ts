@@ -136,6 +136,40 @@ describe("block HTML islands", () => {
     expect(block.cells[1]?.[0]).toMatchObject({ colspan: 2, align: "center" });
   });
 
+  it.each([
+    ["malformed suffix", "2x", "3y"],
+    ["plus sign", "+2", "+3"],
+    ["minus sign", "-2", "-3"],
+    ["decimal", "2.5", "3.5"],
+    ["exponent", "2e1", "3e1"],
+    ["hexadecimal", "0x10", "0x20"],
+    ["unsafe integer", "9007199254740993", "9007199254740993"],
+  ])("ignores malformed raw HTML table spans: %s", (_label, colspan, rowspan) => {
+    const block = single(
+      `<table><tr><td colspan="${colspan}" rowspan="${rowspan}">bad span</td><td>next</td></tr></table>`,
+    );
+    expect(block.type).toBe("table");
+    if (block.type !== "table") {
+      return;
+    }
+    expect(block.cells[0]?.[0]).toEqual({ text: "bad span" });
+    expect(block.cells[0]?.[1]).toEqual({ text: "next" });
+  });
+
+  it.each([
+    ["unquoted decimal", "colspan=2 rowspan=3"],
+    ["single-quoted decimal", "colspan='2' rowspan='3'"],
+    ["double-quoted decimal", 'colspan="2" rowspan="3"'],
+    ["whitespace-padded decimal", 'colspan=" 2 " rowspan=" 3 "'],
+  ])("preserves valid raw HTML table spans: %s", (_label, attrs) => {
+    const block = single(`<table><tr><td ${attrs}>wide</td></tr></table>`);
+    expect(block.type).toBe("table");
+    if (block.type !== "table") {
+      return;
+    }
+    expect(block.cells[0]?.[0]).toMatchObject({ text: "wide", colspan: 2, rowspan: 3 });
+  });
+
   it("keeps surrounding markdown on the paragraph path", () => {
     const blocks = blocksFor("**before**\n\n<hr/>\n\nafter");
     expect(blocks.map((block) => block.type)).toEqual(["paragraph", "divider", "paragraph"]);

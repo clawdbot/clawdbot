@@ -28,7 +28,7 @@ import {
 import {
   listProfilesForProvider,
   promoteAuthProfileInOrder,
-  upsertAuthProfileWithLock,
+  upsertAuthProfileWithLockOrThrow,
 } from "../../agents/auth-profiles/profiles.js";
 import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
@@ -70,8 +70,6 @@ import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runti
 import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-runtime-plugin-install.js";
 import { refreshRunningGatewayAuthState } from "./auth-refresh.js";
 import { loadValidConfigOrThrow, resolveKnownAgentId, updateConfig } from "./shared.js";
-
-type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 
 function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | undefined {
   const normalizedExpiresIn = normalizeStringifiedOptionalString(expiresIn);
@@ -286,7 +284,6 @@ async function resolveModelsAuthContext(params?: {
     workspaceDir,
     mode: "setup",
     includeUntrustedWorkspacePlugins: false,
-    bundledProviderVitestCompat: true,
     ...(providerRef
       ? {
           providerRefs: [providerRef],
@@ -543,8 +540,10 @@ async function runProviderAuthMethod(params: {
   setDefault?: boolean;
   env?: NodeJS.ProcessEnv;
   isRemote?: boolean;
+  signal?: AbortSignal;
   openUrl?: (url: string) => Promise<void>;
 }): Promise<{ result: ProviderAuthResult; profiles: ProviderAuthResult["profiles"] }> {
+  params.signal?.throwIfAborted();
   const selectedProviderId = normalizeProviderId(params.provider.id);
   await clearStaleProfileLockouts(selectedProviderId, params.agentDir);
 
@@ -557,6 +556,7 @@ async function runProviderAuthMethod(params: {
     runtime: params.runtime,
     allowSecretRefPrompt: false,
     isRemote: params.isRemote ?? isRemoteEnvironment(),
+    signal: params.signal,
     openUrl:
       params.openUrl ??
       (async (url) => {
@@ -567,6 +567,7 @@ async function runProviderAuthMethod(params: {
       createVpsAwareHandlers: (runtimeParams) => createVpsAwareOAuthHandlers(runtimeParams),
     },
   });
+  params.signal?.throwIfAborted();
   const resultProviderIds = new Set(
     result.profiles.map((profile) => normalizeProviderId(profile.credential.provider)),
   );
@@ -776,15 +777,6 @@ export async function modelsAuthPasteApiKeyCommand(
   runtime.log(`Auth profile: ${profileId} (${provider}/api_key)`);
 }
 
-async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
-  const updated = await upsertAuthProfileWithLock(params);
-  if (!updated) {
-    throw new Error(
-      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
-    );
-  }
-}
-
 /** Interactive helper for adding token auth profiles, with provider/method prompts. */
 export async function modelsAuthAddCommand(opts: { agent?: string }, runtime: RuntimeEnv) {
   const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
@@ -922,6 +914,7 @@ export type ModelsAuthLoginFlowOptions = LoginOptions & {
   prompter: WizardPrompter;
   env?: NodeJS.ProcessEnv;
   isRemote?: boolean;
+  signal?: AbortSignal;
   openUrl?: (url: string) => Promise<void>;
 };
 
@@ -1084,6 +1077,7 @@ export async function runModelsAuthLoginFlow(
     setDefault: opts.setDefault,
     env: opts.env,
     isRemote: opts.isRemote,
+    signal: opts.signal,
     openUrl: opts.openUrl,
   });
   maybeLogOpenAICodexNativeSearchTip(opts.runtime, selectedProvider.id);

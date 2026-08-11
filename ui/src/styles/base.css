@@ -21,11 +21,13 @@
   --chrome-strong: rgba(14, 16, 21, 0.98);
 
   /* Text - Clean contrast
-   * Keep --muted AA on dark surfaces; do not dim muted body text with opacity. */
+   * Keep --muted AA on dark surfaces; do not dim muted body text with opacity.
+   * --text targets ~10:1 on --bg #0e1015 (10.1; 9.3 on --card) — the dark
+   * comfort band is ~10-12 and brighter body text halates on dark. */
 
-  --text: #d4d4d8;
+  --text: #bcbcc0;
   --text-strong: #f4f4f5;
-  --chat-text: #d4d4d8;
+  --chat-text: #bcbcc0;
   --muted: #8b8b94;
   --muted-strong: #898990;
   --muted-foreground: #8b8b94;
@@ -693,10 +695,61 @@ openclaw-app {
   }
 }
 
-/* Cursor convention: app chrome (buttons, menus, tabs, rails, controls) uses
-   the default arrow cursor; the pointer hand is reserved for real hyperlinks
-   (UA default on a[href]). Do not add `cursor: pointer` to controls; anchors
-   that act as chrome override to `cursor: default` instead. */
+/* Cursor policy. A browser tab gets the pointer hand, the only hover affordance
+   a page owns; installed/app-like windows are desktop chrome and keep the arrow.
+   Controls consume --cursor-action rather than hardcoding a cursor, and real
+   hyperlinks keep the UA pointer in every mode. */
+:root {
+  --cursor-action: pointer;
+}
+
+/* Separate from the standalone block above, which owns viewport and safe-area
+   insets; widening its condition would change those too. `fullscreen` is absent
+   on purpose: it is a transient presentation state any window can enter, and
+   the manifest installs this UI as `standalone`. */
+@media (display-mode: standalone),
+  (display-mode: minimal-ui),
+  (display-mode: window-controls-overlay) {
+  :root {
+    --cursor-action: default;
+  }
+}
+
+/* Native app hosts are installed desktop windows too, but they embed a plain
+   web view that reports `display-mode: browser`; they announce themselves with
+   these `<html>` markers instead (all three, as layout.css already matches). */
+html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrome) {
+  --cursor-action: default;
+}
+
+/* Generic actionable controls, at element/attribute specificity only so the
+   component rules that own semantic cursors (not-allowed, disabled, grab,
+   resize, deliberate `default` on non-actionable elements) still win. */
+button,
+summary,
+select,
+[role="button"],
+[role="checkbox"],
+[role="menuitem"],
+[role="menuitemcheckbox"],
+[role="menuitemradio"],
+[role="option"],
+[role="radio"],
+[role="switch"],
+[role="tab"],
+input:is(
+  [type="button"],
+  [type="checkbox"],
+  [type="color"],
+  [type="file"],
+  [type="radio"],
+  [type="range"],
+  [type="reset"],
+  [type="submit"]
+) {
+  cursor: var(--cursor-action);
+}
+
 a {
   color: var(--accent);
   text-decoration: underline;
@@ -708,10 +761,10 @@ a:hover {
 }
 
 /* Web Awesome dropdown items ship `cursor: pointer` on their shadow host.
-   Document rules beat `:host`, so restore the chrome arrow here — and re-add
-   the disabled cue this override would otherwise clobber. */
+   Document rules beat `:host`, so route them through the policy here — and
+   re-add the disabled cue this override would otherwise clobber. */
 wa-dropdown-item {
-  cursor: default;
+  cursor: var(--cursor-action);
 }
 
 wa-dropdown-item[disabled] {
@@ -841,17 +894,6 @@ textarea,
   width: 85%;
 }
 
-.skeleton-stat {
-  height: 28px;
-  width: 60px;
-  border-radius: var(--radius-sm);
-}
-
-.skeleton-block {
-  height: 48px;
-  border-radius: var(--radius-md);
-}
-
 @keyframes pulse-subtle {
   0%,
   100% {
@@ -860,43 +902,6 @@ textarea,
   50% {
     opacity: 0.7;
   }
-}
-
-@keyframes glow-pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 transparent;
-  }
-  50% {
-    box-shadow: 0 0 20px var(--accent-glow);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .glow-pulse,
-  [class*="glow-pulse"] {
-    animation: none !important;
-  }
-}
-
-/* Stagger animation delays for grouped elements */
-.stagger-1 {
-  animation-delay: 0ms;
-}
-.stagger-2 {
-  animation-delay: 50ms;
-}
-.stagger-3 {
-  animation-delay: 100ms;
-}
-.stagger-4 {
-  animation-delay: 150ms;
-}
-.stagger-5 {
-  animation-delay: 200ms;
-}
-.stagger-6 {
-  animation-delay: 250ms;
 }
 
 @media (prefers-reduced-motion: reduce) {

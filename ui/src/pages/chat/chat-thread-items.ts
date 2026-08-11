@@ -8,7 +8,7 @@ import type {
   NormalizedMessage,
   ToolCard,
 } from "../../lib/chat/chat-types.ts";
-import { extractTextCached } from "../../lib/chat/message-extract.ts";
+import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
 import {
   normalizeMessage,
   stripMessageDisplayMetadataText,
@@ -561,8 +561,9 @@ export function hasRenderableNormalizedMessage(message: unknown): boolean {
     return false;
   }
   const role = normalizeRoleForGrouping(normalized.role);
-  const hasVisibleSenderLabel = role === "assistant" && Boolean(normalized.senderLabel?.trim());
-  return normalized.content.length > 0 || Boolean(normalized.replyTarget) || hasVisibleSenderLabel;
+  const label = role === "assistant" && normalized.senderLabel?.trim();
+  const media = role === "user" && readTranscriptMediaEntries(message).length;
+  return Boolean(normalized.content.length || normalized.replyTarget || label || media);
 }
 
 export function sanitizeStreamText(text: string): string {

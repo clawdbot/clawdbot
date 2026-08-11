@@ -1,11 +1,17 @@
-// Agent via gateway tests cover gateway-backed agent command dispatch and session loading.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+// Agent via gateway tests cover gateway-backed agent command dispatch and session loading.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  configureExecutionIdentityAdmissionSink,
+  hasExecutionIdentityAdmissionSink,
+} from "../audit/execution-identity-admission.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { acquireGatewayLock, type GatewayLockOptions } from "../infra/gateway-lock.js";
 import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
@@ -39,6 +45,11 @@ const agentCommand = vi.hoisted(() => vi.fn());
 const agentModuleLoadCount = vi.hoisted(() => vi.fn());
 const loadAgentSessionModuleMock = vi.hoisted(() => vi.fn());
 const startOneShotDiagnosticsExporters = vi.hoisted(() => vi.fn());
+const auditRecorderMocks = vi.hoisted(() => ({
+  create: vi.fn(),
+  recordExecutionIdentity: vi.fn(() => true),
+  stop: vi.fn(async () => {}),
+}));
 
 const runtime: RuntimeEnv = {
   log: vi.fn(),
@@ -69,6 +80,7 @@ function mockConfig(storePath: string, overrides?: Partial<OpenClawConfig>) {
       ...overrides?.session,
     },
     gateway: overrides?.gateway,
+    logging: overrides?.logging,
   };
   loadConfig.mockReturnValue(config);
   loadConfigWithShellEnvFallback.mockResolvedValue(config);
@@ -110,6 +122,23 @@ function mockLocalAgentReply(text = "local") {
   });
 }
 
+function createLocalGatewayLockOptions(
+  stateDir: string,
+  overrides: Partial<GatewayLockOptions> = {},
+): GatewayLockOptions {
+  return {
+    allowInTests: true,
+    env: {
+      ...process.env,
+      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      OPENCLAW_STATE_DIR: stateDir,
+    },
+    lockDir: path.join(stateDir, "gateway-locks"),
+    timeoutMs: 100,
+    ...overrides,
+  };
+}
+
 function requireFirstCallArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
   const [call] = mock.mock.calls;
   if (!call) {
@@ -133,12 +162,7 @@ function requireFirstCallOrder(
   return order;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object-short");
 
 function createSignalProcess() {
   type SignalName = "SIGINT" | "SIGTERM";
@@ -248,6 +272,15 @@ vi.mock("./agent.js", () => {
 vi.mock("../plugins/one-shot-diagnostics.js", () => ({
   startOneShotDiagnosticsExporters,
 }));
+vi.mock("../audit/audit-recorder.js", () => ({
+  createAuditEventRecorder: (...args: unknown[]) => {
+    auditRecorderMocks.create(...args);
+    return {
+      recordExecutionIdentity: auditRecorderMocks.recordExecutionIdentity,
+      stop: auditRecorderMocks.stop,
+    };
+  },
+}));
 
 let originalForceConsoleToStderr = false;
 let zeroTimeoutGatewayRequestMs: number | undefined;
@@ -275,6 +308,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  configureExecutionIdentityAdmissionSink(() => false)();
   agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests();
   loggingState.forceConsoleToStderr = originalForceConsoleToStderr;
 });
@@ -445,6 +479,81 @@ describe("agentCliCommand", () => {
       );
       expect(opts.message).toBe(messageBody);
       expect(opts).not.toHaveProperty("messageFile");
+    });
+  });
+
+  it("refuses --local before embedded startup when a live Gateway owns the state directory", async () => {
+    await withTempStore(async ({ dir }) => {
+      const lockOptions = createLocalGatewayLockOptions(dir, {
+        readProcessStartTime: () => 123_456,
+      });
+      const gatewayLock = await acquireGatewayLock({
+        ...lockOptions,
+        port: 28789,
+      });
+      expect(gatewayLock).not.toBeNull();
+      if (!gatewayLock) {
+        throw new Error("Expected live Gateway fixture lock");
+      }
+
+      try {
+        await expect(
+          agentCliCommand({ message: "hi", to: "+1555", local: true, json: true }, jsonRuntime, {
+            localGatewayLockOptions: lockOptions,
+          }),
+        ).rejects.toThrow(
+          `A Gateway is running for this state directory (pid ${process.pid}, port 28789). Run without --local to use it, or stop the Gateway first (openclaw gateway stop).`,
+        );
+        expect(agentCommand).not.toHaveBeenCalled();
+        expect(startOneShotDiagnosticsExporters).not.toHaveBeenCalled();
+        expect(jsonRuntime.writeJson).not.toHaveBeenCalled();
+      } finally {
+        await gatewayLock.release();
+      }
+    });
+  });
+
+  it("holds one agent-embedded state lock for the run and rejects a concurrent --local run", async () => {
+    await withTempStore(async ({ dir }) => {
+      const lockOptions = createLocalGatewayLockOptions(dir);
+      let finishFirstRun: ((value: Awaited<ReturnType<typeof AgentCommand>>) => void) | undefined;
+      agentCommand.mockImplementationOnce(
+        async () =>
+          await new Promise<Awaited<ReturnType<typeof AgentCommand>>>((resolve) => {
+            finishFirstRun = resolve;
+          }),
+      );
+
+      const firstRun = agentCliCommand({ message: "first", to: "+1555", local: true }, runtime, {
+        localGatewayLockOptions: lockOptions,
+      });
+      await waitForAgentCommandCall();
+
+      const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
+      const payload = JSON.parse(fs.readFileSync(stateLockPath, "utf8")) as {
+        pid?: number;
+        role?: string;
+      };
+      expect(payload).toMatchObject({ pid: process.pid, role: "agent-embedded" });
+
+      await expect(
+        agentCliCommand({ message: "second", to: "+1555", local: true }, runtime, {
+          localGatewayLockOptions: { ...lockOptions, pollIntervalMs: 2, timeoutMs: 15 },
+        }),
+      ).rejects.toThrow(
+        `another embedded OpenClaw state writer is active (pid ${process.pid}); lock timeout after 15ms`,
+      );
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+
+      if (!finishFirstRun) {
+        throw new Error("Expected first embedded run to start");
+      }
+      finishFirstRun({
+        payloads: [{ text: "done" }],
+        meta: { durationMs: 1 },
+      } as Awaited<ReturnType<typeof AgentCommand>>);
+      await firstRun;
+      expect(fs.existsSync(stateLockPath)).toBe(false);
     });
   });
 
@@ -1521,9 +1630,13 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("passes SIGTERM abort signals into local agent runs", async () => {
-    await withTempStore(async () => {
+  it.each([
+    ["SIGTERM", 143],
+    ["SIGINT", 130],
+  ] as const)("releases the local state lock after %s aborts the run", async (signal, exitCode) => {
+    await withTempStore(async ({ dir }) => {
       const signals = createSignalProcess();
+      const lockOptions = createLocalGatewayLockOptions(dir);
       agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
         expect(opts.abortSignal).toBeInstanceOf(AbortSignal);
         return await new Promise((_, reject) => {
@@ -1541,13 +1654,17 @@ describe("agentCliCommand", () => {
 
       const run = agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime, {
         process: signals.processLike,
+        localGatewayLockOptions: lockOptions,
       });
       await waitForAgentCommandCall();
-      signals.emit("SIGTERM");
+      const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
+      expect(fs.existsSync(stateLockPath)).toBe(true);
+      signals.emit(signal);
 
       await run;
+      expect(fs.existsSync(stateLockPath)).toBe(false);
       expect(callGateway).not.toHaveBeenCalled();
-      expect(runtime.exit).toHaveBeenCalledWith(143);
+      expect(runtime.exit).toHaveBeenCalledWith(exitCode);
       expect(signals.listenerCount("SIGTERM")).toBe(0);
       expect(signals.listenerCount("SIGINT")).toBe(0);
     });
@@ -1820,12 +1937,53 @@ describe("agentCliCommand", () => {
       expect(loadRuntimeConfig).toHaveBeenCalledTimes(1);
       expect(agentCommand).toHaveBeenCalledTimes(1);
       expect(stop).toHaveBeenCalledTimes(1);
+      expect(auditRecorderMocks.create).not.toHaveBeenCalled();
       const startOrder = requireFirstCallOrder(startOneShotDiagnosticsExporters, "exporter start");
       const runOrder = requireFirstCallOrder(agentCommand, "embedded agent");
       const stopOrder = requireFirstCallOrder(stop, "exporter stop");
       expect(startOrder).toBeLessThan(runOrder);
       expect(runOrder).toBeLessThan(stopOrder);
     });
+  });
+
+  it("owns and flushes the opt-in local audit writer without awaiting persistence", async () => {
+    await withTempStore(
+      async () => {
+        agentCommand.mockImplementationOnce(async () => {
+          expect(hasExecutionIdentityAdmissionSink()).toBe(true);
+          return {
+            payloads: [{ text: "local" }],
+            meta: {
+              durationMs: 1,
+              agentMeta: { sessionId: "s", provider: "p", model: "m" },
+            },
+          } as unknown as Awaited<ReturnType<typeof AgentCommand>>;
+        });
+
+        await agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime);
+
+        expect(auditRecorderMocks.create).toHaveBeenCalledWith({ messageMode: "off" });
+        expect(auditRecorderMocks.stop).toHaveBeenCalledOnce();
+        expect(hasExecutionIdentityAdmissionSink()).toBe(false);
+      },
+      { logging: { audit: { executionIdentity: true } } },
+    );
+  });
+
+  it("reuses an existing lifecycle-owned identity writer for local dispatch", async () => {
+    await withTempStore(
+      async () => {
+        const clearSink = configureExecutionIdentityAdmissionSink(() => true);
+        mockLocalAgentReply();
+
+        await agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime);
+
+        expect(auditRecorderMocks.create).not.toHaveBeenCalled();
+        expect(hasExecutionIdentityAdmissionSink()).toBe(true);
+        clearSink();
+      },
+      { logging: { audit: { executionIdentity: true } } },
+    );
   });
 
   it("suppresses stdout diagnostic logs around JSON local embedded runs", async () => {

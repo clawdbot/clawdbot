@@ -17,7 +17,6 @@ import type {
   TuiSessionList,
   TuiSessionCreateOptions,
 } from "../tui/tui-backend.js";
-import { runTui as defaultRunTui } from "../tui/tui.js";
 import { SYSTEM_AGENT_ID } from "./agent-id.js";
 import type { SystemAgentAssistantPlanner } from "./assistant.js";
 import {
@@ -38,11 +37,11 @@ import {
 } from "./operations.js";
 import { formatSystemAgentStartupMessage, loadSystemAgentOverview } from "./overview.js";
 import {
-  resolveSystemAgentVerifiedInferenceRoute,
+  resolveSystemAgentVerifiedInferenceState,
   type SystemAgentVerifiedInferenceBinding,
 } from "./verified-inference.js";
 
-type RunTui = typeof defaultRunTui;
+type RunTui = typeof import("../tui/tui.js").runTui;
 
 export type SystemAgentTuiOptions = {
   yes?: boolean;
@@ -470,7 +469,6 @@ async function runSetupHandoff(
     await writeWizardConfigFile(result.nextConfig, {
       allowConfigSizeDrop: false,
       baseHash: snapshot.hash,
-      migrationBaseConfig: baseConfig,
       afterWrite: GATEWAY_SETUP_AFTER_WRITE,
     });
     runtime.log("Done — gateway settings saved. Run `openclaw gateway restart` to apply them.");
@@ -508,7 +506,6 @@ async function runSetupHandoff(
     await writeWizardConfigFile(searchSetup.config, {
       allowConfigSizeDrop: false,
       baseHash: snapshot.hash,
-      migrationBaseConfig: baseConfig,
     });
     return;
   }
@@ -557,7 +554,7 @@ export async function runSystemAgentTui(
     // an agent handoff uses the normal repair-oriented startup message.
     welcomeVariant = undefined;
     const backend = new SystemAgentTuiBackend(boundOpts, welcome, engine, route);
-    const runTui = boundOpts.runTui ?? defaultRunTui;
+    const runTui = boundOpts.runTui ?? (await import("../tui/tui.js")).runTui;
     try {
       await runTui({
         local: true,
@@ -605,8 +602,9 @@ async function requireTuiVerifiedInference(
     throw new SystemAgentInferenceUnavailableError("conversation");
   }
   try {
-    const route = await resolveSystemAgentVerifiedInferenceRoute(binding, opts.deps);
-    if (route) {
+    const verified = await resolveSystemAgentVerifiedInferenceState(binding, opts.deps);
+    if (verified) {
+      const { config, route } = verified;
       const [{ getPreparedModelCatalogSnapshot }, { resolveThinkingDefault }] = await Promise.all([
         import("../agents/prepared-model-catalog.js"),
         import("../agents/model-thinking-default.js"),
@@ -614,7 +612,7 @@ async function requireTuiVerifiedInference(
       // Catalog metadata improves the label but must not become a new startup
       // dependency after this exact inference route has already been verified.
       const catalog = getPreparedModelCatalogSnapshot({
-        config: route.runConfig,
+        config,
         agentId: route.agentId,
         agentDir: route.agentDir,
         readOnly: true,

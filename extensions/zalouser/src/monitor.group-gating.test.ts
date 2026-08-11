@@ -1,4 +1,5 @@
 // Zalouser tests cover monitor.group gating plugin behavior.
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
@@ -310,7 +311,7 @@ async function processMessageThroughMonitor(params: {
   config: OpenClawConfig;
   runtime: ReturnType<typeof createZalouserRuntimeEnv>;
   historyState?: { historyLimit?: number };
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }): Promise<void> {
   const messages = params.messages ?? (params.message ? [params.message] : []);
   const account = params.historyState?.historyLimit

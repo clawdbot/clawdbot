@@ -46,11 +46,14 @@ const appliedApprovalResult = {
 const resolveApprovalMock = vi.fn(
   async (): Promise<ApprovalResolveResult> => appliedApprovalResult,
 );
-const expectedApprovalResolve = {
-  approvalId: "exec:abc12345",
-  approvalKind: "exec",
-  decision: "allow-once",
-} as const;
+const expectedApprovalResolve = (senderId = "ATTACKER_OPENID") =>
+  ({
+    approvalId: "exec:abc12345",
+    approvalKind: "exec",
+    decision: "allow-once",
+    accountId: "default",
+    senderId,
+  }) as const;
 
 function makeAccount(config: GatewayAccount["config"] = {}): GatewayAccount {
   return {
@@ -190,7 +193,7 @@ describe("createInteractionHandler approval buttons", () => {
     handler(makeApprovalEvent({ group_member_openid: "OWNER_OPENID" }));
 
     await waitForQqInteraction(() =>
-      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve),
+      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve("OWNER_OPENID")),
     );
   });
 
@@ -217,6 +220,8 @@ describe("createInteractionHandler approval buttons", () => {
         approvalId: "exec:looks-like-exec/1",
         approvalKind: "plugin",
         decision: "deny",
+        accountId: "default",
+        senderId: "OWNER_OPENID",
       }),
     );
   });
@@ -340,7 +345,7 @@ describe("createInteractionHandler approval buttons", () => {
     );
 
     await waitForQqInteraction(() =>
-      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve),
+      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve("OWNER_OPENID")),
     );
   });
 
@@ -352,7 +357,76 @@ describe("createInteractionHandler approval buttons", () => {
     handler(makeApprovalEvent());
 
     await waitForQqInteraction(() =>
-      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve),
+      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve()),
+    );
+  });
+
+  it.each([
+    [
+      "an inherited accounts container",
+      () =>
+        Object.create({
+          accounts: {
+            bot2: { allowFrom: ["ATTACKER_OPENID"] },
+          },
+        }) as Record<string, unknown>,
+    ],
+    [
+      "an inherited account allowlist",
+      () => ({
+        accounts: {
+          bot2: Object.create({ allowFrom: ["ATTACKER_OPENID"] }) as Record<string, unknown>,
+        },
+      }),
+    ],
+  ] satisfies Array<[string, () => Record<string, unknown>]>)(
+    "rejects fallback approval buttons authorized only by %s",
+    async (_name, createQQBotConfig) => {
+      const namedAccount = { ...account, accountId: "bot2" };
+      const cfg = {
+        channels: {
+          qqbot: createQQBotConfig(),
+        },
+      } as unknown as OpenClawConfig;
+      const handler = createInteractionHandler(namedAccount, runtime, undefined, {
+        getActiveCfg: () => cfg,
+      });
+
+      handler(makeApprovalEvent());
+
+      await waitForQqInteraction(() => expect(acknowledgeInteractionMock).toHaveBeenCalled());
+      expect(acknowledgeInteractionMock).toHaveBeenCalledWith(
+        { appId: "app", clientSecret: "secret" },
+        "interaction-1",
+        0,
+        { content: "You are not authorized to approve this request." },
+      );
+      expect(resolveApprovalMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("uses an own named-account allowlist for fallback approval buttons", async () => {
+    const namedAccount = { ...account, accountId: "bot2" };
+    const handler = createInteractionHandler(namedAccount, runtime, undefined, {
+      getActiveCfg: () =>
+        ({
+          channels: {
+            qqbot: {
+              accounts: {
+                bot2: { allowFrom: ["ATTACKER_OPENID"] },
+              },
+            },
+          },
+        }) as OpenClawConfig,
+    });
+
+    handler(makeApprovalEvent());
+
+    await waitForQqInteraction(() =>
+      expect(resolveApprovalMock).toHaveBeenCalledWith({
+        ...expectedApprovalResolve(),
+        accountId: "bot2",
+      }),
     );
   });
 
@@ -383,7 +457,7 @@ describe("createInteractionHandler approval buttons", () => {
     handler(makeApprovalEvent());
 
     await waitForQqInteraction(() =>
-      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve),
+      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve()),
     );
   });
 
@@ -408,7 +482,7 @@ describe("createInteractionHandler approval buttons", () => {
     handler(makeApprovalEvent());
 
     await waitForQqInteraction(() =>
-      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve),
+      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve()),
     );
   });
 

@@ -8,10 +8,11 @@ import type { SessionScope } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const agentCommand = vi.fn();
+const localAgentCommand = vi.fn();
 
 vi.mock("../commands/agent.js", () => ({
-  agentCommand,
-  agentCommandFromIngress: agentCommand,
+  agentCommand: localAgentCommand,
+  agentCommandFromSystem: agentCommand,
 }));
 
 const { runBootOnce } = await import("./boot.js");
@@ -131,6 +132,7 @@ describe("runBootOnce", () => {
           }),
         ).resolves.toEqual({ status: "ran" });
         expect(agentCommand).toHaveBeenCalledTimes(1);
+        expect(localAgentCommand).not.toHaveBeenCalled();
         call = requireAgentCall();
       },
     );

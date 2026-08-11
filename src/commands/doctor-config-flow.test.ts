@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import {
@@ -17,6 +18,7 @@ type TerminalNote = (message: string, title?: string) => void;
 const terminalNoteMock = vi.hoisted(() => vi.fn<TerminalNote>());
 const callGatewayMock = vi.hoisted(() => vi.fn());
 const runDoctorRepairSequenceMock = vi.hoisted(() => vi.fn());
+const createDoctorPluginMetadataSnapshotScopeParamsMock = vi.hoisted(() => vi.fn());
 const runDoctorConfigPreflightOptionsMock = vi.hoisted(() => vi.fn());
 const collectDoctorPreviewNotesParamsMock = vi.hoisted(() => vi.fn());
 const collectImplicitFallbackClobberWarningsMock = vi.hoisted(() =>
@@ -165,6 +167,26 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
       changes.push("Moved heartbeat to agents.defaults.heartbeat and channels.defaults.heartbeat.");
     }
 
+    const internalHooks = asRecord(asRecord(next.hooks)?.internal);
+    if (internalHooks && "handlers" in internalHooks) {
+      delete internalHooks.handlers;
+      changes.push(
+        "Removed retired hooks.internal.handlers registrations; hook files must be migrated separately.",
+      );
+      const entries = asRecord(internalHooks.entries);
+      const extraDirs = asRecord(internalHooks.load)?.extraDirs;
+      const hasNamedEntries = Boolean(entries && Object.keys(entries).length > 0);
+      const hasExtraDirs =
+        Array.isArray(extraDirs) &&
+        extraDirs.some((dir) => typeof dir === "string" && dir.trim().length > 0);
+      if (internalHooks.enabled === true && !hasNamedEntries && !hasExtraDirs) {
+        delete internalHooks.enabled;
+        changes.push(
+          "Removed legacy-only hooks.internal.enabled to avoid enabling broad hook discovery.",
+        );
+      }
+    }
+
     const gateway = asRecord(next.gateway);
     if (gateway?.bind === "0.0.0.0") {
       gateway.bind = "lan";
@@ -251,6 +273,21 @@ vi.mock("./doctor/repair-sequencing.js", async () => {
       return actual.runDoctorRepairSequence(
         params as Parameters<typeof actual.runDoctorRepairSequence>[0],
       );
+    },
+  };
+});
+
+vi.mock("./doctor/shared/plugin-metadata-snapshot-scope.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("./doctor/shared/plugin-metadata-snapshot-scope.js")
+  >("./doctor/shared/plugin-metadata-snapshot-scope.js");
+  return {
+    ...actual,
+    createDoctorPluginMetadataSnapshotScope: (
+      params: Parameters<typeof actual.createDoctorPluginMetadataSnapshotScope>[0],
+    ) => {
+      createDoctorPluginMetadataSnapshotScopeParamsMock(params);
+      return actual.createDoctorPluginMetadataSnapshotScope(params);
     },
   };
 });
@@ -406,6 +443,14 @@ vi.mock("../config/legacy.js", () => {
           issues,
           ["agents", "defaults", "sandbox"],
           'agents.defaults.sandbox.perSession is legacy; use agents.defaults.sandbox.scope. Run "openclaw doctor --fix".',
+        );
+      }
+      const internalHooks = asRecord(asRecord(root.hooks)?.internal);
+      if (internalHooks && "handlers" in internalHooks) {
+        addIssue(
+          issues,
+          ["hooks", "internal", "handlers"],
+          'hooks.internal.handlers is retired. Move each module to a managed/workspace hook directory with HOOK.md + handler file before running "openclaw doctor --fix"; the fix removes retired registrations and does not materialize executable files.',
         );
       }
 
@@ -769,7 +814,7 @@ vi.mock("./doctor/shared/stale-oauth-profile-shadows.js", () => ({
 vi.mock("./doctor/channel-capabilities.js", () => {
   const byChannel = {
     googlechat: {
-      dmAllowFromMode: "nestedOnly",
+      dmAllowFromMode: "topOnly",
       groupModel: "route",
       groupAllowFromFallbackToAllowFrom: false,
       warnOnEmptyGroupSenderAllowlist: false,
@@ -1595,6 +1640,7 @@ describe("doctor config flow", () => {
     callGatewayMock.mockReset();
     callGatewayMock.mockResolvedValue({});
     runDoctorRepairSequenceMock.mockReset();
+    createDoctorPluginMetadataSnapshotScopeParamsMock.mockClear();
     collectDoctorPreviewNotesParamsMock.mockClear();
     collectImplicitFallbackClobberWarningsMock.mockClear();
     collectImplicitFallbackClobberWarningsMock.mockReturnValue([]);
@@ -1899,6 +1945,53 @@ describe("doctor config flow", () => {
     expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ doctorOnlyStateMigrations: true }),
     );
+  });
+
+  it("prepares plugin metadata for the complete Doctor lifecycle", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: {},
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ preparePluginMetadataSnapshot: true }),
+    );
+    expect(result.runWithPluginMetadataSnapshot).toEqual(expect.any(Function));
+    expect(result.invalidatePluginMetadataSnapshot).toEqual(expect.any(Function));
+    expect(collectDoctorPreviewNotesParamsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        runWithPluginMetadataSnapshot: result.runWithPluginMetadataSnapshot,
+      }),
+    );
+  });
+
+  it("exposes cleanup-refreshed plugin metadata to later Doctor scopes", async () => {
+    const refreshedSnapshot = {
+      plugins: [],
+      index: { installRecords: {} },
+    } as unknown as PluginMetadataSnapshot;
+    runDoctorRepairSequenceMock.mockImplementation(async (params: { state: unknown }) => ({
+      state: params.state,
+      changeNotes: ['Removed stale managed install record for bundled plugin "google-meet".'],
+      warningNotes: [],
+      authProfilesRepaired: false,
+      pluginMetadataSnapshot: refreshedSnapshot,
+    }));
+
+    const result = await runDoctorConfigWithInput({
+      config: {},
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.pluginMetadataSnapshot).toBe(refreshedSnapshot);
+    const scopeParams = createDoctorPluginMetadataSnapshotScopeParamsMock.mock.lastCall?.[0] as {
+      getBaseSnapshot: () => PluginMetadataSnapshot | undefined;
+    };
+    expect(scopeParams.getBaseSnapshot()).toBe(refreshedSnapshot);
+    expect(scopeParams.getBaseSnapshot()?.index.installRecords).not.toHaveProperty("google-meet");
+    result.invalidatePluginMetadataSnapshot();
+    expect(scopeParams.getBaseSnapshot()).toBeUndefined();
   });
 
   it("collects plugin blocker previews from the pre-auto-enable config", async () => {
@@ -3089,9 +3182,7 @@ describe("doctor config flow", () => {
           googlechat: {
             accounts: {
               work: {
-                dm: {
-                  policy: "open",
-                },
+                dmPolicy: "open",
               },
             },
           },
@@ -3106,11 +3197,9 @@ describe("doctor config flow", () => {
         googlechat: {
           accounts: {
             work: {
-              dm: {
-                policy: string;
-                allowFrom: string[];
-              };
-              allowFrom?: string[];
+              dmPolicy: string;
+              allowFrom: string[];
+              dm?: unknown;
             };
           };
         };
@@ -3118,8 +3207,9 @@ describe("doctor config flow", () => {
     };
     expect(cfg.channels.discord.allowFrom).toEqual(["*"]);
     expect(cfg.channels.discord.dmPolicy).toBe("open");
-    expect(cfg.channels.googlechat.accounts.work.dm.allowFrom).toEqual(["*"]);
-    expect(cfg.channels.googlechat.accounts.work.allowFrom).toBeUndefined();
+    expect(cfg.channels.googlechat.accounts.work.dmPolicy).toBe("open");
+    expect(cfg.channels.googlechat.accounts.work.allowFrom).toEqual(["*"]);
+    expect(cfg.channels.googlechat.accounts.work.dm).toBeUndefined();
   });
 
   it('repairs dmPolicy="allowlist" by restoring allowFrom from pairing store on repair', async () => {
@@ -3397,8 +3487,9 @@ describe("doctor config flow", () => {
       expect(legacyMessages).toContain("tools.web.x_search.apiKey:");
       expect(legacyMessages).toContain("plugins.entries.xai.config.webSearch.apiKey");
       expect(legacyMessages).toContain("hooks.internal.handlers:");
-      expect(legacyMessages).toContain("HOOK.md + handler.js");
-      expect(legacyMessages).toContain("does not rewrite this shape automatically");
+      expect(legacyMessages).toContain("HOOK.md + handler file");
+      expect(legacyMessages).toContain("before running");
+      expect(legacyMessages).toContain("does not materialize executable files");
       expect(legacyMessages).toContain("session.threadBindings.ttlHours");
       expect(legacyMessages).toContain("session.threadBindings.idleHours");
       expect(legacyMessages).toContain("session.maintenance.rotateBytes");
@@ -3422,6 +3513,45 @@ describe("doctor config flow", () => {
       noteSpy.mockClear();
     }
   });
+
+  it.each([
+    [false, "Doctor changes preview", false],
+    [true, "Doctor changes", true],
+  ] as const)(
+    "previews and repairs retired internal hook registrations (repair=%s)",
+    async (repair, panelTitle, shouldWriteConfig) => {
+      const noteSpy = resetTerminalNoteMock();
+      try {
+        const result = await runDoctorConfigWithInput({
+          config: {
+            hooks: {
+              internal: {
+                enabled: true,
+                handlers: [{ event: "command:new", module: "hooks/legacy-handler.js" }],
+              },
+            },
+          },
+          repair,
+          run: loadAndMaybeMigrateDoctorConfig,
+        });
+
+        expect(
+          (result.cfg.hooks?.internal as Record<string, unknown> | undefined)?.handlers,
+        ).toBeUndefined();
+        expect(result.cfg.hooks?.internal?.enabled).toBeUndefined();
+        expect(result.shouldWriteConfig).toBe(shouldWriteConfig);
+        expect(
+          noteSpy.mock.calls.some(
+            ([message, title]) =>
+              title === panelTitle &&
+              message.includes("Removed retired hooks.internal.handlers registrations"),
+          ),
+        ).toBe(true);
+      } finally {
+        noteSpy.mockClear();
+      }
+    },
+  );
 
   it("titles the legacy migration panel as a preview when --fix is not passed (#80817)", async () => {
     const noteSpy = resetTerminalNoteMock();
@@ -3469,16 +3599,14 @@ describe("doctor config flow", () => {
     }
   });
 
-  it("recovers from stale googlechat top-level allowFrom by repairing dm.allowFrom", async () => {
+  it("preserves valid googlechat top-level DM policy and allowFrom", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
       config: {
         channels: {
           googlechat: {
+            dmPolicy: "open",
             allowFrom: ["*"],
-            dm: {
-              policy: "open",
-            },
           },
         },
       },
@@ -3487,13 +3615,15 @@ describe("doctor config flow", () => {
     const cfg = result.cfg as {
       channels: {
         googlechat: {
-          dm: { allowFrom: string[] };
-          allowFrom?: string[];
+          dmPolicy: string;
+          allowFrom: string[];
+          dm?: unknown;
         };
       };
     };
-    expect(cfg.channels.googlechat.dm.allowFrom).toEqual(["*"]);
-    expect(cfg.channels.googlechat.allowFrom).toBeUndefined();
+    expect(cfg.channels.googlechat.dmPolicy).toBe("open");
+    expect(cfg.channels.googlechat.allowFrom).toEqual(["*"]);
+    expect(cfg.channels.googlechat.dm).toBeUndefined();
   });
 
   it("does not report repeat talk provider normalization on consecutive repair runs", async () => {

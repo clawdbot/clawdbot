@@ -66,7 +66,7 @@ export type ChannelStreamingProgressConfig = {
   render?: "text" | "rich";
   /** Include compact tool/task progress in the draft. Default: true. */
   toolProgress?: boolean;
-  /** Command/exec progress detail in the draft. "raw" preserves released behavior; "status" shows only the tool label. Default: "raw". */
+  /** Command/exec progress detail in the draft. "raw" opts into command text; "status" shows only the tool label. Default: "status". */
   commandText?: ChannelStreamingCommandTextMode;
   /** Include assistant commentary/preamble text in the progress draft. Default: false. */
   commentary?: boolean;
@@ -87,7 +87,7 @@ export type ChannelStreamingPreviewConfig = {
    * Default: true.
    */
   toolProgress?: boolean;
-  /** Command/exec progress detail in the preview. "raw" preserves released behavior; "status" shows only the tool label. Default: "raw". */
+  /** Command/exec progress detail in the preview. "raw" opts into command text; "status" shows only the tool label. Default: "status". */
   commandText?: ChannelStreamingCommandTextMode;
 };
 
@@ -98,7 +98,9 @@ export type ChannelStreamingBlockConfig = {
   coalesce?: BlockStreamingCoalesceConfig;
 };
 
-export type ChannelStreamingConfig = {
+export type ChannelStreamingConfig<
+  TProgress extends ChannelStreamingProgressConfig = ChannelStreamingProgressConfig,
+> = {
   /**
    * Preview streaming mode:
    * - "off": disable preview updates
@@ -109,13 +111,10 @@ export type ChannelStreamingConfig = {
   mode?: StreamingMode;
   /** Chunking mode for outbound text delivery. */
   chunkMode?: TextChunkMode;
-  /**
-   * Channel-specific native transport streaming toggle.
-   * Used today by Slack's native stream API.
-   */
+  /** Prefer a channel's native streaming transport over its portable draft path. */
   nativeTransport?: boolean;
   preview?: ChannelStreamingPreviewConfig;
-  progress?: ChannelStreamingProgressConfig;
+  progress?: TProgress;
   block?: ChannelStreamingBlockConfig;
 };
 
@@ -263,7 +262,7 @@ export type SessionMaintenanceConfig = {
   /**
    * Per-agent sessions-directory disk budget (e.g. "500mb"). Default: "10gb".
    * When exceeded, warn (mode=warn) or enforce oldest-first cleanup
-   * (mode=enforce). Set `false` to disable the budget entirely.
+   * (mode=enforce). Set `false`, `0`, or `"0"` to disable the budget entirely.
    */
   maxDiskBytes?: number | string | false;
   /**
@@ -293,7 +292,7 @@ export type DiagnosticsOtelConfig = {
   tracesEndpoint?: string;
   metricsEndpoint?: string;
   logsEndpoint?: string;
-  protocol?: "http/protobuf" | "grpc";
+  protocol?: "http/protobuf";
   headers?: Record<string, string>;
   serviceName?: string;
   /** Replacement prefix for OpenClaw-owned metric names. Empty removes the prefix; defaults to "openclaw.". */
@@ -324,6 +323,11 @@ export type AuditConfig = {
    * records stay readable until they expire.
    */
   enabled?: boolean;
+  /**
+   * Retain bounded execution-identity attribution for exact-run inspection.
+   * Default: false. Requires the audit ledger and takes effect after Gateway restart.
+   */
+  executionIdentity?: boolean;
   /**
    * Record content-free message lifecycle metadata. `direct` records only
    * known direct conversations; `all` also records group, channel, and

@@ -15,6 +15,7 @@ import {
   isProfileInCooldown,
   markAuthProfileBlockedUntil,
   markAuthProfileFailure,
+  markInlineProviderApiKeyFailure,
   maybeReprobeWhamBlockedProfiles,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,
@@ -1163,6 +1164,21 @@ describe("markAuthProfileFailure — locked update failure", () => {
       }
       consoleWarn.mockRestore();
     }
+  });
+});
+
+describe("markInlineProviderApiKeyFailure", () => {
+  it("does not cool an inline key after a provider timeout", async () => {
+    const store = makeStore(undefined);
+
+    await markInlineProviderApiKeyFailure({
+      store,
+      provider: "anthropic",
+      reason: "timeout",
+    });
+
+    expect(store.usageStats).toBeUndefined();
+    expect(storeMocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
   });
 });
 

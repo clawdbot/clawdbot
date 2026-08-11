@@ -4,13 +4,14 @@ import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-conte
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { resolveUserTranscriptMessages } from "./attempt-history.js";
 import {
   installRuntimeContextMessageForPrompt,
   installModelPromptTransform,
   normalizeCurrentPromptTextForLlmBoundary,
   normalizeMessagesForLlmBoundary,
-} from "./attempt.llm-boundary.js";
-import { resolveUserTranscriptMessages } from "./attempt.user-message-boundary.js";
+} from "./attempt-llm-boundary.js";
+import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 describe("normalizeMessagesForLlmBoundary", () => {
   it("strips inbound metadata from historical user turns before model replay", () => {
@@ -937,13 +938,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
         content: [{ type: "text", text: "old answer" }],
         timestamp: 1,
       },
-      {
-        role: "custom",
-        customType: "openclaw.runtime-context",
-        content: "current runtime context",
-        display: false,
-        timestamp: 2,
-      },
+      buildRuntimeContextCustomMessage("current runtime context"),
       {
         role: "user",
         content: [{ type: "text", text: "visible ask" }],
@@ -963,8 +958,10 @@ describe("normalizeMessagesForLlmBoundary", () => {
     ]);
     expect(modelInput[2]).toMatchObject({
       customType: "openclaw.runtime-context",
-      content: "current runtime context",
     });
+    expect(modelInput[2]?.content).toContain(
+      "Use it to continue answering the active user request now.",
+    );
     // User messages are form-canonicalized from array to plain string.
     expect(modelInput[0]?.content).toBe("old ask");
     expect(modelInput[3]?.content).toBe("visible ask");

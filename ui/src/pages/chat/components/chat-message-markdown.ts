@@ -12,7 +12,6 @@ import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.t
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { persistedMessageEntryId, type AssistantMessageExpansionState } from "../chat-thread.ts";
-import { renderDeleteButton } from "./chat-message-confirmation.ts";
 
 export type MessageReplyTarget = {
   messageId: string;
@@ -155,13 +154,11 @@ export function renderMessageActionButtons(
   opts: {
     onReply?: (target: MessageReplyTarget) => void;
   },
-  onDelete?: () => void,
 ) {
   return html`
     ${details.replyTarget && opts.onReply
       ? renderReplyButton(details.replyTarget, opts.onReply)
       : nothing}
-    ${onDelete ? renderDeleteButton(onDelete, "right") : nothing}
     ${details.markdown ? renderCopyAsMarkdownButton(details.markdown) : nothing}
   `;
 }

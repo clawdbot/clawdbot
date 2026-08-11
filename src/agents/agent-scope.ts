@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
+import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 export { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import {
@@ -198,9 +199,7 @@ export function resolveAutoFallbackPrimaryProbe(params: {
     return undefined;
   }
   const fallbackAuthProfileId = normalizeOptionalString(entry.authProfileOverride);
-  const fallbackAuthProfileIdSource =
-    entry.authProfileOverrideSource ??
-    (entry.authProfileOverrideCompactionCount !== undefined ? "auto" : undefined);
+  const fallbackAuthProfileIdSource = resolveSessionAuthProfileOverrideSource(entry);
   return {
     provider: originProvider,
     model: originModel,
@@ -286,11 +285,7 @@ export function clearAutoFallbackPrimaryProbeSelection(
   delete entry.modelOverrideRouteResolution;
   delete entry.modelOverrideFallbackOriginProvider;
   delete entry.modelOverrideFallbackOriginModel;
-  if (
-    entry.authProfileOverrideSource === "auto" ||
-    (entry.authProfileOverrideSource === undefined &&
-      entry.authProfileOverrideCompactionCount !== undefined)
-  ) {
+  if (resolveSessionAuthProfileOverrideSource(entry) === "auto") {
     delete entry.authProfileOverride;
     delete entry.authProfileOverrideSource;
     delete entry.authProfileOverrideCompactionCount;
@@ -458,11 +453,12 @@ export function resolveSubagentModelConfigSelectionResult(params: {
   const agentConfig =
     params.agentConfigOverride ??
     (params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined);
+  // Keep cron and fallback routing aligned with native spawn: per-agent subagent,
+  // then the global subagent default, then agent-primary inheritance.
   const candidates: SubagentModelConfigSelectionResult[] = [
     ...(agentConfig?.subagents?.model
       ? [{ raw: agentConfig.subagents.model, source: "subagent" as const }]
       : []),
-    ...(agentConfig?.model ? [{ raw: agentConfig.model, source: "agent" as const }] : []),
     ...(params.cfg.agents?.defaults?.subagents?.model
       ? [
           {
@@ -471,6 +467,7 @@ export function resolveSubagentModelConfigSelectionResult(params: {
           },
         ]
       : []),
+    ...(agentConfig?.model ? [{ raw: agentConfig.model, source: "agent" as const }] : []),
   ];
   return candidates.find((candidate) => resolvePrimaryStringValue(candidate.raw));
 }
@@ -576,36 +573,23 @@ function normalizePathForComparison(input: string): string {
   return normalized;
 }
 
-export function resolveAgentIdsByWorkspacePath(
-  cfg: OpenClawConfig,
-  workspacePath: string,
-): string[] {
-  const normalizedWorkspacePath = normalizePathForComparison(workspacePath);
-  const ids = listAgentIds(cfg);
-  const matches: Array<{ id: string; workspaceDir: string; order: number }> = [];
-
-  for (const [index, id] of ids.entries()) {
-    const workspaceDir = normalizePathForComparison(resolveAgentWorkspaceDir(cfg, id));
-    if (!isPathInside(workspaceDir, normalizedWorkspacePath)) {
-      continue;
-    }
-    matches.push({ id, workspaceDir, order: index });
-  }
-
-  matches.sort((left, right) => {
-    const workspaceLengthDelta = right.workspaceDir.length - left.workspaceDir.length;
-    if (workspaceLengthDelta !== 0) {
-      return workspaceLengthDelta;
-    }
-    return left.order - right.order;
-  });
-
-  return matches.map((entry) => entry.id);
-}
-
 export function resolveAgentIdByWorkspacePath(
   cfg: OpenClawConfig,
   workspacePath: string,
 ): string | undefined {
-  return resolveAgentIdsByWorkspacePath(cfg, workspacePath)[0];
+  const normalizedWorkspacePath = normalizePathForComparison(workspacePath);
+  let matchedAgentId: string | undefined;
+  let matchedWorkspaceLength = -1;
+
+  for (const id of listAgentIds(cfg)) {
+    const workspaceDir = normalizePathForComparison(resolveAgentWorkspaceDir(cfg, id));
+    if (!isPathInside(workspaceDir, normalizedWorkspacePath)) {
+      continue;
+    }
+    if (workspaceDir.length > matchedWorkspaceLength) {
+      matchedAgentId = id;
+      matchedWorkspaceLength = workspaceDir.length;
+    }
+  }
+  return matchedAgentId;
 }

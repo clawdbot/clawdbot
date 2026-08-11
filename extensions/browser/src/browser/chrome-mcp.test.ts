@@ -2881,11 +2881,34 @@ describe("chrome MCP page parsing", () => {
     });
 
     const callToolMock = session.client["callTool"] as unknown as ToolCallMock;
-    const navigateCall = callToolMock.mock.calls.find(
-      ([call]) => call.name === "navigate_page",
-    )?.[0];
-    expect(navigateCall?.arguments?.timeout).toBe(20_000);
+    const navigateCall = callToolMock.mock.calls.find(([call]) => call.name === "navigate_page");
+    expect(navigateCall?.[0].arguments?.timeout).toBe(20_000);
+    expect(navigateCall?.[2]?.timeout).toBe(25_000);
   });
+
+  it.each([
+    { requestedTimeoutMs: 10, expectedTimeoutMs: 1_000 },
+    { requestedTimeoutMs: 180_000, expectedTimeoutMs: 120_000 },
+    { requestedTimeoutMs: Number.MAX_SAFE_INTEGER, expectedTimeoutMs: 120_000 },
+  ])(
+    "normalizes Chrome MCP navigation timeout $requestedTimeoutMs before SDK watchdog grace",
+    async ({ requestedTimeoutMs, expectedTimeoutMs }) => {
+      const session = createFakeSession();
+      setChromeMcpSessionFactoryForTest(async () => session);
+
+      await navigateChromeMcpPage({
+        profileName: "chrome-live",
+        targetId: FAKE_TARGET_1,
+        url: "https://example.com",
+        timeoutMs: requestedTimeoutMs,
+      });
+
+      const callToolMock = session.client["callTool"] as unknown as ToolCallMock;
+      const navigateCall = callToolMock.mock.calls.find(([call]) => call.name === "navigate_page");
+      expect(navigateCall?.[0].arguments?.timeout).toBe(expectedTimeoutMs);
+      expect(navigateCall?.[2]?.timeout).toBe(expectedTimeoutMs + 5_000);
+    },
+  );
 
   it("caps the navigate_page safety-net timeout", () => {
     expect(resolveChromeMcpNavigateCallTimeoutMs(10_000)).toBe(15_000);

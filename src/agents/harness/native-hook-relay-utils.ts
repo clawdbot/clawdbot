@@ -1,4 +1,4 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateUtf16Safe, truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import type {
   JsonValue,
   NativeHookRelayEvent,
@@ -212,9 +212,6 @@ function snapshotString(value: string, state: { remainingStringLength: number })
   return `${prefix}...[truncated]`;
 }
 
-export function truncateText(value: string, maxLength: number): string {
-  if (value.length <= maxLength) {
-    return value;
-  }
-  return `${truncateUtf16Safe(value, Math.max(0, maxLength - 3))}...`;
+export function truncateRelayText(value: string, maxLength: number): string {
+  return truncateWithMarker(value, maxLength, { marker: "...", reserve: 3, trimEnd: false });
 }

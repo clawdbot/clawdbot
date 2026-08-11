@@ -153,6 +153,7 @@ describe("tsdown config", () => {
       "cli/gateway-lifecycle.runtime",
       "agents/compaction-planning.worker",
       "agents/model-provider-auth.worker",
+      "config/sessions/session-accessor.sqlite-archive.worker",
       "state/openclaw-database-verify.worker",
       "system-agent/setup-inference-detection.worker",
       "plugins/memory-state",
@@ -224,6 +225,14 @@ describe("tsdown config", () => {
 
     expect(entrySources(distGraph)["gateway/worker-environments/runtime"]).toBe(
       "src/gateway/worker-environments/runtime.ts",
+    );
+  });
+
+  it("keeps Gateway plugin reload targets behind one stable dist entry", () => {
+    const distGraph = requireUnifiedDistGraph();
+
+    expect(entrySources(distGraph)["gateway/plugin-channel-reload-targets"]).toBe(
+      "src/gateway/plugin-channel-reload-targets.ts",
     );
   });
 

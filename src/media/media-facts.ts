@@ -5,6 +5,10 @@ import {
   mimeTypeFromFilePath,
   normalizeMimeType,
 } from "@openclaw/media-core/mime";
+import {
+  asFiniteNumberInRange,
+  asPositiveSafeInteger as normalizePositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PromptImageOrderEntry } from "./prompt-image-order.js";
 
@@ -37,7 +41,7 @@ export type MediaFactInput = {
 const RUNTIME_PROMPT_MEDIA_FACTS = Symbol.for("openclaw.runtimePromptMediaFacts");
 
 function normalizeNonNegativeNumber(value: number | null | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+  return asFiniteNumberInRange(value, { min: 0 });
 }
 
 /** Attaches facts to a runtime prompt message without changing serialized/model-visible bytes. */
@@ -320,10 +324,6 @@ type MediaFactDefaults<TInput extends MediaFactInput = MediaFactInput> = {
   workspaceDir?: string;
   transcribed?: (media: TInput, index: number) => boolean;
 };
-
-function normalizePositiveInteger(value: number | null | undefined): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
-}
 
 export type MediaFactLegacyProjection = {
   /** @deprecated Use `media[0]?.path`. */

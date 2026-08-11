@@ -21,6 +21,7 @@ import { compactToolOutputHint } from "./tool-schema-hints.js";
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 const callGatewayMock = vi.fn();
+const agentToolGatewayCallMock = vi.fn();
 const buildStatusMessageMock = vi.hoisted(() =>
   vi.fn((_params?: unknown) => "OpenClaw\n🧠 Model: GPT-5.4"),
 );
@@ -192,6 +193,12 @@ function createGatewayCallModuleMock() {
   };
 }
 
+function createInProcessGatewayModuleMock() {
+  return {
+    callAgentToolGatewayRequest: (opts: unknown) => agentToolGatewayCallMock(opts),
+  };
+}
+
 function createConfigModuleMock() {
   return {
     getRuntimeConfig: () => mockConfig,
@@ -200,6 +207,7 @@ function createConfigModuleMock() {
 
 function createModelCatalogModuleMock() {
   return {
+    loadProviderScopedThinkingCatalog: async () => [],
     loadPreparedModelCatalog: async () => [
       {
         provider: "anthropic",
@@ -314,6 +322,7 @@ function createCommandsStatusRuntimeModuleMock() {
 
 vi.mock("../config/sessions.js", createSessionsModuleMock);
 vi.mock("../gateway/call.js", createGatewayCallModuleMock);
+vi.mock("./tools/in-process-gateway.js", createInProcessGatewayModuleMock);
 vi.mock("../config/config.js", createConfigModuleMock);
 vi.mock("../agents/prepared-model-catalog.js", createModelCatalogModuleMock);
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
@@ -412,6 +421,8 @@ function resetSessionStore(inputStore: Record<string, SessionEntry>) {
   loadSessionStoreMock.mockClear();
   updateSessionStoreMock.mockClear();
   callGatewayMock.mockClear();
+  agentToolGatewayCallMock.mockReset();
+  agentToolGatewayCallMock.mockImplementation((opts: unknown) => callGatewayMock(opts));
   listTasksForRelatedSessionKeyForOwnerMock.mockClear();
   listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([]);
   getSessionStateVersionMock.mockReset();
@@ -2453,6 +2464,43 @@ describe("session_status tool", () => {
     expect(saved.modelOverride).toBeUndefined();
     expect(saved.authProfileOverride).toBeUndefined();
     expect(saved.liveModelSwitchPending).toBe(true);
+  });
+
+  it("preserves a compatible auth profile when changing the session model", async () => {
+    let persistedStore: Record<string, SessionEntry> | undefined;
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+        providerOverride: "openai",
+        modelOverride: "gpt-4o",
+        authProfileOverride: "session-status-team:prod",
+        authProfileOverrideSource: "user",
+        authProfileOverrideCompactionCount: 2,
+      },
+    });
+    mockConfig = {
+      ...createMockConfig(),
+      auth: {
+        profiles: { "session-status-team:prod": { provider: "openai", mode: "api_key" } },
+      },
+    };
+    updateSessionStoreMock.mockImplementation(
+      (_storePath: string, store: Record<string, SessionEntry>) => {
+        persistedStore = structuredClone(store);
+      },
+    );
+
+    const result = await getSessionStatusTool().execute("call4", { model: "openai/gpt-5.4" });
+
+    expect(result.details).toMatchObject({ modelOverride: null });
+    const saved = persistedStore?.main;
+    if (!saved) {
+      throw new Error("Expected session_status to persist the selected model");
+    }
+    expect(saved.authProfileOverride).toBe("session-status-team:prod");
+    expect(saved.authProfileOverrideSource).toBe("user");
+    expect(saved.authProfileOverrideCompactionCount).toBe(2);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -14,6 +14,7 @@ import { Type } from "typebox";
 import { parseScreenSnapshotPayload } from "../../cli/nodes-screen.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { sleep } from "../../utils/sleep.js";
 import {
   DEFAULT_IMAGE_MAX_DIMENSION_PX,
   resolveImageSanitizationLimits,
@@ -27,12 +28,11 @@ import {
   stringEnum,
 } from "../schema/typebox.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
-import { sleep } from "../utils/sleep.js";
 import {
   type AnyAgentTool,
   readFiniteNumberParam,
   readPositiveIntegerParam,
-  readStringParam,
+  readToolStringParam,
 } from "./common.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, type GatewayCallOptions, readGatewayCallOptions } from "./gateway.js";
@@ -296,7 +296,7 @@ function buildComputerActParams(params: {
     }
     case "key":
     case "hold_key": {
-      const keys = readStringParam(input, "text", { required: true });
+      const keys = readToolStringParam(input, "text", { required: true });
       wire.keys = keys;
       if (action === "hold_key") {
         const seconds =
@@ -655,7 +655,9 @@ export function createComputerTool(options?: {
       serialize(async () => {
         signal?.throwIfAborted();
         const params = args as Record<string, unknown>;
-        const action = readStringParam(params, "action", { required: true }) as ComputerToolAction;
+        const action = readToolStringParam(params, "action", {
+          required: true,
+        }) as ComputerToolAction;
         const gatewayOpts = readGatewayCallOptions(params);
         const explicitNode = typeof params.node === "string" ? params.node : undefined;
         const explicitScreenIndex = (() => {
