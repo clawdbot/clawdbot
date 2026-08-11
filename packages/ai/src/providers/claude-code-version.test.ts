@@ -1,23 +1,23 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  __resetClaudeCodeVersionResolver,
-  __setClaudeCodeVersionResolver,
+  resetTestClaudeCodeVersionResolver,
+  setTestClaudeCodeVersionResolver,
   resolveClaudeCodeVersion,
 } from "./claude-code-version.js";
 
 afterEach(() => {
-  __resetClaudeCodeVersionResolver();
+  resetTestClaudeCodeVersionResolver();
 });
 
 describe("resolveClaudeCodeVersion", () => {
   it("returns the value from an injected resolver", () => {
-    __setClaudeCodeVersionResolver(() => "2.1.177");
+    setTestClaudeCodeVersionResolver(() => "2.1.177");
     expect(resolveClaudeCodeVersion()).toBe("2.1.177");
   });
 
   it("caches the resolved value for the process lifetime", () => {
     let calls = 0;
-    __setClaudeCodeVersionResolver(() => {
+    setTestClaudeCodeVersionResolver(() => {
       calls += 1;
       return "2.1.177";
     });
@@ -28,35 +28,35 @@ describe("resolveClaudeCodeVersion", () => {
   });
 
   it("swapping the resolver clears the cache", () => {
-    __setClaudeCodeVersionResolver(() => "2.1.177");
+    setTestClaudeCodeVersionResolver(() => "2.1.177");
     expect(resolveClaudeCodeVersion()).toBe("2.1.177");
-    __setClaudeCodeVersionResolver(() => "2.1.180");
+    setTestClaudeCodeVersionResolver(() => "2.1.180");
     expect(resolveClaudeCodeVersion()).toBe("2.1.180");
   });
 
   it("throws when the resolver returns null", () => {
-    __setClaudeCodeVersionResolver(() => null);
-    expect(() => resolveClaudeCodeVersion()).toThrow(/Failed to resolve Claude Code version/);
+    setTestClaudeCodeVersionResolver(() => null);
+    expect(() => resolveClaudeCodeVersion()).toThrow(/invalid value/);
   });
 
   it("throws when the resolver returns an empty string", () => {
-    __setClaudeCodeVersionResolver(() => "");
+    setTestClaudeCodeVersionResolver(() => "");
     expect(() => resolveClaudeCodeVersion()).toThrow(/invalid value/);
   });
 
   it("throws when the resolver returns a non-digit-leading string", () => {
-    __setClaudeCodeVersionResolver(() => "v2.1.177");
+    setTestClaudeCodeVersionResolver(() => "v2.1.177");
     expect(() => resolveClaudeCodeVersion()).toThrow(/invalid value/);
   });
 
   it("accepts a digit-leading string", () => {
-    __setClaudeCodeVersionResolver(() => "2.0.0-beta");
+    setTestClaudeCodeVersionResolver(() => "2.0.0-beta");
     expect(resolveClaudeCodeVersion()).toBe("2.0.0-beta");
   });
 
   it("throws when the resolver itself throws, preserving the cause", () => {
     const original = new Error("boom");
-    __setClaudeCodeVersionResolver(() => {
+    setTestClaudeCodeVersionResolver(() => {
       throw original;
     });
     try {
@@ -69,7 +69,7 @@ describe("resolveClaudeCodeVersion", () => {
   });
 
   it("never returns a stale-known-rejected fallback (regression guard for #94716)", () => {
-    __setClaudeCodeVersionResolver(() => null);
+    setTestClaudeCodeVersionResolver(() => null);
     expect(() => resolveClaudeCodeVersion()).toThrow();
     // No failure mode of the resolver should silently produce the historically
     // rejected version — the whole point of this module is to fail loudly

@@ -14,8 +14,8 @@ import {
 import { createCompactionCapture } from "./anthropic-compaction-replay.js";
 import { withProviderAcceptanceObserver } from "./transport-stream-shared.js";
 import {
-  __resetClaudeCodeVersionResolver,
-  __setClaudeCodeVersionResolver,
+  resetTestClaudeCodeVersionResolver,
+  setTestClaudeCodeVersionResolver,
 } from "../providers/claude-code-version.js";
 
 // This test environment has no @anthropic-ai/claude-code install and no
@@ -24,10 +24,10 @@ import {
 // covered by claude-code-version.test.ts.
 const TEST_CLAUDE_CODE_VERSION = "2.1.177";
 beforeAll(() => {
-  __setClaudeCodeVersionResolver(() => TEST_CLAUDE_CODE_VERSION);
+  setTestClaudeCodeVersionResolver(() => TEST_CLAUDE_CODE_VERSION);
 });
 afterAll(() => {
-  __resetClaudeCodeVersionResolver();
+  resetTestClaudeCodeVersionResolver();
 });
 
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({

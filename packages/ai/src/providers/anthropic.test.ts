@@ -2,8 +2,8 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import {
-  __resetClaudeCodeVersionResolver,
-  __setClaudeCodeVersionResolver,
+  resetTestClaudeCodeVersionResolver,
+  setTestClaudeCodeVersionResolver,
 } from "./claude-code-version.js";
 import type { AssistantMessage, Context, Model, Tool } from "../types.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
@@ -14,10 +14,10 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-bound
 // covered by claude-code-version.test.ts.
 const TEST_CLAUDE_CODE_VERSION = "2.1.177";
 beforeAll(() => {
-  __setClaudeCodeVersionResolver(() => TEST_CLAUDE_CODE_VERSION);
+  setTestClaudeCodeVersionResolver(() => TEST_CLAUDE_CODE_VERSION);
 });
 afterAll(() => {
-  __resetClaudeCodeVersionResolver();
+  resetTestClaudeCodeVersionResolver();
 });
 
 const anthropicMockState = vi.hoisted(() => ({

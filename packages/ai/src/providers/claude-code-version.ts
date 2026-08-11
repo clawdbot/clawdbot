@@ -18,7 +18,7 @@
 // fallback is exactly the failure mode #94716 reports; re-emitting the rejected
 // value would preserve the production auth failure.
 //
-// The resolver is injectable via __setClaudeCodeVersionResolver so tests can
+// The resolver is injectable via setTestClaudeCodeVersionResolver so tests can
 // run without depending on the host's global Node module graph or PATH.
 //
 // The version is resolved lazily on first call, never at module load — a
@@ -36,9 +36,9 @@ import { createRequire } from "node:module";
 export type ClaudeCodeVersionResolver = () => string | null;
 
 // Process-stable version cache. Populated on first call to resolveClaudeCodeVersion().
-// Cleared by __setClaudeCodeVersionResolver / __resetClaudeCodeVersionResolver
+// Cleared by setTestClaudeCodeVersionResolver / resetTestClaudeCodeVersionResolver
 // for test isolation (tests that swap the resolver also get a fresh resolution).
-let _versionCache: string | null = null;
+let versionCache: string | null = null;
 
 function resolveFromModuleGraph(): string | null {
   try {
@@ -67,7 +67,9 @@ function resolveFromCLIBinary(): string | null {
     });
     // `claude --version` outputs something like "2.1.177" or "Claude Code 2.1.177"
     const m = out.trim().match(/(\d[\d.]+)/);
-    if (m?.[1]) return m[1];
+    if (m?.[1]) {
+      return m[1];
+    }
   } catch {
     // claude not on PATH or --version failed.
   }
@@ -79,27 +81,29 @@ const defaultClaudeCodeVersionResolver: ClaudeCodeVersionResolver = () => {
   return resolveFromModuleGraph() ?? resolveFromCLIBinary();
 };
 
-let _resolver: ClaudeCodeVersionResolver = defaultClaudeCodeVersionResolver;
+let activeResolver: ClaudeCodeVersionResolver = defaultClaudeCodeVersionResolver;
 
-export function __setClaudeCodeVersionResolver(next: ClaudeCodeVersionResolver): void {
-  _resolver = next;
-  _versionCache = null;
+export function setTestClaudeCodeVersionResolver(next: ClaudeCodeVersionResolver): void {
+  activeResolver = next;
+  versionCache = null;
 }
 
-export function __resetClaudeCodeVersionResolver(): void {
-  _resolver = defaultClaudeCodeVersionResolver;
-  _versionCache = null;
+export function resetTestClaudeCodeVersionResolver(): void {
+  activeResolver = defaultClaudeCodeVersionResolver;
+  versionCache = null;
 }
 
 // Returns the validated Claude Code version, cached for the process lifetime.
 // Throws on first call if neither resolution strategy succeeds — never returns
 // a stale fallback.
 export function resolveClaudeCodeVersion(): string {
-  if (_versionCache !== null) return _versionCache;
+  if (versionCache !== null) {
+    return versionCache;
+  }
 
   let result: string | null;
   try {
-    result = _resolver();
+    result = activeResolver();
   } catch (cause) {
     throw new Error(
       "Failed to resolve Claude Code version. " +
@@ -114,6 +118,6 @@ export function resolveClaudeCodeVersion(): string {
         "Install @anthropic-ai/claude-code or ensure the claude binary is on PATH.",
     );
   }
-  _versionCache = result;
+  versionCache = result;
   return result;
 }
