@@ -31,7 +31,6 @@ import type {
 
 export type {
   GatewayProtocolCloseContext,
-  GatewayProtocolRequestTiming,
   GatewayProtocolSocket,
   GatewayProtocolSocketHandlers,
   GatewayProtocolTiming,
