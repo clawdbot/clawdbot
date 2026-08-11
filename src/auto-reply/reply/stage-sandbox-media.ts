@@ -259,8 +259,9 @@ async function pruneEmptyStagedMediaDirs(inboundMediaDir: string): Promise<void>
       // removal tolerates ENOTEMPTY (a concurrent staging run wrote a file
       // after our check) and ENOENT (someone else removed it first), so a
       // late-arriving staged file is never deleted.
-      await fs.rmdir(dirPath).catch((error: NodeJS.ErrnoException) => {
-        if (error.code !== "ENOTEMPTY" && error.code !== "ENOENT") {
+      await fs.rmdir(dirPath).catch((error: unknown) => {
+        const code = (error as NodeJS.ErrnoException | undefined)?.code;
+        if (code !== "ENOTEMPTY" && code !== "ENOENT") {
           throw error;
         }
       });
