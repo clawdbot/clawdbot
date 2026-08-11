@@ -1204,8 +1204,8 @@ async function agentViaGatewayCommand(
         });
       }
       // If the Gateway already accepted the run, surface the run identity so
-      // callers can return an in-flight result instead of silently re-running
-      // the prompt through the embedded fallback.
+      // callers can retain the accepted run ID after ambiguous transport loss
+      // instead of silently dropping it.
       if (
         acceptedGatewayRun &&
         isGatewayTransportError(err) &&
@@ -1374,6 +1374,10 @@ export async function agentCliCommand(
               `To extend the CLI deadline: --timeout <seconds>.`,
           );
         }
+        // This is an unresolved transport failure — the CLI did not receive
+        // a terminal outcome.  Preserve the existing nonzero failure contract
+        // so scripts do not treat a missing result as success.
+        signalBridge.setExitCode(1);
         return result;
       }
       const failureHint = resolveGatewayAgentFailureHint(err);

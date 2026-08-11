@@ -2448,6 +2448,7 @@ describe("agentCliCommand", () => {
 
   it("returns in-flight status when gateway times out after accepting the run", async () => {
     await withTempStore(async () => {
+      const signals = createSignalProcess();
       callGateway.mockImplementationOnce(async (requestValue: unknown) => {
         const request = requireRecord(requestValue, "gateway request");
         const onAccepted = request.onAccepted as ((payload: unknown) => void) | undefined;
@@ -2462,17 +2463,19 @@ describe("agentCliCommand", () => {
       const result = await agentCliCommand(
         { message: "hi", sessionKey: "agent:main:incident-42" },
         runtime,
+        { process: signals.processLike },
       );
 
       expect(callGateway).toHaveBeenCalledTimes(1);
-      // After the Gateway has accepted the run, the CLI must not launch an
-      // embedded fallback because the original Gateway-owned turn is still
-      // executing and could duplicate mutating work.
+      // After the Gateway has accepted the run, the CLI must return the
+      // accepted run ID after ambiguous transport loss rather than silently
+      // dropping it, so the operator can check Gateway status.
       expect(agentCommand).not.toHaveBeenCalled();
       expect(result).toMatchObject({
         status: "accepted_timeout",
         runId: "accepted-run-timeout",
       });
+      expect(signals.processLike.exitCode).toBe(1);
       expect(
         mockMessages(runtime.error).some((message) =>
           message.includes("Gateway agent timed out after accepting run accepted-run-timeout"),
@@ -2488,6 +2491,7 @@ describe("agentCliCommand", () => {
 
   it("returns in-flight status when gateway closes after accepting the run", async () => {
     await withTempStore(async () => {
+      const signals = createSignalProcess();
       callGateway.mockImplementationOnce(async (requestValue: unknown) => {
         const request = requireRecord(requestValue, "gateway request");
         const onAccepted = request.onAccepted as ((payload: unknown) => void) | undefined;
@@ -2502,6 +2506,7 @@ describe("agentCliCommand", () => {
       const result = await agentCliCommand(
         { message: "hi", sessionKey: "agent:main:incident-42" },
         runtime,
+        { process: signals.processLike },
       );
 
       expect(callGateway).toHaveBeenCalledTimes(1);
@@ -2510,6 +2515,7 @@ describe("agentCliCommand", () => {
         status: "accepted_timeout",
         runId: "accepted-run-closed",
       });
+      expect(signals.processLike.exitCode).toBe(1);
       expect(
         mockMessages(runtime.error).some((message) =>
           message.includes(
@@ -2522,6 +2528,7 @@ describe("agentCliCommand", () => {
 
   it("writes JSON stdout and no stderr diagnostic for accepted_timeout in json mode", async () => {
     await withTempStore(async () => {
+      const signals = createSignalProcess();
       callGateway.mockImplementationOnce(async (requestValue: unknown) => {
         const request = requireRecord(requestValue, "gateway request");
         const onAccepted = request.onAccepted as ((payload: unknown) => void) | undefined;
@@ -2536,6 +2543,7 @@ describe("agentCliCommand", () => {
       const result = await agentCliCommand(
         { message: "hi", sessionKey: "agent:main:incident-42", json: true },
         jsonRuntime,
+        { process: signals.processLike },
       );
 
       expect(callGateway).toHaveBeenCalledTimes(1);
@@ -2544,6 +2552,7 @@ describe("agentCliCommand", () => {
         status: "accepted_timeout",
         runId: "accepted-run-json",
       });
+      expect(signals.processLike.exitCode).toBe(1);
       expect(jsonRuntime.writeJson).toHaveBeenCalledWith(
         { status: "accepted_timeout", runId: "accepted-run-json" },
         2,
