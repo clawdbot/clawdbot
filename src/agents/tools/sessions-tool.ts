@@ -441,7 +441,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
             // keeps a reset replacement from being archived between checks.
             void released
               .then(async () => {
-                const archiveIdentities = [key, currentEntry.sessionId];
+                const archiveIdentities = [key, expectedSessionIdentity.expectedSessionId];
                 const archivePatch = {
                   key,
                   archived: true,
@@ -452,7 +452,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                 while (true) {
                   const latestEntry = loadSessionEntry({ agentId, sessionKey: key, storePath });
                   if (
-                    latestEntry?.sessionId !== currentEntry.sessionId ||
+                    latestEntry?.sessionId !== expectedSessionIdentity.expectedSessionId ||
                     (expectedSessionIdentity.expectedLifecycleRevision !== undefined &&
                       latestEntry.lifecycleRevision !==
                         expectedSessionIdentity.expectedLifecycleRevision)

@@ -238,6 +238,18 @@ type LifecycleHandlerResponse = {
   error?: Parameters<RespondFn>[2];
 };
 
+function archivePatch(key: string, expectedSessionId: string) {
+  return { key, archived: true, expectedSessionId };
+}
+
+function archiveTarget(key: string, expectedSessionId: string) {
+  return { key, expectedSessionId };
+}
+
+function expectArchived(storePath: string, sessionKey: string) {
+  expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
+}
+
 async function invokeArchiveHandler(params: {
   authorization: NonNullable<
     ReturnType<typeof resolveSessionMutationAuthorization>["authorization"]
@@ -254,11 +266,7 @@ async function invokeArchiveHandler(params: {
   };
   await handlers["sessions.patch"]?.({
     req: {} as never,
-    params: {
-      key: params.sessionKey,
-      archived: true,
-      expectedSessionId: params.expectedSessionId,
-    },
+    params: archivePatch(params.sessionKey, params.expectedSessionId),
     client: params.client,
     context: params.context,
     isWebchatConnect: () => false,
@@ -641,11 +649,7 @@ test("sessions.patch returns retryable UNAVAILABLE when runtime drain does not s
   embeddedRunMock.activeIds.add(sessionId);
   embeddedRunMock.waitResults.set(sessionId, false);
 
-  const archived = await directSessionReq("sessions.patch", {
-    key: sessionKey,
-    archived: true,
-    expectedSessionId: sessionId,
-  });
+  const archived = await directSessionReq("sessions.patch", archivePatch(sessionKey, sessionId));
 
   expect(archived.ok).toBe(false);
   expect(archived.error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
@@ -831,10 +835,11 @@ test("sessions.patchMany independently archives active and idle sessions in targ
   const activeKey = "agent:main:archive-batch-active";
   const idleKey = "agent:main:archive-batch-idle";
   const activeSessionId = "session-batch-active";
+  const idleSessionId = "session-batch-idle";
   await writeSessionStore({
     entries: {
       [activeKey]: sessionStoreEntry(activeSessionId),
-      [idleKey]: sessionStoreEntry("session-batch-idle"),
+      [idleKey]: sessionStoreEntry(idleSessionId),
     },
   });
   embeddedRunMock.activeIds.add(activeSessionId);
@@ -843,10 +848,7 @@ test("sessions.patchMany independently archives active and idle sessions in targ
   const result = await directSessionReq<{ outcomes: Array<{ key: string; ok: boolean }> }>(
     "sessions.patchMany",
     {
-      targets: [
-        { key: activeKey, expectedSessionId: activeSessionId },
-        { key: idleKey, expectedSessionId: "session-batch-idle" },
-      ],
+      targets: [archiveTarget(activeKey, activeSessionId), archiveTarget(idleKey, idleSessionId)],
       patch: { archived: true },
     },
   );
@@ -856,12 +858,8 @@ test("sessions.patchMany independently archives active and idle sessions in targ
     { key: activeKey, ok: true },
     { key: idleKey, ok: true },
   ]);
-  expect(loadSessionEntry({ storePath, sessionKey: activeKey })?.archivedAt).toEqual(
-    expect.any(Number),
-  );
-  expect(loadSessionEntry({ storePath, sessionKey: idleKey })?.archivedAt).toEqual(
-    expect.any(Number),
-  );
+  expectArchived(storePath, activeKey);
+  expectArchived(storePath, idleKey);
 });
 
 test("sessions.patchMany prepares independent archive drains concurrently and releases in target order", async () => {
@@ -888,10 +886,7 @@ test("sessions.patchMany prepares independent archive drains concurrently and re
   const archive = directSessionReq<{ outcomes: Array<{ key: string; ok: boolean }> }>(
     "sessions.patchMany",
     {
-      targets: [
-        { key: firstKey, expectedSessionId: firstSessionId },
-        { key: secondKey, expectedSessionId: secondSessionId },
-      ],
+      targets: [archiveTarget(firstKey, firstSessionId), archiveTarget(secondKey, secondSessionId)],
       patch: { archived: true },
     },
     {
@@ -925,12 +920,8 @@ test("sessions.patchMany prepares independent archive drains concurrently and re
   expect(firstRelease.mock.invocationCallOrder[0]).toBeLessThan(
     secondRelease.mock.invocationCallOrder[0]!,
   );
-  expect(loadSessionEntry({ storePath, sessionKey: firstKey })?.archivedAt).toEqual(
-    expect.any(Number),
-  );
-  expect(loadSessionEntry({ storePath, sessionKey: secondKey })?.archivedAt).toEqual(
-    expect.any(Number),
-  );
+  expectArchived(storePath, firstKey);
+  expectArchived(storePath, secondKey);
 });
 
 test("sessions.patchMany attempts every archive drain release without masking success", async () => {
@@ -953,10 +944,7 @@ test("sessions.patchMany attempts every archive drain release without masking su
   const result = await directSessionReq<{ outcomes: Array<{ key: string; ok: boolean }> }>(
     "sessions.patchMany",
     {
-      targets: [
-        { key: firstKey, expectedSessionId: firstSessionId },
-        { key: secondKey, expectedSessionId: secondSessionId },
-      ],
+      targets: [archiveTarget(firstKey, firstSessionId), archiveTarget(secondKey, secondSessionId)],
       patch: { archived: true },
     },
     {
@@ -982,12 +970,8 @@ test("sessions.patchMany attempts every archive drain release without masking su
   ]);
   expect(firstRelease).toHaveBeenCalledOnce();
   expect(secondRelease).toHaveBeenCalledOnce();
-  expect(loadSessionEntry({ storePath, sessionKey: firstKey })?.archivedAt).toEqual(
-    expect.any(Number),
-  );
-  expect(loadSessionEntry({ storePath, sessionKey: secondKey })?.archivedAt).toEqual(
-    expect.any(Number),
-  );
+  expectArchived(storePath, firstKey);
+  expectArchived(storePath, secondKey);
 });
 
 test("sessions.patchMany isolates a failed archive drain and continues later targets", async () => {
@@ -995,10 +979,11 @@ test("sessions.patchMany isolates a failed archive drain and continues later tar
   const stuckKey = "agent:main:archive-batch-stuck";
   const idleKey = "agent:main:archive-batch-after-stuck";
   const stuckSessionId = "session-batch-stuck";
+  const idleSessionId = "session-batch-after-stuck";
   await writeSessionStore({
     entries: {
       [stuckKey]: sessionStoreEntry(stuckSessionId),
-      [idleKey]: sessionStoreEntry("session-batch-after-stuck"),
+      [idleKey]: sessionStoreEntry(idleSessionId),
     },
   });
   embeddedRunMock.activeIds.add(stuckSessionId);
@@ -1007,10 +992,7 @@ test("sessions.patchMany isolates a failed archive drain and continues later tar
   const result = await directSessionReq<{
     outcomes: Array<{ error?: { code: string; retryable?: boolean }; key: string; ok: boolean }>;
   }>("sessions.patchMany", {
-    targets: [
-      { key: stuckKey, expectedSessionId: stuckSessionId },
-      { key: idleKey, expectedSessionId: "session-batch-after-stuck" },
-    ],
+    targets: [archiveTarget(stuckKey, stuckSessionId), archiveTarget(idleKey, idleSessionId)],
     patch: { archived: true },
   });
 
@@ -1024,9 +1006,7 @@ test("sessions.patchMany isolates a failed archive drain and continues later tar
     { key: idleKey, ok: true },
   ]);
   expect(loadSessionEntry({ storePath, sessionKey: stuckKey })?.archivedAt).toBeUndefined();
-  expect(loadSessionEntry({ storePath, sessionKey: idleKey })?.archivedAt).toEqual(
-    expect.any(Number),
-  );
+  expectArchived(storePath, idleKey);
 });
 
 test("sessions.patch rejects a generation replaced after the exact preparation read", async () => {

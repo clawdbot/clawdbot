@@ -313,4 +313,3 @@ test("sessions.patch archives the expected session under its lifecycle lock", as
     archivedAt: expect.any(Number),
   });
 });
-
