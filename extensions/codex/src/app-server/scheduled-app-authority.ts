@@ -3,6 +3,10 @@ import {
   AgentHarnessPreflightError,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isCodexAppServerRequestTimeoutError, type CodexAppServerClient } from "./client.js";
 import type { CodexPluginDestructiveApprovalMode } from "./config.js";
 import {
@@ -68,19 +72,9 @@ type ScheduledCodexAppAuthorityPayload = {
   }>;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function readConnectorId(tool: unknown): string | undefined {
-  const meta = asRecord(asRecord(tool)?.["_meta"]);
-  return readString(meta?.connector_id) ?? readString(meta?.connectorId);
+  const meta = asOptionalRecord(asOptionalRecord(tool)?.["_meta"]);
+  return normalizeOptionalString(meta?.connector_id) ?? normalizeOptionalString(meta?.connectorId);
 }
 
 function normalizeApprovalMode(value: unknown): CodexPluginDestructiveApprovalMode | undefined {
@@ -113,19 +107,19 @@ function parseScheduledCodexAppAuthority(
       `Unsupported Codex scheduled authority namespace ${authority.namespace}; reauthorize this automation.`,
     );
   }
-  const payload = asRecord(authority.payload);
-  const auth = asRecord(payload?.auth);
-  const profileId = readString(auth?.profileId);
-  const accountId = readString(auth?.accountId);
+  const payload = asOptionalRecord(authority.payload);
+  const auth = asOptionalRecord(payload?.auth);
+  const profileId = normalizeOptionalString(auth?.profileId);
+  const accountId = normalizeOptionalString(auth?.accountId);
   if (payload?.version !== 1 || !profileId || !accountId || !Array.isArray(payload.apps)) {
     throw new Error("Stored Codex app authority is invalid; reauthorize this automation.");
   }
   const seen = new Set<string>();
   const apps = payload.apps.map((raw) => {
-    const app = asRecord(raw);
-    const id = readString(app?.id);
+    const app = asOptionalRecord(raw);
+    const id = normalizeOptionalString(app?.id);
     const destructiveApprovalMode = normalizeApprovalMode(app?.destructiveApprovalMode);
-    const rawTools = asRecord(app?.tools);
+    const rawTools = asOptionalRecord(app?.tools);
     if (
       !id ||
       seen.has(id) ||
@@ -139,7 +133,7 @@ function parseScheduledCodexAppAuthority(
     seen.add(id);
     const tools: Record<string, CodexAppToolApprovalMode> = {};
     for (const [name, rawMode] of Object.entries(rawTools)) {
-      const toolName = readString(name);
+      const toolName = normalizeOptionalString(name);
       const mode = normalizeAppToolApprovalMode(rawMode);
       if (!toolName || !mode) {
         throw new Error("Stored Codex app authority is invalid; reauthorize this automation.");
@@ -242,8 +236,8 @@ function readToolApprovalMode(
   toolName: string,
   fallback: CodexAppToolApprovalMode = "auto",
 ): CodexAppToolApprovalMode {
-  const app = asRecord(asRecord(config.apps)?.[appId]);
-  const tool = asRecord(asRecord(app?.tools)?.[toolName]);
+  const app = asOptionalRecord(asOptionalRecord(config.apps)?.[appId]);
+  const tool = asOptionalRecord(asOptionalRecord(app?.tools)?.[toolName]);
   return normalizeAppToolApprovalMode(tool?.approval_mode) ?? fallback;
 }
 
@@ -469,9 +463,9 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
   );
   const policyContext = buildPluginAppPolicyContext(apps, pluginAppIds);
   const configPatch = buildCodexPluginAppsConfigPatchFromPolicyContext(policyContext);
-  const appsPatch = asRecord(configPatch.apps);
+  const appsPatch = asOptionalRecord(configPatch.apps);
   for (const [appId, captured] of capturedById) {
-    const appPatch = asRecord(appsPatch?.[appId]);
+    const appPatch = asOptionalRecord(appsPatch?.[appId]);
     if (!appPatch || !Object.hasOwn(apps, appId)) {
       continue;
     }
