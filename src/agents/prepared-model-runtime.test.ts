@@ -15,7 +15,10 @@ import {
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 import { rebindOwnerConfigGeneration } from "./prepared-model-runtime.owner.js";
-import type { PreparedModelRuntimeOwner } from "./prepared-model-runtime.owner.js";
+import type {
+  PreparedModelRuntimeOwner,
+  PreparedModelRuntimeSnapshot,
+} from "./prepared-model-runtime.owner.js";
 import { getPreparedPluginRuntimeLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import {
   getPreparedModelRuntimeMocks,
