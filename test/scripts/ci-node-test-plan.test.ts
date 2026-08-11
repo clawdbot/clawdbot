@@ -216,7 +216,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(compact.some((shard) => shard.requiresDist)).toBe(true);
     expect(
       compact.every((shard) =>
-        shard.groups.every((group) => group.requiresDist === shard.requiresDist),
+        shard.groups.every(
+          (group) => group.requiresDist === shard.requiresDist && group.runner === shard.runner,
+        ),
       ),
     ).toBe(true);
     // Runtime-balanced packing must keep the two heaviest measured groups in
@@ -265,11 +267,26 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         shard.groups.some((group) => exclusiveGroupRe.test(group.shard_name)),
       ).length,
     ).toBeGreaterThan(0);
-    // Both plans carry the same split stripes now; compact bundling must
-    // preserve base include coverage exactly.
+    const expectedEmbeddedAgentGroupNames = [
+      "agentic-agents-embedded-base",
+      "agentic-agents-embedded-incomplete-turn",
+      "agentic-agents-embedded-overflow-compaction",
+      "agentic-agents-embedded-run",
+    ];
+    const compactGroups = compact.flatMap((shard) => shard.groups);
+    const expectedGroupNames = base.flatMap((shard) =>
+      shard.shardName === "agentic-agents-embedded"
+        ? expectedEmbeddedAgentGroupNames
+        : [shard.shardName],
+    );
+    expect(compactGroups.map((group) => group.shard_name).toSorted()).toEqual(
+      expectedGroupNames.toSorted(),
+    );
+    // Both plans carry the same split stripes now; compact bundling must also
+    // preserve include-pattern coverage exactly.
     expect(
-      compact
-        .flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns ?? []))
+      compactGroups
+        .flatMap((group) => group.includePatterns ?? [])
         .toSorted((a, b) => a.localeCompare(b)),
     ).toEqual(
       base.flatMap((shard) => shard.includePatterns ?? []).toSorted((a, b) => a.localeCompare(b)),
@@ -311,16 +328,25 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const largeJobs = compact.filter(
       (shard) => shard.runner === DEFAULT_NODE_TEST_RUNNER && !shard.requiresDist,
     );
-    expect(largeJobs).toHaveLength(8);
+    const smallJobs = compact.filter(
+      (shard) => shard.runner !== DEFAULT_NODE_TEST_RUNNER && !shard.requiresDist,
+    );
+    const distJobs = compact.filter((shard) => shard.requiresDist);
+    expect(largeJobs).toHaveLength(7);
+    expect(smallJobs).toHaveLength(14);
+    expect(distJobs).toHaveLength(2);
+    expect(compact).toEqual(
+      createNodeTestShardBundles({
+        includeReleaseOnlyPluginShards: false,
+        compact: true,
+      }),
+    );
     const embeddedAgentGroups = compact
       .flatMap((shard) => shard.groups)
       .filter((group) => group.shard_name.startsWith("agentic-agents-embedded-"));
-    expect(embeddedAgentGroups.map((group) => group.shard_name).toSorted()).toEqual([
-      "agentic-agents-embedded-base",
-      "agentic-agents-embedded-incomplete-turn",
-      "agentic-agents-embedded-overflow-compaction",
-      "agentic-agents-embedded-run",
-    ]);
+    expect(embeddedAgentGroups.map((group) => group.shard_name).toSorted()).toEqual(
+      expectedEmbeddedAgentGroupNames,
+    );
     expect(
       compact.some((shard) =>
         shard.groups.some((group) => group.shard_name === "agentic-agents-embedded"),
