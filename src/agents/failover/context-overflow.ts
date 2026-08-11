@@ -133,6 +133,9 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (isContextOverflowError(errorMessage)) {
     return true;
   }
+  if (normalizeLowercaseStringOrEmpty(errorMessage).includes("prompt template")) {
+    return false;
+  }
   if (RATE_LIMIT_HINT_RE.test(errorMessage)) {
     return false;
   }
