@@ -20,41 +20,36 @@ import {
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service.js";
 
-export function withUpdateFinalizationEnv<T>(run: () => Promise<T>): Promise<T> {
-  const previousUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-  const previousDeferConfiguredPluginInstallRepair =
-    process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV];
-  const previousParentSupportsDoctorConfigWrite =
-    process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV];
-  const previousPostCoreConvergence = process.env[UPDATE_POST_CORE_CONVERGENCE_ENV];
-  process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
-  process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV] = "1";
-  process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV] = "1";
-  process.env[UPDATE_POST_CORE_CONVERGENCE_ENV] = "1";
-  return run().finally(() => {
-    if (previousUpdateInProgress === undefined) {
-      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+type UpdateDoctorPhase = "pre-plugin" | "post-plugin";
+
+export async function withPrePluginUpdateDoctorEnv<T>(run: () => Promise<T>): Promise<T> {
+  const phaseEnv: NodeJS.ProcessEnv = {
+    OPENCLAW_UPDATE_IN_PROGRESS: "1",
+    [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1",
+    [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
+    [UPDATE_POST_CORE_CONVERGENCE_ENV]: undefined,
+  };
+  const previousEnv = Object.fromEntries(
+    Object.keys(phaseEnv).map((key) => [key, process.env[key]]),
+  );
+  for (const [key, value] of Object.entries(phaseEnv)) {
+    if (value === undefined) {
+      delete process.env[key];
     } else {
-      process.env.OPENCLAW_UPDATE_IN_PROGRESS = previousUpdateInProgress;
+      process.env[key] = value;
     }
-    if (previousDeferConfiguredPluginInstallRepair === undefined) {
-      delete process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV];
-    } else {
-      process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV] =
-        previousDeferConfiguredPluginInstallRepair;
+  }
+  try {
+    return await run();
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
     }
-    if (previousParentSupportsDoctorConfigWrite === undefined) {
-      delete process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV];
-    } else {
-      process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV] =
-        previousParentSupportsDoctorConfigWrite;
-    }
-    if (previousPostCoreConvergence === undefined) {
-      delete process.env[UPDATE_POST_CORE_CONVERGENCE_ENV];
-    } else {
-      process.env[UPDATE_POST_CORE_CONVERGENCE_ENV] = previousPostCoreConvergence;
-    }
-  });
+  }
 }
 
 async function withNormalConfigValidation<T>(run: () => Promise<T>): Promise<T> {
@@ -91,6 +86,7 @@ function createPostPluginDoctorExecutionFailure(
 }
 
 export async function runUpdateFinalizationDoctorInFreshProcess(params: {
+  phase: UpdateDoctorPhase;
   root: string;
   yes: boolean;
   json: boolean;
@@ -110,17 +106,19 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
     "--no-workspace-suggestions",
     ...(params.yes ? ["--yes"] : []),
   ];
+  const baseEnv = stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env));
+  delete baseEnv[UPDATE_POST_CORE_CONVERGENCE_ENV];
   const result = await runExec(params.nodeRunner ?? resolveNodeRunner(), args, {
     cwd: params.root,
     timeoutMs: params.timeoutMs,
     maxBuffer: 4 * 1024 * 1024,
     logOutput: false,
-    baseEnv: stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
+    baseEnv,
     env: {
       OPENCLAW_UPDATE_IN_PROGRESS: "1",
       [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1",
       [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
-      [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1",
+      ...(params.phase === "post-plugin" ? { [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1" } : {}),
     },
   });
   if (!params.json) {
@@ -186,7 +184,11 @@ async function applyFreshPostPluginDoctor(params: {
   }
   let pluginUpdate = params.pluginUpdate;
   try {
-    await runUpdateFinalizationDoctorInFreshProcess({ ...params, entryPath });
+    await runUpdateFinalizationDoctorInFreshProcess({
+      ...params,
+      entryPath,
+      phase: "post-plugin",
+    });
   } catch (err) {
     pluginUpdate = createPostPluginDoctorExecutionFailure(params.pluginUpdate, String(err));
   }
