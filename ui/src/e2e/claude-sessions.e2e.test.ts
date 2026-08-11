@@ -12,11 +12,26 @@ const suite = createControlUiE2eSuite({
 });
 
 type VisibleVirtualRow = {
+  index: number;
   key: string;
+  totalSize: number;
   viewportTop: number;
 };
 
-async function firstVisibleVirtualRow(thread: Locator): Promise<VisibleVirtualRow> {
+type VirtualRowPaintSample = {
+  index: number | null;
+  intersectsViewport: boolean;
+  totalSize: number;
+  viewportTop: number | null;
+};
+
+type VirtualRowPaintProbe = {
+  frameIds: number[];
+  observer: MutationObserver;
+  samples: VirtualRowPaintSample[];
+};
+
+async function captureTopVisibleVirtualRow(thread: Locator): Promise<VisibleVirtualRow> {
   return thread.evaluate((element) => {
     const viewport = element.getBoundingClientRect();
     const row = Array.from(
@@ -32,95 +47,127 @@ async function firstVisibleVirtualRow(thread: Locator): Promise<VisibleVirtualRo
     if (!row) {
       throw new Error("expected a visible virtual transcript row");
     }
+    const index = Number.parseInt(row.dataset.index ?? "", 10);
+    if (!Number.isFinite(index)) {
+      throw new Error("expected the virtual transcript anchor to expose its row index");
+    }
     return {
+      index,
       key: row.dataset.virtualRowKey ?? "",
-      viewportTop: Math.round(row.getBoundingClientRect().top - viewport.top),
+      totalSize:
+        element.querySelector<HTMLElement>(".chat-virtual-sizer")?.getBoundingClientRect().height ??
+        0,
+      viewportTop: row.getBoundingClientRect().top - viewport.top,
     };
   });
 }
 
-type VirtualRowPrependSample = {
-  phase: "before" | "mutation" | "frame";
-  viewportTop: number | null;
-};
-
-async function startVirtualRowPrependProbe(thread: Locator, anchor: VisibleVirtualRow) {
+async function startVirtualRowPaintProbe(thread: Locator, anchor: VisibleVirtualRow) {
   await thread.evaluate((element, expected) => {
     const target = globalThis as typeof globalThis & {
-      chatPrependProbe?: {
-        observer: MutationObserver;
-        samples: VirtualRowPrependSample[];
-      };
+      chatPrependPaintProbe?: VirtualRowPaintProbe;
     };
-    const samples: VirtualRowPrependSample[] = [];
-    let framePending = false;
-    const sample = (phase: VirtualRowPrependSample["phase"]) => {
+    const staleProbe = target.chatPrependPaintProbe;
+    if (staleProbe) {
+      staleProbe.observer.disconnect();
+      staleProbe.frameIds.forEach((frameId) => cancelAnimationFrame(frameId));
+      delete target.chatPrependPaintProbe;
+    }
+    const probe: VirtualRowPaintProbe = {
+      frameIds: [],
+      observer: new MutationObserver(() => undefined),
+      samples: [],
+    };
+    const sample = () => {
+      const viewport = element.getBoundingClientRect();
       const row = Array.from(
         element.querySelectorAll<HTMLElement>(".chat-virtual-row[data-virtual-row-key]"),
-      ).find((candidate) => candidate.dataset.virtualRowKey === expected.key);
-      samples.push({
-        phase,
-        viewportTop: row
-          ? Math.round(row.getBoundingClientRect().top - element.getBoundingClientRect().top)
-          : null,
+      ).find(
+        (candidate) =>
+          candidate.dataset.virtualRowKey !== "history" &&
+          candidate.dataset.virtualRowKey === expected.key,
+      );
+      const rect = row?.getBoundingClientRect();
+      const index = row ? Number.parseInt(row.dataset.index ?? "", 10) : Number.NaN;
+      probe.samples.push({
+        index: Number.isFinite(index) ? index : null,
+        intersectsViewport: Boolean(
+          rect && rect.bottom > viewport.top && rect.top < viewport.bottom,
+        ),
+        totalSize:
+          element.querySelector<HTMLElement>(".chat-virtual-sizer")?.getBoundingClientRect()
+            .height ?? 0,
+        viewportTop: rect ? rect.top - viewport.top : null,
       });
     };
-    sample("before");
-    const observer = new MutationObserver(() => {
-      sample("mutation");
-      if (framePending) {
+    const scheduleSample = () => {
+      if (probe.frameIds.length > 0) {
         return;
       }
-      framePending = true;
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          framePending = false;
-          sample("frame");
+      const firstFrame = requestAnimationFrame(() => {
+        const secondFrame = requestAnimationFrame(() => {
+          probe.frameIds = [];
+          sample();
         });
+        probe.frameIds = [secondFrame];
       });
-    });
-    observer.observe(element, {
+      probe.frameIds = [firstFrame];
+    };
+    probe.observer = new MutationObserver(scheduleSample);
+    probe.observer.observe(element, {
       attributeFilter: ["style"],
       attributes: true,
       childList: true,
       subtree: true,
     });
-    target.chatPrependProbe = { observer, samples };
+    target.chatPrependPaintProbe = probe;
   }, anchor);
 }
 
-async function finishVirtualRowPrependProbe(thread: Locator) {
+async function stopVirtualRowPaintProbe(thread: Locator): Promise<VirtualRowPaintSample[]> {
   return thread.evaluate(() => {
     const target = globalThis as typeof globalThis & {
-      chatPrependProbe?: {
-        observer: MutationObserver;
-        samples: VirtualRowPrependSample[];
-      };
+      chatPrependPaintProbe?: VirtualRowPaintProbe;
     };
-    const probe = target.chatPrependProbe;
+    const probe = target.chatPrependPaintProbe;
     if (!probe) {
-      throw new Error("expected an active virtual row prepend probe");
+      throw new Error("expected an active virtual row paint probe");
     }
     probe.observer.disconnect();
-    delete target.chatPrependProbe;
+    probe.frameIds.forEach((frameId) => cancelAnimationFrame(frameId));
+    delete target.chatPrependPaintProbe;
     return probe.samples;
   });
 }
 
-function expectStableVirtualRowPrepend(
+function expectPaintedVirtualRowAnchor(
   anchor: VisibleVirtualRow,
-  samples: VirtualRowPrependSample[],
+  samples: VirtualRowPaintSample[],
 ) {
-  expect(samples.some((sample) => sample.phase === "mutation")).toBe(true);
-  expect(samples.some((sample) => sample.phase === "frame")).toBe(true);
-  const paintedSamples = samples.filter((sample) => sample.phase !== "mutation");
+  const evidence = JSON.stringify({ anchor, samples });
+  expect(samples.length, evidence).toBeGreaterThan(0);
   expect(
-    paintedSamples.every((sample) => sample.viewportTop !== null),
-    JSON.stringify({ anchor, samples }),
+    samples.some(
+      (sample) =>
+        (sample.index !== null && sample.index > anchor.index) ||
+        sample.totalSize > anchor.totalSize,
+    ),
+    evidence,
   ).toBe(true);
   expect(
-    paintedSamples.every((sample) => Math.abs((sample.viewportTop ?? 0) - anchor.viewportTop) <= 1),
-    JSON.stringify({ anchor, samples }),
+    samples.every((sample) => sample.viewportTop !== null),
+    evidence,
+  ).toBe(true);
+  expect(
+    samples.every((sample) => sample.intersectsViewport),
+    evidence,
+  ).toBe(true);
+  expect(
+    samples.every(
+      (sample) =>
+        sample.viewportTop !== null && Math.abs(sample.viewportTop - anchor.viewportTop) <= 2,
+    ),
+    evidence,
   ).toBe(true);
 }
 
@@ -655,19 +702,25 @@ suite.define(() => {
       .toBe(initialReadCount + 1);
     await catalogPane.locator(".chat-history-loading").waitFor();
     expect(await catalogPane.getByRole("button", { name: "Load older" }).count()).toBe(0);
-    const anchor = await firstVisibleVirtualRow(thread);
-    await startVirtualRowPrependProbe(thread, anchor);
-    await gateway.resolveDeferred("sessions.catalog.read");
-    await expect
-      .poll(() =>
-        catalogPane.evaluate(
-          (element) =>
-            (element as HTMLElement & { catalogMessages: unknown[] }).catalogMessages.length,
-        ),
-      )
-      .toBe(41);
-    await page.clock.runFor(100);
-    expectStableVirtualRowPrepend(anchor, await finishVirtualRowPrependProbe(thread));
+    const anchor = await captureTopVisibleVirtualRow(thread);
+    await startVirtualRowPaintProbe(thread, anchor);
+    let paintedSamples: VirtualRowPaintSample[];
+    try {
+      await gateway.resolveDeferred("sessions.catalog.read");
+      await expect
+        .poll(() =>
+          catalogPane.evaluate(
+            (element) =>
+              (element as HTMLElement & { catalogMessages: unknown[] }).catalogMessages.length,
+          ),
+        )
+        .toBe(41);
+      // Each mutation is sampled after a full paint, once anchor compensation has settled.
+      await page.clock.runFor(100);
+    } finally {
+      paintedSamples = await stopVirtualRowPaintProbe(thread);
+    }
+    expectPaintedVirtualRowAnchor(anchor, paintedSamples);
     expect(
       await catalogPane.locator(".agent-chat__composer-combobox > textarea").isDisabled(),
     ).toBe(true);
@@ -785,22 +838,28 @@ suite.define(() => {
     await page.locator('.chat-virtual-row:not([data-virtual-row-key="history"])').first().waitFor();
     await gateway.waitForRequest("chat.history");
     await page.locator(".chat-history-loading").waitFor();
-    const anchor = await firstVisibleVirtualRow(thread);
-    await startVirtualRowPrependProbe(thread, anchor);
-    await gateway.resolveDeferred("chat.history");
-    await expect
-      .poll(() =>
-        page
-          .locator("openclaw-chat-pane")
-          .evaluate(
-            (element) =>
-              (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
-                .length,
-          ),
-      )
-      .toBe(140);
-    await page.clock.runFor(100);
-    expectStableVirtualRowPrepend(anchor, await finishVirtualRowPrependProbe(thread));
+    const anchor = await captureTopVisibleVirtualRow(thread);
+    await startVirtualRowPaintProbe(thread, anchor);
+    let paintedSamples: VirtualRowPaintSample[];
+    try {
+      await gateway.resolveDeferred("chat.history");
+      await expect
+        .poll(() =>
+          page
+            .locator("openclaw-chat-pane")
+            .evaluate(
+              (element) =>
+                (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
+                  .length,
+            ),
+        )
+        .toBe(140);
+      // Each mutation is sampled after a full paint, once anchor compensation has settled.
+      await page.clock.runFor(100);
+    } finally {
+      paintedSamples = await stopVirtualRowPaintProbe(thread);
+    }
+    expectPaintedVirtualRowAnchor(anchor, paintedSamples);
     expect((await gateway.getRequests("chat.history")).at(-1)?.params).toMatchObject({
       limit: 100,
       offset: 100,
