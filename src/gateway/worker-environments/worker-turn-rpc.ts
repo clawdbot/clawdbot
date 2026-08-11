@@ -595,5 +595,3 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     },
   };
 }
-
-export type WorkerTurnRpc = ReturnType<typeof createWorkerTurnRpc>;

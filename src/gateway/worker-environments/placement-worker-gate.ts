@@ -4,7 +4,7 @@ import type {
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
 
-export type WorkerPlacementBinding = Readonly<{
+type WorkerPlacementBinding = Readonly<{
   sessionId: string;
   environmentId: string;
   ownerEpoch: number;

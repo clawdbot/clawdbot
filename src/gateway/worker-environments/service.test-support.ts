@@ -28,7 +28,7 @@ export function waitForFast<T>(
   return vi.waitFor(callback, { interval: 1, ...options });
 }
 
-export const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
+const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
 export type WorkerEnvironmentServiceOptions = Parameters<typeof createWorkerEnvironmentService>[0];
 export type WorkerEnvironmentServiceError = Error & { code: string };
 export const SSH_ENDPOINT: WorkerSshEndpoint = {
@@ -74,7 +74,7 @@ export const BOOTSTRAP_RECEIPT = {
   protocolFeatures: [],
 };
 export const CREDENTIAL = ["worker", "credential", "fixture"].join("-");
-export const LIVE_EVENT_ACK = { ok: true as const, result: { ackedSeq: 1 } };
+const LIVE_EVENT_ACK = { ok: true as const, result: { ackedSeq: 1 } };
 export const LIVE_EVENT = {
   runEpoch: 1,
   lastAckedSeq: 0,
@@ -84,14 +84,10 @@ export const LIVE_EVENT = {
 };
 
 export type WorkerLifecycleLease = Parameters<WorkerProvider["inspect"]>[0];
-export type TranscriptRequest = Parameters<WorkerEnvironmentService["commitTranscript"]>[1];
-export type TranscriptOverrides = Partial<
-  Pick<TranscriptRequest, "baseLeafId" | "runEpoch" | "seq">
->;
-export type LiveEventRequest = Parameters<WorkerEnvironmentService["pushLiveEvent"]>[1];
-export type LiveOpts = Partial<
-  Pick<LiveEventRequest, "lastAckedSeq" | "runEpoch" | "runId" | "seq">
->;
+type TranscriptRequest = Parameters<WorkerEnvironmentService["commitTranscript"]>[1];
+type TranscriptOverrides = Partial<Pick<TranscriptRequest, "baseLeafId" | "runEpoch" | "seq">>;
+type LiveEventRequest = Parameters<WorkerEnvironmentService["pushLiveEvent"]>[1];
+type LiveOpts = Partial<Pick<LiveEventRequest, "lastAckedSeq" | "runEpoch" | "runId" | "seq">>;
 
 export const testState = {} as {
   root: string;
@@ -390,7 +386,7 @@ export function transcriptRequest(
   };
 }
 
-export function liveEventRequest(
+function liveEventRequest(
   identity: WorkerConnectionIdentity,
   event: LiveEventRequest["event"],
   overrides: LiveOpts = {},

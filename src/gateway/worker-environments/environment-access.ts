@@ -345,5 +345,3 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     stopTunnel,
   };
 }
-
-export type WorkerEnvironmentAccess = ReturnType<typeof createWorkerEnvironmentAccess>;

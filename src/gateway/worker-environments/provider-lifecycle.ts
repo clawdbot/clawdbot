@@ -659,5 +659,3 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     reconcileRecord,
   };
 }
-
-export type WorkerProviderLifecycle = ReturnType<typeof createWorkerProviderLifecycle>;
