@@ -32,7 +32,13 @@ function buildBridgeFromPersistedBundledRecord(
   const officialInstall = officialEntry
     ? resolveOfficialExternalPluginInstall(officialEntry)
     : null;
-  const npmSpec = officialInstall?.npmSpec?.trim() ?? record.packageInstall?.npm?.spec;
+  const officialNpmSpec = officialInstall?.npmSpec?.trim();
+  const npmSpec = officialNpmSpec ?? record.packageInstall?.npm?.spec;
+  // The catalog integrity pin only covers the catalog's own npm spec, never a
+  // persisted record fallback spec.
+  const expectedIntegrity = officialNpmSpec
+    ? officialInstall?.expectedIntegrity?.trim()
+    : undefined;
   const clawhubSpec = officialInstall?.clawhubSpec?.trim();
   if (!npmSpec && !clawhubSpec) {
     return null;
@@ -54,6 +60,7 @@ function buildBridgeFromPersistedBundledRecord(
     preferredSource:
       officialInstall?.defaultChoice === "clawhub" && clawhubSpec ? "clawhub" : "npm",
     ...(npmSpec ? { npmSpec } : {}),
+    ...(expectedIntegrity ? { expectedIntegrity } : {}),
     ...(clawhubSpec ? { clawhubSpec } : {}),
     ...(record.enabledByDefault ? { enabledByDefault: true } : {}),
     ...(channelIds.length ? { channelIds } : {}),

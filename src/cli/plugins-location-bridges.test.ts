@@ -186,6 +186,8 @@ describe("listPersistedBundledPluginLocationBridges", () => {
         pluginId: "openclaw-qqbot",
         preferredSource: "npm",
         npmSpec: "@tencent-connect/openclaw-qqbot@2.0.1",
+        expectedIntegrity:
+          "sha512-2010PaCummeQaxerLtaGfQ/5HChiXaW/KpTERid7V/1zyTs46S2ACi0hgZQ1SB7tH0t1InWr8tzVBJV/pLss3Q==",
         channelIds: ["qqbot"],
       },
     ]);

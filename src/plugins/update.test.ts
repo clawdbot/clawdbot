@@ -4954,6 +4954,7 @@ describe("syncPluginsForUpdateChannel", () => {
           bundledPluginId: "qqbot",
           pluginId: "openclaw-qqbot",
           npmSpec: "@tencent-connect/openclaw-qqbot@2.0.1",
+          expectedIntegrity: "sha512-qqbot-catalog-pin",
           channelIds: ["qqbot"],
         },
       ],
@@ -4974,6 +4975,7 @@ describe("syncPluginsForUpdateChannel", () => {
     });
 
     expect(npmInstallCall()?.expectedPluginId).toBe("openclaw-qqbot");
+    expect(npmInstallCall()?.expectedIntegrity).toBe("sha512-qqbot-catalog-pin");
     expect(result.summary.switchedToNpm).toEqual(["openclaw-qqbot"]);
     expect(result.config.plugins?.entries?.qqbot).toBeUndefined();
     expect(result.config.plugins?.entries?.["openclaw-qqbot"]).toEqual({ enabled: true });
