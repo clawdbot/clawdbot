@@ -2410,6 +2410,32 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
+  it("runs the final fresh doctor for convergence-only current-process changes", async () => {
+    mockGitUpdateAfterMutation();
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(FRESH_POST_UPDATE_ENTRYPOINT);
+    runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
+      changes: ["Repaired configured plugin install records."],
+      warnings: [],
+      errored: false,
+      smokeFailures: [],
+      installRecords: {},
+    });
+
+    await updateCommand({ yes: true, restart: false });
+
+    expect(spawn).not.toHaveBeenCalled();
+    const doctorCall = vi.mocked(runExec).mock.calls.find(([, args]) => args[1] === "doctor");
+    expect(doctorCall?.[2]).toMatchObject({
+      env: { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" },
+    });
+    const strictValidationCall = vi
+      .mocked(runExec)
+      .mock.calls.find(([, args]) => args[1] === "config" && args[2] === "validate");
+    expect(strictValidationCall?.[2]).toMatchObject({
+      env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" },
+    });
+  });
+
   it("runs the fresh plugin doctor with the selected Node runner", async () => {
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
       "/tmp/openclaw-updated-entry.mjs",
