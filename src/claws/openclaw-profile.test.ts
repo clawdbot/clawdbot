@@ -188,6 +188,13 @@ describe("OpenClaw profile reader", () => {
           },
         },
       },
+      legacyOpenClawProfile: {
+        agent: {
+          tools: {
+            profile: "coding",
+          },
+        },
+      },
     });
   });
 

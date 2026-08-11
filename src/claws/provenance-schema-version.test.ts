@@ -52,6 +52,72 @@ describe("Claw install provenance schema migration", () => {
     });
   });
 
+  it("atomically replaces legacy plan identity with the bounded resume plan", async () => {
+    const { root, plan: legacyPlan } = await makePlan();
+    const env = stateEnv(root);
+    persistClawInstallRecord(legacyPlan, { env, status: "pending", nowMs: 1 });
+    downgradeInstallRecord(root);
+    const legacyRecord = readClawInstallRecord("worker", { env });
+    if (!legacyRecord) {
+      throw new Error("expected legacy install record");
+    }
+    const boundedPlan = {
+      ...legacyPlan,
+      planIntegrity: "sha256:bounded-plan",
+      agent: {
+        ...legacyPlan.agent,
+        config: {
+          ...legacyPlan.agent.config,
+          tools: { profile: "full" as const, allow: ["read"] },
+        },
+      },
+    };
+
+    const resumed = persistClawInstallRecord(boundedPlan, {
+      env,
+      status: "pending",
+      nowMs: 2,
+      expectedExistingRecord: legacyRecord,
+      expectedExistingPlan: legacyPlan,
+    });
+
+    expect(resumed).toMatchObject({
+      schemaVersion: "openclaw.clawInstallRecord.v2",
+      planIntegrity: boundedPlan.planIntegrity,
+      status: "pending",
+      addedAtMs: 1,
+      updatedAtMs: 1,
+    });
+    expect(resumed.agentConfigDigest).not.toBe(legacyRecord.agentConfigDigest);
+    expect(readClawInstallRecord("worker", { env })).toEqual(resumed);
+  });
+
+  it("can defer the legacy identity replacement until config migration succeeds", async () => {
+    const { root, plan: legacyPlan } = await makePlan();
+    const env = stateEnv(root);
+    persistClawInstallRecord(legacyPlan, { env, status: "workspace_ready", nowMs: 1 });
+    downgradeInstallRecord(root);
+    const legacyRecord = readClawInstallRecord("worker", { env });
+    if (!legacyRecord) {
+      throw new Error("expected legacy install record");
+    }
+    const boundedPlan = {
+      ...legacyPlan,
+      planIntegrity: "sha256:bounded-plan",
+    };
+
+    const deferred = persistClawInstallRecord(boundedPlan, {
+      env,
+      status: "pending",
+      expectedExistingRecord: legacyRecord,
+      expectedExistingPlan: legacyPlan,
+      deferLegacyPlanUpgrade: true,
+    });
+
+    expect(deferred).toEqual(legacyRecord);
+    expect(readClawInstallRecord("worker", { env })).toEqual(legacyRecord);
+  });
+
   it("does not upgrade a v1 record outside an exact resume handoff", async () => {
     const { root, plan } = await makePlan();
     const env = stateEnv(root);

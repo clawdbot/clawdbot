@@ -57,6 +57,7 @@ import {
 } from "../cron/store.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { authorizeLegacyV1Resume } from "./claws-cli-legacy-resume.js";
 import { waitUntilGatewayConfigApplied } from "./claws-cli.gateway-readiness.js";
 import type {
   ClawsAddOptions,
@@ -278,7 +279,13 @@ export async function runClawsAddCommand(
   if (failNonDryRun(opts, runtime)) {
     return;
   }
-  const result = await readClawManifestFile(sourcePath);
+  let legacyV1ResumeRecord: PersistedClawInstall | undefined;
+  const result = await readClawManifestFile(sourcePath, {
+    authorizeLegacyDynamicToolProfile: ({ manifest, source }) => {
+      legacyV1ResumeRecord = authorizeLegacyV1Resume({ manifest, source, opts });
+      return legacyV1ResumeRecord !== undefined;
+    },
+  });
   if (!result.ok) {
     if (opts.json) {
       writeRuntimeJson(runtime, {
@@ -324,8 +331,36 @@ export async function runClawsAddCommand(
     diagnostics: result.diagnostics,
     context: basePlanContext,
   });
+  let legacyResumePlan = result.legacyOpenClawProfile
+    ? await buildClawAddPlan({
+        manifest: result.manifest,
+        clawMarkdownBody: result.clawMarkdownBody,
+        packageBootstrap: result.packageBootstrap,
+        openClawProfile: result.legacyOpenClawProfile,
+        reconstructLegacyDynamicToolProfilePlan: true,
+        source: result.source,
+        diagnostics: result.diagnostics,
+        context: basePlanContext,
+      })
+    : undefined;
   let resumableInstallRecord: PersistedClawInstall | undefined;
-  const resumeState = await matchingResumeState(plan, opts);
+  const resumeState = await matchingResumeState(legacyResumePlan ?? plan, opts);
+  if (result.legacyOpenClawProfile && !resumeState) {
+    plan = {
+      ...plan,
+      blockers: [
+        ...plan.blockers,
+        {
+          level: "error",
+          code: "claw_resume_plan_mismatch",
+          phase: "plan",
+          path: "$",
+          message:
+            "The incomplete Claw add no longer matches the previously consented plan; remove its partial state before retrying.",
+        },
+      ],
+    };
+  }
   if (resumeState) {
     const { record: resumeRecord, packageRefs: resumePackageRefs } = resumeState;
     resumableInstallRecord = resumeRecord;
@@ -345,12 +380,26 @@ export async function runClawsAddCommand(
     };
     const canResumeWorkspace =
       resumeRecord.status === "workspace_ready" || resumeRecord.status === "config_committed";
+    const expectedCommittedAgentConfig = legacyResumePlan?.agent.config ?? plan.agent.config;
     const committedAgent = listAgentEntries(config).find(
-      (agent) => stableStringify(agent) === stableStringify(plan.agent.config),
+      (agent) => stableStringify(agent) === stableStringify(expectedCommittedAgentConfig),
     );
     const canResumeAgent =
       resumeRecord.status === "config_committed" ||
       (resumeRecord.status === "workspace_ready" && committedAgent !== undefined);
+    const resumePlanContext = {
+      ...basePlanContext,
+      packagePreflight,
+      existingAgentIds: canResumeAgent
+        ? existingAgentIds.filter((agentId) => agentId !== resumeRecord.agentId)
+        : existingAgentIds,
+      existingWorkspacePaths: canResumeWorkspace
+        ? existingAgentIds
+            .filter((agentId) => agentId !== resumeRecord.agentId)
+            .map((agentId) => resolveAgentWorkspaceDir(config, agentId))
+        : existingWorkspacePaths,
+      ...(canResumeWorkspace ? { resumableWorkspace: resumeRecord.workspace } : {}),
+    };
     plan = await buildClawAddPlan({
       manifest: result.manifest,
       clawMarkdownBody: result.clawMarkdownBody,
@@ -358,21 +407,29 @@ export async function runClawsAddCommand(
       openClawProfile: result.openClawProfile,
       source: result.source,
       diagnostics: result.diagnostics,
-      context: {
-        ...basePlanContext,
-        packagePreflight,
-        existingAgentIds: canResumeAgent
-          ? existingAgentIds.filter((agentId) => agentId !== resumeRecord.agentId)
-          : existingAgentIds,
-        existingWorkspacePaths: canResumeWorkspace
-          ? existingAgentIds
-              .filter((agentId) => agentId !== resumeRecord.agentId)
-              .map((agentId) => resolveAgentWorkspaceDir(config, agentId))
-          : existingWorkspacePaths,
-        ...(canResumeWorkspace ? { resumableWorkspace: resumeRecord.workspace } : {}),
-      },
+      context: resumePlanContext,
     });
-    if (plan.blockers.length === 0 && !clawInstallRecordMatchesPlan(resumeRecord, plan)) {
+    if (result.legacyOpenClawProfile) {
+      legacyResumePlan = await buildClawAddPlan({
+        manifest: result.manifest,
+        clawMarkdownBody: result.clawMarkdownBody,
+        packageBootstrap: result.packageBootstrap,
+        openClawProfile: result.legacyOpenClawProfile,
+        reconstructLegacyDynamicToolProfilePlan: true,
+        source: result.source,
+        diagnostics: result.diagnostics,
+        context: resumePlanContext,
+      });
+    }
+    const expectedResumePlan = legacyResumePlan ?? plan;
+    const exactLegacyResume =
+      !legacyResumePlan ||
+      (legacyV1ResumeRecord !== undefined &&
+        stableStringify(legacyV1ResumeRecord) === stableStringify(resumeRecord));
+    if (
+      plan.blockers.length === 0 &&
+      (!exactLegacyResume || !clawInstallRecordMatchesPlan(resumeRecord, expectedResumePlan))
+    ) {
       plan = {
         ...plan,
         blockers: [
@@ -387,6 +444,8 @@ export async function runClawsAddCommand(
           },
         ],
       };
+    } else {
+      resumableInstallRecord = resumeRecord;
     }
   }
 
@@ -413,7 +472,8 @@ export async function runClawsAddCommand(
     return;
   }
 
-  if (opts.planIntegrity !== plan.planIntegrity) {
+  const consentPlanIntegrity = legacyResumePlan?.planIntegrity ?? plan.planIntegrity;
+  if (opts.planIntegrity !== consentPlanIntegrity) {
     const message = "The consented Claw plan no longer matches; run add --dry-run again.";
     if (opts.json) {
       writeRuntimeJson(runtime, {
@@ -435,6 +495,7 @@ export async function runClawsAddCommand(
     addResult = await applyClawAddPlan(plan, {
       consentPlanIntegrity: opts.planIntegrity,
       resumeRecord: resumableInstallRecord,
+      resumePlan: legacyResumePlan,
       runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
       cronGateway: {
         add: async (input) => await callGatewayFromCli("cron.add", {}, input),

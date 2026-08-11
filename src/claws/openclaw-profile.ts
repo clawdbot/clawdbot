@@ -94,7 +94,10 @@ function isToolProfileId(value: string): value is ToolProfileId {
   return resolveClawToolProfileSnapshot({ profile: value }) !== undefined;
 }
 
-function migrateLegacyDynamicToolProfile(value: unknown): unknown {
+function migrateLegacyDynamicToolProfile(value: unknown): {
+  value: unknown;
+  legacyProfile?: ClawOpenClawProfile;
+} {
   const profile = record(value);
   const agent = record(profile?.agent);
   const tools = record(agent?.tools);
@@ -107,10 +110,10 @@ function migrateLegacyDynamicToolProfile(value: unknown): unknown {
     !isToolProfileId(toolProfile) ||
     tools.allow !== undefined
   ) {
-    return value;
+    return { value };
   }
   if (!resolveClawToolProfileSnapshot({ profile: toolProfile })?.allow.includes("bundle-mcp")) {
-    return value;
+    return { value };
   }
   const validationProbe = parseClawOpenClawProfile({
     ...profile,
@@ -123,26 +126,36 @@ function migrateLegacyDynamicToolProfile(value: unknown): unknown {
     },
   });
   if (!validationProbe.ok) {
-    return value;
+    return { value };
   }
   const validatedTools = validationProbe.profile.agent.tools;
   if (!validatedTools) {
-    return value;
+    return { value };
   }
   const selection = {
     ...validatedTools,
     profile: toolProfile,
+  };
+  const legacyProfile: ClawOpenClawProfile = {
+    ...validationProbe.profile,
+    agent: {
+      ...validationProbe.profile.agent,
+      tools: selection,
+    },
   };
   const migrated = materializeClawToolProfile(
     { tools: selection },
     { allowLegacyDynamicProfile: true },
   );
   return {
-    ...profile,
-    agent: {
-      ...agent,
-      tools: migrated.tools,
+    value: {
+      ...profile,
+      agent: {
+        ...agent,
+        tools: migrated.tools,
+      },
     },
+    legacyProfile,
   };
 }
 
@@ -174,6 +187,7 @@ export async function readClawOpenClawProfile(params: {
   | {
       ok: true;
       profile?: ClawOpenClawProfile;
+      legacyProfile?: ClawOpenClawProfile;
       raw?: Buffer;
       path?: string;
       diagnostics?: ClawDiagnostic[];
@@ -261,9 +275,10 @@ export async function readClawOpenClawProfile(params: {
   if (!yaml.ok) {
     return yaml;
   }
-  const parsed = parseClawOpenClawProfile(
-    params.allowLegacyDynamicToolProfile ? migrateLegacyDynamicToolProfile(yaml.value) : yaml.value,
-  );
+  const migration = params.allowLegacyDynamicToolProfile
+    ? migrateLegacyDynamicToolProfile(yaml.value)
+    : { value: yaml.value };
+  const parsed = parseClawOpenClawProfile(migration.value);
   if (!parsed.ok) {
     return {
       ok: false,
@@ -276,6 +291,7 @@ export async function readClawOpenClawProfile(params: {
   return {
     ok: true,
     profile: parsed.profile,
+    ...(migration.legacyProfile ? { legacyProfile: migration.legacyProfile } : {}),
     raw,
     path: declaredPath,
     ...(diagnostics.length > 0 ? { diagnostics } : {}),

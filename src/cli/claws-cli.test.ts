@@ -3,8 +3,13 @@ import { join } from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { buildClawAddPlan } from "../claws/lifecycle.js";
 import { persistClawInstallRecord } from "../claws/provenance.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { readClawManifestFile } from "../claws/reader.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import * as cliTestHelpers from "./claws-cli.test-helpers.js";
 
 const mocks = vi.hoisted(() => {
@@ -556,6 +561,153 @@ describe("claws cli", () => {
       expect.objectContaining({ consentPlanIntegrity: plan.planIntegrity }),
     );
     expect(mocks.runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("resumes an exact v1 dynamic-profile add through the bounded profile migration", async () => {
+    const root = tempDirs.make("openclaw-claws-v1-profile-resume-");
+    const workspace = join(root, "workspace");
+    const stateRoot = tempDirs.make("openclaw-claws-state-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", join(stateRoot, "state"));
+    await mkdir(join(root, "profiles"));
+    const manifestPath = join(root, "openclaw.claw.json");
+    await writeFile(
+      manifestPath,
+      JSON.stringify({ schemaVersion: 1, agent: { id: "demo-agent", name: "Demo Agent" } }),
+      "utf8",
+    );
+    await writeFile(
+      join(root, "profiles", "openclaw.yml"),
+      "schemaVersion: 1\nagent:\n  tools:\n    profile: coding\n",
+      "utf8",
+    );
+    const read = await readClawManifestFile(manifestPath, {
+      allowLegacyDynamicToolProfile: true,
+    });
+    if (!read.ok || !read.legacyOpenClawProfile) {
+      throw new Error("expected legacy dynamic profile evidence");
+    }
+    const legacyPlan = await buildClawAddPlan({
+      manifest: read.manifest,
+      clawMarkdownBody: read.clawMarkdownBody,
+      packageBootstrap: read.packageBootstrap,
+      openClawProfile: read.legacyOpenClawProfile,
+      reconstructLegacyDynamicToolProfilePlan: true,
+      source: read.source,
+      diagnostics: read.diagnostics,
+      context: {
+        workspace,
+        existingAgentIds: [],
+        existingWorkspacePaths: [],
+        existingMcpServers: {},
+        packagePreflight: mocks.preflightClawPackage,
+      },
+    });
+    persistClawInstallRecord(legacyPlan, { status: "workspace_ready", nowMs: 1 });
+    openOpenClawStateDatabase()
+      .db /* sqlite-allow-raw: test-only downgrade simulates a pre-v2 interrupted add. */
+      .prepare("UPDATE claw_installs SET schema_version = ? WHERE agent_id = ?")
+      .run("openclaw.clawInstallRecord.v1", "demo-agent");
+    await mkdir(workspace);
+    mocks.loadConfig.mockReturnValue({ agents: { list: [legacyPlan.agent.config] } });
+
+    await runCli([
+      "claws",
+      "add",
+      manifestPath,
+      "--yes",
+      "--plan-integrity",
+      legacyPlan.planIntegrity,
+      "--workspace",
+      workspace,
+      "--json",
+    ]);
+
+    expect(mocks.applyClawAddPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        planIntegrity: expect.not.stringMatching(legacyPlan.planIntegrity),
+        agent: expect.objectContaining({
+          config: expect.objectContaining({
+            tools: expect.objectContaining({
+              profile: "full",
+              allow: expect.not.arrayContaining(["bundle-mcp"]),
+            }),
+          }),
+        }),
+      }),
+      expect.objectContaining({
+        consentPlanIntegrity: legacyPlan.planIntegrity,
+        resumePlan: expect.objectContaining({ planIntegrity: legacyPlan.planIntegrity }),
+        resumeRecord: expect.objectContaining({
+          schemaVersion: "openclaw.clawInstallRecord.v1",
+          planIntegrity: legacyPlan.planIntegrity,
+        }),
+      }),
+    );
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("does not parse a legacy dynamic profile for a completed v1 record", async () => {
+    const root = tempDirs.make("openclaw-claws-v1-profile-complete-");
+    const workspace = join(root, "workspace");
+    const stateRoot = tempDirs.make("openclaw-claws-state-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", join(stateRoot, "state"));
+    await mkdir(join(root, "profiles"));
+    const manifestPath = join(root, "openclaw.claw.json");
+    await writeFile(
+      manifestPath,
+      JSON.stringify({ schemaVersion: 1, agent: { id: "demo-agent", name: "Demo Agent" } }),
+      "utf8",
+    );
+    await writeFile(
+      join(root, "profiles", "openclaw.yml"),
+      "schemaVersion: 1\nagent:\n  tools:\n    profile: coding\n",
+      "utf8",
+    );
+    const read = await readClawManifestFile(manifestPath, {
+      allowLegacyDynamicToolProfile: true,
+    });
+    if (!read.ok || !read.legacyOpenClawProfile) {
+      throw new Error("expected legacy dynamic profile evidence");
+    }
+    const legacyPlan = await buildClawAddPlan({
+      manifest: read.manifest,
+      clawMarkdownBody: read.clawMarkdownBody,
+      packageBootstrap: read.packageBootstrap,
+      openClawProfile: read.legacyOpenClawProfile,
+      reconstructLegacyDynamicToolProfilePlan: true,
+      source: read.source,
+      diagnostics: read.diagnostics,
+      context: {
+        workspace,
+        existingAgentIds: [],
+        existingWorkspacePaths: [],
+        existingMcpServers: {},
+        packagePreflight: mocks.preflightClawPackage,
+      },
+    });
+    persistClawInstallRecord(legacyPlan, { status: "complete", nowMs: 1 });
+    openOpenClawStateDatabase()
+      .db /* sqlite-allow-raw: test-only downgrade exercises the completed-v1 boundary. */
+      .prepare("UPDATE claw_installs SET schema_version = ? WHERE agent_id = ?")
+      .run("openclaw.clawInstallRecord.v1", "demo-agent");
+
+    await runCli([
+      "claws",
+      "add",
+      manifestPath,
+      "--yes",
+      "--plan-integrity",
+      legacyPlan.planIntegrity,
+      "--workspace",
+      workspace,
+      "--json",
+    ]);
+
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      valid: false,
+      diagnostics: expect.arrayContaining([expect.objectContaining({ code: "invalid_manifest" })]),
+    });
+    expect(mocks.applyClawAddPlan).not.toHaveBeenCalled();
   });
 
   it("resumes when config committed before the workspace-ready phase advanced", async () => {

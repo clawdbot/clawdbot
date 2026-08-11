@@ -183,6 +183,8 @@ export function persistClawInstallRecord(
     status?: ClawInstallStatus;
     nowMs?: number;
     expectedExistingRecord?: PersistedClawInstall;
+    expectedExistingPlan?: ClawAddPlan;
+    deferLegacyPlanUpgrade?: boolean;
   } = {},
 ): PersistedClawInstall {
   const nowMs = options.nowMs ?? Date.now();
@@ -194,13 +196,21 @@ export function persistClawInstallRecord(
     const existing = selectClawInstallRow(db, plan.agent.finalId);
     if (existing) {
       const record = rowToRecord(existing);
-      if (existing.status !== "complete" && clawInstallRecordMatchesPlan(record, plan)) {
+      const expectedPlan = options.expectedExistingPlan ?? plan;
+      if (existing.status !== "complete" && clawInstallRecordMatchesPlan(record, expectedPlan)) {
         if (record.schemaVersion !== installRecordSchema.CLAW_INSTALL_RECORD_SCHEMA_VERSION) {
+          if (options.deferLegacyPlanUpgrade) {
+            return record;
+          }
           return installRecordSchema.upgradeClawInstallSchema(
             db,
             plan.agent.finalId,
             record,
             options.expectedExistingRecord,
+            {
+              planIntegrity: plan.planIntegrity,
+              agentConfigDigest,
+            },
           );
         }
         return record;

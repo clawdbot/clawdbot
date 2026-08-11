@@ -14,6 +14,12 @@ import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
+import {
+  hasUnsupportedMutationActions,
+  planWithPackageActions,
+  sameCommittedAgent,
+  statusAtLeast,
+} from "./add-plan-helpers.js";
 import { ClawBootstrapWriteError, seedClawPackageBootstrap } from "./bootstrap.js";
 import {
   ClawCronInstallError,
@@ -21,6 +27,7 @@ import {
   type ClawCronGateway,
   type PersistedClawCronRef,
 } from "./cron.js";
+import { replaceLegacyCommittedAgent } from "./legacy-resume.js";
 import {
   ClawMcpInstallError,
   installClawMcpServers,
@@ -48,6 +55,7 @@ type ConfigCommit = (transform: (config: OpenClawConfig) => OpenClawConfig) => P
 type ClawAddApplyOptions = OpenClawStateDatabaseOptions & {
   consentPlanIntegrity?: string;
   resumeRecord?: PersistedClawInstall;
+  resumePlan?: ClawAddPlan;
   commitConfig?: ConfigCommit;
   persistRecord?: typeof persistClawInstallRecord;
   deleteRecord?: typeof deleteClawInstallRecord;
@@ -94,42 +102,6 @@ type ClawAddResult = {
   };
 };
 
-function hasUnsupportedMutationActions(plan: ClawAddPlan): boolean {
-  return plan.actions.some(
-    (action) =>
-      ![
-        "agent",
-        "workspace",
-        "bootstrap",
-        "workspaceFile",
-        "package",
-        "mcpServer",
-        "cronJob",
-      ].includes(action.kind),
-  );
-}
-
-function planWithPackageActions(
-  plan: ClawAddPlan,
-  predicate: (action: ClawAddPlan["actions"][number]) => boolean,
-): ClawAddPlan {
-  return {
-    ...plan,
-    actions: plan.actions.filter((action) => action.kind !== "package" || predicate(action)),
-  };
-}
-
-function statusAtLeast(status: ClawInstallStatus, phase: ClawInstallStatus): boolean {
-  const order: Record<ClawInstallStatus, number> = {
-    pending: 0,
-    partial: 0,
-    workspace_ready: 1,
-    config_committed: 2,
-    complete: 3,
-  };
-  return order[status] >= order[phase];
-}
-
 function markInstallStatus(
   agentId: string,
   status: ClawInstallStatus,
@@ -151,10 +123,6 @@ function clearUnownedInstallRecord(
     ...options,
     expectedStatuses,
   });
-}
-
-function sameCommittedAgent(existingAgent: AgentConfig, plan: ClawAddPlan): boolean {
-  return stableStringify(existingAgent) === stableStringify(plan.agent.config);
 }
 
 function workspacePathKey(value: string): string {
@@ -221,7 +189,7 @@ export async function applyClawAddPlan(
       "This build cannot add one or more declared Claw component kinds.",
     );
   }
-  if (options.consentPlanIntegrity !== plan.planIntegrity) {
+  if (options.consentPlanIntegrity !== (options.resumePlan?.planIntegrity ?? plan.planIntegrity)) {
     throw new ClawAddMutationError(
       "plan_integrity_mismatch",
       "Consent does not match the current Claw add plan; run add --dry-run again.",
@@ -235,6 +203,8 @@ export async function applyClawAddPlan(
       ...options,
       status: "pending",
       expectedExistingRecord: options.resumeRecord,
+      expectedExistingPlan: options.resumePlan,
+      deferLegacyPlanUpgrade: options.resumePlan !== undefined,
     });
   } catch (error) {
     throw new ClawAddMutationError("provenance_failed", (error as Error).message);
@@ -475,6 +445,19 @@ export async function applyClawAddPlan(
           configCommitted = true;
           return config;
         }
+        const nextConfig = replaceLegacyCommittedAgent({
+          config: configWithPreservedAgents,
+          agents: agentsToPreserve,
+          normalizedAgentId,
+          plan,
+          resumePlan: options.resumePlan,
+          resumeRecord: options.resumeRecord,
+          matchesPlan: sameCommittedAgent,
+        });
+        if (nextConfig) {
+          configCommitted = true;
+          return nextConfig;
+        }
         throw new ClawAddMutationError(
           "agent_id_collision",
           "Agent " + JSON.stringify(plan.agent.finalId) + " was created after planning.",
@@ -501,6 +484,14 @@ export async function applyClawAddPlan(
       configCommitted = true;
       return nextConfig;
     });
+    if (options.resumePlan && installRecord.schemaVersion === "openclaw.clawInstallRecord.v1") {
+      installRecord = persistRecord(plan, {
+        ...options,
+        status: "pending",
+        expectedExistingRecord: options.resumeRecord,
+        expectedExistingPlan: options.resumePlan,
+      });
+    }
     markInstallStatus(
       plan.agent.finalId,
       "config_committed",

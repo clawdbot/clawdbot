@@ -193,6 +193,7 @@ export async function buildClawAddPlan(params: {
   packageBootstrap?: ClawWorkspaceSourceSnapshot;
   includePackageBootstrap?: boolean;
   openClawProfile?: ClawOpenClawProfile;
+  reconstructLegacyDynamicToolProfilePlan?: boolean;
   source: ClawSourceIdentity;
   diagnostics?: ClawDiagnostic[];
   context?: ClawAddPlanContext;
@@ -237,7 +238,9 @@ export async function buildClawAddPlan(params: {
   const existingAgentIds = new Set(context.existingAgentIds ?? []);
   const agentBlocked = existingAgentIds.has(finalId);
   const openClawAgentSettings = params.openClawProfile?.agent ?? {};
-  const persistedOpenClawAgentSettings = materializeClawToolProfile(openClawAgentSettings);
+  const persistedOpenClawAgentSettings = params.reconstructLegacyDynamicToolProfilePlan
+    ? openClawAgentSettings
+    : materializeClawToolProfile(openClawAgentSettings);
   const agentConfig: ClawAddPlan["agent"]["config"] = {
     ...params.manifest.agent,
     ...persistedOpenClawAgentSettings,
