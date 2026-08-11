@@ -190,7 +190,6 @@ describe("chat header session menu", () => {
           id: "changes",
           label: "Show session changes",
           icon: icons.fileDiff,
-          disabledReason: "This session's workspace is not a git checkout.",
           onActivate: showChanges,
         },
       ],
@@ -211,7 +210,6 @@ describe("chat header session menu", () => {
     expect(panelItems.map(itemLabel)).toEqual(["Show background tasks", "Show session changes"]);
     expect(panelItems[0]?.checked).toBe(false);
     expect(panelItems[0]?.querySelector('[slot="details"]')?.textContent?.trim()).toBe("2");
-    expect(panelItems[1]?.disabled).toBe(true);
     expect(
       Array.from(
         item(menu, "Layout").querySelectorAll<MenuItemElement>("wa-dropdown-item[slot='submenu']"),
@@ -222,7 +220,7 @@ describe("chat header session menu", () => {
     select(menu, "quick:panels:changes");
     select(menu, "quick:layout:split-right");
     expect(showTasks).toHaveBeenCalledOnce();
-    expect(showChanges).not.toHaveBeenCalled();
+    expect(showChanges).toHaveBeenCalledOnce();
     expect(splitRight).toHaveBeenCalledOnce();
   });
 

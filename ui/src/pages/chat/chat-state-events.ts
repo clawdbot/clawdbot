@@ -41,6 +41,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { handleBackgroundTasksEvent } from "./components/chat-background-tasks.ts";
+import { refreshSessionWorkspace } from "./components/chat-session-workspace.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
@@ -473,6 +474,9 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
     if (terminal) {
       removeDeliveredQueuedChatSendForRun(state, payload?.runId);
       void resumeStoredChatOutboxes(state);
+      if (chatScopedEventSessionMatches(state, payload?.sessionKey, payload?.agentId)) {
+        refreshSessionWorkspace(state);
+      }
     }
     requestChatPageUpdate(state, payload?.state === "delta" ? "animation-frame" : "immediate");
     return;
