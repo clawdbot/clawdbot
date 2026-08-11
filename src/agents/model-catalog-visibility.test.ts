@@ -431,6 +431,105 @@ describe("resolveLogicalVisibleModelCatalog", () => {
     expect(result.map((entry) => entry.id)).toEqual(["gpt-5.4-codex"]);
   });
 
+  it("preserves an agent-scoped selected alias over its canonical sibling", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          modelPolicy: {},
+        },
+        list: [
+          {
+            id: "main",
+            model: { primary: "agent-choice" },
+            models: {
+              "openai/gpt-5.4": { agentRuntime: { id: "auto" } },
+              "openai/gpt-5.4-codex": {
+                alias: "agent-choice",
+                agentRuntime: { id: "codex" },
+              },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const policy = createModelVisibilityPolicy({
+      cfg,
+      catalog: [],
+      defaultProvider: "openai",
+      defaultModel: "agent-choice",
+      agentId: "main",
+      allowManifestNormalization: false,
+      allowPluginNormalization: false,
+    });
+
+    const result = await resolveLogicalVisibleModelCatalog({
+      cfg,
+      catalog: [],
+      defaultProvider: "openai",
+      defaultModel: "agent-choice",
+      agentId: "main",
+      view: "configured",
+      policy,
+      routePolicy: openAIModelCatalogRoutePolicy,
+      evaluateEntry: async (entry) =>
+        resolveLogicalModelCatalogEntryState({
+          entry,
+          evaluation: {
+            availability: true,
+            routeResolution: { kind: "routes", routes: [selectedRoute] },
+            selectedRoute,
+          },
+          routePolicy: openAIModelCatalogRoutePolicy,
+        }),
+    });
+
+    expect(result.map((entry) => entry.id)).toEqual(["gpt-5.4-codex"]);
+  });
+
+  it("projects a bare configured runtime model key through the default provider", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "gpt-5.6-sol" },
+          modelPolicy: {},
+          models: {
+            "gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const policy = createModelVisibilityPolicy({
+      cfg,
+      catalog: [],
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.6-sol",
+      allowManifestNormalization: false,
+      allowPluginNormalization: false,
+    });
+
+    const result = await resolveLogicalVisibleModelCatalog({
+      cfg,
+      catalog: [],
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.6-sol",
+      view: "configured",
+      policy,
+      routePolicy: openAIModelCatalogRoutePolicy,
+      evaluateEntry: async (entry) =>
+        resolveLogicalModelCatalogEntryState({
+          entry,
+          evaluation: {
+            availability: true,
+            routeResolution: { kind: "routes", routes: [selectedRoute] },
+            selectedRoute,
+          },
+          routePolicy: openAIModelCatalogRoutePolicy,
+        }),
+    });
+
+    expect(result.map((entry) => entry.id)).toEqual(["gpt-5.6-sol"]);
+  });
+
   it("preserves a defaults alias when an agent canonical sibling is not the selected ref", async () => {
     const cfg = {
       agents: {

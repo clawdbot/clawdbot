@@ -118,6 +118,40 @@ describe("models.list configured runtimes", () => {
     });
   });
 
+  it("projects a configured Codex default accepted by a provider wildcard", async () => {
+    await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-sol" },
+            modelPolicy: { allow: ["openai/*"] },
+          },
+          list: [
+            {
+              id: "main",
+              default: true,
+              models: {
+                "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig;
+
+      await expect(listConfiguredModels({ cfg })).resolves.toEqual({
+        models: [
+          {
+            id: "gpt-5.6-sol",
+            name: "gpt-5.6-sol",
+            provider: "openai",
+            agentRuntime: { id: "codex", source: "model" },
+            available: false,
+          },
+        ],
+      });
+    });
+  });
+
   it("preserves an exact alias runtime binding through public projection", async () => {
     await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {
       await withOpenClawTestState(

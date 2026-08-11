@@ -3,10 +3,9 @@
  * combines explicit policy, configured models, defaults, and runtime
  * auth-backed availability.
  */
-import { toAgentModelListLike } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
-import { resolveAgentConfig } from "./agent-scope.js";
+import { resolveAgentConfig, resolveAgentExplicitModelPrimary } from "./agent-scope.js";
 import type {
   ModelAuthAvailabilityEvaluation,
   ModelAuthAvailabilityRef,
@@ -25,7 +24,7 @@ import {
   buildConfiguredModelCatalog,
   dedupeModelCatalogEntries,
   modelCatalogLogicalKey,
-  resolveConfiguredModelRef,
+  resolveModelRefFromString,
 } from "./model-selection-shared.js";
 import {
   RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
@@ -119,61 +118,80 @@ function dedupeLogicalModelCatalogEntries(
 function listModelRuntimePolicyRefs(params: {
   cfg: OpenClawConfig;
   agentId?: string;
-  defaultRef?: { provider: string; model: string };
+  defaultProvider: string;
+  defaultModel?: string;
   routePolicy: ModelCatalogRoutePolicy;
-}): string[] {
+  policyAliasIndex: ModelVisibilityPolicy["policyAliasIndex"];
+  selectionAliasIndex: ModelVisibilityPolicy["selectionAliasIndex"];
+}) {
   const defaultsModels = params.cfg.agents?.defaults?.models;
   const agentModels = params.agentId
     ? resolveAgentConfig(params.cfg, params.agentId)?.models
     : undefined;
-  const effective = new Map<string, string>();
-  const defaultRef = params.defaultRef
-    ? `${params.defaultRef.provider}/${params.defaultRef.model}`.trim().toLowerCase()
-    : undefined;
-  const selectedRef = [agentModels, defaultsModels].flatMap((models) =>
-    Object.entries(models ?? {}).flatMap(([ref, entry]) =>
-      entry.agentRuntime?.id?.trim() && ref.trim().toLowerCase() === defaultRef ? [ref] : [],
-    ),
-  )[0];
-  const selectedIdentity =
-    selectedRef && params.defaultRef
-      ? params.routePolicy.resolveIdentity({
-          provider: params.defaultRef.provider,
-          id: params.defaultRef.model,
-        })
-      : undefined;
-  if (selectedRef && selectedIdentity) {
-    effective.set(selectedIdentity.key, selectedRef);
-  }
-  for (const models of [defaultsModels, agentModels]) {
-    const scoped = new Map<string, { canonical: boolean; ref: string }>();
-    for (const [ref, entry] of Object.entries(models ?? {})) {
+  const resolveRef = (raw: string, aliasIndex?: ModelVisibilityPolicy["selectionAliasIndex"]) => {
+    const ref = resolveModelRefFromString({
+      cfg: params.cfg,
+      raw,
+      defaultProvider: params.defaultProvider,
+      aliasIndex,
+      ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+    })?.ref;
+    if (!ref) {
+      return undefined;
+    }
+    const identity = params.routePolicy.resolveIdentity({
+      provider: ref.provider,
+      id: ref.model,
+    });
+    if (!identity) {
+      return undefined;
+    }
+    return {
+      raw,
+      provider: ref.provider,
+      model: ref.model,
+      exactKey: modelCatalogLogicalKey({ provider: ref.provider, id: ref.model }),
+      identityKey: identity.key,
+      canonical: ref.model.trim().toLowerCase() === identity.id.trim().toLowerCase(),
+    };
+  };
+  const listRefs = (models: typeof defaultsModels) =>
+    Object.entries(models ?? {}).flatMap(([raw, entry]) => {
       if (!entry.agentRuntime?.id?.trim()) {
+        return [];
+      }
+      const ref = resolveRef(raw);
+      return ref ? [ref] : [];
+    });
+  const defaultsRefs = listRefs(defaultsModels);
+  const agentRefs = listRefs(agentModels);
+  const selectedAliasIndex =
+    params.agentId && resolveAgentExplicitModelPrimary(params.cfg, params.agentId)
+      ? params.selectionAliasIndex
+      : params.policyAliasIndex;
+  const selected = params.defaultModel
+    ? resolveRef(params.defaultModel, selectedAliasIndex)
+    : undefined;
+  const selectedRef = selected
+    ? [...agentRefs, ...defaultsRefs].find((candidate) => candidate.exactKey === selected.exactKey)
+    : undefined;
+  const effective = new Map<string, NonNullable<ReturnType<typeof resolveRef>>>();
+  if (selectedRef) {
+    effective.set(selectedRef.identityKey, selectedRef);
+  }
+  for (const refs of [defaultsRefs, agentRefs]) {
+    const scoped = new Map<string, NonNullable<ReturnType<typeof resolveRef>>>();
+    for (const candidate of refs) {
+      if (candidate.identityKey === selectedRef?.identityKey) {
         continue;
       }
-      const separator = ref.indexOf("/");
-      if (separator <= 0 || separator >= ref.length - 1) {
-        continue;
-      }
-      const id = ref.slice(separator + 1);
-      const identity = params.routePolicy.resolveIdentity({
-        provider: ref.slice(0, separator),
-        id,
-      });
-      if (!identity) {
-        continue;
-      }
-      if (identity.key === selectedIdentity?.key) {
-        continue;
-      }
-      const canonical = id.trim().toLowerCase() === identity.id.trim().toLowerCase();
-      const current = scoped.get(identity.key);
-      if (!current || (canonical && !current.canonical)) {
-        scoped.set(identity.key, { canonical, ref });
+      const current = scoped.get(candidate.identityKey);
+      if (!current || (candidate.canonical && !current.canonical)) {
+        scoped.set(candidate.identityKey, candidate);
       }
     }
     for (const [key, candidate] of scoped) {
-      effective.set(key, candidate.ref);
+      effective.set(key, candidate);
     }
   }
   return [...effective.values()];
@@ -359,48 +377,38 @@ export async function resolveLogicalVisibleModelCatalog(params: {
 
   const catalog = [...params.catalog];
   const catalogKeys = new Set(catalog.map((entry) => resolveLogicalKey(entry, params.routePolicy)));
-  if (policy.allowAny) {
-    const defaultRef = params.defaultModel
-      ? resolveConfiguredModelRef({
-          cfg: {
-            ...params.cfg,
-            agents: {
-              ...params.cfg.agents,
-              defaults: {
-                ...params.cfg.agents?.defaults,
-                model: {
-                  ...toAgentModelListLike(params.cfg.agents?.defaults?.model),
-                  primary: params.defaultModel,
-                },
-              },
-            },
-          },
-          defaultProvider: params.defaultProvider,
-          defaultModel: params.defaultModel,
-          ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-        })
-      : undefined;
+  if (policy.allowAny || policy.hasProviderWildcards) {
     for (const ref of listModelRuntimePolicyRefs({
       cfg: params.cfg,
       agentId: params.agentId,
-      defaultRef,
+      defaultProvider: params.defaultProvider,
+      defaultModel: params.defaultModel,
       routePolicy: params.routePolicy,
+      policyAliasIndex: policy.policyAliasIndex,
+      selectionAliasIndex: policy.selectionAliasIndex,
     })) {
-      const separator = ref.indexOf("/");
       const configuredEntry = {
-        provider: ref.slice(0, separator),
-        id: ref.slice(separator + 1),
-        name: ref.slice(separator + 1),
+        provider: ref.provider,
+        id: ref.model,
+        name: ref.model,
       };
       const identity = params.routePolicy.resolveIdentity(configuredEntry);
-      if (!identity || !configuredKeys.has(identity.key) || catalogKeys.has(identity.key)) {
+      const wildcardAllowed =
+        policy.allowAny ||
+        policy.allowsByWildcard({ provider: configuredEntry.provider, model: configuredEntry.id });
+      if (
+        !identity ||
+        !wildcardAllowed ||
+        !configuredKeys.has(identity.key) ||
+        catalogKeys.has(identity.key)
+      ) {
         continue;
       }
       const runtimeId = normalizeOptionalAgentRuntimeId(
         resolveModelRuntimePolicy({
           config: params.cfg,
           provider: configuredEntry.provider,
-          modelId: ref,
+          modelId: ref.raw,
           agentId: params.agentId,
         }).policy?.id,
       );
