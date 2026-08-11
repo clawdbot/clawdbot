@@ -40,7 +40,10 @@ struct ShareGatewayRelaySettingsTests {
         let resolved = ShareGatewayRelaySettings.resolveLegacyConfig(
             self.config,
             isAppExtension: true,
-            migrate: { _ in migrations += 1 },
+            migrate: { _ in
+                migrations += 1
+                return true
+            },
             discard: { discards += 1 })
 
         #expect(resolved == nil)
@@ -57,11 +60,28 @@ struct ShareGatewayRelaySettingsTests {
             isAppExtension: false,
             migrate: { config in
                 migrated = config
+                return true
             },
             discard: { discards += 1 })
 
         #expect(resolved == self.config)
         #expect(migrated == self.config)
         #expect(discards == 0)
+    }
+
+    @Test func `failed host migration discards and rejects legacy credentials`() {
+        var calls: [String] = []
+
+        let resolved = ShareGatewayRelaySettings.resolveLegacyConfig(
+            self.config,
+            isAppExtension: false,
+            migrate: { _ in
+                calls.append("migrate")
+                return false
+            },
+            discard: { calls.append("discard") })
+
+        #expect(resolved == nil)
+        #expect(calls == ["migrate", "discard"])
     }
 }

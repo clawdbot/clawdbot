@@ -56,7 +56,7 @@ public enum ShareGatewayRelaySettings {
                 config,
                 isAppExtension: self.isAppExtension,
                 migrate: { config in
-                    _ = self.commitConfig(
+                    self.commitConfig(
                         config,
                         saveCredentials: self.saveCredentials,
                         saveMetadata: self.saveMetadata)
@@ -154,16 +154,15 @@ public enum ShareGatewayRelaySettings {
     static func resolveLegacyConfig(
         _ config: ShareGatewayRelayConfig,
         isAppExtension: Bool,
-        migrate: (ShareGatewayRelayConfig) -> Void,
+        migrate: (ShareGatewayRelayConfig) -> Bool,
         discard: () -> Void) -> ShareGatewayRelayConfig?
     {
         // Only the host may create shared credentials. An extension-first upgrade
-        // must scrub and reject legacy auth instead of racing a newer host route.
-        guard !isAppExtension else {
+        // or failed Keychain write must scrub and reject the legacy auth record.
+        guard !isAppExtension, migrate(config) else {
             discard()
             return nil
         }
-        migrate(config)
         return config
     }
 
