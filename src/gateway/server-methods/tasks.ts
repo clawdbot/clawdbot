@@ -178,8 +178,3 @@ export const tasksHandlers: GatewayRequestHandlers = {
     });
   },
 };
-
-export const testApi = {
-  mapTaskSummary,
-};
-export { testApi as __test };
