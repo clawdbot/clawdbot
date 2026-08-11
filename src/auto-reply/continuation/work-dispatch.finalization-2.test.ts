@@ -779,8 +779,8 @@ describe("continue_work end-of-turn finalization park + cross-turn coalesce", ()
         dueAt: Date.now(),
         maxChainLength: 8,
         reason: `+${delaySeconds} delayed row`,
-        chainId: "chain-cael",
-        originRunId: "run-cael",
+        chainId: "chain-alpha",
+        originRunId: "run-alpha",
       });
     }
     activeSessions.add(sessionKey);
