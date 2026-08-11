@@ -512,7 +512,10 @@ function resolveGenerationIdentity(sourceCommit: string) {
     process.env.OPENCLAW_CONTROL_UI_I18N_PROVIDER?.trim() ||
     (process.env.OPENAI_API_KEY?.trim() ? "openai" : "anthropic");
   const model =
-    provider === "openai" ? process.env.OPENAI_MODEL?.trim() : process.env.ANTHROPIC_MODEL?.trim();
+    process.env.OPENCLAW_CONTROL_UI_I18N_MODEL?.trim() ||
+    (provider === "openai"
+      ? process.env.OPENAI_MODEL?.trim()
+      : process.env.ANTHROPIC_MODEL?.trim());
   return {
     workflow: process.env.GITHUB_WORKFLOW?.trim() || "localization-catalog-refresh",
     provider,

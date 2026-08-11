@@ -56,6 +56,12 @@ describe("localization catalog authoring workflow", () => {
     expect(baseCheck.run).toBe("pnpm localization:catalogs:check");
     expect(scope.run).toContain("localization-catalogs.ts changed-areas");
     expect(scope.run).toContain("--base-root .localization-base");
+    expect(refresh.env).toMatchObject({
+      OPENCLAW_CONTROL_UI_I18N_PROVIDER: expect.stringContaining("'openai' || 'anthropic'"),
+      OPENCLAW_CONTROL_UI_I18N_MODEL: expect.stringContaining("OPENCLAW_CI_OPENAI_MODEL_BARE"),
+    });
+    expect(refresh.env).not.toHaveProperty("OPENAI_MODEL");
+    expect(refresh.env).not.toHaveProperty("ANTHROPIC_MODEL");
     expect(refresh.run).toContain("scripts/localization-catalogs.ts refresh");
     expect(refresh.run).toContain('--areas-file "${AREAS_FILE}"');
     expect(validate.run).toContain("scripts/localization-catalogs.ts check --root");

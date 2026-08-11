@@ -79,6 +79,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await rm(root, { recursive: true, force: true });
 });
 
@@ -208,6 +209,7 @@ describe("localization catalog authoring", () => {
   });
 
   it("refreshes stale output with source-pinned generation evidence", async () => {
+    vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_MODEL", "reviewed-translation-model");
     await writeJson(SOURCE_PATH, {
       schemaVersion: 1,
       area: "wizard-core",
@@ -228,6 +230,7 @@ describe("localization catalog authoring", () => {
 
     const generated = JSON.parse(await readFile(path.join(root, TARGET_PATH), "utf8"));
     expect(generated.generation.sourceCommit).toBe("b".repeat(40));
+    expect(generated.generation.model).toBe("reviewed-translation-model");
     expect(generated.messages["wizard.completion.title"]).toBe("Shell 补全设置");
     expect(translator).toHaveBeenCalledOnce();
   });
