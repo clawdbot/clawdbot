@@ -300,17 +300,13 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     void this.sessionOrganizer.patchSession(session, { pinned: !session.pinned });
   }
 
-  toggleSessionMenu(
-    session: SidebarRecentSession,
-    menuSession: SidebarRecentSession,
-    trigger: HTMLElement,
-  ): void {
+  toggleSessionMenu(session: SidebarRecentSession, trigger: HTMLElement): void {
     if (this.sidebarMenus.sessionMenu?.session.key === session.key) {
       this.sidebarMenus.closeSessionMenu();
       return;
     }
     const rect = trigger.getBoundingClientRect();
-    this.sidebarMenus.openSessionMenu(menuSession, rect.right, rect.bottom + 4, trigger);
+    this.sidebarMenus.openSessionMenu(session, rect.right, rect.bottom + 4, trigger);
   }
 
   startSidebarSectionDrag(sectionId: string): void {

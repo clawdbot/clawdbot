@@ -59,7 +59,6 @@ export type SidebarRecentSession = {
   createdActor?: SessionCreatedActor;
   archivedBy?: SessionCreatedActor;
   label: string;
-  meta: string;
   /** Compact repo/branch/node line for work sessions. */
   subtitle?: string;
   href: string;
