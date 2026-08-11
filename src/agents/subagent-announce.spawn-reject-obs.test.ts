@@ -33,7 +33,7 @@ type DispatchToolDelegatesResult = Awaited<ReturnType<typeof dispatchToolDelegat
 
 // --- Mocks that DO intercept the SUT (non-barrel modules) ---
 
-vi.mock("./subagent-announce.runtime.js", async (importOriginal) => ({
+vi.mock("./subagents/announce/subagent-announce.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   readSessionMessagesAsync: vi.fn(async () => []),
 }));
@@ -47,7 +47,7 @@ vi.mock("../gateway/call.js", () => ({
   }),
 }));
 
-vi.mock("./subagent-depth.js", () => ({
+vi.mock("./subagents/spawn/subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: () => 1,
 }));
 
@@ -57,7 +57,7 @@ vi.mock("./embedded-agent.js", () => ({
   waitForEmbeddedAgentRunEnd: async () => true,
 }));
 
-vi.mock("./subagent-registry-runtime.js", () => ({
+vi.mock("./subagents/registry/subagent-registry-runtime.js", () => ({
   countActiveDescendantRuns: () => 0,
   countPendingDescendantRuns: () => 0,
   countPendingDescendantRunsExcludingRun: () => 0,

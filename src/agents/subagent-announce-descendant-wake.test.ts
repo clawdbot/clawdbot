@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
   loadSessionEntryByKey: vi.fn(),
 }));
 
-vi.mock("./subagent-announce-delivery.js", () => ({
+vi.mock("./subagents/announce/subagent-announce-delivery.js", () => ({
   loadSessionEntryByKey: mocks.loadSessionEntryByKey,
   resolveSubagentAnnounceTimeoutMs: () => 1_000,
   runAnnounceDeliveryWithRetry: async <T>(params: { run: () => Promise<T> }) => await params.run(),

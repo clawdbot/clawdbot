@@ -86,7 +86,7 @@ vi.mock("../auto-reply/continuation/work-store.js", () => ({
   hasLiveOrRecentlyDispatchedContinuationWork: hasLiveOrRecentlyDispatchedContinuationWorkMock,
 }));
 
-vi.mock("./subagent-announce.js", () => ({
+vi.mock("./subagents/announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(async () => true),
 }));
 

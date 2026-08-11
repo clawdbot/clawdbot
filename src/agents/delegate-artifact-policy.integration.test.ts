@@ -25,7 +25,7 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./subagent-registry-announce-read.js", async () => {
+vi.mock("./subagents/registry/subagent-registry-announce-read.js", async () => {
   const { listAncestorSessionKeysFromRuns } =
     await import("./subagents/registry/subagent-registry-queries.js");
   return {

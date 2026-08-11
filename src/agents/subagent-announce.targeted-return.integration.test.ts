@@ -58,7 +58,7 @@ vi.mock("../config/sessions/targets.js", () => ({
   ],
 }));
 
-vi.mock("./subagent-announce.runtime.js", () => ({
+vi.mock("./subagents/announce/subagent-announce.runtime.js", () => ({
   callGateway: vi.fn(async () => ({})),
   dispatchGatewayMethodInProcess: vi.fn(async () => ({})),
   getRuntimeConfig: () => mockConfig,
@@ -83,7 +83,7 @@ vi.mock("./subagent-announce.runtime.js", () => ({
   waitForEmbeddedAgentRunEnd: vi.fn(async () => true),
 }));
 
-vi.mock("./subagent-announce-delivery.js", () => ({
+vi.mock("./subagents/announce/subagent-announce-delivery.js", () => ({
   deliverSubagentAnnouncement: async () => ({ delivered: true, path: "direct" }),
   loadRequesterSessionEntry: (sessionKey: string) => ({
     entry: {
@@ -105,9 +105,9 @@ vi.mock("./subagent-announce-delivery.js", () => ({
   runAnnounceDeliveryWithRetry: async <T>(params: { run: () => Promise<T> }) => await params.run(),
 }));
 
-vi.mock("./subagent-registry-runtime.js", () => registryRuntimeMock);
+vi.mock("./subagents/registry/subagent-registry-runtime.js", () => registryRuntimeMock);
 
-vi.mock("./subagent-depth.js", () => ({
+vi.mock("./subagents/spawn/subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: () => requesterDepthMock(),
 }));
 

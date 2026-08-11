@@ -13,7 +13,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("./subagent-announce.runtime.js", async (importOriginal) => ({
+vi.mock("./subagents/announce/subagent-announce.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   readSessionMessagesAsync: vi.fn(async () => []),
 }));
@@ -27,7 +27,7 @@ vi.mock("../gateway/call.js", () => ({
   }),
 }));
 
-vi.mock("./subagent-depth.js", () => ({
+vi.mock("./subagents/spawn/subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: () => 1,
 }));
 
@@ -37,7 +37,7 @@ vi.mock("./embedded-agent.js", () => ({
   waitForEmbeddedAgentRunEnd: async () => true,
 }));
 
-vi.mock("./subagent-registry-runtime.js", () => ({
+vi.mock("./subagents/registry/subagent-registry-runtime.js", () => ({
   countActiveDescendantRuns: () => 0,
   countPendingDescendantRuns: () => 0,
   countPendingDescendantRunsExcludingRun: () => 0,
@@ -67,7 +67,7 @@ vi.mock("../auto-reply/continuation/delegate-store-post-compaction.js", () => ({
 const deliverSubagentAnnouncementMock = vi.hoisted(() =>
   vi.fn(async (_announcement: unknown) => ({ delivered: true, path: "direct" as const })),
 );
-vi.mock("./subagent-announce-delivery.js", async (importOriginal) => ({
+vi.mock("./subagents/announce/subagent-announce-delivery.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   deliverSubagentAnnouncement: deliverSubagentAnnouncementMock,
 }));

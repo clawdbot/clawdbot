@@ -45,7 +45,7 @@ vi.mock("../auto-reply/continuation/state.js", async (importOriginal) => ({
     mocked.unregisterContinuationTimerHandleMock(...args),
 }));
 
-vi.mock("./subagent-depth.js", () => ({
+vi.mock("./subagents/spawn/subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: (sessionKey: string) =>
     sessionKey.includes(":subagent:") ? 1 : 0,
 }));
@@ -57,7 +57,7 @@ vi.mock("./embedded-agent.js", () => ({
   waitForEmbeddedAgentRunEnd: async () => true,
 }));
 
-vi.mock("./subagent-registry-runtime.js", () => ({
+vi.mock("./subagents/registry/subagent-registry-runtime.js", () => ({
   countActiveDescendantRuns: (key: string) => mocked.countActiveDescendantRunsMock(key),
   countPendingDescendantRuns: (key: string) => mocked.countPendingDescendantRunsMock(key),
   countPendingDescendantRunsExcludingRun: () => 0,
