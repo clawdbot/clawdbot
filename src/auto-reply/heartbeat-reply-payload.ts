@@ -6,7 +6,7 @@ import {
 import { getReplyPayloadMetadata } from "./reply-payload.js";
 import type { ReplyPayload } from "./types.js";
 
-export type HeartbeatTerminalToolFailure = {
+type HeartbeatTerminalToolFailure = {
   toolName: string;
 };
 
