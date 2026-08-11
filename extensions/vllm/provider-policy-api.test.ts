@@ -40,6 +40,7 @@ describe("vLLM provider thinking policy", () => {
     ).toEqual({
       levels: [{ id: "off" }, { id: "low", label: "on" }],
       defaultLevel: "off",
+      preserveWhenCatalogReasoningFalse: true,
     });
   });
 
@@ -53,6 +54,7 @@ describe("vLLM provider thinking policy", () => {
     ).toEqual({
       levels: [{ id: "off" }, { id: "low", label: "on" }],
       defaultLevel: "off",
+      preserveWhenCatalogReasoningFalse: true,
     });
   });
 
@@ -66,6 +68,7 @@ describe("vLLM provider thinking policy", () => {
     ).toEqual({
       levels: [{ id: "off" }, { id: "high" }, { id: "max" }],
       defaultLevel: "off",
+      preserveWhenCatalogReasoningFalse: true,
     });
     expect(
       resolveThinkingProfile({
@@ -76,6 +79,7 @@ describe("vLLM provider thinking policy", () => {
     ).toEqual({
       levels: [{ id: "off" }, { id: "high" }, { id: "max" }],
       defaultLevel: "off",
+      preserveWhenCatalogReasoningFalse: true,
     });
   });
 
@@ -93,7 +97,27 @@ describe("vLLM provider thinking policy", () => {
     ).toEqual({
       levels: [{ id: "off" }, { id: "high" }, { id: "max" }],
       defaultLevel: "off",
+      preserveWhenCatalogReasoningFalse: true,
     });
+  });
+
+  it("exposes known-model-family profiles for discovered aliases regardless of catalog reasoning hint", () => {
+    for (const reasoning of [false, undefined]) {
+      expect(
+        resolveThinkingProfile({ provider: "vllm", modelId: "yk_deepseek_v4", reasoning }),
+      ).toEqual({
+        levels: [{ id: "off" }, { id: "high" }, { id: "max" }],
+        defaultLevel: "off",
+        preserveWhenCatalogReasoningFalse: true,
+      });
+      expect(
+        resolveThinkingProfile({ provider: "vllm", modelId: "yk_nemotron-3-super", reasoning }),
+      ).toEqual({
+        levels: [{ id: "off" }, { id: "low", label: "on" }],
+        defaultLevel: "off",
+        preserveWhenCatalogReasoningFalse: true,
+      });
+    }
   });
 
   it("does not flatten unconfigured or non-reasoning vLLM models", () => {
@@ -110,19 +134,6 @@ describe("vLLM provider thinking policy", () => {
         modelId: "Qwen/Qwen3-8B",
         reasoning: false,
         compat: { thinkingFormat: "qwen-chat-template" },
-      }),
-    ).toBeNull();
-    expect(
-      resolveThinkingProfile({
-        provider: "vllm",
-        modelId: "deepseek-v4-flash",
-      }),
-    ).toBeNull();
-    expect(
-      resolveThinkingProfile({
-        provider: "vllm",
-        modelId: "deepseek-v4-flash",
-        reasoning: false,
       }),
     ).toBeNull();
   });
