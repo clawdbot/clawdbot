@@ -17,7 +17,7 @@ const coreIsolatedFiles = [
   "src/agents/subagents/registry/subagent-registry.announce-loop-guard.test.ts",
   "src/agents/subagents/registry/subagent-registry-restart-recovery.test.ts",
 ];
-const incompleteTurnFiles = [`${embeddedRoot}/run.incomplete-turn.test.ts`];
+const incompleteTurnFiles = [`${embeddedRoot}/run.incomplete-turn.*.test.ts`];
 const overflowCompactionFiles = [
   `${embeddedRoot}/run.overflow-compaction.test.ts`,
   `${embeddedRoot}/run.prepared-harness-source-delivery.integration.test.ts`,

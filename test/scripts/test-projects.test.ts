@@ -993,8 +993,8 @@ describe("scripts/test-projects changed-target routing", () => {
       "test/vitest/vitest.agents-embedded-agent.config.ts",
     ],
     [
-      "src/agents/embedded-agent-runner/run.incomplete-turn.test.ts",
-      "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
+      "src/agents/embedded-agent-runner/run.incomplete-turn.classification.test.ts",
+      "test/vitest/vitest.unit-fast-isolated.config.ts",
     ],
     [
       "src/agents/embedded-agent-runner/run.overflow-compaction.test.ts",
@@ -1061,7 +1061,7 @@ describe("scripts/test-projects changed-target routing", () => {
         {
           config: "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
           forwardedArgs: [],
-          includePatterns: [`${root}/run.incomplete-turn.test.ts`],
+          includePatterns: [`${root}/run.incomplete-turn.*.test.ts`],
           watchMode: false,
         },
         {
