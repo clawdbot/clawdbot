@@ -346,6 +346,10 @@ describe("publication preflight real hook behavior", () => {
 describe("publication preflight repository integration", () => {
   it("prepares, checks, approves, and accepts the exact pre-push update", () => {
     const { dir, manifest, branch } = makeRepository();
+    const bareRemote = path.join(dir, ".git", "integration-remote.git");
+    run(dir, "git", ["init", "-q", "--bare", bareRemote]);
+    const remoteUrl = `file://${bareRemote}`;
+    run(dir, "git", ["remote", "set-url", "origin", remoteUrl]);
     run(dir, "node", [path.join(dir, "scripts", "prepare-git-hooks.mjs"), "--install"]);
     run(dir, "node", [
       SCRIPT,
@@ -363,18 +367,9 @@ describe("publication preflight repository integration", () => {
     run(dir, "git", ["commit", "-q", "-m", "publication preflight fixture"]);
     run(dir, "node", [SCRIPT, "check", "--manifest", manifest]);
     run(dir, "node", [SCRIPT, "approve", "--manifest", manifest]);
+    run(dir, "git", ["push", "origin", "HEAD"]);
     const head = run(dir, "git", ["rev-parse", "HEAD"]);
     const input = `HEAD ${head} refs/heads/${branch} 0000000000000000000000000000000000000000\n`;
-    run(
-      dir,
-      "bash",
-      [
-        path.join(dir, "git-hooks", "pre-push"),
-        "origin",
-        "https://github.com/openclaw/openclaw.git",
-      ],
-      input,
-    );
 
     const extraRefFailure = runFailure(
       dir,
@@ -387,7 +382,7 @@ describe("publication preflight repository integration", () => {
         "--remote-name",
         "origin",
         "--remote-url",
-        "https://github.com/openclaw/openclaw.git",
+        remoteUrl,
       ],
       `${input}refs/heads/unreviewed ${head} refs/heads/unreviewed 0000000000000000000000000000000000000000\n`,
     );

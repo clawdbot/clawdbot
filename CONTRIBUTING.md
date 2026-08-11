@@ -78,9 +78,16 @@ allowlist:
 
 ```bash
 node scripts/publication-preflight.mjs prepare \
-  --path path/to/changed-file \
-  --inventory-file /path/to/open-pr-inventory.json
+  --path path/to/changed-file
 ```
+
+By default, `prepare` uses your authenticated `gh` session to collect the full
+open-PR inventory and every changed path. This can take time in a repository
+with many open PRs. The optional `--inventory-file` flag is only for trusted
+tooling that has already produced a complete snapshot in the script's canonical
+array shape (`number`, `repository`, `author`, `branch`, `title`, `url`, and
+`paths` for every open PR); do not pass a placeholder or a partial hand-written
+file.
 
 The manifest records the target repository, remote, base/upstream, feature branch,
 allowed paths, approved GitHub no-reply identity, and open-PR overlap strategy. Run
