@@ -58,7 +58,7 @@ export async function cleanupTrackedTempDirsAsync(trackedDirs: string[]) {
 }
 
 /** Creates a per-suite temp-root tracker with deterministic case directory names. */
-export function createSuiteTempRootTracker(prefix: string, baseDir = os.tmpdir()) {
+export function createSyncSuiteTempRootTracker(prefix: string, baseDir = os.tmpdir()) {
   let suiteTempRoot = "";
   let tempDirCounter = 0;
 

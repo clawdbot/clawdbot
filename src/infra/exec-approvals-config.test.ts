@@ -2,7 +2,7 @@
 import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { makeTempDir } from "./exec-approvals-test-helpers.js";
+import { makeExecApprovalsTempDir } from "./exec-approvals-test-helpers.js";
 import {
   isSafeBinUsage,
   matchAllowlist,
@@ -20,7 +20,7 @@ describe.sequential("exec approval temp fixture cleanup", () => {
   let cleanupProbeRoot = "";
 
   it("creates a disposable fixture root", () => {
-    cleanupProbeRoot = makeTempDir();
+    cleanupProbeRoot = makeExecApprovalsTempDir();
     expect(existsSync(cleanupProbeRoot)).toBe(true);
   });
 
@@ -31,7 +31,7 @@ describe.sequential("exec approval temp fixture cleanup", () => {
 
 describe("exec approvals wildcard agent", () => {
   it("merges wildcard allowlist entries with agent entries", () => {
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const prevOpenClawHome = process.env.OPENCLAW_HOME;
 
     try {

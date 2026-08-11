@@ -16,7 +16,7 @@ import { resetPreparedModelCatalogStateForTest } from "./server-model-catalog.js
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   connectOk,
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
   onceMessage,
   agentDiscoveryMock,
@@ -738,7 +738,7 @@ describe("gateway server misc", () => {
   });
 
   test("releases port after close", async () => {
-    const releasePort = await getFreePort();
+    const releasePort = await getGatewayTestPort();
     const releaseServer = await startTestGatewayServer(releasePort);
     await releaseServer.close();
 

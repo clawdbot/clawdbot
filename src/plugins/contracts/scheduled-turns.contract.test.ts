@@ -23,7 +23,11 @@ import {
   unschedulePluginSessionTurnsByTag,
 } from "../host-hook-scheduled-turns.js";
 import { loadOpenClawPlugins } from "../loader.js";
-import { clearPluginLoaderCache, makeTempDir, writePlugin } from "../loader.test-fixtures.js";
+import {
+  clearPluginLoaderCache,
+  makePluginLoaderTempDir,
+  writePlugin,
+} from "../loader.test-fixtures.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../runtime.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import type { OpenClawPluginApi } from "../types.js";
@@ -587,7 +591,7 @@ describe("plugin scheduled turns", () => {
   });
 
   it("allows bundled plugins to schedule turns during real plugin registration", async () => {
-    const bundledDir = makeTempDir();
+    const bundledDir = makePluginLoaderTempDir();
     writePlugin({
       id: "loader-scheduler",
       dir: bundledDir,
@@ -661,7 +665,7 @@ describe("plugin scheduled turns", () => {
   });
 
   it("keeps late scheduled-turn helpers callable from real plugin gateway handlers", async () => {
-    const bundledDir = makeTempDir();
+    const bundledDir = makePluginLoaderTempDir();
     writePlugin({
       id: "loader-scheduler-runtime",
       dir: bundledDir,

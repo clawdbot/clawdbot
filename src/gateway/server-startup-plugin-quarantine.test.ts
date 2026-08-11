@@ -10,7 +10,7 @@ import {
   setActiveDegradedPlugins,
 } from "../plugins/runtime-degraded-state.js";
 import {
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
   setTestPluginRegistry,
   startTestGatewayServer,
@@ -157,7 +157,7 @@ describe("Gateway startup plugin quarantine", () => {
       plugins: pluginConfig,
     });
 
-    const port = await getFreePort();
+    const port = await getGatewayTestPort();
     server = await startTestGatewayServer(port, { auth: { mode: "none" } });
     const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
 
