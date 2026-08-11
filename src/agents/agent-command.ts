@@ -62,6 +62,7 @@ import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import type { MainSessionRecoveryPendingTarget } from "./main-session-recovery/main-session-recovery-store.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import { createAgentRunRestartAbortError } from "./run-termination.js";
+import { withAgentPluginRegistry } from "./runtime-plugins.js";
 import { measureAgentStartup } from "./startup-timing.js";
 
 type AgentCommandAdmissionIngress = Parameters<typeof executionIdentity.record>[0]["ingress"];
@@ -651,13 +652,18 @@ async function agentCommandFromIngressInternal(
       prepare: async (preparedOpts) => await prepareAgentCommandExecution(preparedOpts, runtime),
       restoreAdmittedRecovery: recovery?.restoreAdmittedRecovery,
       run: async (prepared) =>
-        await agentCommandInternal(
-          prepared,
-          prepared.opts,
-          { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
-          runtime,
-          deps,
-        ),
+        await withAgentPluginRegistry({
+          config: prepared.cfg,
+          workspaceDir: prepared.workspaceDir,
+          run: async () =>
+            await agentCommandInternal(
+              prepared,
+              prepared.opts,
+              { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
+              runtime,
+              deps,
+            ),
+        }),
     });
 
     if (result) {
