@@ -209,6 +209,60 @@ it("closes itself once a watched update finishes without a failure", async () =>
   expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
 });
 
+/**
+ * Retry after a failure: the shell keeps the previous attempt's banner until an
+ * accepted run clears it, and producers replay the current snapshot as their
+ * subscribe-time emit. `accepted: false` models `overlays.runUpdate` refusing
+ * the request (disconnected, already running, no admin), which leaves the
+ * banner in place.
+ */
+function createRetryStream(options: { accepted: boolean }) {
+  let progress: UpdateProgress = {
+    busy: false,
+    connected: true,
+    failure: "The update failed at install: ENOSPC: no space left on device, write.",
+  };
+  let emit: ((next: UpdateProgress) => void) | null = null;
+  return {
+    startGatewayUpdate: () => {
+      if (!options.accepted) {
+        return;
+      }
+      progress = { busy: true, connected: true, failure: null };
+      emit?.(progress);
+    },
+    watchUpdateProgress: (listener: (next: UpdateProgress) => void) => {
+      emit = listener;
+      listener(progress);
+      return () => {};
+    },
+  };
+}
+
+it("reports a refused retry as unanswered rather than as the old failure", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    const stream = createRetryStream({ accepted: false });
+    const { settled } = startUpdate({
+      startGatewayUpdate: stream.startGatewayUpdate,
+      watchUpdateProgress: stream.watchUpdateProgress,
+    });
+    const { modal } = await getRenderedModalDialog(document.body);
+
+    findButton("Update and restart").click();
+    await Promise.resolve();
+    // The refused request must not inherit the previous error as its outcome.
+    expect(modal.textContent).not.toContain("ENOSPC");
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(modal.textContent).toContain("The update request went unanswered");
+    findButton("Close").click();
+    await settled;
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("reports a request the Gateway never accepted instead of spinning forever", async () => {
   // Auto-advancing keeps the modal's own animation frames running while the
   // grace deadline is fast-forwarded.

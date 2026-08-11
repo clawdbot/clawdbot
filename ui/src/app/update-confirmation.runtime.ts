@@ -175,11 +175,20 @@ export async function confirmAndStartUpdateRuntime(
       }
       phase = { kind: "working", connected: true };
       draw();
+      // Start before subscribing: an accepted run clears the retained banner
+      // synchronously, before its first await. Producers then emit that fresh
+      // snapshot as the subscribe-time emit, so a failure still present on it
+      // belongs to the previous attempt and is not this update's outcome —
+      // a refused request is reported by the accept timer below instead.
+      params.startGatewayUpdate();
+      let retainedEmit = true;
       stopWatching = watch((progress: UpdateProgress) => {
+        const staleFailure = retainedEmit;
+        retainedEmit = false;
         if (settled || phase.kind === "confirm") {
           return;
         }
-        if (progress.failure) {
+        if (progress.failure && !staleFailure) {
           phase = { kind: "failed", message: progress.failure };
           draw();
           return;
@@ -202,7 +211,6 @@ export async function confirmAndStartUpdateRuntime(
         phase = { kind: "failed", message: t("updates.dialog.notStarted") };
         draw();
       }, UPDATE_ACCEPT_GRACE_MS);
-      params.startGatewayUpdate();
     }
 
     draw();
