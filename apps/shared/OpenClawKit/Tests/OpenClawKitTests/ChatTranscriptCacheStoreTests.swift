@@ -495,7 +495,15 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
                     details: AnyCodable(["diff": AnyCodable(oversizedDiff), "ignored": AnyCodable("drop")])),
             ],
             timestamp: 1,
-            details: AnyCodable(["diff": AnyCodable(oversizedDiff), "ignored": AnyCodable("drop")]))
+            details: AnyCodable(["diff": AnyCodable(oversizedDiff), "ignored": AnyCodable("drop")]),
+            provenance: OpenClawChatInputProvenance(
+                kind: "internal_system",
+                sourceTool: "restart-sentinel"),
+            historyMarker: OpenClawChatHistoryMarker(
+                kind: "compaction",
+                id: "compact-cache",
+                tokensBefore: 12000,
+                tokensAfter: 7000))
 
         let cached = try #require(OpenClawChatSQLiteTranscriptCache.cacheableMessages([message]).first)
         #expect(cached.content[0].content == nil)
@@ -503,6 +511,8 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
         #expect(Set(cached.content[0].arguments?.dictionaryValue?.keys.map(\.self) ?? []) == ["input"])
         #expect(cached.content[0].arguments?.dictionaryValue?["input"]?.stringValue?.utf16.count == 64000)
         #expect(Set(cached.details?.dictionaryValue?.keys.map(\.self) ?? []) == ["diff"])
+        #expect(cached.provenance == message.provenance)
+        #expect(cached.historyMarker == message.historyMarker)
     }
 
     @Test func `gateway removal deletes only that gateways cache and state`() async throws {
