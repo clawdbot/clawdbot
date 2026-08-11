@@ -13,7 +13,11 @@ import {
 } from "./paths.js";
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
 import { mergeRestartRecoveryTerminalRunIds } from "./restart-recovery-state.js";
-import { normalizePersistedSessionEntryShape } from "./store-entry-shape.js";
+import { parseSqliteSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import {
+  normalizePersistedSessionEntryShape,
+  projectCanonicalSessionEntryShape,
+} from "./store-entry-shape.js";
 
 it("merges bounded restart tombstones without evicting fresh-only ids", () => {
   const existing = Array.from({ length: 64 }, (_, index) => `run-${index}`);
@@ -33,6 +37,35 @@ it("filters legacy row metadata with a noncanonical transcript id", () => {
       pluginExtensions: { memory: { mode: "legacy" } },
     }),
   ).toBeUndefined();
+});
+
+it("preserves runtime-resolved skills in the generic canonical entry shape", () => {
+  const resolvedSkills = [{ source: "RUNTIME_SKILL_BODY" }];
+  const entry = projectCanonicalSessionEntryShape({
+    sessionId: "session-1",
+    updatedAt: 42,
+    skillsSnapshot: {
+      prompt: "<available_skills></available_skills>",
+      skills: [],
+      resolvedSkills,
+    },
+  });
+
+  expect(entry.skillsSnapshot?.resolvedSkills).toBe(resolvedSkills);
+});
+
+it("drops a resolved-skills-only snapshot while reading SQLite entry JSON", () => {
+  const entry = parseSqliteSessionEntryJson({
+    entry_json: JSON.stringify({
+      sessionId: "session-1",
+      updatedAt: 42,
+      skillsSnapshot: {
+        resolvedSkills: [{ source: "RUNTIME_SKILL_BODY" }],
+      },
+    }),
+  });
+
+  expect(entry).not.toHaveProperty("skillsSnapshot");
 });
 
 it("preserves shipped pending key-as-session-id rows without a transcript id", () => {

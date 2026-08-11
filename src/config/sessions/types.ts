@@ -856,6 +856,7 @@ export type SessionSkillSnapshot = {
    */
   resolvedSkills?: Skill[];
   version?: number;
+  promptFormatVersion?: number;
 };
 
 export type SessionSystemPromptReport = {

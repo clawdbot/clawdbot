@@ -1320,6 +1320,93 @@ describe("sqlite session normalization", () => {
     });
   });
 
+  it("keeps resolved skills in the write result but out of canonical SQLite state", async () => {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+    const sessionKey = "agent:main:runtime-skill-state";
+    const scope = {
+      agentId: "main",
+      env,
+      sessionKey,
+      storePath: paths.sqlitePath,
+    };
+    const prompt = "<available_skills><skill><name>demo</name></skill></available_skills>";
+    const skillBodySentinel = "RUNTIME_ONLY_SKILL_BODY_SENTINEL";
+    const writeResult = await replaceSessionEntry(scope, {
+      sessionId: "runtime-skill-session",
+      updatedAt: 10,
+      skillsSnapshot: {
+        prompt,
+        promptFormatVersion: 4,
+        skills: [{ name: "demo" }],
+        resolvedSkills: [
+          {
+            name: "demo",
+            description: "Demo skill",
+            filePath: "/tmp/demo/SKILL.md",
+            baseDir: "/tmp/demo",
+            readContent: skillBodySentinel,
+            sourceInfo: {
+              path: "/tmp/demo/SKILL.md",
+              source: "test",
+              scope: "temporary",
+              origin: "top-level",
+            },
+            disableModelInvocation: false,
+            source: skillBodySentinel,
+          },
+        ],
+      },
+    });
+
+    const runtimeResolvedSkills = writeResult?.skillsSnapshot?.resolvedSkills;
+    if (!runtimeResolvedSkills) {
+      throw new Error("expected runtime-resolved skills in the write result");
+    }
+    expect(runtimeResolvedSkills[0]?.source).toBe(skillBodySentinel);
+
+    let database = openOpenClawAgentDatabase({ agentId: "main", env, path: paths.sqlitePath });
+    const readRawEntry = (): SessionEntry => {
+      const row = database.db
+        .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+        .get(sessionKey) as { entry_json?: string } | undefined;
+      if (!row?.entry_json) {
+        throw new Error("expected canonical session row");
+      }
+      return JSON.parse(row.entry_json) as SessionEntry;
+    };
+    const persisted = readRawEntry();
+    expect(persisted.skillsSnapshot?.prompt).toBe(prompt);
+    expect(persisted.skillsSnapshot?.resolvedSkills).toBeUndefined();
+    expect(JSON.stringify(persisted)).not.toContain(skillBodySentinel);
+
+    const staleEntry = {
+      ...persisted,
+      skillsSnapshot: {
+        ...persisted.skillsSnapshot,
+        resolvedSkills: runtimeResolvedSkills,
+      },
+    };
+    database.db
+      .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+      .run(JSON.stringify(staleEntry), sessionKey);
+    database.db
+      .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+      .run(sessionKey);
+    closeOpenClawAgentDatabasesForTest();
+
+    const loaded = loadSessionEntry(scope);
+    expect(loaded?.skillsSnapshot?.prompt).toBe(prompt);
+    expect(loaded?.skillsSnapshot?.resolvedSkills).toBeUndefined();
+
+    await patchSessionEntry(scope, () => ({ model: "gpt-5.6-luna" }));
+    closeOpenClawAgentDatabasesForTest();
+    database = openOpenClawAgentDatabase({ agentId: "main", env, path: paths.sqlitePath });
+    const healed = readRawEntry();
+    expect(healed.skillsSnapshot?.prompt).toBe(prompt);
+    expect(healed.skillsSnapshot?.resolvedSkills).toBeUndefined();
+    expect(JSON.stringify(healed)).not.toContain(skillBodySentinel);
+  });
+
   it("marks identity-only row updates pending validation", async () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
     const sessionKey = "agent:main:identity-update";

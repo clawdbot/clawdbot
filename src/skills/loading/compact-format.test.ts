@@ -76,6 +76,20 @@ describe("formatSkillsCompact", () => {
       makeSkill("notes", "Summarize notes", "/tmp/notes/SKILL.md"),
     ];
     expect(formatSkillsForPrompt(skills)).toBe(upstreamFormatSkillsForPrompt(skills));
+    expect(formatSkillsForPrompt(skills)).toContain(
+      "Use the read tool to load a skill's file when the task matches its description.",
+    );
+  });
+
+  it("stores one loader-neutral full catalog in the snapshot", () => {
+    const snapshot = buildWorkspaceSkillSnapshot("/fake", {
+      entries: [makeEntry(makeSkill("weather", "Get weather data"))],
+    });
+
+    expect(snapshot.prompt).not.toContain("Use the read tool");
+    expect(snapshot.prompt).toContain("<name>weather</name>");
+    expect(snapshot.prompt).toContain("<description>Get weather data</description>");
+    expect(snapshot.promptFormatVersion).toBe(4);
   });
 
   it("renders all passed skills in the full formatter without reapplying visibility policy", () => {
@@ -213,6 +227,23 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     expect(included).toBeLessThan(total);
     expect(total).toBe(skills.length);
     expect(prompt.match(/<skill>/g)?.length ?? 0).toBe(included);
+  });
+
+  it("stores one loader-neutral compact catalog at the exact budget outcome", () => {
+    const skills = Array.from({ length: 100 }, (_, i) => makeSkill(`skill-${i}`, "description"));
+    const snapshot = buildWorkspaceSkillSnapshot("/fake", {
+      entries: skills.map(makeEntry),
+      config: {
+        skills: { limits: { maxSkillsPromptChars: 2_000 } },
+      } satisfies OpenClawConfig,
+    });
+
+    expect(snapshot.prompt).not.toContain("Use the read tool");
+    expect(snapshot.prompt).toContain("compact format");
+    const [included, total] = requireIncludedCounts(snapshot.prompt);
+    expect(total).toBe(skills.length);
+    expect(snapshot.prompt.match(/<skill>/g)?.length).toBe(included);
+    expect(snapshot.prompt.match(/<description>/g)?.length ?? 0).toBe(0);
   });
 
   it("preserves every identity before allocating description budget", () => {

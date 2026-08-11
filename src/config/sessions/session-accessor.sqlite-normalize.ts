@@ -1,5 +1,21 @@
 import { randomUUID } from "node:crypto";
+import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
+
+/** Projects runtime session state into SQLite's canonical entry JSON shape. */
+export function projectSqliteSessionEntryShape(value: Record<string, unknown>): SessionEntry {
+  const canonicalEntry = projectCanonicalSessionEntryShape(value);
+  const snapshot = canonicalEntry.skillsSnapshot;
+  if (snapshot?.resolvedSkills === undefined) {
+    return canonicalEntry;
+  }
+  const { resolvedSkills: _resolvedSkills, ...persistedSnapshot } = snapshot;
+  if (Object.keys(persistedSnapshot).length === 0) {
+    const { skillsSnapshot: _skillsSnapshot, ...entry } = canonicalEntry;
+    return entry;
+  }
+  return { ...canonicalEntry, skillsSnapshot: persistedSnapshot };
+}
 
 export function createFallbackSessionEntry(patch: Partial<SessionEntry>): SessionEntry {
   const now = Date.now();

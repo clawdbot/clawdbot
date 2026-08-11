@@ -21,6 +21,7 @@ import {
   deleteSessionNodeArtifacts,
   rehomeLegacySessionNodeArtifacts,
 } from "./session-accessor.sqlite-node-artifacts.js";
+import { projectSqliteSessionEntryShape } from "./session-accessor.sqlite-normalize.js";
 import { resolveSessionEntryProvenanceRow } from "./session-accessor.sqlite-provenance.js";
 import { collectSqliteSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import {
@@ -45,7 +46,6 @@ import {
   canonicalSessionKeyMigrationRequiredError,
 } from "./session-canonical-key.js";
 import { parseSqliteSessionEntryRecord } from "./session-entry-json.js";
-import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import {
   collectSessionEntryLookupKeys,
   resolveDeliveryProvenCanonicalSessionKey,
@@ -75,7 +75,7 @@ function parseReadableSqliteSessionEntryRow(
 ): SessionEntry | null {
   const record = parseSqliteSessionEntryRecord(row);
   if (record) {
-    const entry = projectCanonicalSessionEntryShape(record);
+    const entry = projectSqliteSessionEntryShape(record);
     if (resolveDeliveryProvenCanonicalSessionKey(row.session_key, entry) !== row.session_key) {
       throw canonicalSessionKeyMigrationRequiredError(
         `non-canonical persisted row resolves to session key ${row.session_key}`,

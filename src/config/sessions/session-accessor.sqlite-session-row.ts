@@ -5,10 +5,10 @@ import {
 import {
   normalizeSqliteChatType,
   normalizeSqliteText,
+  projectSqliteSessionEntryShape,
 } from "./session-accessor.sqlite-normalize.js";
 import { bindSessionEntryProvenance } from "./session-accessor.sqlite-provenance.js";
 import { normalizeSqliteStatus } from "./session-accessor.sqlite-status.js";
-import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
 
 export function normalizeSqliteSessionEntryTimestamp(entry: SessionEntry): SessionEntry {
@@ -86,7 +86,7 @@ export function bindSqliteSessionNode(params: {
   sessionKey: string;
   updatedAt: number;
 }) {
-  const canonicalEntry = projectCanonicalSessionEntryShape(
+  const canonicalEntry = projectSqliteSessionEntryShape(
     params.entry as unknown as Record<string, unknown>,
   );
   const actor = params.entry.createdActor;

@@ -5,11 +5,11 @@ import type {
   SessionEntryStatus,
   SessionEntrySummary,
 } from "./session-accessor.sqlite-contract.js";
+import { projectSqliteSessionEntryShape } from "./session-accessor.sqlite-normalize.js";
 import {
   hasValidSqliteSessionEntryIdentity,
   parseSqliteSessionEntryRecord,
 } from "./session-entry-json.js";
-import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionStatusDatabase = Pick<OpenClawAgentKyselyDatabase, "session_nodes">;
@@ -32,7 +32,7 @@ export function parseSqliteSessionEntryJson(row: {
   updated_at?: number;
 }): SessionEntry | null {
   const record = parseSqliteSessionEntryRecord(row);
-  return record ? projectCanonicalSessionEntryShape(record) : null;
+  return record ? projectSqliteSessionEntryShape(record) : null;
 }
 
 export function readSqliteSessionEntriesByStatus(

@@ -271,14 +271,15 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     expect(snapshotParams.snapshotVersion).toBe(0);
   });
 
-  it("refreshes snapshots from before config-key skill identities", () => {
+  it("refreshes version-3 snapshots to loader-neutral format version 4", () => {
     shouldRefreshSnapshotForVersionMock.mockReturnValue(false);
+    expect(WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION).toBe(4);
     const result = resolveReusableWorkspaceSkillSnapshot({
       workspaceDir: TEST_WORKSPACE_DIR,
       config: {},
       existingSnapshot: {
         ...strippedSnapshot(),
-        promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION - 1,
+        promptFormatVersion: 3,
       },
     });
 

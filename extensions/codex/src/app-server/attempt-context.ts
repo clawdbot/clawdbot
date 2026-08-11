@@ -571,12 +571,28 @@ function shouldInjectCodexOpenClawPromptContext(params: EmbeddedRunAttemptParams
 export function renderCodexSkillsCollaborationInstructions(params: {
   attempt: EmbeddedRunAttemptParams;
   skillsPrompt?: string;
+  nativeToolSurfaceEnabled: boolean;
+  dynamicTools: readonly CodexDynamicToolSpec[];
 }): string | undefined {
-  if (!shouldInjectCodexOpenClawPromptContext(params.attempt)) {
+  const dynamicToolNames = new Set(
+    flattenCodexDynamicToolFunctions(params.dynamicTools).map((tool) =>
+      normalizeCodexDynamicToolName(tool.name),
+    ),
+  );
+  const canOpenSkillFiles =
+    params.nativeToolSurfaceEnabled ||
+    ["read", "exec", "sandbox_exec"].some((name) => dynamicToolNames.has(name));
+  if (!shouldInjectCodexOpenClawPromptContext(params.attempt) || !canOpenSkillFiles) {
     return undefined;
   }
   return params.skillsPrompt?.trim()
-    ? ["## OpenClaw Skills", "", params.skillsPrompt.trim()].join("\n")
+    ? [
+        "## OpenClaw Skills",
+        "",
+        "Open and read each matching skill's listed <location> using the filesystem or execution capabilities available in this Codex session, then follow its instructions.",
+        "",
+        params.skillsPrompt.trim(),
+      ].join("\n")
     : undefined;
 }
 
