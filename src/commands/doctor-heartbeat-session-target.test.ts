@@ -154,10 +154,12 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     expect(warnings[0]).toContain("resolved to agent:ops:slack:channel:c123");
   });
 
-  it("warns when the default last target has no configured session route", () => {
+  it("warns when the default owner target has no configured owner route", () => {
     const cfg = cfgWithSession("slack:channel:c123", null);
     writeStore(cfg, {});
 
-    expect(describeHeartbeatSessionTargetIssues(cfg)[0]).toContain('reason="no-route"');
+    const warning = describeHeartbeatSessionTargetIssues(cfg)[0];
+    expect(warning).toContain('reason="no-route"');
+    expect(warning).toContain("set commands.ownerAllowFrom or a channel allowFrom");
   });
 });

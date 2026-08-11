@@ -326,6 +326,13 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     targetPrefixes: ["qqbot"],
     /** Normalize common QQ Bot target formats into the canonical qqbot:... form. */
     normalizeTarget: coreNormalizeTarget,
+    inferTargetChatType: ({ to }) => {
+      try {
+        return parseTarget(to).type === "c2c" ? "direct" : "group";
+      } catch {
+        return undefined;
+      }
+    },
     resolveOutboundSessionRoute: (params) => resolveQQBotOutboundSessionRoute(params),
     targetResolver: {
       /** Return true when the id looks like a QQ Bot target. */
