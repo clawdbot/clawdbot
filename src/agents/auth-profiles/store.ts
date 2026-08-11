@@ -44,10 +44,10 @@ import {
   mergeAuthProfileStores,
 } from "./persisted.js";
 import {
-  clearRuntimeAuthProfileStoreSnapshot as clearRuntimeAuthProfileStoreSnapshotImpl,
+  clearRuntimeAuthProfileStoreSnapshotCore,
   clearRuntimeAuthProfileStoreSnapshots,
-  getPreparedRuntimeAuthProfileStoreSnapshot as getPreparedRuntimeAuthProfileStoreSnapshotImpl,
-  getRuntimeAuthProfileStoreSnapshot as getRuntimeAuthProfileStoreSnapshotImpl,
+  getPreparedRuntimeAuthProfileStoreSnapshotCore,
+  getRuntimeAuthProfileStoreSnapshotCore,
   getRuntimeAuthProfileStoreSnapshotRevision,
   noteRuntimeAuthProfileStorePersistedMutation,
   listRuntimeAuthProfileStoreSnapshots,
@@ -282,8 +282,8 @@ function resolveRuntimeAuthProfileStore(
 ): AuthProfileStore | null {
   const mainKey = resolveAuthStorePath(options?.inheritedAuthDir);
   const requestedKey = resolveAuthStorePath(agentDir);
-  const mainStore = getRuntimeAuthProfileStoreSnapshotImpl(options?.inheritedAuthDir);
-  const requestedStore = getRuntimeAuthProfileStoreSnapshotImpl(agentDir);
+  const mainStore = getRuntimeAuthProfileStoreSnapshotCore(options?.inheritedAuthDir);
+  const requestedStore = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
 
   if (!agentDir || requestedKey === mainKey) {
     if (!mainStore) {
@@ -1317,7 +1317,7 @@ export {
 export function getRuntimeAuthProfileStoreSnapshot(
   agentDir?: string,
 ): AuthProfileStore | undefined {
-  return getRuntimeAuthProfileStoreSnapshotImpl(agentDir);
+  return getRuntimeAuthProfileStoreSnapshotCore(agentDir);
 }
 
 /** Return the lifecycle-published effective auth store without persisted fallback reads. */
@@ -1325,14 +1325,14 @@ export function getPreparedRuntimeAuthProfileStoreSnapshot(
   agentDir?: string,
   inheritedAuthDir?: string,
 ): AuthProfileStore | undefined {
-  return getPreparedRuntimeAuthProfileStoreSnapshotImpl(agentDir, inheritedAuthDir);
+  return getPreparedRuntimeAuthProfileStoreSnapshotCore(agentDir, inheritedAuthDir);
 }
 
 export { getRuntimeAuthProfileStoreSnapshotRevision };
 
 /** Clear one runtime auth-profile snapshot. */
 export function clearRuntimeAuthProfileStoreSnapshot(agentDir?: string): boolean {
-  return clearRuntimeAuthProfileStoreSnapshotImpl(agentDir);
+  return clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
 }
 
 function saveAuthProfileStoreInTransaction(

@@ -12,7 +12,7 @@ import { upsertPresence } from "../infra/system-presence.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import { clearSecretsRuntimeSnapshot } from "../secrets/runtime-state.js";
+import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
   recordRemoteNodeInfo,
@@ -517,7 +517,7 @@ export async function prepareGatewayLifecycle(params: {
     await createGatewayCloseHandler({
       bonjourStop: runtimeState.bonjourStop,
       tailscaleCleanup: runtimeState.tailscaleCleanup,
-      clearSecretsRuntimeSnapshot,
+      clearSecretsRuntimeSnapshot: clearSecretsRuntimeSnapshotState,
       channelIds,
       stopChannel,
       pluginServices: runtimeState.pluginServices,

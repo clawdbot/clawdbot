@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  CONTROL_UI_STARTUP_JS_GZIP_IDENTITY_VARIANCE_BYTES,
   collectControlUiPerformanceMetrics,
   evaluateControlUiPerformanceBudgets,
   extractControlUiStartupAssetPaths,
@@ -233,11 +234,23 @@ describe("Control UI performance budgets", () => {
 
     expect(
       evaluateControlUiPerformanceBudgets(
-        createMetrics(10_001),
+        createMetrics(10_000 + CONTROL_UI_STARTUP_JS_GZIP_IDENTITY_VARIANCE_BYTES + 1),
         budgets,
         startupBaseline(1_000_000),
       ).map((entry) => entry.metric),
     ).toEqual(["startup JS gzip"]);
+  });
+
+  it("absorbs bounded build-identity gzip variance at the fixed ceiling", () => {
+    const budgets = { ...looseBudgets, startupJsGzipBytes: 10_000 };
+
+    expect(
+      evaluateControlUiPerformanceBudgets(
+        createMetrics(10_000 + CONTROL_UI_STARTUP_JS_GZIP_IDENTITY_VARIANCE_BYTES),
+        budgets,
+        startupBaseline(10_000),
+      ),
+    ).toEqual([]);
   });
 
   it("suggests lowering a baseline after a meaningful size reduction", () => {

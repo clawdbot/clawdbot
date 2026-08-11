@@ -13,6 +13,7 @@ import {
   type DispatchStage,
   type PlacementStore,
   REQUEST,
+  seedSyncingPlacement,
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
@@ -72,6 +73,10 @@ describe("worker placement dispatch", () => {
     ).rejects.toThrow("sync failed");
 
     expect(states).toEqual(["requested", "provisioning", "syncing", "failed"]);
+    expect(harness.environments.stopTunnel).toHaveBeenCalledWith(
+      harness.attached.environmentId,
+      harness.attached.ownerEpoch,
+    );
   });
 
   it("recovers a completed turn's durable pending workspace result before stale-claim teardown", async () => {
@@ -506,7 +511,6 @@ describe("worker placement dispatch", () => {
     "barrier",
     "workspace",
     "create",
-    "tunnel:ready",
     "sync",
     "attach",
     "tunnel:attached",
@@ -609,6 +613,25 @@ describe("worker placement dispatch", () => {
       expect(redispatchHarness.log).toContain("placement:requested");
     },
   );
+
+  it("tears down the attached owner after restart interrupts workspace sync", async () => {
+    const harness = createHarness(placementStore);
+    const interrupted = seedSyncingPlacement(placementStore, harness.attached.environmentId);
+    harness.markEnvironmentOwnerEpoch(harness.attached.ownerEpoch);
+
+    await harness.service.reconcile();
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "failed",
+      recoveryError: "Worker dispatch interrupted in syncing",
+    });
+    expect(harness.environments.attachSession).not.toHaveBeenCalled();
+    expect(harness.environments.stopTunnel).toHaveBeenCalledWith(
+      interrupted.environmentId,
+      undefined,
+    );
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
 
   it("does not fail or tear down a dispatch owned by another invocation", async () => {
     placementStore.startDispatch(REQUEST);
@@ -812,6 +835,33 @@ describe("worker placement dispatch", () => {
       "placement:active",
     ]);
     expect(harness.environments.create).not.toHaveBeenCalled();
+  });
+
+  it("resumes a synced starting placement with its existing attached owner", async () => {
+    const harness = createHarness(placementStore);
+    harness.placements.seedStarting();
+    harness.markEnvironmentOwnerEpoch(harness.attached.ownerEpoch);
+    harness.log.length = 0;
+
+    await harness.service.reconcile();
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "active",
+      environmentId: harness.attached.environmentId,
+      activeOwnerEpoch: harness.attached.ownerEpoch,
+    });
+    expect(harness.log).toEqual([
+      "environment:reconcile",
+      "workspace",
+      "tunnel:attached",
+      "activation",
+      "placement:active",
+    ]);
+    expect(harness.environments.attachSession).not.toHaveBeenCalled();
+    expect(harness.environments.startTunnel).toHaveBeenCalledWith({
+      environmentId: harness.attached.environmentId,
+      ownerEpoch: harness.attached.ownerEpoch,
+    });
   });
 
   it("tears down a starting worker missing execution context instead of resuming it", async () => {

@@ -44,11 +44,11 @@ import { mergeProviderAuthRuntimeWarnings } from "./runtime-provider-auth-warnin
 import {
   activateSecretsRuntimeSnapshotState,
   activateSecretsRuntimeSnapshotStateIfCurrent,
-  clearSecretsRuntimeSnapshot as clearSecretsRuntimeSnapshotState,
-  getActiveSecretsRuntimeEnv as getActiveSecretsRuntimeEnvState,
+  clearSecretsRuntimeSnapshotState,
+  getActiveSecretsRuntimeEnvState,
   getActiveSecretsRuntimeRefreshContext,
-  getActiveSecretsRuntimeSnapshot as getActiveSecretsRuntimeSnapshotState,
-  getActiveSecretsRuntimeSnapshotRevision as getActiveSecretsRuntimeSnapshotRevisionState,
+  getActiveSecretsRuntimeSnapshotState,
+  getActiveSecretsRuntimeSnapshotRevisionState,
   getLiveSecretsRuntimeAuthStores,
   getPreparedSecretsRuntimeSnapshotRefreshContext,
   registerSecretsRuntimeStateClearHook,
@@ -57,7 +57,7 @@ import {
   type PreparedSecretsRuntimeSnapshot,
   type SecretsRuntimeRefreshContext,
 } from "./runtime-state.js";
-import { getActiveRuntimeWebToolsMetadata as getActiveRuntimeWebToolsMetadataFromState } from "./runtime-web-tools-state.js";
+import { getActiveRuntimeWebToolsMetadataFromState } from "./runtime-web-tools-state.js";
 import type { RuntimeWebToolsMetadata } from "./runtime-web-tools.types.js";
 
 export type { SecretResolverWarning } from "./runtime-shared.js";

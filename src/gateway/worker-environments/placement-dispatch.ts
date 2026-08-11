@@ -189,8 +189,14 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         },
       });
       reportTransition(onTransition, placement);
-      const readyTunnel = await environments.startTunnel({ environmentId, ownerEpoch });
-      const synced = await readyTunnel.syncWorkspace({
+      const credential = await environments.attachSession({
+        environmentId,
+        ownerEpoch,
+        sessionId: request.sessionId,
+      });
+      ownerEpoch = credential.ownerEpoch;
+      const tunnel = await environments.startTunnel({ environmentId, ownerEpoch });
+      const synced = await tunnel.syncWorkspace({
         localPath,
         sessionId: request.sessionId,
         generation: placement.generation,
@@ -206,13 +212,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         },
       });
       reportTransition(onTransition, placement);
-      const credential = await environments.attachSession({
-        environmentId,
-        ownerEpoch,
-        sessionId: request.sessionId,
-      });
-      ownerEpoch = credential.ownerEpoch;
-      await environments.startTunnel({ environmentId, ownerEpoch });
       const startingPlacement = placement;
       const activePlacement = await options.runActivationBarrier({
         sessionId: request.sessionId,
