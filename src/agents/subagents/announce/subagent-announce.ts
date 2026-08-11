@@ -270,15 +270,12 @@ export async function runSubagentAnnounceFlow(params: {
           if (
             !hasTargeting &&
             !managedArtifactReturn &&
-            shouldIgnorePostCompletionAnnounceForSession(
-              targetRequesterSessionKey,
-            )
+            shouldIgnorePostCompletionAnnounceForSession(targetRequesterSessionKey)
           ) {
             return "delivered";
           }
           if (!hasUsableSessionEntry(readSessionEntryByKey(targetRequesterSessionKey))) {
-            const fallback =
-              resolveRequesterForChildSession(targetRequesterSessionKey);
+            const fallback = resolveRequesterForChildSession(targetRequesterSessionKey);
             if (!fallback?.requesterSessionKey) {
               shouldDeleteChildSession = false;
               return "retryable";
@@ -612,9 +609,13 @@ export async function runSubagentAnnounceFlow(params: {
       continuationTargetSessionKeys: params.continuationTargetSessionKeys,
       continuationFanoutMode: params.continuationFanoutMode,
       traceparent: params.traceparent,
+      // Resolve the reads lazily: building this object eagerly would touch the
+      // read-module namespace on every announce, including flows that never
+      // reach the continuation-return router.
       registryRuntime: {
-        listAncestorSessionKeys,
-        shouldIgnorePostCompletionAnnounceForSession,
+        listAncestorSessionKeys: (sessionKey: string) => listAncestorSessionKeys(sessionKey),
+        shouldIgnorePostCompletionAnnounceForSession: (sessionKey: string) =>
+          shouldIgnorePostCompletionAnnounceForSession(sessionKey),
       },
     });
     if (returnRoute.deferred) {

@@ -42,7 +42,6 @@ import {
   normalizePendingFinalRecoveryPayloads,
 } from "./pending-final-delivery.js";
 import { dispatchPostCompactionDelegates } from "./post-compaction-delegate-dispatch.js";
-import { readPostCompactionContext } from "./post-compaction-context.js";
 import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import { enqueueFollowupRun, refreshQueuedFollowupSession } from "./queue.js";
 import { incrementRunCompactionCount } from "./session-run-accounting.js";
