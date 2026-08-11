@@ -4,6 +4,7 @@ import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lane
 import { listActiveEmbeddedRunSessionKeys } from "../agents/embedded-agent-runner/run-state.js";
 import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
+import { resolveReplyOperationAgentTurn } from "../auto-reply/reply/reply-operation-agent-turn-state.js";
 import {
   listActiveReplyRunSessionKeys,
   replyRunRegistry,

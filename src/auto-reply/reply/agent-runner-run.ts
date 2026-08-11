@@ -44,6 +44,7 @@ import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
+import { recordReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
 import * as replyRunState from "./reply-operation-run-state.js";
 import { type ReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
@@ -583,6 +584,7 @@ export async function runReplyAgent(
       typingSignals,
     });
   } catch (error) {
+    recordReplyOperationAgentTurn(replyOperationRunState, "failed");
     return await handleReplyAgentRunError(error, {
       blockReplyPipeline,
       cfg,
