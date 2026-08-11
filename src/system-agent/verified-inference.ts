@@ -48,11 +48,16 @@ type SystemAgentConfiguredRouteIdentity = DistributiveOmit<
   SystemAgentConfiguredRoute,
   "runConfig" | "authProfileId"
 >;
-type SystemAgentVerifiedExecutionRoute =
+export type SystemAgentVerifiedExecutionRoute =
   | Extract<SystemAgentConfiguredRoute, { runner: "cli" }>
   | (Extract<SystemAgentConfiguredRoute, { runner: "embedded" }> & {
       agentHarnessRuntimeOverride: string;
     });
+
+export type SystemAgentVerifiedInferenceState = Readonly<{
+  config: OpenClawConfig;
+  route: SystemAgentVerifiedExecutionRoute;
+}>;
 
 type SystemAgentVerifiedExecutionFingerprint = {
   route: unknown;
@@ -853,10 +858,10 @@ export async function hasCurrentSystemAgentOwnerPluginArtifacts(
  * switch this frozen run, while relevant runtime plugin membership and the
  * actual selected credential are checked explicitly.
  */
-export async function resolveSystemAgentVerifiedInferenceRoute(
+async function resolveSystemAgentVerifiedInferenceStateInternal(
   binding: SystemAgentVerifiedInferenceBinding,
   deps: SystemAgentVerifiedInferenceDeps = {},
-): Promise<SystemAgentVerifiedExecutionRoute | null> {
+): Promise<SystemAgentVerifiedInferenceState | null> {
   const readSnapshot =
     deps.readConfigFileSnapshot ?? (await import("../config/config.js")).readConfigFileSnapshot;
   const snapshot = await readSnapshot();
@@ -965,6 +970,20 @@ export async function resolveSystemAgentVerifiedInferenceRoute(
   if (currentAuthFingerprint !== binding.auth.authFingerprint) {
     return null;
   }
-  return binding.execution;
+  return { config, route: binding.execution };
+}
+
+export async function resolveSystemAgentVerifiedInferenceState(
+  binding: SystemAgentVerifiedInferenceBinding,
+  deps: SystemAgentVerifiedInferenceDeps = {},
+): Promise<SystemAgentVerifiedInferenceState | null> {
+  return resolveSystemAgentVerifiedInferenceStateInternal(binding, deps);
+}
+
+export async function resolveSystemAgentVerifiedInferenceRoute(
+  binding: SystemAgentVerifiedInferenceBinding,
+  deps: SystemAgentVerifiedInferenceDeps = {},
+): Promise<SystemAgentVerifiedExecutionRoute | null> {
+  return (await resolveSystemAgentVerifiedInferenceStateInternal(binding, deps))?.route ?? null;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
