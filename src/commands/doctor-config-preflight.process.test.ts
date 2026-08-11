@@ -716,11 +716,11 @@ describe("gateway startup-migration refusal", () => {
       });
       expect(params.fixture.configFlowScanCount).toBeGreaterThan(0);
       expect(params.fixture.configFlowScanCount).toBeLessThanOrEqual(
-        params.mode === "preview" ? 9 : 6,
+        params.mode === "preview" ? 8 : 5,
       );
       expect(params.fixture.doctorScanCount).toBeGreaterThan(0);
       expect(params.fixture.doctorScanCount).toBeLessThanOrEqual(
-        params.mode === "preview" ? 9 : 15,
+        params.mode === "preview" ? 8 : 14,
       );
     };
 
