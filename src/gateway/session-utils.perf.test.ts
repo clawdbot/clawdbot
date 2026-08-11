@@ -71,6 +71,7 @@ describe("listSessionsFromStore resolver cache", () => {
         );
         const sessionKey = `agent:default:webchat:dm:${index}`;
         const entry: SessionEntry = {
+          sessionId: `cache-proof-${index}`,
           updatedAt: now - index,
           modelProvider: tuple.modelProvider,
           model: tuple.model,
