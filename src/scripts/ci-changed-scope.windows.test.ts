@@ -201,6 +201,23 @@ describe("detectChangedScope Windows routing", () => {
     }
   });
 
+  it("routes OS-home path owners and native tool coverage to Windows", () => {
+    for (const homePath of [
+      "src/infra/home-dir.ts",
+      "src/infra/home-dir.test.ts",
+      "src/agents/agent-tools.read.ts",
+      "src/agents/agent-tools.read.host-operations.test.ts",
+      "src/agents/agent-tools.read.windows.test.ts",
+      "src/agents/sessions/tools/path-utils.ts",
+      "src/agents/sessions/tools/path-utils.test.ts",
+    ]) {
+      expect(detectChangedScope([homePath]), homePath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
   it("routes child environment resolution and native doctor coverage to Windows", () => {
     for (const envPath of [
       "src/agents/provider-local-service.ts",

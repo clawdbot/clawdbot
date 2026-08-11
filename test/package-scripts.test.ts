@@ -350,6 +350,14 @@ describe("package scripts", () => {
     expect(script).toContain("src/agents/sessions/tools/render-utils.test.ts");
   });
 
+  it("runs native OS-home path tool coverage in Windows CI", () => {
+    const script = readPackageJson().scripts["test:windows:ci"];
+
+    expect(script).toContain("src/agents/agent-tools.read.windows.test.ts");
+    expect(script).toContain("src/agents/agent-tools.read.host-operations.test.ts");
+    expect(script).toContain("src/agents/sessions/tools/path-utils.test.ts");
+  });
+
   it("runs child environment and native doctor coverage in Windows CI", () => {
     const script = readPackageJson().scripts["test:windows:ci"];
 
