@@ -16,7 +16,7 @@ type BackupTarEntryProgressStream = {
   pause(): unknown;
 };
 
-export type BackupArchiveProgress = {
+type BackupArchiveProgress = {
   bytes?: number;
   entryPath?: string;
   phase: "entry" | "output" | "raw" | "traversal";

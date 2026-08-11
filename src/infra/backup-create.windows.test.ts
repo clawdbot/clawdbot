@@ -5,13 +5,12 @@ import { PassThrough } from "node:stream";
 import { Minipass } from "minipass";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  observeBackupTarEntryProgress,
-  type BackupArchiveProgress,
-  writeArchiveStreamToFile,
-} from "./backup-create-stream.js";
+import { observeBackupTarEntryProgress, writeArchiveStreamToFile } from "./backup-create-stream.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+type ReportBackupProgress = Parameters<
+  Parameters<typeof writeArchiveStreamToFile>[0]["createArchiveStream"]
+>[0];
 
 describe("writeArchiveStreamToFile", () => {
   it("removes the exclusive partial archive when its initial descriptor stat fails", async () => {
@@ -106,7 +105,7 @@ describe("writeArchiveStreamToFile", () => {
       const tempDir = tempDirs.make("openclaw-backup-stream-traversal-progress-");
       const archivePath = path.join(tempDir, "complete.tar.gz");
       const archiveStream = new PassThrough();
-      let reportProgress: ((progress?: BackupArchiveProgress) => void) | undefined;
+      let reportProgress: ReportBackupProgress | undefined;
       const writePromise = writeArchiveStreamToFile({
         archivePath,
         createArchiveStream: (progress) => {
@@ -135,7 +134,7 @@ describe("writeArchiveStreamToFile", () => {
       const archivePath = path.join(tempDir, "complete.tar.gz");
       const archiveStream = new PassThrough();
       const entry = new Minipass();
-      let reportProgress: ((progress?: BackupArchiveProgress) => void) | undefined;
+      let reportProgress: ReportBackupProgress | undefined;
       const writePromise = writeArchiveStreamToFile({
         archivePath,
         createArchiveStream: (progress) => {
@@ -189,7 +188,7 @@ describe("writeArchiveStreamToFile", () => {
       const archivePath = path.join(tempDir, "partial.tar.gz");
       const archiveStream = new PassThrough();
       const entry = new Minipass();
-      let reportProgress: ((progress?: BackupArchiveProgress) => void) | undefined;
+      let reportProgress: ReportBackupProgress | undefined;
       const writePromise = writeArchiveStreamToFile({
         archivePath,
         createArchiveStream: (progress) => {
