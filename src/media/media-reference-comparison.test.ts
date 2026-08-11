@@ -8,6 +8,18 @@ describe("normalizeMediaReferenceForComparison", () => {
     );
   });
 
+  it.each([
+    ["FILE:/workspace/a%5Cb.png", "/workspace/a\\b.png"],
+    ["FILE:/workspace/a%5cb.png", "/workspace/a\\b.png"],
+    ["FILE:/workspace/a%2Fb.png", "/workspace/a/b.png"],
+    ["FILE:/workspace/a%2fb.png", "/workspace/a/b.png"],
+  ])("preserves encoded separator URL %s without colliding with %s", (fileUrl, localPath) => {
+    expect(normalizeMediaReferenceForComparison(fileUrl)).toBe(fileUrl);
+    expect(normalizeMediaReferenceForComparison(fileUrl)).not.toBe(
+      normalizeMediaReferenceForComparison(localPath),
+    );
+  });
+
   it.each(["file:/tmp/generated.png", "FILE:/tmp/generated.png", "FILE:///tmp/generated.png"])(
     "matches canonical file URL form %s with the triple-slash form",
     (fileUrl) => {

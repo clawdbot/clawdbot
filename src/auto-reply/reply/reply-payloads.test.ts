@@ -169,6 +169,18 @@ describe("filterMessagingToolMediaDuplicates", () => {
     expect(result).toEqual([{ text: "hello", mediaUrl: undefined, mediaUrls: undefined }]);
   });
 
+  it.each([
+    ["FILE:/workspace/a%5Cb.png", "/workspace/a\\b.png"],
+    ["FILE:/workspace/a%5cb.png", "/workspace/a\\b.png"],
+    ["FILE:/workspace/a%2Fb.png", "/workspace/a/b.png"],
+    ["FILE:/workspace/a%2fb.png", "/workspace/a/b.png"],
+  ])("does not dedupe encoded separator URL %s against %s", (sentMediaUrl, replyMediaUrl) => {
+    const payloads = [{ text: "hello", mediaUrl: replyMediaUrl }];
+    expect(
+      filterMessagingToolMediaDuplicates({ payloads, sentMediaUrls: [sentMediaUrl] }),
+    ).toStrictEqual(payloads);
+  });
+
   it("preserves transcript ownership metadata when stripping media", () => {
     const payload = setReplyPayloadMetadata(
       { text: "hello", mediaUrl: "file:///tmp/photo.jpg" },

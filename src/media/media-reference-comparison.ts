@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { hasEncodedFileUrlSeparator } from "../infra/local-file-access.js";
 
 const PATH_PARENT_SEGMENT_RE = /(?:^|[\\/])\.\.(?:[\\/]|$)/u;
 const FORWARD_NETWORK_PATH_PREFIX_RE = /^\/\//u;
@@ -55,6 +56,10 @@ export function normalizeMediaReferenceForComparison(value: string): string {
   try {
     const parsed = new URL(trimmed);
     if (parsed.protocol === "file:") {
+      // Unsafe encoded separators must retain their original key instead of colliding with a path.
+      if (hasEncodedFileUrlSeparator(parsed.pathname)) {
+        return trimmed;
+      }
       const windows =
         process.platform === "win32" &&
         (parsed.hostname !== "" || /^\/[a-z]:[\\/]/iu.test(parsed.pathname));
