@@ -53,7 +53,6 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { deliverAgentCommandResult } from "../command/delivery.js";
 import { setActiveEmbeddedRunLifecycleGeneration } from "../embedded-agent-runner/run-state.js";
 import {
