@@ -31,11 +31,7 @@ import {
   SystemAgentInferenceUnavailableError,
   isSystemAgentInferenceUnavailableError,
 } from "./inference-error.js";
-import {
-  executeSystemAgentOperation,
-  type SystemAgentCommandDeps,
-  type SystemAgentOperation,
-} from "./operations.js";
+import type { SystemAgentCommandDeps, SystemAgentOperation } from "./operations.js";
 import { loadSystemAgentOverview, type SystemAgentOverview } from "./overview.js";
 import { verifyConfigAfterSystemAgentWrite } from "./post-write-verification.js";
 import {
@@ -44,10 +40,6 @@ import {
 } from "./verified-inference.js";
 
 export { SystemAgentWizardAnswerError } from "./chat-wizard-host.js";
-export {
-  GATEWAY_WRITE_POLICY as GATEWAY_SETUP_AFTER_WRITE,
-  requireLocalGateway as assertLocalGatewaySetupMode,
-} from "./hosted-setup.runtime.js";
 
 export type SystemAgentChatEngineOptions = {
   yes?: boolean;
@@ -56,16 +48,14 @@ export type SystemAgentChatEngineOptions = {
   planGreeting?: SystemAgentGreetingPlanner;
   runAgentTurn?: SystemAgentTurnRunner;
   classifyApproval?: SystemAgentApprovalClassifier;
-  executeOperation?: typeof executeSystemAgentOperation;
-  appendAuditEntry?: typeof import("./audit.js").appendSystemAgentAuditEntry;
   surface?: "cli" | "gateway";
-  runChannelSetupWizard?: ChatWizardHostDependencies["runChannelSetupWizard"];
-  runSkillsSetupWizard?: ChatWizardHostDependencies["runSkillsSetupWizard"];
-  runSearchSetupWizard?: ChatWizardHostDependencies["runSearchSetupWizard"];
-  runGatewaySetupWizard?: ChatWizardHostDependencies["runGatewaySetupWizard"];
-  runMemoryImportWizard?: ChatWizardHostDependencies["runMemoryImportWizard"];
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
   operatorApprovalOnly?: boolean;
+};
+
+type SystemAgentChatEngineInternals = {
+  wizardDependencies?: ChatWizardHostDependencies;
+  executeOperation?: typeof import("./operations.js").executeSystemAgentOperation;
 };
 
 /**
@@ -81,7 +71,10 @@ export class SystemAgentChatEngine {
   private verifiedInference: SystemAgentVerifiedInferenceBinding;
   private turnQueue: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly options: SystemAgentChatEngineOptions) {
+  constructor(
+    private readonly options: SystemAgentChatEngineOptions,
+    internals: SystemAgentChatEngineInternals = {},
+  ) {
     const binding = options?.verifiedInference;
     if (!binding) {
       throw new SystemAgentInferenceUnavailableError("conversation");
@@ -93,25 +86,24 @@ export class SystemAgentChatEngine {
       beforePersistentApply: async (runtime) => {
         await this.requirePersistentApplyInference(runtime);
       },
-      dependencies: {
-        runChannelSetupWizard: options.runChannelSetupWizard,
-        runSkillsSetupWizard: options.runSkillsSetupWizard,
-        runSearchSetupWizard: options.runSearchSetupWizard,
-        runGatewaySetupWizard: options.runGatewaySetupWizard,
-        runMemoryImportWizard: options.runMemoryImportWizard,
-        appendAuditEntry: options.appendAuditEntry,
+      dependencies: internals.wizardDependencies,
+    });
+    this.router = new ChatTurnRouter(
+      options,
+      { executeOperation: internals.executeOperation },
+      this.agentSession,
+      this.wizard,
+      {
+        requireVerifiedInference: async () => await this.requireVerifiedInference(),
+        requirePersistentApplyInference: async (runtime) =>
+          await this.requirePersistentApplyInference(runtime),
+        rebindVerifiedInference: (next) => this.rebindVerifiedInference(next),
+        getVerifiedInference: () => this.verifiedInference,
+        loadOverview: async () => await this.loadOverview(),
+        getHistory: () => this.history,
+        verifyConfigAfterWrite: async () => await this.verifyConfigAfterWrite(),
       },
-    });
-    this.router = new ChatTurnRouter(options, this.agentSession, this.wizard, {
-      requireVerifiedInference: async () => await this.requireVerifiedInference(),
-      requirePersistentApplyInference: async (runtime) =>
-        await this.requirePersistentApplyInference(runtime),
-      rebindVerifiedInference: (next) => this.rebindVerifiedInference(next),
-      getVerifiedInference: () => this.verifiedInference,
-      loadOverview: async () => await this.loadOverview(),
-      getHistory: () => this.history,
-      verifyConfigAfterWrite: async () => await this.verifyConfigAfterWrite(),
-    });
+    );
   }
 
   propose(operation: SystemAgentOperation): string {

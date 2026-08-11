@@ -13,8 +13,8 @@ import {
   type WizardStep,
 } from "../wizard/session.js";
 import type { MemoryImportProviderOutcome } from "../wizard/setup.memory-import.js";
-import { classifySystemAgentApprovalText } from "./approval-intent.js";
 import type { SystemAgentOperation } from "./operations.js";
+import { classifySystemAgentApprovalText } from "./operator-approval.js";
 
 type WizardPrompter = import("../wizard/prompts.js").WizardPrompter;
 type HostedRuntime = typeof import("./hosted-setup.runtime.js");

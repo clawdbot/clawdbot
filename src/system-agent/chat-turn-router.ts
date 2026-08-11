@@ -8,10 +8,7 @@ import type {
   SystemAgentTurnRunner,
 } from "./agent-turn.js";
 import { runSystemAgentTurn } from "./agent-turn.js";
-import type {
-  SystemAgentApprovalClassifier,
-  SystemAgentApprovalIntent,
-} from "./approval-intent.js";
+import type { SystemAgentApprovalClassifier } from "./approval-intent.js";
 import type { SystemAgentAssistantPlanner, SystemAgentAssistantTurn } from "./assistant.js";
 import type {
   ChatWizardAnswerResult,
@@ -36,6 +33,7 @@ import {
 import {
   resolveOperatorApprovalDecision,
   resolvePendingOperatorProposal,
+  type SystemAgentApprovalIntent,
 } from "./operator-approval.js";
 import type { SystemAgentOverview } from "./overview.js";
 import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
@@ -52,7 +50,6 @@ type ChatTurnRouterOptions = {
   planWithAssistant?: SystemAgentAssistantPlanner;
   runAgentTurn?: SystemAgentTurnRunner;
   classifyApproval?: SystemAgentApprovalClassifier;
-  executeOperation?: typeof executeSystemAgentOperation;
   surface?: "cli" | "gateway";
   operatorApprovalOnly?: boolean;
 };
@@ -114,6 +111,9 @@ export class ChatTurnRouter {
 
   constructor(
     private readonly options: ChatTurnRouterOptions,
+    private readonly dependencies: {
+      executeOperation?: typeof executeSystemAgentOperation;
+    },
     private readonly agentSession: SystemAgentSession,
     private readonly wizard: ChatWizardHost,
     private readonly callbacks: {
@@ -240,7 +240,7 @@ export class ChatTurnRouter {
     if (this.pending) {
       if (intent === "approve") {
         await this.callbacks.requireVerifiedInference();
-        return await this.applyPendingProposal();
+        return await this.applyPendingProposal(this.pending);
       }
       if (intent === "decline") {
         const skippedModelSetup = this.pending.kind === "model-setup";
@@ -281,13 +281,9 @@ export class ChatTurnRouter {
     });
   }
 
-  private async applyPendingProposal(): Promise<SystemAgentChatReply> {
-    const pending = this.pending;
+  private async applyPendingProposal(pending: SystemAgentOperation): Promise<SystemAgentChatReply> {
     this.clearPendingProposals();
     this.proposalResolution = "approved";
-    if (!pending) {
-      return { text: "", action: "none" };
-    }
     if (pending.kind === "channel-setup") {
       return await this.startWizard(this.wizard.startChannel(pending.channel));
     }
@@ -307,23 +303,7 @@ export class ChatTurnRouter {
       throw new Error("OpenClaw host received a non-persistent approved operation.");
     }
     const capture = createCaptureRuntime();
-    let result: SystemAgentOperationResult | undefined;
-    try {
-      const execute = this.options.executeOperation ?? executeSystemAgentOperation;
-      result = await execute(operation, capture, {
-        approved: true,
-        deps: this.commandDeps(),
-        beforePersistentApply: async () => {
-          await this.callbacks.requirePersistentApplyInference(capture);
-        },
-        onVerifiedInferenceChanged: this.callbacks.rebindVerifiedInference,
-      });
-    } catch (error) {
-      if (isSystemAgentInferenceUnavailableError(error)) {
-        throw error;
-      }
-      capture.error(formatOperationError(error));
-    }
+    const result = await this.executeOperation(operation, capture, true);
     const verify = result?.applied ? await this.callbacks.verifyConfigAfterWrite() : null;
     const followUp = this.armFollowUp(result?.followUp);
     const baseText = [capture.read() || "Applied. Audit entry written.", verify, followUp]
@@ -590,11 +570,29 @@ export class ChatTurnRouter {
         action: "none",
       };
     }
-    let result: SystemAgentOperationResult | undefined;
+    const result = await this.executeOperation(
+      operation,
+      capture,
+      this.options.yes === true || !isPersistentSystemAgentOperation(operation),
+    );
+    const verify = result?.applied ? await this.callbacks.verifyConfigAfterWrite() : null;
+    const followUp = this.armFollowUp(result?.followUp);
+    const reply = [provenance, capture.read(), verify, followUp].filter(Boolean).join("\n\n");
+    if (operation.kind === "none" && reply.includes("Bye.")) {
+      return { text: reply, action: "exit" };
+    }
+    return { text: reply, action: "none" };
+  }
+
+  private async executeOperation(
+    operation: SystemAgentOperation,
+    capture: CaptureRuntime,
+    approved: boolean,
+  ): Promise<SystemAgentOperationResult | undefined> {
     try {
-      const execute = this.options.executeOperation ?? executeSystemAgentOperation;
-      result = await execute(operation, capture, {
-        approved: this.options.yes === true || !isPersistentSystemAgentOperation(operation),
+      const execute = this.dependencies.executeOperation ?? executeSystemAgentOperation;
+      return await execute(operation, capture, {
+        approved,
         deps: this.commandDeps(),
         beforePersistentApply: async () => {
           await this.callbacks.requirePersistentApplyInference(capture);
@@ -606,14 +604,8 @@ export class ChatTurnRouter {
         throw error;
       }
       capture.error(formatOperationError(error));
+      return undefined;
     }
-    const verify = result?.applied ? await this.callbacks.verifyConfigAfterWrite() : null;
-    const followUp = this.armFollowUp(result?.followUp);
-    const reply = [provenance, capture.read(), verify, followUp].filter(Boolean).join("\n\n");
-    if (operation.kind === "none" && reply.includes("Bye.")) {
-      return { text: reply, action: "exit" };
-    }
-    return { text: reply, action: "none" };
   }
 
   private async startWizard(result: Promise<ChatWizardResult>): Promise<SystemAgentChatReply> {

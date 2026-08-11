@@ -14,6 +14,7 @@ import {
   SystemAgentChatEngine as RuntimeSystemAgentChatEngine,
   type SystemAgentChatEngineOptions,
 } from "./chat-engine.js";
+import type { ChatWizardHostDependencies } from "./chat-wizard-host.js";
 import {
   resolveSystemAgentConfiguredRouteFromConfig,
   type SystemAgentConfiguredRoute,
@@ -276,14 +277,26 @@ export async function createCliVerifiedBinding(config: OpenClawConfig) {
   return { binding, deps };
 }
 
-type TestSystemAgentChatEngineOptions = Omit<SystemAgentChatEngineOptions, "verifiedInference"> & {
-  verifiedInference?: SystemAgentVerifiedInferenceBinding;
-};
+type TestSystemAgentChatEngineOptions = Omit<SystemAgentChatEngineOptions, "verifiedInference"> &
+  ChatWizardHostDependencies & {
+    executeOperation?: typeof import("./operations.js").executeSystemAgentOperation;
+    verifiedInference?: SystemAgentVerifiedInferenceBinding;
+  };
 
 /** Every ordinary engine test starts from a real, live-gate-shaped authority grant. */
 export class SystemAgentChatEngine extends RuntimeSystemAgentChatEngine {
   constructor(opts: TestSystemAgentChatEngineOptions = {}) {
-    const explicitBinding = opts.verifiedInference;
+    const {
+      runChannelSetupWizard,
+      runSkillsSetupWizard,
+      runSearchSetupWizard,
+      runGatewaySetupWizard,
+      runMemoryImportWizard,
+      appendAuditEntry,
+      executeOperation,
+      ...engineOptions
+    } = opts;
+    const explicitBinding = engineOptions.verifiedInference;
     const verifiedInference = explicitBinding ?? sharedVerifiedInference;
     if (!verifiedInference) {
       throw new Error("shared verified inference fixture was not initialized");
@@ -291,18 +304,31 @@ export class SystemAgentChatEngine extends RuntimeSystemAgentChatEngine {
     if (!sharedVerifiedInferenceDeps) {
       throw new Error("shared verified inference dependencies were not initialized");
     }
-    super({
-      ...opts,
-      verifiedInference,
-      deps: {
-        ...(explicitBinding
-          ? { validateAgentHarnessRuntimeArtifact: async () => true }
-          : sharedVerifiedInferenceDeps),
-        readConfigFileSnapshot: async () =>
-          configSnapshot(structuredClone(sharedVerifiedInferenceConfig)),
-        ...opts.deps,
+    super(
+      {
+        ...engineOptions,
+        verifiedInference,
+        deps: {
+          ...(explicitBinding
+            ? { validateAgentHarnessRuntimeArtifact: async () => true }
+            : sharedVerifiedInferenceDeps),
+          readConfigFileSnapshot: async () =>
+            configSnapshot(structuredClone(sharedVerifiedInferenceConfig)),
+          ...engineOptions.deps,
+        },
       },
-    });
+      {
+        wizardDependencies: {
+          ...(runChannelSetupWizard ? { runChannelSetupWizard } : {}),
+          ...(runSkillsSetupWizard ? { runSkillsSetupWizard } : {}),
+          ...(runSearchSetupWizard ? { runSearchSetupWizard } : {}),
+          ...(runGatewaySetupWizard ? { runGatewaySetupWizard } : {}),
+          ...(runMemoryImportWizard ? { runMemoryImportWizard } : {}),
+          ...(appendAuditEntry ? { appendAuditEntry } : {}),
+        },
+        ...(executeOperation ? { executeOperation } : {}),
+      },
+    );
   }
 }
 
@@ -385,7 +411,7 @@ export { hashSystemAgentOperation } from "../agents/tools/system-agent-tool.js";
 export type { OpenClawConfig } from "../config/types.openclaw.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { runSystemAgentTurnWithDeps } from "./agent-turn.test-support.js";
-export { classifySystemAgentApprovalText } from "./approval-intent.js";
+export { classifySystemAgentApprovalText } from "./operator-approval.js";
 export { SystemAgentWizardAnswerError } from "./chat-engine.js";
 export type { SystemAgentChatEngineOptions } from "./chat-engine.js";
 export { SystemAgentInferenceUnavailableError } from "./inference-error.js";
