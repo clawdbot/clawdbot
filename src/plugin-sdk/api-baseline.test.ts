@@ -439,7 +439,7 @@ describe("Plugin SDK API baseline", () => {
     const render = (extra = "") =>
       renderSourceFixture({
         "fixture.ts": [
-          'import type { Bridge } from "../../extensions/memory-wiki/src/bridge.js";',
+          'import type { Bridge } from "./bridge.js";',
           "export declare function createFixture(value: Bridge): Bridge;",
         ].join("\n"),
         "bridge.ts": [
