@@ -328,7 +328,12 @@ export async function updateSessionStoreAfterAgentRun(params: {
         snapshotPatch.goal =
           entry.goal?.id === currentEntry.goal.id
             ? resolveSessionGoalDisplayState(
-                { goal: currentEntry.goal, totalTokens: next.totalTokens, totalTokensFresh: true },
+                {
+                  goal: currentEntry.goal,
+                  totalTokens: next.totalTokens,
+                  totalTokensFresh: true,
+                  totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+                },
                 now,
               )
             : rebaseSessionGoalTokenCursor(currentEntry.goal, next.totalTokens, {

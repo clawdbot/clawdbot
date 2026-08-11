@@ -1527,6 +1527,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         tokenCursor: 33_107,
         tokensUsed: 0,
       });
+      expect(sessionStore[sessionKey]?.totalTokensVersion).toBe(SESSION_TOTAL_TOKENS_VERSION);
 
       await run(33_124);
       expect(sessionStore[sessionKey]?.goal).toMatchObject({
@@ -1537,6 +1538,9 @@ describe("updateSessionStoreAfterAgentRun", () => {
         tokenCursor: 33_124,
         tokensUsed: 17,
       });
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.totalTokensVersion).toBe(
+        SESSION_TOTAL_TOKENS_VERSION,
+      );
     });
   });
 
