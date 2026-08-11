@@ -2214,6 +2214,12 @@ importers:
         specifier: 1.3.6
         version: 1.3.6
 
+  packages/control-model:
+    dependencies:
+      '@openclaw/gateway-protocol':
+        specifier: workspace:*
+        version: link:../gateway-protocol
+
   packages/gateway-client:
     dependencies:
       '@openclaw/gateway-protocol':

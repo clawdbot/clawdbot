@@ -1,0 +1,18 @@
+{
+  "name": "@openclaw/control-model",
+  "version": "0.0.0-private",
+  "private": true,
+  "description": "Framework-neutral OpenClaw state and command model",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsdown src/index.ts --no-config --platform neutral --format esm --dts --out-dir dist --clean"
+  },
+  "dependencies": {
+    "@openclaw/gateway-protocol": "workspace:*"
+  }
+}
