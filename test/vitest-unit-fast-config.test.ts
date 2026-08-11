@@ -261,6 +261,8 @@ describe("unit-fast vitest lane", () => {
     const files = [
       "src/agents/auth-profiles/oauth-refresh-error.test.ts",
       "src/auto-reply/reply/agent-runner-execution-runtime.test.ts",
+      "src/infra/outbound/message-action-execution.poll.test.ts",
+      "src/infra/outbound/message-action-runner.poll.test.ts",
     ];
     for (const file of files) {
       const analysis = unitFastAnalysis.find((entry) => entry.file === file);
