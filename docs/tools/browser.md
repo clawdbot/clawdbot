@@ -79,14 +79,15 @@ stage:
 {
   tools: {
     profile: "coding",
-    alsoAllow: ["browser"],
+    alsoAllow: ["browser", "browser_exec"],
   },
 }
 ```
 
-For a single agent, use `agents.entries.*.tools.alsoAllow: ["browser"]`.
-`tools.subagents.tools.allow: ["browser"]` alone is not enough because sub-agent
-policy is applied after profile filtering.
+For a single agent, use
+`agents.entries.*.tools.alsoAllow: ["browser", "browser_exec"]`.
+`tools.subagents.tools.allow` alone is not enough because sub-agent policy is
+applied after profile filtering.
 
 The browser plugin ships two levels of agent guidance:
 
@@ -106,6 +107,24 @@ For page text, use a selector-scoped snapshot or `act:evaluate` that returns
 only the relevant text or structured data, then let the active agent model
 reason over that bounded result. Use efficient snapshots for controls and
 action discovery; they intentionally omit most non-interactive prose.
+
+### Browser scripts
+
+The `browser_exec` tool runs one agent-written JavaScript program against the
+live browser session. Use it for three or more dependent steps, loops,
+conditionals, or aggregation. Its async helpers are `snapshot(opts?)`,
+`act(action)`, `open(url)`, `tabs()`, and `log(...values)`; the script returns
+one JSON value plus capped logs. Use the `browser` tool for one-shot actions.
+
+Scripts run agent-side in a disposable worker, not inside the page. Only an
+`act({ kind: "evaluate", ... })` helper call runs JavaScript in page context.
+The worker provides timeout and failure isolation, not a Node.js privilege
+sandbox: scripts run with the Gateway process's host access. Keep
+`browser.evaluateEnabled` disabled for agents you do not trust with that access.
+`browser_exec` is listed only when `browser.evaluateEnabled` is enabled. It
+uses the same profile, target, and tab routing as `browser`, defaults to 60
+seconds, and accepts `timeoutMs` from 5 to 300 seconds. A stale ref requires a
+fresh `snapshot()` before retrying `act()`.
 
 ## Missing browser command or tool
 
@@ -156,7 +175,7 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 {
   browser: {
     enabled: true, // default: true
-    evaluateEnabled: true, // default: true; false disables act:evaluate (arbitrary JS)
+    evaluateEnabled: true, // default: true; false hides browser_exec and disables act:evaluate
     ssrfPolicy: {
       // dangerouslyAllowPrivateNetwork: true, // opt in only for trusted private-network access
       // allowedHostnames: ["localhost"],
