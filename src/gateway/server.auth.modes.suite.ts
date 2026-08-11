@@ -5,7 +5,7 @@ import {
   connectReq,
   CONTROL_UI_CLIENT,
   ConnectErrorDetailCodes,
-  getFreePort,
+  getGatewayTestPort,
   openTailscaleWs,
   openWs,
   originForPort,
@@ -31,7 +31,7 @@ export function registerAuthModesSuite(): void {
 
     beforeAll(async () => {
       testState.gatewayAuth = { mode: "password", password: "secret" }; // pragma: allowlist secret
-      port = await getFreePort();
+      port = await getGatewayTestPort();
       server = await startTestGatewayServer(port, { openAiChatCompletionsEnabled: true });
     });
 
@@ -89,7 +89,7 @@ export function registerAuthModesSuite(): void {
       prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
       process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
       testState.gatewayAuth = { mode: "token", token: "secret" };
-      port = await getFreePort();
+      port = await getGatewayTestPort();
       server = await startTestGatewayServer(port, { openAiChatCompletionsEnabled: true });
     });
 
@@ -179,7 +179,7 @@ export function registerAuthModesSuite(): void {
       prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
       testState.gatewayAuth = { mode: "none" };
-      port = await getFreePort();
+      port = await getGatewayTestPort();
       server = await startTestGatewayServer(port);
     });
 
@@ -224,7 +224,7 @@ export function registerAuthModesSuite(): void {
           ? { mode: "token" as const, token: "", allowTailscale: false }
           : { mode: "password" as const, password: "", allowTailscale: false };
       testState.gatewayAuth = auth;
-      const port = await getFreePort();
+      const port = await getGatewayTestPort();
 
       try {
         await expect(startTestGatewayServer(port, { auth })).rejects.toThrow(testCase.expected);
@@ -239,7 +239,7 @@ export function registerAuthModesSuite(): void {
 
     test("rejects non-loopback exposure without effective auth before listening", async () => {
       testState.gatewayAuth = { mode: "none" };
-      const port = await getFreePort();
+      const port = await getGatewayTestPort();
 
       await expect(
         startTestGatewayServer(port, {
@@ -272,7 +272,7 @@ export function registerAuthModesSuite(): void {
         },
         afterWrite: { mode: "auto" },
       });
-      port = await getFreePort();
+      port = await getGatewayTestPort();
       server = await startTestGatewayServer(port);
     });
 

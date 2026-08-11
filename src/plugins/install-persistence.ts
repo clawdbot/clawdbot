@@ -9,6 +9,7 @@ import {
   resolveConfigIncludeWritePath,
 } from "../config/includes.js";
 import type { ConfigWriteOptions } from "../config/io.js";
+import { containsConfigIncludeDirective } from "../config/io.read-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -93,19 +94,6 @@ export type ConfigMutationPreflight =
   | { mode: "blocked"; scope: "config" | ConfigMutationSection; reason: string };
 
 const CONFIG_MUTATION_ALLOWED = { mode: "allowed" } as const;
-
-export function containsConfigIncludeDirective(value: unknown): boolean {
-  if (Array.isArray(value)) {
-    return value.some((entry) => containsConfigIncludeDirective(entry));
-  }
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    Object.hasOwn(value, "$include") ||
-    Object.values(value).some((entry) => containsConfigIncludeDirective(entry))
-  );
-}
 
 export function supportsInstallConfigSingleTopLevelIncludeShape(authoredSection: unknown): boolean {
   if (!containsConfigIncludeDirective(authoredSection)) {

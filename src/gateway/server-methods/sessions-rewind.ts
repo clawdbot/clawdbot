@@ -11,16 +11,14 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listRegisteredAgentHarnesses } from "../../agents/harness/registry.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import {
+  forkSessionAtMessage,
   listSessionBranches,
+  rewindSessionToMessage,
+  switchSessionBranch,
   type SessionBranchListResult,
   type SessionBranchSwitchMutationResult,
   type SessionMessageCutMutationResult,
 } from "../../config/sessions/session-accessor.js";
-import {
-  forkSessionAtMessage,
-  rewindSessionToMessage,
-  switchSessionBranch,
-} from "../../config/sessions/session-accessor.sqlite-message-cut.js";
 import { MEDIA_MAX_BYTES, readMediaBuffer } from "../../media/store.js";
 import {
   isCompetingSessionWorkAdmissionActive,

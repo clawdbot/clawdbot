@@ -63,7 +63,7 @@ import { invalidateSessionSharingSnapshot } from "./session-sharing.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 import { resetTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
-  agentCommand,
+  agentCommandMock,
   cronIsolatedRun,
   embeddedRunMock,
   gatewayReplyMock,
@@ -441,8 +441,8 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   testIsNixMode.value = false;
   cronIsolatedRun.mockReset();
   cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "ok" });
-  agentCommand.mockReset();
-  agentCommand.mockResolvedValue(undefined);
+  agentCommandMock.mockReset();
+  agentCommandMock.mockResolvedValue(undefined);
   gatewayReplyMock.mockReset();
   gatewayReplyMock.mockResolvedValue(undefined);
   sendWhatsAppMock.mockReset();
@@ -538,8 +538,8 @@ async function resetGatewayTestRuntimeOnly() {
   testIsNixMode.value = false;
   cronIsolatedRun.mockReset();
   cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "ok" });
-  agentCommand.mockReset();
-  agentCommand.mockResolvedValue(undefined);
+  agentCommandMock.mockReset();
+  agentCommandMock.mockResolvedValue(undefined);
   gatewayReplyMock.mockReset();
   gatewayReplyMock.mockResolvedValue(undefined);
   sendWhatsAppMock.mockReset();
@@ -619,7 +619,7 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
   });
 }
 
-export async function getFreePort(): Promise<number> {
+export async function getGatewayTestPort(): Promise<number> {
   return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 3, 4] });
 }
 
@@ -754,7 +754,7 @@ export async function startGatewayServerWithRetries(params: {
       if (code !== "EADDRINUSE") {
         throw err;
       }
-      port = await getFreePort();
+      port = await getGatewayTestPort();
     }
   }
   throw new Error("failed to start gateway server after retries");
@@ -808,7 +808,7 @@ export async function withGatewayServer<T>(
   opts?: { port?: number; serverOptions?: GatewayServerOptions },
 ): Promise<T> {
   const started = await startGatewayServerWithRetries({
-    port: opts?.port ?? (await getFreePort()),
+    port: opts?.port ?? (await getGatewayTestPort()),
     opts: opts?.serverOptions,
   });
   try {
@@ -828,7 +828,7 @@ export async function createGatewaySuiteHarness(opts?: {
   close: () => Promise<void>;
 }> {
   const started = await startGatewayServerWithRetries({
-    port: opts?.port ?? (await getFreePort()),
+    port: opts?.port ?? (await getGatewayTestPort()),
     opts: opts?.serverOptions,
   });
   return {
@@ -847,7 +847,7 @@ export async function createGatewaySuiteHarness(opts?: {
 }
 
 export async function startServer(token?: string, opts?: GatewayServerOptions) {
-  let port = await getFreePort();
+  let port = await getGatewayTestPort();
   const envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
   const prev = process.env.OPENCLAW_GATEWAY_TOKEN;
   if (typeof token === "string") {

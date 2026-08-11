@@ -24,7 +24,7 @@ import {
   SETUP_INFERENCE_TEST_TIMEOUT_MS,
   SetupInferenceCancelledError,
   type SetupInferenceFailureStatus,
-  log,
+  setupInferenceLog,
 } from "./setup-inference-core.js";
 import {
   type RunResult,
@@ -51,7 +51,7 @@ export async function cleanupSetupInferenceTempDir(params: {
   } catch {
     // Windows cannot remove an open SQLite file. Keep cleanup nonfatal, but
     // always try the directory removal so callers do not retain probe secrets.
-    log.warn("Could not dispose the temporary inference auth database.");
+    setupInferenceLog.warn("Could not dispose the temporary inference auth database.");
   }
   try {
     await (
@@ -63,7 +63,7 @@ export async function cleanupSetupInferenceTempDir(params: {
     params.runtime?.error?.(
       `Could not remove temporary AI setup files: ${formatErrorMessage(error)}`,
     );
-    log.warn("Could not remove the temporary inference test directory.");
+    setupInferenceLog.warn("Could not remove the temporary inference test directory.");
   }
 }
 
@@ -107,13 +107,13 @@ export async function retainUnownedCodexInstall(params: {
       reason: "openclaw-inference-activation-not-committed",
     });
     if (!marked) {
-      log.warn("Could not retain the uncommitted Codex runtime package generation.");
+      setupInferenceLog.warn("Could not retain the uncommitted Codex runtime package generation.");
     }
     return marked;
   } catch {
     // Retention is best effort and marker-after-adoption is non-destructive.
     // A later install or GC may still reuse or remove the unowned generation.
-    log.warn("Could not retain the uncommitted Codex runtime package generation.");
+    setupInferenceLog.warn("Could not retain the uncommitted Codex runtime package generation.");
     return false;
   } finally {
     await clearUnownedCodexInstallCaches(params.deps);
@@ -128,7 +128,9 @@ async function clearUnownedCodexInstallCaches(deps: ActivateSetupInferenceDeps):
         .clearLoadInstalledPluginIndexInstallRecordsCache;
     clearInstallRecords();
   } catch {
-    log.warn("Could not clear the plugin install-record cache after failed Codex activation.");
+    setupInferenceLog.warn(
+      "Could not clear the plugin install-record cache after failed Codex activation.",
+    );
   }
   try {
     const clearPluginMetadata =
@@ -136,16 +138,18 @@ async function clearUnownedCodexInstallCaches(deps: ActivateSetupInferenceDeps):
       (await import("../plugins/plugin-metadata-lifecycle.js")).clearPluginMetadataLifecycleCaches;
     clearPluginMetadata();
   } catch {
-    log.warn("Could not clear plugin metadata caches after failed Codex activation.");
+    setupInferenceLog.warn("Could not clear plugin metadata caches after failed Codex activation.");
   }
   try {
     const invalidateRuntimeDiscovery =
       deps.invalidatePluginRuntimeDiscoveryAfterConfigMutation ??
       (await import("../plugins/registry-refresh.js"))
         .invalidatePluginRuntimeDiscoveryAfterConfigMutation;
-    await invalidateRuntimeDiscovery({ logger: log });
+    await invalidateRuntimeDiscovery({ logger: setupInferenceLog });
   } catch {
-    log.warn("Could not clear plugin runtime discovery after failed Codex activation.");
+    setupInferenceLog.warn(
+      "Could not clear plugin runtime discovery after failed Codex activation.",
+    );
   }
 }
 
@@ -160,7 +164,9 @@ export async function reloadCodexRegistryAfterActivation(params: {
   try {
     snapshot = await params.readSnapshot();
   } catch {
-    log.warn("Could not read config while reloading the plugin registry after Codex activation.");
+    setupInferenceLog.warn(
+      "Could not read config while reloading the plugin registry after Codex activation.",
+    );
     return false;
   }
   const runtimeConfig =
@@ -179,10 +185,12 @@ export async function reloadCodexRegistryAfterActivation(params: {
       config: sourceConfig,
       reason: "source-changed",
       workspaceDir: params.workspaceDir,
-      logger: log,
+      logger: setupInferenceLog,
     });
   } catch {
-    log.warn("Could not refresh persisted plugin registry metadata after Codex activation.");
+    setupInferenceLog.warn(
+      "Could not refresh persisted plugin registry metadata after Codex activation.",
+    );
   }
   try {
     const ensurePluginRegistryLoaded =
@@ -196,7 +204,9 @@ export async function reloadCodexRegistryAfterActivation(params: {
     });
     return true;
   } catch {
-    log.warn("Could not reload the active plugin registry after Codex inference activation.");
+    setupInferenceLog.warn(
+      "Could not reload the active plugin registry after Codex inference activation.",
+    );
     return false;
   }
 }

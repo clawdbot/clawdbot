@@ -234,7 +234,7 @@ export function extractMessageRole(message: unknown): string | undefined {
     : undefined;
 }
 
-export function extractMessageText(message: unknown): string | null {
+export function extractSessionTranscriptText(message: unknown): string | null {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     return null;
   }

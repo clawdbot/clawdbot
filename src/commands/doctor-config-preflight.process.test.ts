@@ -654,8 +654,8 @@ describe("gateway startup-migration refusal", () => {
             manifestPluginCount: metadata?.plugins.length ?? -1,
             scoped: metadata?.pluginIds !== undefined,
           }));
-          const { doctorCommand } = await import(${JSON.stringify(doctorHealthUrl)});
-          await doctorCommand({
+          const { runDoctorHealthFlow } = await import(${JSON.stringify(doctorHealthUrl)});
+          await runDoctorHealthFlow({
             log: () => {},
             error: () => {},
             exit: (code) => { throw new Error("doctor exited " + code); },

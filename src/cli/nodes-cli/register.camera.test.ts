@@ -41,7 +41,7 @@ vi.mock("./rpc.js", async () => {
       platform: "ios",
       remoteIp: "198.51.100.42",
     })),
-    callGatewayCli: vi.fn(async (_method, _opts, invokeParams) => {
+    callNodesGatewayCli: vi.fn(async (_method, _opts, invokeParams) => {
       capturedInvokeParams.push(invokeParams as Record<string, unknown>);
       return {
         payload: {
@@ -93,7 +93,7 @@ describe("nodes camera snap CLI option forwarding", () => {
     const nodes = buildRootCommand();
     await nodes.parseAsync(cameraSnapArgs(["--node", "test-node", "--device-id", "camera-device"]));
 
-    expect(rpc.callGatewayCli).toHaveBeenCalledTimes(1);
+    expect(rpc.callNodesGatewayCli).toHaveBeenCalledTimes(1);
     expect(capturedInvokeParams).toHaveLength(1);
     expect(capturedInvokeParams[0]).toMatchObject({
       command: "camera.snap",

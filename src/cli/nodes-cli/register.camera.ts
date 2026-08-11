@@ -22,7 +22,7 @@ import { parseDurationMs } from "../parse-duration.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import {
   buildNodeInvokeParams,
-  callGatewayCli,
+  callNodesGatewayCli,
   nodesCallOpts,
   parseOptionalNodeFiniteNumber,
   parseOptionalNodeNonNegativeInteger,
@@ -58,7 +58,7 @@ export function registerNodesCameraCommands(nodes: Command) {
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("camera list", async () => {
           const nodeId = await resolveNodeId(opts, opts.node ?? "");
-          const raw = await callGatewayCli(
+          const raw = await callNodesGatewayCli(
             "node.invoke",
             opts,
             buildNodeInvokeParams({
@@ -186,7 +186,7 @@ export function registerNodesCameraCommands(nodes: Command) {
               timeoutMs,
             });
 
-            const raw = await callGatewayCli("node.invoke", opts, invokeParams);
+            const raw = await callNodesGatewayCli("node.invoke", opts, invokeParams);
             const payload = parseCameraSnapPayload(getGatewayInvokePayload(raw));
             const filePath = cameraTempPath({
               kind: "snap",
@@ -258,7 +258,7 @@ export function registerNodesCameraCommands(nodes: Command) {
             timeoutMs,
           });
 
-          const raw = await callGatewayCli("node.invoke", opts, invokeParams);
+          const raw = await callNodesGatewayCli("node.invoke", opts, invokeParams);
           const payload = parseCameraClipPayload(getGatewayInvokePayload(raw));
           const filePath = await writeCameraClipPayloadToFile({
             payload,

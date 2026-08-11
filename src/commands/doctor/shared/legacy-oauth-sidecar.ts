@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { log } from "../../../agents/auth-profiles/constants.js";
+import { authProfilesLog } from "../../../agents/auth-profiles/constants.js";
 import { LEGACY_OAUTH_REF_PROVIDER } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
 import type { LegacyOAuthRef } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
 import { resolveOAuthDir, resolveStateDir } from "../../../config/paths.js";
@@ -302,7 +302,7 @@ function emitKeychainOnlyMigrationHintOnce(profileId: string): void {
     return;
   }
   keychainOnlyMigrationHintEmitted = true;
-  log.warn(
+  authProfilesLog.warn(
     "Legacy Codex OAuth credentials are stored only in macOS Keychain on this host. " +
       "Headless paths cannot prompt for Keychain access; run `openclaw doctor --fix` " +
       "from an interactive terminal to migrate them back to inline auth-profiles.json credentials.",

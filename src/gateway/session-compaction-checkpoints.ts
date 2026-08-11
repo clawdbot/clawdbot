@@ -21,13 +21,13 @@ import {
   loadSessionEntry,
   loadTranscriptEventsSync,
   type SessionCompactionCheckpointMutationResult,
+  type SessionTranscriptRuntimeTarget,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import {
   branchCompactionCheckpointSession,
   restoreCompactionCheckpointSession,
 } from "../config/sessions/session-accessor.sqlite-checkpoint.js";
-import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
