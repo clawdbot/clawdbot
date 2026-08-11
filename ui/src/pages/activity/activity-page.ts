@@ -209,13 +209,16 @@ class ActivityPage extends OpenClawLightDomElement {
     gateway: ApplicationContext["gateway"],
     client: GatewayBrowserClient,
     selector: RunInspectorSelector,
+    previousResult?: AuditRunInspectResult,
   ) {
     this.cancelInspectorRequest();
     const epoch = this.inspectorEpoch;
     const abort = new AbortController();
     this.inspectorAbort = abort;
     this.inspectorClient = client;
-    this.runInspector = { status: "loading", waitingForGateway: false };
+    this.runInspector = previousResult
+      ? { status: "ready", result: previousResult, executionPageStatus: "loading" }
+      : { status: "loading", waitingForGateway: false };
     const requestSelectorKey = selectorKey(selector);
     const isCurrent = () =>
       this.inspectorEpoch === epoch &&
@@ -227,13 +230,42 @@ class ActivityPage extends OpenClawLightDomElement {
     try {
       const params =
         selector.kind === "run"
-          ? { runId: selector.id, decisionLimit: 50, executionLimit: 50 }
+          ? {
+              runId: selector.id,
+              decisionLimit: 50,
+              executionLimit: 50,
+              ...(previousResult?.nextExecutionCursor
+                ? { executionCursor: previousResult.nextExecutionCursor }
+                : {}),
+            }
           : { executionId: selector.id, decisionLimit: 50 };
       const result = await client.request<AuditRunInspectResult>("audit.run.inspect", params, {
         signal: abort.signal,
       });
       if (isCurrent()) {
-        this.runInspector = { status: "ready", result };
+        if (
+          previousResult?.identity.state === "ambiguous" &&
+          result.identity.state === "ambiguous"
+        ) {
+          const candidates = new Map(
+            previousResult.identity.candidates.map((candidate) => [
+              candidate.executionId,
+              candidate,
+            ]),
+          );
+          for (const candidate of result.identity.candidates) {
+            candidates.set(candidate.executionId, candidate);
+          }
+          this.runInspector = {
+            status: "ready",
+            result: {
+              ...result,
+              identity: { ...result.identity, candidates: [...candidates.values()] },
+            },
+          };
+        } else {
+          this.runInspector = { status: "ready", result };
+        }
       }
     } catch (error) {
       if (!isCurrent() || abort.signal.aborted) {
@@ -243,12 +275,38 @@ class ActivityPage extends OpenClawLightDomElement {
         ? { status: "unauthorized" }
         : this.isUnknownInspectMethod(error)
           ? { status: "unsupported" }
-          : { status: "error" };
+          : previousResult
+            ? { status: "ready", result: previousResult, executionPageStatus: "error" }
+            : { status: "error" };
     } finally {
       if (this.inspectorAbort === abort) {
         this.inspectorAbort = null;
       }
     }
+  }
+
+  private loadMoreExecutions() {
+    const route = this.routeData;
+    const snapshot = this.context.gateway.snapshot;
+    const inspectorState = this.runInspector;
+    if (
+      route?.mode !== "run" ||
+      route.selector?.kind !== "run" ||
+      snapshot.phase !== "connected" ||
+      !snapshot.client ||
+      inspectorState.status !== "ready" ||
+      inspectorState.executionPageStatus === "loading" ||
+      inspectorState.result.identity.state !== "ambiguous" ||
+      !inspectorState.result.nextExecutionCursor
+    ) {
+      return;
+    }
+    void this.loadRunInspector(
+      this.context.gateway,
+      snapshot.client,
+      route.selector,
+      inspectorState.result,
+    );
   }
 
   private selectMode(mode: "live" | "run") {
@@ -397,6 +455,7 @@ class ActivityPage extends OpenClawLightDomElement {
           ? renderRunInspector({
               basePath: this.context.basePath,
               state: this.runInspector,
+              onLoadMoreExecutions: () => this.loadMoreExecutions(),
               onRetry: () =>
                 this.syncRunInspector(this.context.gateway, this.context.gateway.snapshot, true),
             })

@@ -29,7 +29,11 @@ export type RunInspectorState =
   | { status: "unauthorized" }
   | { status: "unsupported" }
   | { status: "error" }
-  | { status: "ready"; result: AuditRunInspectResult };
+  | {
+      status: "ready";
+      result: AuditRunInspectResult;
+      executionPageStatus?: "loading" | "error";
+    };
 
 type RunInspectorDiagnosticKind =
   | "present"

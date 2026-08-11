@@ -46,6 +46,14 @@
   line-height: 1.5;
 }
 
+.run-inspector__pagination {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+}
+
 .run-inspector__coverage {
   display: flex;
   flex-wrap: wrap;

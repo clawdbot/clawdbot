@@ -108,10 +108,18 @@ function unavailableResult(
   };
 }
 
-function renderState(state: RunInspectorState) {
+function renderState(state: RunInspectorState, onLoadMoreExecutions = vi.fn()) {
   const container = document.createElement("div");
   document.body.append(container);
-  render(renderRunInspector({ basePath: "/operator", state, onRetry: vi.fn() }), container);
+  render(
+    renderRunInspector({
+      basePath: "/operator",
+      state,
+      onLoadMoreExecutions,
+      onRetry: vi.fn(),
+    }),
+    container,
+  );
   return container;
 }
 
@@ -208,14 +216,29 @@ describe("renderRunInspector", () => {
       },
       decisions: [],
       coverage: { state: "unknown", missingEvidence: ["execution.selection"] },
+      nextExecutionCursor: "opaque-cursor",
     };
 
-    const link = renderState({ status: "ready", result }).querySelector<HTMLAnchorElement>(
-      'a[href*="execution="]',
-    );
+    const onLoadMoreExecutions = vi.fn();
+    const container = renderState({ status: "ready", result }, onLoadMoreExecutions);
+    const link = container.querySelector<HTMLAnchorElement>('a[href*="execution="]');
     expect(link?.textContent).toContain("execution:a/b");
     expect(link?.getAttribute("href")).toBe(
       "/operator/activity?view=run&execution=execution%3Aa%2Fb",
+    );
+    const loadMore = [...container.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Load more executions"),
+    );
+    loadMore?.click();
+    expect(onLoadMoreExecutions).toHaveBeenCalledOnce();
+
+    const loading = renderState({ status: "ready", result, executionPageStatus: "loading" });
+    expect(loading.querySelector("button")?.disabled).toBe(true);
+    expect(loading.textContent).toContain("Loading executions…");
+
+    const failed = renderState({ status: "ready", result, executionPageStatus: "error" });
+    expect(failed.querySelector('[role="alert"]')?.textContent).toContain(
+      "More executions could not be loaded",
     );
   });
 });

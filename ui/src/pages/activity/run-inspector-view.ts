@@ -17,6 +17,7 @@ type EvidenceState = "present" | "absent" | "unknown" | "unsupported";
 type RunInspectorProps = {
   basePath: string;
   state: RunInspectorState;
+  onLoadMoreExecutions: () => void;
   onRetry: () => void;
 };
 
@@ -435,7 +436,12 @@ function diagnosticCopy(result: AuditRunInspectResult) {
   return unreachable;
 }
 
-function renderUnavailableResult(result: AuditRunInspectResult, basePath: string) {
+function renderUnavailableResult(
+  result: AuditRunInspectResult,
+  basePath: string,
+  executionPageStatus: "loading" | "error" | undefined,
+  onLoadMoreExecutions: () => void,
+) {
   const copy = diagnosticCopy(result);
   if (!copy || result.identity.state === "present") {
     return nothing;
@@ -472,8 +478,23 @@ function renderUnavailableResult(result: AuditRunInspectResult, basePath: string
             )}
           </ol>
           ${result.nextExecutionCursor
-            ? html`<div class="run-inspector__pagination" role="note">
-                ${t("activity.runInspector.candidates.more")}
+            ? html`<div class="run-inspector__pagination">
+                <span>${t("activity.runInspector.candidates.more")}</span>
+                <button
+                  type="button"
+                  class="btn"
+                  ?disabled=${executionPageStatus === "loading"}
+                  @click=${onLoadMoreExecutions}
+                >
+                  ${executionPageStatus === "loading"
+                    ? t("activity.runInspector.candidates.loadingMore")
+                    : t("activity.runInspector.candidates.loadMore")}
+                </button>
+                ${executionPageStatus === "error"
+                  ? html`<span role="alert">
+                      ${t("activity.runInspector.candidates.loadMoreError")}
+                    </span>`
+                  : nothing}
               </div>`
             : nothing}
         `
@@ -482,7 +503,12 @@ function renderUnavailableResult(result: AuditRunInspectResult, basePath: string
   `;
 }
 
-function renderReady(result: AuditRunInspectResult, basePath: string) {
+function renderReady(
+  state: Extract<RunInspectorState, { status: "ready" }>,
+  basePath: string,
+  onLoadMoreExecutions: () => void,
+) {
+  const result = state.result;
   const currentCoverageLabel = coverageLabel(result.coverage.state);
   return html`
     <div
@@ -509,7 +535,7 @@ function renderReady(result: AuditRunInspectResult, basePath: string) {
           </section>
           ${renderMissingEvidence(result.coverage.missingEvidence)} ${renderDecisions(result)}
         `
-      : renderUnavailableResult(result, basePath)}
+      : renderUnavailableResult(result, basePath, state.executionPageStatus, onLoadMoreExecutions)}
   `;
 }
 
@@ -582,7 +608,7 @@ export function renderRunInspector(props: RunInspectorProps) {
       );
       break;
     case "ready":
-      content = renderReady(state.result, props.basePath);
+      content = renderReady(state, props.basePath, props.onLoadMoreExecutions);
       break;
   }
 

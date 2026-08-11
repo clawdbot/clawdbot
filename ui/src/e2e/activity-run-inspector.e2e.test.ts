@@ -128,7 +128,11 @@ function unavailableResult(params: {
   };
 }
 
-function ambiguousResult(runId: string, executionId: string): AuditRunInspectResult {
+function ambiguousResult(
+  runId: string,
+  executionId: string,
+  nextExecutionCursor?: string,
+): AuditRunInspectResult {
   return {
     schemaVersion: 1,
     run: { runId, status: "known" },
@@ -148,6 +152,7 @@ function ambiguousResult(runId: string, executionId: string): AuditRunInspectRes
     },
     decisions: [],
     coverage: { state: "unknown", missingEvidence: ["execution.selection"] },
+    ...(nextExecutionCursor ? { nextExecutionCursor } : {}),
   };
 }
 
@@ -300,12 +305,20 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
               }),
             },
             {
+              match: { runId: "ambiguous", executionCursor: "50" },
+              response: ambiguousResult("ambiguous", "execution-candidate-51"),
+            },
+            {
               match: { runId: "ambiguous" },
-              response: ambiguousResult("ambiguous", "execution-candidate-1"),
+              response: ambiguousResult("ambiguous", "execution-candidate-1", "50"),
             },
             {
               match: { executionId: "execution-candidate-1" },
               response: presentResult("ambiguous", "execution-candidate-1"),
+            },
+            {
+              match: { executionId: "execution-candidate-51" },
+              response: presentResult("ambiguous", "execution-candidate-51"),
             },
           ],
         },
@@ -331,11 +344,20 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
       await page.goto(`${server.baseUrl}activity?view=run&run=ambiguous`);
       await page.getByRole("heading", { name: "Multiple executions match this run" }).waitFor();
       await screenshot(page, "11-ambiguous.png");
-      await page.getByRole("link", { name: "execution-candidate-1" }).click();
-      await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
-      expect(new URL(page.url()).searchParams.get("execution")).toBe("execution-candidate-1");
+      await page.getByRole("button", { name: "Load more executions" }).click();
+      await page.getByRole("link", { name: "execution-candidate-51" }).waitFor();
       expect((await gateway.getRequests("audit.run.inspect")).at(-1)?.params).toEqual({
-        executionId: "execution-candidate-1",
+        runId: "ambiguous",
+        executionCursor: "50",
+        decisionLimit: 50,
+        executionLimit: 50,
+      });
+      expect(await page.getByRole("button", { name: "Load more executions" }).count()).toBe(0);
+      await page.getByRole("link", { name: "execution-candidate-51" }).click();
+      await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
+      expect(new URL(page.url()).searchParams.get("execution")).toBe("execution-candidate-51");
+      expect((await gateway.getRequests("audit.run.inspect")).at(-1)?.params).toEqual({
+        executionId: "execution-candidate-51",
         decisionLimit: 50,
       });
       await screenshot(page, "12-exact-selection.png");

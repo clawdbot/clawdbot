@@ -173,7 +173,10 @@ const enActivity = {
         listLabel: "Matching executions",
         recorded: "Recorded {date}",
         executionReference: "Inspect execution",
-        more: "More matching executions exist beyond this bounded page. Use the audit CLI to continue discovery and select one exact execution.",
+        more: "More matching executions exist beyond this bounded page.",
+        loadMore: "Load more executions",
+        loadingMore: "Loading executions…",
+        loadMoreError: "More executions could not be loaded. Try again.",
       },
       panels: {
         empty: {
