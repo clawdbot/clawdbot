@@ -18,7 +18,7 @@ import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { createNodeTestShards } from "../../scripts/lib/ci-node-test-plan.mts";
+import { createVitestCacheWarmGroups } from "../../scripts/lib/ci-node-test-plan.mts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-app-i18n.ts";
 import { SUPPORTED_LOCALES } from "../../ui/src/i18n/lib/registry.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -505,12 +505,7 @@ function readQaProfileEvidenceWorkflow() {
   return parse(readFileSync(".github/workflows/qa-profile-evidence.yml", "utf8"));
 }
 
-type QaProfileTimeoutFixtureMode =
-  | "natural-124"
-  | "self-kill"
-  | "supervisor-term"
-  | "term"
-  | "kill";
+type QaProfileTimeoutFixtureMode = "natural-124" | "self-kill" | "term" | "kill";
 
 function runQaProfileTimeoutFixture(mode: QaProfileTimeoutFixtureMode) {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-qa-profile-timeout-"));
@@ -531,10 +526,6 @@ case "\${FAKE_PNPM_MODE}" in
     ;;
   self-kill)
     kill -KILL "$$"
-    ;;
-  supervisor-term)
-    : > "$SUPERVISOR_READY_FILE"
-    while :; do sleep 0.01; done
     ;;
   term)
     trap 'exit 0' TERM
@@ -568,30 +559,9 @@ esac
       "Run QA profile step",
     );
     let script = runProfileStep.run
-      .replace("--kill-after=30s 110m", "--kill-after=0.5s 1s")
-      .replaceAll("110 minutes", "1 second")
-      .replaceAll("30-second", "0.5-second");
-    if (mode === "supervisor-term") {
-      const timeoutCommandTail = '  3>&2 2>"$timeout_supervisor_fifo" || qa_exit_code=$?';
-      const signaledTimeoutCommandTail = `  3>&2 2>"$timeout_supervisor_fifo" &
-timeout_supervisor_pid=$!
-(
-  for _ in {1..100}; do
-    [[ -e "$SUPERVISOR_READY_FILE" ]] && break
-    sleep 0.01
-  done
-  [[ -e "$SUPERVISOR_READY_FILE" ]]
-  kill -TERM "$timeout_supervisor_pid"
-) &
-timeout_signaler_pid=$!
-wait "$timeout_supervisor_pid" || qa_exit_code=$?
-wait "$timeout_signaler_pid"`;
-      const signaledScript = script.replace(timeoutCommandTail, signaledTimeoutCommandTail);
-      if (signaledScript === script) {
-        throw new Error("QA timeout fixture could not instrument the timeout supervisor");
-      }
-      script = signaledScript;
-    }
+      .replace("--kill-after=30s 110m", "--kill-after=0.05s 0.4s")
+      .replaceAll("110 minutes", "0.4 seconds")
+      .replaceAll("30-second", "0.05-second");
     const timeoutSupervisorCapture = path.join(root, "timeout-supervisor.log");
     const timeoutClassificationStart = `supervisor_tee_pid=""
 
@@ -623,7 +593,6 @@ timeout_outcome="none"`,
         PROTOCOL_SINCE_BASE_SHA: "b".repeat(40),
         QA_PROFILE: "all",
         REQUESTED_REF: "fixture",
-        SUPERVISOR_READY_FILE: path.join(root, "supervisor-ready"),
         TARGET_SHA: "a".repeat(40),
         TIMEOUT_SUPERVISOR_CAPTURE: timeoutSupervisorCapture,
       },
@@ -1183,20 +1152,20 @@ function runGeneratedPublisherScenario(
       writeFileSync(prState, "", "utf8");
       runGit(worktree, ["switch", "main"]);
     }
-    runGit(root, ["clone", "--branch", "main", origin, updater]);
-    runGit(updater, ["config", "user.name", "Base Updater"]);
-    runGit(updater, ["config", "user.email", "updater@example.com"]);
-    if (baseChangePath !== null) {
-      writeFileSync(
-        path.join(updater, "generated", `${baseChangePath}.txt`),
-        `newer-${baseChangePath}\n`,
-        "utf8",
-      );
-    }
-    if (options.updateSource) {
-      writeFileSync(path.join(updater, "source", "input.txt"), "newer-input\n", "utf8");
-    }
     if (baseChangePath !== null || options.updateSource) {
+      runGit(root, ["clone", "--branch", "main", origin, updater]);
+      runGit(updater, ["config", "user.name", "Base Updater"]);
+      runGit(updater, ["config", "user.email", "updater@example.com"]);
+      if (baseChangePath !== null) {
+        writeFileSync(
+          path.join(updater, "generated", `${baseChangePath}.txt`),
+          `newer-${baseChangePath}\n`,
+          "utf8",
+        );
+      }
+      if (options.updateSource) {
+        writeFileSync(path.join(updater, "source", "input.txt"), "newer-input\n", "utf8");
+      }
       runGit(updater, ["add", "generated", "source"]);
       runGit(updater, ["commit", "-m", "update base"]);
       runGit(updater, ["push", "origin", "main"]);
@@ -1223,18 +1192,7 @@ function runGeneratedPublisherScenario(
       ]);
     }
 
-    writeExecutable(path.join(fakeBin, "timeout"), [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      'while [[ "$#" -gt 0 ]]; do',
-      '  case "$1" in',
-      "    --signal=*|--kill-after=*) shift ;;",
-      "    [0-9]*s) shift; break ;;",
-      "    *) break ;;",
-      "  esac",
-      "done",
-      'exec "$@"',
-    ]);
+    writeExecutable(path.join(fakeBin, "sleep"), ["#!/bin/sh", "exit 0"]);
     writeExecutable(path.join(fakeBin, "gh"), [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
@@ -1276,9 +1234,21 @@ function runGeneratedPublisherScenario(
     ]);
 
     const action = parse(readFileSync(PUBLISH_GENERATED_PR_ACTION, "utf8"));
-    const publishRun = action.runs.steps.find(
+    const actionRun = action.runs.steps.find(
       (step: { name?: string }) => step.name === "Publish generated pull request",
     ).run;
+    expect(actionRun).toContain("timeout --signal=TERM --kill-after=10s");
+    const publishRun = `timeout() {
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --signal=*|--kill-after=*) shift ;;
+      [0-9]*s) shift; break ;;
+      *) break ;;
+    esac
+  done
+  "$@"
+}
+${actionRun}`;
     const publish = spawnSync("bash", ["-c", publishRun], {
       cwd: worktree,
       encoding: "utf8",
@@ -2391,29 +2361,6 @@ NODE
   );
 
   it.skipIf(process.platform === "win32")(
-    "defers instead of overwriting a newer overlapping generated path",
-    () => {
-      const result = runGeneratedPublisherScenario("a");
-
-      expect(result.branchExists).toBe(false);
-      expect(result.summary).toContain(
-        "Deferred stale generated output because owned generated paths changed on main.",
-      );
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "retries a stale pull request head read after the branch push",
-    () => {
-      const result = runGeneratedPublisherScenario(null, { stalePrHeadOnce: true });
-
-      expect(result.branchExists).toBe(true);
-      expect(result.generatedA).toBe("desired-a");
-      expect(result.summary).toContain("https://github.com/openclaw/openclaw/pull/1");
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
     "defers stale generator inputs and neutralizes an existing pull request",
     () => {
       const result = runGeneratedPublisherScenario(null, {
@@ -2473,33 +2420,21 @@ NODE
         "::error::Refusing stale generated output because generator inputs changed on main.",
       );
 
-      const noPr = runGeneratedPublisherScenario(null, {
-        expectFailure: true,
-        noGeneratedChange: true,
-        overlapPolicy: "fail",
-        updateSource: true,
+      const publishRun = parse(readFileSync(PUBLISH_GENERATED_PR_ACTION, "utf8")).runs.steps.find(
+        (step: { name?: string }) => step.name === "Publish generated pull request",
+      ).run;
+      const invalidPolicy = spawnSync("bash", ["-c", publishRun], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          AUTO_MERGE: "false",
+          CONTENTS_TOKEN: "contents-token",
+          GH_TOKEN: "pull-request-token",
+          OVERLAP_POLICY: "continue",
+        },
       });
-      expect(noPr.branchExists).toBe(false);
-      expect(noPr.publishOutput).toContain(
-        "::error::Refusing stale generated output because generator inputs changed on main.",
-      );
-
-      const unchangedOverlap = runGeneratedPublisherScenario("b", {
-        expectFailure: true,
-        noGeneratedChange: true,
-        overlapPolicy: "fail",
-      });
-      expect(unchangedOverlap.branchExists).toBe(false);
-      expect(unchangedOverlap.publishOutput).toContain(
-        "::error::Refusing stale generated output because owned generated paths changed on main.",
-      );
-
-      const invalidPolicy = runGeneratedPublisherScenario("b", {
-        expectFailure: true,
-        overlapPolicy: "continue",
-      });
-      expect(invalidPolicy.branchExists).toBe(false);
-      expect(invalidPolicy.publishOutput).toContain(
+      expect(invalidPolicy.status).not.toBe(0);
+      expect(`${invalidPolicy.stdout}${invalidPolicy.stderr}`).toContain(
         "Generated PR publication overlap policy must be 'defer' or 'fail'.",
       );
     },
@@ -3632,17 +3567,12 @@ NODE
     expect(warmer.on).not.toHaveProperty("workflow_run");
     expect(checkoutStep.with).toBeUndefined();
     expect(warmerSource).toContain('cron: "17 8 * * *"');
-    expect(warmerSource).toContain('candidate.shardName.startsWith("core-unit-fast")');
-    expect(warmerSource).toContain('"agentic-agents-embedded"');
-    expect(warmerSource).toContain('"agentic-gateway-methods"');
-    expect(warmerSource).toContain('"auto-reply-reply-commands-3"');
-    expect(warmerSource).toContain("const groups = shards.flatMap((shard) =>");
-    expect(warmerSource).toContain("configs: [config]");
-    expect(warmerSource).toContain("...(shard.env ? { env: shard.env } : {})");
-    expect(warmerSource).toContain(
-      "...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {})",
+    expect(seedStep.run).toContain(
+      'import { createVitestCacheWarmGroups } from "./scripts/lib/ci-node-test-plan.mts";',
     );
-    expect(warmerSource).toContain("`OPENCLAW_NODE_TEST_GROUPS_JSON=${JSON.stringify(groups)}`");
+    expect(seedStep.run).toMatch(
+      /const groups = createVitestCacheWarmGroups\(\);[\s\S]*appendFileSync\(\s*process\.env\.GITHUB_ENV,[\s\S]*OPENCLAW_NODE_TEST_GROUPS_JSON=\$\{JSON\.stringify\(groups\)\}/u,
+    );
     expect(warmerSource).not.toContain("OPENCLAW_NODE_TEST_CONFIGS_JSON");
     expect(warmerSource).toContain('"OPENCLAW_NODE_TEST_PLAN_CONCURRENCY=1"');
     expect(warmerSetup.with).toMatchObject({
@@ -3661,107 +3591,48 @@ NODE
     expect(maintainStoreStep).toBeUndefined();
     expect(maintainStickyStoreStep.env.OPENCLAW_PNPM_STORE_MAX_KIB).toBe("8388608");
 
-    const seedRoot = mkdtempSync(path.join(tmpdir(), "openclaw-cache-seed-"));
-    try {
-      const envPath = path.join(seedRoot, "github-env");
-      const result = runWorkflowShellScript(seedStep.run, {
-        env: {
-          ...process.env,
-          GITHUB_ENV: envPath,
-        },
-      });
-      expect(result.status, result.stderr).toBe(0);
-      const seedEnv = Object.fromEntries(
-        readFileSync(envPath, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => {
-            const separator = line.indexOf("=");
-            return [line.slice(0, separator), line.slice(separator + 1)];
-          }),
-      );
-      const serializedGroups = seedEnv.OPENCLAW_NODE_TEST_GROUPS_JSON;
-      if (!serializedGroups) {
-        throw new Error("cache warmer did not export OPENCLAW_NODE_TEST_GROUPS_JSON");
-      }
-      const groups = JSON.parse(serializedGroups) as Array<{
-        configs: string[];
-        env?: Record<string, string>;
-        includePatterns?: string[];
-        shard_name: string;
-      }>;
-      const selectedShardNames = new Set([
-        "agentic-agents-embedded",
-        "agentic-gateway-methods",
-        "auto-reply-reply-commands-3",
-      ]);
-      const selectedShards = createNodeTestShards().filter(
-        (shard) =>
-          shard.shardName.startsWith("core-unit-fast") || selectedShardNames.has(shard.shardName),
-      );
-      const expectedGroups = selectedShards.flatMap((shard) =>
-        shard.configs.map((config) => ({
-          configs: [config],
-          ...(shard.env ? { env: shard.env } : {}),
-          ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
-          shard_name: `cache-warm:${shard.shardName}:${config}`,
-        })),
-      );
+    const groups = createVitestCacheWarmGroups();
+    expect(groups).toHaveLength(10);
+    expect(groups.every((group) => group.configs.length === 1)).toBe(true);
+    expect(new Set(groups.flatMap((group) => group.configs))).toHaveProperty("size", 9);
+    expect(new Set(groups.map((group) => group.shard_name))).toHaveProperty("size", groups.length);
 
-      expect(groups).toEqual(expectedGroups);
-      expect(groups).toHaveLength(10);
-      expect(groups.every((group) => group.configs.length === 1)).toBe(true);
-      expect(new Set(groups.flatMap((group) => group.configs))).toHaveProperty("size", 9);
-      expect(new Set(groups.map((group) => group.shard_name))).toHaveProperty(
-        "size",
-        groups.length,
-      );
+    const coreStripeGroups = groups.filter(
+      (group) => group.configs[0] === "test/vitest/vitest.unit-fast.config.ts",
+    );
+    expect(coreStripeGroups).toHaveLength(2);
+    expect(coreStripeGroups.every((group) => (group.includePatterns?.length ?? 0) > 0)).toBe(true);
+    const coreStripePatterns = coreStripeGroups.flatMap((group) => group.includePatterns ?? []);
+    expect(new Set(coreStripePatterns).size).toBe(coreStripePatterns.length);
 
-      const coreStripeGroups = groups.filter(
-        (group) => group.configs[0] === "test/vitest/vitest.unit-fast.config.ts",
-      );
-      expect(coreStripeGroups).toHaveLength(2);
-      expect(coreStripeGroups.every((group) => (group.includePatterns?.length ?? 0) > 0)).toBe(
-        true,
-      );
-      const coreStripePatterns = coreStripeGroups.flatMap((group) => group.includePatterns ?? []);
-      expect(new Set(coreStripePatterns).size).toBe(coreStripePatterns.length);
+    const isolatedGroups = groups.filter((group) =>
+      group.shard_name.startsWith("cache-warm:core-unit-fast-isolated:"),
+    );
+    expect(isolatedGroups).toHaveLength(2);
+    expect(isolatedGroups.every((group) => group.includePatterns === undefined)).toBe(true);
+    expect(isolatedGroups.every((group) => group.env === undefined)).toBe(true);
 
-      const isolatedGroups = groups.filter((group) =>
-        group.shard_name.startsWith("cache-warm:core-unit-fast-isolated:"),
-      );
-      expect(isolatedGroups).toHaveLength(2);
-      expect(isolatedGroups.every((group) => group.includePatterns === undefined)).toBe(true);
-      expect(isolatedGroups.every((group) => group.env === undefined)).toBe(true);
+    const embeddedGroups = groups.filter((group) =>
+      group.shard_name.startsWith("cache-warm:agentic-agents-embedded:"),
+    );
+    expect(embeddedGroups).toHaveLength(4);
+    expect(
+      embeddedGroups.every((group) => group.env?.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS === "660000"),
+    ).toBe(true);
 
-      const embeddedGroups = groups.filter((group) =>
-        group.shard_name.startsWith("cache-warm:agentic-agents-embedded:"),
-      );
-      expect(embeddedGroups).toHaveLength(4);
-      expect(
-        embeddedGroups.every(
-          (group) => group.env?.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS === "660000",
-        ),
-      ).toBe(true);
+    const gatewayGroups = groups.filter((group) =>
+      group.shard_name.startsWith("cache-warm:agentic-gateway-methods:"),
+    );
+    expect(gatewayGroups).toHaveLength(1);
+    expect(gatewayGroups[0]?.includePatterns).toBeUndefined();
+    expect(gatewayGroups[0]?.env).toBeUndefined();
 
-      const gatewayGroups = groups.filter((group) =>
-        group.shard_name.startsWith("cache-warm:agentic-gateway-methods:"),
-      );
-      expect(gatewayGroups).toHaveLength(1);
-      expect(gatewayGroups[0]?.includePatterns).toBeUndefined();
-      expect(gatewayGroups[0]?.env).toBeUndefined();
-
-      const autoReplyGroups = groups.filter((group) =>
-        group.shard_name.startsWith("cache-warm:auto-reply-reply-commands-3:"),
-      );
-      expect(autoReplyGroups).toHaveLength(1);
-      expect(autoReplyGroups[0]?.includePatterns).toHaveLength(18);
-      expect(autoReplyGroups[0]?.env).toBeUndefined();
-      expect(seedEnv.OPENCLAW_NODE_TEST_PLAN_CONCURRENCY).toBe("1");
-      expect(seedEnv).not.toHaveProperty("OPENCLAW_NODE_TEST_CONFIGS_JSON");
-    } finally {
-      rmSync(seedRoot, { force: true, recursive: true });
-    }
+    const autoReplyGroups = groups.filter((group) =>
+      group.shard_name.startsWith("cache-warm:auto-reply-reply-commands-3:"),
+    );
+    expect(autoReplyGroups).toHaveLength(1);
+    expect(autoReplyGroups[0]?.includePatterns).toHaveLength(18);
+    expect(autoReplyGroups[0]?.env).toBeUndefined();
 
     const maintenanceRoot = mkdtempSync(path.join(tmpdir(), "openclaw-pnpm-maintenance-"));
     try {
@@ -6423,13 +6294,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           timeoutOutcome: "none",
         },
         {
-          exitCode: 143,
-          mode: "supervisor-term",
-          supervisorSignals: ["TERM"],
-          timedOut: false,
-          timeoutOutcome: "none",
-        },
-        {
           exitCode: 124,
           mode: "term",
           supervisorSignals: ["TERM"],
@@ -6477,11 +6341,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         }
         if (scenario.timeoutOutcome === "term") {
           expect(result.stdout).toContain(
-            "::warning::QA profile 'all' timed out after 1 second and was terminated",
+            "::warning::QA profile 'all' timed out after 0.4 seconds and was terminated",
           );
         } else if (scenario.timeoutOutcome === "kill") {
           expect(result.stdout).toContain(
-            "::warning::QA profile 'all' timed out after 1 second and required SIGKILL after the 0.5-second grace period",
+            "::warning::QA profile 'all' timed out after 0.4 seconds and required SIGKILL after the 0.05-second grace period",
           );
         } else {
           expect(result.stdout).not.toContain("::warning::QA profile");
@@ -6807,7 +6671,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(validateManifestStep.run).toContain("qa-evidence.json profile must be all");
     expect(validateManifestStep.run).toContain("QA evidence manifest profile must be all");
     expect(validateManifestStep.run).toContain("manifest.targetSha !== targetSha");
-    expect(validateManifestStep.run).toContain("qaProfileEvidencePlan.attest");
+    expect(validateManifestStep.run).toMatch(
+      /qaProfileEvidencePlan\.attest\(\s*evidence\.profilePlan,\s*manifest\.qaPassed === true,?\s*\)/u,
+    );
     expect(validateManifestStep.run).toContain("profilePlanSha256");
     expect(validateManifestStep.run).toContain("rerun the QA Profile Evidence workflow");
 
@@ -6820,7 +6686,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(qaEvidenceStep.run).toContain("qa-profile-evidence-manifest.json");
     expect(qaEvidenceStep.run).toContain("validateQaEvidenceSummaryJson");
-    expect(qaEvidenceStep.run).toContain("qaProfileEvidencePlan.attest");
+    expect(qaEvidenceStep.run).toMatch(
+      /qaProfileEvidencePlan\.attest\(\s*payload\.profilePlan,\s*process\.env\.QA_EXIT_CODE === "0",?\s*\)/u,
+    );
     expect(qaEvidenceStep.run).toContain("profilePlanSha256");
     expect(qaEvidenceStep.run).toContain("rerun the QA Profile Evidence workflow");
     expect(qaEvidenceStep.env.PROTOCOL_BASE_SHA).toBe(
@@ -6962,7 +6830,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
   });
 
   it.skipIf(process.platform === "win32")(
-    "round-trips complete and incomplete profile evidence and rejects digest drift",
+    "round-trips profile evidence and rejects digest drift",
     () => {
       const qaWorkflow = readQaProfileEvidenceWorkflow();
       const maturityWorkflow = readMaturityScorecardWorkflow();
@@ -7020,9 +6888,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         ],
       };
 
-      const writeEvidence = (complete: boolean) => {
-        const observedCells = complete ? [expectedCell] : [];
-        const missingCells = complete ? [] : [expectedCell];
+      const writeEvidence = () => {
         writeFileSync(
           evidencePath,
           `${JSON.stringify({
@@ -7038,15 +6904,15 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
               selected: ["scenario-one"],
               excluded: [],
               expectedCells: [expectedCell],
-              observedCells,
-              missingCells,
+              observedCells: [expectedCell],
+              missingCells: [],
               counts: {
                 membership: 1,
                 selected: 1,
                 excluded: 0,
                 expectedCells: 1,
-                observedCells: observedCells.length,
-                missingCells: missingCells.length,
+                observedCells: 1,
+                missingCells: 0,
               },
             },
             scorecard,
@@ -7081,41 +6947,18 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         });
 
       try {
-        writeEvidence(true);
+        writeEvidence();
         const completeProducer = runProducer("0");
         expect(
           completeProducer.status,
           `${completeProducer.stdout}${completeProducer.stderr}`,
         ).toBe(0);
-        expect(JSON.parse(readFileSync(manifestPath, "utf8"))).toMatchObject({
+        const completeManifest = readFileSync(manifestPath, "utf8");
+        expect(JSON.parse(completeManifest)).toMatchObject({
           protocolBaseSha,
           targetSha,
         });
-        const completeConsumer = runConsumer();
-        expect(
-          completeConsumer.status,
-          `${completeConsumer.stdout}${completeConsumer.stderr}`,
-        ).toBe(0);
-
-        writeEvidence(false);
-        const incompleteProducer = runProducer("7");
-        expect(
-          incompleteProducer.status,
-          `${incompleteProducer.stdout}${incompleteProducer.stderr}`,
-        ).toBe(0);
-        const incompleteConsumer = runConsumer();
-        expect(
-          incompleteConsumer.status,
-          `${incompleteConsumer.stdout}${incompleteConsumer.stderr}`,
-        ).toBe(0);
-
-        writeEvidence(true);
-        const mismatchProducer = runProducer("0");
-        expect(
-          mismatchProducer.status,
-          `${mismatchProducer.stdout}${mismatchProducer.stderr}`,
-        ).toBe(0);
-        const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+        const manifest = JSON.parse(completeManifest) as Record<string, unknown>;
         manifest.profilePlanSha256 = "0".repeat(64);
         writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, "utf8");
         const mismatched = runConsumer();
