@@ -153,9 +153,14 @@ export function buildSyntheticTextMessage(params: {
 }
 
 export const buildSyntheticContext = (
-  ctx: Pick<TelegramContext, "me" | "getFile">,
+  ctx: Pick<TelegramContext, "me" | "getFile" | "update">,
   message: Message,
-): TelegramContext => ({ message, me: ctx.me, getFile: ctx.getFile.bind(ctx) });
+): TelegramContext => ({
+  message,
+  update: ctx.update,
+  me: ctx.me,
+  getFile: ctx.getFile.bind(ctx),
+});
 
 export function formatTelegramAmbientTranscriptBody(
   messages: readonly Message[],

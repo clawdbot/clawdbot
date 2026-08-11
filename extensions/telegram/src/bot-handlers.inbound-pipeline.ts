@@ -24,11 +24,12 @@ import {
 } from "./bot/helpers.js";
 import { TelegramPairingStoreReadError } from "./bot/helpers.js";
 import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
+import { emitTelegramLiveLocationMessageHook } from "./location-message-hook.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 
 type TelegramMessageHandlerParams = Pick<
   RegisterTelegramHandlerParams,
-  "bot" | "shouldSkipUpdate"
+  "accountId" | "bot" | "shouldSkipUpdate"
 > & {
   opts: Pick<RegisterTelegramHandlerParams["opts"], "botInfo">;
   runtime: Pick<RegisterTelegramHandlerParams["runtime"], "error">;
@@ -57,7 +58,7 @@ interface TelegramInboundHandlers {
 }
 
 function createTelegramInboundHandlers(
-  { bot, opts, runtime, shouldSkipUpdate }: TelegramMessageHandlerParams,
+  { accountId, bot, opts, runtime, shouldSkipUpdate }: TelegramMessageHandlerParams,
   messageRuntime: TelegramMessageHandlerRuntime,
   authorizationRuntime: Pick<TelegramHandlerAuthorization, "authorizeInboundMessage">,
   inboundRuntime: Pick<TelegramInboundProcessing, "processInboundMessage">,
@@ -128,6 +129,7 @@ function createTelegramInboundHandlers(
     msg: Message;
     requireConfiguredGroup: boolean;
     botUserId: number;
+    providerUpdate?: { id: number; kind: "edited_message" | "edited_channel_post" };
   }) => {
     if (shouldSkipUpdate(params.ctxForDedupe)) {
       return;
@@ -157,6 +159,15 @@ function createTelegramInboundHandlers(
       return;
     }
     await recordMessageForReplyChain(normalizedMsg, gate.context.threadSpec, params.botUserId);
+    if (params.providerUpdate) {
+      emitTelegramLiveLocationMessageHook({
+        accountId,
+        msg: normalizedMsg,
+        updateId: params.providerUpdate.id,
+        updateKind: params.providerUpdate.kind,
+        isForum,
+      });
+    }
   };
 
   const handleInboundMessageLike = async (
@@ -319,6 +330,10 @@ function createTelegramInboundHandlers(
       msg,
       requireConfiguredGroup: false,
       botUserId: resolveBotUserId(ctx),
+      providerUpdate:
+        typeof ctx.update?.update_id === "number"
+          ? { id: ctx.update.update_id, kind: "edited_message" }
+          : undefined,
     });
     return { kind: "recorded" };
   };
@@ -364,6 +379,10 @@ function createTelegramInboundHandlers(
       msg: normalizeChannelPostMessage(post),
       requireConfiguredGroup: true,
       botUserId: resolveBotUserId(ctx),
+      providerUpdate:
+        typeof ctx.update?.update_id === "number"
+          ? { id: ctx.update.update_id, kind: "edited_channel_post" }
+          : undefined,
     });
     return { kind: "recorded" };
   };

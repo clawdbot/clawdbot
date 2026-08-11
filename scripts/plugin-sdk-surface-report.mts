@@ -267,7 +267,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: add canonical coercion exports while retaining the shipped asString compatibility name.
       // +17: continuation delegate/announce surface retained through this back-merge.
       // +2: add high-use coercion primitives while retaining shipped object-record exports.
-      4885,
+      // +2: channel-neutral location and provider-update hook contracts.
+      4887,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
