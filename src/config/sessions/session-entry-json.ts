@@ -25,7 +25,7 @@ export function parseSqliteSessionEntryRecord(row: {
     }
     if (
       (row.current_session_id !== undefined && row.current_session_id !== record.sessionId) ||
-      (row.updated_at !== undefined && row.updated_at !== record.updatedAt)
+      (row.updated_at !== undefined && Number(row.updated_at) !== record.updatedAt)
     ) {
       return null;
     }
