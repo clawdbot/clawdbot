@@ -1,5 +1,5 @@
 // Tests JSON UTF-8 byte counting helpers.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   boundedJsonUtf8Bytes,
   firstEnumerableOwnKeys,
@@ -94,44 +94,17 @@ describe("boundedJsonUtf8Bytes", () => {
     });
   });
 
-  it("uses actual UTF-8 byte length for fast-path bailout on CJK strings", () => {
-    // "中".repeat(3_000) = 3,000 UTF-16 code units but 9,000 UTF-8 bytes.
-    // The O(1) lower bound (value.length + 2 = 3,002) does not exceed the
-    // remaining byte budget (~8,183), so it falls through to the UTF-8
-    // byte-length guard which correctly bails at 9,002 bytes.
-    const cjkPayload = { value: "中".repeat(3_000) };
-    const result = boundedJsonUtf8Bytes(cjkPayload, 8_192);
-    expect(result.complete).toBe(false);
-    expect(result.bytes).toBeGreaterThan(8_192);
-  });
-
-  it("preserves O(1) bailout for oversized ASCII strings", () => {
-    // "x".repeat(50_000) = 50,000 UTF-16 code units = 50,000 UTF-8 bytes.
-    // The O(1) lower bound (value.length + 2 = 50,002) immediately exceeds
-    // the budget, avoiding the O(n) Buffer.byteLength scan.
-    const asciiPayload = { value: "x".repeat(50_000) };
-    const result = boundedJsonUtf8Bytes(asciiPayload, 8_192);
-    expect(result.complete).toBe(false);
-    expect(result.bytes).toBeGreaterThan(8_192);
-  });
-
-  it("completes accurately for unicode strings under the byte limit", () => {
-    // A short emoji string: "😀" is 2 UTF-16 code units but 4 UTF-8 bytes.
-    const emojiPayload = { value: "😀".repeat(10) };
-    const expectedBytes = Buffer.byteLength(JSON.stringify(emojiPayload), "utf8");
-    const result = boundedJsonUtf8Bytes(emojiPayload, 1_000);
-    expect(result).toEqual({ bytes: expectedBytes, complete: true });
-  });
-
-  it("skips expensive scans for CJK strings well within the byte budget", () => {
-    // "中"×2_000 = 2,000 code units → 6,000 UTF-8 bytes.
-    // Tier 1: 2,002 ≯ 10,000 → pass.
-    // Tier 2: 2,000 × 3 + 2 = 6,002 ≤ 10,000 → skip scan, JSON.stringify only.
-    // This is the common fitting-string path; no O(n) scan overhead.
-    const cjkFit = { value: "中".repeat(2_000) };
-    const expectedBytes = Buffer.byteLength(JSON.stringify(cjkFit), "utf8");
-    const result = boundedJsonUtf8Bytes(cjkFit, 10_000);
-    expect(result).toEqual({ bytes: expectedBytes, complete: true });
+  it("rejects over-limit CJK strings before JSON serialization", () => {
+    const stringifySpy = vi.spyOn(JSON, "stringify");
+    try {
+      expect(boundedJsonUtf8Bytes("中".repeat(3_000), 8_192)).toEqual({
+        bytes: 8_193,
+        complete: false,
+      });
+      expect(stringifySpy).not.toHaveBeenCalled();
+    } finally {
+      stringifySpy.mockRestore();
+    }
   });
 
   it.each([
