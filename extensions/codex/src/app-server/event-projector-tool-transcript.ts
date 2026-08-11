@@ -35,6 +35,7 @@ import {
   type ToolTranscriptCallInput,
   type ToolTranscriptResultInput,
 } from "./event-projector-tool-progress.js";
+import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import type {
   CodexDynamicToolCallOutputContentItem,
@@ -167,10 +168,28 @@ export class CodexToolTranscriptProjection {
     },
     resultContentSource?: "network",
   ): void {
+    const contentItems = params.contentItems.map((item) => {
+      if (item.type !== "inputImage") {
+        return item;
+      }
+      const imageUrl =
+        typeof item.imageUrl === "string" ? sanitizeInlineImageDataUrl(item.imageUrl) : undefined;
+      return imageUrl
+        ? { type: "inputImage" as const, imageUrl }
+        : {
+            type: "inputText" as const,
+            text: invalidInlineImageText("codex dynamic tool transcript"),
+          };
+    });
     this.recordToolResult({
       id: params.callId,
       name: params.tool,
-      text: collectDynamicToolContentText(params.contentItems),
+      text: collectDynamicToolContentText(contentItems),
+      images: contentItems.flatMap((item) =>
+        item.type === "inputImage" && typeof item.imageUrl === "string"
+          ? [{ url: item.imageUrl }]
+          : [],
+      ),
       isError: !params.success,
       details: params.details,
       ...(resultContentSource ? { resultContentSource } : {}),
@@ -618,6 +637,7 @@ export class CodexToolTranscriptProjection {
           content: text,
           text,
         },
+        ...(params.images ?? []).map((image) => ({ type: "image", url: image.url })),
       ],
       ...(params.details !== undefined ? { details: params.details } : {}),
       ...(params.resultContentSource

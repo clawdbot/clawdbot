@@ -1,7 +1,10 @@
 // Covers the chat.history final byte-budget fallback, including the sentinel
 // that prevents an empty (blank) transcript from being returned to the dashboard.
 import { describe, expect, it } from "vitest";
-import { enforceChatHistoryFinalBudget } from "./chat-history-budget.js";
+import {
+  enforceChatHistoryFinalBudget,
+  replaceOversizedChatHistoryMessages,
+} from "./chat-history-budget.js";
 
 type DisplayMessage = {
   role?: string;
@@ -73,5 +76,41 @@ describe("enforceChatHistoryFinalBudget", () => {
     expect(firstText(result.messages)).toContain("chat.history unavailable");
     // The sentinel does not carry the oversized source metadata.
     expect((result.messages[0] as Record<string, unknown>)["__openclaw"]).toBeUndefined();
+  });
+});
+
+describe("replaceOversizedChatHistoryMessages", () => {
+  it("preserves bounded image output above the ordinary message cap", () => {
+    const message = {
+      role: "toolResult",
+      content: [
+        { type: "toolResult", text: "screenshot" },
+        { type: "image", url: `data:image/jpeg;base64,${"a".repeat(2_000)}` },
+      ],
+    };
+
+    const result = replaceOversizedChatHistoryMessages({
+      messages: [message],
+      maxSingleMessageBytes: 1_000,
+      maxImageMessageBytes: 4_000,
+    });
+
+    expect(result).toEqual({ messages: [message], replacedCount: 0 });
+  });
+
+  it("still replaces image output above the image-specific cap", () => {
+    const result = replaceOversizedChatHistoryMessages({
+      messages: [
+        {
+          role: "toolResult",
+          content: [{ type: "image", url: `data:image/jpeg;base64,${"a".repeat(4_000)}` }],
+        },
+      ],
+      maxSingleMessageBytes: 1_000,
+      maxImageMessageBytes: 2_000,
+    });
+
+    expect(result.replacedCount).toBe(1);
+    expect(firstText(result.messages)).toContain("chat.history omitted: message too large");
   });
 });

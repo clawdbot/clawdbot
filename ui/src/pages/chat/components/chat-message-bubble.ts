@@ -413,11 +413,11 @@ export function renderGroupedMessage(
                     ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
                     : nothing}
               </button>
+              ${renderMessageImages(images, imageRenderOptions)}
               ${toolMessageExpanded
                 ? html`
                     <div class="chat-tool-msg-body">
                       ${renderPairingQrExpiryNotices(pairingQrExpiryNotices)}
-                      ${renderMessageImages(images, imageRenderOptions)}
                       ${renderAssistantAttachments(
                         visibleAttachments,
                         opts.localMediaPreviewRoots ?? [],

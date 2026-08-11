@@ -13,6 +13,7 @@ import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
+import { messageHasVisibleImage } from "../chat-message-visible-content.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import {
   isPendingSendMessage,
@@ -331,6 +332,7 @@ export function renderActivityGroup(
 
 export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
+  const hasVisibleImage = group.messages.some((item) => messageHasVisibleImage(item.message));
   const isWorkspaceConflict = group.messages.every((item) =>
     Boolean(workspaceResultConflictFromTranscript(item.message)),
   );
@@ -370,7 +372,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   // Aggregate usage/cost/model across all messages in the group
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);
 
-  if (normalizedRole === "tool" && opts.showToolCalls === false) {
+  if (normalizedRole === "tool" && opts.showToolCalls === false && !hasVisibleImage) {
     return nothing;
   }
 
@@ -379,7 +381,11 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       ? group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key))
       : [];
 
-  if (normalizedRole === "tool" && (group.messages.length > 1 || groupedToolCards.length > 1)) {
+  if (
+    normalizedRole === "tool" &&
+    !hasVisibleImage &&
+    (group.messages.length > 1 || groupedToolCards.length > 1)
+  ) {
     return renderActivityGroup([group], opts);
   }
 

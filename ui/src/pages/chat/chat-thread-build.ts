@@ -20,6 +20,7 @@ import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
+import { messageHasVisibleImage } from "./chat-message-visible-content.ts";
 import {
   buildCompactionDividerItem,
   clearWorkingProgress,
@@ -255,7 +256,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       });
     }
 
-    if (!props.showToolCalls && isToolResult) {
+    if (!props.showToolCalls && isToolResult && !messageHasVisibleImage(msg)) {
       continue;
     }
 
@@ -474,7 +475,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       }
     }
     const tool = toolItems[i];
-    if (tool && props.showToolCalls) {
+    if (tool && (props.showToolCalls || messageHasVisibleImage(tool.message))) {
       const toolItem: ChatItem = {
         kind: "message",
         key: tool.key,
