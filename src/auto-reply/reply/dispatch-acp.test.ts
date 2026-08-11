@@ -1212,6 +1212,49 @@ describe("tryDispatchAcpReplyCore", () => {
     }
   });
 
+  it("passes exactly the resolved attachment indexes as delivered images", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("image turn");
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const imagePath = path.join(tempDir, "delivered.png");
+    try {
+      // Real PNG bytes: the turn-attachment resolver byte-sniffs image MIME
+      // through the harness buffer map keyed by local path.
+      await fs.writeFile(imagePath, ACP_PNG_IMAGE_BYTES);
+      acpAttachmentBuffers.set(imagePath, ACP_PNG_IMAGE_BYTES);
+
+      await runDispatch({
+        bodyForAgent: "describe both images",
+        cfg: createAcpTestConfig({
+          channels: {
+            imessage: {
+              attachmentRoots: [tempDir],
+            },
+          },
+        }),
+        ctxOverrides: {
+          Provider: "imessage",
+          Surface: "imessage",
+          media: [
+            { path: imagePath, contentType: "image/png", kind: "image" },
+            { url: "https://cdn.example.test/photos/remote.png", contentType: "image/png" },
+          ],
+        },
+      });
+
+      // The delivered set must mirror the resolver: local image in, remote-url
+      // image out — an empty or over-broad set reintroduces false skip claims.
+      const delivered = requireRecord(
+        mockArg(mediaUnderstandingMocks.applyMediaUnderstanding, 0, 0, "media understanding"),
+        "media understanding",
+      ).deliveredImageIndexes as ReadonlySet<number>;
+      expect(delivered.has(0)).toBe(true);
+      expect(delivered.has(1)).toBe(false);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("selects bounded recent local history images", () => {
     const now = 1_700_000_000_000;
     const ctx = buildTestCtx({

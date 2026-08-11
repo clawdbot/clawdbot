@@ -3,7 +3,6 @@ import {
   leasePendingAgentSteeringItemsFromSubagentRuns,
   releaseLeasedAgentSteeringItemsFromSubagentRuns,
 } from "../../agent-steering-queue.js";
-import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
 import {
@@ -11,27 +10,20 @@ import {
   getLatestSubagentRunByChildSessionKeyFromRuns,
 } from "./subagent-registry-queries.js";
 import { markRequesterTurnYieldedInRuns } from "./subagent-registry-requester-yield.js";
+import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord, SwarmStructuredOutputState } from "./subagent-registry.types.js";
 
 export function createSubagentRegistryPublicApi(config: {
   runs: Map<string, SubagentRunRecord>;
-  deps: () => SubagentRegistryDeps;
   persist: (...runIds: string[]) => void;
   persistOrThrow: (...runIds: string[]) => void;
   restoreOnce: () => void;
   startAnnounceCleanup: (runId: string, entry: SubagentRunRecord) => boolean;
   settleRequesterTurn: SubagentLifecycleController["settleRequesterTurnAfterSessionSpawns"];
 }) {
-  const {
-    runs,
-    deps,
-    persist,
-    persistOrThrow,
-    restoreOnce,
-    startAnnounceCleanup,
-    settleRequesterTurn,
-  } = config;
-  const readRuns = () => deps().getSubagentRunsSnapshotForRead(runs);
+  const { runs, persist, persistOrThrow, restoreOnce, startAnnounceCleanup, settleRequesterTurn } =
+    config;
+  const readRuns = () => getSubagentRunsSnapshotForRead(runs);
   const findRunById = (records: Map<string, SubagentRunRecord>, runId: string) =>
     records.get(runId) ?? [...records.values()].find((entry) => entry.swarmRunId === runId);
 

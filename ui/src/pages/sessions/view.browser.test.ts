@@ -80,9 +80,7 @@ function sessionsTableHtml() {
                               : index === 6
                                 ? "session-actions-col"
                                 : ""
-                      }">${
-                        index === 6 ? `<span class="sessions-sr-only">${header}</span>` : header
-                      }</th>`,
+                      }">${index === 6 ? `<span class="sr-only">${header}</span>` : header}</th>`,
                   )
                   .join("")}
               </tr>

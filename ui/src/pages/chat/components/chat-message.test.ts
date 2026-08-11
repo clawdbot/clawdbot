@@ -1549,14 +1549,11 @@ describe("grouped chat rendering", () => {
     expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(0);
     expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
     expect(container.querySelector(".chat-working-indicator__elapsed")).not.toBeNull();
+    expect(container.querySelector(".chat-working-indicator__status > .sr-only")?.textContent).toBe(
+      "Working…",
+    );
     expect(
-      container.querySelector(".chat-working-indicator__status > .agent-chat__sr-only")
-        ?.textContent,
-    ).toBe("Working…");
-    expect(
-      container.querySelectorAll(
-        ".chat-working-indicator__status > span:not(.agent-chat__sr-only)",
-      ),
+      container.querySelectorAll(".chat-working-indicator__status > span:not(.sr-only)"),
     ).toHaveLength(0);
     expect(container.querySelector(".chat-group-footer")).toBeNull();
   });
@@ -1613,9 +1610,7 @@ describe("grouped chat rendering", () => {
       label,
     );
     expect(container.querySelector(".chat-working-indicator__elapsed")).not.toBeNull();
-    expect(
-      container.querySelector(".chat-working-indicator__status > .agent-chat__sr-only"),
-    ).toBeNull();
+    expect(container.querySelector(".chat-working-indicator__status > .sr-only")).toBeNull();
   });
 
   it("formats terminal recap durations with full localized units", () => {
@@ -1765,8 +1760,8 @@ describe("grouped chat rendering", () => {
       );
       const status = container.querySelector(".chat-working-indicator__status");
       return {
-        hidden: status?.querySelector(".agent-chat__sr-only")?.textContent,
-        visibleLabels: status?.querySelectorAll("span:not(.agent-chat__sr-only)").length,
+        hidden: status?.querySelector(".sr-only")?.textContent,
+        visibleLabels: status?.querySelectorAll("span:not(.sr-only)").length,
         // The whimsical long-wait phrase rides in its own aria-hidden element,
         // never as a plain status span screen readers would announce.
         decorativePhrases: status?.querySelectorAll("openclaw-working-phrase[aria-hidden]").length,

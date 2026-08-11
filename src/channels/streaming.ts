@@ -18,10 +18,7 @@ import type {
   StreamingMode,
   TextChunkMode,
 } from "../config/types.base.js";
-import {
-  DEFAULT_PROGRESS_DRAFT_LABELS as SHARED_PROGRESS_DRAFT_LABELS,
-  selectProgressLabel,
-} from "../shared/progress-labels.js";
+import { DEFAULT_PROGRESS_DRAFT_LABELS, selectProgressLabel } from "../shared/progress-labels.js";
 import { asBoolean } from "../utils/boolean.js";
 import {
   getChannelStreamingConfigObject,
@@ -81,7 +78,7 @@ function asCommandTextMode(value: unknown): ChannelStreamingCommandTextMode | un
   return value === "raw" || value === "status" ? value : undefined;
 }
 
-export const DEFAULT_PROGRESS_DRAFT_LABELS = SHARED_PROGRESS_DRAFT_LABELS;
+export { DEFAULT_PROGRESS_DRAFT_LABELS } from "../shared/progress-labels.js";
 
 // Short enough that a multi-tool turn is never silent, long enough that a
 // quick answer posts no draft at all: the gate only creates the draft when the

@@ -65,6 +65,15 @@ describe("detectChangedScope Windows routing", () => {
     }
   });
 
+  it("routes port diagnostics and their native proof to Windows", () => {
+    for (const portPath of ["src/infra/ports-inspect.ts", "src/infra/ports.test.ts"]) {
+      expect(detectChangedScope([portPath]), portPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
   it("routes MXC runtime changes and Windows-only suites to Windows", () => {
     for (const mxcPath of [
       "extensions/mxc/src/mxc-backend.ts",
@@ -195,6 +204,23 @@ describe("detectChangedScope Windows routing", () => {
       "src/agents/sessions/tools/render-utils.test.ts",
     ]) {
       expect(detectChangedScope([displayPath]), displayPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
+  it("routes OS-home path owners and native tool coverage to Windows", () => {
+    for (const homePath of [
+      "src/infra/home-dir.ts",
+      "src/infra/home-dir.test.ts",
+      "src/agents/agent-tools.read.ts",
+      "src/agents/agent-tools.read.host-operations.test.ts",
+      "src/agents/agent-tools.read.windows.test.ts",
+      "src/agents/sessions/tools/path-utils.ts",
+      "src/agents/sessions/tools/path-utils.test.ts",
+    ]) {
+      expect(detectChangedScope([homePath]), homePath).toMatchObject({
         runNode: true,
         runWindows: true,
       });

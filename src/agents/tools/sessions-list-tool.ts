@@ -43,7 +43,7 @@ import {
 import {
   createAgentToAgentPolicy,
   createSessionVisibilityRowChecker,
-  classifySessionKind,
+  classifySessionListKind,
   deriveChannel,
   resolveDisplaySessionKey,
   resolveEffectiveSessionToolsVisibility,
@@ -284,7 +284,7 @@ export function createSessionsListTool(opts?: {
         }
 
         const gatewayKind = typeof entry.kind === "string" ? entry.kind : undefined;
-        const kind = classifySessionKind({ key, gatewayKind, alias, mainKey });
+        const kind = classifySessionListKind({ key, gatewayKind, alias, mainKey });
         if (allowedKinds && !allowedKinds.has(kind)) {
           continue;
         }

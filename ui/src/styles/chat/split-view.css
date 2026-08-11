@@ -301,17 +301,17 @@ openclaw-chat-pane {
 }
 
 .chat-pane__gateway-menu::part(menu) {
-  padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
-  border-radius: 8px;
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
 }
 
 .chat-pane__gateway-menu-item {
-  min-height: 30px;
+  min-height: var(--menu-item-height);
   padding: 0 8px;
-  border-radius: 8px;
+  border-radius: var(--menu-item-radius);
   color: var(--text);
   font: inherit;
   font-size: 13px;

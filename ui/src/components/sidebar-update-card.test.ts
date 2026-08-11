@@ -35,7 +35,7 @@ type SidebarUpdateCardElement = HTMLElement & {
   updateAvailable: UpdateAvailable | null;
   updateSchedule: UpdateScheduleState | null;
   heldUpdateCampaignId: string | null;
-  updateRunning: boolean;
+  updateBusy: boolean;
   canUpdate: boolean;
   canHoldUpdate: boolean;
   onUpdate: () => void;
@@ -303,11 +303,11 @@ describe("SidebarUpdateCard", () => {
     window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
     expect(onUpdate).toHaveBeenCalledOnce();
 
-    element.updateRunning = true;
+    element.updateBusy = true;
     window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
     expect(onUpdate).toHaveBeenCalledOnce();
 
-    element.updateRunning = false;
+    element.updateBusy = false;
     element.updateAvailable = null;
     window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
     expect(onUpdate).toHaveBeenCalledOnce();
@@ -376,18 +376,37 @@ describe("SidebarUpdateCard", () => {
     expect(postMessage).not.toHaveBeenCalled();
   });
 
-  it("disables the action while updating", async () => {
-    const element = await mount({
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "stable",
-    });
-    element.updateRunning = true;
-    await element.updateComplete;
+  it("narrates the whole update, including after the Gateway drops its metadata", async () => {
+    const element = await mount(
+      { currentVersion: "1.0.0", latestVersion: "1.0.0", channel: "dev", commitsBehind: 246 },
+      {
+        channel: "dev",
+        autoEnabled: false,
+        target: {
+          kind: "git",
+          upstreamRef: "origin/main",
+          upstreamSha: "abc1234def",
+          commitsBehind: 246,
+        },
+      },
+    );
+    expect(element.textContent).toContain("246 commits behind");
 
+    element.updateBusy = true;
+    await element.updateComplete;
     const action = element.querySelector<HTMLButtonElement>(".sidebar-update-card__action");
     expect(action?.disabled).toBe(true);
-    expect(action?.textContent).toContain("Updating…");
+    expect(action?.textContent).toContain("Updating Gateway…");
+    // The stale call to action must not survive into the install.
+    expect(element.textContent).not.toContain("246 commits behind");
+    expect(element.querySelector(".sidebar-update-card__dismiss")).toBeNull();
+
+    // The restarting Gateway takes its update metadata with it; the card is the
+    // operator's only remaining sign that an install is still running.
+    element.updateAvailable = null;
+    element.updateSchedule = null;
+    await element.updateComplete;
+    expect(element.textContent).toContain("Updating Gateway…");
   });
 
   it("renders a quiet live countdown, hides dismissal, and stops ticking on disconnect", async () => {
@@ -425,10 +444,10 @@ describe("SidebarUpdateCard", () => {
       "Hold 1 h",
     );
 
-    element.updateRunning = true;
+    element.updateBusy = true;
     await element.updateComplete;
     expect(element.querySelector(".sidebar-update-card__hold")).toBeNull();
-    element.updateRunning = false;
+    element.updateBusy = false;
     await element.updateComplete;
     expect(element.querySelector(".sidebar-update-card__hold")).not.toBeNull();
 

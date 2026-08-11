@@ -12,6 +12,7 @@ import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
+import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
@@ -38,6 +39,7 @@ import {
   loadSettings,
   normalizeCatalogOpenTarget,
 } from "./settings.ts";
+import type { UpdateProgress } from "./update-confirmation.ts";
 
 const EMPTY_OUTBOX_COUNT_FOR_SESSION = () => 0;
 const EMPTY_SESSION_HAS_DRAFT = () => false;
@@ -122,12 +124,36 @@ export function renderApplicationShell(host: ShellViewHost) {
     : EMPTY_SESSION_HAS_DRAFT;
   const navigationSnapshot = context.navigation.snapshot;
   const overlaySnapshot = context.overlays.snapshot;
+  // The install keeps running after `update.run` answers, so the reconciliation
+  // — not the request — decides how long the update surfaces stay busy.
+  const updateBusy = overlaySnapshot.updateRunning || overlaySnapshot.updateReconciliationPending;
+  // The update dialog outlives this render and the connection, so it reads live
+  // snapshots rather than the values captured here.
+  const watchUpdateProgress = (listener: (progress: UpdateProgress) => void) => {
+    const emit = () => {
+      const update = context.overlays.snapshot;
+      const banner = update.updateStatusBanner;
+      listener({
+        busy: update.updateRunning || update.updateReconciliationPending,
+        connected: context.gateway.snapshot.phase === "connected",
+        failure: banner && banner.tone !== "info" ? banner.text : null,
+      });
+    };
+    const stopOverlays = context.overlays.subscribe(emit);
+    const stopGateway = context.gateway.subscribe(emit);
+    emit();
+    return () => {
+      stopOverlays();
+      stopGateway();
+    };
+  };
   const terminalAvailable = isTerminalAvailable(
     gatewaySnapshot,
     context.config.current.terminalEnabled ?? false,
   );
   const browserPanelAvailable = isBrowserPanelAvailable(gatewaySnapshot);
-  const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
+  const activeSessionRow = findUiSessionRow(context, host.activeSessionKey);
+  const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot, activeSessionRow);
   const custodianPanelAvailable =
     gatewayConnected && isGatewayMethodAdvertised(gatewaySnapshot, "openclaw.chat") === true;
   const activeRoute = host.routeState.routeId ?? "chat";
@@ -232,7 +258,9 @@ export function renderApplicationShell(host: ShellViewHost) {
       updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
       updateSchedule: navigationSurfaceHidden ? null : overlaySnapshot.updateSchedule,
       heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
-      updateRunning: overlaySnapshot.updateRunning,
+      updateBusy,
+      updateStatusBanner: overlaySnapshot.updateStatusBanner,
+      watchUpdateProgress,
       canUpdate,
       canHoldUpdate,
       onUpdate: () => void context.overlays.runUpdate(),
@@ -267,7 +295,9 @@ export function renderApplicationShell(host: ShellViewHost) {
         updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
         updateSchedule: navigationSurfaceHidden ? null : overlaySnapshot.updateSchedule,
         heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
-        updateRunning: overlaySnapshot.updateRunning,
+        updateBusy,
+        updateStatusBanner: overlaySnapshot.updateStatusBanner,
+        watchUpdateProgress,
         canUpdate,
         canHoldUpdate,
         onUpdate: () => void context.overlays.runUpdate(),
@@ -294,8 +324,7 @@ export function renderApplicationShell(host: ShellViewHost) {
             runtimeConfig.configLoading ||
             runtimeConfig.configSaving ||
             (runtimeConfig.configFormDirty && runtimeConfig.configFormMode === "raw") ||
-            overlaySnapshot.updateRunning ||
-            overlaySnapshot.updateReconciliationPending,
+            updateBusy,
           onRetry: () => void context.runtimeConfig.save(),
           onReload: () => void context.runtimeConfig.discardDraft(),
           onApply: () => void context.runtimeConfig.apply(),
@@ -450,18 +479,15 @@ export function renderApplicationShell(host: ShellViewHost) {
                 }}
               ></openclaw-update-banner>`
           : nothing}
-        <openclaw-update-banner
-          .props=${{
-            statusBanner: overlaySnapshot.updateStatusBanner,
-          }}
-        ></openclaw-update-banner>
         ${renderFloatingUpdateCard({
           navigationSurfaceHidden,
           onboarding,
           updateAvailable: overlaySnapshot.updateAvailable,
           updateSchedule: overlaySnapshot.updateSchedule,
           heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
-          updateRunning: overlaySnapshot.updateRunning,
+          updateBusy,
+          statusBanner: overlaySnapshot.updateStatusBanner,
+          watchUpdateProgress,
           canUpdate,
           canHoldUpdate,
           onUpdate: () => void context.overlays.runUpdate(),

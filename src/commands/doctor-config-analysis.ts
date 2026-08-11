@@ -24,7 +24,7 @@ function isUnrecognizedKeysIssue(issue: ZodIssue): issue is UnrecognizedKeysIssu
 }
 
 /** Formats a parsed config issue path into a user-facing dotted path. */
-export function formatConfigPath(parts: Array<string | number>): string {
+export function formatConfigKeyPath(parts: Array<string | number>): string {
   if (parts.length === 0) {
     return "<root>";
   }
@@ -122,7 +122,7 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
         continue;
       }
       delete record[key];
-      removed.push(formatConfigPath([...issuePath, key]));
+      removed.push(formatConfigKeyPath([...issuePath, key]));
     }
   }
 

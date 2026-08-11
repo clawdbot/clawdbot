@@ -15,7 +15,7 @@ import type { RuntimeAuthState } from "./helpers.js";
 
 const mocks = vi.hoisted(() => ({
   prepareProviderRuntimeAuth: vi.fn(),
-  getApiKeyForModel: vi.fn(),
+  getApiKeyForModelCore: vi.fn(),
 }));
 
 vi.mock("../../../plugins/provider-runtime.js", async () => {
@@ -32,7 +32,7 @@ vi.mock("../../model-auth.js", async () => {
   const actual = await vi.importActual<typeof import("../../model-auth.js")>("../../model-auth.js");
   return {
     ...actual,
-    getApiKeyForModel: mocks.getApiKeyForModel,
+    getApiKeyForModelCore: mocks.getApiKeyForModelCore,
   };
 });
 
@@ -165,7 +165,7 @@ function createMutableEmbeddedRunAuthController(params: {
 describe("createEmbeddedRunAuthController", () => {
   beforeEach(() => {
     mocks.prepareProviderRuntimeAuth.mockReset();
-    mocks.getApiKeyForModel.mockReset();
+    mocks.getApiKeyForModelCore.mockReset();
   });
 
   it("commits a prepared route only after its credential resolves", async () => {
@@ -176,7 +176,7 @@ describe("createEmbeddedRunAuthController", () => {
       baseUrl: "https://chatgpt.com/backend-api/codex",
       contextWindow: 272_000,
     };
-    mocks.getApiKeyForModel.mockImplementation(async ({ model }) => {
+    mocks.getApiKeyForModelCore.mockImplementation(async ({ model }) => {
       expect(model).toBe(selectedModel);
       expect(harness.runtimeModel).not.toBe(selectedModel);
       return {
@@ -210,7 +210,7 @@ describe("createEmbeddedRunAuthController", () => {
   it("rejects credentials whose class does not match the prepared route", async () => {
     const harness = createMutableAuthControllerHarness();
     const commit = vi.fn();
-    mocks.getApiKeyForModel.mockResolvedValue({
+    mocks.getApiKeyForModelCore.mockResolvedValue({
       apiKey: "platform-key",
       mode: "api-key",
       source: "config",
@@ -243,7 +243,7 @@ describe("createEmbeddedRunAuthController", () => {
     const harness = createMutableAuthControllerHarness();
     const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
 
-    mocks.getApiKeyForModel.mockResolvedValue({
+    mocks.getApiKeyForModelCore.mockResolvedValue({
       apiKey: "source-api-key",
       mode: "api-key",
       profileId: "default",
@@ -268,7 +268,7 @@ describe("createEmbeddedRunAuthController", () => {
 
     await controller.initializeAuthProfile();
 
-    const apiKeyParams = mocks.getApiKeyForModel.mock.calls.at(0)?.[0] as
+    const apiKeyParams = mocks.getApiKeyForModelCore.mock.calls.at(0)?.[0] as
       | { agentDir?: string; workspaceDir?: string }
       | undefined;
     expect(apiKeyParams?.agentDir).toBe("/tmp/agent");
@@ -296,7 +296,7 @@ describe("createEmbeddedRunAuthController", () => {
       refKeys: ["env:default:MISSING_OPENAI_KEY"],
       reason: "secret reference was not found",
     });
-    mocks.getApiKeyForModel.mockImplementation(async ({ profileId }) => {
+    mocks.getApiKeyForModelCore.mockImplementation(async ({ profileId }) => {
       if (profileId === "default") {
         throw unavailable;
       }
@@ -314,7 +314,7 @@ describe("createEmbeddedRunAuthController", () => {
     });
 
     await expect(controller.initializeAuthProfile()).rejects.toBe(unavailable);
-    expect(mocks.getApiKeyForModel).toHaveBeenCalledOnce();
+    expect(mocks.getApiKeyForModelCore).toHaveBeenCalledOnce();
     expect(mocks.prepareProviderRuntimeAuth).not.toHaveBeenCalled();
   });
 
@@ -328,7 +328,7 @@ describe("createEmbeddedRunAuthController", () => {
     harness.effectiveModel = baseModel;
     const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
 
-    mocks.getApiKeyForModel.mockImplementation(async ({ profileId }) => ({
+    mocks.getApiKeyForModelCore.mockImplementation(async ({ profileId }) => ({
       apiKey: `${String(profileId)}-source-key`,
       mode: "api-key" as const,
       profileId,
@@ -376,7 +376,7 @@ describe("createEmbeddedRunAuthController", () => {
     const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
     const secret = "runtime-exchange-source-secret";
     const sentinel = mintSecretSentinel(secret, { label: "model-auth:custom-openai" });
-    mocks.getApiKeyForModel.mockResolvedValue({
+    mocks.getApiKeyForModelCore.mockResolvedValue({
       apiKey: sentinel,
       mode: "api-key",
       source: "profile:custom-openai:default",
@@ -395,7 +395,7 @@ describe("createEmbeddedRunAuthController", () => {
     const controller = createMutableEmbeddedRunAuthController({ harness, setRuntimeApiKey });
     await controller.initializeAuthProfile();
 
-    expect(mocks.getApiKeyForModel).toHaveBeenCalledWith(
+    expect(mocks.getApiKeyForModelCore).toHaveBeenCalledWith(
       expect.objectContaining({ secretSentinels: true }),
     );
     expect(mocks.prepareProviderRuntimeAuth).toHaveBeenCalledWith(
@@ -415,7 +415,7 @@ describe("createEmbeddedRunAuthController", () => {
     const sentinel = mintSecretSentinel("runtime-source-secret", {
       label: "model-auth:custom-openai",
     });
-    mocks.getApiKeyForModel.mockResolvedValue({
+    mocks.getApiKeyForModelCore.mockResolvedValue({
       apiKey: sentinel,
       mode: "api-key",
       source: "profile:custom-openai:default",
@@ -435,7 +435,7 @@ describe("createEmbeddedRunAuthController", () => {
     const source = mintSecretSentinel("kill-switch-source-secret", {
       label: "model-auth:custom-openai",
     });
-    mocks.getApiKeyForModel.mockResolvedValue({
+    mocks.getApiKeyForModelCore.mockResolvedValue({
       apiKey: source,
       mode: "api-key",
       source: "profile:custom-openai:default",
@@ -456,7 +456,7 @@ describe("createEmbeddedRunAuthController", () => {
     const harness = createMutableAuthControllerHarness();
     const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
 
-    mocks.getApiKeyForModel.mockResolvedValue({
+    mocks.getApiKeyForModelCore.mockResolvedValue({
       mode: "api-key",
       source: "models.providers.custom-openai",
     });
@@ -561,7 +561,7 @@ describe("createEmbeddedRunAuthController", () => {
   it("rejects privileged runtime transport overrides on the first auth exchange", async () => {
     let runtimeModel = createTestModel();
 
-    mocks.getApiKeyForModel.mockResolvedValue({
+    mocks.getApiKeyForModelCore.mockResolvedValue({
       apiKey: "source-api-key",
       mode: "api-key",
       profileId: "default",
@@ -642,7 +642,7 @@ describe("createEmbeddedRunAuthController", () => {
         expiresAt: number;
       }>();
 
-      mocks.getApiKeyForModel.mockImplementation(async ({ profileId }) => {
+      mocks.getApiKeyForModelCore.mockImplementation(async ({ profileId }) => {
         if (profileId === "backup") {
           return {
             apiKey: "backup-source-api-key",
@@ -744,7 +744,7 @@ describe("createEmbeddedRunAuthController", () => {
       const harness = createMutableAuthControllerHarness();
       const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
 
-      mocks.getApiKeyForModel.mockResolvedValue({
+      mocks.getApiKeyForModelCore.mockResolvedValue({
         apiKey: undefined,
         mode: "aws-sdk",
         source: "aws-sdk default chain",
@@ -774,7 +774,7 @@ describe("createEmbeddedRunAuthController", () => {
       const harness = createMutableAuthControllerHarness();
       const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
 
-      mocks.getApiKeyForModel.mockResolvedValue({
+      mocks.getApiKeyForModelCore.mockResolvedValue({
         apiKey: undefined,
         mode: "aws-sdk",
         source: "aws-sdk default chain",
@@ -806,7 +806,7 @@ describe("createEmbeddedRunAuthController", () => {
           refreshTimer: setTimeout(() => undefined, 60_000),
         };
 
-        mocks.getApiKeyForModel.mockResolvedValue({
+        mocks.getApiKeyForModelCore.mockResolvedValue({
           apiKey: undefined,
           mode: "aws-sdk",
           source: "aws-sdk default chain",
@@ -834,7 +834,7 @@ describe("createEmbeddedRunAuthController", () => {
       const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
       const warn = vi.fn<(message: string) => void>();
 
-      mocks.getApiKeyForModel.mockResolvedValue({
+      mocks.getApiKeyForModelCore.mockResolvedValue({
         apiKey: undefined,
         mode: "aws-sdk",
         source: "aws-sdk default chain",
