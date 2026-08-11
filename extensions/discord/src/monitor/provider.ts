@@ -420,7 +420,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         runtime,
         botUserId,
       });
-      const { setDiscordTranscriptsVoiceManager } = await import("../voice/transcripts-source.js");
+      const { setDiscordTranscriptsVoiceManager } = await import("../../transcripts-source-api.js");
       setDiscordTranscriptsVoiceManager({
         accountId: account.accountId,
         manager: voiceManager,
