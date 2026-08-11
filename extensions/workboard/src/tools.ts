@@ -391,6 +391,9 @@ export function createWorkboardTools(params: {
         const requestedSessionKey =
           typeof record.sessionKey === "string" ? record.sessionKey.trim() : undefined;
         const action = typeof record.action === "string" ? record.action : "";
+        if ((action === "bind" || action === "rebind") && !callerSessionKey) {
+          throw new Error("session binding requires a trusted current chat session.");
+        }
         if (requestedSessionKey && callerSessionKey && requestedSessionKey !== callerSessionKey) {
           throw new Error("session binding must target the current chat session.");
         }
@@ -399,8 +402,7 @@ export function createWorkboardTools(params: {
             id,
             {
               action,
-              sessionKey:
-                action === "detach" ? undefined : (requestedSessionKey ?? callerSessionKey),
+              sessionKey: action === "detach" ? undefined : callerSessionKey,
             },
             scope,
           ),

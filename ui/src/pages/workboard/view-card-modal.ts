@@ -111,6 +111,7 @@ export function openEditModal(state: WorkboardUiState, card: WorkboardCard) {
   state.draftLabels = card.labels.join(", ");
   state.draftAgentId = card.agentId ?? "";
   state.draftSessionKey = card.sessionKey ?? "";
+  state.draftOriginalSessionKey = state.draftSessionKey;
   state.draftTemplateId = card.metadata?.templateId ?? "";
   state.draftCommentBody = "";
 }

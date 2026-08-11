@@ -119,6 +119,7 @@ export type WorkboardUiState = {
   draftLabels: string;
   draftAgentId: string;
   draftSessionKey: string;
+  draftOriginalSessionKey: string;
   draftTemplateId: WorkboardTemplateId | "";
   draftCommentBody: string;
   detailCardId: string | null;

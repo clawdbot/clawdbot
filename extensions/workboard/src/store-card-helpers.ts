@@ -359,7 +359,10 @@ export function assertCanMutateClaimedCard(
   }
   const callerSessionKey = normalizeOptionalString(scope.sessionKey);
   const boundSessionKey = cardSessionKey(card);
-  if (callerSessionKey && boundSessionKey && callerSessionKey !== boundSessionKey) {
+  const executionSessionKey = normalizeOptionalString(card.execution?.sessionKey);
+  const callerMatchesSession =
+    callerSessionKey === boundSessionKey || callerSessionKey === executionSessionKey;
+  if (callerSessionKey && boundSessionKey && !callerMatchesSession) {
     throw new Error(`card is bound to session ${boundSessionKey}.`);
   }
 }

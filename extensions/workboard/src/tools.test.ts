@@ -47,6 +47,51 @@ describe("workboard tools", () => {
     expect(manifest.toolMetadata?.workboard_session_bind).toEqual({ optional: true });
   });
 
+  it("rejects agent binding without a trusted current session", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const api = { runtime: {} } as unknown as OpenClawPluginApi;
+    const tools = new Map(
+      createWorkboardTools({
+        api,
+        store,
+        context: { agentId: "main" } as never,
+      }).map((tool) => [tool.name, tool]),
+    );
+    const card = await store.create({ title: "Unbound card" });
+
+    await expect(
+      tools.get("workboard_session_bind")?.execute("contextless-bind", {
+        id: card.id,
+        action: "bind",
+        sessionKey: "agent:other:chosen-by-model",
+      }),
+    ).rejects.toThrow("current chat session");
+    expect((await store.get(card.id))?.sessionKey).toBeUndefined();
+
+    const currentSessionKey = "agent:main:trusted-current-chat";
+    const trustedTools = new Map(
+      createWorkboardTools({
+        api,
+        store,
+        context: { agentId: "main", sessionKey: currentSessionKey } as never,
+      }).map((tool) => [tool.name, tool]),
+    );
+    await expect(
+      trustedTools.get("workboard_session_bind")?.execute("mismatched-bind", {
+        id: card.id,
+        action: "bind",
+        sessionKey: "agent:other:chosen-by-model",
+      }),
+    ).rejects.toThrow("must target the current chat session");
+    await expect(
+      trustedTools.get("workboard_session_bind")?.execute("trusted-bind", {
+        id: card.id,
+        action: "bind",
+      }),
+    ).resolves.toBeDefined();
+    expect((await store.get(card.id))?.sessionKey).toBe(currentSessionKey);
+  });
+
   it("inherits the active tool filesystem boundary for workspace metadata", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const api = { runtime: {} } as unknown as OpenClawPluginApi;

@@ -156,6 +156,7 @@ function openEditDraft(card: WorkboardCard, status: WorkboardCard["status"] = "r
   state.draftLabels = card.labels.join(", ");
   state.draftAgentId = card.agentId ?? "";
   state.draftSessionKey = card.sessionKey ?? "";
+  state.draftOriginalSessionKey = state.draftSessionKey;
 }
 
 function makeMovedCard(card: WorkboardCard, overrides: Partial<WorkboardCard> = {}) {
@@ -2590,6 +2591,51 @@ describe("workboard controller", () => {
     expect(state.cards[0]).toMatchObject({ title: "Updated board", status: "review" });
     expect(state.draftOpen).toBe(false);
     expect(state.editingCardId).toBeNull();
+  });
+
+  it("omits an unchanged primary binding from a stale title-only edit", async () => {
+    const original = createWorkboardCard({ status: "todo" });
+    const concurrentlyBound = {
+      ...original,
+      sessionKey: "agent:main:chat:bound-while-editing",
+      updatedAt: original.updatedAt + 1,
+    };
+    state.cards = [original];
+    openEditDraft(original, original.status);
+    state.draftTitle = "Updated after concurrent bind";
+    const client = createClient((method, params) => {
+      if (method !== "workboard.cards.update") {
+        return {};
+      }
+      const patch = (params as { patch: Partial<WorkboardCard> }).patch;
+      return { card: { ...concurrentlyBound, ...patch } };
+    });
+
+    await saveDraft(client);
+
+    expect(requestPatch(client, 0)).not.toHaveProperty("sessionKey");
+    expect(state.cards[0]).toMatchObject({
+      title: "Updated after concurrent bind",
+      sessionKey: concurrentlyBound.sessionKey,
+    });
+  });
+
+  it("sends an explicit detach when the original primary binding is removed", async () => {
+    const bound = createWorkboardCard({
+      status: "todo",
+      sessionKey: "agent:main:chat:detach-me",
+    });
+    state.cards = [bound];
+    openEditDraft(bound, bound.status);
+    state.draftSessionKey = "";
+    const client = createClient({
+      "workboard.cards.update": { card: { ...bound, sessionKey: undefined } },
+    });
+
+    await saveDraft(client);
+
+    expect(requestPatch(client, 0)).toMatchObject({ sessionKey: "" });
+    expect(state.cards[0]?.sessionKey).toBeUndefined();
   });
 
   it("keeps the existing binding when the atomic card update fails", async () => {

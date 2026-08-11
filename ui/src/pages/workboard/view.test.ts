@@ -2477,7 +2477,7 @@ describe("renderWorkboard", () => {
         sessionKey: "agent:main:execution-linked-session",
       }),
     });
-    const request = vi.fn(async () => ({
+    const request = vi.fn(async (_method: string, _params?: unknown) => ({
       card: { ...card, title: "Renamed without unlinking", updatedAt: 2 },
     }));
     const { state, container, renderView } = createWorkboardView({
@@ -2523,9 +2523,11 @@ describe("renderWorkboard", () => {
       id: card.id,
       patch: expect.objectContaining({
         title: "Renamed without unlinking",
-        sessionKey: testCase.editableSessionKey,
       }),
     });
+    const patch = (request.mock.calls[0]?.[1] as { patch?: Record<string, unknown> } | undefined)
+      ?.patch;
+    expect(patch).not.toHaveProperty("sessionKey");
     expect(state.cards[0]?.execution?.sessionKey).toBe("agent:main:execution-linked-session");
     renderView();
     expect(container.querySelector("openclaw-workboard-card-dashboard")).not.toBeNull();

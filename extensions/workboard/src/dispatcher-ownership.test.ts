@@ -626,7 +626,7 @@ describe("Workboard dispatcher ownership", () => {
     });
   });
 
-  it("preserves the primary session binding when a worker run starts", async () => {
+  it("preserves the primary binding and lets the execution session finish its claim", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const primarySessionKey = "agent:main:chat:primary";
     const card = await store.create({
@@ -657,5 +657,27 @@ describe("Workboard dispatcher ownership", () => {
     await expect(
       store.bindSession(competitor.id, { sessionKey: primarySessionKey }),
     ).rejects.toThrow("already reserved by card");
+
+    const running = await store.get(card.id);
+    const token = running?.metadata?.claim?.token;
+    expect(token).toEqual(expect.any(String));
+    const executionSessionKey = `agent:codex-main:subagent:workboard-default-${card.id}`;
+    await expect(
+      store.heartbeat(card.id, {
+        ownerId: "codex-main",
+        token,
+      }),
+    ).resolves.toMatchObject({ status: "running" });
+    await expect(
+      store.complete(
+        card.id,
+        { summary: "Worker completed the dispatched card." },
+        { ownerId: "codex-main", token, sessionKey: executionSessionKey },
+      ),
+    ).resolves.toMatchObject({
+      status: "done",
+      sessionKey: primarySessionKey,
+      execution: { status: "done", sessionKey: executionSessionKey },
+    });
   });
 });
