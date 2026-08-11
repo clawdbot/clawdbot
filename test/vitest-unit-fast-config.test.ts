@@ -261,7 +261,9 @@ describe("unit-fast vitest lane", () => {
     // Fixture files must genuinely import a stateful test helper; #121923
     // rewrote the outbound poll tests to be stateless, so they left this list.
     const files = [
+      "src/acp/translator.error-kind.test.ts",
       "src/agents/auth-profiles/oauth-refresh-error.test.ts",
+      "src/agents/embedded-agent-runner/model.provider-hooks.timeout.test.ts",
       "src/auto-reply/reply/agent-runner-execution-runtime.test.ts",
     ];
     for (const file of files) {

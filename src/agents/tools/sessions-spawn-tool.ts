@@ -53,6 +53,7 @@ import {
   readToolStringParam,
   ToolInputError,
 } from "./common.js";
+import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
@@ -291,6 +292,9 @@ export function createSessionsSpawnTool(
     requesterAgentIdOverride?: string;
     requesterRunId?: string;
     swarmCollector?: boolean;
+    /** Backend-derived parent incarnation; never sourced from model arguments. */
+    expectedParentSessionId?: string;
+    signal?: AbortSignal;
   } & VisibleSessionsSpawnDeps &
     SpawnedToolContext,
 ): AnyAgentTool {
@@ -414,17 +418,31 @@ export function createSessionsSpawnTool(
           ...roleContext,
         });
       }
-      const visibleResult = await maybeSpawnVisibleSession({
-        raw: params,
-        task,
-        taskName,
-        label,
-        runtime,
-        requestedAgentId,
-        runTimeoutSeconds,
-        sandbox,
-        options: opts,
-      });
+      const expectedParentSessionKey = opts?.agentSessionKey?.trim();
+      if (opts?.expectedParentSessionId && !expectedParentSessionKey) {
+        throw new Error("Exact parent session access requires a session key");
+      }
+      const spawnVisible = async () =>
+        await maybeSpawnVisibleSession({
+          raw: params,
+          task,
+          taskName,
+          label,
+          runtime,
+          requestedAgentId,
+          runTimeoutSeconds,
+          sandbox,
+          options: opts,
+        });
+      const visibleResult = opts?.expectedParentSessionId
+        ? await runWithScopedSessionAccess({
+            cfg: visibilityCfg,
+            expectedSessionId: opts.expectedParentSessionId,
+            ...(opts.signal ? { signal: opts.signal } : {}),
+            targetSessionKey: expectedParentSessionKey!,
+            run: spawnVisible,
+          })
+        : await spawnVisible();
       if (visibleResult) {
         return jsonResult(
           addRoleToFailureResult(visibleResult as { status: string }, requestedAgentId),

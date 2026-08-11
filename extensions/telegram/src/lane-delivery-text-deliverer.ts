@@ -43,6 +43,7 @@ export type LaneDeliveryResult =
       kind: "preview-finalized";
       delivery: LanePreviewFinalizedDelivery;
     }
+  | { kind: "preview-finalized-partial"; delivery: LanePreviewFinalizedDelivery; error: unknown }
   | { kind: "preview-retained" | "preview-updated" | "sent" | "skipped" };
 
 type CreateLaneTextDelivererParams = {
@@ -93,7 +94,7 @@ type DeliverLaneTextParams = {
 };
 
 function result(
-  kind: LaneDeliveryResult["kind"],
+  kind: Exclude<LaneDeliveryResult["kind"], "preview-finalized-partial">,
   delivery?: LanePreviewFinalizedDeliveryInput,
 ): LaneDeliveryResult {
   if (kind === "preview-finalized") {
@@ -317,7 +318,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       await onPlatformSendDispatch?.();
     }
     if (finalizePreview) {
-      await params.stopDraftLane(lane);
+      if (previewAlreadyVisible) {
+        // Cleanup cannot invalidate an accepted preview or create fresh send custody.
+        await params.stopDraftLane(lane).catch(() => undefined);
+      } else {
+        await params.stopDraftLane(lane);
+      }
     } else {
       await params.flushDraftLane(lane);
     }
@@ -474,19 +480,26 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           finalizedPreview.delivery.buttonsAttached === true;
         const mediaText =
           finalizedPreview.kind === "preview-finalized" ? finalizedPreview.delivery.content : text;
-        await params.sendPayload(
-          mediaOnlyPayload(payload, mediaText, {
-            stripButtons,
-            fallbackButtons: stripButtons ? undefined : buttons,
-          }),
-          {
-            afterAcceptedDraft: true,
-            durable,
-            promptContextSequence,
-            onPlatformSendDispatch,
-            bindPendingFinalDelivery,
-          },
-        );
+        try {
+          await params.sendPayload(
+            mediaOnlyPayload(payload, mediaText, {
+              stripButtons,
+              fallbackButtons: stripButtons ? undefined : buttons,
+            }),
+            {
+              afterAcceptedDraft: true,
+              durable,
+              promptContextSequence,
+              onPlatformSendDispatch,
+              bindPendingFinalDelivery,
+            },
+          );
+        } catch (error) {
+          if (durable && finalizedPreview.kind === "preview-finalized") {
+            return { ...finalizedPreview, kind: "preview-finalized-partial", error };
+          }
+          throw error;
+        }
         return finalizedPreview;
       }
     }

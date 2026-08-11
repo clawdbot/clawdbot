@@ -3629,14 +3629,46 @@ openclaw-chat-video-player {
 
   .agent-chat__composer-controls {
     order: 0;
-    display: grid;
-    /* Three columns: settings, the transient interrupted toast (absent in
-       the normal state, so its column collapses), and the model picker. */
-    grid-template-columns: 40px minmax(0, max-content) minmax(0, max-content);
+    display: flex;
+    justify-content: flex-end;
     flex: 1 1 0;
     width: auto;
     margin-left: 0;
     gap: 0;
+  }
+
+  .agent-chat__input .agent-chat__composer-controls {
+    min-width: 187px;
+  }
+
+  .agent-chat__input .agent-chat__composer-run-status,
+  .agent-chat__input .agent-chat__session-overrides-pill {
+    flex: 1 1 auto;
+  }
+
+  .agent-chat__input .agent-chat__composer-run-status {
+    min-width: 23px;
+    overflow: hidden;
+  }
+
+  .agent-chat__input .agent-chat__session-overrides-pill {
+    min-width: 26px;
+  }
+
+  .agent-chat__input .agent-chat__composer-run-status .agent-chat__run-status {
+    min-width: 0;
+    flex-shrink: 1;
+  }
+
+  .agent-chat__input .agent-chat__session-overrides-open {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .agent-chat__input .agent-chat__session-overrides-clear {
+    flex: 0 0 26px;
   }
 
   .agent-chat__composer-meta {
@@ -3651,25 +3683,49 @@ openclaw-chat-video-player {
     margin-left: 0;
   }
 
-  /* The borderless trigger is 30px on desktop; keep a >=40px touch target
-     inside the mobile composer grid. */
-  .agent-chat__composer-controls .chat-controls__inline-select-trigger {
+  /* Reserve the readable model trigger, 44px effort target, and their gap;
+     keep the picker cluster right-aligned like desktop while transient status
+     text yields before either picker does. */
+  .agent-chat__input .agent-chat__composer-controls .chat-composer-model-control {
+    flex: 0 1 auto;
+    min-width: 138px;
+  }
+
+  .agent-chat__input .agent-chat__composer-controls .chat-controls__model-picker {
+    flex: 1 1 auto;
+  }
+
+  .agent-chat__input .agent-chat__composer-controls .chat-controls__effort-picker {
+    flex: 0 0 auto;
+    min-width: 44px;
+  }
+
+  .agent-chat__input .agent-chat__typing-indicator {
+    flex: 1 1 auto;
+    overflow: hidden;
+  }
+
+  /* The borderless trigger is 30px on desktop; keep a >=44px touch target
+     inside the mobile composer row. */
+  .agent-chat__input .agent-chat__composer-controls .chat-controls__inline-select-trigger {
     width: fit-content;
     max-width: 100%;
-    height: 40px;
-    min-height: 40px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
     gap: 4px;
     padding: 0 2px 0 4px;
   }
 
   .agent-chat__input .chat-controls__model-menu,
   .agent-chat__input .chat-controls__effort-menu {
+    box-sizing: border-box;
     position: fixed;
-    left: auto;
+    left: max(12px, var(--safe-area-left));
     right: max(12px, var(--safe-area-right));
-    bottom: calc(96px + var(--safe-area-bottom));
-    width: min(392px, calc(100vw - 24px));
-    max-height: min(440px, calc(100vh - 116px - var(--safe-area-bottom)));
+    bottom: var(--chat-composer-popover-bottom, calc(96px + var(--safe-area-bottom)));
+    width: auto;
+    max-height: min(440px, var(--chat-composer-popover-max-height, calc(100dvh - 116px)));
   }
 
   .agent-chat__composer-shell {
@@ -3690,14 +3746,8 @@ openclaw-chat-video-player {
     overscroll-behavior: contain;
   }
 
-  .agent-chat__input:has(.chat-controls__inline-select[open]),
   .agent-chat__input:has(.agent-chat__attach-menu[open]) {
     overflow: visible;
-  }
-
-  .agent-chat__input .chat-controls__model-menu,
-  .agent-chat__input .chat-controls__effort-menu {
-    max-height: calc(100vh - 148px);
   }
 
   .agent-chat__composer-footer {
@@ -3724,22 +3774,22 @@ openclaw-chat-video-player {
 }
 
 @media (max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  /* Backdrop-filter contains fixed descendants; lift it and the landscape scroll clip while open. */
+  /* Backdrop filtering contains fixed descendants, so lift it while the
+     viewport-anchored panels are open. */
   .agent-chat__input:has(.chat-controls__inline-select[open]),
-  .agent-chat__input:has(.context-usage details[open]),
-  .agent-chat__input:has(.agent-chat__attach-menu[open]) {
-    overflow: visible;
+  .agent-chat__input:has(.context-usage details[open]) {
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
 
   .context-usage__popover {
+    box-sizing: border-box;
     position: fixed;
     left: max(12px, var(--safe-area-left));
     right: max(12px, var(--safe-area-right));
-    bottom: calc(96px + var(--safe-area-bottom));
+    bottom: var(--chat-composer-popover-bottom, calc(96px + var(--safe-area-bottom)));
     width: auto;
-    max-height: calc(100vh - 116px - var(--safe-area-bottom));
+    max-height: var(--chat-composer-popover-max-height, calc(100dvh - 116px));
     overflow-y: auto;
   }
 }

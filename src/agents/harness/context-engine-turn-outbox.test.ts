@@ -138,6 +138,52 @@ describe("context-engine turn outbox", () => {
     ).toBeUndefined();
   });
 
+  it("drains a versionless v1 row after an engine adds the turn-local contract", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-context-outbox-upgrade-"));
+    tempDirs.push(stateDir);
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const payload = createPayload({
+      advancementKey: "session-a:legacy-ready",
+      databasePath: database.path,
+      sequence: 3,
+      sessionId: "session-a",
+    });
+    enqueueContextEngineTurnCommit({ database, engineId: "test", payload });
+    const commitTurn = vi.fn<NonNullable<ContextEngine["commitTurn"]>>(async () => ({
+      status: "committed",
+    }));
+    const commitTurnLocal = vi.fn<NonNullable<ContextEngine["commitTurnLocal"]>>(async () => ({
+      status: "committed",
+    }));
+    const engine = {
+      info: {
+        id: "test",
+        name: "Test",
+        transcriptSemantics: {
+          turnAdvancementIdempotency: "atomic-idempotent-turn-local-v1",
+        },
+      },
+      ingest: async () => ({ ingested: true }),
+      assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+      compact: async () => ({ ok: true, compacted: false }),
+      commitTurn,
+      commitTurnLocal,
+    } satisfies ContextEngine;
+
+    await drainContextEngineTurnOutbox({
+      database,
+      engine,
+      engineId: "test",
+      warn: vi.fn(),
+    });
+
+    expect(commitTurn).toHaveBeenCalledWith(expect.objectContaining({ prePromptMessageCount: 3 }));
+    expect(commitTurnLocal).not.toHaveBeenCalled();
+  });
+
   it("drains prior work before fresh-turn assembly and records dispatch admission", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-context-outbox-recovery-"));
     tempDirs.push(stateDir);
@@ -186,6 +232,7 @@ describe("context-engine turn outbox", () => {
       database,
       engineId: "test",
       isHeartbeat: true,
+      turnAdvancementIdempotency: "atomic-idempotent-turn-local-v1",
     });
     const current = await appendTranscriptMessage(target, {
       message: { role: "user", content: "second" },
@@ -205,20 +252,23 @@ describe("context-engine turn outbox", () => {
       message: currentMessage,
       target: async () => undefined,
     });
-    const commitTurn = vi.fn(async () => ({ status: "committed" as const }));
+    const commitTurnLocal = vi.fn<NonNullable<ContextEngine["commitTurnLocal"]>>(async () => ({
+      status: "committed",
+    }));
     const engine = {
       info: {
         id: "test",
         name: "Test",
         transcriptSemantics: {
           currentTurnFence: "before-current-turn-entry-v1",
-          turnAdvancementIdempotency: "atomic-idempotent-v1",
+          turnAdvancementIdempotency: "atomic-idempotent-turn-local-v1",
         },
       },
       ingest: async () => ({ ingested: true }),
       assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
       compact: async () => ({ ok: true, compacted: false }),
-      commitTurn,
+      commitTurn: async () => ({ status: "committed" as const }),
+      commitTurnLocal,
     } satisfies ContextEngine;
     const lease = {
       engine,
@@ -242,8 +292,8 @@ describe("context-engine turn outbox", () => {
       sessionTarget: target,
     });
 
-    expect(commitTurn).toHaveBeenCalledOnce();
-    expect(commitTurn).toHaveBeenCalledWith(
+    expect(commitTurnLocal).toHaveBeenCalledOnce();
+    expect(commitTurnLocal).toHaveBeenCalledWith(
       expect.objectContaining({
         advancementKey: admission.logicalTurnId,
         isHeartbeat: true,
@@ -251,12 +301,12 @@ describe("context-engine turn outbox", () => {
           { role: "user", content: "first" },
           { role: "assistant", content: "first answer" },
         ],
-        prePromptMessageCount: 0,
       }),
     );
     expect(
       database.db.prepare("SELECT advancement_key FROM context_engine_turn_outbox").all(),
     ).toHaveLength(0);
+    expect(commitTurnLocal.mock.calls[0]?.[0]).not.toHaveProperty("prePromptMessageCount");
 
     recorder.markRuntimePersisted(currentMessage, currentAdmission);
     const queued = database.db
@@ -395,6 +445,7 @@ describe("context-engine turn outbox", () => {
       database,
       engineId: "test",
       isHeartbeat: false,
+      turnAdvancementIdempotency: "atomic-idempotent-v1",
     });
     const warn = vi.fn();
 

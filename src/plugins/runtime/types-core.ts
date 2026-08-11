@@ -389,9 +389,8 @@ export type PluginRuntimeCore = {
     requestHeartbeatNow: (opts?: RuntimeRequestHeartbeatNowOptions) => void;
     /**
      * Run a single heartbeat cycle immediately (bypassing the coalesce timer).
-     * Accepts an optional `heartbeat` config override so callers can force
-     * delivery to the last active channel — the same pattern the cron service
-     * uses to avoid the default `target: "none"` suppression.
+     * Accepts an optional `heartbeat` config override so callers can choose
+     * an explicit destination or opt into internal-only `target: "none"` runs.
      */
     runHeartbeatOnce: (opts?: RunHeartbeatOnceOptions) => Promise<HeartbeatRunResult>;
     runCommandWithTimeout: typeof import("../../process/exec.js").runCommandWithTimeout;

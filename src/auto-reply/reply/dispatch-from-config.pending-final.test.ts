@@ -30,7 +30,7 @@ describe("pending final delivery restart proof", () => {
   });
 
   async function writePendingFinal(
-    beforeAgentReplyState: "continue" | "handled-reply",
+    beforeAgentReplyState: "handled-reply" | undefined,
     state: "prepared" | "delivered" = "delivered",
   ): Promise<void> {
     const entry: SessionEntry = {
@@ -67,7 +67,7 @@ describe("pending final delivery restart proof", () => {
     return payload;
   }
 
-  it.each(["continue", "handled-reply"] as const)(
+  it.each([undefined, "handled-reply"] as const)(
     "clears %s provenance only after the exact pending intent succeeds",
     async (beforeAgentReplyState) => {
       await writePendingFinal(beforeAgentReplyState);
@@ -105,7 +105,7 @@ describe("pending final delivery restart proof", () => {
         intentId: "intent-media",
         deliveries: [{ id: "delivery-media", state: "delivered" }],
       },
-      restartRecoveryBeforeAgentReplyState: "handled-unrecoverable",
+      restartRecoveryBeforeAgentReplyState: "handled-reply",
       restartRecoverySourceIngress: "channel",
     };
     await replaceSessionEntry({ storePath, sessionKey }, entry);
@@ -133,7 +133,7 @@ describe("pending final delivery restart proof", () => {
   });
 
   it("clears a skipped turn only after every sendable final is suppressed", async () => {
-    await writePendingFinal("continue", "prepared");
+    await writePendingFinal(undefined, "prepared");
     await replaceSessionEntry(
       { storePath, sessionKey },
       {

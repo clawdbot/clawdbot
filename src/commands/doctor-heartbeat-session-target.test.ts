@@ -100,6 +100,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("resolved to agent:ops:slack:channel:c123");
     expect(warnings[0]).toContain('reason="no-target"');
+    expect(warnings[0]).toContain("Heartbeats will run");
   });
 
   it("does not warn when an explicit heartbeat recipient does not need session history", () => {
@@ -153,10 +154,12 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     expect(warnings[0]).toContain("resolved to agent:ops:slack:channel:c123");
   });
 
-  it("does not warn when target is omitted because runtime defaults to none", () => {
+  it("warns when the default owner target has no configured owner route", () => {
     const cfg = cfgWithSession("slack:channel:c123", null);
     writeStore(cfg, {});
 
-    expect(describeHeartbeatSessionTargetIssues(cfg)).toEqual([]);
+    const warning = describeHeartbeatSessionTargetIssues(cfg)[0];
+    expect(warning).toContain('reason="no-route"');
+    expect(warning).toContain("set commands.ownerAllowFrom or a channel allowFrom");
   });
 });

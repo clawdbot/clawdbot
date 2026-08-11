@@ -18,10 +18,6 @@ export const log = createSubsystemLogger("main-session-restart-recovery");
 export const DEFAULT_RECOVERY_DELAY_MS = 5_000;
 export const MAX_RECOVERY_RETRIES = 3;
 export const RETRY_BACKOFF_MULTIPLIER = 2;
-export const UNRESUMABLE_SESSION_NOTICE =
-  "I was interrupted by a gateway restart and couldn't safely resume the previous turn. " +
-  "Please send that last request again and I'll pick it up cleanly.";
-
 export type ExpectedRestartRecoveryTarget = {
   canonicalSessionKey?: string;
   sessionId: string;

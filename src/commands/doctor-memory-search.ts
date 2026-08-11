@@ -43,7 +43,7 @@ import {
 } from "../plugin-sdk/memory-core-bundled-runtime.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import {
-  getActiveMemorySearchManager,
+  getActiveMemorySearchManagerCore,
   resolveActiveMemoryBackendConfig,
 } from "../plugins/memory-runtime.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
@@ -258,7 +258,7 @@ async function resolveRuntimeMemoryAuditContext(
   cfg: OpenClawConfig,
   agentId: string,
 ): Promise<RuntimeMemoryAuditContext | null> {
-  const result = await getActiveMemorySearchManager({
+  const result = await getActiveMemorySearchManagerCore({
     cfg,
     agentId,
     purpose: "status",

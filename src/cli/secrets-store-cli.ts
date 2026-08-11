@@ -73,7 +73,8 @@ function mapStoreError(error: unknown): SecretStoreCliFailure {
   if (
     validation?.name === "SecretStoreValidationError" &&
     (validation.code === "SECRET_STORE_INVALID_NAME" ||
-      validation.code === "SECRET_STORE_VALUE_TOO_LARGE")
+      validation.code === "SECRET_STORE_VALUE_TOO_LARGE" ||
+      validation.code === "SECRET_STORE_VALUE_EMPTY")
   ) {
     return new SecretStoreCliFailure(2, validation.message ?? "Invalid secret store input.");
   }

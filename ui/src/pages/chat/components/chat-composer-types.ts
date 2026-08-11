@@ -182,6 +182,7 @@ export type ChatComposerState = {
   gatewayQuestionCollapsed: boolean;
   questionTakeoverActive: boolean;
   restoreComposerFocus: boolean;
+  composerInput: HTMLElement | null;
   composerTextarea: HTMLTextAreaElement | null;
   microphonePickerOpen: boolean;
   microphonePickerLoading: boolean;
@@ -192,8 +193,9 @@ export type ChatComposerState = {
   microphoneDiscoveryRequest: number;
   capabilityMenuOpen: boolean;
   capabilityMenuView: ChatComposerPlusMenuView;
-  // Stable Lit ref: an inline arrow would change identity per render and force
-  // a layout re-measure of the textarea on every chat render, not just attach.
+  // Stable Lit refs: inline arrows would change identity per render and force
+  // layout observers to detach and reconnect on every chat update.
+  composerInputRef: ((element?: Element) => void) | null;
   textareaRef: ((element?: Element) => void) | null;
   dictation: ComposerDictationController | null;
   dictationDraftKey: string | null;

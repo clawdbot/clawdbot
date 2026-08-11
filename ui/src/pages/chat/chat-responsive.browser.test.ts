@@ -120,6 +120,8 @@ type ControlRect = {
   y: number;
   width: number;
   height: number;
+  clientWidth?: number;
+  scrollWidth?: number;
   clientHeight?: number;
   scrollHeight?: number;
   scrollTop?: number;
@@ -129,6 +131,7 @@ type ControlRect = {
 
 type ChatFixtureOptions = {
   composerAttachment?: boolean;
+  crowdedComposerFooter?: boolean;
   direct?: boolean;
   sessionRailBody?: string;
   sessionRailDocked?: boolean;
@@ -269,14 +272,27 @@ function chatControlsHtml(opts: { agent?: boolean } = {}) {
   `;
 }
 
-function composerControlsHtml() {
+function composerControlsHtml(crowded = false) {
   return `
     <div class="agent-chat__composer-controls">
+      ${
+        crowded
+          ? `<div class="agent-chat__composer-run-status">
+          <span class="agent-chat__run-status agent-chat__run-status--interrupted">
+            ${iconSvg()}<span class="agent-chat__run-status-label">Interrupted</span>
+          </span>
+        </div>
+        <span class="agent-chat__session-overrides-pill">
+          <button class="agent-chat__session-overrides-open" type="button">4 session overrides</button>
+          <button class="agent-chat__session-overrides-clear" type="button" aria-label="Clear session overrides">${iconSvg()}</button>
+        </span>`
+          : ""
+      }
       <div class="chat-composer-model-control">
         <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
           <details class="chat-controls__inline-select chat-controls__model-picker">
-          <summary class="chat-controls__inline-select-trigger" data-chat-composer-model="true" aria-label="Chat model">
-            <span class="chat-controls__inline-select-label">GPT-5.6</span>
+          <summary class="chat-controls__inline-select-trigger chat-controls__model-trigger" data-chat-composer-model="true" aria-label="Chat model">
+            <span class="chat-controls__inline-select-label">GPT-5.6 Luna</span>
           </summary>
           <div class="chat-controls__inline-select-menu chat-controls__model-menu">
             <div class="chat-controls__model-search-wrap"><input class="chat-controls__model-search" placeholder="Search models" /></div>
@@ -284,11 +300,14 @@ function composerControlsHtml() {
               <button class="chat-controls__inline-select-option chat-controls__model-option chat-controls__inline-select-option--selected">Default model</button>
               <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.5</button>
               <button class="chat-controls__inline-select-option chat-controls__model-option">claude-sonnet-4-6</button>
+              <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.6-luna</button>
+              <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.6-sol</button>
+              <button class="chat-controls__inline-select-option chat-controls__model-option">openrouter/auto</button>
             </div>
           </div>
           </details>
           <details class="chat-controls__inline-select chat-controls__effort-picker">
-          <summary class="chat-controls__inline-select-trigger" data-chat-composer-effort="true" aria-label="Effort">
+          <summary class="chat-controls__inline-select-trigger chat-controls__effort-trigger" data-chat-composer-effort="true" aria-label="Effort">
             <span class="chat-controls__inline-select-label">High</span>
           </summary>
           <div class="chat-controls__inline-select-menu chat-controls__effort-menu">
@@ -462,7 +481,19 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                     </div>
                   </div>
                   <div class="agent-chat__composer-footer">
-                    ${composerControlsHtml()}
+                    ${composerControlsHtml(opts.crowdedComposerFooter)}
+                    ${
+                      opts.crowdedComposerFooter
+                        ? `<div class="agent-chat__typing-indicator" role="status">
+                      <span class="agent-chat__typing-avatars" aria-hidden="true">
+                        <span class="chat-author-avatar">A</span>
+                        <span class="chat-author-avatar">B</span>
+                        <span class="chat-author-avatar">C</span>
+                      </span>
+                      <span class="agent-chat__typing-text">Alexandria, Bartholomew, and Cassandra are typing</span>
+                    </div>`
+                        : ""
+                    }
                     <div class="agent-chat__composer-meta">
                       <div class="context-usage">
                         <details>
@@ -503,12 +534,30 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
   `;
 }
 
+async function syncFixtureComposerPopoverAnchor(page: Page) {
+  await page.locator(".agent-chat__input").evaluate((node) => {
+    const viewport = window.visualViewport;
+    const viewportTop = viewport?.offsetTop ?? 0;
+    const layoutViewportHeight = document.documentElement.clientHeight || window.innerHeight;
+    const composerTop = node.getBoundingClientRect().top;
+    node.style.setProperty(
+      "--chat-composer-popover-bottom",
+      `${layoutViewportHeight - composerTop + 6}px`,
+    );
+    node.style.setProperty(
+      "--chat-composer-popover-max-height",
+      `${Math.max(0, composerTop - viewportTop - 28)}px`,
+    );
+  });
+}
+
 async function openFixture(width: number, height: number, opts: ChatFixtureOptions = {}) {
   const page = await openBrowserPage(width, height);
   try {
     await page.setContent(
       `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${chatHtml(opts, width <= 1100)}</body></html>`,
     );
+    await syncFixtureComposerPopoverAnchor(page);
     return page;
   } catch (error) {
     await closeBrowserPage(page);
@@ -2171,26 +2220,160 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   });
 
   it.each([
-    [320, 568],
-    [375, 812],
-    [667, 375],
-    [768, 500],
+    [320, 568, false],
+    [375, 812, false],
+    [667, 375, false],
+    [768, 500, false],
+    [320, 568, true],
+    [667, 375, true],
   ] as const)(
-    "keeps the composer model menu inside the mobile viewport at %sx%s",
-    async (width, height) => {
-      const page = await openFixture(width, height);
+    "keeps the composer popovers inside the mobile viewport and clear of the input at %sx%s (attachment: %s)",
+    async (width, height, composerAttachment) => {
+      const page = await openFixture(width, height, { composerAttachment });
       try {
-        await page.locator('[data-chat-composer-model="true"]').evaluate((node) => {
-          node.parentElement?.setAttribute("open", "");
-        });
-        const menu = await getBoundingBox(page, ".chat-controls__model-menu");
-        expect(menu.x).toBeGreaterThanOrEqual(0);
-        expect(menu.x + menu.width).toBeLessThanOrEqual(width + 1);
+        const composer = await getBoundingBox(page, ".agent-chat__input");
+        for (const picker of [
+          {
+            menu: ".chat-controls__model-menu",
+            trigger: '[data-chat-composer-model="true"]',
+          },
+          {
+            menu: ".chat-controls__effort-menu",
+            trigger: '[data-chat-composer-effort="true"]',
+          },
+          {
+            menu: ".context-usage__popover",
+            trigger: ".context-ring",
+          },
+        ]) {
+          await page.locator(picker.trigger).evaluate((node) => {
+            node.parentElement?.setAttribute("open", "");
+          });
+          await waitForLayoutSettled(page);
+          await syncFixtureComposerPopoverAnchor(page);
+          await waitForLayoutSettled(page);
+          const menu = await getBoundingBox(page, picker.menu);
+          const trigger = await getBoundingBox(page, picker.trigger);
+          const footer = await getBoundingBox(page, ".agent-chat__composer-footer");
+          const menuPosition = await page.locator(picker.menu).evaluate((node) => ({
+            bottom: getComputedStyle(node).bottom,
+            boxSizing: getComputedStyle(node).boxSizing,
+            maxHeight: getComputedStyle(node).maxHeight,
+          }));
+          const menuLabel = `${picker.menu} ${JSON.stringify(menuPosition)}`;
+          expect(menu.x, picker.menu).toBeGreaterThanOrEqual(0);
+          expect(menu.x + menu.width, picker.menu).toBeLessThanOrEqual(width + 1);
+          expect(menu.y, menuLabel).toBeGreaterThanOrEqual(0);
+          expect(menu.y + menu.height, picker.menu).toBeLessThanOrEqual(composer.y + 1);
+          expect(trigger.y + trigger.height, picker.trigger).toBeLessThanOrEqual(height + 1);
+          expect(footer.y + footer.height, picker.menu).toBeLessThanOrEqual(height + 1);
+          await page.locator(picker.trigger).evaluate((node) => {
+            node.parentElement?.removeAttribute("open");
+          });
+        }
       } finally {
         await closeBrowserPage(page);
       }
     },
   );
+
+  it("anchors mobile composer popovers when the iPhone visual viewport is panned", async () => {
+    const page = await openFixture(375, 812);
+    try {
+      await page.locator(".card.chat").evaluate(async (node) => {
+        await Promise.all(node.getAnimations().map((animation) => animation.finished));
+      });
+      await page.evaluate(() => {
+        Object.defineProperty(window, "visualViewport", {
+          configurable: true,
+          value: { height: 400, offsetTop: 300 },
+        });
+      });
+      await syncFixtureComposerPopoverAnchor(page);
+      await page.locator('[data-chat-composer-model="true"]').evaluate((node) => {
+        node.parentElement?.setAttribute("open", "");
+      });
+      await waitForLayoutSettled(page);
+      await syncFixtureComposerPopoverAnchor(page);
+      await waitForLayoutSettled(page);
+      const composer = await getBoundingBox(page, ".agent-chat__input");
+      const menu = await getBoundingBox(page, ".chat-controls__model-menu");
+      const anchorEvidence = await page.locator(".agent-chat__input").evaluate((node) => ({
+        anchorBottom: getComputedStyle(node).getPropertyValue("--chat-composer-popover-bottom"),
+        layoutHeight: document.documentElement.clientHeight,
+      }));
+
+      expect(menu.y).toBeGreaterThanOrEqual(300);
+      expect(
+        Math.abs(menu.y + menu.height - (composer.y - 6)),
+        JSON.stringify({ anchorEvidence, composer, menu }),
+      ).toBeLessThanOrEqual(1);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("keeps transient footer controls from crushing the mobile model pickers", async () => {
+    const page = await openFixture(320, 568, { crowdedComposerFooter: true });
+    try {
+      await expectNoHorizontalOverflow(page);
+      const layout = await page.evaluate(() => {
+        const rectFor = (selector: string) => {
+          const node = document.querySelector<HTMLElement>(selector)!;
+          const rect = node.getBoundingClientRect();
+          return {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            clientWidth: node.clientWidth,
+            scrollWidth: node.scrollWidth,
+          };
+        };
+        return {
+          controls: rectFor(".agent-chat__composer-controls"),
+          effort: rectFor(".chat-controls__effort-trigger"),
+          footer: rectFor(".agent-chat__composer-footer"),
+          meta: rectFor(".agent-chat__composer-meta"),
+          model: rectFor(".chat-controls__model-trigger"),
+          modelLabel: rectFor(".chat-controls__model-trigger .chat-controls__inline-select-label"),
+          overrides: rectFor(".agent-chat__session-overrides-pill"),
+          status: rectFor(".agent-chat__composer-run-status"),
+          typing: rectFor(".agent-chat__typing-indicator"),
+        };
+      });
+
+      expect(layout.controls.scrollWidth).toBeLessThanOrEqual(layout.controls.clientWidth + 1);
+      for (const control of [
+        layout.status,
+        layout.overrides,
+        layout.model,
+        layout.effort,
+        layout.typing,
+      ]) {
+        expect(control.x).toBeGreaterThanOrEqual(layout.footer.x - 1);
+        expect(control.x + control.width).toBeLessThanOrEqual(
+          layout.footer.x + layout.footer.width + 1,
+        );
+      }
+      for (const trigger of [layout.model, layout.effort]) {
+        expect(trigger.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+        expect(trigger.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+      }
+      expect(layout.modelLabel.scrollWidth).toBeLessThanOrEqual(layout.modelLabel.clientWidth + 1);
+      for (const [left, right] of [
+        [layout.status, layout.overrides],
+        [layout.overrides, layout.model],
+        [layout.model, layout.effort],
+        [layout.effort, layout.typing],
+        [layout.typing, layout.meta],
+      ] as const) {
+        expect(rectsOverlap(left, right)).toBe(false);
+      }
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
 
   it.each([
     [320, 568],
@@ -2218,6 +2401,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
               y: rect.y,
               width: rect.width,
               height: rect.height,
+              clientWidth: node.clientWidth,
+              scrollWidth: node.scrollWidth,
               display: getComputedStyle(node).display,
             };
           };
@@ -2230,6 +2415,14 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             textarea: rectFor(".agent-chat__composer-combobox > textarea"),
             meta: rectFor(".agent-chat__composer-meta"),
             model: rectFor(".chat-composer-model-control"),
+            modelTrigger: rectFor(".chat-controls__model-trigger"),
+            modelLabel: rectFor(
+              ".chat-controls__model-trigger .chat-controls__inline-select-label",
+            ),
+            effortTrigger: rectFor(".chat-controls__effort-trigger"),
+            effortLabel: rectFor(
+              ".chat-controls__effort-trigger .chat-controls__inline-select-label",
+            ),
             context: rectFor(".context-ring"),
             attach: rectFor('.agent-chat__input-btn[aria-label="Add attachment"]'),
             send: rectFor(".chat-send-btn"),
@@ -2244,11 +2437,28 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const textarea = expectControlRect(controls.textarea, "composer textarea");
         const meta = expectControlRect(controls.meta, "composer metadata");
         const model = expectControlRect(controls.model, "composer model control");
+        const modelTrigger = expectControlRect(controls.modelTrigger, "composer model trigger");
+        const modelLabel = expectControlRect(controls.modelLabel, "composer model label");
+        const effortTrigger = expectControlRect(
+          controls.effortTrigger,
+          "composer thinking trigger",
+        );
+        const effortLabel = expectControlRect(controls.effortLabel, "composer thinking label");
         const context = expectControlRect(controls.context, "composer context control");
         const attach = expectControlRect(controls.attach, "composer attach control");
         const send = expectControlRect(controls.send, "composer send control");
 
-        for (const control of [footer, textarea, meta, model, context, attach, send]) {
+        for (const control of [
+          footer,
+          textarea,
+          meta,
+          model,
+          modelTrigger,
+          effortTrigger,
+          context,
+          attach,
+          send,
+        ]) {
           expect(control.x).toBeGreaterThanOrEqual(input.x - 1);
           expect(control.x + control.width).toBeLessThanOrEqual(input.x + input.width + 1);
         }
@@ -2267,6 +2477,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(send.x).toBeGreaterThanOrEqual(textarea.x + textarea.width - 1);
         expect(send.x + send.width).toBeLessThanOrEqual(input.x + input.width + 1);
         expect(rectsOverlap(model, send)).toBe(false);
+        const effortContextGap = context.x - (effortTrigger.x + effortTrigger.width);
+        expect(effortContextGap).toBeGreaterThanOrEqual(-1);
+        expect(effortContextGap).toBeLessThanOrEqual(9);
         const composerFontSize = await page
           .locator(".agent-chat__composer-combobox > textarea")
           .evaluate((textareaNode) => Number.parseFloat(getComputedStyle(textareaNode).fontSize));
@@ -2274,6 +2487,15 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           expect(composerFontSize).toBe(16);
           expect(model.width).toBeGreaterThanOrEqual(40);
           expect(model.width).toBeLessThanOrEqual(footer.width);
+          for (const trigger of [modelTrigger, effortTrigger]) {
+            expect(trigger.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+            expect(trigger.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+          }
+          for (const label of [modelLabel, effortLabel]) {
+            expect(label.clientWidth).toBeDefined();
+            expect(label.scrollWidth).toBeDefined();
+            expect(label.scrollWidth ?? 0).toBeLessThanOrEqual((label.clientWidth ?? 0) + 1);
+          }
           expect(send.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
           expect(send.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
           for (const control of [model, context]) {

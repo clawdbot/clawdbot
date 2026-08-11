@@ -4,7 +4,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import { inferToolMetaFromArgs } from "../../agents/embedded-agent-utils.js";
+import { inferToolMetaFromArgsCore } from "../../agents/tool-display.js";
 import type { GetReplyOptions } from "../types.js";
 
 /**
@@ -93,7 +93,7 @@ export function buildCommandOutputFromToolResultEvent(evt: {
   const args = readRecordValue(evt.data.args);
   const title =
     readStringValue(evt.data.title) ??
-    (args ? inferToolMetaFromArgs(name, args, { detailMode: "explain" }) : undefined);
+    (args ? inferToolMetaFromArgsCore(name, args, { detailMode: "explain" }) : undefined);
   return {
     itemId: readStringValue(evt.data.itemId),
     phase: "end",

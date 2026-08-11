@@ -585,7 +585,7 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
 
     const outbound = expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext), {
       threadId: 1,
-      to: "-100555",
+      to: "telegram:-100555",
     });
     expectRecordFields(outbound.ctxPayload, {
       From: "telegram:group:-100555:topic:1",

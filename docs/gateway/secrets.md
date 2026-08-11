@@ -282,7 +282,7 @@ Entries have a `secret` or `env` kind. The kind controls CLI disclosure, not Sec
 
 `secret` entries are never injected into subprocess environments. They remain available only through `store` SecretRefs because plaintext env injection would bypass the store disclosure boundary; safe secret injection requires a future egress-substitution mechanism.
 
-Names use the same uppercase grammar as env SecretRefs, and each UTF-8 value is limited to 64 KiB (65,536 bytes). This supports PEM keys and service-account JSON without inheriting the smaller limits of ordinary environment variables.
+Names use the same uppercase grammar as env SecretRefs, and each UTF-8 value is limited to 64 KiB (65,536 bytes). A `secret` entry must carry a value; empty secrets are rejected because they would surface only as a confusing downstream auth failure. `env` entries may be empty. This supports PEM keys and service-account JSON without inheriting the smaller limits of ordinary environment variables.
 
 Reference an entry from `openclaw.json` with the `store` source:
 

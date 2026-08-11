@@ -101,7 +101,6 @@ export async function handleCodexAppServerApprovalRequest(params: {
     });
     return buildApprovalResponse(params.method, context.requestParams, outcome);
   };
-
   try {
     const policyOutcome = await runOpenClawToolPolicyForApprovalRequest({
       method: params.method,

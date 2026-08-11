@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
@@ -18,6 +19,7 @@ import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import { resetTaskRegistryForTests } from "../../../tasks/task-runtime.test-helpers.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import { SubagentLifecycleController } from "../registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
@@ -33,6 +35,8 @@ import {
 
 const resumeSubagentRun = vi.hoisted(() => vi.fn());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const discardTerminalDelivery = (entry: SubagentRunRecord, completedAt: number) =>
+  SubagentLifecycleController.discardTerminalDelivery(entry, completedAt);
 
 vi.mock("../registry/subagent-registry.js", () => ({ resumeSubagentRun }));
 
@@ -373,6 +377,12 @@ describe("atomic subagent completion admission store", () => {
       });
 
       const cappedSubagent = structuredClone(subagentRuns.get(input.subagent.runId)!);
+      const attachmentsRootDir = path.join(tempDir, "attachments");
+      const attachmentsDir = path.join(attachmentsRootDir, "completion-run");
+      await fs.mkdir(attachmentsDir, { recursive: true });
+      await fs.writeFile(path.join(attachmentsDir, "result.txt"), "retained result");
+      cappedSubagent.attachmentsRootDir = attachmentsRootDir;
+      cappedSubagent.attachmentsDir = attachmentsDir;
       Object.assign(cappedSubagent.delivery!, {
         status: "suspended",
         generation: 10,
@@ -400,8 +410,43 @@ describe("atomic subagent completion admission store", () => {
         reason: "completion delivery redrive limit reached",
       });
       expect(resumeSubagentRun).not.toHaveBeenCalled();
+      const discardInsideTransaction = vi.fn((entry: SubagentRunRecord, completedAt: number) => {
+        expect(database.db.isTransaction).toBe(true);
+        discardTerminalDelivery(entry, completedAt);
+      });
+      database.db.exec(`
+        CREATE TRIGGER fail_dismissed_task_persist
+        BEFORE UPDATE ON task_runs
+        BEGIN
+          SELECT RAISE(ABORT, 'injected dismissal persistence failure');
+        END;
+      `);
 
-      const dismissed = dismissSubagentCompletionDelivery(input.task.taskId);
+      await expect(
+        dismissSubagentCompletionDelivery(input.task.taskId, {
+          discardTerminalDelivery: discardInsideTransaction,
+          databaseOptions: { database },
+        }),
+      ).rejects.toThrow("injected dismissal persistence failure");
+      expect(subagentRuns.get(input.subagent.runId)?.delivery?.status).toBe("suspended");
+      expect(getTaskById(input.task.taskId)?.deliveryStatus).toBe("failed");
+      const rolledBackSubagent = database.db
+        .prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
+        .get(input.subagent.runId) as { payload_json: string };
+      expect(JSON.parse(rolledBackSubagent.payload_json).delivery.status).toBe("suspended");
+      const rolledBackTask = database.db
+        .prepare("SELECT delivery_status FROM task_runs WHERE task_id = ?")
+        .get(input.task.taskId) as { delivery_status: string };
+      expect(rolledBackTask.delivery_status).toBe("failed");
+      await expect(fs.stat(attachmentsDir)).resolves.toBeDefined();
+      database.db.exec("DROP TRIGGER fail_dismissed_task_persist");
+
+      const dismissed = await dismissSubagentCompletionDelivery(input.task.taskId, {
+        discardTerminalDelivery: discardInsideTransaction,
+        databaseOptions: { database },
+      });
+      expect(discardInsideTransaction).toHaveBeenCalledTimes(2);
+      await expect(fs.stat(attachmentsDir)).rejects.toMatchObject({ code: "ENOENT" });
       expect(dismissed).toMatchObject({
         ok: true,
         task: {
@@ -413,7 +458,11 @@ describe("atomic subagent completion admission store", () => {
       expect(subagentRuns.get(input.subagent.runId)?.delivery).toMatchObject({
         status: "discarded",
         disposition: "intentional_non_delivery",
+        payload: undefined,
+        suspendedAt: undefined,
+        suspendedReason: undefined,
       });
+      expect(subagentRuns.get(input.subagent.runId)?.cleanupCompletedAt).toBeTypeOf("number");
 
       resetTaskRegistryForTests({ persist: false });
       subagentRuns.clear();
@@ -426,6 +475,15 @@ describe("atomic subagent completion admission store", () => {
         terminalOutcome: "blocked",
         progressSummary: "canonical result",
       });
+      expect(subagentRuns.get(input.subagent.runId)).toMatchObject({
+        cleanupHandled: true,
+        cleanupCompletedAt: expect.any(Number),
+        delivery: {
+          status: "discarded",
+          disposition: "intentional_non_delivery",
+        },
+      });
+      expect(subagentRuns.get(input.subagent.runId)?.delivery).not.toHaveProperty("payload");
     });
   });
 });

@@ -237,6 +237,10 @@ export type ReplyPayloadMetadata = {
   assistantTranscriptMediaUrls?: string[];
   /** The runtime owns the transcript decision for this assistant payload. */
   assistantTranscriptOwned?: boolean;
+  /** Exact channel/account transform owner that already accepted this payload. */
+  channelReplyTransformOwner?: object;
+  /** Exact dispatcher that already ran its full normalization before side effects. */
+  replyDispatcherNormalizationOwner?: object;
   /** Exact key for replacing a runtime-owned assistant row after media materialization. */
   assistantTranscriptIdempotencyKey?: string;
   /** Foreground freshness prevented a visible final after transcript persistence. */

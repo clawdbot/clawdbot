@@ -115,7 +115,42 @@ function backfillLegacyManagedImageRoots(db: DatabaseSync): void {
   }
 }
 
+function ensureWorkerSessionToolStateSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS worker_turn_tool_authorities (
+      session_id TEXT NOT NULL PRIMARY KEY,
+      environment_id TEXT NOT NULL,
+      owner_epoch INTEGER NOT NULL CHECK (owner_epoch >= 1),
+      placement_generation INTEGER NOT NULL CHECK (placement_generation >= 0),
+      claim_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      tool_names_json TEXT NOT NULL,
+      updated_at_ms INTEGER NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
+    ) STRICT;
+
+    CREATE TABLE IF NOT EXISTS worker_session_tool_operations (
+      source_session_id TEXT NOT NULL,
+      source_claim_id TEXT NOT NULL,
+      tool_call_id TEXT NOT NULL,
+      tool_name TEXT NOT NULL CHECK (tool_name IN ('sessions_spawn', 'sessions_send')),
+      request_digest TEXT NOT NULL,
+      operation_seed TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'unknown')),
+      child_session_key TEXT,
+      result_json TEXT,
+      gateway_instance_id TEXT NOT NULL,
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (source_session_id, source_claim_id, tool_call_id),
+      FOREIGN KEY (source_session_id)
+        REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
+    ) STRICT;
+  `);
+}
+
 export function ensureAdditiveStateColumns(db: DatabaseSync): void {
+  ensureWorkerSessionToolStateSchema(db);
   for (const { columnName, dataType, tableName } of CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
     ensureColumn(db, tableName, `${columnName} ${dataType}`);
   }

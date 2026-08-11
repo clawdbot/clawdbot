@@ -1,4 +1,5 @@
 // API baseline helpers render public SDK exports for contract drift checks.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -349,35 +350,29 @@ function buildModuleSurface(params: {
   };
 }
 
+function sha256(content: string): string {
+  return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
 function buildJsonlLines(baseline: PluginSdkApiBaseline): string[] {
-  const lines: string[] = [];
-
-  for (const moduleSurface of baseline.modules) {
-    lines.push(
-      JSON.stringify({
-        category: moduleSurface.category,
-        entrypoint: moduleSurface.entrypoint,
-        importSpecifier: moduleSurface.importSpecifier,
-        recordType: "module",
-      }),
-    );
-
-    for (const exportSurface of moduleSurface.exports) {
-      lines.push(
-        JSON.stringify({
-          closureHash: exportSurface.closureHash,
-          declaration: exportSurface.declaration,
-          entrypoint: moduleSurface.entrypoint,
-          exportName: exportSurface.exportName,
-          importSpecifier: moduleSurface.importSpecifier,
-          kind: exportSurface.kind,
-          recordType: "export",
-        }),
-      );
-    }
-  }
-
-  return lines;
+  return baseline.modules.map((moduleSurface) => {
+    const contractSurface = {
+      category: moduleSurface.category,
+      entrypoint: moduleSurface.entrypoint,
+      exports: moduleSurface.exports.map((exportSurface) => ({
+        closureHash: exportSurface.closureHash,
+        declaration: exportSurface.declaration,
+        exportName: exportSurface.exportName,
+        kind: exportSurface.kind,
+      })),
+      importSpecifier: moduleSurface.importSpecifier,
+    };
+    return JSON.stringify({
+      contentHash: sha256(JSON.stringify(contractSurface)),
+      entrypoint: moduleSurface.entrypoint,
+      importSpecifier: moduleSurface.importSpecifier,
+    });
+  });
 }
 
 /** Render the current public SDK API baseline without writing generated artifacts. */

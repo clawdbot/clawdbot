@@ -38,9 +38,8 @@ import {
   type TelegramInputRichMessage,
 } from "./rich-message.js";
 import {
-  buildTelegramPlainFallbackPlan,
-  isTelegramHtmlParseError,
   splitTelegramPlainTextChunks,
+  withTelegramPlainFallback,
   warnTelegramRichBlocksDegradations,
 } from "./rich-plain-fallback.js";
 
@@ -383,38 +382,36 @@ export function createTelegramDraftStream(params: {
     sendMessageParams: ReturnType<typeof reserveReplyTargetForSend>,
   ) => {
     if (page.richMessage) {
+      const richMessage = page.richMessage;
       warnTelegramRichBlocksDegradations({
         context: "stream preview",
         reasons: page.degradationReasons ?? [],
         warn: (message) => params.warn?.(message),
       });
-      try {
-        return {
+      return await withTelegramPlainFallback<{
+        message: Message;
+        snapshot: TelegramDraftMessageSnapshot;
+      }>({
+        kind: "rich",
+        context: "stream preview",
+        plainText: page.text,
+        warn: (message) => params.warn?.(message),
+        sendFormatted: async () => ({
           message: await getTelegramRichRawApi(params.api).sendRichMessage({
             chat_id: chatId,
-            rich_message: page.richMessage,
+            rich_message: richMessage,
             ...sendMessageParams,
           }),
           snapshot: page,
-        };
-      } catch (err) {
-        const fallbackPlan = buildTelegramPlainFallbackPlan({
-          plainText: page.text,
-          err,
-          context: "stream preview",
-          warn: (message) => params.warn?.(message),
-        });
-        if (!fallbackPlan) {
-          throw err;
-        }
-        return {
-          message: await params.api.sendMessage(chatId, fallbackPlan.plainText, {
+        }),
+        sendPlain: async (plan) => ({
+          message: await params.api.sendMessage(chatId, plan.plainText, {
             ...sendMessageParams,
             ...linkPreviewParams,
           }),
-          snapshot: fallbackSnapshot(fallbackPlan.plainText),
-        };
-      }
+          snapshot: fallbackSnapshot(plan.plainText),
+        }),
+      });
     }
     if (page.sourceTextMode !== "html") {
       return {
@@ -425,27 +422,30 @@ export function createTelegramDraftStream(params: {
         snapshot: page,
       };
     }
-    try {
-      return {
+    return await withTelegramPlainFallback<{
+      message: Message;
+      snapshot: TelegramDraftMessageSnapshot;
+    }>({
+      kind: "html",
+      context: "stream preview",
+      plainText: page.text,
+      warn: (message) => params.warn?.(message),
+      sendFormatted: async () => ({
         message: await params.api.sendMessage(chatId, page.sourceText, {
           parse_mode: "HTML" as const,
           ...sendMessageParams,
           ...linkPreviewParams,
         }),
         snapshot: page,
-      };
-    } catch (err) {
-      if (!isTelegramHtmlParseError(err)) {
-        throw err;
-      }
-      return {
-        message: await params.api.sendMessage(chatId, page.text, {
+      }),
+      sendPlain: async (plan) => ({
+        message: await params.api.sendMessage(chatId, plan.plainText, {
           ...sendMessageParams,
           ...linkPreviewParams,
         }),
-        snapshot: fallbackSnapshot(page.text),
-      };
-    }
+        snapshot: fallbackSnapshot(plan.plainText),
+      }),
+    });
   };
   const sendMessageTransportPreview = async (
     page: PlannedTelegramDraftPage,
@@ -460,42 +460,47 @@ export function createTelegramDraftStream(params: {
       streamVisibleSinceMs ??= Date.now();
       let acceptedSnapshot: TelegramDraftMessageSnapshot = page;
       if (page.richMessage) {
+        const richMessage = page.richMessage;
         warnTelegramRichBlocksDegradations({
           context: "stream preview edit",
           reasons: page.degradationReasons ?? [],
           warn: (message) => params.warn?.(message),
         });
-        try {
-          await getTelegramRichRawApi(params.api).editMessageText({
-            chat_id: chatId,
-            message_id: targetMessageId,
-            rich_message: page.richMessage,
-          });
-        } catch (err) {
-          const fallbackPlan = buildTelegramPlainFallbackPlan({
-            plainText: page.text,
-            err,
-            context: "stream preview edit",
-            warn: (message) => params.warn?.(message),
-          });
-          if (!fallbackPlan) {
-            throw err;
-          }
-          await editMessageTextWithPreview(targetMessageId, fallbackPlan.plainText);
-          acceptedSnapshot = fallbackSnapshot(fallbackPlan.plainText);
-        }
+        acceptedSnapshot = await withTelegramPlainFallback<TelegramDraftMessageSnapshot>({
+          kind: "rich",
+          context: "stream preview edit",
+          plainText: page.text,
+          warn: (message) => params.warn?.(message),
+          sendFormatted: async () => {
+            await getTelegramRichRawApi(params.api).editMessageText({
+              chat_id: chatId,
+              message_id: targetMessageId,
+              rich_message: richMessage,
+            });
+            return page;
+          },
+          sendPlain: async (plan) => {
+            await editMessageTextWithPreview(targetMessageId, plan.plainText);
+            return fallbackSnapshot(plan.plainText);
+          },
+        });
       } else if (page.sourceTextMode === "html") {
-        try {
-          await editMessageTextWithPreview(targetMessageId, page.sourceText, {
-            parse_mode: "HTML" as const,
-          });
-        } catch (err) {
-          if (!isTelegramHtmlParseError(err)) {
-            throw err;
-          }
-          await editMessageTextWithPreview(targetMessageId, page.text);
-          acceptedSnapshot = fallbackSnapshot(page.text);
-        }
+        acceptedSnapshot = await withTelegramPlainFallback<TelegramDraftMessageSnapshot>({
+          kind: "html",
+          context: "stream preview edit",
+          plainText: page.text,
+          warn: (message) => params.warn?.(message),
+          sendFormatted: async () => {
+            await editMessageTextWithPreview(targetMessageId, page.sourceText, {
+              parse_mode: "HTML" as const,
+            });
+            return page;
+          },
+          sendPlain: async (plan) => {
+            await editMessageTextWithPreview(targetMessageId, plan.plainText);
+            return fallbackSnapshot(plan.plainText);
+          },
+        });
       } else {
         await editMessageTextWithPreview(targetMessageId, page.sourceText);
       }

@@ -201,15 +201,33 @@ describe("detectChangedScope Windows routing", () => {
     }
   });
 
-  it("routes MCP environment resolution and native doctor coverage to Windows", () => {
-    for (const mcpPath of [
+  it("routes child environment resolution and native doctor coverage to Windows", () => {
+    for (const envPath of [
+      "src/agents/provider-local-service.ts",
+      "src/agents/provider-local-service.env-case.test.ts",
       "src/cli/mcp-cli.ts",
       "src/cli/mcp-cli.test.ts",
       "src/cli/mcp-cli.path-case.windows.test.ts",
       "src/infra/process-env.ts",
       "src/infra/process-env.test.ts",
     ]) {
-      expect(detectChangedScope([mcpPath]), mcpPath).toMatchObject({
+      expect(detectChangedScope([envPath]), envPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
+  it("routes explicit memory extra-file owners and native coverage to Windows", () => {
+    for (const memoryPath of [
+      "packages/memory-host-sdk/src/host/explicit-extra-markdown.ts",
+      "packages/memory-host-sdk/src/host/internal.ts",
+      "packages/memory-host-sdk/src/host/internal.test.ts",
+      "packages/memory-host-sdk/src/host/read-file.ts",
+      "extensions/memory-core/src/cli-runtime-common.ts",
+      "extensions/memory-core/src/memory-extra-file-path.windows.test.ts",
+    ]) {
+      expect(detectChangedScope([memoryPath]), memoryPath).toMatchObject({
         runNode: true,
         runWindows: true,
       });

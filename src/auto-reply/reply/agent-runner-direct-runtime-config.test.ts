@@ -120,7 +120,11 @@ function createTelegramSessionCtx(): TemplateContext {
   } as unknown as TemplateContext;
 }
 
-function createReplyOperation(): ReplyOperation {
+type TestReplyOperation = ReplyOperation & {
+  setPhase: ReturnType<typeof vi.fn<ReplyOperation["setPhase"]>>;
+};
+
+function createReplyOperation(): TestReplyOperation {
   let sessionId = "session-1";
   return {
     key: "test",
@@ -333,13 +337,15 @@ describe("runReplyAgent runtime config", () => {
     expect(memoryCall.runtimePolicySessionKey).toBe(runtimePolicySessionKey);
   });
 
-  it("continues the main reply when memory flush reports visible maintenance errors", async () => {
+  it("continues the main reply after a recorded memory-flush failure", async () => {
     const { replyParams } = createDirectRuntimeReplyParams({
       shouldFollowup: false,
       isActive: false,
     });
     const onBlockReply = vi.fn();
+    const replyOperation = createReplyOperation();
     replyParams.opts = { sourceReplyDeliveryMode: "message_tool_only", onBlockReply };
+    replyParams.replyOperation = replyOperation;
     resolveQueuedReplyExecutionConfigMock.mockResolvedValue({
       ...freshCfg,
       agents: { defaults: { compaction: { notifyUser: true } } },
@@ -347,13 +353,12 @@ describe("runReplyAgent runtime config", () => {
     runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
     runMemoryFlushIfNeededMock.mockImplementation(
       async (params: {
+        replyOperation: ReplyOperation;
         onVisibleErrorPayloads?: (payloads: Array<{ text?: string; isError?: boolean }>) => void;
       }) => {
+        params.replyOperation.setPhase("memory_flushing");
         params.onVisibleErrorPayloads?.([
-          {
-            text: "⚠️ write failed: Memory flush writes are restricted to memory/2023-11-14.md; use that path only.",
-            isError: true,
-          },
+          { text: "⚠️ memory flush preparation failed", isError: true },
         ]);
         return { sessionEntry: undefined, outcome: "failed" };
       },
@@ -364,6 +369,7 @@ describe("runReplyAgent runtime config", () => {
     expect(result).toEqual({ text: "main reply" });
     expect(onBlockReply).not.toHaveBeenCalled();
     expect(executeAgentTurnMock).toHaveBeenCalledOnce();
+    expect(replyOperation.setPhase).toHaveBeenLastCalledWith("running");
   });
 
   it("rotates, rebinds, and optionally notifies when memory flush is exhausted", async () => {

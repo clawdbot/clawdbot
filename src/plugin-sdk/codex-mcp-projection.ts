@@ -13,7 +13,10 @@ export {
   buildCodexUserMcpServersThreadConfigPatchForRuntime,
   resolveCodexMcpToolOverridesForAgent,
 } from "../agents/cli-runner/bundle-mcp-codex.js";
-export { runWithCronCreatorAuthorityResolver } from "../agents/cron-creator-authority-context.js";
+export {
+  runWithCronCreatorAuthorityCapabilityResolver,
+  runWithCronCreatorAuthorityResolver,
+} from "../agents/cron-creator-authority-context.js";
 
 /** Materialize static configured MCP under a scheduled Codex authority envelope. */
 export async function materializeStaticMcpToolsForScheduledHarnessRun(

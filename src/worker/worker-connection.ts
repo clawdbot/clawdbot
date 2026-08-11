@@ -7,6 +7,10 @@ import type {
   WorkerLiveEventParams,
   WorkerLiveEventResponseFrame,
   WorkerProtocolCloseReason,
+  WorkerSessionsSendParams,
+  WorkerSessionsSendResponseFrame,
+  WorkerSessionsSpawnParams,
+  WorkerSessionsSpawnResponseFrame,
   WorkerTranscriptCommitParams,
   WorkerTranscriptCommitResponseFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
@@ -57,6 +61,8 @@ const DEFAULT_RECONNECT_BACKOFF: BackoffPolicy = {
 const DEFAULT_ADMISSION_TIMEOUT_MS = DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
 const DEFAULT_ADMISSION_DEADLINE_MS = 120_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const WORKER_SESSION_SPAWN_TIMEOUT_MS = 15 * 60_000;
+const WORKER_SESSION_SEND_TIMEOUT_SLACK_MS = 60_000;
 
 type ReadyWaiter = {
   resolve: (hello: WorkerHelloOk) => void;
@@ -194,6 +200,41 @@ export class WorkerConnection {
 
   requestLiveEvent(params: WorkerLiveEventParams): Promise<WorkerLiveEventResponseFrame> {
     return this.frames.request("live-event", params);
+  }
+
+  requestSessionsSpawn(
+    params: WorkerSessionsSpawnParams,
+  ): Promise<WorkerSessionsSpawnResponseFrame> {
+    const timeoutMs = Math.max(this.requestTimeoutMs, WORKER_SESSION_SPAWN_TIMEOUT_MS);
+    return this.requestDurableSessionOperation(() =>
+      this.frames.request("sessions-spawn", params, undefined, timeoutMs),
+    );
+  }
+
+  requestSessionsSend(params: WorkerSessionsSendParams): Promise<WorkerSessionsSendResponseFrame> {
+    const requestedTimeoutMs =
+      (params.timeoutSeconds ?? 30) * 1_000 + WORKER_SESSION_SEND_TIMEOUT_SLACK_MS;
+    const timeoutMs = Math.max(this.requestTimeoutMs, requestedTimeoutMs);
+    return this.requestDurableSessionOperation(() =>
+      this.frames.request("sessions-send", params, undefined, timeoutMs),
+    );
+  }
+
+  private async requestDurableSessionOperation<T>(request: () => Promise<T>): Promise<T> {
+    for (;;) {
+      try {
+        return await request();
+      } catch (error) {
+        if (!(error instanceof WorkerConnectionInterruptedError) || this.isTerminal()) {
+          throw error;
+        }
+        // The Gateway durably coordinates these calls by toolCallId. Reconnect
+        // and replay the identical request until a response arrives or the
+        // credential/connection is terminal; transient reconnects cannot invent
+        // a second operation.
+        await this.waitForReady();
+      }
+    }
   }
 
   requestInferenceStart(

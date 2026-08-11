@@ -29,10 +29,19 @@ function cancelReaderSoon(reader) {
 
 function parseContentLengthHeader(headers) {
   const raw = headers.get("content-length");
-  if (!raw || !/^\d+$/u.test(raw)) {
+  if (!raw) {
     return undefined;
   }
-  const parsed = Number(raw);
+  // This is post-framing early rejection, not framing validation.
+  const values = raw.split(",").map((value) => value.trim());
+  if (values.some((value) => !/^\d+$/u.test(value))) {
+    return undefined;
+  }
+  const canonical = values.map((value) => value.replace(/^0+(?=\d)/u, ""));
+  if (canonical.some((value) => value !== canonical[0])) {
+    return undefined;
+  }
+  const parsed = Number(canonical[0]);
   return Number.isSafeInteger(parsed) ? parsed : Number.POSITIVE_INFINITY;
 }
 

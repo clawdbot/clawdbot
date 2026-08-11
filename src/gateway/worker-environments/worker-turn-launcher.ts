@@ -99,7 +99,7 @@ async function executeLocalTurn<T>(params: {
   try {
     return await params.runLocal();
   } finally {
-    releaseClaimIfOwned(params.placements, turnClaim);
+    await releaseClaimIfOwned(params.placements, turnClaim);
   }
 }
 
@@ -134,7 +134,7 @@ async function failHandedOffTurn(params: {
   if (draining.state !== "draining") {
     return;
   }
-  releaseClaimIfOwned(params.placements, params.turnClaim);
+  await releaseClaimIfOwned(params.placements, params.turnClaim);
   try {
     await params.environments.stopTunnel(
       params.placement.environmentId,
@@ -313,6 +313,7 @@ async function executeWorkerTurn(params: {
     modelRef,
     turn,
   });
+  params.placements.authorizeWorkerTurnTools(params.turnClaim, toolAuthority.allowedToolNames);
   const { operationalRunInstance, runtimeIdentity } = await prepareWorkerAgentRuntimeIdentity({
     agentId: placement.agentId,
     runtimeInstanceId: placement.environmentId,
@@ -688,12 +689,12 @@ export function createWorkerSessionTurnPlacementProvider(
         if (error instanceof WorkerWorkspaceReconciliationError && !handedOff) {
           // Recovery runs before remote launch. Preserve the journal's active
           // generation; only the new admission claim belongs to this attempt.
-          releaseClaimIfOwned(options.placements, turnClaim);
+          await releaseClaimIfOwned(options.placements, turnClaim);
           throw error;
         }
         if (error instanceof WorkerTurnExecutionError) {
           if (options.placements.validateTurnClaim(turnClaim)) {
-            options.placements.releaseTurn(turnClaim);
+            await releaseClaimIfOwned(options.placements, turnClaim);
             throw error;
           }
           const settledPlacement = options.placements.get(turnClaim.sessionId);
@@ -717,7 +718,7 @@ export function createWorkerSessionTurnPlacementProvider(
             error,
           });
         } else {
-          releaseClaimIfOwned(options.placements, turnClaim);
+          await releaseClaimIfOwned(options.placements, turnClaim);
         }
         throw error;
       }

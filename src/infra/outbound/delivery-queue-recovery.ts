@@ -1213,7 +1213,7 @@ async function drainQueuedEntry(opts: {
   }
 }
 
-export async function drainPendingDeliveries(opts: {
+export async function drainPendingDeliveriesCore(opts: {
   drainKey: string;
   logLabel: string;
   cfg: OpenClawConfig;

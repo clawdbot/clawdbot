@@ -57,6 +57,7 @@ import {
   extractAssistantVisibleText,
   sanitizeAssistantVisibleStreamText,
 } from "../../embedded-agent-utils.js";
+import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 import { buildSourceReplyPayloadState } from "./source-reply-payloads.js";
@@ -523,6 +524,7 @@ export function buildEmbeddedRunPayloads(params: {
   isHeartbeatTrigger?: boolean;
   sessionKey: string;
   provider?: string;
+  providerOwner?: PreparedProviderFailoverOwner;
   model?: string;
   /** Credential auth mode for billing copy (#80877). */
   authMode?: string;
@@ -605,6 +607,7 @@ export function buildEmbeddedRunPayloads(params: {
               cfg: params.config,
               sessionKey: params.sessionKey,
               provider: params.provider,
+              providerOwner: params.providerOwner,
               model: params.model,
               authMode: params.authMode,
             })
@@ -612,6 +615,7 @@ export function buildEmbeddedRunPayloads(params: {
               cfg: params.config,
               sessionKey: params.sessionKey,
               provider: params.provider,
+              providerOwner: params.providerOwner,
               model: params.model,
               authMode: params.authMode,
             })

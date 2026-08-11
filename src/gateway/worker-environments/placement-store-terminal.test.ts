@@ -173,6 +173,51 @@ describe("worker placement terminal persistence", () => {
     expect(reopened?.terminalReason).toBe(failed.terminalReason);
   });
 
+  it("does not fail a pending result while its session operation is running", () => {
+    advanceToActive();
+    const { active, claim, pending } = pendingResult();
+    const binding = {
+      sessionId: claim.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      runId: claim.runId,
+    };
+    store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    expect(
+      store.beginWorkerSessionToolOperation({
+        binding,
+        toolName: "sessions_send",
+        toolCallId: "call-pending-send",
+        requestDigest: "digest-pending-send",
+      }),
+    ).toMatchObject({ kind: "execute" });
+
+    expect(() =>
+      store.failWorkspaceResultAndReleaseTurn(pending, new Error("worker disappeared")),
+    ).toThrow("running worker session operation");
+    expect(store.get(claim.sessionId)).toMatchObject({
+      state: "active",
+      turnClaim: { claimId: claim.claimId },
+    });
+    expect(store.listPendingWorkspaceResults()).toMatchObject([
+      { sessionId: claim.sessionId, claimId: claim.claimId },
+    ]);
+
+    expect(
+      store.completeWorkerSessionToolOperation({
+        sourceSessionId: claim.sessionId,
+        sourceClaimId: claim.claimId,
+        toolCallId: "call-pending-send",
+        requestDigest: "digest-pending-send",
+        resultJson: '{"status":"ok"}',
+      }),
+    ).toBe(true);
+    expect(
+      store.failWorkspaceResultAndReleaseTurn(pending, new Error("worker disappeared")),
+    ).toMatchObject({ state: "failed", turnClaim: null });
+    expect(store.listPendingWorkspaceResults()).toEqual([]);
+  });
+
   it("does not leak terminal diagnostics between sessions sharing an environment", () => {
     const sharedEnvironmentId = "environment-shared";
     advanceToActive(SESSION, sharedEnvironmentId);

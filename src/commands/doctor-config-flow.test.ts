@@ -2150,6 +2150,40 @@ describe("doctor config flow", () => {
     });
   });
 
+  it("emits warning-only stale channel cleanup without changing config", async () => {
+    const input = {
+      agents: { entries: { ops: { default: true } } },
+      channels: { matrix: { enabled: true } },
+    };
+    const channelDoctor = await import("./doctor/shared/channel-doctor.js");
+    vi.mocked(channelDoctor.collectChannelDoctorStaleConfigMutations).mockResolvedValueOnce([
+      {
+        config: { ...input, channels: { matrix: { enabled: false } } },
+        changes: [],
+        warnings: ["- matrix stale cleanup warning"],
+      },
+    ]);
+    runDoctorRepairSequenceMock.mockImplementation(async (params: { state: unknown }) => ({
+      state: params.state,
+      changeNotes: [],
+      warningNotes: [],
+      authProfilesRepaired: false,
+    }));
+
+    const result = await runDoctorConfigWithInput({
+      config: input,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(terminalNoteMock).toHaveBeenCalledWith(
+      "- matrix stale cleanup warning",
+      "Doctor warnings",
+    );
+    expect(result.cfg).toEqual(input);
+    expect(result.shouldWriteConfig).toBe(false);
+  });
+
   it("previews and repairs hooks token reuse of gateway auth", async () => {
     const config = {
       gateway: {

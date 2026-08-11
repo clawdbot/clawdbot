@@ -5,24 +5,24 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { parseSqliteSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
 
-export type SqliteSessionEntryCacheSnapshot = {
+export type SessionEntryCacheSnapshot = {
   entries: Map<string, SessionEntry>;
   keys: string[];
   listEntries: Pick<ReadonlyMap<string, SessionEntry>, "get">;
 };
 
-type SqliteSessionEntryCache = SqliteSessionEntryCacheSnapshot & {
+type SqliteSessionEntryCache = SessionEntryCacheSnapshot & {
   listProjections: Map<string, SessionEntry>;
   updatedAtByKey: Map<string, number>;
   validityToken: SqliteSessionEntryCacheValidityToken;
 };
 
-type LoadedSessionEntrySnapshot = SqliteSessionEntryCacheSnapshot & {
+type LoadedSessionEntrySnapshot = SessionEntryCacheSnapshot & {
   listProjections: Map<string, SessionEntry>;
   updatedAtByKey: Map<string, number>;
 };
@@ -116,7 +116,7 @@ function cacheValidityTokensEqual(
 }
 
 /** Bracket one accessor-owned row write so its publication cannot hide earlier raw DML. */
-export function trackSqliteSessionEntryCacheWrite(
+export function trackSessionEntryCacheWrite(
   database: OpenClawAgentDatabase,
   write: () => void,
 ): SqliteSessionEntryCacheWriteGeneration | undefined {
@@ -172,7 +172,7 @@ function loadSessionEntrySnapshot(database: SessionEntryCacheDatabase): LoadedSe
   ).rows;
   const entries = new Map<string, SessionEntry>();
   for (const row of rows) {
-    const entry = parseSqliteSessionEntryJson(row);
+    const entry = parseSessionEntryJson(row);
     if (!entry) {
       continue;
     }
@@ -231,7 +231,7 @@ function incrementallyRevalidateSessionEntrySnapshot(
         .where("session_key", "in", changedKeys),
     ).rows;
     for (const row of changedRows) {
-      const entry = parseSqliteSessionEntryJson(row);
+      const entry = parseSessionEntryJson(row);
       if (entry) {
         entries.set(row.session_key, entry);
       }
@@ -247,10 +247,10 @@ function incrementallyRevalidateSessionEntrySnapshot(
   };
 }
 
-export function readSqliteSessionEntryCache(
+export function readSessionEntryCache(
   database: SessionEntryCacheDatabase,
   options: { cache: boolean; latest?: boolean },
-): SqliteSessionEntryCacheSnapshot {
+): SessionEntryCacheSnapshot {
   if (!options.cache || options.latest || database.db.isTransaction) {
     return loadSessionEntrySnapshot(database);
   }
@@ -324,7 +324,7 @@ function publishSqliteSessionEntryCacheUpsert(
   },
   writeGeneration?: SqliteSessionEntryCacheWriteGeneration,
 ): void {
-  const entry = parseSqliteSessionEntryJson({
+  const entry = parseSessionEntryJson({
     current_session_id: row.current_session_id,
     entry_json: row.entry_json,
     updated_at: row.updated_at,
@@ -369,7 +369,7 @@ function publishSqliteSessionEntryCacheUpsert(
   });
 }
 
-export function publishSqliteSessionEntryCacheInvalidation(
+export function publishSessionEntryCacheInvalidation(
   database: OpenClawAgentDatabase,
   row?: {
     current_session_id: string;

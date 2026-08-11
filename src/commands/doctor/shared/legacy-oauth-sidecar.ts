@@ -1,6 +1,6 @@
 // Legacy OAuth sidecar reader for migrating encrypted auth-profile secret material.
 import * as childProcess from "node:child_process";
-import { createCipheriv, createDecipheriv, hash } from "node:crypto";
+import { createDecipheriv, hash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -111,38 +111,6 @@ function buildLegacyOAuthSecretKey(seed: string): Buffer {
   // Legacy #79006 compatibility: existing sidecars were encrypted with this
   // SHA-256 key derivation, so changing it would strand affected users.
   return hash("sha256", `openclaw:auth-profile-oauth:${seed}`, "buffer");
-}
-
-function encryptLegacyOAuthMaterialForTest(params: {
-  ref: LegacyOAuthRef;
-  profileId: string;
-  provider: string;
-  seed: string;
-  material: Record<string, string>;
-}): LegacyOAuthEncryptedPayload {
-  const iv = Buffer.from("0102030405060708090a0b0c", "hex");
-  const cipher = createCipheriv(
-    LEGACY_OAUTH_SECRET_ALGORITHM,
-    buildLegacyOAuthSecretKey(params.seed),
-    iv,
-  );
-  cipher.setAAD(
-    buildLegacyOAuthSecretAad({
-      ref: params.ref,
-      profileId: params.profileId,
-      provider: params.provider,
-    }),
-  );
-  const ciphertext = Buffer.concat([
-    cipher.update(JSON.stringify(params.material), "utf8"),
-    cipher.final(),
-  ]);
-  return {
-    algorithm: LEGACY_OAUTH_SECRET_ALGORITHM,
-    iv: iv.toString("base64url"),
-    tag: cipher.getAuthTag().toString("base64url"),
-    ciphertext: ciphertext.toString("base64url"),
-  };
 }
 
 function uniquePaths(paths: Array<string | undefined>): string[] {
@@ -342,18 +310,6 @@ function emitKeychainOnlyMigrationHintOnce(profileId: string): void {
   );
 }
 
-const legacyOAuthSidecarInternalTestUtils = {
-  resetKeychainOnlyMigrationHint(): void {
-    keychainOnlyMigrationHintEmitted = false;
-  },
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.legacyOAuthSidecarInternalTestApi")
-  ] = legacyOAuthSidecarInternalTestUtils;
-}
-
 export function loadLegacyOAuthSidecarMaterial(params: {
   ref: LegacyOAuthRef;
   profileId: string;
@@ -386,9 +342,3 @@ export function loadLegacyOAuthSidecarMaterial(params: {
   }
   return normalizeLegacyOAuthSecretMaterial(raw);
 }
-
-export const legacyOAuthSidecarTestUtils = {
-  buildLegacyOAuthSecretAad,
-  buildLegacyOAuthSecretKey,
-  encryptLegacyOAuthMaterial: encryptLegacyOAuthMaterialForTest,
-};

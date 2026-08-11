@@ -17,9 +17,9 @@ import {
   type SessionMessageCutMutationResult,
 } from "../../config/sessions/session-accessor.js";
 import {
-  forkSqliteSessionAtMessage as forkSessionAtMessage,
-  rewindSqliteSessionToMessage as rewindSessionToMessage,
-  switchSqliteSessionBranch as switchSessionBranch,
+  forkSessionAtMessage,
+  rewindSessionToMessage,
+  switchSessionBranch,
 } from "../../config/sessions/session-accessor.sqlite-message-cut.js";
 import { MEDIA_MAX_BYTES, readMediaBuffer } from "../../media/store.js";
 import {

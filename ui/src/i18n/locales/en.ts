@@ -4591,6 +4591,8 @@ export const en: TranslationMap = {
       renameAria: "Rename session {title}",
       renameInputAria: "Session title",
       renameInputPlaceholder: "Session title",
+      panels: "Panels",
+      layout: "Layout",
       workspaceAria: "Workspace actions for {workspace}",
       revealFinder: "Reveal in Finder",
       revealFileExplorer: "Reveal in File Explorer",

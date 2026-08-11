@@ -884,9 +884,9 @@ describe("runReplyAgent active steering", () => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     const onAdopted = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
-      expect((await readStoredMainSession(storePath)).restartRecoveryBeforeAgentReplyState).toBe(
-        "admitted",
-      );
+      expect(
+        (await readStoredMainSession(storePath)).restartRecoveryBeforeAgentReplyState,
+      ).toBeUndefined();
       return {
         payloads: [{ text: "final" }],
         meta: { agentMeta: { usage: { input: 1, output: 1 } } },
@@ -2259,7 +2259,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
     state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
       const storedDuringRun = await readStoredMainSession(storePath);
-      expect(storedDuringRun.restartRecoveryBeforeAgentReplyState).toBe("admitted");
+      expect(storedDuringRun.restartRecoveryBeforeAgentReplyState).toBeUndefined();
       expect(storedDuringRun.restartRecoveryDeliveryContext).toBeUndefined();
       expect(storedDuringRun.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
       expect(typeof storedDuringRun.restartRecoveryDeliveryRunId).toBe("string");
@@ -2290,7 +2290,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(sessionStore.main.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
     const stored = await readStoredMainSession(storePath);
     expect(stored.restartRecoveryDeliveryContext).toBeUndefined();
-    expect(stored.restartRecoveryBeforeAgentReplyState).toBe("admitted");
+    expect(stored.restartRecoveryBeforeAgentReplyState).toBeUndefined();
     expect(stored.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
     expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
@@ -2308,7 +2308,6 @@ describe("runReplyAgent pending final delivery capture", () => {
   it("advances a transcript-only admission to pending before running a discovered hook", async () => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
       abortedLastRun: false,
-      restartRecoveryBeforeAgentReplyState: "admitted",
       restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
       restartRecoveryDeliveryRunId: "msg",
       restartRecoveryDeliverySourceRunId: "control-ui-run",
@@ -2329,9 +2328,9 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
       const result = await runHookBackedEmbeddedAgent(params);
-      expect((await readStoredMainSession(storePath)).restartRecoveryBeforeAgentReplyState).toBe(
-        "continue",
-      );
+      expect(
+        (await readStoredMainSession(storePath)).restartRecoveryBeforeAgentReplyState,
+      ).toBeUndefined();
       return result;
     });
 
@@ -2354,42 +2353,9 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
 
-  it("does not rerun a hook after a durable continue checkpoint", async () => {
-    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
-      abortedLastRun: false,
-      restartRecoveryBeforeAgentReplyState: "continue",
-      restartRecoveryDeliveryRunId: "msg",
-      restartRecoveryDeliverySourceRunId: "control-ui-run",
-      restartRecoverySourceIngress: "control-ui",
-      status: "running",
-    });
-    state.beforeAgentReplyHasHooksMock.mockImplementation(
-      (hookName) => hookName === "before_agent_reply",
-    );
-    state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
-    const { run } = createMinimalRun({
-      sessionCtx: {
-        MessageSid: "msg",
-        OriginatingChannel: "webchat",
-        Provider: "webchat",
-      },
-      sourceTurnId: "channel-user:v1:different-from-gateway-run",
-      runOverrides: { messageProvider: "webchat" },
-      sessionEntry,
-      sessionStore,
-      sessionKey: "main",
-      storePath,
-    });
-
-    await expect(run()).resolves.toEqual(expect.objectContaining({ text: "model reply" }));
-
-    expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
-  });
-
   it("does not carry a stale hook checkpoint into a fresh claim", async () => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
-      restartRecoveryBeforeAgentReplyState: "continue",
+      restartRecoveryBeforeAgentReplyState: "handled-reply",
     });
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
@@ -2809,9 +2775,9 @@ describe("runReplyAgent pending final delivery capture", () => {
     state.beforeAgentReplyRunMock.mockResolvedValue(undefined);
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
       const result = await runHookBackedEmbeddedAgent(params);
-      expect((await readStoredMainSession(storePath)).restartRecoveryBeforeAgentReplyState).toBe(
-        "continue",
-      );
+      expect(
+        (await readStoredMainSession(storePath)).restartRecoveryBeforeAgentReplyState,
+      ).toBeUndefined();
       return result;
     });
     const { followupRun, run, sourceTurnId } = createMinimalRun({
@@ -2848,9 +2814,11 @@ describe("runReplyAgent pending final delivery capture", () => {
         intentId: expect.any(String),
         createdAt: expect.any(Number),
       },
-      restartRecoveryBeforeAgentReplyState: "continue",
       restartRecoverySourceIngress: "channel",
     });
+    expect(
+      (await readStoredMainSession(storePath)).restartRecoveryBeforeAgentReplyState,
+    ).toBeUndefined();
   });
 
   it("fires onAdopted for suppressed-delivery runs before the agent turn", async () => {
