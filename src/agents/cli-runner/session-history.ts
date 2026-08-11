@@ -135,7 +135,11 @@ function projectReseedMessage(message: unknown, timestamp: unknown): unknown {
 }
 
 function formatHistoryTimestamp(value: unknown): string | undefined {
-  return timestampMsToIsoString(typeof value === "string" ? Date.parse(value) : value);
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const timestamp = timestampMsToIsoString(Date.parse(value));
+  return timestamp === value ? timestamp : undefined;
 }
 
 function historyEntryToContextEngineMessage(entry: HistoryEntry): AgentMessage | undefined {

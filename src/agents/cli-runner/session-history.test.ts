@@ -30,6 +30,10 @@ function withReseedGuidanceBudget(historyChars: number): number {
   return RESEED_CURRENCY_GUIDANCE.length + "\n".length + historyChars;
 }
 
+function extractReseedHistory(prompt: string | undefined): string {
+  return prompt?.match(/<conversation_history>\n([\s\S]*?)\n<\/conversation_history>/)?.[1] ?? "";
+}
+
 function createSessionTranscript(params: {
   rootDir: string;
   sessionId: string;
@@ -839,11 +843,8 @@ describe("loadCliSessionReseedMessages", () => {
         expect(reseed).toHaveLength(2);
         expectCompactionSummary(reseed[0], "safe compacted summary");
         expectMessageFields(reseed[1], { role: "user", content: "post-compaction ask" });
-        expect(requireRecord(reseed[0], "compaction reseed message").timestamp).toBe(
-          "1970-01-01T00:00:00.002Z",
-        );
-        expect(requireRecord(reseed[1], "post-compaction reseed message").timestamp).toBe(
-          "1970-01-01T00:00:00.003Z",
+        expect(reseed.map((message) => requireRecord(message, "reseed message").timestamp)).toEqual(
+          ["1970-01-01T00:00:00.002Z", "1970-01-01T00:00:00.003Z"],
         );
         const prompt = buildCliSessionHistoryPrompt({ messages: reseed, prompt: "next" });
         expect(prompt).toContain(
@@ -873,20 +874,26 @@ describe("buildCliSessionHistoryPrompt", () => {
     expect(prompt).toContain("<next_user_message>\nnew ask\n</next_user_message>");
   });
 
-  it("renders valid saved timestamps and omits invalid or missing timestamps", () => {
+  it("renders canonical saved timestamps and omits invalid or noncanonical timestamps", () => {
     const prompt = buildCliSessionHistoryPrompt({
       messages: [
-        { role: "user", content: "dated ask", timestamp: "2026-06-17T12:00:00-04:00" },
+        { role: "user", content: "dated ask", timestamp: "2026-06-17T16:00:00.000Z" },
+        { role: "assistant", content: "zero date answer", timestamp: "0" },
+        { role: "user", content: "year-only ask", timestamp: "2026" },
         { role: "assistant", content: "invalid date answer", timestamp: "not-a-date" },
-        { role: "user", content: "undated ask" },
+        { role: "user", content: "offset date ask", timestamp: "2026-06-17T12:00:00-04:00" },
+        { role: "assistant", content: "undated answer" },
       ],
       prompt: "new ask",
     });
 
     expect(prompt).toContain("[2026-06-17T16:00:00.000Z] User: dated ask");
-    expect(prompt).toContain("\nAssistant: invalid date answer");
-    expect(prompt).toContain("\nUser: undated ask");
-    expect(prompt).not.toContain("[not-a-date]");
+    expect(prompt).toMatch(
+      /Assistant: zero date answer[\s\S]*User: year-only ask[\s\S]*Assistant: invalid date answer[\s\S]*User: offset date ask[\s\S]*Assistant: undated answer/u,
+    );
+    expect(prompt).not.toMatch(
+      /\[(?:2000-01-01T00:00:00\.000Z|2026-01-01T00:00:00\.000Z|not-a-date|2026-06-17T12:00:00-04:00)\]/u,
+    );
     expect(prompt).toContain(RESEED_CURRENCY_GUIDANCE);
   });
 
@@ -915,11 +922,7 @@ describe("buildCliSessionHistoryPrompt", () => {
     // Older 100-char prefix must be dropped by the tail slice; the
     // post-cap rendered tail is shorter than the dropped prefix.
     expect(prompt).not.toContain("x".repeat(80));
-    const historyMatch = prompt?.match(
-      /<conversation_history>\n([\s\S]*?)\n<\/conversation_history>/,
-    );
-    const renderedHistory = historyMatch?.[1] ?? "";
-    expect(renderedHistory.length).toBeLessThanOrEqual(maxHistoryChars);
+    expect(extractReseedHistory(prompt).length).toBeLessThanOrEqual(maxHistoryChars);
   });
 
   it("keeps a whole code point when the retained history tail starts inside an emoji", () => {
@@ -998,11 +1001,9 @@ describe("buildCliSessionHistoryPrompt", () => {
     // dropped so the cap is honored.
     expect(prompt).not.toContain("z".repeat(8000));
     expect(prompt).toContain("<next_user_message>\nnext ask\n</next_user_message>");
-    const historyMatch = prompt?.match(
-      /<conversation_history>\n([\s\S]*?)\n<\/conversation_history>/,
+    expect(extractReseedHistory(prompt).length).toBeLessThanOrEqual(
+      MAX_CLI_SESSION_RESEED_HISTORY_CHARS,
     );
-    const renderedHistory = historyMatch?.[1] ?? "";
-    expect(renderedHistory.length).toBeLessThanOrEqual(MAX_CLI_SESSION_RESEED_HISTORY_CHARS);
   });
 
   it("caps oversize compaction summary while preserving recent post-summary tail", () => {
