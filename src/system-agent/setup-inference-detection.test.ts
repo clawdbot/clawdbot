@@ -201,7 +201,7 @@ describe("isolated setup inference detection", () => {
       {
         kind: "openai-api-key",
         brandId: "openai",
-        modelRef: "openai/gpt-5.6",
+        modelRef: "openai/gpt-5.6-sol",
         label: "OpenAI API key",
         detail: "OPENAI_API_KEY set",
         credentials: true,

@@ -68,6 +68,8 @@ import {
   waitForCompactionRetryWithAggregateTimeout,
 } from "./compaction-retry-aggregate-timeout.js";
 import { selectCompactionTimeoutSnapshot } from "./compaction-timeout.js";
+import { materializeProviderContext } from "./images.js";
+import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 /**
@@ -441,6 +443,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
   providerThinkingLevel: ProviderThinkLevel | undefined;
   sessionAgentId: string;
   workspaceDir: string;
+  workspaceOnly: boolean;
   agentDir: string;
   abortSignal: AbortSignal;
   getProviderRuntimeHandle: () => ProviderRuntimePluginHandle;
@@ -496,6 +499,23 @@ export async function prepareEmbeddedAttemptTransport(input: {
     agentDir: input.agentDir,
     workspaceDir: input.workspaceDir,
   });
+  const directProviderStreamFn = providerStreamFn
+    ? wrapStreamFnWithMessageTransform(
+        providerStreamFn,
+        (messages) => messages,
+        ({ context, ...provider }) =>
+          materializeProviderContext({
+            ...provider,
+            context,
+            workspaceDir: input.workspaceDir,
+            workspaceOnly: input.workspaceOnly,
+            sandbox:
+              input.sandbox?.enabled && input.sandbox.fsBridge
+                ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
+                : undefined,
+          }),
+      )
+    : undefined;
   const transportApiKey = await resolveEmbeddedAgentApiKey({
     provider: attempt.model.provider,
     resolvedApiKey: attempt.resolvedApiKey,
@@ -503,13 +523,13 @@ export async function prepareEmbeddedAttemptTransport(input: {
   });
   const streamStrategy = describeEmbeddedAgentStreamStrategy({
     currentStreamFn: defaultSessionStreamFn,
-    providerStreamFn,
+    providerStreamFn: directProviderStreamFn,
     model: attempt.model,
     resolvedApiKey: transportApiKey,
   });
   session.agent.streamFn = resolveEmbeddedAgentStreamFn({
     currentStreamFn: defaultSessionStreamFn,
-    providerStreamFn,
+    providerStreamFn: directProviderStreamFn,
     sessionId: attempt.sessionId,
     promptCacheKey: attempt.promptCacheKey,
     signal: input.abortSignal,

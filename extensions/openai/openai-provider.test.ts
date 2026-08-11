@@ -290,7 +290,7 @@ describe("buildOpenAIProvider", () => {
       groupLabel: "OpenAI",
       groupHint: "ChatGPT/Codex sign-in or API key",
     });
-    expect(apiKey?.starterModel).toBe("openai/gpt-5.6");
+    expect(apiKey?.starterModel).toBe("openai/gpt-5.6-sol");
   });
 
   it("preserves existing model selection during non-interactive API key setup", async () => {
@@ -378,7 +378,7 @@ describe("buildOpenAIProvider", () => {
     }
   });
 
-  it("keeps a network-free OpenAI static catalog", async () => {
+  it("keeps a network-free OpenAI static catalog without the duplicate GPT-5.6 alias", async () => {
     const provider = buildOpenAIProvider();
 
     const result = await provider.staticCatalog?.run({
@@ -406,22 +406,20 @@ describe("buildOpenAIProvider", () => {
       image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
     });
     expect(gpt56Models?.map((model) => model.id)).toEqual([
-      "gpt-5.6",
       "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",
     ]);
     expect(gpt56Models?.map((model) => model.contextWindow)).toEqual([
-      1_050_000, 1_050_000, 1_050_000, 1_050_000,
+      1_050_000, 1_050_000, 1_050_000,
     ]);
     expect(gpt56Models?.map((model) => model.thinkingLevelMap?.off)).toEqual([
       "none",
       "none",
       "none",
-      "none",
     ]);
     expect(gpt56Models?.map((model) => model.compat?.supportedReasoningEfforts)).toEqual(
-      Array.from({ length: 4 }, () => ["none", "low", "medium", "high", "xhigh", "max"]),
+      Array.from({ length: 3 }, () => ["none", "low", "medium", "high", "xhigh", "max"]),
     );
     expect(gpt54Models).toMatchObject([
       {
@@ -461,7 +459,7 @@ describe("buildOpenAIProvider", () => {
         cost: { input: 0.2, output: 1.25, cacheRead: 0.02, cacheWrite: 0 },
       },
     ]);
-    expect(OPENAI_DEFAULT_MODEL).toBe("openai/gpt-5.6");
+    expect(OPENAI_DEFAULT_MODEL).toBe("openai/gpt-5.6-sol");
     expect(OPENAI_CODEX_DEFAULT_MODEL).toBe("openai/gpt-5.6-sol");
   });
 
@@ -570,7 +568,7 @@ describe("buildOpenAIProvider", () => {
     });
 
     expect(provider.apiKey).toBe("sk-openai");
-    expect(provider.models.map((model) => model.id)).toContain("gpt-5.6");
+    expect(provider.models.map((model) => model.id)).not.toContain("gpt-5.6");
     expect(provider.models.map((model) => model.id)).toContain("gpt-5.5");
     expect(provider.models.map((model) => model.id)).toEqual(
       expect.arrayContaining([

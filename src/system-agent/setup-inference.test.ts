@@ -2074,6 +2074,7 @@ describe("activateSetupInference", () => {
 
     const result = await activateSetupInference({
       kind: "openai-api-key",
+      modelRef: "openai/gpt-5.6",
       deps: {
         readConfigFileSnapshot: mockConfigSnapshot(sourceConfig, { runtimeConfig }),
         runEmbeddedAgent: runEmbeddedAgent as never,
@@ -2124,7 +2125,7 @@ describe("activateSetupInference", () => {
     const result = await activateSetupInference({
       kind: "openai-api-key",
       deps: {
-        runEmbeddedAgent: vi.fn(successfulRunner("openai", "gpt-5.6")) as never,
+        runEmbeddedAgent: vi.fn(successfulRunner("openai", "gpt-5.6-sol")) as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
         // The real revalidation throws when the current route owner no longer
         // matches the probe credential (e.g. a Codex-imported OAuth profile
