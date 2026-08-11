@@ -32,7 +32,6 @@ import {
 } from "./subagent-announce.runtime.js";
 import type { SubagentRunOutcome } from "./subagent-run-outcome.js";
 import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
-export type { SubagentRunOutcome } from "./subagent-run-outcome.js";
 
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
 const MAX_CHILD_COMPLETION_RESULT_CHARS = 512;
