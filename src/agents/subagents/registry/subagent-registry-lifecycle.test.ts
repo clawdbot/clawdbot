@@ -3020,13 +3020,14 @@ describe("subagent registry lifecycle hardening", () => {
     expect(entry.collectorCompletion).toEqual({ status: "done" });
   });
 
-  it("retains the registry owner when attachment cleanup fails", async () => {
+  it.each([
+    { path: "non-announcing", expectsCompletionMessage: false },
+    { path: "delivered", expectsCompletionMessage: true },
+  ])("retains the registry owner when $path attachment cleanup fails", async (testCase) => {
     helperMocks.safeRemoveAttachmentsDir.mockResolvedValueOnce(false);
     const entry = createRunEntry({
       cleanup: "delete",
-      expectsCompletionMessage: false,
-      collect: true,
-      groupId: "swarm:test",
+      expectsCompletionMessage: testCase.expectsCompletionMessage,
     });
     const runs = new Map([[entry.runId, entry]]);
     const controller = createLifecycleController({ entry, runs });
