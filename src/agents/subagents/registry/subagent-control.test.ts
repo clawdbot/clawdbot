@@ -244,7 +244,6 @@ beforeEach(() => {
     cleanupBrowserSessionsForLifecycleEnd: async () => {},
     ensureContextEnginesInitialized: () => {},
     loadAgentRuntimePluginRegistryHandle: () => undefined,
-    getSubagentRunsSnapshotForRead: (runs) => new Map(runs),
     persistSubagentRunsToDisk: () => {},
     persistSubagentRunsToDiskOrThrow: () => {},
     restoreSubagentRunsFromDisk: () => 0,
@@ -2140,7 +2139,6 @@ describe("killAllControlledSubagentRuns", () => {
       cleanupBrowserSessionsForLifecycleEnd: async () => {},
       ensureContextEnginesInitialized: () => {},
       loadAgentRuntimePluginRegistryHandle: () => undefined,
-      getSubagentRunsSnapshotForRead: (runs) => new Map(runs),
       persistSubagentRunsToDisk: () => {},
       persistSubagentRunsToDiskOrThrow: () => {
         if (failNextPersistence) {

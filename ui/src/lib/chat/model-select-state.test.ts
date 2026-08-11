@@ -170,7 +170,7 @@ describe("chat-model-select-state", () => {
     expect(resolveChatModelSelectState(state).currentOverride).toBe("deepseek/deepseek-chat");
   });
 
-  it("preserves already-qualified active-session models when the provider is stale and the catalog is empty", () => {
+  it("keeps the active model value but does not synthesize a picker option when the catalog is empty", () => {
     const state = createChatModelState({
       sessionsResult: createSessionsListResult({
         model: "openai/gpt-5-mini",
@@ -180,15 +180,12 @@ describe("chat-model-select-state", () => {
 
     const resolved = resolveChatModelSelectState(state);
     expect(resolved.currentOverride).toBe("openai/gpt-5-mini");
-    expect(resolved.options).toEqual([
-      { value: "openai/gpt-5-mini", label: "gpt-5-mini · openai" },
-      { value: "openai/gpt-5", label: "gpt-5 · openai" },
-    ]);
+    expect(resolved.defaultSelectable).toBe(false);
+    expect(resolved.options).toEqual([]);
   });
 
-  it("does not synthesize configured models when options are restricted to catalog results", () => {
+  it("does not synthesize configured models outside catalog results", () => {
     const state = createChatModelState({
-      restrictOptionsToCatalog: true,
       sessionsResult: createSessionsListResult({
         model: "openai/gpt-5-mini",
         modelProvider: "openai",

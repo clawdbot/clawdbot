@@ -184,7 +184,7 @@ const longChildCompletionOutput = [
   "34/34 tests pass, clean build. Now docker repro:",
   "Root cause: the requester's announce delivery accepted a prefix-only assistant payload as delivered.",
   "PR: https://github.com/openclaw/openclaw/pull/12345",
-  "Verification: pnpm test src/agents/subagent-announce-delivery.test.ts passed with the regression enabled.",
+  "Verification: pnpm test src/agents/subagents/announce/subagent-announce-delivery.test.ts passed with the regression enabled.",
 ].join("\n");
 
 const committedSessionSpawnEvidence = {

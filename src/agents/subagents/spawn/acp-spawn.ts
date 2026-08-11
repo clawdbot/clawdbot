@@ -95,12 +95,9 @@ import { callSubagentGateway, readGatewayRunId } from "./subagent-spawn-gateway.
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-plan.js";
 
-export const ACP_SPAWN_MODES = ["run", "session"] as const;
-type SpawnAcpMode = (typeof ACP_SPAWN_MODES)[number];
-const ACP_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
-export type SpawnAcpSandboxMode = (typeof ACP_SPAWN_SANDBOX_MODES)[number];
-export const ACP_SPAWN_STREAM_TARGETS = ["parent"] as const;
-type SpawnAcpStreamTarget = (typeof ACP_SPAWN_STREAM_TARGETS)[number];
+type SpawnAcpMode = "run" | "session";
+type SpawnAcpSandboxMode = "inherit" | "require";
+type SpawnAcpStreamTarget = "parent";
 
 type SpawnAcpParams = {
   task: string;
@@ -121,7 +118,7 @@ type SpawnAcpParams = {
   attachments?: AcpTurnAttachment[];
 };
 
-export type SpawnAcpContext = {
+type SpawnAcpContext = {
   agentSessionKey?: string;
   requesterTurnRunId?: string;
   completionOwnerKey?: string;
@@ -183,11 +180,7 @@ type SpawnAcpFailedResult = SpawnAcpResultFields & {
   errorCode: SpawnAcpErrorCode;
 };
 
-export type SpawnAcpResult = SpawnAcpAcceptedResult | SpawnAcpFailedResult;
-
-export function isSpawnAcpAcceptedResult(result: SpawnAcpResult): result is SpawnAcpAcceptedResult {
-  return result.status === "accepted";
-}
+type SpawnAcpResult = SpawnAcpAcceptedResult | SpawnAcpFailedResult;
 
 const ACP_SPAWN_ACCEPTED_NOTE =
   "initial ACP task queued in isolated session; follow-ups continue in the bound thread.";
