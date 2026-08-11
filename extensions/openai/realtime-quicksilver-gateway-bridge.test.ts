@@ -602,7 +602,7 @@ describe("GPT-Live gateway relay bridge", () => {
     const onClose = vi.fn();
     const bridge = new OpenAIQuicksilverGatewayBridge({
       providerConfig: {},
-      model: "gpt-live-1-codex",
+      model: "gpt-live-1-boulder-alpha",
       voice: "marin",
       audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
       onAudio: vi.fn(),
@@ -612,9 +612,8 @@ describe("GPT-Live gateway relay bridge", () => {
       runAgentConsult: vi.fn(async () => ({ text: "done" })),
       logger: { debug: vi.fn(), warn: vi.fn() },
       resolveAuth: vi.fn(async () => ({
-        type: "oauth" as const,
-        token: "oauth-token",
-        accountId: "account-1",
+        type: "api-key" as const,
+        token: "platform-key",
       })),
       createPeer: vi.fn((callbacks) => {
         peerCallbacks = callbacks;
@@ -803,7 +802,7 @@ describe("GPT-Live gateway relay bridge", () => {
     const closePeer = vi.fn();
     const bridge = new OpenAIQuicksilverGatewayBridge({
       providerConfig: {},
-      model: "gpt-live-1-codex",
+      model: "gpt-live-1-boulder-alpha",
       voice: "marin",
       audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
       onAudio: vi.fn(),
@@ -811,9 +810,8 @@ describe("GPT-Live gateway relay bridge", () => {
       runAgentConsult: vi.fn(async () => ({ text: "done" })),
       logger: { debug: vi.fn(), warn: vi.fn() },
       resolveAuth: vi.fn(async () => ({
-        type: "oauth" as const,
-        token: "oauth-token",
-        accountId: "account-1",
+        type: "api-key" as const,
+        token: "platform-key",
       })),
       createPeer: vi.fn(() => peerPromise),
       connectTimeoutMs: 5,
@@ -861,7 +859,7 @@ describe("GPT-Live gateway relay bridge", () => {
     const onClose = vi.fn();
     const bridge = new OpenAIQuicksilverGatewayBridge({
       providerConfig: {},
-      model: "gpt-live-1-codex",
+      model: "gpt-live-1-boulder-alpha",
       voice: "marin",
       instructions: "Speak briefly.",
       audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
@@ -873,9 +871,8 @@ describe("GPT-Live gateway relay bridge", () => {
       runAgentConsult,
       logger: { debug: vi.fn(), warn: vi.fn() },
       resolveAuth: vi.fn(async () => ({
-        type: "oauth" as const,
-        token: "oauth-token",
-        accountId: "account-1",
+        type: "api-key" as const,
+        token: "platform-key",
       })),
       createPeer: vi.fn(async () => peer),
       fetchImpl: vi.fn(async () => createCallResponse("v=answer\r\n", "rtc_bridge")),
@@ -937,7 +934,7 @@ describe("GPT-Live gateway relay bridge", () => {
     const onError = vi.fn();
     const bridge = new OpenAIQuicksilverGatewayBridge({
       providerConfig: {},
-      model: "gpt-live-1-codex",
+      model: "gpt-live-1-boulder-alpha",
       voice: "marin",
       audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
       onAudio: vi.fn(),
@@ -947,9 +944,8 @@ describe("GPT-Live gateway relay bridge", () => {
       runAgentConsult: vi.fn(async () => ({ text: "done" })),
       logger: { debug: vi.fn(), warn: vi.fn() },
       resolveAuth: vi.fn(async () => ({
-        type: "oauth" as const,
-        token: "oauth-token",
-        accountId: "account-1",
+        type: "api-key" as const,
+        token: "platform-key",
       })),
       createPeer: vi.fn(async () => ({
         createOffer: vi.fn(async () => "v=offer\r\n"),

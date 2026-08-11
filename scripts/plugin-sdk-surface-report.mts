@@ -256,7 +256,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -7: retire unused and duplicate inbound-dispatch compatibility exports.
       // +7: restore still-existing deprecated inbound-dispatch compatibility re-exports.
       // +1: authoritative provider OAuth access projection.
-      4848,
+      // +1: typed provider auth-profile selection state for plugin-owned auth precedence.
+      4849,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -314,7 +315,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -10: collapse inbound-dispatch callable aliases and wrappers.
       // +7: restore still-existing deprecated inbound-dispatch callable re-exports.
       // +1: authoritative provider OAuth access projection.
-      2918,
+      // +1: typed provider auth-profile selection state for plugin-owned auth precedence.
+      2919,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

@@ -10,7 +10,7 @@ import {
   resolveApiKeyForProfile,
   resolveOAuthCredentialForProfile,
 } from "../agents/auth-profiles/oauth.js";
-import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
+import { resolveAuthProfileOrderWithMetadata } from "../agents/auth-profiles/order.js";
 import { listProfilesForProvider } from "../agents/auth-profiles/profiles.js";
 import { resolveStoredCredentialReadOnlyAvailability } from "../agents/auth-profiles/read-only-availability.js";
 import {
@@ -585,6 +585,29 @@ export function isProviderAuthProfileConfigured(params: {
   return listUsableProviderAuthProfileIds(params).profileIds.length > 0;
 }
 
+/** Resolves requested credential-type selection state and whether authored order owns it. */
+export function resolveProviderAuthProfileSelectionState(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+  profileTypes: readonly AuthProfileCredential["type"][];
+  allowKeychainPrompt?: boolean;
+  includeExternalCliAuth?: boolean;
+}): {
+  explicit: boolean;
+  status: "missing" | "selected" | "unresolved" | "unselected";
+} {
+  try {
+    const { selectionState } = resolveUsableProviderAuthProfiles({
+      ...params,
+      readinessMode: "read-only",
+    });
+    return selectionState ?? { explicit: false, status: "unselected" };
+  } catch {
+    return { explicit: false, status: "unselected" };
+  }
+}
+
 /**
  * Resolves the first usable auth-profile API key for a provider in configured profile order.
  */
@@ -664,7 +687,16 @@ function resolveUsableProviderAuthProfiles(params: {
   agentDir?: string;
   allowKeychainPrompt?: boolean;
   includeExternalCliAuth?: boolean;
-}): { agentDir: string; profileIds: string[]; store: AuthProfileStore } {
+  profileTypes?: readonly AuthProfileCredential["type"][];
+  readinessMode?: "execution" | "read-only";
+}): {
+  agentDir: string;
+  profileIds: string[];
+  selectionState?: NonNullable<
+    ReturnType<typeof resolveAuthProfileOrderWithMetadata>["selectionState"]
+  >;
+  store: AuthProfileStore;
+} {
   const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.cfg ?? {});
   const externalCli = params.includeExternalCliAuth
     ? externalCliDiscoveryForProviderAuth({
@@ -676,25 +708,31 @@ function resolveUsableProviderAuthProfiles(params: {
   const store = externalCli
     ? loadAuthProfileStoreForSecretsRuntime(agentDir, { externalCli })
     : loadAuthProfileStoreForSecretsRuntime(agentDir);
-  const profileIds = resolveAuthProfileOrder({
+  const resolution = resolveAuthProfileOrderWithMetadata({
     cfg: params.cfg,
     store,
     provider: params.provider,
+    profileTypes: params.profileTypes,
+    readinessMode: params.readinessMode,
   });
-  if (profileIds.length > 0) {
-    return { agentDir, profileIds, store };
+  if (resolution.profileIds.length > 0) {
+    return { agentDir, ...resolution, store };
   }
 
   const fallbackStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
     allowKeychainPrompt: params.allowKeychainPrompt ?? false,
   });
+  const fallbackResolution = resolveAuthProfileOrderWithMetadata({
+    cfg: params.cfg,
+    store: fallbackStore,
+    provider: params.provider,
+    profileTypes: params.profileTypes,
+    readinessMode: params.readinessMode,
+  });
   return {
     agentDir,
-    profileIds: resolveAuthProfileOrder({
-      cfg: params.cfg,
-      store: fallbackStore,
-      provider: params.provider,
-    }),
+    profileIds: fallbackResolution.profileIds,
+    selectionState: fallbackResolution.selectionState ?? resolution.selectionState,
     store: fallbackStore,
   };
 }

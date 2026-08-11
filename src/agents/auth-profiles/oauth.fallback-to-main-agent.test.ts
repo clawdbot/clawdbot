@@ -21,7 +21,7 @@ import type { AuthProfileStore } from "./types.js";
 const { getOAuthApiKeyMock } = vi.hoisted(() => {
   vi.resetModules();
   return {
-    getOAuthApiKeyMock: vi.fn(async () => {
+    getOAuthApiKeyMock: vi.fn(async (_provider: string, _credentials: object) => {
       throw new Error("invalid_grant");
     }),
   };

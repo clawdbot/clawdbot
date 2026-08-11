@@ -712,8 +712,8 @@ export class AuthStorage {
       if (!refreshed) {
         return null;
       }
-      const refreshedCredential: OAuthCredential = { ...credential, ...refreshed.newCredentials };
-      refreshedCredential.provider = providerId;
+      const { newCredentials } = refreshed;
+      const refreshedCredential = { ...credential, ...newCredentials, provider: providerId };
       if (Date.now() >= refreshedCredential.expires) {
         throw new Error("OAuth provider returned an expired credential");
       }

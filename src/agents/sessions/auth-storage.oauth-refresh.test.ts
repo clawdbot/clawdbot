@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 
 const providerOAuthMocks = vi.hoisted(() => ({
   resolveCredential: vi.fn(),
@@ -61,7 +62,7 @@ describe("AuthStorage OAuth refresh deadline", () => {
         expires: 1,
       },
     });
-    const stalled = Promise.withResolvers<{
+    const stalled = createDeferred<{
       access: string;
       refresh: string;
       expires: number;

@@ -430,15 +430,16 @@ describe("resolveAuthProfileOrder", () => {
         },
       },
     };
-
-    const order = resolveAuthProfileOrder({
-      cfg: {
-        auth: {
-          order: {
-            "fixture-provider": ["fixture-provider:missing"],
-          },
+    const cfg = {
+      auth: {
+        order: {
+          "fixture-provider": ["fixture-provider:missing"],
         },
       },
+    } satisfies OpenClawConfig;
+
+    const order = resolveAuthProfileOrder({
+      cfg,
       store,
       provider: "fixture-provider",
     });
@@ -446,17 +447,27 @@ describe("resolveAuthProfileOrder", () => {
     expect(order).toStrictEqual([]);
     expect(
       resolveAuthProfileOrderWithMetadata({
-        cfg: {
-          auth: {
-            order: {
-              "fixture-provider": ["fixture-provider:missing"],
-            },
-          },
-        },
+        cfg,
         store,
         provider: "fixture-provider",
       }),
-    ).toStrictEqual({ profileIds: [], hasExplicitOrder: true });
+    ).toStrictEqual({
+      profileIds: [],
+      hasExplicitOrder: true,
+    });
+    expect(
+      resolveAuthProfileOrderWithMetadata({
+        cfg,
+        store,
+        provider: "fixture-provider",
+        profileTypes: ["api_key"],
+        readinessMode: "read-only",
+      }),
+    ).toEqual({
+      profileIds: [],
+      hasExplicitOrder: true,
+      selectionState: { explicit: true, status: "missing" },
+    });
   });
 
   it("reports an empty configured auth order as authoritative", () => {
@@ -481,7 +492,10 @@ describe("resolveAuthProfileOrder", () => {
       provider: "fixture-provider",
     });
 
-    expect(resolution).toStrictEqual({ profileIds: [], hasExplicitOrder: true });
+    expect(resolution).toStrictEqual({
+      profileIds: [],
+      hasExplicitOrder: true,
+    });
   });
 
   it("does not apply a cooldown scoped to another model when ordering profiles", () => {
@@ -612,7 +626,22 @@ describe("resolveAuthProfileOrder", () => {
         provider: "openai",
         readinessMode: "read-only",
       }),
-    ).toEqual({ profileIds: ["openai:legacy-ref"], hasExplicitOrder: false });
+    ).toEqual({
+      profileIds: ["openai:legacy-ref"],
+      hasExplicitOrder: false,
+    });
+    expect(
+      resolveAuthProfileOrderWithMetadata({
+        store,
+        provider: "openai",
+        profileTypes: ["oauth"],
+        readinessMode: "read-only",
+      }),
+    ).toEqual({
+      profileIds: ["openai:legacy-ref"],
+      hasExplicitOrder: false,
+      selectionState: { explicit: false, status: "unresolved" },
+    });
   });
 
   it("lets Codex auth use friendly OpenAI auth order entries", async () => {

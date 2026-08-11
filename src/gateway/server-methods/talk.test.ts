@@ -518,7 +518,7 @@ describe("talk.catalog handler", () => {
       id: "openai",
       label: "OpenAI Realtime",
       defaultModel: "gpt-realtime-2.1",
-      models: ["gpt-realtime-2.1", "gpt-live-1-codex"],
+      models: ["gpt-realtime-2.1", "gpt-live-1-boulder-alpha"],
       voices: ["alloy", "marin"],
       resolveConfig: vi.fn(({ rawConfig }: { rawConfig: Record<string, unknown> }) => rawConfig),
       isConfigured: vi.fn(() => false),
@@ -543,7 +543,7 @@ describe("talk.catalog handler", () => {
               realtime: {
                 provider: "openai",
                 providers: { openai: { model: "gpt-realtime-2.1" } },
-                model: "gpt-live-1-codex",
+                model: "gpt-live-1-boulder-alpha",
               },
             },
           }) as OpenClawConfig,
@@ -554,7 +554,7 @@ describe("talk.catalog handler", () => {
       realtime: { providers: Array<Record<string, unknown>> };
     };
     expect(catalog.realtime.providers[0]).toMatchObject({
-      models: ["gpt-realtime-2.1", "gpt-live-1-codex"],
+      models: ["gpt-realtime-2.1", "gpt-live-1-boulder-alpha"],
       voices: ["alloy", "marin"],
     });
     // Catalog readiness must mirror talk.client.create: top-level
@@ -562,14 +562,14 @@ describe("talk.catalog handler", () => {
     // agent scope is consulted, or GPT-Live over OAuth reads as unconfigured.
     expect(mocks.resolveConfiguredRealtimeVoiceProvider).toHaveBeenCalledWith(
       expect.objectContaining({
-        providerConfigOverrides: { model: "gpt-live-1-codex" },
+        providerConfigOverrides: { model: "gpt-live-1-boulder-alpha" },
         agentId: expect.any(String),
       }),
     );
     expect(mocks.isRealtimeVoiceProviderConfigured).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: expect.any(String),
-        providerConfig: expect.objectContaining({ model: "gpt-live-1-codex" }),
+        providerConfig: expect.objectContaining({ model: "gpt-live-1-boulder-alpha" }),
         surface: "browser-session",
       }),
     );
@@ -1845,11 +1845,11 @@ describe("talk.session unified handlers", () => {
     {
       label: "request override from a configured GA model",
       configuredModel: "gpt-realtime-2.1",
-      requestedModel: "gpt-live-1-codex",
+      requestedModel: "gpt-live-1-boulder-alpha",
     },
     {
       label: "configured supported model without an override",
-      configuredModel: "gpt-live-1-codex",
+      configuredModel: "gpt-live-1-boulder-alpha",
       requestedModel: undefined,
     },
   ])("resolves relay readiness from the effective model: $label", async (testCase) => {
@@ -1863,14 +1863,14 @@ describe("talk.session unified handlers", () => {
       expect(input).toEqual(
         expect.objectContaining({
           agentId: "voice-agent",
-          providerConfigOverrides: { model: "gpt-live-1-codex" },
+          providerConfigOverrides: { model: "gpt-live-1-boulder-alpha" },
           defaultModel: testCase.configuredModel,
           surface: "gateway-relay",
         }),
       );
       return {
         provider,
-        providerConfig: { model: "gpt-live-1-codex" },
+        providerConfig: { model: "gpt-live-1-boulder-alpha" },
       } as never;
     });
     mocks.createTalkRealtimeRelaySession.mockReturnValueOnce({
@@ -1883,7 +1883,7 @@ describe("talk.session unified handlers", () => {
         outputEncoding: "pcm16",
         outputSampleRateHz: 24000,
       },
-      model: "gpt-live-1-codex",
+      model: "gpt-live-1-boulder-alpha",
       voice: "marin",
       expiresAt: 1_797_986_400,
     });
@@ -1917,8 +1917,8 @@ describe("talk.session unified handlers", () => {
     expect(mocks.createTalkRealtimeRelaySession).toHaveBeenCalledWith(
       expect.objectContaining({
         provider,
-        providerConfig: { model: "gpt-live-1-codex" },
-        model: "gpt-live-1-codex",
+        providerConfig: { model: "gpt-live-1-boulder-alpha" },
+        model: "gpt-live-1-boulder-alpha",
         sessionKey: "agent:voice-agent:main",
       }),
     );
@@ -1938,7 +1938,7 @@ describe("talk.session unified handlers", () => {
     };
     mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
       provider,
-      providerConfig: { model: "gpt-live-1-codex" },
+      providerConfig: { model: "gpt-live-1-boulder-alpha" },
     });
     mocks.resolveInternalRealtimeVoiceGatewayRelayLaunchError.mockReturnValueOnce(
       "GPT-Live gateway-relay sessions cannot use forced agent consult routing; GPT-Live delegates to the agent natively",
@@ -1951,7 +1951,7 @@ describe("talk.session unified handlers", () => {
         transport: "gateway-relay",
         brain: "agent-consult",
         provider: "openai",
-        model: "gpt-live-1-codex",
+        model: "gpt-live-1-boulder-alpha",
       },
       respond,
       context: {
@@ -1960,7 +1960,7 @@ describe("talk.session unified handlers", () => {
             talk: {
               realtime: {
                 provider: "openai",
-                providers: { openai: { model: "gpt-live-1-codex" } },
+                providers: { openai: { model: "gpt-live-1-boulder-alpha" } },
                 consultRouting: "force-agent-consult",
               },
             },
@@ -1971,8 +1971,8 @@ describe("talk.session unified handlers", () => {
     expect(mocks.resolveInternalRealtimeVoiceGatewayRelayLaunchError).toHaveBeenCalledWith({
       provider,
       cfg: expect.any(Object),
-      providerConfig: { model: "gpt-live-1-codex" },
-      model: "gpt-live-1-codex",
+      providerConfig: { model: "gpt-live-1-boulder-alpha" },
+      model: "gpt-live-1-boulder-alpha",
       autoRespondToAudio: false,
     });
     expectRespondError(respond, {

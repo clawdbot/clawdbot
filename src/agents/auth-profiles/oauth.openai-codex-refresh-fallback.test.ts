@@ -1236,6 +1236,8 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
         return {
           apiKey: "retried-access-token",
           newCredentials: {
+            type: "oauth",
+            provider: "openai",
             access: "retried-access-token",
             refresh: "retried-refresh-token",
             expires: Date.now() + 10 * 60_000,

@@ -18,6 +18,7 @@ import {
   type AuthCredentialReasonCode,
 } from "./credential-state.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
+import { resolveStoredCredentialReadOnlyAvailability } from "./read-only-availability.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import {
   clearExpiredCooldowns,
@@ -263,6 +264,7 @@ type ResolveAuthProfileOrderParams = {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;
   provider: string;
+  profileTypes?: readonly AuthProfileCredential["type"][];
   preferredProfile?: string;
   /** Model that will consume the profile, for model-scoped cooldowns. */
   forModel?: string;
@@ -274,6 +276,10 @@ export type AuthProfileOrderResolution = {
   profileIds: string[];
   /** An authored store/config order owns selection, including an empty result. */
   hasExplicitOrder: boolean;
+  selectionState?: {
+    explicit: boolean;
+    status: "missing" | "selected" | "unresolved" | "unselected";
+  };
 };
 
 /** Resolves ordered usable auth profiles plus whether an explicit order owns selection. */
@@ -350,9 +356,6 @@ export function resolveAuthProfileOrderWithMetadata(
       : undefined);
   const baseOrder =
     explicitOrder ?? (explicitProfiles.length > 0 ? explicitProfiles : storeProfiles);
-  if (baseOrder.length === 0) {
-    return { profileIds: [], hasExplicitOrder: explicitOrder !== undefined };
-  }
 
   const isValidProfile = (profileId: string): boolean => {
     const eligibility = resolveAuthProfileEligibility({
@@ -375,9 +378,10 @@ export function resolveAuthProfileOrderWithMetadata(
   // can drift from their stored credential ids and still need repair.
   const allBaseProfilesMissing = baseOrder.every((profileId) => !store.profiles[profileId]);
   if (
+    baseOrder.length > 0 &&
     filtered.length === 0 &&
     allBaseProfilesMissing &&
-    (explicitOrderFromStore || explicitProfiles.length > 0)
+    (explicitOrderFromStore || (explicitOrder === undefined && explicitProfiles.length > 0))
   ) {
     filtered = storeProfiles.filter(isValidProfile);
     repairedFallbackToStoreProfiles = true;
@@ -387,6 +391,7 @@ export function resolveAuthProfileOrderWithMetadata(
 
   // Explicit order remains a hard user/config preference, but cooldown tracking
   // moves temporarily bad profiles behind available ones.
+  let profileIds: string[];
   if (explicitOrder && explicitOrder.length > 0 && !repairedFallbackToStoreProfiles) {
     const available: string[] = [];
     const inCooldown: Array<{ profileId: string; cooldownUntil: number }> = [];
@@ -408,27 +413,56 @@ export function resolveAuthProfileOrderWithMetadata(
     const ordered = [...available, ...cooldownSorted];
 
     // Explicit user choice still wins when it is part of the filtered order.
-    if (preferredProfile && ordered.includes(preferredProfile)) {
-      return {
-        profileIds: [preferredProfile, ...ordered.filter((e) => e !== preferredProfile)],
-        hasExplicitOrder: true,
-      };
-    }
-    return { profileIds: ordered, hasExplicitOrder: true };
+    profileIds =
+      preferredProfile && ordered.includes(preferredProfile)
+        ? [preferredProfile, ...ordered.filter((entry) => entry !== preferredProfile)]
+        : ordered;
+  } else {
+    // Otherwise, use round-robin by lastUsed. lastGood is intentionally ignored
+    // because prioritizing it would starve other healthy profiles.
+    const sorted = orderProfilesByMode(deduped, store, now, forModel);
+    profileIds =
+      preferredProfile && sorted.includes(preferredProfile)
+        ? [preferredProfile, ...sorted.filter((entry) => entry !== preferredProfile)]
+        : sorted;
   }
 
-  // Otherwise, use round-robin by lastUsed. lastGood is intentionally ignored
-  // because prioritizing it would starve other healthy profiles.
-  const sorted = orderProfilesByMode(deduped, store, now, forModel);
-
-  if (preferredProfile && sorted.includes(preferredProfile)) {
-    return {
-      profileIds: [preferredProfile, ...sorted.filter((e) => e !== preferredProfile)],
-      hasExplicitOrder: explicitOrder !== undefined,
-    };
-  }
-
-  return { profileIds: sorted, hasExplicitOrder: explicitOrder !== undefined };
+  const requestedTypes = params.profileTypes ? new Set(params.profileTypes) : undefined;
+  const matchesRequestedType = (profileId: string, allowMissing = false) => {
+    const type = store.profiles[profileId]?.type ?? cfg?.auth?.profiles?.[profileId]?.mode;
+    return (
+      (allowMissing && type === undefined) ||
+      (type !== undefined && type !== "aws-sdk" && requestedTypes?.has(type) === true)
+    );
+  };
+  const selectedProfileId = profileIds.find((profileId) => matchesRequestedType(profileId));
+  const credential = selectedProfileId ? store.profiles[selectedProfileId] : undefined;
+  const availability = credential
+    ? resolveStoredCredentialReadOnlyAvailability({
+        credential,
+        cfg: cfg ?? {},
+        env: process.env,
+        canRefreshOAuth: true,
+      })
+    : selectedProfileId
+      ? true
+      : undefined;
+  const status = selectedProfileId
+    ? availability === undefined
+      ? "unresolved"
+      : availability
+        ? "selected"
+        : "missing"
+    : explicitOrder?.some((profileId) => matchesRequestedType(profileId, true))
+      ? "missing"
+      : "unselected";
+  return {
+    profileIds,
+    hasExplicitOrder: explicitOrder !== undefined,
+    ...(requestedTypes
+      ? { selectionState: { explicit: explicitOrder !== undefined, status } }
+      : {}),
+  };
 }
 
 /** Resolves ordered usable auth profile ids for a provider. */

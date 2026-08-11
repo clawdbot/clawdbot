@@ -17,6 +17,7 @@ import {
   isProviderApiKeyConfigured,
   normalizeGithubCopilotDomain,
   resolveCopilotApiToken,
+  resolveProviderAuthProfileSelectionState,
 } from "./provider-auth.js";
 
 const TEST_GITHUB_TOKEN = ["github", "token"].join("-");
@@ -57,6 +58,19 @@ type FallbackStoreCaseResult = {
   resolveApiKeyCalls: unknown[][];
 };
 
+function resolveMockAuthProfileOrder(params: { provider: string; store: AuthProfileStore }): {
+  hasExplicitOrder: false;
+  profileIds: string[];
+} {
+  const profileIds = Object.entries(params.store.profiles)
+    .filter(([, profile]) => profile.provider === params.provider)
+    .map(([profileId]) => profileId);
+  return {
+    hasExplicitOrder: false,
+    profileIds,
+  };
+}
+
 async function runFallbackStoreCase(): Promise<FallbackStoreCaseResult> {
   vi.resetModules();
 
@@ -96,10 +110,7 @@ async function runFallbackStoreCase(): Promise<FallbackStoreCaseResult> {
     resolveOAuthCredentialForProfile: vi.fn(),
   }));
   vi.doMock("../agents/auth-profiles/order.js", () => ({
-    resolveAuthProfileOrder: ({ provider, store }: { provider: string; store: AuthProfileStore }) =>
-      Object.entries(store.profiles)
-        .filter(([, profile]) => profile.provider === provider)
-        .map(([profileId]) => profileId),
+    resolveAuthProfileOrderWithMetadata: resolveMockAuthProfileOrder,
   }));
   vi.doMock("../agents/auth-profiles/store.js", () => ({
     ensureAuthProfileStore: vi.fn(() => primaryStore),
@@ -489,6 +500,69 @@ describe("provider auth profile helpers", () => {
     vi.resetModules();
   });
 
+  it("reports a bare explicit missing profile as selected-but-missing", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-auth-order-"));
+    try {
+      vi.stubEnv("OPENCLAW_STATE_DIR", agentDir);
+      saveAuthProfileStore({ version: 1, profiles: {} }, agentDir, {
+        filterExternalAuthProfiles: false,
+        syncExternalCli: false,
+      });
+
+      expect(
+        resolveProviderAuthProfileSelectionState({
+          provider: "openai",
+          agentDir,
+          cfg: { auth: { order: { openai: ["openai:missing"] } } },
+          profileTypes: ["api_key"],
+        }),
+      ).toEqual({ explicit: true, status: "missing" });
+    } finally {
+      vi.unstubAllEnvs();
+      clearRuntimeAuthProfileStoreSnapshots();
+      await fs.rm(agentDir, { force: true, recursive: true });
+    }
+  });
+
+  it("reports an explicitly selected unresolved ref as unresolved", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-auth-ref-"));
+    try {
+      vi.stubEnv("OPENCLAW_STATE_DIR", agentDir);
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "openai:selected": {
+              type: "api_key",
+              provider: "openai",
+              keyRef: {
+                source: "env",
+                provider: "default",
+                id: "OPENAI_SELECTED_PROFILE_KEY",
+              },
+            },
+          },
+        },
+        agentDir,
+        { filterExternalAuthProfiles: false, syncExternalCli: false },
+      );
+      vi.stubEnv("OPENAI_SELECTED_PROFILE_KEY", "");
+
+      expect(
+        resolveProviderAuthProfileSelectionState({
+          provider: "openai",
+          agentDir,
+          cfg: { auth: { order: { openai: ["openai:selected"] } } },
+          profileTypes: ["api_key"],
+        }),
+      ).toEqual({ explicit: true, status: "unresolved" });
+    } finally {
+      vi.unstubAllEnvs();
+      clearRuntimeAuthProfileStoreSnapshots();
+      await fs.rm(agentDir, { force: true, recursive: true });
+    }
+  });
+
   it("resolves API keys from the fallback store that supplied usable profile ids", () => {
     expect(fallbackStoreCase.profileIds).toEqual(["openai:default"]);
     expect(fallbackStoreCase.resolvedKey).toBe("fallback-key");
@@ -556,16 +630,7 @@ describe("provider auth profile helpers", () => {
       resolveOAuthCredentialForProfile: vi.fn(),
     }));
     vi.doMock("../agents/auth-profiles/order.js", () => ({
-      resolveAuthProfileOrder: ({
-        provider,
-        store: profileStore,
-      }: {
-        provider: string;
-        store: AuthProfileStore;
-      }) =>
-        Object.entries(profileStore.profiles)
-          .filter(([, profile]) => profile.provider === provider)
-          .map(([profileId]) => profileId),
+      resolveAuthProfileOrderWithMetadata: resolveMockAuthProfileOrder,
     }));
     vi.doMock("../agents/auth-profiles/store.js", () => ({
       ensureAuthProfileStore: vi.fn(() => store),
@@ -622,7 +687,10 @@ describe("provider auth profile helpers", () => {
       resolveOAuthCredentialForProfile,
     }));
     vi.doMock("../agents/auth-profiles/order.js", () => ({
-      resolveAuthProfileOrder: () => ["openai:key", "openai:oauth"],
+      resolveAuthProfileOrderWithMetadata: () => ({
+        hasExplicitOrder: false,
+        profileIds: ["openai:key", "openai:oauth"],
+      }),
     }));
     vi.doMock("../agents/auth-profiles/store.js", () => ({
       ensureAuthProfileStore: vi.fn(() => store),
@@ -680,16 +748,7 @@ describe("provider auth profile helpers", () => {
       resolveOAuthCredentialForProfile: vi.fn(),
     }));
     vi.doMock("../agents/auth-profiles/order.js", () => ({
-      resolveAuthProfileOrder: ({
-        provider,
-        store,
-      }: {
-        provider: string;
-        store: AuthProfileStore;
-      }) =>
-        Object.entries(store.profiles)
-          .filter(([, profile]) => profile.provider === provider)
-          .map(([profileId]) => profileId),
+      resolveAuthProfileOrderWithMetadata: resolveMockAuthProfileOrder,
     }));
     vi.doMock("../agents/auth-profiles/store.js", () => ({
       ensureAuthProfileStore: vi.fn(() => primaryStore),

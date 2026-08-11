@@ -99,7 +99,7 @@ async function loginOpenAICodex(callbacks: OpenAICodexLoginCallbacks): Promise<O
 }
 
 /** Captures the activated OpenAI facade before entering serialized refresh work. */
-export function prepareOpenAICodexOAuthRefresh() {
+function prepareOpenAICodexOAuthRefresh() {
   const refresh = loadOpenAICodexOAuthFacade().refreshOpenAICodexToken;
   return (credentials: OAuthCredentials, context?: OAuthRefreshContext) =>
     refresh(credentials.refresh, { signal: context?.signal });

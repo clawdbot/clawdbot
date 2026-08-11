@@ -388,21 +388,21 @@ function decodeOpenAIQuicksilverCallId(params: {
 function describeOpenAIQuicksilverCallError(status: number, detail: string): string {
   const normalized = detail.toLowerCase();
   if (status === 403) {
-    return "GPT-Live rejected the session (403). This overloaded response most often means the voice or model is invalid for /v1/live. Accepted voices: alloy, ash, ballad, cedar, coral, echo, marin, sage, shimmer, verse. Accepted models: gpt-live-1-codex, gpt-live-1-boulder-alpha. Account access may also be unavailable; verify the selected ChatGPT OAuth profile and chatgpt-account-id.";
+    return "GPT-Live rejected the Platform session (403). Verify API-key access, voice, and model for /v1/live. Accepted voices: alloy, ash, ballad, cedar, coral, echo, marin, sage, shimmer, verse. Accepted model: gpt-live-1-boulder-alpha.";
   }
   if (
     status === 400 &&
     (normalized.includes("model_not_found") ||
       normalized.includes("does not exist or you do not have access"))
   ) {
-    return `OpenAI Platform API-key access to /v1/live is waitlist-gated. Use a ChatGPT OAuth profile or request access at ${OPENAI_GPT_LIVE_WAITLIST_URL}`;
+    return `OpenAI Platform API-key access to /v1/live is waitlist-gated. Request access at ${OPENAI_GPT_LIVE_WAITLIST_URL}`;
   }
   if (
     status === 400 &&
     normalized.includes("session.model") &&
     normalized.includes("not allowed")
   ) {
-    return "The GPT-Live model value is not permitted on /v1/live. Accepted values are gpt-live-1-codex and gpt-live-1-boulder-alpha.";
+    return "The GPT-Live model value is not permitted on /v1/live. Accepted value: gpt-live-1-boulder-alpha.";
   }
   return `GPT-Live call creation failed (${status})${detail ? `: ${detail}` : ""}`;
 }
@@ -435,6 +435,11 @@ export async function createOpenAIQuicksilverCall(params: {
   const isGptLive = isOpenAIGptLiveModel(params.session.model);
   if (params.gaSideband && (isGptLive || params.auth.type !== "api-key")) {
     throw new Error("OpenAI Realtime Gateway control requires a GA model and Platform API key");
+  }
+  if (isGptLive && params.auth.type === "oauth") {
+    throw new OpenAIQuicksilverCallError(
+      "GPT-Live ChatGPT OAuth is disabled until the upstream sideband join is proven; configure an OpenAI Platform API key with /v1/live access",
+    );
   }
   const authHeaders = isGptLive
     ? openAIQuicksilverAuthHeaders(params.auth, params.requestIds)
@@ -513,8 +518,10 @@ export async function createOpenAIQuicksilverCall(params: {
   const callId = decodeOpenAIQuicksilverCallId({
     location: response.headers.get("Location"),
     openAiSessionId: response.headers.get("openai-session-id"),
-    callUrl: OPENAI_QUICKSILVER_CALL_URL,
+    callUrl,
   });
+  // Call creation and sideband must share the direct Realtime registry. A
+  // ChatGPT-origin call id cannot currently be joined on this endpoint.
   return {
     kind: "gpt-live",
     status: response.status,

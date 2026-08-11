@@ -1,23 +1,18 @@
-import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
-import { readCodexCliCredentialsCached } from "openclaw/plugin-sdk/provider-auth";
+import {
+  readCodexCliCredentialsCached,
+  resolveProviderAuthProfileApiKey,
+} from "openclaw/plugin-sdk/provider-auth";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "openclaw/plugin-sdk/realtime-voice";
 import type { Page } from "playwright";
 import { describe, expect, it } from "vitest";
-import WebSocket, { type RawData } from "ws";
 import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
 import {
   createOpenAIQuicksilverBrowserSessionBroker,
   OPENAI_QUICKSILVER_OFFER_PATH,
-  resolveOpenAIChatGptSubscriptionAuth,
 } from "./realtime-quicksilver-session.js";
-import {
-  buildOpenAIQuicksilverSession,
-  createOpenAIQuicksilverCall,
-  openAIQuicksilverAuthHeaders,
-  type OpenAIQuicksilverAuth,
-} from "./realtime-quicksilver-wire.js";
+import type { OpenAIQuicksilverAuth } from "./realtime-quicksilver-wire.js";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
 const LIVE_ENABLED =
@@ -29,16 +24,6 @@ const LIVE_MILESTONE_TIMEOUT_MS = 30_000;
 type BrowserWithGptLivePeer = typeof globalThis & {
   openclawGptLivePeer?: RTCPeerConnection;
 };
-
-function decodeTextFrame(data: RawData): string {
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data).toString("utf8");
-  }
-  return data.toString("utf8");
-}
 
 async function createBrowserOffer(page: Page, includeDataChannel = true): Promise<string> {
   return await page.evaluate(async (shouldCreateDataChannel) => {
@@ -104,73 +89,21 @@ async function closeBrowserPeer(page: Page): Promise<void> {
   });
 }
 
-async function waitForSidebandSessionStarted(params: {
-  url: string;
-  headers: Record<string, string>;
-}): Promise<{ socket: WebSocket; sessionId: string }> {
-  return await new Promise((resolve, reject) => {
-    const socket = new WebSocket(params.url, { headers: params.headers });
-    const timeout = setTimeout(() => {
-      socket.close(1000, "session-start timeout");
-      reject(new Error("GPT-Live sideband did not emit session.started"));
-    }, 15_000);
-    const finish = (result: { socket: WebSocket; sessionId: string } | Error) => {
-      clearTimeout(timeout);
-      socket.off("message", onMessage);
-      socket.off("error", onError);
-      socket.off("close", onClose);
-      if (result instanceof Error) {
-        reject(result);
-      } else {
-        resolve(result);
-      }
-    };
-    const onMessage = (data: RawData, isBinary: boolean) => {
-      if (isBinary) {
-        return;
-      }
-      let decoded: unknown;
-      try {
-        decoded = JSON.parse(decodeTextFrame(data));
-      } catch {
-        return;
-      }
-      if (!decoded || typeof decoded !== "object") {
-        return;
-      }
-      const event = decoded as { type?: unknown; session?: { id?: unknown } };
-      if (event.type === "session.started" && typeof event.session?.id === "string") {
-        finish({ socket, sessionId: event.session.id });
-      }
-    };
-    const onError = (error: Error) => finish(error);
-    const onClose = () => finish(new Error("GPT-Live sideband closed before session.started"));
-    socket.on("message", onMessage);
-    socket.once("error", onError);
-    socket.once("close", onClose);
-  });
-}
-
-async function sendSessionClose(socket: WebSocket): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    socket.send(JSON.stringify({ type: "session.close" }), (error) => {
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    });
-  });
-  socket.close(1000, "test complete");
-}
-
 async function resolveLiveOAuthProfile(): Promise<
   Extract<OpenAIQuicksilverAuth, { type: "oauth" }> | undefined
 > {
   try {
-    const profile = await resolveOpenAIChatGptSubscriptionAuth({});
-    if (profile) {
-      return profile;
+    const token = await resolveProviderAuthProfileApiKey({
+      provider: "openai",
+      profileTypes: ["oauth"],
+      includeExternalCliAuth: false,
+    });
+    if (token) {
+      const accountId = resolveCodexAuthIdentity({ accessToken: token }).accountId;
+      if (!accountId) {
+        throw new Error("The selected ChatGPT OAuth profile is missing its account id");
+      }
+      return { type: "oauth", token, accountId };
     }
   } catch (error) {
     if (!(error instanceof Error) || error.name !== "AuthProfileMigrationRequiredError") {
@@ -220,7 +153,7 @@ describeLive("GPT-Live Platform WebSocket", () => {
       }
       const bridge = new OpenAIQuicksilverVoiceBridge({
         providerConfig: {},
-        model: "gpt-live-1-codex",
+        model: "gpt-live-1-boulder-alpha",
         voice: "marin",
         instructions: "Keep this transport verification session silent.",
         audioFormat: { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
@@ -425,66 +358,7 @@ describeLive("OpenAI GA Gateway-controlled WebRTC", () => {
   );
 });
 
-describeLive("OpenAI OAuth WebRTC", () => {
-  it(
-    "creates a call and joins the authenticated sideband",
-    async ({ skip }) => {
-      const auth = await resolveLiveOAuthProfile();
-      if (!auth) {
-        skip("No ChatGPT OAuth profile is available");
-        return;
-      }
-
-      const { chromium } = await import("playwright");
-      const browser = await chromium.launch({
-        headless: true,
-        args: ["--no-sandbox", "--use-fake-device-for-media-stream"],
-      });
-      const page = await browser.newPage();
-      let sideband: WebSocket | undefined;
-      try {
-        const offerSdp = await createBrowserOffer(page);
-        const requestIds = {
-          realtimeSessionId: randomUUID(),
-          sessionId: randomUUID(),
-          threadId: randomUUID(),
-        };
-        const call = await createOpenAIQuicksilverCall({
-          auth,
-          requestIds,
-          sdp: offerSdp,
-          session: buildOpenAIQuicksilverSession({
-            model: "gpt-live-1-codex",
-            instructions: "Keep this transport verification session silent.",
-            voice: "marin",
-          }),
-        });
-
-        if (call.kind !== "gpt-live") {
-          throw new Error("GPT-Live call unexpectedly used the GA realtime wire shape");
-        }
-        expect(call.status).toBe(201);
-        expect(call.callId).toMatch(/^rtc_[\w-]+$/);
-        expect(call.answerSdp).toMatch(/^v=0/m);
-        await applyBrowserAnswer(page, call.answerSdp);
-
-        const started = await waitForSidebandSessionStarted({
-          url: call.sidebandUrl,
-          headers: openAIQuicksilverAuthHeaders(auth, requestIds),
-        });
-        sideband = started.socket;
-        expect(started.sessionId).toBe(call.callId);
-        await sendSessionClose(sideband);
-        sideband = undefined;
-      } finally {
-        sideband?.close(1000, "test cleanup");
-        await closeBrowserPeer(page).catch(() => undefined);
-        await browser.close();
-      }
-    },
-    LIVE_TIMEOUT_MS,
-  );
-
+describeLive("OpenAI GA OAuth WebRTC", () => {
   it(
     "creates all GA realtime models through the single-use OAuth broker",
     async ({ skip }) => {

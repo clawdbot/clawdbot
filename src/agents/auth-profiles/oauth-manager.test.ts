@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -801,7 +802,7 @@ describe("createOAuthManager", () => {
       saveAuthProfileStore({ version: 1, profiles: { [profileId]: credential } }, agentDir, {
         filterExternalAuthProfiles: false,
       });
-      const gate = Promise.withResolvers<void>();
+      const gate = createDeferred();
       const refresh = vi.fn(async () => ({
         access: "winner-access",
         refresh: "winner-refresh",
@@ -962,7 +963,7 @@ describe("createOAuthManager", () => {
       saveAuthProfileStore({ version: 1, profiles: { [profileId]: credential } }, agentDir, {
         filterExternalAuthProfiles: false,
       });
-      const stalled = Promise.withResolvers<never>();
+      const stalled = createDeferred<never>();
       const secondRefresh = vi.fn(async () => ({
         access: "second-access",
         refresh: "second-refresh",
@@ -1003,7 +1004,7 @@ describe("createOAuthManager", () => {
       saveAuthProfileStore({ version: 1, profiles: { [profileId]: credential } }, agentDir, {
         filterExternalAuthProfiles: false,
       });
-      const stalled = Promise.withResolvers<OAuthCredentials>();
+      const stalled = createDeferred<OAuthCredentials>();
       const aborted = vi.fn();
       const manager = createOAuthManager({
         prepareRefresh: async () => async (_credential, signal) => {

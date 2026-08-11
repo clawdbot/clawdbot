@@ -19,7 +19,7 @@ vi.mock("../../../plugin-sdk/facade-runtime.js", () => ({
     mocks.loadActivatedBundledPluginPublicSurfaceModuleSync,
 }));
 
-import { openaiCodexOAuthProvider, prepareOpenAICodexOAuthRefresh } from "./openai-chatgpt.js";
+import { openaiCodexOAuthProvider } from "./openai-chatgpt.js";
 
 type OpenAIProviderLoginCallbacks = Omit<
   Parameters<typeof openaiCodexOAuthProvider.login>[0],
@@ -206,7 +206,10 @@ describe("OpenAI Codex OAuth compatibility provider", () => {
 
   it("captures one facade refresh callable and reuses it with rotated tokens and signals", async () => {
     const controller = new AbortController();
-    const refresh = prepareOpenAICodexOAuthRefresh();
+    const refresh = openaiCodexOAuthProvider.prepareRefreshToken?.();
+    if (!refresh) {
+      throw new Error("OpenAI OAuth provider does not prepare refresh calls");
+    }
     mocks.refreshOpenAICodexToken
       .mockResolvedValueOnce({
         access: "first-access",

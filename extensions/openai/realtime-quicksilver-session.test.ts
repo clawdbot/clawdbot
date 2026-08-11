@@ -86,7 +86,9 @@ describe("GPT-Live session shaping", () => {
     "shimmer",
     "verse",
   ])("accepts the live-proven %s voice", (voice) => {
-    expect(buildOpenAIQuicksilverSession({ model: "gpt-live-1-codex", voice }).audio).toEqual({
+    expect(
+      buildOpenAIQuicksilverSession({ model: "gpt-live-1-boulder-alpha", voice }).audio,
+    ).toEqual({
       output: { voice },
     });
   });
@@ -94,7 +96,9 @@ describe("GPT-Live session shaping", () => {
   it.each(["arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"])(
     "falls back from the rejected %s voice",
     (voice) => {
-      expect(buildOpenAIQuicksilverSession({ model: "gpt-live-1-codex", voice }).audio).toEqual({
+      expect(
+        buildOpenAIQuicksilverSession({ model: "gpt-live-1-boulder-alpha", voice }).audio,
+      ).toEqual({
         output: { voice: "marin" },
       });
     },
@@ -102,7 +106,7 @@ describe("GPT-Live session shaping", () => {
 
   it("bounds initial items to the newest context", () => {
     const session = buildOpenAIQuicksilverSession({
-      model: "gpt-live-1-codex",
+      model: "gpt-live-1-boulder-alpha",
       initialItems: Array.from({ length: 20 }, (_, index) => ({
         role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
         text: `${index}:${"x".repeat(1_000)}`,
@@ -421,20 +425,7 @@ describe("GPT-Live offer broker", () => {
     }
   });
 
-  it.each([
-    {
-      name: "OAuth",
-      auth: { type: "oauth" as const, token: "oauth-token", accountId: "account-123" },
-      authorization: "Bearer oauth-token",
-      accountId: "account-123",
-    },
-    {
-      name: "API key",
-      auth: { type: "api-key" as const, token: "platform-key" },
-      authorization: "Bearer platform-key",
-      accountId: undefined,
-    },
-  ])("uses matching $name headers on signaling and the API sideband", async (authCase) => {
+  it("uses matching Platform headers on signaling and the API sideband", async () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.7.2-test");
     let signalingUrl: string | undefined;
     let signalingHeaders: Record<string, string> | undefined;
@@ -451,7 +442,7 @@ describe("GPT-Live offer broker", () => {
           model: "gpt-live-1",
           runAgentConsult: vi.fn(async () => ({ text: "Done" })),
         },
-        authCase.auth,
+        { type: "api-key", token: "platform-key" },
       );
       if (reservation.transport !== "webrtc") {
         throw new Error("Expected WebRTC reservation");
@@ -463,10 +454,9 @@ describe("GPT-Live offer broker", () => {
 
       const sideband = socketRequests[0];
       expect(signalingUrl).toBe("https://api.openai.com/v1/live");
-      expect(signalingUrl).not.toContain("?");
       expect(sideband?.url).toBe("wss://api.openai.com/v1/live/rtc_header-parity");
       expect(signalingHeaders).toMatchObject({
-        Authorization: authCase.authorization,
+        Authorization: "Bearer platform-key",
         "OpenAI-Alpha": "quicksilver=v2",
         "User-Agent": "openclaw/2026.7.2-test",
         originator: "openclaw",
@@ -477,7 +467,7 @@ describe("GPT-Live offer broker", () => {
         "Content-Type": expect.stringMatching(/^multipart\/form-data; boundary=/),
       });
       expect(sideband?.headers).toMatchObject({
-        Authorization: authCase.authorization,
+        Authorization: "Bearer platform-key",
         "OpenAI-Alpha": "quicksilver=v2",
         "User-Agent": "openclaw/2026.7.2-test",
         originator: "openclaw",
@@ -489,13 +479,8 @@ describe("GPT-Live offer broker", () => {
       expect(signalingHeaders?.["session-id"]).not.toBe(signalingHeaders?.["x-session-id"]);
       expect(signalingHeaders?.["thread-id"]).not.toBe(signalingHeaders?.["x-session-id"]);
       expect(signalingHeaders?.["thread-id"]).not.toBe(signalingHeaders?.["session-id"]);
-      if (authCase.accountId) {
-        expect(signalingHeaders?.["chatgpt-account-id"]).toBe(authCase.accountId);
-        expect(sideband?.headers?.["chatgpt-account-id"]).toBe(authCase.accountId);
-      } else {
-        expect(signalingHeaders).not.toHaveProperty("chatgpt-account-id");
-        expect(sideband?.headers).not.toHaveProperty("chatgpt-account-id");
-      }
+      expect(signalingHeaders).not.toHaveProperty("chatgpt-account-id");
+      expect(sideband?.headers).not.toHaveProperty("chatgpt-account-id");
     } finally {
       await realtime.cleanup();
     }
@@ -521,7 +506,7 @@ describe("GPT-Live offer broker", () => {
       const reservation = await realtime.broker.createBrowserSession(
         {
           providerConfig: {},
-          model: "gpt-live-1-codex",
+          model: "gpt-live-1-boulder-alpha",
           runAgentConsult: vi.fn(async () => ({ text: "Done" })),
         },
         { type: "api-key", token: "platform-key" },
@@ -550,7 +535,7 @@ describe("GPT-Live offer broker", () => {
       const reservation = await realtime.broker.createBrowserSession(
         {
           providerConfig: {},
-          model: "gpt-live-1-codex",
+          model: "gpt-live-1-boulder-alpha",
           runAgentConsult: vi.fn(async () => ({ text: "Done" })),
         },
         { type: "api-key", token: "platform-key" },
@@ -595,7 +580,7 @@ describe("GPT-Live offer broker", () => {
     });
     try {
       const reservation = await realtime.broker.createBrowserSession(
-        { providerConfig: {}, model: "gpt-live-1-codex", runAgentConsult },
+        { providerConfig: {}, model: "gpt-live-1-boulder-alpha", runAgentConsult },
         { type: "api-key", token: "platform-key" },
       );
       if (reservation.transport !== "webrtc") {
@@ -636,7 +621,7 @@ describe("GPT-Live offer broker", () => {
         const reservation = await realtime.broker.createBrowserSession(
           {
             providerConfig: {},
-            model: "gpt-live-1-codex",
+            model: "gpt-live-1-boulder-alpha",
             runAgentConsult: vi.fn(async () => ({ text: "Done" })),
           },
           { type: "api-key", token: "platform-key" },
@@ -667,7 +652,7 @@ describe("GPT-Live offer broker", () => {
       const reservation = await realtime.broker.createBrowserSession(
         {
           providerConfig: {},
-          model: "gpt-live-1-codex",
+          model: "gpt-live-1-boulder-alpha",
           runAgentConsult: vi.fn(async () => ({ text: "Done" })),
         },
         { type: "api-key", token: "platform-key" },
@@ -701,7 +686,7 @@ describe("GPT-Live offer broker", () => {
       const reservation = await realtime.broker.createBrowserSession(
         {
           providerConfig: {},
-          model: "gpt-live-1-codex",
+          model: "gpt-live-1-boulder-alpha",
           runAgentConsult: vi.fn(async () => ({ text: "Done" })),
         },
         { type: "api-key", token: "platform-key" },

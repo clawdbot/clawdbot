@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 
 const providerOAuthMocks = vi.hoisted(() => ({
   login: vi.fn(),
@@ -323,8 +324,8 @@ describe("SQLite auth storage", () => {
   it("keeps deprecated async backend calls serialized", async () => {
     const agentDir = makeAgentDir();
     const backend = new FileAuthStorageBackend(path.join(agentDir, "auth.json"));
-    const entered = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
+    const entered = createDeferred();
+    const release = createDeferred();
     const secondUpdate = vi.fn(async () => ({ result: "second" }));
     const first = backend.withLockAsync(async () => {
       entered.resolve();
@@ -347,8 +348,8 @@ describe("SQLite auth storage", () => {
   it("rejects a stale deprecated async backend write", async () => {
     const agentDir = makeAgentDir();
     const backend = new FileAuthStorageBackend(path.join(agentDir, "auth.json"));
-    const entered = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
+    const entered = createDeferred();
+    const release = createDeferred();
     const pending = backend.withLockAsync(async (current) => {
       entered.resolve();
       await release.promise;

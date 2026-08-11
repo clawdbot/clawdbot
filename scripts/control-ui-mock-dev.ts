@@ -1516,7 +1516,6 @@ async function createChatPickerScenario(
                 "gpt-realtime-2.1",
                 "gpt-realtime-2.1-mini",
                 "gpt-realtime-2",
-                "gpt-live-1-codex",
                 "gpt-live-1-boulder-alpha",
               ],
               voices: [
