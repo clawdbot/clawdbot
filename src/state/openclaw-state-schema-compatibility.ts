@@ -26,7 +26,6 @@ const CLAW_LAZY_ADDITIVE_STATE_COLUMNS = [
   "worker_environments.shared_host",
   "worker_session_placements.terminal_reason",
   "worker_session_placements.terminal_at_ms",
-  "worker_session_tool_operations.operation_seed",
   "worktrees.run_end_cleanup_json",
 ] as const;
 
@@ -112,9 +111,6 @@ export const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = 
     "worker_environments.shared_host": ["shared_host INTEGER CHECK (shared_host IN (0, 1))"],
     "worker_session_placements.terminal_reason": ["terminal_reason TEXT"],
     "worker_session_placements.terminal_at_ms": ["terminal_at_ms INTEGER"],
-    // Same-version databases created before durable operation seeds append this
-    // column through ALTER TABLE after backfilling all existing rows.
-    "worker_session_tool_operations.operation_seed": ["operation_seed TEXT"],
   },
 };
 

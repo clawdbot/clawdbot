@@ -147,12 +147,6 @@ function ensureWorkerSessionToolStateSchema(db: DatabaseSync): void {
         REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
     ) STRICT;
   `);
-  ensureColumn(db, "worker_session_tool_operations", "operation_seed TEXT");
-  db.exec(`
-    UPDATE worker_session_tool_operations
-    SET operation_seed = lower(hex(randomblob(32)))
-    WHERE operation_seed IS NULL;
-  `);
 }
 
 export function ensureAdditiveStateColumns(db: DatabaseSync): void {

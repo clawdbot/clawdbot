@@ -285,13 +285,13 @@ describe("worker protocol schemas", () => {
     expect(validateWorkerSessionsSpawnParams({ ...spawn, unexpected: true })).toBe(false);
     expect(validateWorkerSessionsSendParams({ ...send, message: "" })).toBe(false);
     const escaped = "\0";
-    const requestBytes = (method: string, params: object) =>
+    const requestBytes = (method: string, requestParams: object) =>
       Buffer.byteLength(
         JSON.stringify({
           type: "req",
           id: escaped.repeat(WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH),
           method,
-          params,
+          params: requestParams,
         }),
         "utf8",
       );
