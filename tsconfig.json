@@ -164,6 +164,9 @@
       "@openclaw/normalization-core/phone-presentation": [
         "./packages/normalization-core/src/phone-presentation.ts"
       ],
+      "@openclaw/normalization-core/promise-like": [
+        "./packages/normalization-core/src/promise-like.ts"
+      ],
       "@openclaw/normalization-core/record-coerce": [
         "./packages/normalization-core/src/record-coerce.ts"
       ],

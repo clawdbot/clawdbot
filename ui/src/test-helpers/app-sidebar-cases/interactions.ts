@@ -17,6 +17,11 @@ import {
   createSessions,
   mountSidebar,
 } from "../app-sidebar.ts";
+import {
+  answerConfirmDialog,
+  installDialogPolyfill,
+  waitForConfirmDialogActions,
+} from "../modal-dialog.ts";
 import { waitForFast } from "../wait-for.ts";
 import {
   click,
@@ -239,7 +244,7 @@ describe("AppSidebar multi-select", () => {
   });
 
   it("deletes the selection in one batch after a single confirm", async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const restoreDialogPolyfill = installDialogPolyfill();
     try {
       const { sidebar, harness } = await mountMultiSelect();
 
@@ -252,15 +257,17 @@ describe("AppSidebar multi-select", () => {
       const menu = await sessionMenu(sidebar);
       menu.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();
 
+      const actions = await waitForConfirmDialogActions();
+      expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain("2");
+      answerConfirmDialog(actions, "confirm");
+
       await waitForFast(() => expect(harness.deleteMany).toHaveBeenCalledOnce());
-      expect(confirmSpy).toHaveBeenCalledOnce();
-      expect(confirmSpy.mock.calls[0]?.[0]).toContain("2");
       expect(harness.deleteMany).toHaveBeenCalledWith([
         { key: "agent:main:a", agentId: "main", deleteTranscript: true },
         { key: "agent:main:b", agentId: "main", deleteTranscript: true },
       ]);
     } finally {
-      confirmSpy.mockRestore();
+      restoreDialogPolyfill();
     }
   });
 

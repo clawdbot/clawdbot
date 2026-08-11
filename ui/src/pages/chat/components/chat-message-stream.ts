@@ -161,7 +161,7 @@ export function renderWorkGroupSummary(
   item: { key: string; durationMs: number | null; hasError: boolean },
   opts: { expanded: boolean; onToggle: () => void },
 ) {
-  const duration = formatDurationCompact(item.durationMs, { spaced: true });
+  const duration = formatDurationCompact(item.durationMs);
   const label = duration ? t("chat.workRun.workedFor", { duration }) : t("chat.workRun.worked");
   return html`
     <div class="chat-group tool chat-group--work" data-chat-row-key=${item.key}>

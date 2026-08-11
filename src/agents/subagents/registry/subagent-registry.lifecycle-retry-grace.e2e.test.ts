@@ -9,6 +9,7 @@ import {
   testing as settleWakeTesting,
 } from "../announce/subagent-announce.requester-settle-wake.js";
 import * as announceRead from "./subagent-registry-announce-read.js";
+import * as registryRead from "./subagent-registry-read.js";
 import * as mod from "./subagent-registry.test-helpers.js";
 
 const noop = () => {};
@@ -129,14 +130,14 @@ vi.mock("../spawn/subagent-depth.js", () => ({
 
 const loadSubagentRegistryRuntimeForTest = async () =>
   ({
-    countActiveDescendantRuns: mod.countActiveDescendantRuns,
-    countPendingDescendantRuns: mod.countPendingDescendantRuns,
+    countActiveDescendantRuns: registryRead.countActiveDescendantRuns,
+    countPendingDescendantRuns: announceRead.countPendingDescendantRuns,
     countPendingDescendantRunsExcludingRun: mod.countPendingDescendantRunsExcludingRun,
     hasDescendantRunAwaitingSettle: announceRead.hasDescendantRunAwaitingSettle,
-    getLatestSubagentRunByChildSessionKey: mod.getLatestSubagentRunByChildSessionKey,
+    getLatestSubagentRunByChildSessionKey: registryRead.getLatestSubagentRunByChildSessionKey,
     isSubagentSessionRunActive: mod.isSubagentSessionRunActive,
     listSubagentRunsForRequester: mod.listSubagentRunsForRequester,
-    replaceSubagentRunAfterSteer: mod.replaceSubagentRunAfterSteer,
+    replaceSubagentRunAfterSteer: mod.replaceSubagentRunAfterSteerCore,
     resolveRequesterForChildSession: mod.resolveRequesterForChildSession,
     shouldIgnorePostCompletionAnnounceForSession: mod.shouldIgnorePostCompletionAnnounceForSession,
   }) as unknown as typeof import("./subagent-registry-runtime.js");

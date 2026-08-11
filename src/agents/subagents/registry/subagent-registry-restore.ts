@@ -245,14 +245,24 @@ export function createSubagentRegistryRestorer(config: {
             start: async () => {
               await runWithGatewayIndependentRootWorkAdmission(async () => {
                 launchLifecycleGeneration = getAgentEventLifecycleGeneration();
-                const response = await deps().callGateway({
+                const request = {
                   method: "agent",
                   params: applySubagentLaunchAuthorization(launch.request, launch.authorization),
                   // Restart replay must restore the trusted launch capability; otherwise
                   // the queued child silently falls back to its session/default route.
                   ...(launch.authorization ? { scopes: [ADMIN_SCOPE] } : {}),
                   timeoutMs: launch.timeoutMs,
-                });
+                };
+                const gatewayRuntime = deps().getGatewayRecoveryRuntime();
+                const response = gatewayRuntime
+                  ? await gatewayRuntime.dispatchAgent(
+                      request.params as Parameters<typeof gatewayRuntime.dispatchAgent>[0],
+                      request.timeoutMs,
+                      launch.authorization
+                        ? { allowModelOverride: true, scopes: [ADMIN_SCOPE] }
+                        : undefined,
+                    )
+                  : await deps().callGateway(request);
                 const gatewayRunId = readGatewayRunId(response) ?? runId;
                 try {
                   if (!startQueuedSubagentRun(runId, gatewayRunId, launchLifecycleGeneration)) {

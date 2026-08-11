@@ -8,7 +8,10 @@ import {
   resolveBtwSessionTranscriptPath,
 } from "../agents/btw-transcript.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
-import { extractAssistantText, stripToolMessages } from "../agents/tools/chat-history-text.js";
+import {
+  extractStoredAssistantText,
+  stripToolMessages,
+} from "../agents/tools/chat-history-text.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveStorePath } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -158,7 +161,7 @@ function sanitizeSeedMessages(messages: unknown[]): SessionCompanionSeedMessage[
       const role = (message as { role?: unknown }).role;
       const text =
         role === "assistant"
-          ? normalizeSeedText(extractAssistantText(message) ?? "")
+          ? normalizeSeedText(extractStoredAssistantText(message) ?? "")
           : role === "user"
             ? extractUserText(message)
             : undefined;

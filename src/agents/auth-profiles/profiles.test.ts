@@ -28,20 +28,20 @@ import {
   upsertAuthProfileWithLock,
 } from "./profiles.js";
 import {
+  clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshot as getInternalRuntimeAuthProfileStoreSnapshot,
   getRuntimeAuthProfileStoreCredentialMutationToken,
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreStateMutationToken,
+  replaceRuntimeAuthProfileStoreSnapshots,
 } from "./runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath, runAuthProfileWriteTransaction } from "./sqlite.js";
 import {
   captureAuthProfileStorePersistenceSnapshot,
-  clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStoreWithoutExternalProfiles,
   getRuntimeAuthProfileStoreSnapshot,
   loadAuthProfileStoreForRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
-  replaceRuntimeAuthProfileStoreSnapshots,
   restoreAuthProfileStorePersistenceSnapshot,
   saveAuthProfileStoreIfPersistenceSnapshotMatches,
   saveAuthProfileStore,

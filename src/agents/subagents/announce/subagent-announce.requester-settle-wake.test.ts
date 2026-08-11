@@ -3,6 +3,7 @@
 // nested/cron/single-delivered paths.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 
 const deliverSpy = vi.fn(
   async (
@@ -117,8 +118,14 @@ function transitionBatch(runIds: readonly string[], state: RequesterSettleWakeBa
   }
 }
 
-function completeBatch(runIds: readonly string[], rearmGeneration?: number): void {
-  if (rearmGeneration === undefined) {
+function completeBatch(
+  runIds: readonly string[],
+  rearmGeneration?: number,
+  outcome?: SubagentAnnounceDeliveryResult,
+): void {
+  if (outcome) {
+    completeBatchSpy(runIds, rearmGeneration, outcome);
+  } else if (rearmGeneration === undefined) {
     completeBatchSpy(runIds);
   } else {
     completeBatchSpy(runIds, rearmGeneration);
@@ -434,7 +441,10 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(deliveredCallArg().directIdempotencyKey).toBe(
       `announce:requester-settle:${REQUESTER}:run-b:yield-1`,
     );
-    expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1);
+    expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1, {
+      delivered: true,
+      path: "direct",
+    });
   });
 
   it.each([
@@ -491,7 +501,10 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
 
     expect(woke).toBe(true);
     expect(deliverSpy).toHaveBeenCalledOnce();
-    expect(completeBatchSpy).toHaveBeenCalledWith(["run-a"], 1);
+    expect(completeBatchSpy).toHaveBeenCalledWith(["run-a"], 1, {
+      delivered: true,
+      path: "direct",
+    });
   });
 
   it("wakes after a requester yields with one already-delivered completion", async () => {
@@ -522,7 +535,10 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(deliveredCallArg().directIdempotencyKey).toBe(
       `announce:requester-settle:${REQUESTER}:run-b:yield-1`,
     );
-    expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1);
+    expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1, {
+      delivered: true,
+      path: "direct",
+    });
   });
 
   it("wakes for a single required completion whose announce never delivered", async () => {
@@ -653,7 +669,10 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
         `announce:requester-settle:${REQUESTER}:run-b:yield-1`,
         `announce:requester-settle:${REQUESTER}:run-b:yield-1:retry-1`,
       ]);
-      expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1);
+      expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1, {
+        delivered: true,
+        path: "direct",
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -742,6 +761,11 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
 
       expect(woke).toBe(false);
       expect(deliverSpy).toHaveBeenCalledTimes(3);
+      expect(completeBatchSpy).toHaveBeenLastCalledWith(["run-a", "run-b"], undefined, {
+        delivered: false,
+        path: "direct",
+        error: "undelivered",
+      });
     } finally {
       vi.useRealTimers();
       deliverSpy.mockReset().mockResolvedValue({ delivered: true, path: "direct" });
@@ -763,6 +787,11 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
 
     expect(woke).toBe(false);
     expect(deliverSpy).toHaveBeenCalledTimes(1);
+    expect(completeBatchSpy).toHaveBeenLastCalledWith(["run-a", "run-b"], undefined, {
+      delivered: false,
+      path: "direct",
+      disposition: "ambiguous",
+    });
   });
 
   it("does not consume retry budget when aborted before dispatch", async () => {
@@ -812,7 +841,10 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       ).toBe(true);
       expect(String(deliveredCallArg().triggerMessage)).toContain("alpha findings");
       expect(String(deliveredCallArg().triggerMessage)).toContain("beta findings");
-      expect(completeBatchSpy).toHaveBeenLastCalledWith(["run-a", "run-b"]);
+      expect(completeBatchSpy).toHaveBeenLastCalledWith(["run-a", "run-b"], undefined, {
+        delivered: true,
+        path: "direct",
+      });
     });
 
     it("persists the frozen batch before dispatch", async () => {
@@ -983,7 +1015,10 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       expect(
         await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: mixed[1] })),
       ).toBe(true);
-      expect(completeBatchSpy).toHaveBeenLastCalledWith(["run-delete", "run-keep"]);
+      expect(completeBatchSpy).toHaveBeenLastCalledWith(["run-delete", "run-keep"], undefined, {
+        delivered: true,
+        path: "direct",
+      });
 
       deliverSpy.mockClear();
       completeBatchSpy.mockClear();

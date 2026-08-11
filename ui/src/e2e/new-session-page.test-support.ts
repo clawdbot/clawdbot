@@ -8,11 +8,12 @@ import {
   installMockGateway as installControlUiMockGateway,
   type ControlUiMockGatewayScenario,
   type MockGatewayControls,
+  waitForConfirmModal,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-export { controlUiSessionPath, controlUiSessionUrl };
+export { controlUiSessionPath, controlUiSessionUrl, waitForConfirmModal };
 
 const NEW_SESSION_FEATURE_METHODS = [
   "chat.metadata",

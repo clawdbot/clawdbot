@@ -3289,6 +3289,22 @@ td.data-table-key-col {
   color: var(--warn);
 }
 
+/* The confirm opt-out is a control, not a continuation of the message copy, so it
+   takes the same 12px separation the details block uses and keeps the 16px action
+   gap below it. Without the margin it reads as a third line of the paragraph. */
+.exec-approval-skip {
+  margin-top: 12px;
+  column-gap: 10px;
+  font-size: 13px;
+  cursor: var(--cursor-action);
+}
+
+.exec-approval-skip input[type="checkbox"] {
+  margin: 0;
+  width: 16px;
+  height: 16px;
+}
+
 .exec-approval-actions {
   margin-top: 16px;
   display: flex;

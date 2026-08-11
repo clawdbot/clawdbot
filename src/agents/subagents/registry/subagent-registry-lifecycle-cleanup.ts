@@ -33,6 +33,7 @@ import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
 
 type RunSubagentAnnounceFlow =
   (typeof import("../announce/subagent-announce.js"))["runSubagentAnnounceFlow"];
+type SubagentAnnounceFlowOutcome = Awaited<ReturnType<RunSubagentAnnounceFlow>>;
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 
@@ -199,7 +200,7 @@ export function createSubagentRegistryLifecycleCleanup(
   const finalizeSubagentCleanup = async (
     runId: string,
     cleanup: "delete" | "keep",
-    didAnnounce: boolean,
+    announceOutcome: SubagentAnnounceFlowOutcome,
     cleanupGeneration: number,
     options?: {
       skipAnnounce?: boolean;
@@ -247,12 +248,13 @@ export function createSubagentRegistryLifecycleCleanup(
       }
       return;
     }
-    if (didAnnounce) {
+    if (announceOutcome === "delivered" || announceOutcome === "intentional_non_delivery") {
       const delivery = ensureDeliveryState(entry);
       const shouldCreditDelivery =
-        !options?.skipAnnounce ||
-        delivery.status === "delivered" ||
-        typeof delivery.announcedAt === "number";
+        announceOutcome === "delivered" &&
+        (!options?.skipAnnounce ||
+          delivery.status === "delivered" ||
+          typeof delivery.announcedAt === "number");
       if (shouldCreditDelivery) {
         const deliveredAt = delivery.deliveredAt ?? delivery.announcedAt ?? Date.now();
         delivery.status = "delivered";
@@ -263,7 +265,18 @@ export function createSubagentRegistryLifecycleCleanup(
           params.persist(runId);
         }
       }
-      clearPendingFinalDelivery(entry);
+      if (announceOutcome === "delivered") {
+        clearPendingFinalDelivery(entry);
+      } else {
+        // The requester-settle batch owns the real delivery now. Retire the
+        // per-child retry obligation without converting the handoff into success.
+        delivery.status = "pending";
+        delivery.disposition = "intentional_non_delivery";
+        delivery.payload = undefined;
+        delivery.createdAt = undefined;
+        delivery.attemptCount = undefined;
+        delivery.nextAttemptAt = undefined;
+      }
       const finalDelivery = ensureDeliveryState(entry);
       if (shouldCreditDelivery) {
         finalDelivery.status = "delivered";
@@ -275,9 +288,13 @@ export function createSubagentRegistryLifecycleCleanup(
           entry,
           deliveryStatus: "delivered",
         });
+      } else if (announceOutcome === "intentional_non_delivery" && !options?.skipDeliveryStatus) {
+        safeSetSubagentTaskDeliveryStatus({ entry, deliveryStatus: "pending" });
       }
-      finalDelivery.lastError = undefined;
-      finalDelivery.lastDropReason = undefined;
+      if (announceOutcome === "delivered") {
+        finalDelivery.lastError = undefined;
+        finalDelivery.lastDropReason = undefined;
+      }
       entry.wakeOnDescendantSettle = undefined;
       const completion = ensureCompletionState(entry);
       completion.fallbackResultText = undefined;
@@ -311,7 +328,7 @@ export function createSubagentRegistryLifecycleCleanup(
       return;
     }
 
-    if (entry.delivery?.disposition === "session_queued") {
+    if (announceOutcome === "session_queued") {
       // The correlated queue owns transport now. Settlement, not admission,
       // decides delivered versus blocked and re-enters cleanup afterward.
       entry.cleanupHandled = false;
@@ -356,7 +373,7 @@ export function createSubagentRegistryLifecycleCleanup(
 
     markPendingFinalDelivery({
       entry,
-      error: didAnnounce ? undefined : "announce deferred or direct delivery failed",
+      error: "announce deferred or direct delivery failed",
     });
     const delivery = ensureDeliveryState(entry);
     delivery.windowStartedAt ??= entry.execution.endedAt ?? now;
@@ -389,7 +406,7 @@ export function createSubagentRegistryLifecycleCleanup(
         entry,
         cleanupGeneration,
         run: async () => {
-          await finalizeSubagentCleanup(runId, cleanup, true, cleanupGeneration, {
+          await finalizeSubagentCleanup(runId, cleanup, "delivered", cleanupGeneration, {
             skipAnnounce: true,
           });
         },
@@ -482,7 +499,7 @@ export function createSubagentRegistryLifecycleCleanup(
             await retireSupersededCleanupIfNeeded(runId, entry, cleanupGeneration);
             return;
           }
-          await finalizeSubagentCleanup(runId, cleanup, true, cleanupGeneration, {
+          await finalizeSubagentCleanup(runId, cleanup, "delivered", cleanupGeneration, {
             skipAnnounce: true,
             skipDeliveryStatus: true,
             skipRequesterDelivery,
@@ -494,13 +511,13 @@ export function createSubagentRegistryLifecycleCleanup(
     const pendingPayload = loadPendingFinalDeliveryPayload(entry);
     const requesterOrigin = normalizeDeliveryContext(pendingPayload.requesterOrigin);
     let latestDeliveryError = getDeliveryLastError(entry);
-    const finalizeAnnounceCleanup = async (didAnnounce: boolean) => {
+    const finalizeAnnounceCleanup = async (announceOutcome: SubagentAnnounceFlowOutcome) => {
       if (!isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
         await retireSupersededCleanupIfNeeded(runId, entry, cleanupGeneration);
         return;
       }
       const shouldCreditPriorDelivery =
-        !didAnnounce && (await hasPriorRequesterDeliveryMirror(entry));
+        announceOutcome !== "delivered" && (await hasPriorRequesterDeliveryMirror(entry));
       if (!isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
         await retireSupersededCleanupIfNeeded(runId, entry, cleanupGeneration);
         return;
@@ -508,13 +525,13 @@ export function createSubagentRegistryLifecycleCleanup(
       if (shouldCreditPriorDelivery) {
         latestDeliveryError = undefined;
       }
-      if (!didAnnounce && latestDeliveryError) {
+      if (announceOutcome !== "delivered" && latestDeliveryError) {
         ensureDeliveryState(entry).lastError = latestDeliveryError;
       }
       await finalizeSubagentCleanup(
         runId,
         cleanup,
-        didAnnounce || shouldCreditPriorDelivery,
+        shouldCreditPriorDelivery ? "delivered" : announceOutcome,
         cleanupGeneration,
       );
     };
@@ -578,7 +595,7 @@ export function createSubagentRegistryLifecycleCleanup(
           latestDeliveryError = undefined;
           return;
         }
-        if (delivery.path === "none") {
+        if (delivery.path === "none" && delivery.disposition !== "intentional_non_delivery") {
           ensureDeliveryState(entry).lastDropReason = "sink_unavailable";
         }
         latestDeliveryError = formatAnnounceDeliveryError(delivery);
@@ -593,15 +610,15 @@ export function createSubagentRegistryLifecycleCleanup(
       entry,
       cleanupGeneration,
       run: async () => {
-        let didAnnounce = false;
+        let announceOutcome: SubagentAnnounceFlowOutcome = "retryable";
         try {
-          didAnnounce = await params.runSubagentAnnounceFlow(announceParams);
+          announceOutcome = await params.runSubagentAnnounceFlow(announceParams);
         } catch (error) {
           defaultRuntime.log(
             `[warn] Subagent announce flow failed during cleanup for run ${runId}: ${String(error)}`,
           );
         }
-        await finalizeAnnounceCleanup(didAnnounce);
+        await finalizeAnnounceCleanup(announceOutcome);
       },
     });
     return true;

@@ -115,7 +115,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     testing.setDepsForTest({
       ...createSubagentRegistryTestDeps(),
       getGatewayRecoveryRuntime: () => gatewayRuntime,
-      runSubagentAnnounceFlow: vi.fn(async () => true),
+      runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
       onAgentEvent: vi.fn(() => () => undefined),
     });
     dispatchAgent.mockReset();
@@ -256,7 +256,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     testing.setDepsForTest({
       ...createSubagentRegistryTestDeps(),
       getGatewayRecoveryRuntime: () => gatewayRuntime,
-      runSubagentAnnounceFlow: vi.fn(async () => true),
+      runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
       onAgentEvent: vi.fn(() => () => undefined),
       persistSubagentRunsToDiskOrThrow: (runs, changedRunIds) => {
         strictWriteCount += 1;
@@ -408,7 +408,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     testing.setDepsForTest({
       ...createSubagentRegistryTestDeps(),
       getGatewayRecoveryRuntime: () => gatewayRuntime,
-      runSubagentAnnounceFlow: vi.fn(async () => true),
+      runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
       onAgentEvent: vi.fn(() => () => undefined),
       persistSubagentRunsToDiskOrThrow: (runs, changedRunIds) => {
         strictWriteCount += 1;
@@ -456,7 +456,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
       ...createSubagentRegistryTestDeps(),
       callGateway,
       getGatewayRecoveryRuntime: () => gatewayRuntime,
-      runSubagentAnnounceFlow: vi.fn(async () => true),
+      runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
       onAgentEvent: vi.fn(() => () => undefined),
     });
     initSubagentRegistry();
@@ -528,7 +528,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     testing.setDepsForTest({
       ...createSubagentRegistryTestDeps(),
       getGatewayRecoveryRuntime: () => gatewayRuntime,
-      runSubagentAnnounceFlow: vi.fn(async () => true),
+      runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
       onAgentEvent: vi.fn(() => () => undefined),
     });
     initSubagentRegistry();
@@ -603,7 +603,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     testing.setDepsForTest({
       ...createSubagentRegistryTestDeps(),
       getGatewayRecoveryRuntime: () => gatewayRuntime,
-      runSubagentAnnounceFlow: vi.fn(async () => true),
+      runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
       onAgentEvent: vi.fn(() => () => undefined),
       persistSubagentRunsToDiskOrThrow: (runs, changedRunIds) => {
         strictWriteCount += 1;

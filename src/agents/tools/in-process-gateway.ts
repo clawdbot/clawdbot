@@ -25,6 +25,7 @@ type AgentToolGatewayRequest = Pick<
   | "onSignalAbort"
   | "params"
   | "signal"
+  | "scopes"
   | "timeoutMs"
 >;
 
@@ -54,30 +55,32 @@ export const callAgentToolGatewayRequest: AgentToolGatewayRequestCaller = async 
     const { callGateway } = await import("../../gateway/call.js");
     return await callGateway<T>(request);
   }
-  const scopes = resolveLeastPrivilegeOperatorScopesForMethod(request.method, request.params);
+  const scopes =
+    request.scopes ?? resolveLeastPrivilegeOperatorScopesForMethod(request.method, request.params);
   const timeoutMs =
     request.timeoutMs === null
       ? undefined
       : (request.timeoutMs ?? DEFAULT_IN_PROCESS_GATEWAY_REQUEST_TIMEOUT_MS);
+  const dispatchOptions = {
+    forceSyntheticClient: true,
+    syntheticScopes: scopes,
+    ...(request.expectFinal !== undefined ? { expectFinal: request.expectFinal } : {}),
+    ...(request.onAccepted ? { onAccepted: request.onAccepted } : {}),
+    ...(request.onSignalAbort
+      ? {
+          onSignalAbort: () =>
+            request.onSignalAbort?.((method, params, options) =>
+              callAgentToolGatewayRequest({ method, params, ...options }),
+            ),
+        }
+      : {}),
+    ...(request.signal ? { signal: request.signal } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+  };
   return await dispatchGatewayMethodInProcess<T>(
     request.method,
     (request.params ?? {}) as Record<string, unknown>,
-    {
-      forceSyntheticClient: true,
-      syntheticScopes: scopes,
-      ...(request.expectFinal !== undefined ? { expectFinal: request.expectFinal } : {}),
-      ...(request.onAccepted ? { onAccepted: request.onAccepted } : {}),
-      ...(request.onSignalAbort
-        ? {
-            onSignalAbort: () =>
-              request.onSignalAbort?.((method, params, options) =>
-                callAgentToolGatewayRequest({ method, params, ...options }),
-              ),
-          }
-        : {}),
-      ...(request.signal ? { signal: request.signal } : {}),
-      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-    },
+    dispatchOptions,
   );
 };
 

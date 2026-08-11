@@ -235,11 +235,16 @@ vi.mock("../../agents/subagents/registry/subagent-registry.js", async (importOri
   return {
     ...actual,
     getSwarmRunByLaunchReplayKey: () => undefined,
-    getLatestSubagentRunByChildSessionKey: () => null,
-    listSubagentRunsForController: () => [],
     markSubagentRunTerminated: () => 0,
   };
 });
+vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../agents/subagents/registry/subagent-registry-read.js")
+  >()),
+  getLatestSubagentRunByChildSessionKey: () => null,
+  listSubagentRunsForController: () => [],
+}));
 
 // #85714: keep the real private-final decision but spy the WARN emitter so we
 // can assert it fires only through the substantive text suppression branch.

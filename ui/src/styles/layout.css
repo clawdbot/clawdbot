@@ -2924,34 +2924,6 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   border-color: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
-.sidebar-pinned-session__icon {
-  width: 16px;
-  height: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  overflow: hidden;
-  opacity: 0.72;
-  transition:
-    opacity var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.sidebar-pinned-session__icon svg {
-  width: 16px;
-  height: 16px;
-}
-
-.sidebar-zone-entry .sidebar-recent-session:hover .sidebar-pinned-session__icon,
-.sidebar-zone-entry .sidebar-recent-session--active .sidebar-pinned-session__icon {
-  opacity: 1;
-}
-
-.sidebar-zone-entry .sidebar-recent-session--active .sidebar-pinned-session__icon {
-  color: var(--accent);
-}
-
 .sidebar-zone-entry .sidebar-recent-session__aside {
   padding-right: 0;
 }

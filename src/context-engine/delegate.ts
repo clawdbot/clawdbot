@@ -152,8 +152,8 @@ export async function delegateCompactionToRuntime(
 ): Promise<CompactResult> {
   // Load through the dedicated runtime boundary without introducing another
   // source-level static edge into the embedded runner graph.
-  const { compactEmbeddedAgentSessionDirect } = await loadCompactRuntime();
-  type RuntimeCompactionParams = Parameters<typeof compactEmbeddedAgentSessionDirect>[0];
+  const { compactEmbeddedAgentSessionOnDemand } = await loadCompactRuntime();
+  type RuntimeCompactionParams = Parameters<typeof compactEmbeddedAgentSessionOnDemand>[0];
 
   // runtimeContext carries host-resolved runtime fields set by internal
   // callers. Keep the public delegate keyed by session identity, not by the
@@ -172,7 +172,7 @@ export async function delegateCompactionToRuntime(
       ? Math.floor(runtimeContext.currentTokenCount)
       : undefined);
 
-  const result = await compactEmbeddedAgentSessionDirect({
+  const result = await compactEmbeddedAgentSessionOnDemand({
     ...runtimeContextParams,
     ...(agentId ? { agentId } : {}),
     sessionId: params.sessionId,

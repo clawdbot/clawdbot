@@ -602,8 +602,7 @@ function renderUsageInsights(
       : t("usage.common.emptyValue");
   const avgDurationLabel =
     stats.durationCount > 0
-      ? (formatDurationCompact(stats.avgDurationMs, { spaced: true }) ??
-        t("usage.common.emptyValue"))
+      ? (formatDurationCompact(stats.avgDurationMs) ?? t("usage.common.emptyValue"))
       : t("usage.common.emptyValue");
   const errorDays = aggregates.daily
     .filter((day) => day.messages > 0 && day.errors > 0)
@@ -824,7 +823,7 @@ function renderSessionsCard(
         `errors:${session.usage.messageCounts.errors}`,
       showColumn("duration") &&
         session.usage?.durationMs &&
-        `dur:${formatDurationCompact(session.usage.durationMs, { spaced: true }) ?? "—"}`,
+        `dur:${formatDurationCompact(session.usage.durationMs) ?? "—"}`,
     ].filter((part): part is string => typeof part === "string" && part.length > 0);
 
   const selectedDaySet = new Set(selectedDays);

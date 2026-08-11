@@ -1,10 +1,13 @@
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
+import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
+import { ensureDeliveryState } from "./subagent-delivery-state.js";
 import type { createSubagentRegistryLifecycleCommon } from "./subagent-registry-lifecycle-common.js";
 import type {
   SubagentRegistryLifecycleParams,
   SubagentRegistryLifecycleState,
 } from "./subagent-registry-lifecycle-contracts.js";
+import type { createSubagentRegistryLifecycleDelivery } from "./subagent-registry-lifecycle-delivery.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
@@ -15,6 +18,7 @@ export function createSubagentRegistryLifecycleRequesterWake(
   params: SubagentRegistryLifecycleParams,
   lifecycleState: SubagentRegistryLifecycleState,
   common: ReturnType<typeof createSubagentRegistryLifecycleCommon>,
+  deliveryHelpers: ReturnType<typeof createSubagentRegistryLifecycleDelivery>,
 ) {
   const {
     pendingRequesterSettleWakeRearms,
@@ -22,6 +26,8 @@ export function createSubagentRegistryLifecycleRequesterWake(
     scheduledRequesterSettleWakeTimers,
   } = lifecycleState;
   const { buildSafeLifecycleErrorMeta, maskRunId, maskSessionKey } = common;
+  const { safeMarkRequiredCompletionDeliveryBlocked, safeSetSubagentTaskDeliveryStatus } =
+    deliveryHelpers;
 
   const transitionRequesterSettleWakeBatch = (
     runIds: readonly string[],
@@ -59,6 +65,7 @@ export function createSubagentRegistryLifecycleRequesterWake(
   const completeRequesterSettleWakeBatch = (
     runIds: readonly string[],
     rearmGeneration?: number,
+    outcome?: SubagentAnnounceDeliveryResult,
   ) => {
     const entries = runIds
       .map((runId) => [runId, params.runs.get(runId)] as const)
@@ -72,10 +79,35 @@ export function createSubagentRegistryLifecycleRequesterWake(
     }
     const requesterSessionKeys = new Set(entries.map(([, entry]) => entry.requesterSessionKey));
     const previousStates = entries.map(([, entry]) => ({
+      delivery: structuredClone(entry.delivery),
       requesterSettleWake: structuredClone(entry.requesterSettleWake),
       retireAfterRequesterTurn: entry.retireAfterRequesterTurn,
     }));
+    const settledDeliveries: SubagentRunRecord[] = [];
     for (const [runId, entry] of entries) {
+      if (
+        outcome &&
+        entry.expectsCompletionMessage === true &&
+        entry.delivery?.status !== "delivered"
+      ) {
+        const delivery = ensureDeliveryState(entry);
+        if (outcome.delivered) {
+          const deliveredAt = outcome.deliveredAt ?? Date.now();
+          delivery.status = "delivered";
+          delivery.disposition = "delivered";
+          delivery.deliveredAt = deliveredAt;
+          delivery.announcedAt = deliveredAt;
+          delivery.lastError = undefined;
+          delivery.lastDropReason = undefined;
+        } else {
+          delivery.status = "failed";
+          delivery.disposition = outcome.disposition ?? delivery.disposition;
+          delivery.lastError = outcome.error ?? outcome.reason ?? "requester settle wake failed";
+          delivery.deliveredAt = undefined;
+          delivery.announcedAt = undefined;
+        }
+        settledDeliveries.push(entry);
+      }
       if (entry.requesterTurnRunId) {
         entry.retireAfterRequesterTurn =
           entry.retireAfterRequesterTurn === true ||
@@ -95,10 +127,24 @@ export function createSubagentRegistryLifecycleRequesterWake(
       entries.forEach(([runId, entry], index) => {
         const previous = previousStates[index];
         params.runs.set(runId, entry);
+        entry.delivery = previous?.delivery;
         entry.requesterSettleWake = previous?.requesterSettleWake;
         entry.retireAfterRequesterTurn = previous?.retireAfterRequesterTurn;
       });
       throw error;
+    }
+    for (const entry of settledDeliveries) {
+      if (outcome?.delivered) {
+        safeSetSubagentTaskDeliveryStatus({ entry, deliveryStatus: "delivered" });
+      } else if (outcome) {
+        const error = outcome.error ?? outcome.reason ?? "requester settle wake failed";
+        safeSetSubagentTaskDeliveryStatus({
+          entry,
+          deliveryStatus: "failed",
+          deliveryError: error,
+        });
+        safeMarkRequiredCompletionDeliveryBlocked({ entry, reason: error });
+      }
     }
     for (const [runId, entry] of entries) {
       const retryTimer = scheduledRequesterSettleWakeTimers.get(runId);

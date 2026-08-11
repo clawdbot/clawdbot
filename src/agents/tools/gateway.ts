@@ -30,7 +30,7 @@ import {
   type DeviceIdentity,
 } from "../../infra/device-identity.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { readPositiveIntegerParam, readStringParam } from "./common.js";
+import { readPositiveIntegerParam, readToolStringParam } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { getGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 
@@ -46,8 +46,8 @@ type GatewayOverrideTarget = "local" | "remote";
 /** Reads common gateway options from tool parameters while preserving explicit token whitespace. */
 export function readGatewayCallOptions(params: Record<string, unknown>): GatewayCallOptions {
   return {
-    gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
-    gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
+    gatewayUrl: readToolStringParam(params, "gatewayUrl", { trim: false }),
+    gatewayToken: readToolStringParam(params, "gatewayToken", { trim: false }),
     timeoutMs: readPositiveIntegerParam(params, "timeoutMs"),
   };
 }

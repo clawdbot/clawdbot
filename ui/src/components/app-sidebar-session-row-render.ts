@@ -369,7 +369,7 @@ export function renderRecentSession(params: {
                   ? html`<openclaw-elapsed-time
                       .startMs=${session.runtimeSampledAt! - session.runtimeMs}
                     ></openclaw-elapsed-time>`
-                  : (formatDurationCompact(session.runtimeMs, { spaced: true }) ?? "0ms")
+                  : (formatDurationCompact(session.runtimeMs) ?? "0ms")
                 : html`<openclaw-elapsed-time
                     .startMs=${session.startedAt!}
                     .endMs=${session.endedAt ?? null}

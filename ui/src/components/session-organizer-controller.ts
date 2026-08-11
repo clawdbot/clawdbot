@@ -198,7 +198,9 @@ export class SessionOrganizerController implements ReactiveController {
       return;
     }
     const operations = await this.loadOperations(scope);
-    await operations?.deleteSession(this.host, session, scope);
+    // Sidebar is the surface the delete-confirm setting names, so it is the one
+    // caller allowed to offer the opt-out.
+    await operations?.deleteSession(this.host, session, scope, { offerSkip: true });
   }
 
   startSidebarRouteDrag(event: DragEvent, route: SidebarNavRoute) {

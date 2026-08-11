@@ -36,7 +36,7 @@ import type {
   NativeHookRelayProviderAdapter,
   NativeHookRelayRegistration,
 } from "./native-hook-relay-types.js";
-import { readOptionalString, truncateText } from "./native-hook-relay-utils.js";
+import { readOptionalString, truncateRelayText } from "./native-hook-relay-utils.js";
 
 export type NativeHookRelayDeferredToolApprovalRequester = typeof requestDeferredPluginToolApproval;
 
@@ -282,7 +282,7 @@ function nativeHookRelayPermissionAllowAlwaysKey(params: {
 function permissionRequestFallbackKey(request: NativeHookRelayPermissionApprovalRequest): string {
   const command = readOptionalString(request.toolInput.command);
   if (command) {
-    return `${request.toolName}:command:${truncateText(command, 240)}`;
+    return `${request.toolName}:command:${truncateRelayText(command, 240)}`;
   }
   return `${request.toolName}:keys:${permissionRequestToolInputKeyFingerprint(request.toolInput)}`;
 }
@@ -482,11 +482,11 @@ async function requestNativeHookRelayPermissionApproval(
     { timeoutMs: timeoutMs + 10_000 },
     {
       pluginId: `openclaw-native-hook-relay-${request.provider}`,
-      title: truncateText(
+      title: truncateRelayText(
         `${nativeHookRelayProviderDisplayName(request.provider)} permission request`,
         MAX_APPROVAL_TITLE_LENGTH,
       ),
-      description: truncateText(
+      description: truncateRelayText(
         formatPermissionApprovalDescription(request),
         MAX_APPROVAL_DESCRIPTION_LENGTH,
       ),
@@ -592,7 +592,7 @@ function formatPermissionApprovalDescription(
 function formatToolInputPreview(toolInput: Record<string, unknown>): string | undefined {
   const command = readOptionalString(toolInput.command);
   if (command) {
-    return `Command: ${truncateText(sanitizeApprovalText(command), 240)}`;
+    return `Command: ${truncateRelayText(sanitizeApprovalText(command), 240)}`;
   }
   const keys = Object.keys(toolInput).map(sanitizeApprovalText).filter(Boolean).toSorted();
   if (!keys.length) {

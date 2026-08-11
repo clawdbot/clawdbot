@@ -14,6 +14,7 @@ import {
   setDetachedTaskDeliveryStatusByRunId,
 } from "../../../tasks/detached-task-runtime.js";
 import { resolveRequiredCompletionDeliveryFailureTerminalResult } from "../../../tasks/task-completion-contract.js";
+import type { TaskDeliveryStatus } from "../../../tasks/task-registry.types.js";
 import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
@@ -51,6 +52,7 @@ export function createSubagentRegistryLifecycleDelivery(
   const formatAnnounceDeliveryError = (delivery: SubagentAnnounceDeliveryResult): string => {
     const errors = [
       delivery.error,
+      delivery.reason,
       ...(delivery.phases ?? []).map((phase) =>
         phase.error ? `${phase.phase}: ${phase.error}` : undefined,
       ),
@@ -164,7 +166,7 @@ export function createSubagentRegistryLifecycleDelivery(
 
   const safeSetSubagentTaskDeliveryStatus = (args: {
     entry: SubagentRunRecord;
-    deliveryStatus: "delivered" | "failed";
+    deliveryStatus: Extract<TaskDeliveryStatus, "pending" | "delivered" | "failed">;
     deliveryError?: string;
   }) => {
     const target = resolveSubagentTaskTarget(args.entry);

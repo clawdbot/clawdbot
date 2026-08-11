@@ -38,7 +38,7 @@ import {
 } from "./execute-logging.js";
 import {
   createCliAbortError,
-  resolveNodeClaudePlacement,
+  resolveNodeClaudeTarget,
   stripGatewayLocalClaudeArgs,
 } from "./execute-node-claude.js";
 import { executeCliProcess } from "./execute-process.js";
@@ -138,7 +138,7 @@ export async function executePreparedCliRun(
     throw createCliAbortError();
   }
   const backend = context.preparedBackend.backend;
-  const nodePlacement = resolveNodeClaudePlacement(context);
+  const nodePlacement = resolveNodeClaudeTarget(context);
   const { sessionId: resolvedSessionId, isNew } = resolveSessionIdToSend({
     backend,
     cliSessionId: cliSessionIdToUse,

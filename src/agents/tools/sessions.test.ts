@@ -13,7 +13,7 @@ import {
 } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { extractAssistantText, sanitizeTextContent } from "./chat-history-text.js";
+import { extractStoredAssistantText, sanitizeTextContent } from "./chat-history-text.js";
 
 const callGatewayMock = vi.fn();
 const inProcessGatewayRequestMock = vi.fn((opts: unknown) => callGatewayMock(opts));
@@ -402,7 +402,7 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
 });
 
-describe("extractAssistantText", () => {
+describe("extractStoredAssistantText", () => {
   it("sanitizes blocks without injecting newlines", () => {
     const message = {
       role: "assistant",
@@ -411,7 +411,7 @@ describe("extractAssistantText", () => {
         { type: "text", text: "<think>secret</think>there" },
       ],
     };
-    expect(extractAssistantText(message)).toBe("Hi there");
+    expect(extractStoredAssistantText(message)).toBe("Hi there");
   });
 
   it("rewrites error-ish assistant text only when the transcript marks it as an error", () => {
@@ -421,7 +421,7 @@ describe("extractAssistantText", () => {
       errorMessage: "500 Internal Server Error",
       content: [{ type: "text", text: "500 Internal Server Error" }],
     };
-    expect(extractAssistantText(message)).toBe("HTTP 500: Internal Server Error");
+    expect(extractStoredAssistantText(message)).toBe("HTTP 500: Internal Server Error");
   });
 
   it("keeps normal status text that mentions billing", () => {
@@ -434,7 +434,7 @@ describe("extractAssistantText", () => {
         },
       ],
     };
-    expect(extractAssistantText(message)).toBe(
+    expect(extractStoredAssistantText(message)).toBe(
       "Firebase downgraded us to the free Spark plan. Check whether billing should be re-enabled.",
     );
   });
@@ -446,7 +446,7 @@ describe("extractAssistantText", () => {
       errorMessage: "insufficient credits for embedding model",
       content: [{ type: "text", text: "Handle payment required errors in your API." }],
     };
-    expect(extractAssistantText(message)).toBe("Handle payment required errors in your API.");
+    expect(extractStoredAssistantText(message)).toBe("Handle payment required errors in your API.");
   });
 
   it("prefers final_answer text when phased assistant history is present", () => {
@@ -465,7 +465,7 @@ describe("extractAssistantText", () => {
         },
       ],
     };
-    expect(extractAssistantText(message)).toBe("Done.");
+    expect(extractStoredAssistantText(message)).toBe("Done.");
   });
 });
 

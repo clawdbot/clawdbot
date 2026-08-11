@@ -1,6 +1,6 @@
+import { loadSettings, patchSettings } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
-import { moveSessionSection, normalizeSessionSectionOrder } from "../lib/sessions/grouping.ts";
 import {
   buildAgentMainSessionKey,
   parseAgentSessionKey,
@@ -15,34 +15,26 @@ import type {
   SidebarSessionPatch,
 } from "./app-sidebar-session-types.ts";
 import { requestCloudWorkerStop } from "./cloud-worker-stop.ts";
-import { showConfirmDialog } from "./confirm-dialog.ts";
+import { showConfirmDialog, type ConfirmDialogSkipPreference } from "./confirm-dialog.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 import {
   patchSessionRows,
   refreshSessionsAfterBatch,
+  requireSessionMutationAccess,
   sessionRowAgentId,
 } from "./session-organizer-batch-mutations.ts";
 import type { SessionActionHost, SessionActionRow } from "./session-organizer-batch-mutations.ts";
+import { rememberSessionGroup } from "./session-organizer-catalog.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
 
 export type { SessionActionHost, SessionActionRow } from "./session-organizer-batch-mutations.ts";
-
-function requireSessionMutationAccess(
-  host: SessionActionHost,
-  scope: SidebarSessionMutationScope,
-  request: {
-    method: string;
-    params?: unknown;
-    requiredScope?: "operator.write" | "operator.admin";
-  },
-): boolean {
-  const access = readSessionMethodAccess(scope.gateway.snapshot, request);
-  if (access.allowed) {
-    return true;
-  }
-  host.sessionData.publishSessionMutationError(scope, access.reason);
-  return false;
-}
+// The controller loads this module as a single namespace, so the catalog
+// operations stay reachable under their original names after the split.
+export {
+  deleteSessionGroup,
+  renameSessionGroup,
+  reorderSidebarSection,
+} from "./session-organizer-catalog.ts";
 
 export async function patchSession(
   host: SessionActionHost,
@@ -237,6 +229,27 @@ async function restoreArchivedSessions(
   await refreshSessionsAfterBatch(host, scope, rows);
 }
 
+/**
+ * Session deletes are the repeatable, per-row destructive action here, so they
+ * carry an opt-out. Stopping a cloud worker and removing a preserved worktree
+ * deliberately get none: the first is a rare shared-resource action and the
+ * second destroys the only copy of uncommitted work.
+ */
+function sessionDeleteSkipPreference(
+  scope: SidebarSessionMutationScope,
+): ConfirmDialogSkipPreference {
+  return {
+    skipped: loadSettings().sessionDeleteConfirm === false,
+    remember: () => {
+      patchSettings({ sessionDeleteConfirm: false });
+      // A mounted Settings -> Appearance rereads settings only on this
+      // notification; without it its toggle keeps showing the stale value
+      // while deletes already skip the prompt.
+      scope.context.theme.refresh();
+    },
+  };
+}
+
 /** One confirm and one preserved-worktrees alert for the whole selection. */
 export async function deleteSessionsBatch(
   host: SessionOrganizerControllerHost,
@@ -246,10 +259,15 @@ export async function deleteSessionsBatch(
   if (rows.length === 0) {
     return;
   }
-  if (!window.confirm(t("sessionsView.deleteSessionsConfirm", { count: String(rows.length) }))) {
-    return;
-  }
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  const confirmed = await showConfirmDialog({
+    message: t("sessionsView.deleteSessionsConfirm", { count: String(rows.length) }),
+    confirmLabel: t("common.delete"),
+    danger: true,
+    skipPreference: sessionDeleteSkipPreference(scope),
+  });
+  // A reconnect or a replaced sessions capability can land while the modal is
+  // open, so the captured scope is revalidated before any delete leaves here.
+  if (!confirmed || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
   const requests = rows.map((row) => ({
@@ -345,42 +363,6 @@ export async function runBatchSessionAction(
   }
 }
 
-async function rememberSessionGroup(
-  host: SessionOrganizerControllerHost,
-  name: string,
-  scope: SidebarSessionMutationScope,
-): Promise<SidebarSessionMutationResult> {
-  const groups = host.knownSessionGroups();
-  if (groups.includes(name)) {
-    return "completed";
-  }
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-    return "stale";
-  }
-  if (
-    !requireSessionMutationAccess(host, scope, {
-      method: "sessions.groups.put",
-      requiredScope: "operator.write",
-    })
-  ) {
-    return "failed";
-  }
-  try {
-    const written = await scope.sessions.groupsPut([...groups, name]);
-    // The catalog owns the authoritative stale signal; the mutation scope adds
-    // its own. Either one retiring means no confirmed entry to assign against.
-    return written === "completed" && host.sessionData.isSessionMutationScopeCurrent(scope)
-      ? "completed"
-      : "stale";
-  } catch (error) {
-    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-      return "stale";
-    }
-    host.sessionData.publishSessionMutationError(scope, error);
-    return "failed";
-  }
-}
-
 export async function renameSession(
   host: SessionOrganizerControllerHost,
   session: SidebarRecentSession,
@@ -435,117 +417,6 @@ export async function createSessionGroup(
   // Re-render so the new section shows up.
   host.requestUpdate();
   return "completed";
-}
-
-export async function renameSessionGroup(
-  host: SessionOrganizerControllerHost,
-  group: string,
-  next: string,
-  scope: SidebarSessionMutationScope,
-): Promise<boolean> {
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-    return false;
-  }
-  if (
-    !requireSessionMutationAccess(host, scope, {
-      method: "sessions.groups.rename",
-      requiredScope: "operator.write",
-    })
-  ) {
-    return false;
-  }
-  try {
-    const outcome = await scope.sessions.groupsRename(group, next);
-    return outcome === "completed" && host.sessionData.isSessionMutationScopeCurrent(scope);
-  } catch (error) {
-    host.sessionData.publishSessionMutationError(scope, error);
-    return false;
-  }
-}
-
-export async function deleteSessionGroup(
-  host: SessionOrganizerControllerHost,
-  group: string,
-  scope: SidebarSessionMutationScope,
-): Promise<boolean> {
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-    return false;
-  }
-  if (
-    !requireSessionMutationAccess(host, scope, {
-      method: "sessions.groups.delete",
-      requiredScope: "operator.write",
-    })
-  ) {
-    return false;
-  }
-  // Deleting a group keeps its sessions: the Gateway drops the catalog row and
-  // clears the category on every member, so the confirm names that outcome. It
-  // follows the access check so nobody is asked about a delete that cannot run.
-  const confirmed = await showConfirmDialog({
-    title: t("sessionsView.deleteGroupTitle", { group }),
-    message: t("sessionsView.deleteGroupConfirm", { group }),
-    confirmLabel: t("common.delete"),
-    danger: true,
-  });
-  if (!confirmed) {
-    return false;
-  }
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-    showToast({ message: t("sessionsView.deleteGroupStale", { group }) });
-    return false;
-  }
-  try {
-    const outcome = await scope.sessions.groupsDelete(group);
-    return outcome === "completed" && host.sessionData.isSessionMutationScopeCurrent(scope);
-  } catch (error) {
-    host.sessionData.publishSessionMutationError(scope, error);
-    return false;
-  }
-}
-
-export async function reorderSidebarSection(
-  host: SessionOrganizerControllerHost,
-  sourceSectionId: string,
-  targetSectionId: string,
-  position: "before" | "after",
-  scope: SidebarSessionMutationScope,
-): Promise<void> {
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-    return;
-  }
-  if (
-    !requireSessionMutationAccess(host, scope, {
-      method: "sessions.groups.put",
-      requiredScope: "operator.write",
-    })
-  ) {
-    return;
-  }
-  try {
-    // knownSessionGroups() is the full discovered set (gateway catalog plus
-    // row-discovered categories), so normalize only prunes deleted groups.
-    const knownGroups = host.knownSessionGroups();
-    const knownCatalogIds = host.knownSessionCatalogIds();
-    const next = moveSessionSection(
-      normalizeSessionSectionOrder(host.knownSectionOrder(), knownGroups, knownCatalogIds),
-      sourceSectionId,
-      targetSectionId,
-      position,
-    );
-    const nextGroups = next.flatMap((token) =>
-      token.startsWith("category:") ? [token.slice("category:".length)] : [],
-    );
-    // No capability gate: the gateway serves this UI from its own dist, so a
-    // newer UI never talks to an older gateway's closed put schema outside dev.
-    await scope.sessions.groupsPut(nextGroups, next);
-    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-      return;
-    }
-    host.requestUpdate();
-  } catch (error) {
-    host.sessionData.publishSessionMutationError(scope, error);
-  }
 }
 
 export async function assignSessionCategory(
@@ -607,14 +478,18 @@ export async function stopCloudWorker(
   scope: SidebarSessionMutationScope,
 ) {
   const stopAction = session.cloudWorkerStopAction;
-  if (
-    !stopAction ||
-    (stopAction.method === "sessions.reclaim" && session.hasActiveRun) ||
-    !window.confirm(t("sessionsView.stopCloudWorkerConfirm", { session: session.label }))
-  ) {
+  // Reclaim during an active run is never offered, so decide that before the
+  // await; a run starting while the modal is open is left to the gateway, whose
+  // rejection is a recorded reason instead of a silently dropped confirmation.
+  if (!stopAction || (stopAction.method === "sessions.reclaim" && session.hasActiveRun)) {
     return;
   }
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  const confirmed = await showConfirmDialog({
+    message: t("sessionsView.stopCloudWorkerConfirm", { session: session.label }),
+    confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
+    danger: true,
+  });
+  if (!confirmed || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
   if (!requireSessionMutationAccess(host, scope, stopAction)) {
@@ -647,11 +522,17 @@ export async function deleteSession(
   host: SessionActionHost,
   session: SessionActionRow,
   scope: SidebarSessionMutationScope,
+  // The chat header shares this operation, so the opt-out is opt-in per caller:
+  // only the sidebar the setting names may offer it, and the default keeps asking.
+  options: { offerSkip?: boolean } = {},
 ) {
-  if (!window.confirm(t("sessionsView.deleteSessionConfirm", { session: session.label }))) {
-    return;
-  }
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  const confirmed = await showConfirmDialog({
+    message: t("sessionsView.deleteSessionConfirm", { session: session.label }),
+    confirmLabel: t("common.delete"),
+    danger: true,
+    ...(options.offerSkip ? { skipPreference: sessionDeleteSkipPreference(scope) } : {}),
+  });
+  if (!confirmed || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
   const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
@@ -696,24 +577,29 @@ export async function deleteSession(
         if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
           return;
         }
-      } else if (
-        window.confirm(
-          t("sessionsView.deletePreservedWorktreeConfirm", { branch: preserved.branch }),
-        )
-      ) {
+      } else {
+        const removeWorktree = await showConfirmDialog({
+          message: t("sessionsView.deletePreservedWorktreeConfirm", { branch: preserved.branch }),
+          confirmLabel: t("common.remove"),
+          danger: true,
+        });
+        // Cancel needs this guard too: the delete already landed, so a scope
+        // retired while the modal was open must not drive the navigation below.
         if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
           return;
         }
-        try {
-          await scope.client.request("worktrees.remove", {
-            id: preserved.id,
-            force: true,
-          });
-        } catch (error) {
-          host.sessionData.publishSessionMutationError(scope, error);
-        }
-        if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-          return;
+        if (removeWorktree) {
+          try {
+            await scope.client.request("worktrees.remove", {
+              id: preserved.id,
+              force: true,
+            });
+          } catch (error) {
+            host.sessionData.publishSessionMutationError(scope, error);
+          }
+          if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+            return;
+          }
         }
       }
     }

@@ -10,6 +10,7 @@ import {
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { getGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
   resolveExternalBestEffortDeliveryTarget,
@@ -52,6 +53,26 @@ const AGENT_FOLLOWUP_WAIT_TIMEOUT_MS = 60_000;
 const AGENT_FOLLOWUP_WAIT_RETRY_DELAY_MS = 1_000;
 const AGENT_FOLLOWUP_OBSERVATION_TIMEOUT_MS =
   AGENT_FOLLOWUP_RUN_TIMEOUT_SECONDS * 1_000 + AGENT_FOLLOWUP_WAIT_TIMEOUT_MS;
+
+async function callExecApprovalFollowupGateway(
+  method: "agent" | "agent.wait",
+  timeoutMs: number,
+  params: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const gatewayRuntime = getGatewayRecoveryRuntime();
+  if (gatewayRuntime) {
+    return method === "agent"
+      ? await gatewayRuntime.dispatchAgent(
+          params as Parameters<typeof gatewayRuntime.dispatchAgent>[0],
+          timeoutMs,
+        )
+      : await gatewayRuntime.waitForAgent(
+          params as Parameters<typeof gatewayRuntime.waitForAgent>[0],
+          timeoutMs,
+        );
+  }
+  return await callGatewayTool(method, { timeoutMs }, params);
+}
 
 type ExecApprovalFollowupParams = {
   approvalId: string;
@@ -259,14 +280,10 @@ async function waitForAgentFollowupRun(params: {
     const waitTimeoutMs = Math.max(1, Math.min(params.timeoutMs, remainingMs));
     let wait: Record<string, unknown>;
     try {
-      wait = await callGatewayTool(
-        "agent.wait",
-        { timeoutMs: waitTimeoutMs + 2_000 },
-        {
-          runId: params.runId,
-          timeoutMs: waitTimeoutMs,
-        },
-      );
+      wait = await callExecApprovalFollowupGateway("agent.wait", waitTimeoutMs + 2_000, {
+        runId: params.runId,
+        timeoutMs: waitTimeoutMs,
+      });
     } catch {
       // The accepted run remains the sole delivery owner. Keep observing
       // across bounded gateway reconnects instead of racing it with direct delivery.
@@ -472,7 +489,7 @@ export async function sendExecApprovalFollowup(
         internalRuntimeHandoffId,
         idempotencyKey,
       });
-      const accepted = await callGatewayTool("agent", { timeoutMs: 60_000 }, agentArgs);
+      const accepted = await callExecApprovalFollowupGateway("agent", 60_000, agentArgs);
       const status = readGatewayStatus(accepted);
       if (isSuccessfulFollowupStatus(status)) {
         return true;

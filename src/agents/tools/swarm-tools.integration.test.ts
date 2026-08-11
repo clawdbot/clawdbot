@@ -129,7 +129,7 @@ describe("swarm tools integration", () => {
         persistSubagentRunsToDiskOrThrow: vi.fn(),
         resolveAgentTimeoutMs: () => 1_000,
         restoreSubagentRunsFromDisk: vi.fn(() => 0),
-        runSubagentAnnounceFlow: vi.fn(async () => true),
+        runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
         ensureContextEnginesInitialized: vi.fn(),
         loadAgentRuntimePluginRegistryHandle: vi.fn(),
         resolveContextEngine: vi.fn(async () => ({
