@@ -103,7 +103,7 @@ const defaultPostCompactionDelegateDeliveryDeps: PostCompactionDelegateDeliveryD
   loadSessionEntry,
   log: (message) => defaultRuntime.log(message),
   now: () => Date.now(),
-  patchSessionEntryCore: patchSessionEntryCore,
+  patchSessionEntryCore,
   resolveContinuationRuntimeConfig,
   resolveSessionAgentId,
   resolveSessionStorePathCore,
