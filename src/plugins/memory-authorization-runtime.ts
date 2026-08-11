@@ -1,14 +1,14 @@
 import {
   runMemoryAuthorizationConformanceSuite,
   type MemoryAuthorizationConformanceAdapter,
-} from "../memory-host-sdk/host/authorization-conformance.js";
+} from "../plugin-sdk/memory-authorization-conformance.js";
 import {
   MEMORY_AUTHORIZATION_CAPABILITY_NAMES,
   isMemoryAuthorizationCapabilities,
   listMissingMemoryAuthorizationCapabilities,
   type AuthorizedMemoryRuntime,
   type MemoryAuthorizationCapabilityName,
-} from "../memory-host-sdk/host/authorization.js";
+} from "../plugin-sdk/memory-authorization.js";
 
 const AUTHORIZED_MEMORY_RUNTIME_METHODS = [
   "authorize",

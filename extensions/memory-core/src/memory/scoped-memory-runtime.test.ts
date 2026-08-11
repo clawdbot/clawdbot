@@ -9,6 +9,7 @@ import {
   consumeAdmittedChannelMemoryIdentityFromContext,
   createChannelMemoryIdentityAdmission,
 } from "../../../../src/channels/message-access/memory-identity-admission.js";
+import { admitMemoryAuthorizationReadRuntime } from "../../../../src/plugins/memory-authorization-runtime.js";
 import { resetMemoryIsolationCutoverForTest } from "../../../../src/plugins/memory-cutover.js";
 import { createEmptyPluginRegistry } from "../../../../src/plugins/registry-empty.js";
 import {
@@ -259,6 +260,10 @@ describe("builtin scoped authorized runtime", () => {
   }
 
   it("postfilters before result count and issues plan-bound exact-read handles", async () => {
+    expect(MEMORY_CORE_AUTHORIZATION_CAPABILITIES).toMatchObject({
+      exposureReceipts: true,
+      egressReceipts: true,
+    });
     const alice = createPrivateResource("alice", "shared signal from alice");
     createPrivateResource("bob", "shared signal from bob");
     const context = createContext("alice");
@@ -273,6 +278,13 @@ describe("builtin scoped authorized runtime", () => {
     expect(result.value).toHaveLength(1);
     expect(result.value[0]).toMatchObject({ snippet: "shared signal from alice" });
     expect(result.exposureReceipt.exposedRevisionHandles).toEqual([alice.revisionId]);
+    expect(result.egressReceipt).toMatchObject({
+      planId: plan.planId,
+      runId: context.runId,
+      allowedAudiences: context.delivery.audiences,
+      deliveryRevision: context.delivery.deliveryRevision,
+      egressRegistryRevision: context.delivery.egressRegistryRevision,
+    });
     const hit = result.value[0];
     if (!hit) {
       return;
@@ -307,6 +319,13 @@ describe("builtin scoped authorized runtime", () => {
     }
     markCutOver();
     installBuiltinSelectedRuntime();
+    await expect(
+      admitMemoryAuthorizationReadRuntime({
+        authorization: MEMORY_CORE_AUTHORIZATION_CAPABILITIES,
+        authorizationConformance: builtinScopedMemoryConformanceAdapter,
+        runtime: builtinScopedMemoryAuthorizedRuntime,
+      }),
+    ).resolves.toMatchObject({ ok: true });
 
     const aliceHost = createAuthorizedMemoryReadHost({ agentId: "main", ...aliceSession });
     const bobHost = createAuthorizedMemoryReadHost({ agentId: "main", ...bobSession });

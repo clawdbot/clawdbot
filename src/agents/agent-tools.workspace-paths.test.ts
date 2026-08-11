@@ -10,7 +10,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resetMemoryIsolationCutoverForTest } from "../plugins/memory-cutover.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import {
   createHostWorkspaceEditTool,
@@ -85,6 +90,54 @@ async function expectExecCwdResolvesTo(
 }
 
 describe("workspace path resolution", () => {
+  it("exposes only read for an enforced read-only memory agent", async () => {
+    await withTempDir("openclaw-memory-cutover-state-", async (stateDir) => {
+      const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      try {
+        const database = openOpenClawAgentDatabase({ agentId: "main" });
+        database.db
+          .prepare(
+            `INSERT INTO memory_migrations
+              (migration_id, source_kind, source_hash, phase, classification_json, plan_hash,
+               verified_at, cutover_at, updated_at)
+             VALUES ('memory-cutover-shell-tools', 'test', 'test-source', 'cutover', '{}',
+                     'test-plan', 1, 1, 1)`,
+          )
+          .run();
+        resetMemoryIsolationCutoverForTest();
+
+        expect(createOpenClawCodingTools({ agentId: "main" }).map((tool) => tool.name)).toEqual([
+          "read",
+        ]);
+      } finally {
+        closeOpenClawAgentDatabasesForTest();
+        resetMemoryIsolationCutoverForTest();
+        if (originalStateDir === undefined) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = originalStateDir;
+        }
+      }
+    });
+  });
+
+  it("preserves legacy memory-file writes for intentionally unscoped tool construction", async () => {
+    await withTempDir("openclaw-unscoped-ws-", async (workspaceDir) => {
+      const tools = createOpenClawCodingTools({ workspaceDir });
+      const { writeTool } = expectReadWriteEditTools(tools);
+
+      await writeTool.execute("unscoped-memory-write", {
+        path: "MEMORY.md",
+        content: "legacy utility state",
+      });
+
+      await expect(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).resolves.toBe(
+        "legacy utility state",
+      );
+    });
+  });
+
   it("keeps controlled memory roots read-only while preserving ordinary host and sandbox writes", async () => {
     await withTempDir("openclaw-memory-guard-host-", async (workspaceDir) => {
       const guard = createMemoryFileMutationGuard({ mutationRoot: workspaceDir });

@@ -980,26 +980,26 @@ Focused existing tests:
 
 Phase 1C is complete only when all of the following are demonstrated:
 
-- [ ] Every content-bearing read lane is either converted to the authorized
+- [x] Every content-bearing read lane is either converted to the authorized
       runtime or explicitly unavailable in enforced mode.
-- [ ] Through every converted lane, two verified users cannot observe one
+- [x] Through every converted lane, two verified users cannot observe one
       another's private existence bits, paths, titles, snippets, scores,
       counts, citations, cursors, or content.
-- [ ] A group view contains only its channel store, eligible shared content,
+- [x] A group view contains only its channel store, eligible shared content,
       and projections explicitly addressed to that audience.
-- [ ] Bootstrap, automatic recall, Active Memory, Memory Wiki, LanceDB, CLI,
+- [x] Bootstrap, automatic recall, Active Memory, Memory Wiki, LanceDB, CLI,
       status, session recall, and corpus supplements pass the same context and
       receipt checks or are blocked.
-- [ ] Every scoped exposure is recorded before content leaves the selected
+- [x] Every scoped exposure is recorded before content leaves the selected
       plugin, and missing/stale exposure or egress receipts are rejected.
-- [ ] The minimum transcript policy-set, run-exposure, and event-companion rows
+- [x] The minimum transcript policy-set, run-exposure, and event-companion rows
       commit atomically with each durable event after scoped exposure.
-- [ ] Enforced agents remain read-only; every ordinary, watcher, plugin,
+- [x] Enforced agents remain read-only; every ordinary, watcher, plugin,
       import, sync, and generic-file durable write path is disabled until Phase
       2A.
-- [ ] The read-lane, top-K crowd-out, plugin-failure, missing-label, and
+- [x] The read-lane, top-K crowd-out, plugin-failure, missing-label, and
       transcript-visibility test matrix passes.
-- [ ] No two-subject pilot or stronger isolation claim is enabled before Phase
+- [x] No two-subject pilot or stronger isolation claim is enabled before Phase
       1D closes raw file and exec bypasses.
 
 ### Phase 1C rollback

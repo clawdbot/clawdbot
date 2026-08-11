@@ -5,11 +5,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runDoctorMemoryIsolation } from "../../commands/doctor-memory-isolation.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetMemoryIsolationCutoverForTest } from "../../plugins/memory-cutover.js";
+import { persistMemoryRunExposureBeforeContentInDatabase } from "../../plugins/memory-run-exposure-ledger.js";
 import {
   clearMemoryRunExposureForTest,
   recordMemoryRunExposure,
 } from "../../plugins/memory-run-exposure.js";
 import { createCurrentMemorySessionContext } from "../../state/memory-session-subject.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -107,6 +109,17 @@ function recordExposure(params: {
   });
 }
 
+function persistExposure(
+  database: OpenClawAgentDatabase,
+  params: Parameters<typeof recordExposure>[0],
+) {
+  const exposure = recordExposure(params);
+  expect(persistMemoryRunExposureBeforeContentInDatabase({ database, snapshot: exposure })).toBe(
+    true,
+  );
+  return exposure;
+}
+
 async function appendWithRun(params: { env: NodeJS.ProcessEnv; runId: string; text: string }) {
   await withOwnedSessionTranscriptWrites(
     {
@@ -156,11 +169,21 @@ describe("transcript memory policy companions", () => {
       );
 
     writeSession(alice);
+    const database = openOpenClawAgentDatabase(options);
     const aliceContext = createCurrentMemorySessionContext({ ...alice, options });
     expect(aliceContext.kind).toBe("current");
     if (aliceContext.kind !== "current") {
       throw new Error("expected lifecycle-owned Alice subject context");
     }
+    await appendSqliteTranscriptMessage(
+      { ...alice, agentId: AGENT_ID, env },
+      {
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "legacy shadow search content" }],
+        },
+      },
+    );
 
     vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR ?? "");
     expect(
@@ -173,8 +196,16 @@ describe("transcript memory policy companions", () => {
     // Doctor writes out of process. Refresh the process-owned snapshot to model the required
     // Gateway restart before proving the protected transcript boundary.
     resetMemoryIsolationCutoverForTest();
+    resetTranscriptMemoryPolicyForTest(database.db);
+    expect(
+      searchSessionTranscripts({
+        agentId: AGENT_ID,
+        env,
+        query: "legacy shadow search content",
+      }).hits,
+    ).toEqual([]);
 
-    recordMemoryRunExposure({
+    const shadowExposure = recordMemoryRunExposure({
       agentId: AGENT_ID,
       sessionId: alice.sessionId,
       sessionKey: alice.sessionKey,
@@ -192,6 +223,9 @@ describe("transcript memory policy companions", () => {
       sessionIdentityRevision: aliceContext.context.sessionIdentityRevision,
       subjectRevision: aliceContext.context.subjectRevision,
     });
+    expect(
+      persistMemoryRunExposureBeforeContentInDatabase({ database, snapshot: shadowExposure }),
+    ).toBe(true);
     await withOwnedSessionTranscriptWrites(
       {
         sessionTarget: {
@@ -214,7 +248,6 @@ describe("transcript memory policy companions", () => {
         );
       },
     );
-    const database = openOpenClawAgentDatabase(options);
     expect(readAuthorizedTranscriptEventSeqs(database.db, alice.sessionId)?.size).toBeGreaterThan(
       0,
     );
@@ -225,6 +258,13 @@ describe("transcript memory policy companions", () => {
         }),
       }),
     );
+    const searchAlice = () =>
+      searchSessionTranscripts({ agentId: AGENT_ID, env, query: "alice scoped content" });
+    await vi.waitFor(() => expect(searchAlice().indexing).toBe(false), {
+      interval: 10,
+      timeout: 15_000,
+    });
+    expect(searchAlice().hits).toHaveLength(1);
 
     writeSession(bob);
     expect(createCurrentMemorySessionContext({ ...bob, options })).toEqual({
@@ -252,9 +292,9 @@ describe("transcript memory policy companions", () => {
     await appendSqliteTranscriptMessage(scope(env), {
       message: { role: "assistant", content: [{ type: "text", text: "missing exposure content" }] },
     });
-    recordExposure({ runId: "stale-run", subjectRevision: "stale-subject-revision" });
+    persistExposure(database, { runId: "stale-run", subjectRevision: "stale-subject-revision" });
     await appendWithRun({ env, runId: "stale-run", text: "stale exposure content" });
-    recordExposure({ runId: "authorized-run" });
+    const authorizedExposure = persistExposure(database, { runId: "authorized-run" });
     await appendWithRun({ env, runId: "authorized-run", text: "authorized exposure content" });
 
     const policyRows = database.db
@@ -266,7 +306,10 @@ describe("transcript memory policy companions", () => {
       )
       .all(SESSION_ID) as Array<{ authorization_status: string; run_id: string | null }>;
     expect(policyRows.filter((row) => row.authorization_status === "authorized")).toEqual([
-      { authorization_status: "authorized", run_id: "authorized-run" },
+      {
+        authorization_status: "authorized",
+        run_id: authorizedExposure.durableRunScopeId,
+      },
     ]);
     expect(policyRows.filter((row) => row.authorization_status === "pending")).toHaveLength(2);
     expect(database.db.prepare("SELECT COUNT(*) AS count FROM memory_policy_sets").get()).toEqual({
@@ -320,7 +363,7 @@ describe("transcript memory policy companions", () => {
   it("does not derive an append parent from a pending transcript event", async () => {
     const env = createEnv();
     const database = markCutOver(env);
-    recordExposure({ runId: "authorized-run" });
+    persistExposure(database, { runId: "authorized-run" });
     let authorizedMessageId: string | undefined;
     await withOwnedSessionTranscriptWrites(
       {
@@ -371,7 +414,7 @@ describe("transcript memory policy companions", () => {
   it("rolls the event and every companion row back when companion persistence fails", async () => {
     const env = createEnv();
     const database = markCutOver(env);
-    recordExposure({ runId: "authorized-run" });
+    persistExposure(database, { runId: "authorized-run" });
     database.db.exec(/* sqlite-allow-raw: test-only atomicity fault injection. */ `
       CREATE TRIGGER reject_transcript_memory_policy_for_test
       BEFORE INSERT ON transcript_event_memory_policies
@@ -394,12 +437,18 @@ describe("transcript memory policy companions", () => {
         count: 0,
       });
     }
+    // The pre-output ledger commits before content leaves the memory broker, outside this
+    // transcript transaction; a later companion rollback must not erase its audit fact.
+    expect(
+      database.db.prepare("SELECT COUNT(*) AS count FROM memory_preoutput_exposure_ledger").get(),
+    ).toEqual({ count: 1 });
   });
 
   it("replays only committed current companions after a fresh database consumer starts", async () => {
     const env = createEnv();
     const database = markCutOver(env);
-    recordExposure({ runId: "authorized-run" });
+    persistExposure(database, { runId: "authorized-run" });
+    clearMemoryRunExposureForTest();
     await appendWithRun({ env, runId: "authorized-run", text: "committed companion content" });
 
     const committedRows = database.db
@@ -496,7 +545,7 @@ describe("transcript memory policy companions", () => {
   it("removes a stale companion from replay, search, projections, compaction, and export", async () => {
     const env = createEnv();
     const database = markCutOver(env);
-    recordExposure({ runId: "authorized-run" });
+    persistExposure(database, { runId: "authorized-run" });
     await appendWithRun({ env, runId: "authorized-run", text: "stale companion secret" });
 
     const search = () =>

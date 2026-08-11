@@ -31,6 +31,7 @@ import {
   AGENT_SCOPED_MEMORY_FTS_TABLE,
   AGENT_SCOPED_MEMORY_FTS_TRIGGER_DEFINITIONS,
   AGENT_SCOPED_MEMORY_TABLES,
+  ensureOpenClawAgentScopedMemorySchema,
 } from "./openclaw-agent-scoped-memory-schema.js";
 import {
   AGENT_V14_ADDITIVE_SCHEMA_SQL,
@@ -147,7 +148,6 @@ function repairAndAssertAgentSchemaGroup(
 
 const SESSION_KEY_CONTRACT_SCHEMA_START = "CREATE TABLE IF NOT EXISTS session_key_contract (";
 const SESSION_KEY_CONTRACT_SCHEMA_END = "CREATE TABLE IF NOT EXISTS session_windows (";
-
 /** Ensure the additive session-key contract table inside the caller's transaction. */
 export function ensureSessionKeyContractSchemaInTransaction(db: DatabaseSync): void {
   const start = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(SESSION_KEY_CONTRACT_SCHEMA_START);
@@ -156,6 +156,11 @@ export function ensureSessionKeyContractSchemaInTransaction(db: DatabaseSync): v
     throw new Error("OpenClaw agent session-key contract schema markers are missing.");
   }
   db.exec(OPENCLAW_AGENT_SCHEMA_SQL.slice(start, end)); // sqlite-allow-raw -- Idempotent additive lazy ensure.
+}
+
+/** Ensure the scoped-read audit ledger inside the caller's synchronous write transaction. */
+export function ensureMemoryPreoutputExposureLedgerSchemaInTransaction(db: DatabaseSync): void {
+  ensureOpenClawAgentScopedMemorySchema(db);
 }
 
 export function repairAndAssertOpenClawAgentV14SchemaForMigration(

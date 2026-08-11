@@ -3,20 +3,21 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAuthorizedMemoryReadHost } from "../agents/memory-authorized-read-host.js";
-import { referenceMemoryAuthorizationConformanceAdapter } from "../memory-host-sdk/host/authorization-conformance.js";
+import { referenceMemoryAuthorizationConformanceAdapter } from "../plugin-sdk/memory-authorization-conformance.js";
 import {
   COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES,
   LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
   type AuthorizedMemoryPlan,
   type AuthorizedMemorySearchResult,
   type MemoryContentAccessContext,
-} from "../memory-host-sdk/host/authorization.js";
+} from "../plugin-sdk/memory-authorization.js";
 import { ensureMemoryOperationalPrincipal } from "../state/memory-identity.js";
 import { persistMemorySessionSubject } from "../state/memory-session-subject.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { ensureOpenClawAgentScopedMemorySchema } from "../state/openclaw-agent-scoped-memory-schema.js";
 import { resetMemoryIsolationCutoverForTest } from "./memory-cutover.js";
 import { MEMORY_INVOCATION_UNAVAILABLE } from "./memory-invocation.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -56,6 +57,7 @@ function createAuthorizedReadHost() {
   const sessionId = "memory-invocation-session";
   const options = { agentId, env };
   const database = openOpenClawAgentDatabase(options);
+  ensureOpenClawAgentScopedMemorySchema(database.db);
   database.db
     .prepare(
       "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, '{}', 1)",
@@ -97,7 +99,7 @@ function createAuthorizedReadHost() {
   if (!host) {
     throw new Error("failed to create authorized memory read host");
   }
-  return host;
+  return { database, host };
 }
 
 function registerSelectedCapability(capability: unknown) {
@@ -111,7 +113,7 @@ function registerSelectedCapability(capability: unknown) {
 }
 
 function createRuntime(params: {
-  searchAuthorized?: () => Promise<unknown>;
+  searchAuthorized?: (context: MemoryContentAccessContext<"read">) => Promise<unknown>;
   authorize?: (context: MemoryContentAccessContext<"read">) => Promise<AuthorizedMemoryPlan>;
 }) {
   const legacySearch = vi.fn();
@@ -120,7 +122,8 @@ function createRuntime(params: {
     runtime: {
       authorize: async (context: MemoryContentAccessContext<"read">) =>
         await (params.authorize?.(context) ?? Promise.resolve(createPlan(context))),
-      searchAuthorized: async () => await params.searchAuthorized?.(),
+      searchAuthorized: async ({ context }: { context: MemoryContentAccessContext<"read"> }) =>
+        await params.searchAuthorized?.(context),
       readAuthorized: async () => {
         throw new Error("exact read must not execute in this test");
       },
@@ -191,7 +194,7 @@ describe("enforced selected-memory invocation failures", () => {
       authorizationConformance: referenceMemoryAuthorizationConformanceAdapter,
       runtime,
     });
-    const result = await createAuthorizedReadHost().search({ query: "private" });
+    const result = await createAuthorizedReadHost().host.search({ query: "private" });
 
     expect(result).toBe(MEMORY_INVOCATION_UNAVAILABLE);
     expect(JSON.stringify(result)).not.toContain("private legacy content");
@@ -220,9 +223,95 @@ describe("enforced selected-memory invocation failures", () => {
     }
     registerSelectedCapability(capability);
 
-    await expect(createAuthorizedReadHost().search({ query: "private" })).resolves.toBe(
+    await expect(createAuthorizedReadHost().host.search({ query: "private" })).resolves.toBe(
       MEMORY_INVOCATION_UNAVAILABLE,
     );
     expect(legacySearch).not.toHaveBeenCalled();
+  });
+
+  it("commits the content-free exposure ledger before returning a selected-plugin result", async () => {
+    const { runtime } = createRuntime({
+      searchAuthorized: async (context) => ({
+        version: 1,
+        value: [
+          {
+            path: "private/note.md",
+            startLine: 1,
+            endLine: 1,
+            score: 1,
+            snippet: "allowed text",
+            source: "memory",
+            resourceHandle: {
+              version: 1,
+              handleId: "handle-1",
+              planId: "plan-1",
+              contextFingerprint: context.contextFingerprint,
+              resourceRevision: "revision-1",
+              policyRevision: "policy-1",
+              expiresAt: new Date(Date.now() + 60_000).toISOString(),
+            },
+          },
+        ],
+        exposureReceipt: {
+          version: 1,
+          receiptId: "exposure-1",
+          contextFingerprint: context.contextFingerprint,
+          planId: "plan-1",
+          runId: context.runId,
+          runExposureRevision: "run-exposure-1",
+          sourcePolicySetId: "source-policy-1",
+          exposedRevisionHandles: ["revision-1"],
+          recordedAt: new Date().toISOString(),
+        },
+        egressReceipt: {
+          version: 1,
+          receiptId: "egress-1",
+          contextFingerprint: context.contextFingerprint,
+          planId: "plan-1",
+          runId: context.runId,
+          runExposureRevision: "run-exposure-1",
+          sourcePolicySetId: "source-policy-1",
+          allowedAudiences: context.delivery.audiences,
+          deliveryRevision: context.delivery.deliveryRevision,
+          egressRegistryRevision: context.delivery.egressRegistryRevision,
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      }),
+    });
+    registerSelectedCapability({
+      authorization: COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES,
+      authorizationConformance: referenceMemoryAuthorizationConformanceAdapter,
+      runtime,
+    });
+    const { database, host } = createAuthorizedReadHost();
+
+    await expect(host.search({ query: "private" })).resolves.toEqual({
+      results: [
+        {
+          handleId: "handle-1",
+          path: "private/note.md",
+          startLine: 1,
+          endLine: 1,
+          score: 1,
+          snippet: "allowed text",
+          source: "memory",
+        },
+      ],
+    });
+    expect(
+      database.db
+        .prepare(
+          `SELECT session_id, run_id, revision_number, exposure_receipt_ids_json
+           FROM memory_preoutput_exposure_ledger`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        session_id: "memory-invocation-session",
+        run_id: "run-1",
+        revision_number: 1,
+        exposure_receipt_ids_json: '["exposure-1"]',
+      },
+    ]);
   });
 });

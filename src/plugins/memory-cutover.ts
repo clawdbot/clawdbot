@@ -370,7 +370,10 @@ export function isMemoryIsolationSubjectAdmitted(params: {
  * memory. An unreadable authority store fails closed: selected-memory callers never use legacy.
  */
 export function isMemoryIsolationCutoverAgent(agentIdInput: string): boolean {
-  return resolveMemoryIsolationMode(agentIdInput) !== "legacy";
+  const agentId = agentIdInput.trim();
+  // Tool construction can be intentionally unscoped (for example, local workspace utilities).
+  // It has no authority-store owner, so it must retain legacy behavior rather than borrow an agent.
+  return agentId ? resolveMemoryIsolationMode(agentId) !== "legacy" : false;
 }
 
 /**

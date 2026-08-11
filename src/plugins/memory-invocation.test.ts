@@ -1,15 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES,
   type AuthorizedMemoryPlan,
   type AuthorizedMemoryResultEnvelope,
   type AuthorizedMemorySearchResult,
   type MemoryAccessContext,
-} from "../memory-host-sdk/host/authorization.js";
+} from "../plugin-sdk/memory-authorization.js";
 
 const mocks = vi.hoisted(() => ({
   admit: vi.fn(),
   materialize: vi.fn(),
+  hydrateExposure: vi.fn(() => true),
+  logWarn: vi.fn(),
+  persistExposure: vi.fn(() => true),
 }));
 
 vi.mock("../state/memory-access-context.js", async (importOriginal) => ({
@@ -21,12 +24,23 @@ vi.mock("./memory-authorization-runtime.js", () => ({
   admitMemoryAuthorizationReadRuntime: mocks.admit,
 }));
 
+vi.mock("./memory-run-exposure-ledger.js", () => ({
+  hydrateMemoryRunExposureFromLedger: mocks.hydrateExposure,
+  persistMemoryRunExposureBeforeContent: mocks.persistExposure,
+}));
+
+vi.mock("../logger.js", () => ({
+  logWarn: mocks.logWarn,
+}));
+
 const {
   MEMORY_INVOCATION_UNAVAILABLE,
   createAuthorizedMemoryReadInvocation,
   readAuthorizedMemoryForInvocation,
+  readAuthorizedMemoryRunExposure,
   searchAuthorizedMemoryForInvocation,
 } = await import("./memory-invocation.js");
+const { clearMemoryRunExposureForTest } = await import("./memory-run-exposure.js");
 
 function createContext(): MemoryAccessContext & Readonly<{ operation: "read" }> {
   return {
@@ -133,6 +147,16 @@ function createEnvelope<T>(
 }
 
 describe("authorized memory read invocation", () => {
+  afterEach(() => {
+    clearMemoryRunExposureForTest();
+    receiptSequence = 0;
+    mocks.hydrateExposure.mockReset();
+    mocks.hydrateExposure.mockReturnValue(true);
+    mocks.logWarn.mockReset();
+    mocks.persistExposure.mockReset();
+    mocks.persistExposure.mockReturnValue(true);
+  });
+
   it("returns only an unavailable result when backend admission fails", async () => {
     mocks.materialize.mockReturnValue(createContext());
     mocks.admit.mockResolvedValue({ ok: false, reasonCode: "backend-nonconforming" });
@@ -143,6 +167,29 @@ describe("authorized memory read invocation", () => {
         capability: { authorization: COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES },
       }),
     ).resolves.toBe(MEMORY_INVOCATION_UNAVAILABLE);
+  });
+
+  it("emits fixed diagnostics without memory access facts or backend error content", async () => {
+    mocks.materialize.mockReturnValue(createContext());
+    mocks.admit.mockResolvedValue({
+      ok: true,
+      runtime: {
+        authorize: vi.fn().mockRejectedValue(new Error("private memory error")),
+      },
+    });
+
+    await expect(
+      createAuthorizedMemoryReadInvocation({
+        context: {} as never,
+        capability: { authorization: COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES },
+      }),
+    ).resolves.toBe(MEMORY_INVOCATION_UNAVAILABLE);
+
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      "memory invocation unavailable: authorization-failed",
+    );
+    expect(JSON.stringify(mocks.logWarn.mock.calls)).not.toContain("private memory error");
+    expect(JSON.stringify(mocks.logWarn.mock.calls)).not.toContain("alice");
   });
 
   it("does not leak a search result unless its current exposure and egress receipts validate", async () => {
@@ -217,6 +264,236 @@ describe("authorized memory read invocation", () => {
     ).resolves.toBe(MEMORY_INVOCATION_UNAVAILABLE);
   });
 
+  it("does not return selected-plugin content or commit a receipt when exposure recording fails", async () => {
+    const result: AuthorizedMemorySearchResult = {
+      path: "private/note.md",
+      startLine: 1,
+      endLine: 1,
+      score: 1,
+      snippet: "private content",
+      source: "memory",
+      resourceHandle: {
+        version: 1,
+        handleId: "handle-1",
+        planId: "plan-1",
+        contextFingerprint: "fingerprint-1",
+        resourceRevision: "revision-1",
+        policyRevision: "policy-1",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    };
+    const runtime = {
+      authorize: vi.fn().mockResolvedValue(createPlan()),
+      searchAuthorized: vi.fn().mockResolvedValue(createEnvelope([result])),
+      readAuthorized: vi.fn(),
+    };
+    mocks.materialize.mockReturnValue(createContext());
+    mocks.admit.mockResolvedValue({ ok: true, runtime });
+    mocks.persistExposure.mockReturnValue(false);
+
+    const invocation = await createAuthorizedMemoryReadInvocation({
+      context: {} as never,
+      capability: { authorization: COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES },
+    });
+    expect(invocation).not.toBe(MEMORY_INVOCATION_UNAVAILABLE);
+    if (invocation === MEMORY_INVOCATION_UNAVAILABLE) {
+      return;
+    }
+
+    const response = await searchAuthorizedMemoryForInvocation({ invocation, query: "private" });
+
+    expect(response).toBe(MEMORY_INVOCATION_UNAVAILABLE);
+    expect(JSON.stringify(response)).not.toContain("private content");
+    expect(mocks.persistExposure).toHaveBeenCalledOnce();
+    expect(readAuthorizedMemoryRunExposure(invocation)).toEqual({
+      sourcePolicySetIds: [],
+      exposedRevisionHandles: [],
+      exposureReceiptIds: [],
+      egressReceiptIds: [],
+    });
+  });
+
+  it("does not return exact-read text or commit its receipt when the ledger write fails", async () => {
+    const handle = {
+      version: 1 as const,
+      handleId: "handle-1",
+      planId: "plan-1",
+      contextFingerprint: "fingerprint-1",
+      resourceRevision: "revision-1",
+      policyRevision: "policy-1",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    };
+    const runtime = {
+      authorize: vi.fn().mockResolvedValue(createPlan()),
+      searchAuthorized: vi.fn().mockResolvedValue(
+        createEnvelope([
+          {
+            path: "private/note.md",
+            startLine: 1,
+            endLine: 1,
+            score: 1,
+            snippet: "search text",
+            source: "memory",
+            resourceHandle: handle,
+          },
+        ]),
+      ),
+      readAuthorized: vi
+        .fn()
+        .mockResolvedValue(createEnvelope({ path: "private/note.md", text: "private exact text" })),
+    };
+    mocks.materialize.mockReturnValue(createContext());
+    mocks.admit.mockResolvedValue({ ok: true, runtime });
+
+    const invocation = await createAuthorizedMemoryReadInvocation({
+      context: {} as never,
+      capability: { authorization: COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES },
+    });
+    expect(invocation).not.toBe(MEMORY_INVOCATION_UNAVAILABLE);
+    if (invocation === MEMORY_INVOCATION_UNAVAILABLE) {
+      return;
+    }
+    await expect(
+      searchAuthorizedMemoryForInvocation({ invocation, query: "private" }),
+    ).resolves.toEqual(
+      expect.objectContaining({ results: [expect.objectContaining({ handleId: "handle-1" })] }),
+    );
+    mocks.persistExposure.mockReturnValue(false);
+
+    const response = await readAuthorizedMemoryForInvocation({ invocation, handleId: "handle-1" });
+
+    expect(response).toBe(MEMORY_INVOCATION_UNAVAILABLE);
+    expect(JSON.stringify(response)).not.toContain("private exact text");
+    expect(readAuthorizedMemoryRunExposure(invocation)).toEqual({
+      sourcePolicySetIds: ["policy-set-1"],
+      exposedRevisionHandles: ["revision-1"],
+      exposureReceiptIds: ["exposure-1"],
+      egressReceiptIds: ["egress-1"],
+    });
+  });
+
+  it("allows a fresh exact-read receipt after a failed ledger write", async () => {
+    const handle = {
+      version: 1 as const,
+      handleId: "handle-1",
+      planId: "plan-1",
+      contextFingerprint: "fingerprint-1",
+      resourceRevision: "revision-1",
+      policyRevision: "policy-1",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    };
+    const runtime = {
+      authorize: vi.fn().mockResolvedValue(createPlan()),
+      searchAuthorized: vi.fn().mockResolvedValue(
+        createEnvelope([
+          {
+            path: "private/note.md",
+            startLine: 1,
+            endLine: 1,
+            score: 1,
+            snippet: "search text",
+            source: "memory",
+            resourceHandle: handle,
+          },
+        ]),
+      ),
+      readAuthorized: vi
+        .fn()
+        .mockImplementation(async () =>
+          createEnvelope({ path: "private/note.md", text: "private exact text" }),
+        ),
+    };
+    mocks.materialize.mockReturnValue(createContext());
+    mocks.admit.mockResolvedValue({ ok: true, runtime });
+
+    const invocation = await createAuthorizedMemoryReadInvocation({
+      context: {} as never,
+      capability: { authorization: COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES },
+    });
+    expect(invocation).not.toBe(MEMORY_INVOCATION_UNAVAILABLE);
+    if (invocation === MEMORY_INVOCATION_UNAVAILABLE) {
+      return;
+    }
+    await expect(
+      searchAuthorizedMemoryForInvocation({ invocation, query: "private" }),
+    ).resolves.toEqual(
+      expect.objectContaining({ results: [expect.objectContaining({ handleId: "handle-1" })] }),
+    );
+    mocks.persistExposure.mockReturnValueOnce(false).mockReturnValue(true);
+
+    await expect(
+      readAuthorizedMemoryForInvocation({ invocation, handleId: "handle-1" }),
+    ).resolves.toBe(MEMORY_INVOCATION_UNAVAILABLE);
+    await expect(
+      readAuthorizedMemoryForInvocation({ invocation, handleId: "handle-1" }),
+    ).resolves.toEqual({ path: "private/note.md", text: "private exact text" });
+    expect(readAuthorizedMemoryRunExposure(invocation)).toEqual({
+      sourcePolicySetIds: ["policy-set-1"],
+      exposedRevisionHandles: ["revision-1"],
+      exposureReceiptIds: ["exposure-1", "exposure-3"],
+      egressReceiptIds: ["egress-1", "egress-3"],
+    });
+  });
+
+  it("allows a fresh receipt after a failed ledger write without retaining the failed attempt", async () => {
+    const result = (snippet: string, handleId: string): AuthorizedMemorySearchResult => ({
+      path: "private/note.md",
+      startLine: 1,
+      endLine: 1,
+      score: 1,
+      snippet,
+      source: "memory",
+      resourceHandle: {
+        version: 1,
+        handleId,
+        planId: "plan-1",
+        contextFingerprint: "fingerprint-1",
+        resourceRevision: "revision-1",
+        policyRevision: "policy-1",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    });
+    const runtime = {
+      authorize: vi.fn().mockResolvedValue(createPlan()),
+      searchAuthorized: vi
+        .fn()
+        .mockResolvedValueOnce(createEnvelope([result("first private text", "handle-1")]))
+        .mockResolvedValueOnce(createEnvelope([result("retry text", "handle-2")])),
+      readAuthorized: vi.fn(),
+    };
+    mocks.materialize.mockReturnValue(createContext());
+    mocks.admit.mockResolvedValue({ ok: true, runtime });
+    mocks.persistExposure.mockReturnValueOnce(false).mockReturnValue(true);
+
+    const invocation = await createAuthorizedMemoryReadInvocation({
+      context: {} as never,
+      capability: { authorization: COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES },
+    });
+    expect(invocation).not.toBe(MEMORY_INVOCATION_UNAVAILABLE);
+    if (invocation === MEMORY_INVOCATION_UNAVAILABLE) {
+      return;
+    }
+    await expect(searchAuthorizedMemoryForInvocation({ invocation, query: "first" })).resolves.toBe(
+      MEMORY_INVOCATION_UNAVAILABLE,
+    );
+    await expect(
+      searchAuthorizedMemoryForInvocation({ invocation, query: "retry" }),
+    ).resolves.toEqual({
+      results: [
+        expect.objectContaining({
+          handleId: "handle-2",
+          snippet: "retry text",
+        }),
+      ],
+    });
+    expect(readAuthorizedMemoryRunExposure(invocation)).toEqual({
+      sourcePolicySetIds: ["policy-set-1"],
+      exposedRevisionHandles: ["revision-1"],
+      exposureReceiptIds: ["exposure-2"],
+      egressReceiptIds: ["egress-2"],
+    });
+  });
+
   it.each([
     {
       name: "has an invalid timestamp",
@@ -248,6 +525,38 @@ describe("authorized memory read invocation", () => {
     await expect(
       searchAuthorizedMemoryForInvocation({ invocation, query: "private" }),
     ).resolves.toBe(MEMORY_INVOCATION_UNAVAILABLE);
+  });
+
+  it("does not leak a search result from an unsupported result-envelope version", async () => {
+    const runtime = {
+      authorize: vi.fn().mockResolvedValue(createPlan()),
+      searchAuthorized: vi.fn().mockResolvedValue({
+        ...createEnvelope([]),
+        version: 2,
+      }),
+      readAuthorized: vi.fn(),
+    };
+    mocks.materialize.mockReturnValue(createContext());
+    mocks.admit.mockResolvedValue({ ok: true, runtime });
+
+    const invocation = await createAuthorizedMemoryReadInvocation({
+      context: {} as never,
+      capability: { authorization: COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES },
+    });
+    expect(invocation).not.toBe(MEMORY_INVOCATION_UNAVAILABLE);
+    if (invocation === MEMORY_INVOCATION_UNAVAILABLE) {
+      return;
+    }
+
+    await expect(
+      searchAuthorizedMemoryForInvocation({ invocation, query: "private" }),
+    ).resolves.toBe(MEMORY_INVOCATION_UNAVAILABLE);
+    expect(readAuthorizedMemoryRunExposure(invocation)).toEqual({
+      sourcePolicySetIds: [],
+      exposedRevisionHandles: [],
+      exposureReceiptIds: [],
+      egressReceiptIds: [],
+    });
   });
 
   it("rejects a replayed exposure receipt instead of exposing the repeated result", async () => {

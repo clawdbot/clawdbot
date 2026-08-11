@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { referenceMemoryAuthorizationConformanceAdapter } from "../memory-host-sdk/host/authorization-conformance.js";
+import { referenceMemoryAuthorizationConformanceAdapter } from "../plugin-sdk/memory-authorization-conformance.js";
 import {
   COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES,
   LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
   MEMORY_AUTHORIZATION_CAPABILITY_NAMES,
-} from "../memory-host-sdk/host/authorization.js";
+} from "../plugin-sdk/memory-authorization.js";
 import {
   admitMemoryAuthorizationReadRuntime,
   inspectMemoryAuthorizationCapability,

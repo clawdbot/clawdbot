@@ -334,10 +334,7 @@ describe("memory cli", () => {
     ["index", ["index", "--agent", "main"]],
     ["promotion apply", ["promote", "--agent", "main", "--apply"]],
     ["REM backfill", ["rem-backfill", "--agent", "main", "--rollback"]],
-    [
-      "session backfill apply",
-      ["session-backfill", "--agent", "main", "--apply"],
-    ],
+    ["session backfill apply", ["session-backfill", "--agent", "main", "--apply"]],
   ] as const)(
     "blocks %s before acquiring a legacy manager for a cut-over agent",
     async (_command, args) => {

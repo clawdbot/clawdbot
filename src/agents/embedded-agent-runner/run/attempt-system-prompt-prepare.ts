@@ -8,6 +8,7 @@ import {
   resolveProviderSystemPromptContribution,
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
+import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
@@ -23,6 +24,7 @@ import {
 } from "../../channel-tools.js";
 import { resolveOpenClawReferencePaths } from "../../docs-path.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
+import { createAuthorizedMemoryReadHost } from "../../memory-authorized-read-host.js";
 import { prepareAgentMemoryPrompt } from "../../memory-prompt-prepare.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { buildModelToolsUnavailablePrompt } from "../../model-tool-support.js";
@@ -248,6 +250,20 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     });
   const includeMemorySection =
     !params.activeContextEngine || params.activeContextEngine.info.id === "legacy";
+  const authorizedMemoryRead = createAuthorizedMemoryReadHost({
+    agentId: params.sessionAgentId,
+    sessionKey: runtimeInfo.sessionKey,
+    sessionId: attempt.sessionId,
+    runId: attempt.runId,
+    deliveryContext: normalizeDeliveryContext({
+      channel: attempt.messageChannel ?? attempt.messageProvider,
+      to: attempt.messageTo ?? attempt.currentMessagingTarget ?? attempt.currentChannelId,
+      accountId: attempt.agentAccountId,
+      threadId: attempt.messageThreadId ?? attempt.currentThreadTs,
+    }),
+    messageChannel: attempt.messageChannel ?? attempt.messageProvider,
+    agentAccountId: attempt.agentAccountId,
+  });
   const preparedMemoryPrompt = await prepareAgentMemoryPrompt({
     enabled: effectivePromptMode === "full" && includeMemorySection,
     toolNames: params.effectiveTools.map((tool) => tool.name),
@@ -256,6 +272,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     agentId: runtimeInfo.agentId,
     agentSessionKey: runtimeInfo.sessionKey,
     sandboxed: sandboxInfo?.enabled === true,
+    authorizedMemoryRead,
   });
   const preparedWatchedSessions = prepareWatchedSessionsPrompt({
     enabled: effectivePromptMode === "full",
