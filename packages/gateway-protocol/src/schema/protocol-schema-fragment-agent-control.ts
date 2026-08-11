@@ -46,6 +46,7 @@ export const AgentControlProtocolSchemas = {
   AgentWaitParams: agent.AgentWaitParamsSchema,
   WakeParams: agent.WakeParamsSchema,
   ProjectRecord: projects.ProjectRecordSchema,
+  ProjectRecent: projects.ProjectRecentSchema,
   ProjectsListParams: projects.ProjectsListParamsSchema,
   ProjectsListResult: projects.ProjectsListResultSchema,
   ProjectsRegisterParams: projects.ProjectsRegisterParamsSchema,

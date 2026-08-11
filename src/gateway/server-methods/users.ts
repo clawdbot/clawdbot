@@ -5,11 +5,14 @@ import {
   formatValidationErrors,
   validateUsersLinkEmailParams,
   validateUsersListParams,
+  validateUsersPrefsGetParams,
+  validateUsersPrefsSetParams,
   validateUsersSelfParams,
   validateUsersSetAvatarParams,
   validateUsersSetDisplayNameParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { getUserPreferences, setUserPreferences } from "../../state/user-preferences.js";
 import {
   ensureProfileForEmail,
   getUserProfileDisplay,
@@ -144,6 +147,81 @@ export const usersHandlers: GatewayRequestHandlers = {
         return;
       }
       respond(true, { profile: getUserProfileListItem(profileId) });
+    } catch (error) {
+      respond(false, undefined, profileError(error));
+    }
+  },
+  "users.prefs.get": ({ client, params, respond }) => {
+    if (!validateUsersPrefsGetParams(params)) {
+      respond(
+        false,
+        undefined,
+        invalidParams("users.prefs.get", validateUsersPrefsGetParams.errors),
+      );
+      return;
+    }
+    const profileId = client?.authenticatedUserProfile?.profileId ?? "";
+    if (!profileId) {
+      respond(true, { status: "no_durable_identity" }, undefined);
+      return;
+    }
+    try {
+      const canonicalProfileId = resolveUserProfileId(profileId);
+      if (!canonicalProfileId) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "authenticated user profile is unavailable"),
+        );
+        return;
+      }
+      respond(
+        true,
+        { status: "ok", entries: getUserPreferences(canonicalProfileId, params.keys) },
+        undefined,
+      );
+    } catch (error) {
+      respond(false, undefined, profileError(error));
+    }
+  },
+  "users.prefs.set": ({ client, params, respond }) => {
+    if (!validateUsersPrefsSetParams(params)) {
+      respond(
+        false,
+        undefined,
+        invalidParams("users.prefs.set", validateUsersPrefsSetParams.errors),
+      );
+      return;
+    }
+    const profileId = client?.authenticatedUserProfile?.profileId ?? "";
+    if (!profileId) {
+      respond(true, { status: "no_durable_identity" }, undefined);
+      return;
+    }
+    try {
+      const canonicalProfileId = resolveUserProfileId(profileId);
+      if (!canonicalProfileId) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "authenticated user profile is unavailable"),
+        );
+        return;
+      }
+      const result = setUserPreferences(canonicalProfileId, params.entries);
+      if (!result.ok) {
+        const key = result.error.key ? ` for ${result.error.key}` : "";
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid users.prefs.set entry${key}: ${result.error.code}`,
+          ),
+        );
+        return;
+      }
+      respond(true, { status: "ok" }, undefined);
     } catch (error) {
       respond(false, undefined, profileError(error));
     }

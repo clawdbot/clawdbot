@@ -39,8 +39,13 @@ describe("project protocol schemas", () => {
             source: "registered",
           },
         ],
+        recents: [
+          { kind: "project", projectId: "openclaw", displayName: "OpenClaw" },
+          { kind: "folder", folder: "/repo/scratch", displayName: "scratch" },
+        ],
       }),
     ).toBe(true);
+    expect(Value.Check(ProjectsListResultSchema, { projects: [] })).toBe(true);
   });
 
   it("accepts projectId as an additive sessions.create parameter", () => {

@@ -1,0 +1,140 @@
+import type { DatabaseSync } from "node:sqlite";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import {
+  USER_PREFS_ENTRY_LIMIT,
+  USER_PREFS_VALUE_BYTES,
+} from "../../packages/gateway-protocol/src/schema/users.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabaseOptions,
+} from "./openclaw-state-db.js";
+
+type UserPreferencesDatabase = Pick<OpenClawStateKyselyDatabase, "user_preferences">;
+
+const ensuredDatabases = new WeakSet<DatabaseSync>();
+const USER_PREFERENCES_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS user_preferences (
+  profile_id TEXT NOT NULL,
+  pref_key TEXT NOT NULL,
+  value_json TEXT NOT NULL,
+  updated_at_ms INT NOT NULL,
+  PRIMARY KEY (profile_id, pref_key)
+) STRICT;
+`;
+
+type UserPreferenceError = {
+  code: "invalid-entry-count" | "invalid-key" | "invalid-value" | "value-too-large";
+  key?: string;
+};
+
+function ensureUserPreferencesSchema(options: OpenClawStateDatabaseOptions = {}): void {
+  const database = openOpenClawStateDatabase(options);
+  if (ensuredDatabases.has(database.db)) {
+    return;
+  }
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      // sqlite-allow-raw -- feature-local additive schema DDL; preference rows use Kysely below.
+      db.exec(USER_PREFERENCES_SCHEMA_SQL);
+    },
+    options,
+    { operationLabel: "users.preferences.schema.ensure" },
+  );
+  ensuredDatabases.add(database.db);
+}
+
+function openUserPreferencesDatabase(options: OpenClawStateDatabaseOptions = {}) {
+  ensureUserPreferencesSchema(options);
+  const state = openOpenClawStateDatabase(options);
+  return { sqlite: state.db, kysely: getNodeSqliteKysely<UserPreferencesDatabase>(state.db) };
+}
+
+export function getUserPreferences(
+  profileId: string,
+  keys?: readonly string[],
+  options: OpenClawStateDatabaseOptions = {},
+): Record<string, unknown> {
+  if (keys?.length === 0) {
+    return {};
+  }
+  const { sqlite, kysely } = openUserPreferencesDatabase(options);
+  let query = kysely
+    .selectFrom("user_preferences")
+    .select(["pref_key", "value_json"])
+    .where("profile_id", "=", profileId)
+    .orderBy("pref_key", "asc");
+  if (keys) {
+    query = query.where("pref_key", "in", [...keys]);
+  }
+  return Object.fromEntries(
+    executeSqliteQuerySync(sqlite, query).rows.map((row) => [
+      row.pref_key,
+      JSON.parse(row.value_json) as unknown,
+    ]),
+  );
+}
+
+export function setUserPreferences(
+  profileId: string,
+  entries: Record<string, unknown>,
+  options: OpenClawStateDatabaseOptions = {},
+): Result<void, UserPreferenceError> {
+  const rawEntries = Object.entries(entries);
+  if (rawEntries.length > USER_PREFS_ENTRY_LIMIT) {
+    return err({ code: "invalid-entry-count" });
+  }
+  const serialized: Array<{ prefKey: string; valueJson: string }> = [];
+  for (const [prefKey, value] of rawEntries) {
+    if (!prefKey || prefKey.length > 256) {
+      return err({ code: "invalid-key", key: prefKey });
+    }
+    let valueJson: string | undefined;
+    try {
+      valueJson = JSON.stringify(value);
+    } catch {
+      return err({ code: "invalid-value", key: prefKey });
+    }
+    if (valueJson === undefined) {
+      return err({ code: "invalid-value", key: prefKey });
+    }
+    if (Buffer.byteLength(valueJson, "utf8") > USER_PREFS_VALUE_BYTES) {
+      return err({ code: "value-too-large", key: prefKey });
+    }
+    serialized.push({ prefKey, valueJson });
+  }
+  if (serialized.length === 0) {
+    return ok(undefined);
+  }
+  ensureUserPreferencesSchema(options);
+  runOpenClawStateWriteTransaction(
+    ({ db: sqlite }) => {
+      const db = getNodeSqliteKysely<UserPreferencesDatabase>(sqlite);
+      const updatedAtMs = Date.now();
+      for (const entry of serialized) {
+        executeSqliteQuerySync(
+          sqlite,
+          db
+            .insertInto("user_preferences")
+            .values({
+              profile_id: profileId,
+              pref_key: entry.prefKey,
+              value_json: entry.valueJson,
+              updated_at_ms: updatedAtMs,
+            })
+            .onConflict((conflict) =>
+              conflict.columns(["profile_id", "pref_key"]).doUpdateSet({
+                value_json: entry.valueJson,
+                updated_at_ms: updatedAtMs,
+              }),
+            ),
+        );
+      }
+    },
+    options,
+    { operationLabel: "users.preferences.set" },
+  );
+  return ok(undefined);
+}

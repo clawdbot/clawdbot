@@ -1867,6 +1867,14 @@ CREATE TABLE IF NOT EXISTS projects (
   updated_at_ms INT NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS user_preferences (
+  profile_id TEXT NOT NULL,
+  pref_key TEXT NOT NULL,
+  value_json TEXT NOT NULL,
+  updated_at_ms INT NOT NULL,
+  PRIMARY KEY (profile_id, pref_key)
+) STRICT;
+
 -- Gateway-owned custom session group catalog (names + display order).
 -- Membership stays on each session entry's category field; this table only
 -- owns which groups exist and how operator UIs order them.

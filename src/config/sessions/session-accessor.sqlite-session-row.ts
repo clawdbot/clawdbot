@@ -102,6 +102,7 @@ export function bindSessionNode(params: {
     created_actor_type:
       normalizeSqliteCreatedActorType(actor?.type) ?? (legacyActorId ? "human" : null),
     created_actor_id: normalizeText(actor?.id) ?? legacyActorId,
+    project_id: normalizeText(params.entry.projectId),
     parent_session_key:
       normalizeText(params.entry.parentSessionKey) ?? normalizeText(params.entry.spawnedBy),
     spawned_by: normalizeText(params.entry.spawnedBy),

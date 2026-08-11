@@ -40,6 +40,7 @@ import {
 } from "./openclaw-agent-db-schema-helpers.js";
 import {
   backfillSessionConversations,
+  ensureSessionProjectColumn,
   ensureSessionEntryValidityProjection,
   migrateConversationDeliveryTargetColumn,
   migrateSessionEntryStatusProjection,
@@ -149,6 +150,11 @@ function hasPendingSessionKeyContractSchemaMigration(db: DatabaseSync): boolean 
       .get(),
   );
   return !sessionNodeColumns.has("entry_valid") || !hasContractTable;
+}
+
+function hasPendingSessionProjectColumn(db: DatabaseSync): boolean {
+  const columns = readSqliteTableColumns(db, "session_nodes");
+  return Boolean(columns && !columns.has("project_id"));
 }
 
 function migrateMemoryChunkMetadataSchema(db: DatabaseSync): void {
@@ -574,10 +580,13 @@ export function assertAgentDatabaseIntegrityBeforeMutation(
     hasPendingSessionKeyContractSchemaMigration(database);
   const hasPendingRetiredLeaseMigration =
     userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && hasRetiredAgentStateLeaseSchema(database);
+  const hasPendingProjectColumn =
+    userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && hasPendingSessionProjectColumn(database);
   const hasPendingCurrentVersionMigration =
     hasPendingMemoryMigration ||
     hasPendingSessionContractMigration ||
-    hasPendingRetiredLeaseMigration;
+    hasPendingRetiredLeaseMigration ||
+    hasPendingProjectColumn;
   if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
     verifyAndRepairCanonicalSqliteIndexes(database, pathname, OPENCLAW_AGENT_SCHEMA_SQL, {
       allowMissingColumns: true,
@@ -636,6 +645,7 @@ function ensureAgentSchema(
       }
       migrateRetiredAgentStateLeaseSchema(db, pathname, targetVersion);
       if (previousVersion === targetVersion) {
+        ensureSessionProjectColumn(db);
         ensureSessionEntryValidityProjection(db);
         ensureSessionKeyContractSchemaInTransaction(db);
         if (hasPendingMemoryChunkMetadataMigration(db)) {
@@ -670,6 +680,7 @@ function ensureAgentSchema(
       }
       backfillSessionEntryProvenance(db, previousVersion);
       migrateSessionNodesAndWindows(db, previousVersion);
+      ensureSessionProjectColumn(db);
       ensureSessionEntryValidityProjection(db);
       db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
       migrateMemoryChunkMetadataSchema(db);

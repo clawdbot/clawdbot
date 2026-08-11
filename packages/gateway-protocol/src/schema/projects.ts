@@ -26,9 +26,24 @@ export const ProjectRecordSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
 });
 
+export const ProjectRecentSchema = Type.Union([
+  closedObject({
+    kind: Type.Literal("project"),
+    projectId: NonEmptyString,
+    displayName: NonEmptyString,
+  }),
+  closedObject({
+    kind: Type.Literal("folder"),
+    folder: NonEmptyString,
+    displayName: NonEmptyString,
+    execNode: Type.Optional(NonEmptyString),
+  }),
+]);
+
 export const ProjectsListParamsSchema = closedObject({});
 export const ProjectsListResultSchema = closedObject({
   projects: Type.Array(ProjectRecordSchema),
+  recents: Type.Optional(Type.Array(ProjectRecentSchema, { maxItems: 8 })),
 });
 
 export const ProjectsRegisterParamsSchema = closedObject({
@@ -41,6 +56,7 @@ export const ProjectsRemoveParamsSchema = closedObject({ id: StoredProjectIdSche
 export const ProjectsRemoveResultSchema = closedObject({ removed: Type.Boolean() });
 
 export type ProjectRecord = Static<typeof ProjectRecordSchema>;
+export type ProjectRecent = Static<typeof ProjectRecentSchema>;
 export type ProjectsListParams = Static<typeof ProjectsListParamsSchema>;
 export type ProjectsListResult = Static<typeof ProjectsListResultSchema>;
 export type ProjectsRegisterParams = Static<typeof ProjectsRegisterParamsSchema>;
