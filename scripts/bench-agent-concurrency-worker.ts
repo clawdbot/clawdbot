@@ -643,7 +643,7 @@ async function runSweepSample(childCount: number): Promise<Sample> {
       sessionEffects += 1;
       return {} as T;
     }) as typeof import("../src/gateway/call.js").callGateway,
-    cleanupCollectorLaunchResources: async () => true,
+    cleanupFailedLaunchResources: async () => true,
     runContextEngineSubagentEnded: async () => {
       sessionEffects += 1;
     },
