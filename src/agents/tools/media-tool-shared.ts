@@ -13,10 +13,12 @@ import {
 } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { safeFileURLToPath } from "../../infra/local-file-access.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import type { Model } from "../../llm/types.js";
 import { resolveChannelInboundAttachmentRootsForChannel } from "../../media/channel-inbound-roots.js";
 import { getDefaultLocalRootsCore } from "../../media/local-media-access.js";
+import { classifyMediaReferenceSource } from "../../media/media-reference.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { loadCapabilityManifestSnapshot } from "../../plugins/capability-provider-runtime.js";
 import { listAvailableManifestContractValues } from "../../plugins/manifest-contract-eligibility.js";
@@ -624,8 +626,8 @@ export async function resolveMediaToolReferenceAccess(params: {
           inboundFallbackDir: "media/inbound",
         })
       : {
-          resolved: params.input.startsWith("file://")
-            ? params.input.slice("file://".length)
+          resolved: classifyMediaReferenceSource(params.input).isFileUrl
+            ? safeFileURLToPath(params.input)
             : params.input,
         };
   const resolvedPath = params.isDataUrl ? null : pathInfo.resolved;

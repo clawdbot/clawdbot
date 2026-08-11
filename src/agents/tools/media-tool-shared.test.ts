@@ -12,6 +12,7 @@ import {
   resolveMediaToolInboundRoots,
   resolveCapabilityModelConfigForTool,
   resolveMediaToolLocalRoots,
+  resolveMediaToolReferenceAccess,
   resolveModelFromRegistry,
 } from "./media-tool-shared.js";
 
@@ -129,6 +130,57 @@ describe("resolveMediaToolLocalRoots", () => {
         accountId: "work",
       }),
     ).toEqual([accountRoot, sharedRoot, "/Users/*/Library/Messages/Attachments"]);
+  });
+});
+
+describe("resolveMediaToolReferenceAccess", () => {
+  it("decodes a host-local file URL with Unicode and spaces", async () => {
+    const filePath = path.join(process.cwd(), "café reference image.png");
+
+    await expect(
+      resolveMediaToolReferenceAccess({
+        input: pathToFileURL(filePath).href,
+        isDataUrl: false,
+        workspaceDir: process.cwd(),
+      }),
+    ).resolves.toMatchObject({ resolvedPath: filePath });
+  });
+
+  it.each(["relative/reference.png", "https://example.com/reference.png", "media://inbound/a.png"])(
+    "preserves non-file reference %s",
+    async (input) => {
+      await expect(
+        resolveMediaToolReferenceAccess({
+          input,
+          isDataUrl: false,
+          workspaceDir: process.cwd(),
+        }),
+      ).resolves.toMatchObject({ resolvedPath: input });
+    },
+  );
+
+  it("keeps data URLs out of filesystem resolution", async () => {
+    await expect(
+      resolveMediaToolReferenceAccess({
+        input: "data:image/png;base64,cG5n",
+        isDataUrl: true,
+        workspaceDir: process.cwd(),
+      }),
+    ).resolves.toMatchObject({ resolvedPath: null });
+  });
+
+  it.each([
+    ["file://attacker/share.png", /remote hosts/i],
+    ["file:///tmp/encoded%2Fseparator.png", /encode path separators/i],
+    ["file:///tmp/malformed%ZZ.png", /invalid|malformed/i],
+  ])("rejects unsafe or malformed file URL %s", async (input, expected) => {
+    await expect(
+      resolveMediaToolReferenceAccess({
+        input,
+        isDataUrl: false,
+        workspaceDir: process.cwd(),
+      }),
+    ).rejects.toThrow(expected);
   });
 });
 
