@@ -104,9 +104,11 @@ describe("diagnostic support bundle helpers", () => {
     });
     const priorBytes = fs.readFileSync(outputPath);
 
-    const writeFileSpy = vi
-      .spyOn(fsp, "writeFile")
-      .mockRejectedValueOnce(new Error("injected write failure"));
+    const writeFileSpy = vi.spyOn(fsp, "writeFile").mockImplementationOnce(async (file) => {
+      expect(typeof file).toBe("string");
+      fs.writeFileSync(file as string, "partial replacement");
+      throw new Error("injected write failure");
+    });
     try {
       await expect(
         writeSupportBundleZip({
