@@ -169,6 +169,15 @@ function isAllowedMemoryFilePath(filePath: string, multimodal?: MemoryMultimodal
   );
 }
 
+export function isExplicitExtraMarkdownFilePath(
+  filePath: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return (
+    filePath.endsWith(".md") || (platform === "win32" && filePath.toLowerCase().endsWith(".md"))
+  );
+}
+
 function shouldDescendMemoryEntry(
   entry: WalkDirectoryEntry,
   shouldSkipPath?: (absPath: string) => boolean,
@@ -257,7 +266,11 @@ export async function listMemoryFiles(
           );
           continue;
         }
-        if (stat.isFile() && isAllowedMemoryFilePath(inputPath, multimodal)) {
+        if (
+          stat.isFile() &&
+          (isExplicitExtraMarkdownFilePath(inputPath) ||
+            isAllowedMemoryFilePath(inputPath, multimodal))
+        ) {
           result.push(inputPath);
         }
       } catch {}
