@@ -170,9 +170,9 @@ openclaw-chat-pane {
   flex: 0 1 auto;
   min-width: 0;
   align-items: center;
-  /* Tight: both interactive segments carry their own 5px padding, so the gap
-     only has to keep their hover tints from touching. */
-  gap: 4px;
+  /* Both interactive segments pull their 5px hover padding back out of flow, so
+     this gap is the separator's actual optical air on each side. */
+  gap: 6px;
 }
 
 /* Renaming needs the row's spare width, which the trail must pass through:
@@ -444,7 +444,11 @@ openclaw-chat-pane {
   max-width: 180px;
   align-items: center;
   gap: 6px;
+  /* Hover padding drawn outside the text box, matching the title button, so the
+     icon starts flush at the row and the separator keeps equal air on both
+     sides instead of inheriting only the title's pull-back. */
   padding: 3px 5px;
+  margin-inline: -5px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
