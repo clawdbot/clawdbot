@@ -531,8 +531,8 @@ function Install-Node {
             return $true
         }
         if ($wingetExitCode -eq -1978335189) {
-            Write-Host "[!] winget found a stale Node.js registration; retrying with --force" -ForegroundColor Yellow
-            winget install OpenJS.NodeJS.LTS --source winget --force --accept-package-agreements --accept-source-agreements | Out-Host
+            Write-Host "[!] winget found a stale Node.js registration; attempting repair" -ForegroundColor Yellow
+            winget repair --id OpenJS.NodeJS.LTS --exact --source winget --accept-package-agreements --accept-source-agreements | Out-Host
             Refresh-ProcessPath
             Add-InstalledNodeToProcessPath | Out-Null
             if (Check-Node) {
