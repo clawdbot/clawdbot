@@ -309,7 +309,7 @@ function deletePendingForStore(
  * Sign-in links are channel-visible bearer state; a bounded lifetime caps how
  * long a copied link stays completable. Enforced at lookup AND claim.
  */
-export const MCP_OAUTH_PENDING_STATE_TTL_MS = 10 * 60 * 1000;
+const MCP_OAUTH_PENDING_STATE_TTL_MS = 10 * 60 * 1000;
 
 /** Resolve one OAuth callback state without scanning credential JSON. */
 export function readMcpOAuthPendingAuthorization(state: string): string | undefined {
