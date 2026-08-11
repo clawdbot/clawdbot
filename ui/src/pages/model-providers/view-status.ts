@@ -54,12 +54,12 @@ export function renderProviderStatus(card: ModelProviderCard) {
     return renderAuthStatus(card);
   }
   if (card.catalogStatus === "auth-rejected") {
-    return renderSettingsStatus({ kind: "danger", label: t("modelProviders.status.authRejected") });
+    return renderSettingsStatus({ kind: "danger", label: t("modelProviders.status.denied") });
   }
   if (card.catalogStatus === "unavailable") {
     return renderSettingsStatus({
       kind: "warn",
-      label: t("modelProviders.status.catalogUnavailable"),
+      label: t("common.failed"),
     });
   }
   if (!hasProviderCredentials(card)) {
