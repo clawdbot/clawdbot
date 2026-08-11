@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { SessionEntry } from "./types.js";
 import { matchesPluginHostCleanupSession } from "./plugin-host-cleanup.js";
+import type { SessionEntry } from "./types.js";
 
 const entry = (sessionId: string): SessionEntry => ({
   sessionId,
@@ -16,8 +16,13 @@ describe("matchesPluginHostCleanupSession", () => {
         "agent:main:telegram:group:room",
       ),
     ).toBe(true);
-    expect(matchesPluginHostCleanupSession("agent:main:main", entry("Runtime-Session"), "runtime-session"))
-      .toBe(true);
+    expect(
+      matchesPluginHostCleanupSession(
+        "agent:main:main",
+        entry("Runtime-Session"),
+        "runtime-session",
+      ),
+    ).toBe(true);
   });
 
   it("does not match case-distinct Matrix room ids", () => {
