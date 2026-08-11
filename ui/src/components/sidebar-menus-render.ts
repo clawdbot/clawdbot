@@ -317,6 +317,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     peopleSortAvailable: host.sessionPeopleSortAvailable(),
     statusFilter: host.sessionsStatusFilter,
     showCron: host.sessionsShowCron,
+    showSystem: host.sessionsShowSystem,
     creators: host.sessionOwnershipVisible ? host.sessionCreatorOptions : [],
     creatorFilterId: host.sessionCreatorFilterActive ? host.sessionCreatorFilterId : null,
     onGroupingChange: (grouping) => {
@@ -338,6 +339,10 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     },
     onShowCronChange: (show) => {
       host.sessionOrganizer.setSessionsShowCron(show);
+      controller.closeSessionSortMenu({ restoreFocus: true });
+    },
+    onShowSystemChange: (show) => {
+      host.sessionOrganizer.setSessionsShowSystem(show);
       controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onClose: (restoreFocus) => {

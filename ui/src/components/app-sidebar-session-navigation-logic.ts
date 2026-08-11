@@ -5,6 +5,7 @@ import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import {
+  isCronSessionKey,
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
   resolveSessionWorkSubtitle,
@@ -19,6 +20,7 @@ import {
 import {
   compareSessionRowsByUpdatedAt,
   filterVisibleSessionRows,
+  isSystemCreatedSessionRow,
   resolveSessionNavigation,
 } from "../lib/sessions/index.ts";
 import {
@@ -33,6 +35,7 @@ import {
   normalizeAgentId,
   resolveUiCanonicalMainSessionKey,
   resolveUiConfiguredMainKey,
+  resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
 import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
@@ -112,6 +115,7 @@ export function buildSidebarSessionNavigationState(input: {
   activeSession?: GatewaySessionRow | null;
   sessionsAgentId: string | null;
   showCron: boolean;
+  showSystem: boolean;
   statusFilter: SidebarSessionStatusFilter;
   compareSessions: (a: SessionRow, b: SessionRow) => number;
   highlightCurrentSession: boolean;
@@ -138,6 +142,7 @@ export function buildSidebarSessionNavigationState(input: {
       context?.agentSelection.state.selectedId ?? context?.gateway.snapshot.assistantAgentId,
     hello: context?.gateway.snapshot.hello,
     showCron: input.showCron,
+    showSystem: input.showSystem,
     archivedFilter: input.statusFilter,
     compareSessions: input.compareSessions,
   });
@@ -385,6 +390,32 @@ export function latestVisibleAgentSessionRow(input: {
     archivedFilter: "active",
   });
   return visible.toSorted(compareSessionRowsByUpdatedAt)[0] ?? null;
+}
+
+/**
+ * Promote the hidden main session's children to top-level threads, with the
+ * same visibility rules as ordinary roots so archived, cron, or
+ * system-created children cannot sneak in and pagination stays deterministic.
+ */
+export function collectPromotedMainChildRows(input: {
+  rows: readonly GatewaySessionRow[];
+  childRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
+  mainSessionKeys: ReadonlySet<string>;
+  scopedRootKeys: ReadonlySet<string>;
+  showCron: boolean;
+  showSystem: boolean;
+}): GatewaySessionRow[] {
+  return [...input.rows, ...Object.values(input.childRowsByParent).flat()].filter((row) => {
+    const parentKey = resolveUiSessionNavigationParentKey(row);
+    return (
+      parentKey != null &&
+      input.mainSessionKeys.has(parentKey) &&
+      !input.scopedRootKeys.has(row.key) &&
+      !row.archived &&
+      (input.showCron || !isCronSessionKey(row.key)) &&
+      (input.showSystem || !isSystemCreatedSessionRow(row))
+    );
+  });
 }
 
 export function resolveSidebarAgentResumeKey(

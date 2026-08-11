@@ -49,6 +49,7 @@ export {
   filterSessionRows,
   filterVisibleSessionRows,
   getVisibleSessionRows,
+  isSystemCreatedSessionRow,
   resolveSessionNavigation,
   sessionMatchesArchivedFilter,
   scopedAgentIdForSession,

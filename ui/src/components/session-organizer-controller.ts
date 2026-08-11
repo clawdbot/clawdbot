@@ -22,6 +22,7 @@ import {
   storeCollapsedSessionSections,
   storeSidebarSessionsGrouping,
   storeSidebarSessionsShowCron,
+  storeSidebarSessionsShowSystem,
   type SidebarRecentSession,
   type SidebarSectionDropTarget,
   type SidebarSessionMutationResult,
@@ -48,6 +49,7 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
   readonly onUpdateSidebarEntries?: (entries: string[]) => void;
   sessionsGrouping: SidebarSessionsGrouping;
   sessionsShowCron: boolean;
+  sessionsShowSystem: boolean;
   sessionsStatusFilter: SidebarSessionStatusFilter;
   clearSessionSelection(): void;
   findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
@@ -691,6 +693,15 @@ export class SessionOrganizerController implements ReactiveController {
     this.host.sessionsShowCron = show;
     try {
       storeSidebarSessionsShowCron(show);
+    } catch {
+      // Keep the in-memory preference when storage is unavailable.
+    }
+  }
+
+  setSessionsShowSystem(show: boolean) {
+    this.host.sessionsShowSystem = show;
+    try {
+      storeSidebarSessionsShowSystem(show);
     } catch {
       // Keep the in-memory preference when storage is unavailable.
     }

@@ -925,6 +925,7 @@ export const en: TranslationMap = {
     groupByNone: "None",
     groupByCategory: "Custom groups",
     showCronSessions: "Show automation sessions",
+    showSystemSessions: "Show system sessions",
     groupByChannel: "Channel",
     groupByKind: "Kind",
     groupByAgent: "Agent",

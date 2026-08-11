@@ -32,6 +32,7 @@ type SessionNavigationInput = {
   assistantAgentId?: string | null;
   hello?: GatewayHelloOk | null;
   showCron?: boolean;
+  showSystem?: boolean;
   archivedFilter?: SessionArchivedFilter;
   compareSessions?: (a: GatewaySessionRow, b: GatewaySessionRow) => number;
 };
@@ -228,8 +229,29 @@ type VisibleSessionRowOptions = {
   defaultAgentId: string;
   filterByAgent?: boolean;
   showCron?: boolean;
+  showSystem?: boolean;
   archivedFilter?: SessionArchivedFilter;
 };
+
+/**
+ * Machine-created probe/system rows (health-check turns, internal effect
+ * sessions), classified from recorded creation provenance only — never from
+ * message text, which rots and false-positives real chats. Rows without
+ * recorded provenance (legacy stores) stay visible so a real conversation is
+ * never hidden by a guess.
+ */
+export function isSystemCreatedSessionRow(row: GatewaySessionRow): boolean {
+  if (row.createdActor?.type === "system") {
+    return true;
+  }
+  if (row.createdVia !== "run" && row.createdVia !== "internal") {
+    return false;
+  }
+  if (row.createdActor?.type === "human") {
+    return false;
+  }
+  return !(row.label?.trim() || row.displayName?.trim() || row.subject?.trim());
+}
 
 export function sessionMatchesArchivedFilter(
   row: GatewaySessionRow,
@@ -259,6 +281,7 @@ export function filterVisibleSessionRows(
       row.kind !== "unknown" &&
       (options.showCron === true ||
         ((row.kind as string) !== "cron" && !isCronSessionKey(row.key))) &&
+      (options.showSystem === true || !isSystemCreatedSessionRow(row)) &&
       !isSubagentSessionKey(row.key) &&
       !row.spawnedBy &&
       (!options.filterByAgent ||
@@ -316,6 +339,7 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
     defaultAgentId,
     filterByAgent: shouldFilterByAgent,
     showCron: input.showCron,
+    showSystem: input.showSystem,
     archivedFilter: input.archivedFilter,
   }).toSorted(input.compareSessions ?? compareSessionRowsByUpdatedAt);
   // The sidebar is the session list, not a recent-session preview. Keep every

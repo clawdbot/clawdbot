@@ -1,7 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { resolveSessionNavigation, visibleSessionMatches } from "./navigation.ts";
+import {
+  isSystemCreatedSessionRow,
+  resolveSessionNavigation,
+  visibleSessionMatches,
+} from "./navigation.ts";
 
 function sessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
   return {
@@ -52,6 +56,36 @@ describe("resolveSessionNavigation", () => {
     expect(shown.visibleSessions.map((row) => row.key)).toEqual([
       "agent:main:chat",
       "agent:main:cron:job",
+    ]);
+  });
+
+  it("hides system-created probe sessions unless showSystem opts in", () => {
+    const rows: GatewaySessionRow[] = [
+      { key: "agent:main:chat", kind: "direct", updatedAt: 300 },
+      {
+        key: "agent:main:explicit:healthcheck",
+        kind: "direct",
+        updatedAt: 200,
+        createdVia: "run",
+      },
+    ];
+
+    const hidden = resolveSessionNavigation({
+      result: sessionsResult(rows),
+      resultAgentId: "main",
+      sessionKey: "agent:main:chat",
+    });
+    expect(hidden.visibleSessions.map((row) => row.key)).toEqual(["agent:main:chat"]);
+
+    const shown = resolveSessionNavigation({
+      result: sessionsResult(rows),
+      resultAgentId: "main",
+      sessionKey: "agent:main:chat",
+      showSystem: true,
+    });
+    expect(shown.visibleSessions.map((row) => row.key)).toEqual([
+      "agent:main:chat",
+      "agent:main:explicit:healthcheck",
     ]);
   });
 
@@ -339,5 +373,29 @@ describe("visibleSessionMatches", () => {
     expect(visibleSessionMatches(bareHost, "room:123", "main")).toBe(true);
     expect(visibleSessionMatches(bareHost, "room:123", "work")).toBe(false);
     expect(visibleSessionMatches(bareHost, "room:456", "main")).toBe(false);
+  });
+});
+
+describe("isSystemCreatedSessionRow", () => {
+  const base = { key: "agent:main:explicit:probe", kind: "direct", updatedAt: 1 } as const;
+  it.each([
+    ["run + no actor + unnamed is system", { createdVia: "run" }, true],
+    ["internal + no actor + unnamed is system", { createdVia: "internal" }, true],
+    ["system actor is system regardless of via", { createdActor: { type: "system" } }, true],
+    [
+      "run + human actor stays visible",
+      { createdVia: "run", createdActor: { type: "human" } },
+      false,
+    ],
+    ["run + label stays visible", { createdVia: "run", label: "My batch job" }, false],
+    [
+      "run + displayName stays visible",
+      { createdVia: "run", displayName: "Nightly digest" },
+      false,
+    ],
+    ["operator creation stays visible", { createdVia: "operator" }, false],
+    ["legacy row without provenance stays visible", {}, false],
+  ] as const)("%s", (_name, fields, expected) => {
+    expect(isSystemCreatedSessionRow({ ...base, ...fields } as GatewaySessionRow)).toBe(expected);
   });
 });
