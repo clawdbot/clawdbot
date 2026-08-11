@@ -222,6 +222,7 @@ struct TerminalHubScreenTests {
             url: controlURL,
             tls: nil)
 
+        #expect(coordinator.matchesExpectedAuthority(host: "gateway.example.com", port: 0))
         #expect(coordinator.matchesExpectedAuthority(host: "gateway.example.com", port: 443))
         #expect(!coordinator.matchesExpectedAuthority(host: "gateway.example.com", port: 8443))
         #expect(!coordinator.matchesExpectedAuthority(host: "replacement.example.com", port: 443))

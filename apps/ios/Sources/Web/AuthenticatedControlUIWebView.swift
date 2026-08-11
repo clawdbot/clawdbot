@@ -156,7 +156,10 @@ struct AuthenticatedControlUIOrigin: Equatable {
     }
 
     func matches(host: String, port: Int) -> Bool {
-        self.host == Self.canonicalHost(host) && self.port == port
+        // URLProtectionSpace uses 0 for the protocol's default port. Normalize it here or
+        // a default-port Gateway challenge can miss the pinning path and use platform trust.
+        let challengePort = port == 0 ? (self.scheme == "https" ? 443 : 80) : port
+        return self.host == Self.canonicalHost(host) && self.port == challengePort
     }
 
     var serialized: String {
