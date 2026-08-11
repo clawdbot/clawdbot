@@ -1,6 +1,8 @@
 import MarkdownIt from "markdown-it";
 import markdownItTaskLists from "markdown-it-task-lists";
+import type Token from "markdown-it/lib/token.mjs";
 import { t } from "../i18n/index.ts";
+import { fileKindForPath, shortestFileLabels } from "./file-kind.ts";
 import {
   installAssistantTranscriptRoleImageRenderer,
   installAssistantTranscriptRoleMarkdown,
@@ -31,6 +33,40 @@ const GITHUB_LINK_CLASS = "markdown-github-link";
 // Marks anchors whose visible text is the URL itself, which CSS may break at
 // any character. Authored labels keep normal word wrapping.
 const BARE_URL_CLASS = "markdown-bare-url";
+
+// Inline-code file links are rendered by the code_inline rule, which runs after
+// every core rule. The core rule therefore parks the resolved target here so the
+// renderer never re-parses a path the core rule already classified.
+type MarkdownFileLinkMeta = {
+  path: string;
+  line: number | null;
+  // Full original reference, set only when the visible label was shortened.
+  title: string | null;
+};
+
+// Shortening a label needs every file link in the message, so the core rule
+// collects targets first and applies labels in a second pass.
+type MarkdownFileLinkDecoration = {
+  path: string;
+  reference: string;
+  applyLabel: (label: string) => void;
+};
+
+/** Visible text of the link opened at `openIndex`, used to tell an authored
+ *  label apart from one that merely repeats the reference. */
+function linkLabelText(children: readonly Token[], openIndex: number): string {
+  let label = "";
+  for (let cursor = openIndex + 1; cursor < children.length; cursor++) {
+    const token = children[cursor];
+    if (!token || token.type === "link_close") {
+      break;
+    }
+    if (token.type === "text" || token.type === "code_inline") {
+      label += token.content;
+    }
+  }
+  return label.trim();
+}
 
 function normalizeMarkdownImageLabel(text?: string | null): string {
   const trimmed = text?.trim();
@@ -261,6 +297,7 @@ export function createMarkdownParser(): MarkdownIt {
     if (env?.fileLinks !== true) {
       return;
     }
+    const decorations: MarkdownFileLinkDecoration[] = [];
     for (const blockToken of state.tokens) {
       if (blockToken.type !== "inline" || !blockToken.children) {
         continue;
@@ -293,8 +330,17 @@ export function createMarkdownParser(): MarkdownIt {
                 token.attrSet("role", "button");
                 token.attrSet("tabindex", "0");
                 token.attrSet("data-file-path", target.path);
+                token.attrSet("data-file-kind", fileKindForPath(target.path));
                 if (target.line !== null) {
                   token.attrSet("data-file-line", String(target.line));
+                }
+                // The author wrote this label, so it is never rewritten; the
+                // tooltip is the only place the reference behind it survives —
+                // and it is skipped when the label already is that reference,
+                // matching the shortened links below.
+                const reference = decodedHref.trim();
+                if (linkLabelText(children, index) !== reference) {
+                  token.attrSet("title", reference);
                 }
               }
             }
@@ -306,7 +352,31 @@ export function createMarkdownParser(): MarkdownIt {
           linkDepth = Math.max(0, linkDepth - 1);
           continue;
         }
-        if (linkDepth > 0 || token.type !== "text") {
+        if (linkDepth > 0) {
+          continue;
+        }
+        if (token.type === "code_inline") {
+          const target = parseMarkdownFileLinkTarget(token.content);
+          if (target) {
+            const reference = token.content.trim();
+            const meta: MarkdownFileLinkMeta = {
+              path: target.path,
+              line: target.line,
+              title: null,
+            };
+            token.meta = { ...token.meta, fileLink: meta };
+            decorations.push({
+              path: target.path,
+              reference,
+              applyLabel: (label) => {
+                token.content = label;
+                meta.title = label === reference ? null : reference;
+              },
+            });
+          }
+          continue;
+        }
+        if (token.type !== "text") {
           continue;
         }
 
@@ -338,6 +408,7 @@ export function createMarkdownParser(): MarkdownIt {
           open.attrSet("role", "button");
           open.attrSet("tabindex", "0");
           open.attrSet("data-file-path", target.path);
+          open.attrSet("data-file-kind", fileKindForPath(target.path));
           if (target.line !== null) {
             open.attrSet("data-file-line", String(target.line));
           }
@@ -346,6 +417,16 @@ export function createMarkdownParser(): MarkdownIt {
           const close = new state.Token("link_close", "a", -1);
           close.markup = "file-link";
           replacements.push(open, label, close);
+          decorations.push({
+            path: target.path,
+            reference: matched,
+            applyLabel: (text) => {
+              label.content = text;
+              if (text !== matched) {
+                open.attrSet("title", matched);
+              }
+            },
+          });
           cursor = matchEnd;
         }
         if (replacements.length === 0) {
@@ -359,6 +440,16 @@ export function createMarkdownParser(): MarkdownIt {
         children.splice(index, 1, ...replacements);
         index += replacements.length - 1;
       }
+    }
+    // A path carries far more characters than identity: the basename is what a
+    // reader scans for, and the glyph already says "workspace file". Paths that
+    // share a basename keep just enough trailing segments to stay distinct.
+    const labels = shortestFileLabels(decorations.map((decoration) => decoration.path));
+    for (const decoration of decorations) {
+      const label = labels.get(decoration.path) ?? decoration.path;
+      // Line suffixes (":42") are part of the reference, not the path, and stay
+      // on the visible label because they are what makes the link specific.
+      decoration.applyLabel(label + decoration.reference.slice(decoration.path.length));
     }
   });
 
@@ -445,16 +536,15 @@ export function createMarkdownParser(): MarkdownIt {
   };
   markdownParser.renderer.rules.code_inline = (tokens, index, options, env, self) => {
     const rendered = defaultCodeInlineRenderer(tokens, index, options, env, self);
-    const renderEnv = env as Partial<MarkdownRenderEnv> | undefined;
-    const token = tokens[index];
-    const target =
-      token && renderEnv?.fileLinks === true ? parseMarkdownFileLinkTarget(token.content) : null;
+    const target = tokens[index]?.meta?.fileLink as MarkdownFileLinkMeta | undefined;
     if (!target) {
       return rendered;
     }
     const lineAttribute =
       target.line === null ? "" : ` data-file-line="${escapeMarkdownHtml(String(target.line))}"`;
-    return `<a class="markdown-file-link" role="button" tabindex="0" data-file-path="${escapeMarkdownHtml(target.path)}"${lineAttribute}>${rendered}</a>`;
+    const titleAttribute =
+      target.title === null ? "" : ` title="${escapeMarkdownHtml(target.title)}"`;
+    return `<a class="markdown-file-link" role="button" tabindex="0" data-file-path="${escapeMarkdownHtml(target.path)}" data-file-kind="${fileKindForPath(target.path)}"${lineAttribute}${titleAttribute}>${rendered}</a>`;
   };
 
   // Message rendering allows only inline data images (#15437). Document
