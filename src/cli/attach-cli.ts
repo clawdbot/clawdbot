@@ -213,12 +213,12 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
           // Guard against repeated Ctrl+C: clear any previous escalation
           // timer so stale timers do not fire on an exited or reused PID.
           disarm();
-          // Forward SIGINT to the launched child. The child shares the
-          // operator's terminal, so the console also delivers Ctrl+C to it;
-          // this explicit signal covers non-interactive or slow paths.
-          child.kill("SIGINT");
+          // The child is non-detached with inherited stdio, so the
+          // operator's terminal already delivers Ctrl+C to it. Do not
+          // forward SIGINT here — a second delivery can change how the
+          // child handles its own graceful cancellation.
           // Escalate to SIGKILL after a grace period so a stuck child cannot
-          // keep the parent alive indefinitely by ignoring SIGINT.
+          // keep the parent alive indefinitely by ignoring the terminal SIGINT.
           forceKillTimer = setTimeout(() => {
             forceKillTimer = undefined;
             if (isFinished) {

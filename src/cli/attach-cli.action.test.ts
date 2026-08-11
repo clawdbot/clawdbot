@@ -287,12 +287,14 @@ describe("openclaw attach (action)", () => {
     expect(process.listenerCount("SIGTERM")).toBe(baseTerm);
   });
 
-  it("forwards SIGINT to the launched child", async () => {
+  it("does not forward SIGINT to the child (terminal delivers it via inherited stdio)", async () => {
     await runAttach("--session", "agent:main:spawn");
     const sigintListeners = process.listeners("SIGINT");
     const handler = sigintListeners[sigintListeners.length - 1] as () => void;
     handler();
-    expect(spawnedChild.kill).toHaveBeenCalledWith("SIGINT");
+    // The child inherits stdio; terminal Ctrl+C already reaches it.
+    // The parent must not send a second SIGINT.
+    expect(spawnedChild.kill).not.toHaveBeenCalledWith("SIGINT");
     // Cleanup: a healthy child would exit on SIGINT
     spawnedChild.emit("exit", 0, null);
     await tick();
@@ -310,15 +312,15 @@ describe("openclaw attach (action)", () => {
     await tick();
   });
 
-  it("force-kills the child after a grace period when it ignores SIGINT", async () => {
+  it("force-kills the child after a grace period when it ignores the terminal SIGINT", async () => {
     vi.useFakeTimers();
     try {
       await runAttach("--session", "agent:main:spawn");
       const sigintListeners = process.listeners("SIGINT");
       const handler = sigintListeners[sigintListeners.length - 1] as () => void;
       handler();
-      expect(spawnedChild.kill).toHaveBeenCalledWith("SIGINT");
-      // Child survives SIGINT — timer should escalate to SIGKILL.
+      // The terminal delivers SIGINT; the parent only starts the escalation
+      // timer. Child survives — timer should escalate to SIGKILL.
       // kill() must return true for the force-kill path to record
       // the signal and report exit code 128+9.
       spawnedChild.kill.mockReturnValueOnce(true);
@@ -339,7 +341,6 @@ describe("openclaw attach (action)", () => {
       const sigintListeners = process.listeners("SIGINT");
       const handler = sigintListeners[sigintListeners.length - 1] as () => void;
       handler();
-      expect(spawnedChild.kill).toHaveBeenCalledWith("SIGINT");
       // kill() returns false: the child has already exited or delivery
       // was not confirmed. The timer must not finalize until the child
       // exit handler records the authoritative outcome.
@@ -366,7 +367,6 @@ describe("openclaw attach (action)", () => {
       const handler = sigintListeners[sigintListeners.length - 1] as () => void;
       // First Ctrl+C
       handler();
-      expect(spawnedChild.kill).toHaveBeenCalledWith("SIGINT");
       // Second Ctrl+C before escalation fires: must clear the first timer
       handler();
       // Advance well past the first timer's deadline; only the second
@@ -374,7 +374,7 @@ describe("openclaw attach (action)", () => {
       // so the force-kill path records the signal.
       spawnedChild.kill.mockImplementation((signal: string) => signal === "SIGKILL");
       vi.advanceTimersByTime(5_000);
-      expect(spawnedChild.kill).toHaveBeenCalledTimes(3); // SIGINT ×2 + SIGKILL
+      expect(spawnedChild.kill).toHaveBeenCalledTimes(1); // SIGKILL only
       spawnedChild.emit("exit", null, "SIGKILL");
       await vi.runAllTimersAsync();
     } finally {
@@ -389,7 +389,6 @@ describe("openclaw attach (action)", () => {
       const sigintListeners = process.listeners("SIGINT");
       const handler = sigintListeners[sigintListeners.length - 1] as () => void;
       handler();
-      expect(spawnedChild.kill).toHaveBeenCalledWith("SIGINT");
       // Child exits before the SIGKILL escalation fires.
       spawnedChild.emit("exit", 0, null);
       await vi.runAllTimersAsync();
