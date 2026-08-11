@@ -1488,6 +1488,104 @@ describe("subagent registry lifecycle hardening", () => {
     expect(entry.completion?.resultText).toBeUndefined();
   });
 
+  it("refreshes only the newest pending completion generation for a shared session", async () => {
+    const childSessionKey = "agent:main:subagent:shared-refresh";
+    const older = createRunEntry({
+      runId: "run-shared-refresh-old",
+      childSessionKey,
+      generation: 1,
+      createdAt: 1_000,
+      expectsCompletionMessage: true,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      completion: {
+        required: true,
+        resultText: "older generation result",
+        capturedAt: 4_000,
+      },
+    });
+    const newer = createRunEntry({
+      runId: "run-shared-refresh-new",
+      childSessionKey,
+      generation: 2,
+      createdAt: 2_000,
+      expectsCompletionMessage: true,
+      endedAt: 5_000,
+      outcome: { status: "ok" },
+      completion: {
+        required: true,
+        resultText: "newer generation placeholder",
+        capturedAt: 5_000,
+      },
+    });
+    const olderBefore = structuredClone(older);
+    const persist = vi.fn();
+    const controller = createLifecycleController({
+      entry: newer,
+      runs: new Map([
+        [older.runId, older],
+        [newer.runId, newer],
+      ]),
+      persist,
+      captureSubagentCompletionReply: vi.fn(async () => "latest session reply"),
+    });
+
+    expect(await controller.refreshFrozenResultFromSession(childSessionKey)).toBe(true);
+
+    expect(older).toEqual(olderBefore);
+    expect(newer.completion).toMatchObject({
+      resultText: "latest session reply",
+      capturedAt: expect.any(Number),
+    });
+    expect(persist).toHaveBeenCalledOnce();
+    expect(persist).toHaveBeenCalledWith(newer.runId);
+  });
+
+  it("rejects a frozen-result refresh when a newer generation registers during capture", async () => {
+    const childSessionKey = "agent:main:subagent:refresh-race";
+    const entry = createRunEntry({
+      runId: "run-refresh-race-old",
+      childSessionKey,
+      generation: 1,
+      expectsCompletionMessage: true,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+    });
+    const runs = new Map([[entry.runId, entry]]);
+    let finishCapture: ((value: string) => void) | undefined;
+    const captureSubagentCompletionReply = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          finishCapture = resolve;
+        }),
+    );
+    const persist = vi.fn();
+    const controller = createLifecycleController({
+      entry,
+      runs,
+      persist,
+      captureSubagentCompletionReply,
+    });
+
+    const refresh = controller.refreshFrozenResultFromSession(childSessionKey);
+    await waitForLifecycleState(() =>
+      expect(captureSubagentCompletionReply).toHaveBeenCalledOnce(),
+    );
+    const successor = createRunEntry({
+      runId: "run-refresh-race-new",
+      childSessionKey,
+      generation: 2,
+      createdAt: 2_000,
+    });
+    runs.set(successor.runId, successor);
+    finishCapture?.("reply owned by the successor");
+
+    expect(await refresh).toBe(false);
+    expect(entry.completion?.resultText).toBeUndefined();
+    expect(successor.completion?.resultText).toBeUndefined();
+    expect(persist).not.toHaveBeenCalled();
+  });
+
   it("keeps success canonical while a killed callback waits behind reply capture", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: true });
     let releaseCapture: ((value: string) => void) | undefined;
