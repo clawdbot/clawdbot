@@ -83,7 +83,9 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
     }
     const row = asObjectRecord(model) ?? {};
     const cost = asObjectRecord(row.cost) ?? {};
-    return { ...row, cost: { ...cost, cacheWrite: 0 } };
+    return Object.assign({}, row, {
+      cost: Object.assign({}, cost, { cacheWrite: 0 }),
+    });
   });
 
   return {
