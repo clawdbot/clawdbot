@@ -56,8 +56,6 @@ type EmbeddedRunContextWindowInfo = {
   source: "model" | "modelsConfig" | "agentContextTokens" | "default";
 };
 
-export type EmbeddedRunFastModeParam = boolean | (() => boolean | undefined);
-
 type EmbeddedRunAttemptOperation = "attempt" | "settled-tool-finalization";
 
 type EmbeddedRunAttemptToolTerminalObservation = {
@@ -170,7 +168,7 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   toolAuthProfileStore?: AuthProfileStore;
   modelRegistry: ModelRegistry;
   thinkLevel: ThinkLevel;
-  fastMode?: EmbeddedRunFastModeParam;
+  fastMode?: boolean | (() => boolean | undefined);
   /** True when this attempt is running the auto fast-mode policy. */
   fastModeAuto?: boolean;
   beforeAgentFinalizeRevisionAttempts?: number;
