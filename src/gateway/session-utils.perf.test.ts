@@ -2,7 +2,7 @@
 // session lists with repeated provider/model tuples.
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeAll, describe, test, expect, vi } from "vitest";
+import { describe, test, expect, vi } from "vitest";
 import {
   readAcpSessionMetaBatch,
   readAcpSessionMetaForEntry,
@@ -32,49 +32,6 @@ import { listSessionsFromStore, listSessionsFromStoreAsync } from "./session-uti
  * are the actual scaling failure mode we care about.
  */
 describe("listSessionsFromStore resolver cache", () => {
-  beforeAll(async () => {
-    await withStateDirEnv("openclaw-perf-warm-", async ({ stateDir }) => {
-      resetPluginRuntimeStateForTest();
-      setActivePluginRegistry(createEmptyPluginRegistry());
-      const cfg = {
-        agents: { defaults: { model: { primary: "google-vertex/gemini-3-flash-preview" } } },
-      } as OpenClawConfig;
-      resetConfigRuntimeState();
-      setRuntimeConfigSnapshot(cfg);
-      listSessionsFromStore({
-        cfg,
-        storePath: path.join(stateDir, "sessions.json"),
-        store: {
-          google: {
-            sessionId: "google",
-            updatedAt: 1,
-            modelProvider: "google-vertex",
-            model: "gemini-3-flash-preview",
-          },
-          openai: {
-            sessionId: "openai",
-            updatedAt: 1,
-            modelProvider: "openai",
-            model: "gpt-5",
-          },
-          anthropic: {
-            sessionId: "anthropic",
-            updatedAt: 1,
-            modelProvider: "anthropic",
-            model: "claude-opus-4-7",
-          },
-          openrouter: {
-            sessionId: "openrouter",
-            updatedAt: 1,
-            modelProvider: "openrouter",
-            model: "z-ai/glm-5",
-          },
-        },
-        opts: {},
-      });
-    });
-  });
-
   test("collapses non-lightweight per-row resolver work to O(unique provider/model tuples)", async () => {
     await withStateDirEnv("openclaw-perf-", async ({ stateDir }) => {
       resetPluginRuntimeStateForTest();
@@ -112,8 +69,18 @@ describe("listSessionsFromStore resolver cache", () => {
         } as SessionEntry;
       }
 
-      const thinkingSpy = vi.spyOn(thinking, "listThinkingLevelOptions");
-      const costSpy = vi.spyOn(usageFormat, "resolveModelCostConfig");
+      // Keep this proof on the request-local cache boundary. Calling the real
+      // resolvers here pays unrelated cold provider startup before measuring
+      // the cache and previously required a duplicate broad warm-up list.
+      const thinkingSpy = vi
+        .spyOn(thinking, "listThinkingLevelOptions")
+        .mockReturnValue([{ id: "off", label: "Off" }]);
+      const costSpy = vi.spyOn(usageFormat, "resolveModelCostConfig").mockReturnValue({
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+      });
       try {
         const result = listSessionsFromStore({
           cfg,
@@ -128,13 +95,10 @@ describe("listSessionsFromStore resolver cache", () => {
         expect(result.sessions.length).toBe(rowCount);
 
         // The cache keys on rowContext are (provider, model) or
-        // (agentId, provider, model). With K=5 unique tuples we must see at
-        // most a small constant number of resolver calls, not O(N=30). A
-        // pre-cache regression would scale linearly and easily exceed the
-        // threshold below.
-        const cacheCallCeiling = tuples.length * 4;
-        expect(thinkingSpy.mock.calls.length).toBeLessThanOrEqual(cacheCallCeiling);
-        expect(costSpy.mock.calls.length).toBeLessThanOrEqual(cacheCallCeiling);
+        // (agentId, provider, model). With K=5 unique tuples we must see K
+        // resolver calls, not O(N=30).
+        expect(thinkingSpy).toHaveBeenCalledTimes(tuples.length);
+        expect(costSpy).toHaveBeenCalledTimes(tuples.length);
       } finally {
         thinkingSpy.mockRestore();
         costSpy.mockRestore();
