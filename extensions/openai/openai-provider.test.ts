@@ -192,6 +192,11 @@ function runWrappedPayloadCase(params: {
   agentId?: string;
   nativeWebSearchAllowedByToolPolicy?: boolean;
   payload?: Record<string, unknown>;
+  context?: Context;
+  streamOptions?: SimpleStreamOptions & {
+    openclawCodeModeToolSurface?: boolean;
+    openclawCodeModeAllowedHostedToolTypes?: Set<string>;
+  };
 }) {
   const payload = params.payload ?? { store: false };
   let capturedOptions: SimpleStreamOptions | undefined;
@@ -212,8 +217,7 @@ function runWrappedPayloadCase(params: {
     streamFn: baseStreamFn,
   } as never);
 
-  const context: Context = { messages: [] };
-  void streamFn?.(params.model, context, {});
+  void streamFn?.(params.model, params.context ?? { messages: [] }, params.streamOptions ?? {});
 
   return {
     payload,
@@ -2338,6 +2342,53 @@ describe("buildOpenAIProvider", () => {
     ]);
   });
 
+  it("authorizes native OpenAI web search through the code mode wrapper chain", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+    const allowedHostedToolTypes = new Set<string>();
+
+    const result = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      context: {
+        messages: [],
+        tools: [
+          { name: "exec", description: "", parameters: {} },
+          { name: "wait", description: "", parameters: {} },
+        ],
+      },
+      streamOptions: {
+        openclawCodeModeToolSurface: true,
+        openclawCodeModeAllowedHostedToolTypes: allowedHostedToolTypes,
+      },
+      payload: {
+        tools: [
+          { type: "function", name: "exec" },
+          { type: "function", name: "wait" },
+          { type: "function", name: "rogue" },
+          { type: "function", name: "web_search" },
+        ],
+      },
+    });
+
+    expect(result.payload.tools).toEqual([
+      { type: "function", name: "exec" },
+      { type: "function", name: "wait" },
+      { type: "web_search" },
+    ]);
+    expect(allowedHostedToolTypes).toEqual(new Set(["web_search"]));
+  });
+
   it("keeps one native OpenAI web search tool when the payload is already patched", () => {
     const provider = buildOpenAIProvider();
     const wrap = provider.wrapStreamFn;
@@ -2373,12 +2424,17 @@ describe("buildOpenAIProvider", () => {
       throw new Error("expected OpenAI wrapper");
     }
 
+    const allowedHostedToolTypes = new Set<string>();
     const result = runWrappedPayloadCase({
       wrap,
       provider: "openai",
       modelId: "gpt-5.4",
       agentId: "main",
       nativeWebSearchAllowedByToolPolicy: false,
+      streamOptions: {
+        openclawCodeModeToolSurface: true,
+        openclawCodeModeAllowedHostedToolTypes: allowedHostedToolTypes,
+      },
       cfg: {
         agents: {
           list: [
@@ -2407,6 +2463,7 @@ describe("buildOpenAIProvider", () => {
       { type: "function", name: "read" },
       { type: "function", name: "web_search" },
     ]);
+    expect(allowedHostedToolTypes).toEqual(new Set());
   });
 
   it("raises minimal reasoning when native OpenAI web search is injected", () => {
@@ -2444,11 +2501,15 @@ describe("buildOpenAIProvider", () => {
       throw new Error("expected OpenAI wrapper");
     }
 
+    const disabledAllowedHostedToolTypes = new Set<string>();
     const disabled = runWrappedPayloadCase({
       wrap,
       provider: "openai",
       modelId: "gpt-5.4",
       cfg: { tools: { web: { search: { enabled: false } } } },
+      streamOptions: {
+        openclawCodeModeAllowedHostedToolTypes: disabledAllowedHostedToolTypes,
+      },
       model: {
         api: "openai-responses",
         provider: "openai",
@@ -2457,6 +2518,7 @@ describe("buildOpenAIProvider", () => {
       } as Model<"openai-responses">,
       payload: { tools: [{ type: "function", name: "web_search" }] },
     });
+    const proxiedAllowedHostedToolTypes = new Set<string>();
     const proxied = runWrappedPayloadCase({
       wrap,
       provider: "openai",
@@ -2467,11 +2529,16 @@ describe("buildOpenAIProvider", () => {
         id: "gpt-5.4",
         baseUrl: "https://example-proxy.invalid/v1",
       } as Model<"openai-responses">,
+      streamOptions: {
+        openclawCodeModeAllowedHostedToolTypes: proxiedAllowedHostedToolTypes,
+      },
       payload: { tools: [{ type: "function", name: "web_search" }] },
     });
 
     expect(disabled.payload.tools).toEqual([{ type: "function", name: "web_search" }]);
     expect(proxied.payload.tools).toEqual([{ type: "function", name: "web_search" }]);
+    expect(disabledAllowedHostedToolTypes).toEqual(new Set());
+    expect(proxiedAllowedHostedToolTypes).toEqual(new Set());
   });
 
   it("keeps managed web_search when another search provider is configured", () => {
@@ -2482,11 +2549,15 @@ describe("buildOpenAIProvider", () => {
       throw new Error("expected OpenAI wrapper");
     }
 
+    const allowedHostedToolTypes = new Set<string>();
     const result = runWrappedPayloadCase({
       wrap,
       provider: "openai",
       modelId: "gpt-5.4",
       cfg: { tools: { web: { search: { enabled: true, provider: "brave" } } } },
+      streamOptions: {
+        openclawCodeModeAllowedHostedToolTypes: allowedHostedToolTypes,
+      },
       model: {
         api: "openai-responses",
         provider: "openai",
@@ -2497,6 +2568,7 @@ describe("buildOpenAIProvider", () => {
     });
 
     expect(result.payload.tools).toEqual([{ type: "function", name: "web_search" }]);
+    expect(allowedHostedToolTypes).toEqual(new Set());
   });
 
   it("preserves explicit OpenAI responses transport overrides", () => {
