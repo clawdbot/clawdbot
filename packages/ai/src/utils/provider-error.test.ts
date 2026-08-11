@@ -394,6 +394,58 @@ describe("projectProviderError", () => {
     expect(projected.errorMessage.length).toBeLessThanOrEqual(4096);
   });
 
+  it("caps descriptor reads from hostile objects", () => {
+    let descriptorReads = 0;
+    const keys = Array.from({ length: 1_000 }, (_, index) => `field${index}`);
+    const error = new Proxy(
+      {},
+      {
+        ownKeys: () => keys,
+        getOwnPropertyDescriptor: (_target, key) => {
+          descriptorReads += 1;
+          return { configurable: true, enumerable: true, value: String(key) };
+        },
+      },
+    );
+
+    expect(projectProviderError(error).stopReason).toBe("error");
+    expect(descriptorReads).toBe(64);
+  });
+
+  it("skips proxy keys without property descriptors", () => {
+    const error = new Proxy(
+      { safe: "connection failed" },
+      {
+        ownKeys: () => ["missing", "safe"],
+        getOwnPropertyDescriptor: (target, key) => Reflect.getOwnPropertyDescriptor(target, key),
+      },
+    );
+
+    expect(projectProviderError(error).errorMessage).toContain("connection failed");
+  });
+
+  it("redacts value fields when their discriminator falls beyond the field cap", () => {
+    const secret = "late-discriminator-secret";
+    const error: Record<string, unknown> = { value: secret };
+    for (let index = 0; index < 63; index += 1) {
+      error[`field${index}`] = index;
+    }
+    error.name = "api_key";
+
+    expect(JSON.stringify(projectProviderError(error))).not.toContain(secret);
+  });
+
+  it("redacts media fields when their discriminator falls beyond the field cap", () => {
+    const media = "QUJDRA==";
+    const error: Record<string, unknown> = { data: media };
+    for (let index = 0; index < 63; index += 1) {
+      error[`field${index}`] = index;
+    }
+    error.type = "video";
+
+    expect(JSON.stringify(projectProviderError(error))).not.toContain(media);
+  });
+
   it.each([
     { name: "Buffer", bytes: Buffer.from([1, 2, 3]) },
     { name: "Uint8Array", bytes: new Uint8Array([4, 5, 6]) },

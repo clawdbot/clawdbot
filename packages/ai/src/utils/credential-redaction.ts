@@ -173,14 +173,21 @@ export function projectDiagnosticValue(
       state.changed = true;
       return "[Truncated]";
     }
-    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const keys = Reflect.ownKeys(value).slice(0, 65);
+    const descriptors = Object.fromEntries(
+      keys.slice(0, 64).flatMap((key) => {
+        const descriptor = typeof key === "string" && Object.getOwnPropertyDescriptor(value, key);
+        return descriptor ? [[key, descriptor]] : [];
+      }),
+    );
+    state.changed ||= keys.length > 64;
     seen.add(value);
     const out = (Array.isArray(value) ? [] : {}) as Record<string, unknown>;
     const rawName =
       typeof descriptors.name?.value === "string" ? descriptors.name.value : descriptors.key?.value;
-    const redactValueField = typeof rawName === "string" && isCredentialFieldName(rawName);
-    const redactMedia = mediaPayload || isDiagnosticMediaPayload(descriptors);
-    let fieldCount = 0;
+    const redactValueField =
+      keys.length > 64 || (typeof rawName === "string" && isCredentialFieldName(rawName));
+    const redactMedia = mediaPayload || keys.length > 64 || isDiagnosticMediaPayload(descriptors);
     for (const [key, descriptor] of Object.entries(descriptors)) {
       if (
         !("value" in descriptor) ||
@@ -190,10 +197,6 @@ export function projectDiagnosticValue(
         key === "length"
       ) {
         continue;
-      }
-      if (fieldCount++ >= 64) {
-        state.changed = true;
-        break;
       }
       const child = descriptor.value;
       if (policy.omitField?.(key) || isCredentialFieldName(key)) {

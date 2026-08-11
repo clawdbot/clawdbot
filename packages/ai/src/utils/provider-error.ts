@@ -14,9 +14,7 @@ export type ProviderErrorProjection = {
 
 export type ProviderErrorRedactor = (value: unknown) => unknown;
 let providerErrorRedactor: ProviderErrorRedactor | undefined;
-export function configureProviderErrorRedactor(
-  redactor: ProviderErrorRedactor | undefined,
-): ProviderErrorRedactor | undefined {
+export function configureProviderErrorRedactor(redactor: ProviderErrorRedactor | undefined) {
   const previous = providerErrorRedactor;
   providerErrorRedactor = redactor;
   return previous;
