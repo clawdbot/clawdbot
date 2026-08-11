@@ -412,6 +412,25 @@ describe("projectProviderError", () => {
     expect(descriptorReads).toBe(64);
   });
 
+  it("caps descriptor reads across a branching hostile graph", () => {
+    let descriptorReads = 0;
+    const keys = Array.from({ length: 64 }, (_, index) => `field${index}`);
+    const createNode = (): object =>
+      new Proxy(
+        {},
+        {
+          ownKeys: () => keys,
+          getOwnPropertyDescriptor: () => {
+            descriptorReads += 1;
+            return { configurable: true, enumerable: true, value: createNode() };
+          },
+        },
+      );
+
+    expect(projectProviderError(createNode()).stopReason).toBe("error");
+    expect(descriptorReads).toBe(64 * 64);
+  });
+
   it("skips proxy keys without property descriptors", () => {
     const error = new Proxy(
       { safe: "connection failed" },

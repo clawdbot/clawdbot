@@ -33,7 +33,6 @@ const LOOSE_CREDENTIAL_PAIR_RE =
 const MEDIA_DATA_URL_RE =
   /data:(?:audio|image|video)\/[a-z0-9.+-]+(?:;[^,;\s]+)*;base64,[ \t]*(?:\r?\n[ \t]*)?[a-z0-9+/_=-]+(?:[ \t]*\r?\n[ \t]*[a-z0-9+/_=-]+)*/giu;
 const MAX_DIAGNOSTIC_JSON_LENGTH = 16 * 1024;
-const MAX_DIAGNOSTIC_DEPTH = 8;
 const PLAIN_BRACKET_TAG_RE = /^\[[A-Za-z0-9][A-Za-z0-9 _.-]*\]$/u;
 const JSON_ARRAY_START_RE = /\[\s*(?:[{"\d\]-]|true\b|false\b|null\b)/u;
 const MALFORMED_JSON_RE =
@@ -143,9 +142,8 @@ export function projectDiagnosticValue(
   value: unknown,
   policy: DiagnosticProjectionPolicy = {},
   seen = new WeakSet<object>(),
-  depth = 0,
   mediaPayload = false,
-  state = { changed: false },
+  state = { changed: false, nodesRemaining: 64 },
 ): unknown {
   try {
     if (typeof value === "string") {
@@ -169,7 +167,7 @@ export function projectDiagnosticValue(
     if (seen.has(value)) {
       return "[Circular]";
     }
-    if (depth >= MAX_DIAGNOSTIC_DEPTH) {
+    if (state.nodesRemaining-- <= 0) {
       state.changed = true;
       return "[Truncated]";
     }
@@ -217,7 +215,7 @@ export function projectDiagnosticValue(
         continue;
       }
       const childMedia = media?.kind === "context";
-      out[key] = projectDiagnosticValue(child, policy, seen, depth + 1, childMedia, state);
+      out[key] = projectDiagnosticValue(child, policy, seen, childMedia, state);
     }
     return out;
   } catch {
@@ -243,9 +241,9 @@ export function redactDiagnosticText(value: string): string {
     unstructured += plainText;
     redacted += plainText;
     try {
-      const state = { changed: false };
+      const state = { changed: false, nodesRemaining: 64 };
       const parsed = JSON.parse(fragment.json);
-      const projected = projectDiagnosticValue(parsed, {}, new WeakSet(), 0, false, state);
+      const projected = projectDiagnosticValue(parsed, {}, new WeakSet(), false, state);
       redacted += state.changed ? stableStringify(projected) : fragment.json;
     } catch {
       if (!PLAIN_BRACKET_TAG_RE.test(fragment.json) || JSON_ARRAY_START_RE.test(fragment.json)) {
