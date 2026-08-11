@@ -1680,6 +1680,130 @@ describe("gateway session utils", () => {
     expect(row.effectiveResponseUsage).toBe("tokens");
   });
 
+  test("buildGatewaySessionRow projects effective reasoning without replacing its override", () => {
+    const cfg = {
+      agents: {
+        defaults: { reasoningDefault: "on" },
+        list: [
+          { id: "main", default: true },
+          { id: "work", reasoningDefault: "stream" },
+        ],
+      },
+    } as OpenClawConfig;
+    const inherited = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:work:main",
+      entry: { sessionId: "work-inherited", updatedAt: 1 } as SessionEntry,
+    });
+    const explicit = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:work:override",
+      entry: {
+        sessionId: "work-override",
+        updatedAt: 1,
+        reasoningLevel: "off",
+      } as SessionEntry,
+    });
+    const globalDefault = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:main:main",
+      entry: { sessionId: "main-inherited", updatedAt: 1 } as SessionEntry,
+    });
+
+    expect(inherited.reasoningLevel).toBeUndefined();
+    expect(inherited.effectiveReasoningLevel).toBe("stream");
+    expect(buildGatewaySessionEventFields({ sessionRow: inherited }).effectiveReasoningLevel).toBe(
+      "stream",
+    );
+    expect(explicit.reasoningLevel).toBe("off");
+    expect(explicit.effectiveReasoningLevel).toBe("off");
+    expect(globalDefault.effectiveReasoningLevel).toBe("on");
+  });
+
+  test("uses model reasoning only without explicit thinking or reasoning defaults", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: "reasoner",
+      source: "test",
+      provider: {
+        id: "reasoner",
+        label: "Reasoner",
+        auth: [],
+        resolveThinkingProfile: () => ({
+          levels: [{ id: "off" }],
+          defaultLevel: "off",
+        }),
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const modelCatalog = [
+      { provider: "reasoner", id: "default-on", name: "Default on", reasoning: true },
+    ];
+    const cfg = {
+      agents: {
+        defaults: { model: { primary: "reasoner/default-on" } },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+    const row = (entry?: SessionEntry, config = cfg) =>
+      buildGatewaySessionRow({
+        cfg: config,
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+        entry,
+        modelCatalog,
+      });
+
+    expect(row().effectiveReasoningLevel).toBe("on");
+    expect(row({ thinkingLevel: "off" } as SessionEntry).effectiveReasoningLevel).toBe("off");
+    expect(
+      row(undefined, {
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults: { ...cfg.agents?.defaults, thinkingDefault: "off" },
+        },
+      } as OpenClawConfig).effectiveReasoningLevel,
+    ).toBe("off");
+    const staticCatalogCfg = {
+      ...cfg,
+      models: {
+        providers: {
+          reasoner: {
+            baseUrl: "https://reasoner.example.test/v1",
+            models: [
+              {
+                id: "default-on",
+                name: "Default on",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    expect(
+      buildGatewaySessionRow({
+        cfg: staticCatalogCfg,
+        storePath: "",
+        store: {},
+        key: "agent:main:main",
+      }).effectiveReasoningLevel,
+    ).toBe("on");
+  });
+
   test("buildGatewaySessionRow effectiveResponseUsage respects a per-channel responseUsage map", () => {
     const cfg = {
       agents: { list: [{ id: "main", default: true }] },

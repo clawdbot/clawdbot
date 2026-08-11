@@ -173,6 +173,43 @@ describe("chat transcript row measurement", () => {
     }
   });
 
+  it("renders inherited reasoning when the session's effective setting is on", () => {
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = {
+      ...threadProps("pane-effective-reasoning", "main", [
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "Inherited reasoning is visible." },
+            { type: "text", text: "Visible answer." },
+          ],
+          timestamp: 1,
+        },
+      ]),
+      showThinking: true,
+      sessions: {
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 1,
+            reasoningLevel: "off",
+            effectiveReasoningLevel: "on",
+          },
+        ],
+      } as never,
+    };
+
+    render(renderChatThread(props, transcript), container);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+
+    expect(container.querySelector(".chat-thinking")?.textContent).toContain(
+      "Inherited reasoning is visible.",
+    );
+  });
+
   it("loads a truncated assistant message once across inline collapse and re-expansion", async () => {
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
