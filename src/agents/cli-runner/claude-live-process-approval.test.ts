@@ -92,7 +92,11 @@ describe("Claude live process approvals", () => {
       context: () =>
         buildClaudeLiveRunContext({
           sessionKey: "agent:main:main",
-          sessionEntry: { execSecurity: "deny" },
+          sessionEntry: {
+            sessionId: "session-policy-test",
+            updatedAt: 1,
+            execSecurity: "deny",
+          },
           config: {
             tools: { exec: { security: "full", ask: "off" } },
             agents: {
