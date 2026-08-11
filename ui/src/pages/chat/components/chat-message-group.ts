@@ -329,7 +329,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   });
   const userLabel = group.senderLabel?.trim();
   const isPeerGroup = normalizedRole === "user" && isPeerSenderGroup(group, opts.userId);
-  const isCurrentUser = normalizedRole === "user" && Boolean(group.sender) && !isPeerGroup;
+  const isCurrentUser = normalizedRole === "user" && !isPeerGroup;
   const who =
     normalizedRole === "user"
       ? isCurrentUser
@@ -436,7 +436,12 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   `;
 
   return html`
-    <div class="chat-group ${roleClass} chat-group--with-footer" data-chat-row-key=${group.key}>
+    <div
+      class="chat-group ${roleClass} chat-group--with-footer${isPeerGroup
+        ? " chat-group--peer"
+        : ""}"
+      data-chat-row-key=${group.key}
+    >
       ${renderChatAvatar(
         group.role,
         {
@@ -456,10 +461,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         ${replyToLabel
           ? html`
               <div class="chat-reply-attribution" title=${replyToTitle} aria-label=${replyToTitle}>
-                <span class="chat-reply-attribution__icon" aria-hidden="true"
-                  >${icons.cornerDownLeft}</span
-                >
-                <span>${replyToLabel}</span>
+                <span>${replyToTitle}</span>
               </div>
             `
           : nothing}

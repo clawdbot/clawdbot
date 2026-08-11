@@ -1705,7 +1705,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     [393, 852],
     [1366, 900],
   ] as const)(
-    "aligns human and agent messages on the same document axis at %sx%s",
+    "anchors the viewer right and other participants left at %sx%s",
     async (width, height) => {
       const page = await openFixture(width, height);
       try {
@@ -1737,9 +1737,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const userBubble = expectControlRect(roles.userBubble, "user bubble");
 
         expect(Math.abs(assistantBubble.x - assistantLane.x)).toBeLessThanOrEqual(1);
-        expect(Math.abs(userBubble.x - userLane.x)).toBeLessThanOrEqual(1);
-        expect(Math.abs(userLane.x - assistantLane.x)).toBeLessThanOrEqual(1);
-        expect(userBubble.width).toBeCloseTo(userLane.width, 0);
+        expect(
+          Math.abs(userBubble.x + userBubble.width - (userLane.x + userLane.width)),
+        ).toBeLessThanOrEqual(1);
+        expect(userBubble.x).toBeGreaterThan(assistantBubble.x);
+        expect(userBubble.width).toBeLessThan(userLane.width);
         expect(assistantBubble.width).toBeCloseTo(assistantLane.width, 0);
       } finally {
         await closeBrowserPage(page);
@@ -1790,8 +1792,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(Math.abs(threadCenter - composerCenter)).toBeLessThanOrEqual(1);
         expect(Math.abs(thread.width - composer.width)).toBeLessThanOrEqual(1);
         expect(thread.width).toBeCloseTo(768, 0);
-        expect(Math.abs(assistantLane.left - userLane.left)).toBeLessThanOrEqual(1);
-        expect(Math.abs(assistantLane.right - userLane.right)).toBeLessThanOrEqual(1);
+        expect(userLane.left).toBeGreaterThan(assistantLane.left);
+        expect(userLane.right).toBeGreaterThan(thread.left + thread.width / 2);
       } finally {
         await closeBrowserPage(page);
       }

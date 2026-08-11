@@ -23,7 +23,7 @@ async function captureProof(page: import("playwright").Page, theme: "dark" | "li
 }
 
 suite.define(() => {
-  it("presents every human and agent message in one left-aligned document flow", async () => {
+  it("keeps the viewer on the right and makes agent reply targets explicit", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       viewport: { width: 1440, height: 900 },
@@ -117,17 +117,20 @@ suite.define(() => {
         .waitFor();
 
       const toolDisclosure = page.locator(".chat-group.tool button[aria-expanded]").first();
-      if (
-        (await toolDisclosure.count()) > 0 &&
-        (await toolDisclosure.getAttribute("aria-expanded")) !== "true"
-      ) {
-        await toolDisclosure.click();
+      if ((await toolDisclosure.count()) > 0) {
+        if ((await toolDisclosure.getAttribute("aria-expanded")) === "true") {
+          await toolDisclosure.click();
+        }
+        expect(await toolDisclosure.getAttribute("aria-expanded")).toBe("false");
       }
       expect(await page.locator(".chat-group.tool").count()).toBe(1);
 
       const presentations: Array<{
+        avatarX: number[];
         backgrounds: string[];
+        bodyWidths: number[];
         borderWidths: string[];
+        currentUser: boolean[];
         headerBeforeBody: boolean[];
         headerOpacity: string[];
         messageX: number[];
@@ -152,9 +155,14 @@ suite.define(() => {
               const bubbles = [...node.querySelectorAll<HTMLElement>(".chat-bubble")];
               const bodyBox = body?.getBoundingClientRect();
               const headerBox = header?.getBoundingClientRect();
+              const avatarBox = avatar?.getBoundingClientRect();
               return {
+                avatarX: avatarBox?.x ?? Number.NaN,
                 backgrounds: bubbles.map((bubble) => getComputedStyle(bubble).backgroundColor),
+                bodyWidth: bodyBox?.width ?? Number.NaN,
                 borderWidths: bubbles.map((bubble) => getComputedStyle(bubble).borderTopWidth),
+                currentUser:
+                  node.classList.contains("user") && !node.classList.contains("chat-group--peer"),
                 headerBeforeBody: Boolean(
                   headerBox && bodyBox && headerBox.bottom <= bodyBox.top + 1,
                 ),
@@ -164,8 +172,11 @@ suite.define(() => {
               };
             });
             return {
+              avatarX: rows.map((row) => row.avatarX),
               backgrounds: rows.flatMap((row) => row.backgrounds),
+              bodyWidths: rows.map((row) => row.bodyWidth),
               borderWidths: rows.flatMap((row) => row.borderWidths),
+              currentUser: rows.map((row) => row.currentUser),
               headerBeforeBody: rows.map((row) => row.headerBeforeBody),
               headerOpacity: rows.map((row) => row.headerOpacity),
               messageX: rows.map((row) => row.messageX),
@@ -181,17 +192,53 @@ suite.define(() => {
           .locator(".chat-group:is(.user, .assistant) .chat-group-footer__meta .chat-sender-name")
           .allTextContents(),
       ).toEqual(["Colin", "Roboclaw", "Vyctor Brzezowski", "Roboclaw"]);
+      expect(
+        (await page.locator(".chat-reply-attribution").allTextContents()).map((text) =>
+          text.trim(),
+        ),
+      ).toEqual(["Replying to Colin", "Replying to Vyctor Brzezowski"]);
       for (const presentation of presentations) {
         expect(presentation.visibleAvatars.every(Boolean)).toBe(true);
         expect(presentation.headerBeforeBody.every(Boolean)).toBe(true);
         expect(presentation.headerOpacity.every((opacity) => opacity === "1")).toBe(true);
+        expect(presentation.currentUser).toEqual([false, false, true, false]);
+        const currentUserIndex = presentation.currentUser.indexOf(true);
+        const currentUserX = presentation.messageX[currentUserIndex];
+        const currentUserAvatarX = presentation.avatarX[currentUserIndex];
+        const currentUserBodyWidth = presentation.bodyWidths[currentUserIndex];
+        if (
+          currentUserX === undefined ||
+          currentUserAvatarX === undefined ||
+          currentUserBodyWidth === undefined
+        ) {
+          throw new Error("missing current viewer geometry");
+        }
+        const otherMessageX = presentation.messageX.filter(
+          (_, index) => index !== currentUserIndex,
+        );
+        const otherAvatarX = presentation.avatarX.filter((_, index) => index !== currentUserIndex);
+        expect(currentUserX).toBeGreaterThan(Math.max(...otherMessageX) + 20);
+        expect(currentUserAvatarX).toBeGreaterThan(currentUserX);
+        expect(currentUserAvatarX).toBeGreaterThan(Math.max(...otherAvatarX) + 500);
+        expect(currentUserBodyWidth).toBeLessThanOrEqual(560);
         expect(
-          Math.max(...presentation.messageX) - Math.min(...presentation.messageX),
-        ).toBeLessThan(2);
-        expect(
-          presentation.backgrounds.every((background) => background === "rgba(0, 0, 0, 0)"),
+          presentation.avatarX.every((avatarX, index) => {
+            const messageX = presentation.messageX[index];
+            return index === currentUserIndex || (messageX !== undefined && avatarX < messageX);
+          }),
         ).toBe(true);
-        expect(presentation.borderWidths.every((width) => width === "0px")).toBe(true);
+        expect(
+          presentation.backgrounds.every((background, index) =>
+            index === currentUserIndex
+              ? background !== "rgba(0, 0, 0, 0)"
+              : background === "rgba(0, 0, 0, 0)",
+          ),
+        ).toBe(true);
+        expect(
+          presentation.borderWidths.every((width, index) =>
+            index === currentUserIndex ? width === "1px" : width === "0px",
+          ),
+        ).toBe(true);
       }
     } finally {
       await suite.closeBrowserContext(context);

@@ -1787,6 +1787,7 @@ describe("grouped chat rendering", () => {
 
     const avatar = named.querySelector<HTMLElement>(".chat-avatar.user");
     expect(avatar?.tagName).toBe("DIV");
+    expect(named.querySelector(".chat-group.user")?.classList).not.toContain("chat-group--peer");
   });
 
   it("keeps the sender name visible without duplicating a gutter avatar", () => {
@@ -1806,6 +1807,30 @@ describe("grouped chat rendering", () => {
     ).toBe("alice");
     expect(container.querySelector(".chat-avatar.user")).not.toBeNull();
     expect(container.querySelector(".chat-author-avatar")).toBeNull();
+    expect(container.querySelector(".chat-group.user")?.classList).toContain("chat-group--peer");
+  });
+
+  it("marks the current viewer's message for right-aligned presentation", () => {
+    const container = document.createElement("div");
+    const message = { role: "user", content: "hello", timestamp: 1000 };
+    const group = createMessageGroup(message, "user", {
+      key: "current-user-group",
+      senderLabel: "Vyctor",
+      sender: { id: "profile-self", name: "Vyctor Brzezowski" },
+      messages: [createMessageEntry("current-user-message", message)],
+    });
+
+    render(
+      renderTestMessageGroup(group, {
+        userId: "profile-self",
+        userName: "Vyctor Brzezowski",
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".chat-group.user")?.classList).not.toContain(
+      "chat-group--peer",
+    );
   });
 
   it("renders assistant reply attribution for a multi-sender thread", () => {
@@ -1824,7 +1849,7 @@ describe("grouped chat rendering", () => {
     );
 
     const attribution = container.querySelector<HTMLElement>(".chat-reply-attribution");
-    expect(attribution?.textContent?.trim()).toBe("Alice");
+    expect(attribution?.textContent?.trim()).toBe("Replying to Alice");
     expect(attribution?.getAttribute("title")).toBe("Replying to Alice");
     expect(attribution?.nextElementSibling?.classList.contains("chat-bubble")).toBe(true);
   });

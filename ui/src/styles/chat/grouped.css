@@ -42,11 +42,20 @@
 }
 
 .chat-group:is(.user, .assistant).chat-group--with-footer {
+  --chat-message-column-max: min(760px, calc(100% - 42px));
   grid-template-columns: 30px minmax(0, var(--chat-message-column-max));
   grid-template-rows: auto auto;
   gap: 6px 12px;
   justify-content: start;
   padding-bottom: 28px;
+}
+
+.chat-group.user:not(.chat-group--peer).chat-group--with-footer {
+  --chat-group-avatar-column: 2;
+  --chat-group-content-column: 1;
+  --chat-message-column-max: min(560px, calc(100% - 42px));
+  grid-template-columns: minmax(0, var(--chat-message-column-max)) 30px;
+  justify-content: end;
 }
 
 .chat-group.chat-group--with-footer .chat-avatar {
@@ -120,6 +129,15 @@
   pointer-events: auto;
 }
 
+.chat-group.user:not(.chat-group--peer) .chat-group-footer,
+.chat-group.user:not(.chat-group--peer) .chat-group-footer__meta {
+  justify-content: flex-end;
+}
+
+.chat-group.user:not(.chat-group--peer) .chat-group-messages {
+  align-items: flex-end;
+}
+
 .chat-group-footer__meta {
   display: flex;
   align-items: center;
@@ -148,9 +166,18 @@
   margin-left: 0;
 }
 
+.chat-group.user:not(.chat-group--peer) .chat-group-footer-actions {
+  right: auto;
+  left: 0;
+}
+
 .chat-group.assistant .chat-message-actions-row {
   justify-content: flex-start;
   margin-left: 0;
+}
+
+.chat-group.user:not(.chat-group--peer) .chat-message-actions-row {
+  justify-content: flex-end;
 }
 
 .chat-message-actions-row {
@@ -544,14 +571,21 @@ img.chat-avatar.chat-avatar--logo {
   box-shadow: none;
 }
 
-/* Human and agent messages share one document flow. Identity lives in the
-   header, so the body needs no bubble skin or role-based alignment. */
+/* Agent and peer messages stay in the flat document flow. */
 .chat-group:is(.user, .assistant) .chat-bubble {
   width: 100%;
   padding: 0;
   border: 0;
   background: transparent;
   box-shadow: none;
+}
+
+.chat-group.user:not(.chat-group--peer) .chat-bubble {
+  width: fit-content;
+  padding: 11px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--card));
+  border-radius: var(--radius-md) var(--radius-sm) var(--radius-md) var(--radius-md);
 }
 
 /* Keep the working claw on the same left edge as the flat text column. */
@@ -590,15 +624,14 @@ img.chat-avatar.chat-avatar--logo {
 .chat-reply-attribution {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  color: var(--muted);
+  min-height: 22px;
+  margin-bottom: 4px;
+  padding-inline-start: 9px;
+  border-inline-start: 2px solid color-mix(in srgb, var(--accent) 58%, transparent);
+  color: var(--text);
   font-size: 12px;
-}
-
-.chat-reply-attribution__icon,
-.chat-reply-attribution__icon svg {
-  width: 14px;
-  height: 14px;
+  font-weight: 600;
+  line-height: 1.35;
 }
 
 @media (hover: none),
@@ -712,6 +745,11 @@ img.chat-avatar.chat-avatar--logo {
   border-color: transparent;
   background: transparent;
   box-shadow: none;
+}
+
+:root[data-theme-mode="light"] .chat-group.user:not(.chat-group--peer) .chat-bubble {
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--card));
 }
 
 /* ── Message metadata (tokens, cost, model, context %) ── */
@@ -924,5 +962,9 @@ details.msg-meta:not([open]) .msg-meta__details {
 
   .chat-group.tool {
     --chat-message-column-max: calc(100% - 46px);
+  }
+
+  .chat-group.user:not(.chat-group--peer).chat-group--with-footer {
+    --chat-message-column-max: 82%;
   }
 }
