@@ -16,7 +16,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import type { Model } from "../../llm/types.js";
 import { resolveChannelInboundAttachmentRootsForChannel } from "../../media/channel-inbound-roots.js";
-import { getDefaultLocalRoots } from "../../media/local-media-access.js";
+import { getDefaultLocalRootsCore } from "../../media/local-media-access.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { loadCapabilityManifestSnapshot } from "../../plugins/capability-provider-runtime.js";
 import { listAvailableManifestContractValues } from "../../plugins/manifest-contract-eligibility.js";
@@ -45,7 +45,11 @@ import {
   resolveDefaultModelRef,
   type ToolModelConfig,
 } from "./model-config.helpers.js";
-import { getApiKeyForModel, normalizeWorkspaceDir, requireApiKey } from "./tool-runtime.helpers.js";
+import {
+  getApiKeyForModelCore,
+  normalizeWorkspaceDir,
+  requireApiKey,
+} from "./tool-runtime.helpers.js";
 
 type TextToolAttempt = {
   provider: string;
@@ -597,7 +601,7 @@ export function resolveMediaToolLocalRoots(
   }
   // Channel inbound attachment roots stay separate: those paths are scoped to inbound media
   // access, not broad host-local file reads.
-  const roots = getDefaultLocalRoots();
+  const roots = getDefaultLocalRootsCore();
   return uniqueStrings([...roots, ...(workspaceDir ? [workspaceDir] : [])]);
 }
 
@@ -730,7 +734,7 @@ export async function resolveModelRuntimeApiKey(params: {
     setRuntimeApiKey: (provider: string, apiKey: string) => void;
   };
 }): Promise<string> {
-  const apiKeyInfo = await getApiKeyForModel({
+  const apiKeyInfo = await getApiKeyForModelCore({
     model: params.model,
     cfg: params.cfg,
     agentDir: params.agentDir,

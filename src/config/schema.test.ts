@@ -2,7 +2,7 @@ import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-ur
 // Covers canonical config schema defaults, validation, and sensitive redaction.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
-import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
+import { buildConfigSchemaCore, lookupConfigSchema } from "./schema.js";
 import { applyDerivedTags } from "./schema.tags.js";
 import { applyResolvedConfigTierHints } from "./schema.tiers.js";
 import { validateConfigObjectRaw } from "./validation.js";
@@ -10,8 +10,8 @@ import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("config schema", () => {
-  type SchemaInput = NonNullable<Parameters<typeof buildConfigSchema>[0]>;
-  let baseSchema: ReturnType<typeof buildConfigSchema>;
+  type SchemaInput = NonNullable<Parameters<typeof buildConfigSchemaCore>[0]>;
+  let baseSchema: ReturnType<typeof buildConfigSchemaCore>;
   let pluginUiHintInput: SchemaInput;
   let tokenHintInput: SchemaInput;
   let mergedSchemaInput: SchemaInput;
@@ -19,7 +19,7 @@ describe("config schema", () => {
   let cachedMergeInput: SchemaInput;
 
   beforeAll(() => {
-    baseSchema = buildConfigSchema();
+    baseSchema = buildConfigSchemaCore();
     pluginUiHintInput = {
       plugins: [
         {
@@ -471,7 +471,7 @@ describe("config schema", () => {
   });
 
   it("merges plugin ui hints", () => {
-    const res = buildConfigSchema(pluginUiHintInput);
+    const res = buildConfigSchemaCore(pluginUiHintInput);
 
     expect(res.uiHints["plugins.entries.voice-call"]?.label).toBe("Voice Call");
     expect(res.uiHints["plugins.entries.voice-call.config"]?.label).toBe("Voice Call Config");
@@ -482,13 +482,13 @@ describe("config schema", () => {
   });
 
   it("does not re-mark existing non-sensitive token-like fields", () => {
-    const res = buildConfigSchema(tokenHintInput);
+    const res = buildConfigSchemaCore(tokenHintInput);
 
     expect(res.uiHints["plugins.entries.voice-call.config.tokens"]?.sensitive).toBe(false);
   });
 
   it("merges plugin + channel schemas", () => {
-    const res = buildConfigSchema(mergedSchemaInput);
+    const res = buildConfigSchemaCore(mergedSchemaInput);
 
     const schema = res.schema as {
       properties?: Record<string, unknown>;
@@ -544,7 +544,7 @@ describe("config schema", () => {
   });
 
   it("omits a single oversized plugin schema from the full schema response", () => {
-    const res = buildConfigSchema({
+    const res = buildConfigSchemaCore({
       cache: false,
       plugins: [
         {
@@ -572,7 +572,7 @@ describe("config schema", () => {
   });
 
   it("omits later plugin schemas after the aggregate extension schema budget is exhausted", () => {
-    const res = buildConfigSchema({
+    const res = buildConfigSchemaCore({
       cache: false,
       plugins: Array.from({ length: 40 }, (_, index) => ({
         id: `plugin-${index}`,
@@ -597,7 +597,7 @@ describe("config schema", () => {
   });
 
   it("looks up plugin config paths for slash-delimited plugin ids", () => {
-    const res = buildConfigSchema({
+    const res = buildConfigSchemaCore({
       plugins: [
         {
           id: "pack/one",
@@ -622,7 +622,7 @@ describe("config schema", () => {
   });
 
   it("adds heartbeat target hints with dynamic channels", () => {
-    const res = buildConfigSchema(heartbeatChannelInput);
+    const res = buildConfigSchemaCore(heartbeatChannelInput);
 
     const defaultsHint = res.uiHints["agents.defaults.heartbeat.target"];
     const entryHint = res.uiHints["agents.entries.*.heartbeat.target"];
@@ -634,10 +634,10 @@ describe("config schema", () => {
   });
 
   it("caches merged schemas for identical plugin/channel metadata", () => {
-    const first = buildConfigSchema(cachedMergeInput);
+    const first = buildConfigSchemaCore(cachedMergeInput);
     const plugin = expectDefined(cachedMergeInput.plugins?.[0], "cached plugin metadata");
     const channel = expectDefined(cachedMergeInput.channels?.[0], "cached channel metadata");
-    const second = buildConfigSchema({
+    const second = buildConfigSchemaCore({
       plugins: [{ ...plugin }],
       channels: [{ ...channel }],
     });

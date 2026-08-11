@@ -8,7 +8,7 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock("../../agents/model-auth.js", () => ({
-  getApiKeyForModel: hoisted.getApiKeyForModel,
+  getApiKeyForModelCore: hoisted.getApiKeyForModel,
   resolveApiKeyForProvider: hoisted.resolveApiKeyForProvider,
 }));
 

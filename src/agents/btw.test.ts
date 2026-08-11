@@ -137,7 +137,7 @@ vi.mock("./model-auth.js", () => ({
   ensureAuthProfileStore: (...args: unknown[]) => ensureAuthProfileStoreMock(...args),
   ensureAuthProfileStoreWithoutExternalProfiles: (...args: unknown[]) =>
     ensureAuthProfileStoreWithoutExternalProfilesMock(...args),
-  getApiKeyForModel: (...args: unknown[]) => getApiKeyForModelMock(...args),
+  getApiKeyForModelCore: (...args: unknown[]) => getApiKeyForModelMock(...args),
   hasUsableCustomProviderApiKey: (...args: unknown[]) => hasUsableCustomProviderApiKeyMock(...args),
   requireApiKey: (...args: unknown[]) => requireApiKeyMock(...args),
   resolveProviderEntryApiKeyProfileReference: (params: unknown) =>

@@ -27,8 +27,8 @@ import {
 import {
   activateSecretsRuntimeSnapshotState,
   graftActiveSecretsRuntimeAuthState,
-  getActiveSecretsRuntimeSnapshot,
-  getActiveSecretsRuntimeSnapshotRevision,
+  getActiveSecretsRuntimeSnapshotState,
+  getActiveSecretsRuntimeSnapshotRevisionState,
   hasActiveSecretsRuntimeSnapshotLineage,
   hasSameSecretReloadContract,
   hasCurrentAuthStoreCredentialsRevision,
@@ -268,7 +268,7 @@ export function createRuntimeSecretsActivator(params: {
     const activationScope = options?.stateScope ?? "full";
     if (activationParams.activate && (statePrepared.degradedOwners?.length ?? 0) > 0) {
       if (activationParams.deferStatePublication === true) {
-        const activationRevision = getActiveSecretsRuntimeSnapshotRevision();
+        const activationRevision = getActiveSecretsRuntimeSnapshotRevisionState();
         deferredStateTransitions.set(prepared, {
           kind: "degraded",
           activationRevision,
@@ -282,7 +282,7 @@ export function createRuntimeSecretsActivator(params: {
     } else if (activationParams.activate && secretsDegraded) {
       if (activationParams.deferStatePublication === true) {
         if (activeDegradationGeneration !== null) {
-          const activationRevision = getActiveSecretsRuntimeSnapshotRevision();
+          const activationRevision = getActiveSecretsRuntimeSnapshotRevisionState();
           deferredStateTransitions.set(prepared, {
             kind: "recovered",
             activationRevision,
@@ -415,7 +415,7 @@ export function createRuntimeSecretsActivator(params: {
         const prepareRuntimeSecretsSnapshot =
           params.prepareRuntimeSecretsSnapshot ?? secretsRuntime!.prepareSecretsRuntimeSnapshot;
         const allowUnavailableSecretOwners =
-          activationParams.reason !== "startup" || getActiveSecretsRuntimeSnapshot() === null;
+          activationParams.reason !== "startup" || getActiveSecretsRuntimeSnapshotState() === null;
         const prepared = await measureDiagnosticsTimelineSpan(
           "secrets.prepare",
           () =>
@@ -485,7 +485,7 @@ export function createRuntimeSecretsActivator(params: {
       : undefined;
     return await runWithSecretsActivationLock(async () => {
       if (
-        getActiveSecretsRuntimeSnapshotRevision() !== expectedRevision ||
+        getActiveSecretsRuntimeSnapshotRevisionState() !== expectedRevision ||
         !hasCurrentAuthStoreCredentialsRevision(snapshot) ||
         (canActivate && !canActivate())
       ) {
@@ -522,7 +522,7 @@ export function createRuntimeSecretsActivator(params: {
   registerProviderAuthRuntimeSnapshotActivationOwner({
     runExclusive: runWithSecretsActivationLock,
     isCurrent: (snapshot, expectedRevision) =>
-      getActiveSecretsRuntimeSnapshotRevision() === expectedRevision &&
+      getActiveSecretsRuntimeSnapshotRevisionState() === expectedRevision &&
       hasCurrentAuthStoreCredentialsRevision(snapshot),
     assertValid: (snapshot) => assertRuntimeGatewayAuthNotKnownWeak(snapshot.config),
     publish: async (snapshot) => {
@@ -553,7 +553,7 @@ export function createRuntimeSecretsActivator(params: {
         options?.sourceOnly === true &&
         options.expectedRevision !== undefined &&
         hasActiveSecretsRuntimeSnapshotLineage(options.expectedRevision);
-      const activeSnapshot = sourceOnlyOwnsLineage ? getActiveSecretsRuntimeSnapshot() : null;
+      const activeSnapshot = sourceOnlyOwnsLineage ? getActiveSecretsRuntimeSnapshotState() : null;
       const sourceOnlyDegradationGeneration = activeDegradationGeneration;
       const sourceOnlyContractRecovered =
         activeSnapshot !== null &&
@@ -574,7 +574,7 @@ export function createRuntimeSecretsActivator(params: {
     if (!hasActiveSecretsRuntimeSnapshotLineage(transition.activationRevision)) {
       return;
     }
-    const activeSnapshot = getActiveSecretsRuntimeSnapshot();
+    const activeSnapshot = getActiveSecretsRuntimeSnapshotState();
     if (!activeSnapshot) {
       return;
     }

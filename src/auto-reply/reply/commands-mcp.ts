@@ -7,7 +7,7 @@ import {
 } from "../../config/mcp-config.js";
 import { redactSensitiveArgv } from "../../config/redact-argv.js";
 import { REDACTED_SENTINEL, redactConfigObject } from "../../config/redact-snapshot.js";
-import { buildConfigSchema } from "../../config/schema.js";
+import { buildConfigSchemaCore } from "../../config/schema.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -56,7 +56,7 @@ function redactMcpServersForDisplay(servers: Record<string, unknown>): Record<st
   );
   const redactedRoot = redactConfigObject(
     { mcp: { servers: argvRedacted } },
-    buildConfigSchema().uiHints,
+    buildConfigSchemaCore().uiHints,
   ) as {
     mcp?: { servers?: Record<string, unknown> };
   };
