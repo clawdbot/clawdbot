@@ -112,6 +112,9 @@ describe("skill collection review", () => {
         ),
       }),
     );
+    const reviewPrompt = runEmbeddedAgent.mock.calls[0]?.[0]?.prompt;
+    expect(reviewPrompt).toContain("Never drop a skill only because it is specialized");
+    expect(reviewPrompt).not.toContain("too narrow to route reliably");
   });
 
   it("encodes hostile skill metadata as prompt data", async () => {
