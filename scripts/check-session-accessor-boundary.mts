@@ -21,6 +21,7 @@ const legacyReaderNames = new Set([
   "readSessionStoreReadOnly",
   "readSessionStoreSnapshot",
   "resolveSessionStoreEntry",
+  "resolveSessionStoreEntryCore",
 ]);
 const legacyWholeStoreAccessNames = new Set([
   ...legacyReaderNames,
