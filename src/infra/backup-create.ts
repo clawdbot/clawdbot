@@ -30,7 +30,11 @@ import {
   publishPreparedBackupArchive,
   type BackupArchivePublication,
 } from "./backup-archive-publication.js";
-import { removePreparedBackupArchive, writeArchiveStreamToFile } from "./backup-create-stream.js";
+import {
+  observeBackupTarEntryProgress,
+  removePreparedBackupArchive,
+  writeArchiveStreamToFile,
+} from "./backup-create-stream.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import { isTransientSqliteBackupPath, isVolatileBackupPath } from "./backup-volatile-filter.js";
 import {
@@ -936,11 +940,17 @@ export async function createBackupArchive(
                 linkCache: createBackupLinkCache(),
                 statCache: createBackupVolatileStatCache(volatilePlan),
                 filter: (entryPath, entryStat) => {
-                  reportProgress();
+                  reportProgress({ phase: "traversal", entryPath });
                   return tarFilter(entryPath, entryStat);
                 },
                 onWriteEntry: (entry) => {
-                  reportProgress();
+                  const sourceEntryPath = entry.path;
+                  reportProgress({ phase: "entry", entryPath: sourceEntryPath });
+                  if (entry.type === "File" && (entry.stat?.size ?? 0) > 0) {
+                    observeBackupTarEntryProgress(entry, (bytes) => {
+                      reportProgress({ phase: "raw", entryPath: sourceEntryPath, bytes });
+                    });
+                  }
                   entry.path = remapArchiveEntryPath({
                     entryPath: entry.path,
                     manifestPath,

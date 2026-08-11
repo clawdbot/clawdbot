@@ -4,15 +4,11 @@ import {
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
 import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
-import type {
-  AgentCommandOutputEventData,
-  AgentItemEventData,
-  AgentPatchSummaryEventData,
-} from "../infra/agent-activity-events.js";
 import {
-  emitAgentApprovalEvent,
-  emitAgentCommandOutputEvent,
-  emitAgentPatchSummaryEvent,
+  emitAgentActivityEvent,
+  type AgentCommandOutputEventData,
+  type AgentItemEventData,
+  type AgentPatchSummaryEventData,
 } from "../infra/agent-activity-events.js";
 import { emitAgentEvent, type AgentApprovalEventData } from "../infra/agent-events.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
@@ -452,9 +448,10 @@ export async function handleToolExecutionEnd(
         ...(execDetails.status === "approval-unavailable" ? { reason: execDetails.reason } : {}),
         message: execDetails.warningText,
       };
-      emitAgentApprovalEvent({
+      emitAgentActivityEvent({
         runId: ctx.params.runId,
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+        stream: "approval",
         data: approvalData,
       });
       emitAgentEventCallbackBestEffort(ctx, {
@@ -519,9 +516,10 @@ export async function handleToolExecutionEnd(
           ? { cwd: execDetails.cwd }
           : {}),
       };
-      emitAgentCommandOutputEvent({
+      emitAgentActivityEvent({
         runId: ctx.params.runId,
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+        stream: "command_output",
         data: outputData,
       });
       emitAgentEventCallbackBestEffort(ctx, {
@@ -545,9 +543,10 @@ export async function handleToolExecutionEnd(
             toolCallId,
             message: parsedApprovalResult.body || parsedApprovalResult.raw,
           };
-          emitAgentApprovalEvent({
+          emitAgentActivityEvent({
             runId: ctx.params.runId,
             ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+            stream: "approval",
             data: approvalData,
           });
           emitAgentEventCallbackBestEffort(ctx, {
@@ -591,9 +590,10 @@ export async function handleToolExecutionEnd(
         deleted: patchSummary.deleted,
         summary: summaryText ?? buildPatchSummaryText(patchSummary),
       };
-      emitAgentPatchSummaryEvent({
+      emitAgentActivityEvent({
         runId: ctx.params.runId,
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+        stream: "patch",
         data: patchData,
       });
       emitAgentEventCallbackBestEffort(ctx, {

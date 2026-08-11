@@ -4770,6 +4770,10 @@ export const en: TranslationMap = {
       description: "The compacted transcript is preserved as a checkpoint.",
       openCheckpoints: "Open checkpoints",
     },
+    sessionReset: {
+      label: "Session reset",
+      description: "The earlier conversation was cleared.",
+    },
     systemNotice: {
       restartRecovery: {
         label: "System · restart recovery",

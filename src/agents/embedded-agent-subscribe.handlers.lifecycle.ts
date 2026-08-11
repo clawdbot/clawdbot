@@ -17,10 +17,8 @@ import {
   GENERIC_ASSISTANT_ERROR_TEXT,
 } from "./embedded-agent-helpers.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
-import {
-  hasAttemptTerminalState,
-  isIncompleteTerminalAssistantTurn,
-} from "./embedded-agent-runner/run/incomplete-turn.js";
+import { hasAttemptTerminalState } from "./embedded-agent-runner/run/attempt-terminal-evidence.js";
+import { isIncompleteTerminalAssistantTurn } from "./embedded-agent-runner/run/incomplete-turn-classification.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import {
   consumePendingToolMediaReply,
