@@ -15,6 +15,7 @@ import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "@openclaw/ai/transports";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // OpenAI stream wrapper normalizes OpenAI-compatible streamed tool and text events.
 import {
@@ -131,14 +132,6 @@ function isCodeModeEnabled(config?: OpenClawConfig): boolean {
     codeMode &&
     typeof codeMode === "object" &&
     (codeMode as { enabled?: unknown }).enabled === true,
-  );
-}
-
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  return (
-    value !== null &&
-    (typeof value === "object" || typeof value === "function") &&
-    typeof (value as { then?: unknown }).then === "function"
   );
 }
 
