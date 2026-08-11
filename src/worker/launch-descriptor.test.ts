@@ -144,6 +144,36 @@ describe("worker launch descriptor", () => {
 
     descriptor.assignment.toolAuthority.allowedToolNames = [];
     expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+
+    descriptor.assignment.toolAuthority.allowedToolNames = ["browser"];
+    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+  });
+
+  it("accepts only a closed absolute loopback browser attachment descriptor", () => {
+    const descriptor = launchDescriptor();
+    descriptor.assignment.browser = {
+      cdpUrl: "http://127.0.0.1:9222",
+      launcherPath: "/usr/local/bin/openclaw-worker-browser",
+    };
+    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+
+    const browser = descriptor.assignment.browser;
+    const cases: unknown[] = [
+      { ...browser, unexpected: true },
+      { ...browser, cdpUrl: "https://127.0.0.1:9222" },
+      { ...browser, cdpUrl: "http://localhost:9222" },
+      { ...browser, cdpUrl: "http://127.0.0.1" },
+      { ...browser, cdpUrl: "http://127.0.0.1:9222/json/version" },
+      { ...browser, launcherPath: "openclaw-worker-browser" },
+    ];
+    for (const invalidBrowser of cases) {
+      expect(() =>
+        parseWorkerLaunchDescriptor({
+          ...descriptor,
+          assignment: { ...descriptor.assignment, browser: invalidBrowser },
+        }),
+      ).toThrow("invalid worker launch descriptor");
+    }
   });
 
   it("rejects non-absolute paths, unattached sessions, and discontinuous event sequences", () => {

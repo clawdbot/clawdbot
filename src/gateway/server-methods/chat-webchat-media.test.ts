@@ -7,11 +7,16 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getDefaultLocalRoots } from "../../media/local-media-access.js";
-import { __testing, buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
+import { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
 
-const { buildWebchatAudioContentBlocksFromReplyPayloads } = __testing;
+async function buildWebchatAudioBlocks(
+  ...args: Parameters<typeof buildWebchatAssistantMessageFromReplyPayloads>
+): Promise<Array<Record<string, unknown>>> {
+  const message = await buildWebchatAssistantMessageFromReplyPayloads(...args);
+  return message?.content.filter((block) => block.type === "attachment") ?? [];
+}
 
-describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
+describe("webchat audio blocks through assistant messages", () => {
   let tmpDir: string | undefined;
 
   afterEach(() => {
@@ -31,7 +36,7 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
   it("exposes a local audio file as a media-ticketed attachment when it is under localRoots", async () => {
     const { audioPath, localRoot } = writeAudioFixture();
 
-    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
+    const blocks = await buildWebchatAudioBlocks(
       [{ mediaUrl: audioPath, trustedLocalMedia: true }],
       { localRoots: [localRoot] },
     );
@@ -53,7 +58,7 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
   it("exposes MPEG-2 audio files with their canonical MIME type", async () => {
     const { audioPath, localRoot } = writeAudioFixture([0xff, 0xfd, 0x80, 0x00], ".m2a");
 
-    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
+    const blocks = await buildWebchatAudioBlocks(
       [{ mediaUrl: audioPath, trustedLocalMedia: true }],
       { localRoots: [localRoot] },
     );
@@ -75,7 +80,7 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
         extension,
       );
 
-      const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
+      const blocks = await buildWebchatAudioBlocks(
         [{ mediaUrl: audioPath, trustedLocalMedia: true }],
         { localRoots: [localRoot] },
       );
@@ -89,7 +94,7 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
   it("preserves voice-note metadata on local audio attachments", async () => {
     const { audioPath, localRoot } = writeAudioFixture();
 
-    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
+    const blocks = await buildWebchatAudioBlocks(
       [{ mediaUrl: audioPath, trustedLocalMedia: true, audioAsVoice: true }],
       { localRoots: [localRoot] },
     );
@@ -106,7 +111,7 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
   it("suppresses reasoning payload audio", async () => {
     const { audioPath, localRoot } = writeAudioFixture();
 
-    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
+    const blocks = await buildWebchatAudioBlocks(
       [
         {
           text: "step",
@@ -122,7 +127,7 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
   });
 
   it("skips remote URLs", async () => {
-    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads([
+    const blocks = await buildWebchatAudioBlocks([
       { mediaUrl: "https://example.com/a.mp3", trustedLocalMedia: true },
     ]);
     expect(blocks).toHaveLength(0);
@@ -133,7 +138,7 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     const imagePath = path.join(tmpDir, "clip.png");
     fs.writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
 
-    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
+    const blocks = await buildWebchatAudioBlocks(
       [{ mediaUrl: imagePath, trustedLocalMedia: true }],
       { localRoots: [tmpDir] },
     );
@@ -144,7 +149,7 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
   it("dedupes repeated paths", async () => {
     const { audioPath, localRoot } = writeAudioFixture([0x00]);
 
-    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
+    const blocks = await buildWebchatAudioBlocks(
       [
         { mediaUrl: audioPath, trustedLocalMedia: true },
         { mediaUrl: audioPath, trustedLocalMedia: true },
@@ -158,12 +163,9 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     const { audioPath, localRoot } = writeAudioFixture([0x01]);
 
     const fileUrl = pathToFileURL(audioPath).href;
-    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
-      [{ mediaUrl: fileUrl, trustedLocalMedia: true }],
-      {
-        localRoots: [localRoot],
-      },
-    );
+    const blocks = await buildWebchatAudioBlocks([{ mediaUrl: fileUrl, trustedLocalMedia: true }], {
+      localRoots: [localRoot],
+    });
 
     expect(blocks).toHaveLength(1);
     expect((blocks[0] as { type?: string }).type).toBe("attachment");
@@ -172,7 +174,7 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
   it("drops tool-result file:// URLs with remote hosts before touching the filesystem", async () => {
     const openSpy = vi.spyOn(fsPromises, "open");
 
-    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads([
+    const blocks = await buildWebchatAudioBlocks([
       {
         text: "MEDIA:file://attacker/share/probe.mp3",
         mediaUrl: "file://attacker/share/probe.mp3",
@@ -196,7 +198,7 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     fs.writeFileSync(audioPath, Buffer.from([0x03]));
 
     const onLocalAudioAccessDenied = vi.fn();
-    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
+    const blocks = await buildWebchatAudioBlocks(
       [{ mediaUrl: audioPath, trustedLocalMedia: true }],
       {
         localRoots: [allowedRoot],
@@ -219,7 +221,7 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     const audioPath = path.join(tmpDir, "clip.mp3");
     fs.writeFileSync(audioPath, Buffer.from([0x04]));
 
-    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads([
+    const blocks = await buildWebchatAudioBlocks([
       { mediaUrl: audioPath, trustedLocalMedia: true },
     ]);
 
@@ -231,7 +233,7 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     const { audioPath, localRoot } = writeAudioFixture([0x02]);
     fs.truncateSync(audioPath, 16 * 1024 * 1024);
 
-    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
+    const blocks = await buildWebchatAudioBlocks(
       [{ mediaUrl: audioPath, trustedLocalMedia: true }],
       { localRoots: [localRoot] },
     );
@@ -242,10 +244,9 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
   it("rejects untrusted local audio paths", async () => {
     const { audioPath, localRoot } = writeAudioFixture();
 
-    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
-      [{ mediaUrl: audioPath }],
-      { localRoots: [localRoot] },
-    );
+    const blocks = await buildWebchatAudioBlocks([{ mediaUrl: audioPath }], {
+      localRoots: [localRoot],
+    });
 
     expect(blocks).toHaveLength(0);
   });

@@ -255,8 +255,9 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
               ?.openclawCodeModeToolSurface === true
           ) {
             const visibleToolNames = resolveCodeModeResponsesVisibleToolNames(context);
-            enforceCodeModeResponsesToolSurface(params, visibleToolNames);
-            assertCodeModeResponsesToolSurface(params, visibleToolNames);
+            const allowedHostedToolTypes = responsesOptions?.openclawCodeModeAllowedHostedToolTypes;
+            enforceCodeModeResponsesToolSurface(params, visibleToolNames, allowedHostedToolTypes);
+            assertCodeModeResponsesToolSurface(params, visibleToolNames, allowedHostedToolTypes);
           }
           return params;
         };

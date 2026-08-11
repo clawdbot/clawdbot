@@ -36,7 +36,6 @@ import {
 } from "../lib/sessions/session-key.ts";
 import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
-import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
 import {
   limitSidebarSessionRows,
   SIDEBAR_SESSION_NO_ATTENTION,
@@ -101,7 +100,8 @@ function isSidebarDraftOwnedBySelf(
 export type SidebarSessionNavigationState = {
   routeSessionKey: string;
   selectedAgentId: string;
-  visibleSessions: SidebarRecentSession[];
+  activeRowKey: string | null;
+  visibleSessionRows: GatewaySessionRow[];
   toSidebarSession: (row: SessionRow, isChild?: boolean) => SidebarRecentSession;
 };
 
@@ -160,7 +160,6 @@ export function buildSidebarSessionNavigationState(input: {
       // The sidebar's zone structure already says what forked from what;
       // a "Subagent:" prefix on named threads is noise (other surfaces keep it).
       label: resolveSessionDisplayName(row.key, row, { includeSubagentPrefix: false }),
-      meta: formatSidebarTimestamp(row.updatedAt),
       subtitle: resolveSessionWorkSubtitle(row),
       href: sessionNavigationTarget({
         face: resolveSessionPreferredFace(row),
@@ -230,7 +229,8 @@ export function buildSidebarSessionNavigationState(input: {
   return {
     routeSessionKey: navigation.currentSessionKey,
     selectedAgentId: navigation.selectedAgentId,
-    visibleSessions: navigation.visibleSessions.map((row) => toSidebarSession(row)),
+    activeRowKey: navigation.activeRowKey,
+    visibleSessionRows: navigation.visibleSessions,
     toSidebarSession,
   };
 }
@@ -459,11 +459,11 @@ export function findProjectedSidebarSession(input: {
   navigationState: SidebarSessionNavigationState;
   sessionRowsByAgent: Readonly<Record<string, SessionsListResult["sessions"]>>;
 }): SidebarRecentSession | undefined {
-  const active = input.navigationState.visibleSessions.find(
+  const active = input.navigationState.visibleSessionRows.find(
     (candidate) => candidate.key === input.sessionKey,
   );
   if (active) {
-    return active;
+    return input.navigationState.toSidebarSession(active);
   }
   for (const rows of Object.values(input.sessionRowsByAgent)) {
     const row = rows.find((candidate) => candidate.key === input.sessionKey);

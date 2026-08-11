@@ -138,6 +138,7 @@ export async function runWorkerDescriptor(
           : { systemPrompt: descriptor.assignment.systemPrompt }),
         inferenceOptions: descriptor.assignment.inferenceOptions,
         allowedToolNames: descriptor.assignment.toolAuthority.allowedToolNames,
+        ...(descriptor.assignment.browser ? { browser: descriptor.assignment.browser } : {}),
         inference: { stream },
         transcript: {
           commit: async (messages) => {

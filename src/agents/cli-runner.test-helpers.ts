@@ -266,21 +266,6 @@ export function buildClaudeLiveRunContext(overrides: PreparedCliRunContextOverri
   });
 }
 
-export function buildClaudeLiveBackend(
-  overrides: Partial<PreparedCliRunContext["preparedBackend"]["backend"]> = {},
-) {
-  return {
-    command: "claude",
-    args: ["-p", "--output-format", "stream-json"],
-    output: "jsonl" as const,
-    input: "stdin" as const,
-    sessionArgs: ["--session-id", "{sessionId}"],
-    systemPromptArg: "--append-system-prompt",
-    systemPromptFileArg: "--append-system-prompt-file",
-    ...overrides,
-  };
-}
-
 export function createCancelableLiveRunLifecycle() {
   let resolveExit!: (exit: RunExit) => void;
   const exited = new Promise<RunExit>((resolve) => {

@@ -147,7 +147,7 @@ export function buildCrabboxWarmupArgs(
     "--keep=true",
   ];
   if (profile.desktop) {
-    args.push("--desktop");
+    args.push("--desktop", "--browser");
   }
   return args;
 }

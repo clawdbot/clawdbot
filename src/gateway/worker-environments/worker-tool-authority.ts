@@ -5,8 +5,9 @@ import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { logWarn } from "../../logger.js";
 import {
-  WORKER_LOCAL_TOOL_NAMES,
+  WORKER_REQUIRED_LOCAL_TOOL_NAMES,
   type WorkerLocalToolName,
+  type WorkerOptionalLocalToolName,
   type WorkerToolAuthority,
 } from "../../worker/tool-authority.js";
 
@@ -72,13 +73,16 @@ function resolveWorkerCapabilityProfile(params: {
 export function resolveWorkerToolAuthority(params: {
   modelRef: { provider: string; model: string };
   turn: SessionPlacementTurnParams;
+  availableOptionalToolNames?: readonly WorkerOptionalLocalToolName[];
 }): WorkerToolAuthority {
   const turn = params.turn;
   if (turn.disableTools === true || turn.modelRun === true || turn.promptMode === "none") {
     return { allowedToolNames: [] };
   }
   const runtimeCappedTools = applyEmbeddedAttemptToolsAllow(
-    WORKER_LOCAL_TOOL_NAMES.map((name) => ({ name })),
+    [...WORKER_REQUIRED_LOCAL_TOOL_NAMES, ...(params.availableOptionalToolNames ?? [])].map(
+      (name) => ({ name }),
+    ),
     turn.toolsAllow,
   );
   const projected: WorkerLocalToolName[] = projectConversationToolNames({

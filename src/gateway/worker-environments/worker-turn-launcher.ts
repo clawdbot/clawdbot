@@ -20,7 +20,7 @@ import type {
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
-import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
+import { resolveWorkerBrowserLaunchPlan } from "./worker-browser-launch-plan.js";
 import {
   claimWorkerTurn,
   latestDurableWorkspaceConflict,
@@ -315,7 +315,11 @@ async function executeWorkerTurn(params: {
     timeoutMs: turn.timeoutMs,
   });
   const reasoning = mapThinkingLevelForProvider(turn.thinkLevel);
-  const toolAuthority = resolveWorkerToolAuthority({ modelRef, turn });
+  const { browser, toolAuthority } = resolveWorkerBrowserLaunchPlan({
+    desktop: environment.desktop,
+    modelRef,
+    turn,
+  });
   const launchPlan = fitLaunchDescriptor(
     (windowedMessages) =>
       parseWorkerLaunchDescriptor({
@@ -348,6 +352,7 @@ async function executeWorkerTurn(params: {
             nextSeq: (placement.lastLiveEventAckCursor ?? 0) + 1,
           },
           toolAuthority,
+          ...(browser ? { browser } : {}),
         },
       }),
     initialMessages,

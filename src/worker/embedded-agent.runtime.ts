@@ -26,13 +26,19 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AssistantMessage, AssistantMessageEventStreamLike } from "../llm/types.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { createWorkerBrowserToolRuntime } from "./browser-runtime.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
 import {
   createWorkerTranscriptRuntime,
   toAgentMessage,
   toWorkerInferenceContext,
 } from "./embedded-agent-transcript.runtime.js";
-import { WORKER_LOCAL_TOOL_NAMES, type WorkerLocalToolName } from "./tool-authority.js";
+import type { WorkerBrowserLaunchDescriptor } from "./launch-descriptor.js";
+import {
+  WORKER_LOCAL_TOOL_NAMES,
+  WORKER_REQUIRED_LOCAL_TOOL_NAMES,
+  type WorkerLocalToolName,
+} from "./tool-authority.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
 
 function toError(value: unknown, fallback: string): Error {
@@ -76,12 +82,17 @@ type RunWorkerEmbeddedTurnParams = {
   systemPrompt?: string;
   inferenceOptions?: WorkerInferenceOptions;
   allowedToolNames: readonly WorkerLocalToolName[];
+  browser?: WorkerBrowserLaunchDescriptor;
   signal?: AbortSignal;
 };
 
 const WORKER_TOOL_CONFIG = { plugins: { enabled: false } } satisfies OpenClawConfig;
 
 export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams): Promise<void> {
+  const browserAuthorized = params.allowedToolNames.includes("browser");
+  if (browserAuthorized !== (params.browser !== undefined)) {
+    throw new Error("Worker Browser authority and launch descriptor must be provided together.");
+  }
   const model = createNativeModelOwnedRuntimeModel({
     provider: params.modelRef.provider,
     modelId: params.modelRef.model,
@@ -153,48 +164,65 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     },
     processDefaults: { scopeKey: params.sessionKey },
   });
-  const localTools = finalizeAgentTools({
-    tools: coreTools,
-    modelProvider: params.modelRef.provider,
-    modelId: params.modelRef.model,
-    hookContext: {
-      agentId: DEFAULT_AGENT_ID,
-      config: WORKER_TOOL_CONFIG,
-      cwd: params.cwd,
-      workspaceDir: params.cwd,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-      runId: params.runId,
-      requester: { senderIsOwner: true },
-      loopDetection: resolveToolLoopDetectionConfig({
-        cfg: WORKER_TOOL_CONFIG,
+  const browserRuntime = params.browser
+    ? await createWorkerBrowserToolRuntime({
+        descriptor: params.browser,
+        sessionKey: params.sessionKey,
+        stateDir: params.stateDir,
+        workspaceDir: params.cwd,
+      })
+    : undefined;
+  const { session } = await (async () => {
+    try {
+      const localTools = finalizeAgentTools({
+        tools: browserRuntime ? [...coreTools, browserRuntime.tool] : coreTools,
+        modelProvider: params.modelRef.provider,
+        modelId: params.modelRef.model,
+        hookContext: {
+          agentId: DEFAULT_AGENT_ID,
+          config: WORKER_TOOL_CONFIG,
+          cwd: params.cwd,
+          workspaceDir: params.cwd,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          runId: params.runId,
+          requester: { senderIsOwner: true },
+          loopDetection: resolveToolLoopDetectionConfig({
+            cfg: WORKER_TOOL_CONFIG,
+            agentId: DEFAULT_AGENT_ID,
+          }),
+        },
         agentId: DEFAULT_AGENT_ID,
-      }),
-    },
-    agentId: DEFAULT_AGENT_ID,
-  }).filter((tool) => localToolNameSet.has(tool.name));
-  const discoveredToolNames = new Set(localTools.map((tool) => tool.name));
-  for (const toolName of WORKER_LOCAL_TOOL_NAMES) {
-    if (!discoveredToolNames.has(toolName)) {
-      throw new Error(`Worker coding tool unavailable: ${toolName}`);
-    }
-  }
+      }).filter((tool) => localToolNameSet.has(tool.name));
+      const discoveredToolNames = new Set(localTools.map((tool) => tool.name));
+      for (const toolName of WORKER_REQUIRED_LOCAL_TOOL_NAMES) {
+        if (!discoveredToolNames.has(toolName)) {
+          throw new Error(`Worker coding tool unavailable: ${toolName}`);
+        }
+      }
 
-  const { session } = await createAgentSession({
-    cwd: params.cwd,
-    agentDir: params.stateDir,
-    authStorage,
-    modelRegistry,
-    model,
-    thinkingLevel: "medium",
-    tools: [...activeToolNames],
-    customTools: toToolDefinitions(localTools.filter((tool) => allowedToolNameSet.has(tool.name))),
-    noTools: "all",
-    sessionManager,
-    settingsManager,
-    resourceLoader,
-    withSessionWriteSettlement: transcriptRuntime.withSessionWriteSettlement,
-  });
+      return await createAgentSession({
+        cwd: params.cwd,
+        agentDir: params.stateDir,
+        authStorage,
+        modelRegistry,
+        model,
+        thinkingLevel: "medium",
+        tools: [...activeToolNames],
+        customTools: toToolDefinitions(
+          localTools.filter((tool) => allowedToolNameSet.has(tool.name)),
+        ),
+        noTools: "all",
+        sessionManager,
+        settingsManager,
+        resourceLoader,
+        withSessionWriteSettlement: transcriptRuntime.withSessionWriteSettlement,
+      });
+    } catch (error) {
+      await browserRuntime?.dispose();
+      throw error;
+    }
+  })();
   session.agent.sessionId = params.sessionId;
   session.setActiveToolsByName([...activeToolNames]);
   session.agent.streamFn = (_model, context, options) => {
@@ -245,7 +273,10 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     runFailure = params.signal?.aborted
       ? toError(params.signal.reason, "Worker agent turn aborted.")
       : toError(error, "Worker agent turn failed.");
-    liveRuntime.enqueueRunFailure({ aborted: params.signal?.aborted === true, error: runFailure });
+    liveRuntime.enqueueRunFailure({
+      aborted: params.signal?.aborted === true,
+      error: runFailure,
+    });
   }
 
   let finalTranscriptFailure: Error | undefined;
@@ -264,6 +295,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     unsubscribe();
     getProcessSupervisor().cancelScope(params.sessionKey, "manual-cancel");
     session.dispose();
+    await browserRuntime?.dispose();
   }
   if (runFailure !== undefined) {
     throw runFailure;

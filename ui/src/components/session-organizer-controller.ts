@@ -475,8 +475,17 @@ export class SessionOrganizerController implements ReactiveController {
   }
 
   async renameSessionGroupFromMenu(group: string): Promise<void> {
-    const next = window.prompt(t("sessionsView.renameGroupPrompt"), group)?.trim();
-    if (!next || next === group) {
+    const showInputDialog = await this.loadInputDialog();
+    // requireChange holds the submit closed on the name the group already has,
+    // so the only rename that reaches the Gateway is one that changes something.
+    const next = await showInputDialog?.({
+      title: t("sessionsView.renameGroupTitle", { group }),
+      label: t("sessionsView.groupNameLabel"),
+      defaultValue: group,
+      requireValue: true,
+      requireChange: true,
+    });
+    if (!next) {
       return;
     }
     const scope = this.host.sessionData.beginSessionMutation();
@@ -500,9 +509,6 @@ export class SessionOrganizerController implements ReactiveController {
   }
 
   async deleteSessionGroupFromMenu(group: string): Promise<void> {
-    if (!window.confirm(t("sessionsView.deleteGroupConfirm", { group }))) {
-      return;
-    }
     const scope = this.host.sessionData.beginSessionMutation();
     if (!scope) {
       return;

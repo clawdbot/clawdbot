@@ -9,6 +9,11 @@ import {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  crabboxCommandError,
+  permanentCrabboxCommandError,
+} from "./crabbox-worker-command-error.js";
+import * as workerDesktop from "./crabbox-worker-desktop-setup.js";
 import { parseInspectJson, type ParsedInspect } from "./crabbox-worker-inspect.js";
 import {
   buildCrabboxWarmupArgs,
@@ -19,17 +24,21 @@ import {
   parseCrabboxProfile,
   resolveCrabboxBinary,
 } from "./crabbox-worker-profile.js";
+import {
+  countCrabboxProvisionSetupPhases,
+  CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS,
+  CRABBOX_LIFECYCLE_TIMEOUT_MS,
+  CRABBOX_SETUP_TIMEOUT_MS,
+  CRABBOX_WARMUP_TIMEOUT_MS,
+  resolveCrabboxProvisionBaseTimeoutMs,
+  resolveCrabboxProvisionCallTimeoutMs,
+} from "./crabbox-worker-timeouts.js";
 
 export { resolveOpenClawRoot } from "./crabbox-worker-profile.js";
 
 const CRABBOX_WORKER_PROVIDER_ID = "crabbox";
 const CRABBOX_KEY_REF_PROVIDER = "crabbox";
 
-const WARMUP_TIMEOUT_MS = 240_000;
-const LIFECYCLE_TIMEOUT_MS = 60_000;
-const PROVISION_TIMEOUT_MS = 290_000;
-// Setup gets its own budget on top of provision so a slow warmup cannot starve it.
-const SETUP_TIMEOUT_MS = 300_000;
 const READY_POLL_INTERVAL_MS = 2_000;
 const MAX_OUTPUT_BYTES = 64 * 1024;
 const MAX_ERROR_DETAIL_CHARS = 512;
@@ -76,28 +85,6 @@ type CrabboxWorkerProviderDependencies = {
   sleep?: (milliseconds: number) => Promise<void>;
 };
 
-function commandDetail(result: SpawnResult): string {
-  const raw = (result.stderr || result.stdout).trim();
-  if (!raw) {
-    return "";
-  }
-  const compressed = redactSensitiveText(raw).replace(/\s+/gu, " ");
-  const redacted = truncateUtf16Safe(compressed, MAX_ERROR_DETAIL_CHARS);
-  return redacted ? `: ${redacted}` : "";
-}
-
-function commandError(action: string, result: SpawnResult): Error {
-  if (result.termination !== "exit") {
-    return new Error(`Crabbox ${action} did not exit normally (${result.termination})`);
-  }
-  const exitCode = result.code === null ? "unknown" : String(result.code);
-  return new Error(`Crabbox ${action} failed with exit code ${exitCode}${commandDetail(result)}`);
-}
-
-function permanentCommandError(action: string, result: SpawnResult): WorkerProviderError {
-  return new WorkerProviderError(commandError(action, result).message);
-}
-
 async function assertAwsWorkerHasNoInstanceProfile(params: {
   binary: string;
   runCommand: CrabboxCommandRunner;
@@ -107,10 +94,10 @@ async function assertAwsWorkerHasNoInstanceProfile(params: {
     args: ["config", "show", "--json"],
     binary: params.binary,
     runCommand: params.runCommand,
-    timeoutMs: LIFECYCLE_TIMEOUT_MS,
+    timeoutMs: CRABBOX_LIFECYCLE_TIMEOUT_MS,
   });
   if (result.termination !== "exit" || result.code !== 0) {
-    throw permanentCommandError("config show", result);
+    throw permanentCrabboxCommandError("config show", result);
   }
   let instanceProfile: unknown;
   try {
@@ -148,7 +135,7 @@ function provisionProfileError(result: SpawnResult): WorkerProviderError | undef
     /\blease_id_conflict\b/u.test(output) &&
     !/\bretry after provider inventory converges\b/iu.test(output)
   ) {
-    return permanentCommandError("warmup", result);
+    return permanentCrabboxCommandError("warmup", result);
   }
   if (result.code !== 2) {
     return undefined;
@@ -271,7 +258,7 @@ async function inspectWithContext(params: {
     ],
     binary: params.context.binary,
     runCommand: params.runCommand,
-    timeoutMs: params.timeoutMs ?? LIFECYCLE_TIMEOUT_MS,
+    timeoutMs: params.timeoutMs ?? CRABBOX_LIFECYCLE_TIMEOUT_MS,
   });
   if (result.termination === "exit" && result.code === 0) {
     // A successful but malformed response cannot attest the fixed lease. Command failures and
@@ -292,7 +279,7 @@ async function inspectWithContext(params: {
   if (result.termination === "exit" && authoritativeLeaseAbsence(result, params.id)) {
     return { status: "unknown" };
   }
-  throw commandError("inspect", result);
+  throw crabboxCommandError("inspect", result);
 }
 
 function remainingProvisionTimeout(deadline: number, maximum: number): number {
@@ -313,7 +300,7 @@ async function stopWithContext(params: {
     args: ["stop", "--provider", params.context.provider, "--id", params.context.id],
     binary: params.context.binary,
     runCommand: params.runCommand,
-    timeoutMs: params.timeoutMs ?? LIFECYCLE_TIMEOUT_MS,
+    timeoutMs: params.timeoutMs ?? CRABBOX_LIFECYCLE_TIMEOUT_MS,
   });
   if (result.termination === "exit" && result.code === 0) {
     return;
@@ -325,18 +312,12 @@ async function stopWithContext(params: {
   ) {
     return;
   }
-  throw commandError("stop", result);
+  throw crabboxCommandError("stop", result);
 }
 
 const isTerminalState = (state: string) => DESTROYED_STATES.has(state.toLowerCase());
 const isUnusableProvisionState = (state: string) =>
   UNUSABLE_PROVISION_STATES.has(state.toLowerCase());
-
-function statusFromInspect(inspect: ParsedInspect): WorkerLeaseStatus {
-  // `ready` is a short SSH probe, not lease existence. A recognized nonterminal lease remains
-  // active while it is provisioning or temporarily unreachable, even when ready is false.
-  return { status: isTerminalState(inspect.state) ? "destroyed" : "active" };
-}
 
 function leaseFromInspect(inspect: ParsedInspect, profile: CrabboxProfile): WorkerLease {
   if (isTerminalState(inspect.state)) {
@@ -372,13 +353,7 @@ function leaseFromInspect(inspect: ParsedInspect, profile: CrabboxProfile): Work
     // Crabbox's Linux desktop contract is TigerVNC on worker loopback with a per-lease
     // password file. This warm-time capability cannot be retrofitted onto an existing lease.
     ...(profile.desktop
-      ? {
-          desktop: {
-            protocol: "rfb" as const,
-            port: 5900,
-            passwordFilePath: "/var/lib/crabbox/vnc.password",
-          },
-        }
+      ? { desktop: workerDesktop.createCrabboxWorkerDesktopEndpoint(inspect.sshUser) }
       : {}),
   };
 }
@@ -422,7 +397,7 @@ async function waitForProvisionReady(
       expectedLeaseId: inspect.id,
       id: inspect.id,
       runCommand: params.runCommand,
-      timeoutMs: remainingProvisionTimeout(params.deadline, LIFECYCLE_TIMEOUT_MS),
+      timeoutMs: remainingProvisionTimeout(params.deadline, CRABBOX_LIFECYCLE_TIMEOUT_MS),
     });
     if (replay.status === "unknown") {
       throw new Error("Crabbox operation lease disappeared while waiting for SSH readiness");
@@ -434,7 +409,7 @@ async function waitForProvisionReady(
     // Reject forbidden state immediately; omitted AWS metadata is pending only until ready.
     assertProvisionSecurityPolicy({ inspect, provider: params.provider });
     while (inspect.ready !== true && !isUnusableProvisionState(inspect.state)) {
-      const remaining = remainingProvisionTimeout(params.deadline, LIFECYCLE_TIMEOUT_MS);
+      const remaining = remainingProvisionTimeout(params.deadline, CRABBOX_LIFECYCLE_TIMEOUT_MS);
       await params.sleep(Math.min(READY_POLL_INTERVAL_MS, remaining));
       inspect = await inspectAgain();
       assertProvisionSecurityPolicy({ inspect, provider: params.provider });
@@ -483,7 +458,7 @@ async function runProvisionSetup(
       ],
       binary: params.binary,
       runCommand: params.runCommand,
-      timeoutMs: remainingProvisionTimeout(params.deadline, SETUP_TIMEOUT_MS),
+      timeoutMs: remainingProvisionTimeout(params.deadline, CRABBOX_SETUP_TIMEOUT_MS),
     });
   } catch (error) {
     await stopProvisionInspect(params);
@@ -492,7 +467,7 @@ async function runProvisionSetup(
   if (result.termination === "exit" && result.code === 0) {
     return;
   }
-  const error = permanentCommandError("setup", result);
+  const error = permanentCrabboxCommandError("setup", result);
   await stopProvisionInspect(params);
   throw error;
 }
@@ -523,7 +498,7 @@ async function stopProvisionId(params: {
     context: { binary: params.binary, id: params.id, provider: params.provider },
     runCommand: params.runCommand,
     // Cleanup gets its own budget so an exhausted provision deadline cannot leak a lease.
-    timeoutMs: LIFECYCLE_TIMEOUT_MS,
+    timeoutMs: CRABBOX_LIFECYCLE_TIMEOUT_MS,
   });
 }
 
@@ -615,10 +590,17 @@ export function createCrabboxWorkerProvider(
 
   return {
     id: CRABBOX_WORKER_PROVIDER_ID,
+    resolveProvisionTimeoutMs(profile) {
+      return resolveCrabboxProvisionCallTimeoutMs(parseCrabboxProfile(profile));
+    },
     async provision(profile: WorkerProfile, operationId: string): Promise<WorkerLease> {
       const parsed = parseCrabboxProfile(profile);
-      const deadline = Date.now() + PROVISION_TIMEOUT_MS;
-      const setupDeadline = deadline + (parsed.setup ? SETUP_TIMEOUT_MS : 0);
+      const warmupTimeoutMs = parsed.desktop
+        ? CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS
+        : CRABBOX_WARMUP_TIMEOUT_MS;
+      const deadline = Date.now() + resolveCrabboxProvisionBaseTimeoutMs(parsed);
+      const setupCount = countCrabboxProvisionSetupPhases(parsed);
+      const setupDeadline = deadline + setupCount * CRABBOX_SETUP_TIMEOUT_MS;
       if (!operationId.trim()) {
         throw new Error("Crabbox provision requires an operation id");
       }
@@ -651,14 +633,14 @@ export function createCrabboxWorkerProvider(
         args: buildCrabboxWarmupArgs(parsed, leaseId, slug),
         binary,
         runCommand,
-        timeoutMs: remainingProvisionTimeout(deadline, WARMUP_TIMEOUT_MS),
+        timeoutMs: remainingProvisionTimeout(deadline, warmupTimeoutMs),
       });
       if (warmup.termination !== "exit" || warmup.code !== 0) {
         const profileError = provisionProfileError(warmup);
         if (profileError) {
           throw profileError;
         }
-        throw commandError("warmup", warmup);
+        throw crabboxCommandError("warmup", warmup);
       }
       let inspected: InspectCommandResult;
       try {
@@ -667,7 +649,7 @@ export function createCrabboxWorkerProvider(
           expectedLeaseId: leaseId,
           id: leaseId,
           runCommand,
-          timeoutMs: remainingProvisionTimeout(deadline, LIFECYCLE_TIMEOUT_MS),
+          timeoutMs: remainingProvisionTimeout(deadline, CRABBOX_LIFECYCLE_TIMEOUT_MS),
         });
       } catch (error) {
         // Transport failure after warmup is indeterminate; preserve the lease for durable replay.
@@ -692,8 +674,20 @@ export function createCrabboxWorkerProvider(
         throw new WorkerProviderError("Crabbox warmup lease entered a terminal state");
       }
       inspectedParams.inspect = await waitForProvisionReady({ ...inspectedParams, sleep });
+      inspectedParams.deadline = setupDeadline;
+      inspectedParams.inspect = await workerDesktop.provisionCrabboxWorkerDesktop(
+        parsed.desktop === true,
+        inspectedParams.inspect.sshUser ?? "",
+        inspectedParams.inspect,
+        () => stopProvisionInspect(inspectedParams),
+        (setup) =>
+          runProvisionSetupAndWaitReady({
+            ...inspectedParams,
+            setup,
+            sleep,
+          }),
+      );
       if (parsed.setup) {
-        inspectedParams.deadline = setupDeadline;
         inspectedParams.inspect = await runProvisionSetupAndWaitReady({
           ...inspectedParams,
           setup: parsed.setup,
@@ -713,7 +707,8 @@ export function createCrabboxWorkerProvider(
       if (inspected.status === "unknown") {
         return { status: "unknown" };
       }
-      return statusFromInspect(inspected.inspect);
+      // `ready` is an SSH probe; every recognized nonterminal lease remains active.
+      return { status: isTerminalState(inspected.inspect.state) ? "destroyed" : "active" };
     },
     async resolveSshIdentity(request) {
       const context = resolveLeaseContext(request);

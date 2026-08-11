@@ -104,5 +104,6 @@ describe("core gateway method release trains", () => {
     for (const method of ["projects.list", "projects.register", "projects.remove"]) {
       expect(methods.find((candidate) => candidate.name === method)?.since).toBe("2026.8");
     }
+    expect(methods.find((method) => method.name === "worker.desktop.launch")?.since).toBe("2026.8");
   });
 });

@@ -25,13 +25,13 @@ import { snapshotRecentMessages } from "./attempt-context-summary.js";
 import {
   installModelPromptTransform,
   installRuntimeContextMessageForPrompt,
-} from "./attempt.llm-boundary.js";
+} from "./attempt-llm-boundary.js";
 import {
   isSessionsYieldAbortError,
   persistSessionsYieldContextMessage,
   stripSessionsYieldArtifacts,
   waitForSessionsYieldAbortSettle,
-} from "./attempt.sessions-yield.js";
+} from "./attempt-sessions-yield.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
 import { isMidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";

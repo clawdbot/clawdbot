@@ -3,6 +3,11 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import {
+  getPluginCommandExecutionCount,
+  isPluginCommandExecutionActiveHere,
+  waitForPluginCommandExecutions,
+} from "./command-execution-lock.js";
+import {
   clearPluginHostRuntimeState,
   dispatchPluginAgentEventSubscriptions,
 } from "./host-hook-runtime.js";
@@ -84,11 +89,15 @@ function cleanupRetiredPluginHostRegistry(previousRegistry: PluginRegistry): voi
   if (!registryHasPluginHostCleanupWork(previousRegistry)) {
     return;
   }
-  void cleanupPreviousPluginHostRegistry({
-    previousRegistry,
-  }).catch((error: unknown) => {
-    log.warn(`plugin host registry cleanup failed: ${String(error)}`);
-  });
+  const cleanup = () =>
+    cleanupPreviousPluginHostRegistry({ previousRegistry }).catch((error: unknown) => {
+      log.warn(`plugin host registry cleanup failed: ${String(error)}`);
+    });
+  if (getPluginCommandExecutionCount(previousRegistry) > 0) {
+    void waitForPluginCommandExecutions(previousRegistry).then(cleanup);
+    return;
+  }
+  void cleanup();
 }
 
 function retirePluginRegistryIfUnused(registry: PluginRegistry | null): boolean {
@@ -374,17 +383,51 @@ function clearActivePluginRegistryState(): PluginRegistry | null {
 
 export async function clearActivePluginRegistry(): Promise<void> {
   const previousRegistry = clearActivePluginRegistryState();
-  try {
-    if (registryHasPluginHostCleanupWork(previousRegistry)) {
-      await cleanupPreviousPluginHostRegistry({ previousRegistry: previousRegistry! });
-    }
-  } finally {
-    try {
-      await drainGlobalSingletonLifecycleState("plugin-registry");
-    } finally {
-      clearPluginHostRuntimeState();
-    }
+  const clearVersion = state.activeVersion;
+  const clearRegistries = (state.commandRegistryClearRegistries ??= new Map());
+  if (previousRegistry) {
+    clearRegistries.set(previousRegistry, (clearRegistries.get(previousRegistry) ?? 0) + 1);
   }
+  const previousTail = state.commandRegistryClearTail ?? Promise.resolve();
+  const completion = previousTail
+    .catch(() => undefined)
+    .then(async () => {
+      try {
+        if (previousRegistry) {
+          await waitForPluginCommandExecutions(previousRegistry);
+          if (registryHasPluginHostCleanupWork(previousRegistry)) {
+            await cleanupPreviousPluginHostRegistry({ previousRegistry });
+          }
+        }
+      } finally {
+        // A handler-triggered clear may publish a successor before its own drain settles.
+        // Never let the retired generation's tail erase that successor's host state.
+        if (state.activeRegistry === null && state.activeVersion === clearVersion) {
+          try {
+            await drainGlobalSingletonLifecycleState("plugin-registry");
+          } finally {
+            clearPluginHostRuntimeState();
+          }
+        }
+      }
+    })
+    .finally(() => {
+      if (previousRegistry) {
+        const remaining = (clearRegistries.get(previousRegistry) ?? 1) - 1;
+        if (remaining === 0) {
+          clearRegistries.delete(previousRegistry);
+        } else {
+          clearRegistries.set(previousRegistry, remaining);
+        }
+      }
+    });
+  state.commandRegistryClearTail = completion.catch((error: unknown) => {
+    log.warn(`plugin registry clear failed: ${String(error)}`);
+  });
+  if ([...clearRegistries.keys()].some(isPluginCommandExecutionActiveHere)) {
+    return;
+  }
+  await completion;
 }
 
 export function resetPluginRuntimeStateForTest(): void {

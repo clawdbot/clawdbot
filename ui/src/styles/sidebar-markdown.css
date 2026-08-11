@@ -103,14 +103,14 @@
   font-size: 0.88em;
 }
 
-.sidebar-markdown :where(:not(pre) > code) {
+.sidebar-markdown :where(:not(pre, a.markdown-file-link) > code) {
   padding: 0.15em 0.4em;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: rgba(0, 0, 0, 0.12);
 }
 
-:root[data-theme-mode="light"] .sidebar-markdown :where(:not(pre) > code) {
+:root[data-theme-mode="light"] .sidebar-markdown :where(:not(pre, a.markdown-file-link) > code) {
   background: rgba(0, 0, 0, 0.06);
 }
 

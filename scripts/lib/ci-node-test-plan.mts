@@ -98,11 +98,10 @@ const COMPACT_EMBEDDED_GROUP_NAMES = [
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // PR-only bundles trade a little serial work for fewer ephemeral runner registrations.
 // Keep runner classes and subprocess isolation intact while bounding each combined job.
-// The group hints below are loaded-fleet CI walls. The 190s cap forbids
-// pairings like core-runtime-media-ui (124) +
-// core-unit-src-security (95) that produced a 195s real-wall straggler bin
-// while the pack sat at ~160s; ~3 extra bins buy ~30-40s of run wall.
-const COMPACT_NODE_TEST_JOB_SECONDS = 190;
+// The group hints below are loaded-fleet CI walls. The 220s cap keeps the
+// established 24-worker compact matrix after refreshing underestimated groups;
+// expanded composite groups are then striped evenly across those jobs.
+const COMPACT_NODE_TEST_JOB_SECONDS = 220;
 const COMPACT_NODE_TEST_JOB_GROUPS = 10;
 const COMPACT_TOOLING_NODE_TEST_GROUPS = 4;
 const COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES = 120;
@@ -116,6 +115,7 @@ const UNIT_FAST_NODE_TEST_STRIPES = 2;
 // dropping cache-warm/contention outliers outside [median/1.5, median*1.5].
 // Packing only: a stale entry skews job balance but never correctness.
 // Unknown shards fall back to a per-file estimate.
+// Four outlier hints were refreshed from child-process walls in run 31450296338.
 const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-agents-core-auth", 27],
   ["agentic-agents-core-isolated", 9],
@@ -125,13 +125,15 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   // Reliability's runtime-free provider check dropped its wall time from
   // ~245s to ~5s; the narrow anthropic cli-api artifact removes the same
   // full-barrel evaluation for the remaining facade importers (spawn).
+  // The live-session extraction rebalanced these stripes without changing the
+  // fleet-scale import wall that dominates each compact group.
   ["agentic-agents-core-runner-cli-1", 8],
-  ["agentic-agents-core-runner-cli-2", 9],
+  ["agentic-agents-core-runner-cli-2", 8],
   ["agentic-agents-core-runner-cli-3", 8],
   ["agentic-agents-core-runner-commands", 27],
   ["agentic-agents-core-runner-embedded", 20],
   ["agentic-agents-core-runner-sessions", 13],
-  ["agentic-agents-core-runtime", 79],
+  ["agentic-agents-core-runtime", 130],
   ["agentic-agents-core-subagents", 32],
   ["agentic-agents-core-tools", 52],
   // The composite hint sets the existing job count before its independent
@@ -143,7 +145,7 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-agents-embedded-incomplete-turn", 146],
   ["agentic-agents-embedded-overflow-compaction", 150],
   ["agentic-agents-embedded-run", 30],
-  ["agentic-agents-support", 105],
+  ["agentic-agents-support", 110],
   ["agentic-agents-tools", 42],
   ["agentic-cli", 72],
   ["agentic-command-support", 41],
@@ -177,7 +179,7 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["auto-reply-core-top-level", 30],
   ["auto-reply-reply-agent-runner", 40],
   ["auto-reply-reply-commands-1", 24],
-  ["auto-reply-reply-commands-2", 10],
+  ["auto-reply-reply-commands-2", 18],
   ["auto-reply-reply-commands-3", 12],
   ["auto-reply-reply-dispatch", 40],
   ["auto-reply-reply-session", 19],
@@ -210,7 +212,7 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["core-tooling-4", 125],
   ["core-tooling-isolated", 49],
   ["core-unit-fast-1", 41],
-  ["core-unit-fast-2", 35],
+  ["core-unit-fast-2", 92],
   // Fork-per-file isolation parallelizes poorly on 4 vCPU; keep it on the
   // 8 vCPU class, where it still runs a measured ~90s under fleet load.
   ["core-unit-fast-isolated", 90],
@@ -228,7 +230,7 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/agents/cli-runner.context-engine.test.ts", 6],
   // Fresh profile: 5.1s total, 3.8s import; retain a conservative packing hint.
   ["src/agents/cli-runner.reliability.test.ts", 8],
-  ["src/agents/cli-runner.spawn.test.ts", 18],
+  ["src/agents/cli-runner.spawn.test.ts", 45],
   ["src/auto-reply/reply/commands-export-session.test.ts", 8],
   ["src/auto-reply/reply/commands-gating.test.ts", 6],
   ["src/auto-reply/reply/commands-learn.test.ts", 8],

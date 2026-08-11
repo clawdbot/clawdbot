@@ -14,7 +14,6 @@ import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import { collectGatewayProcessMemoryUsageMb, finishGatewayRestartTrace } from "./restart-trace.js";
-import { createGatewayServerActiveWorkInspectors } from "./server-active-work.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import {
@@ -23,7 +22,6 @@ import {
 } from "./server-lifetime-sidecars.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
 import { setFallbackGatewayContextResolver } from "./server-plugins.js";
-import { assertGatewayRestartDatabaseReadiness } from "./server-restart-readiness.js";
 import {
   enforceSharedGatewaySessionGenerationForConfigWrite,
   getRequiredSharedGatewaySessionGeneration,
@@ -409,6 +407,7 @@ export async function finishGatewayStartup(params: {
       runtimeState.stopOutboundDeliveryRecovery = activated.stopOutboundDeliveryRecovery;
     });
   };
+  const { createGatewayServerActiveWorkInspectors } = await import("./server-active-work.js");
   ({
     stopGatewayUpdateCheck: runtimeState.stopGatewayUpdateCheck,
     tailscaleCleanup: runtimeState.tailscaleCleanup,
@@ -632,7 +631,6 @@ export async function finishGatewayStartup(params: {
     resolveSharedGatewaySessionGenerationForConfig,
     sharedGatewaySessionGenerationState,
     clients,
-    ...(!minimalTestGateway ? { assertRestartReady: assertGatewayRestartDatabaseReadiness } : {}),
     ...(opts.hotReloadRecovery ? { requestRecoveryRestart: opts.hotReloadRecovery } : {}),
     restartRecoveryAvailable: opts.hotReloadRecovery !== undefined,
   });

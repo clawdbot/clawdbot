@@ -15,6 +15,7 @@ import type {
   SidebarSessionPatch,
 } from "./app-sidebar-session-types.ts";
 import { requestCloudWorkerStop } from "./cloud-worker-stop.ts";
+import { showConfirmDialog } from "./confirm-dialog.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 import {
   patchSessionRows,
@@ -476,6 +477,22 @@ export async function deleteSessionGroup(
       requiredScope: "operator.write",
     })
   ) {
+    return false;
+  }
+  // Deleting a group keeps its sessions: the Gateway drops the catalog row and
+  // clears the category on every member, so the confirm names that outcome. It
+  // follows the access check so nobody is asked about a delete that cannot run.
+  const confirmed = await showConfirmDialog({
+    title: t("sessionsView.deleteGroupTitle", { group }),
+    message: t("sessionsView.deleteGroupConfirm", { group }),
+    confirmLabel: t("common.delete"),
+    danger: true,
+  });
+  if (!confirmed) {
+    return false;
+  }
+  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    showToast({ message: t("sessionsView.deleteGroupStale", { group }) });
     return false;
   }
   try {

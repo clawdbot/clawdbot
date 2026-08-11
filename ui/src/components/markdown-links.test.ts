@@ -281,17 +281,17 @@ describe("toSanitizedMarkdownHtml links", () => {
       expect(fragment.textContent).toContain("foo.ts");
     });
 
-    it("preserves line suffixes in labels while storing the parsed line", () => {
+    it("keeps line suffixes on the label while storing the parsed line", () => {
       const fragment = htmlFragment(
-        toSanitizedMarkdownHtml("src/lib/foo.ts:42 and foo.ts:7:3", { fileLinks: true }),
+        toSanitizedMarkdownHtml("src/lib/foo.ts:42 and bar.ts:7:3", { fileLinks: true }),
       );
       const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
       expect(links[0]?.dataset.filePath).toBe("src/lib/foo.ts");
       expect(links[0]?.dataset.fileLine).toBe("42");
-      expect(links[0]?.textContent).toBe("src/lib/foo.ts:42");
-      expect(links[1]?.dataset.filePath).toBe("foo.ts");
+      expect(links[0]?.textContent).toBe("foo.ts:42");
+      expect(links[1]?.dataset.filePath).toBe("bar.ts");
       expect(links[1]?.dataset.fileLine).toBe("7");
-      expect(links[1]?.textContent).toBe("foo.ts:7:3");
+      expect(links[1]?.textContent).toBe("bar.ts:7:3");
     });
 
     it("links Windows absolute paths", () => {
@@ -365,6 +365,94 @@ describe("toSanitizedMarkdownHtml links", () => {
         toSanitizedMarkdownHtml("Node.js, e.g. version 1.2.3", { fileLinks: true }),
       );
       expect(fragment.querySelector("a[data-file-path]")).toBeNull();
+    });
+
+    it("labels a file link with its basename and keeps the path addressable", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("see src/components/Button.tsx for details", { fileLinks: true }),
+      );
+      const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-file-link");
+      expect(link?.textContent).toBe("Button.tsx");
+      expect(link?.dataset.filePath).toBe("src/components/Button.tsx");
+      expect(link?.getAttribute("title")).toBe("src/components/Button.tsx");
+    });
+
+    it("adds no tooltip when the label is already the whole reference", () => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml("`README.md`", { fileLinks: true }));
+      const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-file-link");
+      expect(link?.textContent).toBe("README.md");
+      expect(link?.hasAttribute("title")).toBe(false);
+    });
+
+    it("adds no tooltip when an explicit label already repeats the reference", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("[src/lib/foo.ts](src/lib/foo.ts) and [go](src/lib/bar.ts)", {
+          fileLinks: true,
+        }),
+      );
+      const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
+      expect(links.map((link) => link.getAttribute("title"))).toEqual([null, "src/lib/bar.ts"]);
+    });
+
+    it("shortens inline-code paths and keeps author labels on explicit links", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("`src/lib/foo.ts` and [the button](src/ui/Button.tsx:12)", {
+          fileLinks: true,
+        }),
+      );
+      const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
+      expect(links.map((link) => link.textContent)).toEqual(["foo.ts", "the button"]);
+      expect(links.map((link) => link.getAttribute("title"))).toEqual([
+        "src/lib/foo.ts",
+        "src/ui/Button.tsx:12",
+      ]);
+    });
+
+    it("grows the label only far enough to tell equal basenames apart", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("ui/src/app.ts and api/src/app.ts and `D:\\work\\app.ts`", {
+          fileLinks: true,
+        }),
+      );
+      const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
+      // The Windows path is unique one segment up, so it stops there while the
+      // other two grow to three — and it keeps its own separator.
+      expect(links.map((link) => link.textContent)).toEqual([
+        "ui/src/app.ts",
+        "api/src/app.ts",
+        "work\\app.ts",
+      ]);
+    });
+
+    it.each([
+      ["README.md", "markdown"],
+      ["package.json", "package"],
+      ["src/components/Button.tsx", "component"],
+      ["src/index.ts", "code"],
+      ["config/app.yaml", "data"],
+      ["scripts/run.sh", "shell"],
+      ["docs/logo.png", "image"],
+      ["notes/todo.txt", "file"],
+      // Inline code so bare filenames link too: the prose scan deliberately
+      // ignores them unless they carry a directory or a line suffix.
+    ])("classifies %s as the %s glyph kind", (path, kind) => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(`\`${path}\``, { fileLinks: true }));
+      const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-file-link");
+      expect(link?.dataset.filePath).toBe(path);
+      expect(link?.dataset.fileKind).toBe(kind);
+    });
+
+    it.each([
+      ["spaces", "see docs/my notes.md today"],
+      ["parentheses", "see src/lib/foo(1).ts today"],
+      ["a fragment", "see README.md#install today"],
+      ["a query", "see config.json?raw=1 today"],
+    ])("never pulls %s into a file path, and leaves the prose intact", (_kind, input) => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(input, { fileLinks: true }));
+      for (const link of fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")) {
+        expect(link.dataset.filePath).not.toMatch(/[\s()?]/);
+      }
+      expect(fragment.textContent).toContain(input);
     });
   });
 

@@ -434,7 +434,7 @@ restore_prepublish_authored_config() {
 configure_plugin_registry() {
   local fixture_root="$ARTIFACT_ROOT/plugin-registry"
   local package_dir="$fixture_root/package"
-  local tarball="$fixture_root/openclaw-brave-plugin-2026.5.2.tgz"
+  local tarball="$fixture_root/openclaw-brave-plugin-${candidate_version}.tgz"
   local port_file="$fixture_root/npm-registry-port"
   local log_file="$fixture_root/npm-registry.log"
   local registry_args=()
@@ -473,17 +473,21 @@ NODE
 
   if configured_plugin_installs_enabled; then
     mkdir -p "$package_dir"
-    FIXTURE_PACKAGE_DIR="$package_dir" node <<'NODE'
+    FIXTURE_PACKAGE_DIR="$package_dir" FIXTURE_PACKAGE_VERSION="$candidate_version" node <<'NODE'
 const fs = require("node:fs");
 const path = require("node:path");
 const root = process.env.FIXTURE_PACKAGE_DIR;
+const version = process.env.FIXTURE_PACKAGE_VERSION;
+if (!version) {
+  throw new Error("missing fixture package version");
+}
 fs.mkdirSync(root, { recursive: true });
 fs.writeFileSync(
   path.join(root, "package.json"),
   `${JSON.stringify(
     {
       name: "@openclaw/brave-plugin",
-      version: "2026.5.2",
+      version,
       openclaw: { extensions: ["./index.js"] },
     },
     null,
@@ -524,7 +528,7 @@ fs.writeFileSync(
 );
 NODE
     tar -czf "$tarball" -C "$fixture_root" package
-    registry_args+=("@openclaw/brave-plugin" "2026.5.2" "$tarball")
+    registry_args+=("@openclaw/brave-plugin" "$candidate_version" "$tarball")
   fi
 
   if [ "${#registry_args[@]}" -eq 0 ]; then

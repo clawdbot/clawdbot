@@ -37,6 +37,7 @@ import type {
   SidebarNarrationSyncInput,
   SidebarSessionNarrationController,
 } from "./app-sidebar-session-narration.ts";
+import type { SidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
 import { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import {
   renderSessionTree,
@@ -81,6 +82,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   // dropped because the controller aligns from cumulative snapshots.
   private narration: SidebarSessionNarrationController | null = null;
   private narrationLoad: Promise<void> | null = null;
+  private sessionNavigationState: SidebarSessionNavigationState | undefined;
+  private projectedSessionRows: SidebarRecentSession[] | undefined;
   private readonly narrationSubscriptions = this.createNarrationSubscriptions();
   private readonly nativeGatewaysChanged = () => this.requestUpdate();
   private readonly hiddenSessionCatalogsChanged = () => {
@@ -166,6 +169,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   protected override willUpdate(changed: PropertyValues<this>) {
     super.willUpdate(changed);
+    this.sessionNavigationState = super.getSessionNavigationState();
+    this.projectedSessionRows = super.selectedAgentSessionRows(this.sessionNavigationState);
     const chip = this.activeChipAgent();
     // An open switcher tracks roster/reconnect updates; otherwise only hydrate
     // the active card and avoid background RPCs for every configured agent.
@@ -192,15 +197,27 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     }
   }
 
+  override getSessionNavigationState(): SidebarSessionNavigationState {
+    return this.sessionNavigationState ?? super.getSessionNavigationState();
+  }
+
+  protected override selectedAgentSessionRows(
+    navigationState: SidebarSessionNavigationState,
+  ): SidebarRecentSession[] {
+    return this.projectedSessionRows ?? super.selectedAgentSessionRows(navigationState);
+  }
+
   override updated(changedProperties: PropertyValues<this>) {
     super.updated(changedProperties);
     if (!this.narration) {
       if (this.sidebarLiveActivity) {
         this.ensureNarrationController();
       }
-      return;
+    } else {
+      this.narration.sync(this.narrationSyncInput());
     }
-    this.narration.sync(this.narrationSyncInput());
+    this.sessionNavigationState = undefined;
+    this.projectedSessionRows = undefined;
   }
 
   private visibleNarrationRowsInOrder(): SidebarRecentSession[] {
@@ -283,17 +300,13 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     void this.sessionOrganizer.patchSession(session, { pinned: !session.pinned });
   }
 
-  toggleSessionMenu(
-    session: SidebarRecentSession,
-    menuSession: SidebarRecentSession,
-    trigger: HTMLElement,
-  ): void {
+  toggleSessionMenu(session: SidebarRecentSession, trigger: HTMLElement): void {
     if (this.sidebarMenus.sessionMenu?.session.key === session.key) {
       this.sidebarMenus.closeSessionMenu();
       return;
     }
     const rect = trigger.getBoundingClientRect();
-    this.sidebarMenus.openSessionMenu(menuSession, rect.right, rect.bottom + 4, trigger);
+    this.sidebarMenus.openSessionMenu(session, rect.right, rect.bottom + 4, trigger);
   }
 
   startSidebarSectionDrag(sectionId: string): void {
@@ -419,12 +432,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       ...(this.sessionData.sessionsResult?.sessions ?? []),
       ...Object.values(this.sessionData.sessionRowsByAgent).flat(),
     ];
-    const sidebarRowsByKey = new Map<string, SidebarRecentSession>();
-    for (const row of liveRows) {
-      if (!sidebarRowsByKey.has(row.key)) {
-        sidebarRowsByKey.set(row.key, navigationState.toSidebarSession(row));
-      }
-    }
     const { sections: allSections } = this.zonedVisibleSections(visibleSessions);
     const catalogs = this.sessionData.sessionCatalogs.filter(
       (catalog) => !this.hiddenSessionCatalogIds.has(catalog.id),
@@ -458,7 +465,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         loadingMoreCatalogIds: this.sessionData.loadingMoreSessionCatalogIds,
         projectGrouping: this.catalogProjectGrouping,
         liveRows,
-        sidebarRowsByKey,
+        toSidebarSession: navigationState.toSidebarSession,
         creatorId: this.activeSessionCreatorId,
         catalogOpenTarget: this.catalogOpenTarget,
         terminalAvailable: this.terminalAvailable,

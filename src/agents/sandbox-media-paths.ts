@@ -4,6 +4,7 @@
  * Bridges media references through sandbox filesystems while enforcing workspace-only boundaries when required.
  */
 import path from "node:path";
+import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { createBoundedOutboundMediaReadFile } from "../media/bounded-read-file.js";
 import type { OutboundMediaReadFile } from "../media/load-options.js";
 import { resolveMediaReferenceSandboxPath } from "../media/media-reference.js";
@@ -35,12 +36,12 @@ export async function resolveSandboxedBridgeMediaPath(params: {
   mediaPath: string;
   inboundFallbackDir?: string;
 }): Promise<{ resolved: string; rewrittenFrom?: string }> {
-  const normalizeFileUrl = (rawPath: string) =>
-    rawPath.startsWith("file://") ? rawPath.slice("file://".length) : rawPath;
   const mediaPathInfo = params.inboundFallbackDir
     ? resolveMediaReferenceSandboxPath(params.mediaPath, params.inboundFallbackDir)
     : { resolved: params.mediaPath };
-  const filePath = normalizeFileUrl(mediaPathInfo.resolved);
+  const filePath = /^file:/iu.test(mediaPathInfo.resolved)
+    ? safeFileURLToPath(mediaPathInfo.resolved, "linux")
+    : mediaPathInfo.resolved;
   const rewrittenFrom = mediaPathInfo.rewrittenFrom;
   if (rewrittenFrom) {
     const stat = await params.sandbox.bridge.stat({

@@ -1,8 +1,9 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
@@ -43,6 +44,25 @@ import {
   WorkerTranscriptCommitClient,
 } from "./worker-rpc-clients.js";
 import { runWorkerDescriptor } from "./worker.runtime.js";
+
+const browserRuntimeMocks = vi.hoisted(() => ({
+  createWorkerBrowserToolRuntime: vi.fn(),
+  dispose: vi.fn(),
+}));
+
+vi.mock("./browser-runtime.js", () => {
+  browserRuntimeMocks.createWorkerBrowserToolRuntime.mockImplementation(async () => ({
+    tool: {
+      name: "browser",
+      label: "Browser",
+      description: "Control the attached worker browser.",
+      parameters: Type.Object({}),
+      execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+    },
+    dispose: browserRuntimeMocks.dispose,
+  }));
+  return { createWorkerBrowserToolRuntime: browserRuntimeMocks.createWorkerBrowserToolRuntime };
+});
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -770,6 +790,8 @@ async function setup(options?: FakeGatewayOptions): Promise<{
 }
 
 afterEach(async () => {
+  browserRuntimeMocks.createWorkerBrowserToolRuntime.mockClear();
+  browserRuntimeMocks.dispose.mockClear();
   for (const gateway of gateways.splice(0)) {
     await gateway.stop();
   }
@@ -850,6 +872,52 @@ describe("worker runtime", () => {
     await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
 
     expect(gateway.inferenceRequests[0]?.context.tools ?? []).toEqual([]);
+  });
+
+  it("materializes exactly the Browser tool for a browser-only assignment", async () => {
+    const { gateway, launch } = await setup();
+    launch.assignment.toolAuthority.allowedToolNames = ["browser"];
+    launch.assignment.browser = {
+      cdpUrl: "http://127.0.0.1:9222",
+      launcherPath: "/usr/local/bin/openclaw-worker-browser",
+    };
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+    expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual([
+      "browser",
+    ]);
+    expect(browserRuntimeMocks.createWorkerBrowserToolRuntime).toHaveBeenCalledWith({
+      descriptor: launch.assignment.browser,
+      sessionKey: `worker:${SESSION_ID}`,
+      stateDir: expect.any(String),
+      workspaceDir: await realpath(launch.assignment.workspaceDir),
+    });
+    expect(browserRuntimeMocks.dispose).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { authority: ["browser"] as const, browser: undefined },
+    {
+      authority: ["read"] as const,
+      browser: {
+        cdpUrl: "http://127.0.0.1:9222",
+        launcherPath: "/usr/local/bin/openclaw-worker-browser",
+      },
+    },
+  ])("fails before inference when Browser authority and descriptor disagree", async (testCase) => {
+    const { gateway, launch } = await setup();
+    launch.assignment.toolAuthority.allowedToolNames = [...testCase.authority];
+    if (testCase.browser) {
+      launch.assignment.browser = testCase.browser;
+    } else {
+      delete launch.assignment.browser;
+    }
+
+    await expect(runWorkerDescriptor(launch)).rejects.toThrow(
+      "Worker Browser authority and launch descriptor must be provided together",
+    );
+    expect(gateway.inferenceRequests).toHaveLength(0);
   });
 
   it("fail-stops a stale mid-run transcript without duplicating or rebasing the paid tail", async () => {

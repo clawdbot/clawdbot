@@ -44,7 +44,7 @@ type SessionCatalogRenderSnapshot = {
   loadingMoreCatalogIds: ReadonlySet<string>;
   projectGrouping: CatalogProjectGrouping;
   liveRows: readonly GatewaySessionRow[];
-  sidebarRowsByKey: ReadonlyMap<string, SidebarRecentSession>;
+  toSidebarSession: (row: GatewaySessionRow) => SidebarRecentSession;
   creatorId: string | null;
   catalogOpenTarget: CatalogOpenTarget;
   terminalAvailable: boolean;
@@ -335,7 +335,7 @@ function renderSessionCatalog(params: {
       renderLiveRow: (row, display) =>
         renderRecentSession({
           host,
-          session: snapshot.sidebarRowsByKey.get(row.key)!,
+          session: snapshot.toSidebarSession(row),
           display,
         }),
       onToggleSection: (sectionId) => host.toggleSection(sectionId),

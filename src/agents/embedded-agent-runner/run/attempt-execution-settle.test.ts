@@ -27,8 +27,8 @@ vi.mock("./attempt-stream-finalize.js", () => ({
   finalizeEmbeddedAttemptStreamPhase: mocks.finalizeStream,
 }));
 
+import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
 import { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
-import { SESSIONS_YIELD_ABORT_REASON } from "./attempt.sessions-yield.js";
 
 type SettledInput = Parameters<typeof runEmbeddedAttemptSettledPhase>[0];
 

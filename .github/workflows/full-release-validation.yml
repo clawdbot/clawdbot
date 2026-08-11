@@ -894,9 +894,8 @@ jobs:
               if [[ "$child_rerun_group" == "release-checks" ]]; then
                 child_rerun_group=all
               fi
-              release_checks_target_ref="${TARGET_CONTEXT_REF:-$TARGET_REF}"
               args=(
-                -f ref="$release_checks_target_ref"
+                -f ref="$TARGET_SHA"
                 -f expected_sha="$TARGET_SHA"
                 -f provider="$PROVIDER"
                 -f mode="$MODE"
@@ -908,6 +907,7 @@ jobs:
                 -f rerun_group="$child_rerun_group"
               )
               if [[ -n "${TARGET_CONTEXT_REF// }" ]]; then
+                args+=(-f target_context_ref="$TARGET_CONTEXT_REF")
                 args+=(-f allow_frozen_target_scenario_omissions=true)
               fi
               if [[ -n "${LIVE_SUITE_FILTER// }" ]]; then

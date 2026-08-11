@@ -292,11 +292,10 @@ async function agentCommandInternal(
             throw error;
           }
           log.warn(
-            `delivery preflight failed; continuing session-only because bestEffortDeliver is enabled: ${
+            `delivery preflight failed; continuing model run with requested delivery intent because bestEffortDeliver is enabled: ${
               error instanceof Error ? error.message : String(error)
             }`,
           );
-          opts = { ...opts, deliver: false };
         }
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
         if (preparedDelivery) {

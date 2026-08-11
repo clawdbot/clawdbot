@@ -187,5 +187,11 @@ export async function captureUiProof(page: Page, fileName: string) {
     return;
   }
   await mkdir(uiProofArtifactDir, { recursive: true });
-  await page.screenshot({ fullPage: true, path: path.join(uiProofArtifactDir, fileName) });
+  // Dialogs and menus fade in, so an undisabled capture can land mid-transition
+  // and prove nothing about the state it was taken for.
+  await page.screenshot({
+    animations: "disabled",
+    fullPage: true,
+    path: path.join(uiProofArtifactDir, fileName),
+  });
 }

@@ -9,6 +9,11 @@ on:
         description: Branch, tag, or full commit SHA to validate
         required: true
         type: string
+      target_context_ref:
+        description: Optional canonical release branch or tag context for an exact-SHA target
+        required: false
+        default: ""
+        type: string
       expected_sha:
         description: Optional full SHA that ref must resolve to
         required: false
@@ -1974,7 +1979,7 @@ jobs:
       - name: Dispatch and await trusted Telegram QA
         env:
           GH_TOKEN: ${{ github.token }}
-          TARGET_REF: ${{ needs.resolve_target.outputs.ref }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
         shell: bash
         run: |
@@ -1983,13 +1988,6 @@ jobs:
           workflow="openclaw-release-telegram-qa.yml"
           run_id=""
           run_name=""
-          telegram_target_ref="$TARGET_REF"
-          case "$telegram_target_ref" in
-            validation/target-* | refs/heads/validation/target-*)
-              telegram_target_ref="$TARGET_SHA"
-              ;;
-          esac
-
           find_child_runs() {
             RUN_NAME="$run_name" gh api -X GET \
               "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
@@ -2041,7 +2039,8 @@ jobs:
               --ref main \
               -f dispatch_id="$dispatch_id" \
               -f expected_trusted_workflow_sha="$expected_trusted_workflow_sha" \
-              -f target_ref="$telegram_target_ref" \
+              -f target_context_ref="$TARGET_CONTEXT_REF" \
+              -f target_ref="$TARGET_SHA" \
               -f target_sha="$TARGET_SHA"
 
             for _ in $(seq 1 60); do

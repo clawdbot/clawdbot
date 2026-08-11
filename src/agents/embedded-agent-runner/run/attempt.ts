@@ -33,6 +33,10 @@ import {
 import { prepareEmbeddedAttemptSessionRuntime } from "./attempt-session-runtime-prepare.js";
 import { cleanupEmbeddedAttemptSessionPhase } from "./attempt-session-settle.js";
 import {
+  queueSessionsYieldInterruptMessage,
+  SESSIONS_YIELD_ABORT_REASON,
+} from "./attempt-sessions-yield.js";
+import {
   prepareEmbeddedAttemptSetup,
   prepareEmbeddedAttemptSkills,
   startEmbeddedAttemptDiagnostics,
@@ -43,10 +47,6 @@ import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prep
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
-import {
-  queueSessionsYieldInterruptMessage,
-  SESSIONS_YIELD_ABORT_REASON,
-} from "./attempt.sessions-yield.js";
 import {
   measureEmbeddedAgentPreparation,
   measureEmbeddedAgentPreparationSync,

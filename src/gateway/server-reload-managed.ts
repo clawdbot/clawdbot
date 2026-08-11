@@ -148,7 +148,11 @@ export function startManagedGatewayConfigReloader(
     ...(params.requestRecoveryRestart
       ? { requestRecoveryRestart: params.requestRecoveryRestart }
       : {}),
-    ...(params.assertRestartReady ? { assertRestartReady: params.assertRestartReady } : {}),
+    assertRestartReady: () =>
+      import("../state/openclaw-database-preflight.js").then(
+        ({ assertOpenClawDatabasesReadyForRestart }) =>
+          assertOpenClawDatabasesReadyForRestart({ env: process.env }),
+      ),
     restartRecoveryAvailable,
     createHealthMonitor: (config) =>
       startGatewayChannelHealthMonitor({

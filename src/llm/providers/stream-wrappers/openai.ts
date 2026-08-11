@@ -3,7 +3,6 @@ import {
   supportsOpenAIReasoningEffort,
 } from "@openclaw/ai/internal/openai";
 import {
-  emitModelTransportDebug,
   filterCodeModePayloadTools,
   isCodeModeModelVisibleToolName,
   readCodeModePayloadToolName,
@@ -49,6 +48,7 @@ type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
 type DynamicFastMode = boolean | (() => boolean | undefined);
 type OpenClawSimpleStreamOptions = SimpleStreamOptions & {
   openclawCodeModeToolSurface?: boolean;
+  openclawCodeModeAllowedHostedToolTypes?: Set<string>;
 };
 type OpenAIResponsesReplayOptions = Parameters<StreamFn>[2] & {
   replayResponsesItemIds?: boolean;
@@ -146,9 +146,10 @@ function filterCodeModePayloadHookResult(
   payload: unknown,
   nextPayload: unknown,
   visibleToolNames: ReadonlySet<string>,
+  allowedHostedToolTypes: ReadonlySet<string>,
 ): unknown {
   const finalPayload = nextPayload === undefined ? payload : nextPayload;
-  filterCodeModePayloadTools(finalPayload, visibleToolNames);
+  filterCodeModePayloadTools(finalPayload, visibleToolNames, allowedHostedToolTypes);
   return nextPayload === undefined ? undefined : finalPayload;
 }
 
@@ -648,31 +649,81 @@ export function createCodexNativeWebSearchWrapper(
     const codeModeSurfaceFromOptions =
       (options as OpenClawSimpleStreamOptions | undefined)?.openclawCodeModeToolSurface === true;
     const codeModeVisibleToolNames = resolveCodeModeVisibleToolNames(context);
+    const resolveNativeSearchActivation = () =>
+      resolveCodexNativeSearchActivation({
+        config: params.config,
+        modelProvider: readStringValue(model.provider),
+        modelApi: readStringValue(model.api),
+        modelId: readStringValue(model.id),
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        sandboxToolPolicy: params.sandboxToolPolicy,
+        messageProvider: params.messageProvider,
+        agentAccountId: params.agentAccountId,
+        groupId: params.groupId,
+        groupChannel: params.groupChannel,
+        groupSpace: params.groupSpace,
+        spawnedBy: params.spawnedBy,
+        senderId: params.senderId,
+        senderName: params.senderName,
+        senderUsername: params.senderUsername,
+        senderE164: params.senderE164,
+        agentDir: params.agentDir,
+      });
     if (
       (params.codeModeToolSurfaceEnabled === true ||
         codeModeSurfaceFromOptions ||
         isCodeModeEnabled(params.config)) &&
       codeModeVisibleToolNames
     ) {
-      emitModelTransportDebug(
-        log,
-        `skipping Codex native web search because code mode owns the model tool surface for ${
-          model.provider ?? "unknown"
-        }/${model.id ?? "unknown"}`,
-      );
+      // Every spread below must retain this request-scoped Set so the provider policy owner
+      // and final Responses egress agree on the same hosted-tool authorization fact.
+      const allowedHostedToolTypes =
+        (options as OpenClawSimpleStreamOptions | undefined)
+          ?.openclawCodeModeAllowedHostedToolTypes ?? new Set<string>();
+      const activation =
+        params.nativeWebSearchAllowedByToolPolicy === false
+          ? undefined
+          : resolveNativeSearchActivation();
+      if (activation?.state === "native_active") {
+        allowedHostedToolTypes.add("web_search");
+      }
+      if (activation?.state === "native_active" || activation?.codexNativeEnabled) {
+        const outcome =
+          activation.state === "native_active"
+            ? `activating (${activation.codexMode})`
+            : `skipping (${activation.inactiveReason ?? "inactive"})`;
+        log.debug(
+          `${outcome} Codex native web search alongside code mode for ${model.provider ?? "unknown"}/${model.id ?? "unknown"}`,
+        );
+      }
       const originalOnPayload = options?.onPayload;
       const codeModeOptions: OpenClawSimpleStreamOptions = {
         ...options,
         openclawCodeModeToolSurface: true,
+        openclawCodeModeAllowedHostedToolTypes: allowedHostedToolTypes,
         onPayload: (payload) => {
-          filterCodeModePayloadTools(payload, codeModeVisibleToolNames);
+          if (activation?.state === "native_active") {
+            patchCodexNativeWebSearchPayload({ payload, config: params.config });
+          }
+          filterCodeModePayloadTools(payload, codeModeVisibleToolNames, allowedHostedToolTypes);
           const nextPayload = originalOnPayload?.(payload, model);
           if (isPromiseLike(nextPayload)) {
             return Promise.resolve(nextPayload).then((resolvedPayload) =>
-              filterCodeModePayloadHookResult(payload, resolvedPayload, codeModeVisibleToolNames),
+              filterCodeModePayloadHookResult(
+                payload,
+                resolvedPayload,
+                codeModeVisibleToolNames,
+                allowedHostedToolTypes,
+              ),
             );
           }
-          return filterCodeModePayloadHookResult(payload, nextPayload, codeModeVisibleToolNames);
+          return filterCodeModePayloadHookResult(
+            payload,
+            nextPayload,
+            codeModeVisibleToolNames,
+            allowedHostedToolTypes,
+          );
         },
       };
       return underlying(model, context, codeModeOptions);
@@ -687,26 +738,7 @@ export function createCodexNativeWebSearchWrapper(
       return underlying(model, context, options);
     }
 
-    const activation = resolveCodexNativeSearchActivation({
-      config: params.config,
-      modelProvider: readStringValue(model.provider),
-      modelApi: readStringValue(model.api),
-      modelId: readStringValue(model.id),
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      sandboxToolPolicy: params.sandboxToolPolicy,
-      messageProvider: params.messageProvider,
-      agentAccountId: params.agentAccountId,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      spawnedBy: params.spawnedBy,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-      agentDir: params.agentDir,
-    });
+    const activation = resolveNativeSearchActivation();
 
     if (activation.state !== "native_active") {
       if (activation.codexNativeEnabled) {

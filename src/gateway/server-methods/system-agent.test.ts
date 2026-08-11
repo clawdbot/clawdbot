@@ -469,6 +469,7 @@ describe("openclaw.setup", () => {
       baseSnapshot: expect.objectContaining({ hash: "prepare-base-hash" }),
       baseHash: "prepare-base-hash",
     });
+    await whenAdmittedWizardSessionSettled(session);
   });
 });
 

@@ -4576,7 +4576,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     "OPENCLAW_LOG_LEVEL",
     "OPENCLAW_AGENT_DIR",
   ]);
-  const { startGatewayServerCore } = await import("./server.impl.js");
+  const { startGatewayServerCore } = await import("./server-start.js");
   let runtimeEnv: ReturnType<typeof enterProductionEnvForLiveRun> | undefined;
   let cleanupTempStateDir: string | undefined;
   let cleanupTempAgentDir: string | undefined;
@@ -5734,7 +5734,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     clearRuntimeConfigSnapshot();
     const runtimeEnv = enterProductionEnvForLiveRun();
     const previousEnv = snapshotLiveEnv(["OPENCLAW_AGENT_DIR"]);
-    const { startGatewayServerCore } = await import("./server.impl.js");
+    const { startGatewayServerCore } = await import("./server-start.js");
 
     process.env.OPENCLAW_SKIP_CHANNELS = "1";
     process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
