@@ -47,6 +47,7 @@ import {
   attachCliMessagingDeliveryEvidence,
   getCliMessagingDeliveryEvidence,
 } from "./cli-runner/delivery-evidence.js";
+import { createCliFailoverError } from "./cli-runner/exit-error.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import {
@@ -63,13 +64,12 @@ import type {
   RunCliAgentParams,
 } from "./cli-runner/types.js";
 import { claudeCliSessionTranscriptHasContent as claudeCliSessionTranscriptHasContentImpl } from "./command/attempt-execution.helpers.js";
-import { classifyFailoverReason, isFailoverErrorMessage } from "./embedded-agent-helpers.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
 import { waitForDeferredTurnMaintenanceForSession } from "./embedded-agent-runner/context-engine-maintenance.js";
 import { resolveExplicitFinalSourceReplyDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
 import { resolveAuthProfileFailureReason } from "./embedded-agent-runner/run/auth-profile-failure-policy.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
-import { FailoverError, isFailoverError, resolveFailoverStatus } from "./failover-error.js";
+import { coerceToFailoverError, FailoverError, isFailoverError } from "./failover-error.js";
 import {
   awaitAgentEndSideEffects,
   runAgentEndSideEffects,
@@ -216,29 +216,8 @@ function isUnsupportedCliResumeAtError(error: unknown, resumeAtArg: string): boo
   const message = formatErrorMessage(error).toLowerCase();
   return (
     message.includes(resumeAtArg.toLowerCase()) &&
-    ["unknown", "unexpected", "unrecognized", "not recognized"].some((token) =>
-      message.includes(token),
-    )
+    /\b(?:unknown|unexpected|unrecognized)\b|\bnot\s+recognized\b/.test(message)
   );
-}
-
-function formatCliEmptyOutputDiagnostics(output: CliOutput): string | undefined {
-  const process = output.diagnostics?.process;
-  if (!process) {
-    return undefined;
-  }
-  return [
-    `backend=${process.backendId}`,
-    `reason=${process.processReason}`,
-    `exitCode=${process.exitCode ?? "null"}`,
-    `exitSignal=${process.exitSignal ?? "null"}`,
-    `durationMs=${process.durationMs}`,
-    `stdoutBytes=${process.stdoutBytes}`,
-    `stdoutHash=${process.stdoutHash}`,
-    `stderrBytes=${process.stderrBytes}`,
-    `stderrHash=${process.stderrHash}`,
-    `useResume=${process.useResume ? "true" : "false"}`,
-  ].join(" ");
 }
 
 /** Checks whether a Claude CLI session binding has reached its transcript file. */
@@ -802,6 +781,12 @@ export async function runPreparedCliAgent(
 ): Promise<EmbeddedAgentRunResult> {
   const { executePreparedCliRun } = await import("./cli-runner/execute.runtime.js");
   const { params } = context;
+  const cliFailoverContext = {
+    provider: params.provider,
+    model: context.modelId,
+    sessionId: params.sessionId,
+    lane: params.lane,
+  };
   const sessionBindingDisabled = context.preparedBackend.backend.sessionMode === "none";
   const preparedContextAgentMeta =
     isClaudeCliProvider(params.provider) && context.contextWindowInfo
@@ -1145,26 +1130,6 @@ export async function runPreparedCliAgent(
     }
   };
 
-  const toCliRunFailure = (error: unknown): never => {
-    if (isFailoverError(error)) {
-      throw error;
-    }
-    const message = formatErrorMessage(error);
-    if (isFailoverErrorMessage(message, { provider: params.provider })) {
-      const reason = classifyFailoverReason(message, { provider: params.provider }) ?? "unknown";
-      const status = resolveFailoverStatus(reason);
-      throw new FailoverError(message, {
-        reason,
-        provider: params.provider,
-        model: context.modelId,
-        sessionId: params.sessionId,
-        lane: params.lane,
-        status,
-      });
-    }
-    throw error;
-  };
-
   const executeCliAttempt = async (
     cliSessionIdToUse?: string,
     options?: {
@@ -1223,18 +1188,28 @@ export async function runPreparedCliAgent(
       !output.didSendViaMessagingTool &&
       params.allowEmptyAssistantReplyAsSilent !== true
     ) {
-      const emptyOutputDiagnostics = formatCliEmptyOutputDiagnostics(output);
-      if (emptyOutputDiagnostics) {
-        cliBackendLog.warn(`cli empty response diagnostics: ${emptyOutputDiagnostics}`);
+      const process = output.diagnostics?.process;
+      if (process) {
+        const diagnostics = [
+          `backend=${process.backendId}`,
+          `reason=${process.processReason}`,
+          `exitCode=${process.exitCode ?? "null"}`,
+          `exitSignal=${process.exitSignal ?? "null"}`,
+          `durationMs=${process.durationMs}`,
+          `stdoutBytes=${process.stdoutBytes}`,
+          `stdoutHash=${process.stdoutHash}`,
+          `stderrBytes=${process.stderrBytes}`,
+          `stderrHash=${process.stderrHash}`,
+          `useResume=${process.useResume ? "true" : "false"}`,
+        ].join(" ");
+        cliBackendLog.warn(`cli empty response diagnostics: ${diagnostics}`);
       }
       throw attachCliMessagingDeliveryEvidence(
-        new FailoverError("CLI backend returned an empty response.", {
-          reason: "empty_response",
-          provider: params.provider,
-          model: context.modelId,
-          sessionId: params.sessionId,
-          lane: params.lane,
-        }),
+        createCliFailoverError(
+          "CLI backend returned an empty response.",
+          "empty_response",
+          cliFailoverContext,
+        ),
         output,
       );
     }
@@ -1673,15 +1648,12 @@ export async function runPreparedCliAgent(
         context.preparedBackend.backend.resumeAtArg &&
         isUnsupportedCliResumeAtError(err, context.preparedBackend.backend.resumeAtArg)
       ) {
-        recoveryError = new FailoverError("CLI backend cannot resume from the stored checkpoint.", {
-          reason: "session_expired",
-          provider: params.provider,
-          model: context.modelId,
-          sessionId: params.sessionId,
-          lane: params.lane,
-          status: resolveFailoverStatus("session_expired"),
-          cause: err,
-        });
+        recoveryError = createCliFailoverError(
+          "CLI backend cannot resume from the stored checkpoint.",
+          "session_expired",
+          cliFailoverContext,
+          { cause: err },
+        );
       }
       if (isFailoverError(recoveryError)) {
         if (
@@ -1777,7 +1749,7 @@ export async function runPreparedCliAgent(
               ctx: hookContext,
               hookRunner,
             });
-            return toCliRunFailure(retryErr);
+            throw retryErr;
           }
         }
       }
@@ -1795,7 +1767,7 @@ export async function runPreparedCliAgent(
         ctx: hookContext,
         hookRunner,
       });
-      return toCliRunFailure(recoveryError);
+      throw recoveryError;
     }
   };
 
@@ -1825,7 +1797,7 @@ export async function runPreparedCliAgent(
     );
   }
   if (runFailed) {
-    throw runError;
+    throw coerceToFailoverError(runError, cliFailoverContext) ?? runError;
   }
   if (!runResult) {
     throw new Error("CLI run completed without a result");
