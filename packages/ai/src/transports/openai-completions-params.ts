@@ -1,5 +1,5 @@
 import type { Context, Model } from "@openclaw/llm-core";
-import { convertMessages } from "../openai-completions-messages.js";
+import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import {
@@ -48,18 +48,6 @@ import {
   estimateStringChars,
   supportsModelTools,
 } from "./transport-utils.js";
-
-function hasToolHistory(messages: Context["messages"]): boolean {
-  return messages.some(
-    (message) =>
-      message.role === "toolResult" ||
-      // Assistant content can be a raw string from transcript replay; a string
-      // never carries tool calls, so it should not count toward tool history.
-      (message.role === "assistant" &&
-        Array.isArray(message.content) &&
-        message.content.some((block) => block.type === "toolCall")),
-  );
-}
 
 function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl">): boolean {
   if (!model.baseUrl.trim()) {
@@ -247,14 +235,13 @@ function applyTogetherOpenAICompletionsThinkingParams(params: {
   modelReasoning: boolean;
   payload: Record<string, unknown>;
   requestedEffort: OpenAIReasoningEffort;
-}): boolean {
+}): void {
   if (!params.modelReasoning || params.compatThinkingFormat !== "together") {
-    return false;
+    return;
   }
   params.payload.reasoning = {
     enabled: isOpenAICompletionsThinkingEnabled(params.requestedEffort),
   };
-  return true;
 }
 
 function convertTools(
@@ -385,7 +372,7 @@ export function buildOpenAICompletionsParams(
         (converted.projection.inputToolCount === 0 && converted.projection.diagnostics.length === 0)
       ) {
         params.tools = converted.tools;
-      } else if (hasToolHistory(context.messages)) {
+      } else if (hasToolCallHistory(context.messages)) {
         params.tools = [];
       }
       if (options?.toolChoice) {
@@ -403,7 +390,7 @@ export function buildOpenAICompletionsParams(
       ) {
         params.tool_choice = "auto";
       }
-    } else if (hasToolHistory(context.messages)) {
+    } else if (hasToolCallHistory(context.messages)) {
       params.tools = [];
     }
     if (

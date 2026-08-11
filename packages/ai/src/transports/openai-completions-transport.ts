@@ -14,9 +14,8 @@ import { hasOpenAICompatibleConversationTurn } from "./openai-compatible-convers
 import { isAzureOpenAICompatibleHost } from "./openai-completions-host.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
 import {
-  processCompletionsStream as processOpenAICompletionsStream,
+  processCompletionsStream,
   shouldEmitOpenAICompletionsReasoning,
-  shouldEmitOpenAICompletionsReasoningForModel,
 } from "./openai-completions-stream.js";
 import {
   assertCodeModeResponsesToolSurface,
@@ -29,7 +28,6 @@ import {
 } from "./openai-transport-params.js";
 import {
   createOpenAIResponseHook,
-  parseOpenAICompletionsUsage,
   type MutableAssistantOutput,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
@@ -271,7 +269,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           hook: createOpenAIResponseHook(options?.onResponse, response, model),
           onReady: () => stream.push({ type: "start", partial: output as never }),
         });
-        await processOpenAICompletionsStream(hookedResponseStream, output, model, stream, {
+        await processCompletionsStream(hookedResponseStream, output, model, stream, {
           signal: options?.signal,
           emitReasoning,
           firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
@@ -299,21 +297,4 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
   };
 }
 
-const completionsTesting = {
-  getCompat,
-  createSseDoneDetector,
-  createOpenAICompletionsClient,
-  buildOpenAICompletionsClientConfig,
-  parseTransportChunkUsage: parseOpenAICompletionsUsage,
-  processOpenAICompletionsStream,
-  shouldEmitOpenAICompletionsReasoningForModel,
-};
-
-declare global {
-  var openclawOpenAICompletionsTransportTestApi: typeof completionsTesting | undefined;
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  globalThis.openclawOpenAICompletionsTransportTestApi = completionsTesting;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

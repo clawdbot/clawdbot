@@ -597,13 +597,6 @@ export function shouldEmitOpenAICompletionsReasoning(
   return true;
 }
 
-export function shouldEmitOpenAICompletionsReasoningForModel(
-  model: OpenAIModeModel,
-  options: OpenAICompletionsOptions | undefined,
-) {
-  return shouldEmitOpenAICompletionsReasoning(model, options);
-}
-
 function hasOpenAICompletionsReasoningUsageActivity(
   rawUsage: NonNullable<ChatCompletionChunk["usage"]>,
 ) {
