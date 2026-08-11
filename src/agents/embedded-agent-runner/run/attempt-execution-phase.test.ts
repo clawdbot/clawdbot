@@ -26,7 +26,6 @@ function createFixture() {
   const result = { messages: [] };
   const preparedStreamRuntime = { stream: { queueHandle: { kind: "embedded" } } };
   const state = {
-    beforeAgentRunBlocked: false,
     beforeAgentRunBlockedBy: undefined,
     terminal: { kind: "ok" as const },
     trajectoryEndRecorded: false,

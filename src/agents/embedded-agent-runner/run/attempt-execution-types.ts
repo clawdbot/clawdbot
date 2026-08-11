@@ -22,7 +22,6 @@ type StreamRuntimeInput = Parameters<typeof prepareEmbeddedAttemptStreamRuntime>
 type AttemptContextEngine = NonNullable<StreamRuntimeInput["history"]["activeContextEngine"]>;
 
 export type EmbeddedAttemptExecutionState = {
-  beforeAgentRunBlocked: boolean;
   beforeAgentRunBlockedBy: string | undefined;
   terminal: AgentRunAttemptTerminal;
   trajectoryEndRecorded: boolean;
