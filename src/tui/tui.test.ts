@@ -403,6 +403,25 @@ describe("resolveInitialTuiAgentId", () => {
     ).toBe("ops");
     expect(resolveInitialTuiAgentId({ cfg: restartConfig, cwd: "/tmp/openclaw" })).toBe("ops");
   });
+
+  it("uses the persisted fixed-store owner for any bare initial session key", () => {
+    const restartConfig: OpenClawConfig = {
+      session: { store: "/tmp/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { main: {}, ops: {} },
+      },
+    };
+
+    expect(
+      resolveInitialTuiAgentId({
+        cfg: restartConfig,
+        initialSessionInput: "incident-42",
+        cwd: "/tmp/openclaw",
+      }),
+    ).toBe("ops");
+  });
 });
 
 describe("resolveGatewayDisconnectState", () => {

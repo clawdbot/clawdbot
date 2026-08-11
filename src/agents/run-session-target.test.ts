@@ -214,6 +214,26 @@ describe("agent run session target", () => {
     });
   });
 
+  it("does not create a key for an unknown session id during cross-agent lookup", async () => {
+    const storePath = path.join(tempDir, "missing-cross-agent", "sessions.json");
+
+    await expect(
+      resolveAgentRunSessionTarget({
+        config: {
+          session: { store: storePath },
+          agents: {
+            ownership: "explicit",
+            entries: { ops: {}, research: {} },
+          },
+        },
+        sessionId: "unknown-cross-agent-session",
+      }),
+    ).rejects.toMatchObject({
+      code: "session-key-missing",
+      name: "AgentRunSessionTargetResolutionError",
+    });
+  });
+
   it("round-trips a plain compatibility key through sessionFile", async () => {
     const storePath = path.join(tempDir, "fallback", "sessions.json");
 

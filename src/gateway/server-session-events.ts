@@ -11,6 +11,7 @@ import {
   loadSessionEntryReadOnly as loadAccessorSessionEntryReadOnly,
   resolveTranscriptSessionKeyBySessionId,
 } from "../config/sessions/session-accessor.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -259,8 +260,13 @@ async function handleTranscriptUpdateBroadcast(
   }
   const effectiveAgentId = compatibleLegacyMarker?.agentId ?? targetAgentId ?? update.agentId;
   const compatibilityDefaultAgentId = tryResolveCompatibilityDefaultAgentId();
+  const persistedOwner = resolvePersistedSessionStoreOwnerForKey(getRuntimeConfig(), sessionKey);
   const defaultGlobalAgentId =
-    sessionKey === "global" && !effectiveAgentId ? compatibilityDefaultAgentId : undefined;
+    sessionKey === "global" && !effectiveAgentId
+      ? persistedOwner.kind === "configured"
+        ? persistedOwner.agentId
+        : compatibilityDefaultAgentId
+      : undefined;
   const visibleAgentId = effectiveAgentId;
   const routingAgentId = effectiveAgentId ?? defaultGlobalAgentId;
   const connIds = new Set<string>();
@@ -442,18 +448,25 @@ export function createLifecycleEventBroadcastHandler(params: {
     const compatibilityDefaultAgentId = tryResolveCompatibilityDefaultAgentId();
     const eventAgentId =
       normalizeOptionalString(event.agentId) ?? parseAgentSessionKey(event.sessionKey)?.agentId;
-    const rowAgentId = eventAgentId ?? compatibilityDefaultAgentId;
+    const persistedOwner = resolvePersistedSessionStoreOwnerForKey(
+      getRuntimeConfig(),
+      event.sessionKey,
+    );
+    const rowAgentId =
+      eventAgentId ??
+      (persistedOwner.kind === "configured" ? persistedOwner.agentId : undefined) ??
+      compatibilityDefaultAgentId;
     const sessionRow = rowAgentId
       ? loadGatewaySessionRow(event.sessionKey, { agentId: rowAgentId })
       : undefined;
     const activeRunState =
-      sessionRow && (sessionRow.key !== "global" || eventAgentId || compatibilityDefaultAgentId)
+      sessionRow && (sessionRow.key !== "global" || rowAgentId)
         ? resolveVisibleActiveSessionRunState({
             context: params,
             requestedKey: event.sessionKey,
             canonicalKey: sessionRow.key,
             sessionId: sessionRow.sessionId,
-            ...(eventAgentId ? { agentId: eventAgentId } : {}),
+            ...(rowAgentId ? { agentId: rowAgentId } : {}),
             defaultAgentId: compatibilityDefaultAgentId,
           })
         : null;

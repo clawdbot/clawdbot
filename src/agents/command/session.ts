@@ -377,14 +377,14 @@ export function resolveStoredSessionKeyForSessionId(opts: {
   };
 }
 
-/** Resolves the session key/store targeted by one command request. */
-export function resolveSessionKeyForRequestCore(opts: {
+function resolveSessionKeyForRequestInternal(opts: {
   cfg: OpenClawConfig;
   to?: string;
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;
   clone?: boolean;
+  createMissingSessionId: boolean;
 }): SessionKeyResolution {
   const sessionCfg = opts.cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
@@ -526,7 +526,7 @@ export function resolveSessionKeyForRequestCore(opts: {
     }
   }
 
-  if (requestedSessionId && !sessionKey) {
+  if (requestedSessionId && !sessionKey && opts.createMissingSessionId) {
     const explicitSessionAgentId =
       requestedAgentId ??
       tryResolveLegacyCompatibilityAgentId(opts.cfg) ??
@@ -547,6 +547,35 @@ export function resolveSessionKeyForRequestCore(opts: {
   }
 
   return { agentId: storeAgentId, sessionKey, sessionStore, storePath };
+}
+
+/** Resolves an existing session-id row across agent stores without creating a fallback key. */
+export function resolveExistingSessionKeyForRequest(opts: {
+  cfg: OpenClawConfig;
+  sessionId: string;
+  agentId?: string;
+  clone?: boolean;
+}): SessionKeyResolution {
+  return resolveSessionKeyForRequestInternal({ ...opts, createMissingSessionId: false });
+}
+
+/** Resolves the session key/store targeted by one command request. */
+export function resolveSessionKeyForRequest(opts: {
+  cfg: OpenClawConfig;
+  to?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  agentId?: string;
+  clone?: boolean;
+}): SessionKeyResolution {
+  return resolveSessionKeyForRequestInternal({ ...opts, createMissingSessionId: true });
+}
+
+/** Core alias retained for runtime owners that bypass the public library facade. */
+export function resolveSessionKeyForRequestCore(
+  opts: Parameters<typeof resolveSessionKeyForRequest>[0],
+): SessionKeyResolution {
+  return resolveSessionKeyForRequest(opts);
 }
 
 /** Resolves or creates the session used by one agent command request. */

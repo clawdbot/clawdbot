@@ -595,14 +595,23 @@ async function normalizeSessionKeyOptsForDispatch(
       normalizedOpts = { ...normalizedOpts, gatewayDispatchConfig: cfg, remoteGatewayRoster };
     }
     selectionCfg = cfg;
+    const effectiveOwnerSessionKey =
+      rawSessionKey ?? (cfg.session?.scope === "global" ? "global" : undefined);
     const persistedKeyOwner = remoteGatewayRoster
       ? ({ kind: "none" } as const)
-      : resolvePersistedSessionStoreOwnerForKey(cfg, rawSessionKey);
+      : resolvePersistedSessionStoreOwnerForKey(cfg, effectiveOwnerSessionKey);
     if (persistedKeyOwner.kind === "retired") {
       throw new AgentSelectionRequiredError(listAgentIds(cfg), {
         surface: `session key "${rawSessionKey}"`,
         hint: `The shared fixed-store row belongs to retired agent "${persistedKeyOwner.agentId}".`,
       });
+    }
+    if (
+      persistedKeyOwner.kind === "configured" &&
+      rawSessionKey === undefined &&
+      effectiveOwnerSessionKey === "global"
+    ) {
+      normalizedOpts = { ...normalizedOpts, sessionKey: "global" };
     }
     const selectedAgentId =
       persistedKeyOwner.kind === "configured"

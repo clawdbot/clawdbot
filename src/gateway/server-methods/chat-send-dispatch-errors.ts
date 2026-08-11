@@ -290,7 +290,9 @@ export function createChatSendDispatchErrorLifecycle(params: {
         requestedKey: rawSessionKey,
         canonicalKey: sessionKey,
         ...(sessionKey === "global" && agentId ? { agentId } : {}),
-        defaultAgentId: tryResolveLegacyCompatibilityAgentId(cfg),
+        defaultAgentId:
+          (sessionKey === "global" ? agentId : undefined) ??
+          tryResolveLegacyCompatibilityAgentId(cfg),
       });
       if (hasActiveRun) {
         return;

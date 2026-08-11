@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   applySessionStoreProjection,
   replaceSessionEntrySync,
@@ -15,6 +15,7 @@ import type { callGateway as gatewayCall } from "../../gateway/call.js";
 import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
+import { testing as sessionsResolutionTesting } from "./sessions-resolution.test-support.js";
 
 type CallGatewayRequest = Parameters<typeof gatewayCall>[0];
 type HistoryMessage = {
@@ -129,6 +130,10 @@ describe("sessions_history redaction", () => {
     if (tempDir) {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  afterEach(() => {
+    sessionsResolutionTesting.setDepsForTest();
   });
 
   it("declares complete success and closed error contracts", async () => {
@@ -653,6 +658,38 @@ describe("sessions_history redaction", () => {
     expect(requests).toContainEqual({
       method: "chat.history",
       params: expect.objectContaining({ sessionKey: "global", agentId: "ops" }),
+    });
+  });
+
+  it("resolves current history under the requester instead of the fixed-store owner", async () => {
+    const resolveGateway = vi.fn(async (request: { params?: Record<string, unknown> }) => {
+      expect(request.params).toMatchObject({ agentId: "research", sessionId: "current" });
+      return { agentId: "research", key: "agent:research:main" };
+    });
+    sessionsResolutionTesting.setDepsForTest({ callGateway: resolveGateway as never });
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      agentSessionKey: "agent:research:main",
+      requesterAgentIdOverride: "research",
+      config: {
+        session: { store: path.join(tempDir!, "owned-current.sqlite"), scope: "global" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      },
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        return { messages: [] } as T;
+      },
+    });
+
+    await tool.execute("research-current-history", { sessionKey: "current" });
+
+    expect(requests).toContainEqual({
+      method: "chat.history",
+      params: expect.objectContaining({ sessionKey: "agent:research:main", agentId: "research" }),
     });
   });
 });

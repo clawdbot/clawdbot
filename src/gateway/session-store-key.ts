@@ -65,13 +65,16 @@ function shouldRemapLegacyDefaultMainAlias(
   if (agentId !== DEFAULT_AGENT_ID || listAgentIds(cfg).includes(DEFAULT_AGENT_ID)) {
     return false;
   }
+  const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
+  const mainKey = normalizeMainKey(cfg.session?.mainKey);
+  if (rest !== "main" && rest !== mainKey) {
+    return false;
+  }
   const defaultAgentId = resolveLogicalSessionStoreAgentId(cfg, "main");
   if (options?.storeAgentId && normalizeAgentId(options.storeAgentId) !== defaultAgentId) {
     return false;
   }
-  const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
-  const mainKey = normalizeMainKey(cfg.session?.mainKey);
-  return rest === "main" || rest === mainKey;
+  return true;
 }
 
 function resolveParsedSessionStoreKey(

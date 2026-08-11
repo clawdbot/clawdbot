@@ -401,6 +401,7 @@ export function createSessionsHistoryTool(opts?: {
         agentId: opts?.requesterAgentIdOverride,
       }).sessionAgentId;
       const normalizedInputKey = sessionKeyParam.trim();
+      const isCurrentSession = normalizedInputKey === "current";
       const isConfiguredMainAlias =
         normalizedInputKey === "main" ||
         normalizedInputKey === "global" ||
@@ -412,7 +413,11 @@ export function createSessionsHistoryTool(opts?: {
           : resolvePersistedSessionStoreOwnerForKey(cfg, sessionKeyParam);
       const resolvedSession = await resolveSessionReference({
         sessionKey: sessionKeyParam,
-        ...(inputStoreOwner.kind === "configured" ? { agentId: inputStoreOwner.agentId } : {}),
+        ...(isCurrentSession
+          ? { agentId: requesterAgentId }
+          : inputStoreOwner.kind === "configured"
+            ? { agentId: inputStoreOwner.agentId }
+            : {}),
         alias,
         mainKey,
         requesterInternalKey: effectiveRequesterKey,

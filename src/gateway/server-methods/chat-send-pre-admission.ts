@@ -90,7 +90,9 @@ export async function runChatSendPreAdmission(params: {
       respondChatSessionRoutingChanged(respond);
       return false;
     }
-    const defaultAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
+    const defaultAgentId =
+      (sessionKey === "global" ? selectedAgent.agentId : undefined) ??
+      tryResolveLegacyCompatibilityAgentId(cfg);
     const stopAgentId =
       sessionKey === "global"
         ? (selectedAgent.agentId ?? tryResolveLegacyCompatibilityAgentId(cfg))

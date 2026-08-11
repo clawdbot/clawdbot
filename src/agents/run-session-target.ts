@@ -15,7 +15,7 @@ import { parseAgentSessionKey, toAgentStoreSessionKey } from "../routing/session
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
 import {
-  resolveSessionKeyForRequest,
+  resolveExistingSessionKeyForRequest,
   resolveStoredSessionKeyForSessionId,
 } from "./command/session.js";
 
@@ -166,7 +166,7 @@ export async function resolveAgentRunSessionTarget(params: {
           sessionId,
           agentId,
         })
-      : resolveSessionKeyForRequest({ cfg: config, sessionId, clone: false })
+      : resolveExistingSessionKeyForRequest({ cfg: config, sessionId, clone: false })
     : undefined;
   const lookupAgentId =
     (hasCompleteTypedTarget || trustExplicitAlternateStoreAgent ? targetAgentId : undefined) ??

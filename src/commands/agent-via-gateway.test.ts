@@ -600,6 +600,30 @@ describe("agentCliCommand", () => {
     );
   });
 
+  it("dispatches an implicit global turn through its persisted fixed-store owner", async () => {
+    await withTempStore(
+      async () => {
+        mockGatewaySuccessReply();
+
+        await agentCliCommand({ message: "hi" }, runtime);
+
+        const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "agent request");
+        expect(request.params).toMatchObject({
+          agentId: undefined,
+          sessionKey: "global",
+        });
+      },
+      {
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          list: [{ id: "ops" }, { id: "research" }],
+        },
+        session: { scope: "global" },
+      },
+    );
+  });
+
   it("dispatches a retained-owner global session through --local", async () => {
     await withTempStore(
       async () => {

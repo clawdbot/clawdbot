@@ -171,6 +171,20 @@ describe("default agent role materialization", () => {
     expect(resolveTalkSessionAgentId(config, "agent:ops:main")).toBe("ops");
   });
 
+  it("routes bare Talk sessions through the persisted fixed-store owner", () => {
+    const config: OpenClawConfig = {
+      talk: { agentId: "research" },
+      session: { store: "/tmp/owned-shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    };
+
+    expect(resolveTalkSessionAgentId(config, "incident-42")).toBe("ops");
+  });
+
   it("preserves malformed bindings and agent-default blocks for validation", () => {
     const base = {
       agents: { entries: { ops: { default: true }, research: {} } },

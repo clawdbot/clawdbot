@@ -153,6 +153,47 @@ describe("session observer", () => {
     harness.observer.dispose();
   });
 
+  it("keeps the persisted fixed-store owner on the bare global observer stream", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const config = {
+      gateway: { controlUi: { sessionObserver: true } },
+      session: { scope: "global" as const, store: "/tmp/owned-shared.sqlite" },
+      agents: {
+        ownership: "explicit" as const,
+        defaults: {
+          utilityModel: "openai/gpt-test",
+          sessionStore: { agentId: "ops" },
+        },
+        entries: { ops: {}, research: {} },
+      },
+    } satisfies OpenClawConfig;
+    const harness = createHarness({ subscribe: false, config });
+    harness.subscribers.subscribe("conn-global", "global")?.commit();
+    harness.subscribers.subscribe("conn-scoped", "agent:ops:global")?.commit();
+    declareObserverVisibility(harness.observer, "conn-global");
+    declareObserverVisibility(harness.observer, "conn-scoped");
+
+    harness.observer.handleEvent(
+      event({
+        runId: "run-ops",
+        sessionKey: "global",
+        agentId: "ops",
+        stream: "item",
+        data: { kind: "preamble", phase: "update", progressText: "Ops agent work" },
+      }),
+    );
+    await flushObserver();
+
+    expect(harness.broadcastToConnIds).toHaveBeenCalledWith(
+      "session.observer",
+      expect.objectContaining({ agentId: "ops", sessionKey: "global" }),
+      new Set(["conn-scoped", "conn-global"]),
+      { dropIfSlow: true },
+    );
+    harness.observer.dispose();
+  });
+
   it("resolves an explicit global alias to its agent-scoped companion snapshot", () => {
     const config = {
       gateway: { controlUi: { sessionObserver: true } },

@@ -156,6 +156,26 @@ describe("sessions.search gateway method", () => {
     expect(searchSessionTranscriptsMock).not.toHaveBeenCalled();
   });
 
+  it("retains the inferred fixed-store owner for a bare key search", async () => {
+    cfg = {
+      session: { store: "/stores/shared/sessions.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    };
+
+    await callSearch({ query: "needle", sessionKeys: ["global"] });
+
+    expect(searchSessionTranscriptsMock).toHaveBeenCalledWith({
+      agentId: "ops",
+      query: "needle",
+      limit: undefined,
+      sessionKeys: ["global"],
+    });
+  });
+
   it("filters incognito candidates before applying a non-admin result limit", async () => {
     const incognitoKey = "agent:main:dashboard:incognito-newer";
     const durableKey = "agent:main:dashboard:durable";

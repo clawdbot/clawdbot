@@ -103,7 +103,9 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       !isIncognitoSessionKey(sessionKey) ||
       canAccessIncognitoSession({ cfg, client: client ?? null, sessionKey });
     const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
-    const sessionKeys: string[] | undefined = params.sessionKeys ? [] : undefined;
+    const resolvedSessionKeys:
+      | Array<{ sessionKey: string; agentId: string | undefined }>
+      | undefined = params.sessionKeys ? [] : undefined;
     for (const sessionKey of params.sessionKeys ?? []) {
       // Retired per-agent stores remain read-compatible when the caller explicitly scopes them.
       // A durable fixed-store owner still wins, so this exception cannot cross agent ownership.
@@ -117,21 +119,21 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         respond(false, undefined, requestedAgent.error);
         return;
       }
-      sessionKeys?.push(
-        requestedAgent.agentId
+      resolvedSessionKeys?.push({
+        sessionKey: requestedAgent.agentId
           ? resolveStoredSessionKeyForAgentStore({
               cfg,
               agentId: requestedAgent.agentId,
               sessionKey,
             })
           : resolveSessionStoreKey({ cfg, sessionKey }),
-      );
+        agentId: requestedAgent.agentId,
+      });
     }
+    const sessionKeys = resolvedSessionKeys?.map((resolved) => resolved.sessionKey);
     const agentIds = new Set(
-      sessionKeys?.map((sessionKey) =>
-        requestedAgentId && (sessionKey === "global" || sessionKey === "unknown")
-          ? requestedAgentId
-          : resolveSessionStoreAgentId(cfg, sessionKey),
+      resolvedSessionKeys?.map((resolved) =>
+        resolved.agentId ? resolved.agentId : resolveSessionStoreAgentId(cfg, resolved.sessionKey),
       ),
     );
     if (

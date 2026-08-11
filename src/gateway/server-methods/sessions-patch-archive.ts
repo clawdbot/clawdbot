@@ -217,7 +217,7 @@ export async function prepareSessionPatchArchive(params: {
       sessionId: fresh.entry?.sessionId,
       sessionKey: freshCanonicalKey,
       agentId: freshResolved.agentId,
-      defaultAgentId: tryResolveLegacyCompatibilityAgentId(cfg),
+      defaultAgentId: freshResolved.agentId ?? tryResolveLegacyCompatibilityAgentId(cfg),
       lifecycleIdentities: target.lifecycleIdentities.filter((identity): identity is string =>
         Boolean(identity),
       ),
