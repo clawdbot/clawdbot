@@ -503,6 +503,8 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
                     transform: `translateY(${
                       virtualRow.start - virtualizer.options.scrollMargin
                     }px)`,
+                    // Keep skipped overscan rows at the virtualizer's known size.
+                    containIntrinsicBlockSize: `auto ${virtualRow.size}px`,
                   })}
                   data-index=${String(virtualRow.index)}
                   data-virtual-row-key=${row.key}

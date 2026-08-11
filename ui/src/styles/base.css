@@ -166,6 +166,13 @@
   --radius-full: 9999px;
   --radius: 10px;
 
+  /* Menu items stay optically parallel to their panel edge: radius 6 + padding 4
+     = panel radius 10. Shared knobs keep transient menus from drifting again. */
+  --menu-radius: var(--radius-md);
+  --menu-item-radius: var(--radius-sm);
+  --menu-item-height: 28px;
+  --menu-padding: 4px;
+
   /* Transitions - Crisp and responsive */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
@@ -187,6 +194,13 @@
   --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
 
   color-scheme: dark;
+}
+
+/* Menu actions follow the platform 44px touch-target contract for coarse pointers. */
+@media (pointer: coarse) {
+  :root {
+    --menu-item-height: 44px;
+  }
 }
 
 /* The claw family deepens only the text-bearing destructive fill. */
@@ -849,6 +863,17 @@ textarea,
   }
   to {
     opacity: 1;
+  }
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }
 
