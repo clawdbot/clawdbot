@@ -542,7 +542,7 @@ async function authorizeGatewayConnectCore(
   const managedTailscaleRoute =
     unattributableProxy && managedTailscaleServe && hasTailscaleProxyHeaders(req);
   let effectiveIp = ip;
-  let verifiedTailscaleUser: TailscaleUser | undefined;
+  let verifiedTailscaleUser: VerifiedTailscaleIdentity | undefined;
 
   if (
     authSurface === "http-user-profile-avatar" &&
