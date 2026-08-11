@@ -1,10 +1,12 @@
 // Process regression for typed gateway startup-migration refusal and lease cleanup.
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
+import pLimit from "p-limit";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -20,6 +22,7 @@ const STARTUP_REFUSAL =
 const STARTUP_RECOVERY =
   'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.';
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const execFileAsync = promisify(execFile);
 
 function runIsolatedModuleScript(
   env: NodeJS.ProcessEnv,
@@ -630,9 +633,14 @@ describe("gateway startup-migration refusal", () => {
         nonInteractive: true,
         ...(mode === "repair" ? { repair: true } : {}),
       };
-      const result = runIsolatedModuleScript(
-        env,
-        `
+      await execFileAsync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "--input-type=module",
+          "--eval",
+          `
           const { loadAndMaybeMigrateDoctorConfig } = await import(${JSON.stringify(configFlowUrl)});
           const result = await loadAndMaybeMigrateDoctorConfig({
             options: ${JSON.stringify(doctorOptions)},
@@ -666,11 +674,15 @@ describe("gateway startup-migration refusal", () => {
             doctorScanCount: countMetadataScans() - configFlowScanCount,
           }));
         `,
-        { timeoutMs: 60_000 },
+        ],
+        {
+          cwd: path.resolve("."),
+          encoding: "utf8",
+          env,
+          maxBuffer: 4 * 1024 * 1024,
+          timeout: 60_000,
+        },
       );
-      expect(result.error, `${result.stderr}\n${result.stdout}`).toBeUndefined();
-      expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
-      expect(result.signal, `${result.stderr}\n${result.stdout}`).toBeNull();
 
       const metadata = JSON.parse(fs.readFileSync(resultPath, "utf8")) as {
         mode: "preview" | "repair";
@@ -683,17 +695,40 @@ describe("gateway startup-migration refusal", () => {
       return metadata;
     };
 
-    const repairBaseline = await runDoctorConfigFlow(1, 1, "repair");
-    const repairManyPlugins = await runDoctorConfigFlow(12, 1, "repair");
-    const repairManyAgents = await runDoctorConfigFlow(1, 12, "repair");
-    const repairConfiguredChannel = await runDoctorConfigFlow(1, 1, "repair", {
-      configuredChannel: true,
-    });
-    const previewBaseline = await runDoctorConfigFlow(1, 1, "preview");
-    const previewManyPlugins = await runDoctorConfigFlow(12, 1, "preview");
-    const previewManyAgents = await runDoctorConfigFlow(1, 12, "preview");
-    const previewConfiguredChannel = await runDoctorConfigFlow(1, 1, "preview", {
-      configuredChannel: true,
+    // Each fixture needs a fresh process for environment and module-cache isolation. Bound the
+    // process fanout to the CI lane's worker budget instead of paying eight serial imports.
+    const runLimited = pLimit(3);
+    const fixtureRuns = [
+      runLimited(() => runDoctorConfigFlow(1, 1, "repair")),
+      runLimited(() => runDoctorConfigFlow(12, 1, "repair")),
+      runLimited(() => runDoctorConfigFlow(1, 12, "repair")),
+      runLimited(() =>
+        runDoctorConfigFlow(1, 1, "repair", {
+          configuredChannel: true,
+        }),
+      ),
+      runLimited(() => runDoctorConfigFlow(1, 1, "preview")),
+      runLimited(() => runDoctorConfigFlow(12, 1, "preview")),
+      runLimited(() => runDoctorConfigFlow(1, 12, "preview")),
+      runLimited(() =>
+        runDoctorConfigFlow(1, 1, "preview", {
+          configuredChannel: true,
+        }),
+      ),
+    ] as const;
+    const [
+      repairBaseline,
+      repairManyPlugins,
+      repairManyAgents,
+      repairConfiguredChannel,
+      previewBaseline,
+      previewManyPlugins,
+      previewManyAgents,
+      previewConfiguredChannel,
+    ] = await Promise.all(fixtureRuns).catch(async (error: unknown) => {
+      // A failed child must not let afterEach remove roots that queued siblings still use.
+      await Promise.allSettled(fixtureRuns);
+      throw error;
     });
 
     const expectBoundedScans = (params: {
