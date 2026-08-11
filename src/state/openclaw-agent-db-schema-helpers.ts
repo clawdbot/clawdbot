@@ -65,39 +65,10 @@ const AGENT_SCHEMA_COMPATIBILITY = {
   ],
 } satisfies SqliteSchemaCompatibility;
 
-const RETIRED_AGENT_STATE_LEASE_SCHEMA_SQL = `
-CREATE TABLE state_leases (
-  scope TEXT NOT NULL,
-  lease_key TEXT NOT NULL,
-  owner TEXT NOT NULL,
-  expires_at INTEGER,
-  heartbeat_at INTEGER,
-  payload_json TEXT,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  PRIMARY KEY (scope, lease_key)
-) STRICT;
-`;
-
-export function hasRetiredAgentStateLeaseSchema(database: DatabaseSync): boolean {
+function hasRetiredAgentStateLeaseSchema(database: DatabaseSync): boolean {
   return Boolean(
     database.prepare("SELECT 1 FROM main.sqlite_schema WHERE name = 'state_leases'").get(),
   );
-}
-
-/** Drop the exact retired v16 lease shape inside the caller's schema transaction. */
-export function repairRetiredAgentStateLeaseSchemaInTransaction(
-  database: DatabaseSync,
-  pathname: string,
-): boolean {
-  if (!hasRetiredAgentStateLeaseSchema(database)) {
-    return false;
-  }
-
-  assertSqliteSchemaContains(database, pathname, RETIRED_AGENT_STATE_LEASE_SCHEMA_SQL);
-  // DROP TABLE also removes the retired indexes and sqlite_stat rows atomically.
-  database.exec("DROP TABLE state_leases;");
-  return true;
 }
 
 export function assertOpenClawAgentSchemaContains(

@@ -14,6 +14,7 @@ import {
   verifyAndRepairCanonicalSqliteIndexes,
 } from "../infra/sqlite-index-schema.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
@@ -34,10 +35,8 @@ import {
   assertOpenClawAgentCurrentRuntimeSchema,
   assertSupportedAgentSchemaVersion,
   ensureSessionKeyContractSchemaInTransaction,
-  hasRetiredAgentStateLeaseSchema,
   readExistingAgentSchemaMeta,
   repairAndAssertOpenClawAgentV14SchemaForMigration,
-  repairRetiredAgentStateLeaseSchemaInTransaction,
 } from "./openclaw-agent-db-schema-helpers.js";
 import {
   backfillSessionConversations,
@@ -294,17 +293,37 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
   backfillTranscriptMutationWatermarks(db);
 }
 
+const RETIRED_AGENT_STATE_LEASE_SCHEMA_SQL = `
+CREATE TABLE state_leases (
+  scope TEXT NOT NULL,
+  lease_key TEXT NOT NULL,
+  owner TEXT NOT NULL,
+  expires_at INTEGER,
+  heartbeat_at INTEGER,
+  payload_json TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (scope, lease_key)
+) STRICT;
+`;
+
+function hasRetiredAgentStateLeaseSchema(db: DatabaseSync): boolean {
+  return Boolean(db.prepare("SELECT 1 FROM main.sqlite_schema WHERE name = 'state_leases'").get());
+}
+
 function migrateRetiredAgentStateLeaseSchema(
   db: DatabaseSync,
   pathname: string,
   targetVersion: number,
 ): void {
-  if (targetVersion < 17) {
+  if (targetVersion < 17 || !hasRetiredAgentStateLeaseSchema(db)) {
     return;
   }
   // The 2026-08-10 tenant audit found no agent-DB lease writers after #121113;
   // #121615 removed the unreachable routing arm, so v17 retires this table.
-  repairRetiredAgentStateLeaseSchemaInTransaction(db, pathname);
+  assertSqliteSchemaContains(db, pathname, RETIRED_AGENT_STATE_LEASE_SCHEMA_SQL);
+  // DROP TABLE also removes the retired indexes and sqlite_stat rows atomically.
+  db.exec("DROP TABLE state_leases;");
 }
 
 /** Backfill one generation token without copying or rewriting transcript rows. */
