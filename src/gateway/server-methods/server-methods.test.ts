@@ -32,6 +32,7 @@ import {
   appendAssistantMirrorMessageByIdentity,
   appendSessionTranscriptMessageByIdentity,
 } from "../../plugin-sdk/session-transcript-runtime.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { waitForAgentJob } from "../agent-turn/agent-job.js";
 import {
@@ -2132,6 +2133,7 @@ describe("projectRecentChatDisplayMessages", () => {
         ],
       });
     } finally {
+      closeOpenClawAgentDatabasesForTest();
       fs.rmSync(tempDir, { force: true, recursive: true });
     }
   });
