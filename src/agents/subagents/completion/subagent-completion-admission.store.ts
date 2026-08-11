@@ -122,12 +122,13 @@ export function settleSubagentCompletionDelivery(params: {
   subagent: SubagentRunRecord;
   task: TaskRecord;
   databaseOptions?: OpenClawStateDatabaseOptions;
+  mutateSubagent?: (entry: SubagentRunRecord) => unknown;
 }): void {
-  const boundSubagent = bindSubagentRunRecord(params.subagent);
   const boundTask = bindTaskRecord(params.task);
   runOpenClawStateWriteTransaction(
     (database) => {
-      upsertSubagentRunRowInDatabase(database, boundSubagent);
+      invokeSynchronousHook(() => params.mutateSubagent?.(params.subagent));
+      upsertSubagentRunRowInDatabase(database, bindSubagentRunRecord(params.subagent));
       upsertTaskRunRowInDatabase(database, boundTask);
     },
     params.databaseOptions,

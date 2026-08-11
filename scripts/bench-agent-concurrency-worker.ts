@@ -636,6 +636,7 @@ async function runSweepSample(childCount: number): Promise<Sample> {
     resumeRequesterSettleWake: () => {},
     startSubagentAnnounceCleanupFlow: () => true,
     completeCleanupBookkeeping: () => {},
+    discardTerminalDelivery: () => {},
     shouldEmitEndedHookForRun: () => false,
     emitSubagentEndedHookForRun: async () => {},
     callGateway: (async <T>() => {
