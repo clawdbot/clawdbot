@@ -334,7 +334,10 @@ export class WorkboardCoreStore {
     previous: WorkboardCard,
     next: WorkboardCard,
   ): Promise<WorkboardCard> {
-    const persisted = removeUndefinedCardFields(next);
+    const persisted = removeUndefinedCardFields({
+      ...next,
+      updatedAt: Math.max(Date.now(), previous.updatedAt + 1),
+    });
     await this.registerCard(persisted, undefined, {
       updatedAt: previous.updatedAt,
       claimToken: previous.metadata?.claim?.token,

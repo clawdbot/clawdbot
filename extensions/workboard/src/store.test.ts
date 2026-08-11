@@ -1218,6 +1218,65 @@ describe("WorkboardStore", () => {
     }
   });
 
+  it("advances diagnostics writes before a prepared update can persist", async () => {
+    const dir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-workboard-diagnostics-update-race-"),
+    );
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const diagnosticsStores = createWorkboardSqliteStores({ dbPath });
+    const updateStores = createWorkboardSqliteStores({ dbPath });
+    try {
+      const setupStore = new WorkboardStore(diagnosticsStores.cards);
+      const diagnosticsStore = new WorkboardStore(diagnosticsStores.cards);
+      const card = await setupStore.create({
+        title: "Diagnose before update",
+        status: "ready",
+        agentId: "main",
+      });
+      const originalReservedRegister =
+        updateStores.cards.registerWithPrimarySessionReservation?.bind(updateStores.cards);
+      if (!originalReservedRegister) {
+        throw new Error("expected SQLite registration reservation support");
+      }
+      let markWriteStarted!: () => void;
+      let releaseWrite!: () => void;
+      const writeStarted = new Promise<void>((resolve) => {
+        markWriteStarted = resolve;
+      });
+      const writeReleased = new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+      updateStores.cards.registerWithPrimarySessionReservation = async (key, value, expected) => {
+        markWriteStarted();
+        await writeReleased;
+        await originalReservedRegister(key, value, expected);
+      };
+      const updateStore = new WorkboardStore(updateStores.cards);
+
+      const updating = updateStore.update(card.id, { title: "Prepared stale update" });
+      await writeStarted;
+      let refreshed: Awaited<ReturnType<WorkboardStore["refreshDiagnostics"]>>;
+      try {
+        refreshed = await diagnosticsStore.refreshDiagnostics(Date.now() + 2 * 24 * 60 * 60 * 1000);
+      } finally {
+        releaseWrite();
+      }
+
+      expect(refreshed.count).toBeGreaterThan(0);
+      await expect(updating).rejects.toThrow("changed before persistence");
+      const persisted = await diagnosticsStore.get(card.id);
+      expect(persisted?.title).toBe(card.title);
+      expect(persisted?.updatedAt).toBeGreaterThan(card.updatedAt);
+      expect(persisted?.metadata?.diagnostics).toEqual(
+        expect.arrayContaining([expect.objectContaining({ kind: "stranded_ready" })]),
+      );
+    } finally {
+      updateStores.close();
+      diagnosticsStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("reserves normalized execution-only session bindings and ignores terminal cards", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const sessionKey = "agent:main:execution-only";
@@ -2685,8 +2744,9 @@ describe("WorkboardStore", () => {
 
       expect(createdRunningTimed.startedAt).toBe(1_000);
       expect(result.count).toBe(4);
-      await expect(store.get(ready.id)).resolves.toMatchObject({
-        updatedAt: readyUpdatedAt,
+      const dispatchedReady = await store.get(ready.id);
+      expect(dispatchedReady?.updatedAt).toBeGreaterThan(readyUpdatedAt);
+      expect(dispatchedReady).toMatchObject({
         metadata: { automation: { dispatchCount: 1, lastDispatchAt: 600_000 } },
         events: expect.arrayContaining([expect.objectContaining({ kind: "dispatch" })]),
       });
@@ -3029,8 +3089,9 @@ describe("WorkboardStore", () => {
     const diagnostics = await store.refreshDiagnostics(now);
 
     expect(diagnostics.count).toBeGreaterThanOrEqual(4);
-    await expect(store.get(ready.id)).resolves.toMatchObject({ updatedAt: ready.updatedAt });
-    await expect(store.get(ready.id)).resolves.toMatchObject({
+    const refreshedReady = await store.get(ready.id);
+    expect(refreshedReady?.updatedAt).toBeGreaterThan(ready.updatedAt);
+    expect(refreshedReady).toMatchObject({
       metadata: { diagnostics: [expect.objectContaining({ kind: "stranded_ready" })] },
     });
     await expect(store.get(running.id)).resolves.toMatchObject({
