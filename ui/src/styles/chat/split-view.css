@@ -225,8 +225,6 @@ openclaw-chat-pane {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  /* Inter's visible ink sits 0.8px above its line-box center at this size. */
-  transform: translateY(1px);
 }
 
 .chat-pane__session-title-input {
@@ -462,14 +460,6 @@ openclaw-chat-pane {
   background: color-mix(in srgb, var(--text) 7%, transparent);
   color: var(--text);
   outline: none;
-}
-
-/* Same optical correction as .chat-pane__session-title-text: both trail labels
-   are Inter at 12px, so they must take the same shift or the project would sit
-   a pixel above the session title it sits beside. */
-.chat-pane__workspace-chip span,
-.chat-pane__crumb-sep {
-  transform: translateY(1px);
 }
 
 .chat-pane__workspace-chip span {
