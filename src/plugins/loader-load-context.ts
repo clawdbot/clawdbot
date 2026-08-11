@@ -237,6 +237,28 @@ function buildActivationMetadataHash(params: {
       webSearchConfig?.enabled !== false && typeof webSearchConfig?.provider === "string"
         ? webSearchConfig.provider
         : "",
+    webFetchProvider:
+      typeof capabilityConfig.tools?.web?.fetch?.provider === "string"
+        ? capabilityConfig.tools.web.fetch.provider
+        : "",
+    // Plugin-owned capability candidates key off entry-config KEYS (`webSearch`, `webFetch`,
+    // declared tool schema keys) — materiality alone cannot distinguish two material entries
+    // whose key sets differ, so the key sets themselves join the fingerprint.
+    entryConfigKeys: Object.entries(
+      (capabilityConfig.plugins?.entries as Record<string, unknown> | undefined) ?? {},
+    )
+      .map(([pluginId, entry]) => {
+        const entryConfig =
+          entry && typeof entry === "object" && !Array.isArray(entry)
+            ? (entry as { config?: unknown }).config
+            : undefined;
+        const keys =
+          entryConfig && typeof entryConfig === "object" && !Array.isArray(entryConfig)
+            ? sortStrings(Object.keys(entryConfig))
+            : [];
+        return [pluginId, keys] as const;
+      })
+      .toSorted(([left], [right]) => left.localeCompare(right)),
   };
 
   return createHash("sha256")

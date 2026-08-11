@@ -29,7 +29,11 @@ import {
 import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
-import { getRuntimeAmbientEnvTriggers } from "./runtime-snapshot.js";
+import {
+  getRuntimeAmbientEnvTriggers,
+  getRuntimeConfigSourceSnapshot,
+  hashRuntimeConfigValue,
+} from "./runtime-snapshot.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import {
   bundledChannelIds,
@@ -311,6 +315,22 @@ function validateConfigObjectWithPluginsBase(
     return info.normalizedPlugins;
   };
 
+  const activationSurfaceHash = (cfg: OpenClawConfig): string =>
+    hashRuntimeConfigValue({
+      channels: cfg.channels,
+      plugins: cfg.plugins,
+      auth: cfg.auth,
+      tools: cfg.tools,
+      models: cfg.models,
+    } as OpenClawConfig);
+  const validatesActiveRegistryConfig = (): boolean => {
+    const sourceSnapshot = getRuntimeConfigSourceSnapshot();
+    if (!sourceSnapshot || !isRecord(raw)) {
+      return false;
+    }
+    return activationSurfaceHash(raw as OpenClawConfig) === activationSurfaceHash(sourceSnapshot);
+  };
+
   const buildChannelSchemas = (
     planConfig: OpenClawConfig,
   ): Map<string, { schema?: Record<string, unknown>; pluginId?: string }> => {
@@ -321,11 +341,16 @@ function validateConfigObjectWithPluginsBase(
       ),
     );
     const ambientEnvTriggers = getRuntimeAmbientEnvTriggers();
-    // Landed channel registrations outrank prediction: after a planned replacement fails and
-    // the suppressed incumbent is restored, validation must rank schemas by the plugin that
-    // actually serves the channel. Outside a gateway process no registry is active and the
-    // projection stays predictive.
-    const runtimeChannelOwners = resolveActiveRuntimeChannelOwners();
+    // Landed channel registrations outrank prediction ONLY for the config that produced the
+    // active registry: a prospective mutation (config.set/patch selecting a replacement) must
+    // validate against ITS OWN auto-enable plan, or the old runtime owner's schema vetoes the
+    // very change that replaces it. The gate is activation-surface equality between the raw
+    // candidate and the published authored source — edits outside that surface keep landed
+    // ownership for the running system; outside a gateway process both facts are absent and
+    // the projection stays predictive.
+    const runtimeChannelOwners = validatesActiveRegistryConfig()
+      ? resolveActiveRuntimeChannelOwners()
+      : undefined;
     for (const entry of collectChannelSchemaMetadataWithOwnership(
       info.registry,
       planConfig,

@@ -1,9 +1,18 @@
 // Channel schema OWNERSHIP contracts in config validation: canonical channel identity for
 // authored variant spellings, and ownership planning from the defaulted config the gateway's
 // auto-enable pass actually consumes.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "./runtime-snapshot.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
+
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
+  clearRuntimeConfigSnapshot();
+});
 
 const mockLoadPluginManifestRegistry = vi.hoisted(() =>
   vi.fn(
@@ -147,5 +156,74 @@ describe("channel schema ownership follows the defaulted config", () => {
     if (!result.ok) {
       expect(result.issues.some((issue) => issue.path.startsWith("channels.bchb"))).toBe(true);
     }
+  });
+});
+
+// #120332 round 49 (P1): landed ownership applies only to the config that produced the active
+// registry. A prospective mutation selecting the replacement must validate against ITS OWN
+// auto-enable plan — the old runtime owner's schema would veto the very change that replaces
+// it — while re-validating the running config keeps the landed owner.
+describe("landed ownership gates on the validated config", () => {
+  const strictSchema = (property: string) => ({
+    type: "object",
+    properties: { [property]: { type: "string" } },
+    additionalProperties: false,
+  });
+  const setupClaimants = () => {
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        createPluginManifestRecord({
+          id: "acme-inc",
+          origin: "global",
+          enabledByDefault: true,
+          channels: ["acmech"],
+          channelConfigs: { acmech: { schema: strictSchema("incOpt") } },
+        }),
+        createPluginManifestRecord({
+          id: "acme-rep",
+          origin: "global",
+          enabledByDefault: true,
+          channels: ["acmech"],
+          channelConfigs: {
+            acmech: { schema: strictSchema("repOpt"), preferOver: ["acme-inc"] },
+          },
+        }),
+      ],
+    });
+    const activeRegistry = createEmptyPluginRegistry();
+    activeRegistry.channels.push({
+      pluginId: "acme-inc",
+      plugin: { id: "acmech" },
+    } as (typeof activeRegistry.channels)[number]);
+    setActivePluginRegistry(activeRegistry, "landed-owner-validation");
+  };
+
+  it("validates a prospective replacement selection predictively", () => {
+    setupClaimants();
+    const runningConfig: OpenClawConfig = { channels: { acmech: { incOpt: "x" } } };
+    setRuntimeConfigSnapshot(runningConfig, runningConfig);
+
+    // The candidate differs on the activation surface: its own plan selects the replacement,
+    // so the replacement-only key must validate even though the incumbent still serves.
+    const result = validateConfigObjectWithPlugins({
+      channels: { acmech: { repOpt: "x" } },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("keeps the landed owner when re-validating the running config", () => {
+    setupClaimants();
+    const runningConfig: OpenClawConfig = { channels: { acmech: { incOpt: "x" } } };
+    setRuntimeConfigSnapshot(runningConfig, runningConfig);
+
+    // Same activation surface as the published source: prediction would select the
+    // replacement and reject the serving plugin's key — landed ownership keeps it valid.
+    const result = validateConfigObjectWithPlugins({
+      channels: { acmech: { incOpt: "x" } },
+    });
+
+    expect(result.ok).toBe(true);
   });
 });

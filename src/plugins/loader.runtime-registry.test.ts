@@ -113,6 +113,13 @@ describe("resolvePluginLoadCacheContext", () => {
       keyOf({ models: { providers: { "acme-prov": { baseUrl: "http://x", models: [] } } } }),
     ).not.toBe(baseKey);
     expect(keyOf({ tools: { web: { search: { provider: "acme-search" } } } })).not.toBe(baseKey);
+    // #120332 round 49 (P2): the web-FETCH selection and plugin-owned entry-config key sets are
+    // candidate inputs too — two equally MATERIAL entries whose config keys differ must not
+    // share a cached registry.
+    expect(keyOf({ tools: { web: { fetch: { provider: "acme-fetch" } } } })).not.toBe(baseKey);
+    expect(keyOf({ plugins: { entries: { "acme-tool": { config: { webFetch: {} } } } } })).not.toBe(
+      keyOf({ plugins: { entries: { "acme-tool": { config: { other: {} } } } } }),
+    );
   });
 
   it("partitions full and setup channel plugin load intent", () => {
