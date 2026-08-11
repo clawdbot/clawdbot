@@ -20,7 +20,6 @@
 
 .chat-text {
   font-size: var(--chat-text-size);
-  letter-spacing: 0;
   line-height: 1.5;
   color: var(--chat-text);
   overflow-wrap: anywhere;

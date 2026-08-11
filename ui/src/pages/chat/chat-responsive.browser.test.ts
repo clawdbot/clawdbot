@@ -3299,7 +3299,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("matches the reading prototype's transcript letter spacing", async () => {
+  it("matches the reading prototype's transcript letter spacing without changing shared text", async () => {
     const page = await openBrowserPage(1366, 900);
     try {
       await page.setContent(`<!doctype html><html data-theme-mode="dark"><head><style>${readUiCss()}</style></head><body>
@@ -3317,12 +3317,22 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             </div>
           </div>
         </div>
+        <div class="chat-notice"><div class="chat-text chat-notice__body">Compact notice</div></div>
+        <div class="cron-run-entry__body chat-text">Cron output</div>
       </body></html>`);
 
-      const letterSpacing = await page
-        .locator(".chat-text")
+      const transcriptLetterSpacing = await page
+        .locator(".chat-bubble .chat-text")
         .evaluate((element) => getComputedStyle(element).letterSpacing);
-      expect(letterSpacing).toBe("normal");
+      const noticeLetterSpacing = await page
+        .locator(".chat-notice .chat-text")
+        .evaluate((element) => getComputedStyle(element).letterSpacing);
+      const cronLetterSpacing = await page
+        .locator(".cron-run-entry__body.chat-text")
+        .evaluate((element) => getComputedStyle(element).letterSpacing);
+      expect(transcriptLetterSpacing).toBe("normal");
+      expect(noticeLetterSpacing).toBe("-0.12px");
+      expect(cronLetterSpacing).toBe("-0.14px");
     } finally {
       await closeBrowserPage(page);
     }
