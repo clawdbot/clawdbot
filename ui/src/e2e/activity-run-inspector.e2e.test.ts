@@ -301,8 +301,8 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
       await expect.poll(() => page.locator(".activity-entry").count()).toBe(40);
       const layout = await page.locator("#activity-mode-panel").evaluate((modePanel) => {
         const livePanel = modePanel.querySelector<HTMLElement>("#activity-live-panel");
-        const stream = modePanel.querySelector<HTMLElement>(".activity-stream");
-        if (!livePanel || !stream) {
+        const streamElement = modePanel.querySelector<HTMLElement>(".activity-stream");
+        if (!livePanel || !streamElement) {
           throw new Error("Live Activity layout is incomplete");
         }
         const modeStyle = getComputedStyle(modePanel);
@@ -314,9 +314,9 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
           liveFlexGrow: liveStyle.flexGrow,
           modeDisplay: modeStyle.display,
           modeFlexGrow: modeStyle.flexGrow,
-          streamBottom: stream.getBoundingClientRect().bottom,
-          streamClientHeight: stream.clientHeight,
-          streamScrollHeight: stream.scrollHeight,
+          streamBottom: streamElement.getBoundingClientRect().bottom,
+          streamClientHeight: streamElement.clientHeight,
+          streamScrollHeight: streamElement.scrollHeight,
           viewportHeight: window.innerHeight,
           workspaceBottom: workspace?.getBoundingClientRect().bottom ?? 0,
         };
@@ -344,8 +344,8 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
       await page.setViewportSize({ height: 900, width: 720 });
       const mobileLayout = await page.locator("main.content").evaluate((content) => {
         const outlet = content.querySelector("openclaw-router-outlet");
-        const stream = content.querySelector<HTMLElement>(".activity-stream");
-        if (!outlet || !stream) {
+        const streamElement = content.querySelector<HTMLElement>(".activity-stream");
+        if (!outlet || !streamElement) {
           throw new Error("Mobile Live Activity layout is incomplete");
         }
         return {
