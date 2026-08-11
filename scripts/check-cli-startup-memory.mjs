@@ -2,12 +2,27 @@
 
 // Measures CLI startup memory with an isolated home and RSS hook.
 import { spawnSync as defaultSpawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+// Fork note: launcher filename follows package.json "bin" (opencrustacean.mjs)
+// instead of the upstream hardcoded "openclaw.mjs".
+const LAUNCHER_ENTRY = (() => {
+  try {
+    const parsed = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+    const binValue = parsed?.bin?.[parsed?.name];
+    if (typeof binValue === "string" && binValue.length > 0) {
+      return binValue;
+    }
+  } catch {
+    // fall through to the default
+  }
+  return "opencrustacean.mjs";
+})();
 const tmpDir = process.env.TMPDIR || process.env.TEMP || process.env.TMP || os.tmpdir();
 const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
 const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
@@ -112,13 +127,13 @@ const cases = [
   {
     id: "help",
     label: "--help",
-    args: ["openclaw.mjs", "--help"],
+    args: [LAUNCHER_ENTRY, "--help"],
     limitMb: readPositiveNumberEnv("OPENCLAW_STARTUP_MEMORY_HELP_MB", DEFAULT_LIMITS_MB.help),
   },
   {
     id: "pluginsList",
     label: "plugins list --json",
-    args: ["openclaw.mjs", "plugins", "list", "--json"],
+    args: [LAUNCHER_ENTRY, "plugins", "list", "--json"],
     limitMb: readPositiveNumberEnv(
       "OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB",
       DEFAULT_LIMITS_MB.pluginsList,
@@ -127,7 +142,7 @@ const cases = [
   {
     id: "statusJson",
     label: "status --json",
-    args: ["openclaw.mjs", "status", "--json"],
+    args: [LAUNCHER_ENTRY, "status", "--json"],
     limitMb: readPositiveNumberEnv(
       "OPENCLAW_STARTUP_MEMORY_STATUS_JSON_MB",
       DEFAULT_LIMITS_MB.statusJson,
@@ -136,7 +151,7 @@ const cases = [
   {
     id: "gatewayStatus",
     label: "gateway status",
-    args: ["openclaw.mjs", "gateway", "status"],
+    args: [LAUNCHER_ENTRY, "gateway", "status"],
     limitMb: readPositiveNumberEnv(
       "OPENCLAW_STARTUP_MEMORY_GATEWAY_STATUS_MB",
       DEFAULT_LIMITS_MB.gatewayStatus,

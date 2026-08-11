@@ -35,6 +35,21 @@ function dedupe(values: string[]): string[] {
 const scriptPath = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(scriptPath);
 const rootDir = path.resolve(scriptDir, "..");
+
+// Fork note: launcher filename follows package.json "bin" (opencrustacean.mjs)
+// instead of the upstream hardcoded "openclaw.mjs".
+function resolveLauncherEntry(): string {
+  try {
+    const parsed = JSON.parse(readFileSync(path.join(rootDir, "package.json"), "utf8"));
+    const binValue = parsed?.bin?.[parsed?.name];
+    if (typeof binValue === "string" && binValue.length > 0) {
+      return binValue;
+    }
+  } catch {
+    // fall through to the default
+  }
+  return "opencrustacean.mjs";
+}
 const distDir = path.join(rootDir, "dist");
 const outputPath = path.join(distDir, "cli-startup-metadata.json");
 const extensionsDir = path.join(rootDir, "extensions");
@@ -721,7 +736,7 @@ async function renderSourceCommandHelpText(
   command: SourceCommandHelpCommand,
   renderContext: RootHelpRenderContext,
 ): Promise<string> {
-  return await spawnText(["openclaw.mjs", command, "--help"], {
+  return await spawnText([resolveLauncherEntry(), command, "--help"], {
     cwd: rootDir,
     env: {
       ...renderContext.env,

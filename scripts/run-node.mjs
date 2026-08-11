@@ -1015,15 +1015,34 @@ const getInterruptedSpawnExitCode = (res) => {
   return null;
 };
 
+// Fork note: launcher filename follows package.json "bin" (opencrustacean.mjs)
+// instead of the upstream hardcoded "openclaw.mjs".
+const resolveRunNodeLauncherEntry = (deps) => {
+  try {
+    const parsed = JSON.parse(deps.fs.readFileSync(path.join(deps.cwd, "package.json"), "utf8"));
+    const binValue = parsed?.bin?.[parsed?.name];
+    if (typeof binValue === "string" && binValue.length > 0) {
+      return binValue;
+    }
+  } catch {
+    // fall through to the default
+  }
+  return "opencrustacean.mjs";
+};
+
 const runOpenClaw = async (deps) => {
   const diagnosticArgs = resolveRunNodeDiagnosticArgs(deps);
   const useProcessGroup = shouldUseRunNodeChildProcessGroup(deps);
-  const nodeProcess = deps.spawn(deps.execPath, [...diagnosticArgs, "openclaw.mjs", ...deps.args], {
-    cwd: deps.cwd,
-    detached: useProcessGroup,
-    env: deps.env,
-    stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
-  });
+  const nodeProcess = deps.spawn(
+    deps.execPath,
+    [...diagnosticArgs, resolveRunNodeLauncherEntry(deps), ...deps.args],
+    {
+      cwd: deps.cwd,
+      detached: useProcessGroup,
+      env: deps.env,
+      stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
+    },
+  );
   pipeSpawnedOutput(nodeProcess, deps);
   const res = await waitForSpawnedProcess(nodeProcess, deps);
   const interruptedExitCode = getInterruptedSpawnExitCode(res);
