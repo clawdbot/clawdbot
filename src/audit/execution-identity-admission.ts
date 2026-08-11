@@ -25,6 +25,25 @@ const evidenceState = () =>
 const closedObject = <T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
   Type.Object(properties, { additionalProperties: false });
 
+const ExecutionIdentityAdmissionInvokerSchema = Type.Union([
+  closedObject({
+    state: Type.Literal("present"),
+    kind: Type.Union([
+      Type.Literal("person"),
+      Type.Literal("agent"),
+      Type.Literal("service"),
+      Type.Literal("schedule"),
+      Type.Literal("webhook"),
+      Type.Literal("system"),
+      Type.Literal("local-account"),
+      Type.Literal("runtime"),
+    ]),
+    rawPrincipalRef: rawRef(),
+    displayLabel: Type.Optional(Type.String({ maxLength: 128 })),
+  }),
+  closedObject({ state: Type.Literal("unknown") }),
+]);
+
 const ExecutionIdentityAdmissionEnvelopeSchema = closedObject({
   envelopeVersion: Type.Literal(1),
   contextId: boundedRef(),
@@ -62,26 +81,7 @@ const ExecutionIdentityAdmissionEnvelopeSchema = closedObject({
       Type.Literal("acp"),
     ]),
   }),
-  invoker: Type.Optional(
-    Type.Union([
-      closedObject({
-        state: Type.Literal("present"),
-        kind: Type.Union([
-          Type.Literal("person"),
-          Type.Literal("agent"),
-          Type.Literal("service"),
-          Type.Literal("schedule"),
-          Type.Literal("webhook"),
-          Type.Literal("system"),
-          Type.Literal("local-account"),
-          Type.Literal("runtime"),
-        ]),
-        rawPrincipalRef: rawRef(),
-        displayLabel: Type.Optional(Type.String({ maxLength: 128 })),
-      }),
-      closedObject({ state: Type.Literal("unknown") }),
-    ]),
-  ),
+  invoker: Type.Optional(ExecutionIdentityAdmissionInvokerSchema),
   applicableGrants: Type.Array(closedObject({ rawGrantRef: rawRef(), state: evidenceState() }), {
     maxItems: EXECUTION_IDENTITY_ADMISSION_MAX_ITEMS,
   }),
@@ -220,6 +220,12 @@ function validateEnvelope(value: unknown): asserts value is ExecutionIdentityAdm
   const encoded = JSON.stringify(value);
   if (Buffer.byteLength(encoded, "utf8") > EXECUTION_IDENTITY_ADMISSION_MAX_BYTES) {
     throw new Error("execution identity admission envelope exceeds 16 KiB");
+  }
+}
+
+function validateRawInvoker(value: unknown): void {
+  if (value !== undefined && !Value.Check(ExecutionIdentityAdmissionInvokerSchema, value)) {
+    throw new Error("execution identity admission invoker violates its bounded contract");
   }
 }
 
@@ -419,6 +425,7 @@ export function enqueueExecutionIdentityContextAtAdmission(
   }
   try {
     assertPlainCloneData(facts);
+    validateRawInvoker(facts.invoker);
     const token =
       options.token ??
       createExecutionIdentityAdmissionToken(facts.runId, {

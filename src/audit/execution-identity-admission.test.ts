@@ -191,6 +191,38 @@ describe("execution identity admission envelope", () => {
     ).toThrow("execution identity admission envelope is not canonical");
   });
 
+  it.each([
+    ["malformed", { state: "invalid" }],
+    ["mixed", { state: "unknown", rawPrincipalRef: "raw-substitute-secret" }],
+    ["untagged", { kind: "local-account", rawPrincipalRef: "legacy-untagged" }],
+    [
+      "extra-field",
+      {
+        state: "present",
+        kind: "local-account",
+        rawPrincipalRef: "raw-principal",
+        extra: true,
+      },
+    ],
+  ])("rejects %s raw invoker facts before enqueue projection", (_variant, invoker) => {
+    const sink = vi.fn(() => true);
+    const clear = configureExecutionIdentityAdmissionSink(sink);
+    try {
+      expect(
+        enqueueExecutionIdentityContextAtAdmission(facts({ invoker: invoker as never }), {
+          enabled: true,
+          contextId: "context-invalid",
+          executionId: "execution-invalid",
+          now: 1,
+          runtimeInstanceId: "runtime-1",
+        }),
+      ).toBeUndefined();
+      expect(sink).not.toHaveBeenCalled();
+    } finally {
+      clear();
+    }
+  });
+
   it("rejects non-plain or lossy clone data without invoking accessors", () => {
     const envelope = captureEnvelope(facts({ invoker: { state: "unknown" } }), {
       contextId: "context-unknown",
