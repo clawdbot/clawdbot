@@ -134,8 +134,10 @@ describe("handleEmbeddedAssistantFailure", () => {
       reason === "billing" ? "billing" : null,
     );
     providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockImplementation(
-      ({ provider, context }) =>
-        provider === "openrouter" && context.errorMessage === errorMessage ? "billing" : undefined,
+      ({ provider: classifiedProvider, context }) =>
+        classifiedProvider === "openrouter" && context.errorMessage === errorMessage
+          ? "billing"
+          : undefined,
     );
 
     const outcome = await handleEmbeddedAssistantFailure(fixture.input);
