@@ -90,6 +90,9 @@ export async function buildDiscordMessageProcessContext(params: {
     isDirectMessage,
     baseText,
     preflightAudioTranscript,
+    batchMessageIds,
+    batchMessageIdFirst,
+    batchMessageIdLast,
     threadChannel,
     threadParentId,
     threadParentName,
@@ -509,6 +512,11 @@ export async function buildDiscordMessageProcessContext(params: {
     logVerbose(
       `discord inbound: channel=${messageChannelId} deliver=${deliverTarget} from=${ctxPayload.From} preview="${preview}"`,
     );
+  }
+  if (batchMessageIds && batchMessageIds.length > 1) {
+    ctxPayload.MessageSids = batchMessageIds;
+    ctxPayload.MessageSidFirst = batchMessageIdFirst ?? batchMessageIds[0];
+    ctxPayload.MessageSidLast = batchMessageIdLast ?? batchMessageIds.at(-1);
   }
 
   return {

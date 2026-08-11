@@ -52,22 +52,22 @@ async function flushQueueWork(): Promise<void> {
   }
 }
 
-function createMessageData(messageId: string, channelId = "ch-1") {
+function createMessageData(messageId: string, channelId = "ch-1", content = "hello") {
   return {
     channel_id: channelId,
     author: { id: "user-1" },
     message: {
       id: messageId,
       author: { id: "user-1", bot: false },
-      content: "hello",
+      content,
       channel_id: channelId,
       attachments: [{ id: `att-${messageId}` }],
     },
   };
 }
 
-function createTextMessageData(messageId: string, channelId = "ch-1") {
-  const data = createMessageData(messageId, channelId);
+function createTextMessageData(messageId: string, channelId = "ch-1", content = "hello") {
+  const data = createMessageData(messageId, channelId, content);
   data.message.attachments = [];
   return data;
 }
@@ -431,6 +431,171 @@ describe("createDiscordMessageHandler queue behavior", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("coalesces same-session messages queued behind an active run into one next turn", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+
+    const firstRun = createDeferred();
+    const processedTexts: string[] = [];
+    const processedIds: Array<string[] | undefined> = [];
+    processDiscordMessageMock.mockImplementation(async (ctx: never) => {
+      const typed = ctx as {
+        messageText?: string;
+        batchMessageIds?: string[];
+      };
+      processedTexts.push(typed.messageText ?? "");
+      processedIds.push(typed.batchMessageIds);
+      if (processedTexts.length === 1) {
+        await firstRun.promise;
+      }
+    });
+    preflightDiscordMessageMock.mockImplementation(
+      async (params: { data: { channel_id: string; message?: { content?: string } } }) =>
+        ({
+          ...createPreflightContext(params.data.channel_id),
+          data: params.data,
+          message: params.data.message,
+          messageText: params.data.message?.content ?? "",
+        }) as never,
+    );
+    const handler = createDiscordMessageHandler(createDiscordHandlerParams());
+
+    await expect(
+      handler(createTextMessageData("m-1", "ch-1", "start long task") as never, {} as never),
+    ).resolves.toBeUndefined();
+    await flushQueueWork();
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+
+    await expect(
+      handler(createTextMessageData("m-2", "ch-1", "also check staging") as never, {} as never),
+    ).resolves.toBeUndefined();
+    await expect(
+      handler(createTextMessageData("m-3", "ch-1", "and use k-dev too") as never, {} as never),
+    ).resolves.toBeUndefined();
+    await flushQueueWork();
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+
+    firstRun.resolve();
+    await firstRun.promise;
+    await flushQueueWork();
+
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
+    expect(processedTexts[1]).toContain("also check staging");
+    expect(processedTexts[1]).toContain("and use k-dev too");
+    expect(processedIds[1]).toEqual(["m-2", "m-3"]);
+  });
+
+  it("keeps queued audio transcripts inside the combined text", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+
+    const firstRun = createDeferred();
+    const processed: Array<{ text: string; transcript?: string }> = [];
+    processDiscordMessageMock.mockImplementation(async (ctx: never) => {
+      const typed = ctx as {
+        messageText?: string;
+        preflightAudioTranscript?: string;
+      };
+      processed.push({
+        text: typed.messageText ?? "",
+        transcript: typed.preflightAudioTranscript,
+      });
+      if (processed.length === 1) {
+        await firstRun.promise;
+      }
+    });
+    preflightDiscordMessageMock.mockImplementation(
+      async (params: {
+        data: { channel_id: string; message?: { content?: string; id?: string } };
+      }) =>
+        ({
+          ...createPreflightContext(params.data.channel_id),
+          data: params.data,
+          message: params.data.message,
+          messageText: params.data.message?.content ?? "",
+          preflightAudioTranscript:
+            params.data.message?.id === "m-3" ? "spoken third request" : undefined,
+        }) as never,
+    );
+    const handler = createDiscordMessageHandler(createDiscordHandlerParams());
+
+    await expect(
+      handler(createTextMessageData("m-1", "ch-1", "start long task") as never, {} as never),
+    ).resolves.toBeUndefined();
+    await flushQueueWork();
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+
+    await expect(
+      handler(createTextMessageData("m-2", "ch-1", "typed second request") as never, {} as never),
+    ).resolves.toBeUndefined();
+    await expect(
+      handler(createTextMessageData("m-3", "ch-1", "") as never, {} as never),
+    ).resolves.toBeUndefined();
+
+    firstRun.resolve();
+    await firstRun.promise;
+    await flushQueueWork();
+
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
+    expect(processed[1]?.text).toContain("typed second request");
+    expect(processed[1]?.text).toContain("spoken third request");
+    expect(processed[1]?.transcript).toBeUndefined();
+  });
+
+  it("splits queued batches when sender identity changes", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+
+    const firstRun = createDeferred();
+    const processedTexts: string[] = [];
+    processDiscordMessageMock.mockImplementation(async (ctx: never) => {
+      const typed = ctx as { messageText?: string };
+      processedTexts.push(typed.messageText ?? "");
+      if (processedTexts.length === 1) {
+        await firstRun.promise;
+      }
+    });
+    preflightDiscordMessageMock.mockImplementation(
+      async (params: {
+        data: { channel_id: string; author?: { id?: string }; message?: { content?: string } };
+      }) => {
+        const authorId = params.data.author?.id ?? "user-1";
+        return {
+          ...createPreflightContext(params.data.channel_id),
+          data: params.data,
+          author: { id: authorId, username: authorId, bot: false },
+          sender: { id: authorId, label: authorId, name: authorId, isPluralKit: false },
+          message: params.data.message,
+          messageText: params.data.message?.content ?? "",
+        } as never;
+      },
+    );
+    const handler = createDiscordMessageHandler(createDiscordHandlerParams());
+
+    await expect(
+      handler(createTextMessageData("m-1", "ch-1", "start long task") as never, {} as never),
+    ).resolves.toBeUndefined();
+    await flushQueueWork();
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+
+    await expect(
+      handler(createTextMessageData("m-2", "ch-1", "from user one") as never, {} as never),
+    ).resolves.toBeUndefined();
+    const otherUser = createTextMessageData("m-3", "ch-1", "from user two");
+    otherUser.author.id = "user-2";
+    otherUser.message.author.id = "user-2";
+    await expect(handler(otherUser as never, {} as never)).resolves.toBeUndefined();
+
+    firstRun.resolve();
+    await firstRun.promise;
+    await flushQueueWork();
+
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(3);
+    expect(processedTexts[1]).toContain("from user one");
+    expect(processedTexts[1]).not.toContain("from user two");
+    expect(processedTexts[2]).toContain("from user two");
   });
 
   it("refreshes run activity while active runs are in progress", async () => {

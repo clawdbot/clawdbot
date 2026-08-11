@@ -221,14 +221,9 @@ export function createDiscordMessageDispatcher(
             applyImplicitReplyBatchGate(ctx, params.replyToMode, true);
             const ids = entries.map((entry) => entry.data.message?.id).filter(isNonEmptyString);
             if (ids.length > 0) {
-              const ctxBatch = ctx as typeof ctx & {
-                MessageSids?: string[];
-                MessageSidFirst?: string;
-                MessageSidLast?: string;
-              };
-              ctxBatch.MessageSids = ids;
-              ctxBatch.MessageSidFirst = ids[0];
-              ctxBatch.MessageSidLast = ids[ids.length - 1];
+              ctx.batchMessageIds = ids;
+              ctx.batchMessageIdFirst = ids[0];
+              ctx.batchMessageIdLast = ids[ids.length - 1];
             }
             messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { ingressSettlement: ingress }));
           } catch (error) {
