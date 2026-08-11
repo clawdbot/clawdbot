@@ -793,9 +793,7 @@ describe("spawnSubagentDirect filename validation", () => {
 
     expect(result).toMatchObject({ status: "error", error: "state database unavailable" });
     expect(mutations).toEqual([]);
-    expect(callGatewayMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({ method: "agent" }),
-    );
+    expect(callGatewayMock).not.toHaveBeenCalledWith(expect.objectContaining({ method: "agent" }));
   });
 
   it("retains the provisional owner when partial-write cleanup fails", async () => {

@@ -1,8 +1,6 @@
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
-import {
-  runWithGatewayIndependentRootWorkAdmission,
-} from "../../../process/gateway-work-admission.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { recordSubagentTerminalState } from "../../../sessions/session-state-events.js";
@@ -83,10 +81,7 @@ export function scheduleResumeSubagentRun(
     }).catch((err: unknown) => {
       defaultRuntime.log(`[warn] subagent cleanup resume failed (${runId}): ${String(err)}`);
       const current = params.runs.get(runId);
-      if (
-        current === entry &&
-        typeof current.cleanupCompletedAt !== "number"
-      ) {
+      if (current === entry && typeof current.cleanupCompletedAt !== "number") {
         scheduleResumeSubagentRun(
           context,
           runId,

@@ -128,7 +128,7 @@ function createHarness(runtime: { current?: GatewayRecoveryRuntime }) {
     shouldEmitEndedHookForRun: vi.fn(() => false),
     emitSubagentEndedHookForRun,
     callGateway,
-    cleanupCollectorLaunchResources: vi.fn(async () => true),
+    cleanupFailedLaunchResources: vi.fn(async () => true),
     runContextEngineSubagentEnded: vi.fn(),
     notifyContextEngineSubagentEnded,
     retireSupersededRun: vi.fn(),

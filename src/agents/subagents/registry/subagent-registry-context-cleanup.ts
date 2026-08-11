@@ -76,13 +76,14 @@ export function createSubagentRegistryContextCleanup(config: {
     );
   }
 
-  async function cleanupCollectorLaunchResources(
+  async function cleanupFailedLaunchResources(
     entry: SubagentRunRecord,
-    options?: { isCurrent?: () => boolean },
+    options?: { isCurrent?: () => boolean; includeSessionEffects?: boolean },
   ): Promise<boolean> {
     const isCurrent = () => options?.isCurrent?.() !== false;
+    const includeSessionEffects = options?.includeSessionEffects !== false;
     let internalEffectsRemoved = true;
-    if (isCurrent()) {
+    if (includeSessionEffects && isCurrent()) {
       try {
         await removeInternalSessionEffectsSession(entry.execution.transcriptTarget);
       } catch (err) {
@@ -94,7 +95,8 @@ export function createSubagentRegistryContextCleanup(config: {
         });
       }
     }
-    const contextAlreadyEnded = typeof entry.contextEngineCleanupCompletedAt === "number";
+    const contextAlreadyEnded =
+      !includeSessionEffects || typeof entry.contextEngineCleanupCompletedAt === "number";
     const attachmentsRemoved = await safeRemoveAttachmentsDir(entry);
     if (!isCurrent()) {
       return false;
@@ -173,7 +175,7 @@ export function createSubagentRegistryContextCleanup(config: {
   return {
     runContextEngineSubagentEnded,
     notifyContextEngineSubagentEnded,
-    cleanupCollectorLaunchResources,
+    cleanupFailedLaunchResources,
     suppressAnnounceForSteerRestart: (entry?: SubagentRunRecord) =>
       entry?.suppressAnnounceReason === "steer-restart",
     shouldEmitEndedHookForRun,

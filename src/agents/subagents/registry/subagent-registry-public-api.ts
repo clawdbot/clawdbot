@@ -96,12 +96,12 @@ export function createSubagentRegistryPublicApi(config: {
     };
   }
 
-  function completeCollectorLaunchCleanup(runId: string): void {
+  function completeFailedLaunchCleanup(runId: string): void {
     const entry = findRunById(runs, runId.trim());
-    if (!entry?.collectorLaunchCleanupPending) {
+    if (!entry?.launchCleanupPending) {
       return;
     }
-    entry.collectorLaunchCleanupPending = false;
+    entry.launchCleanupPending = undefined;
     entry.cleanupCompletedAt = Date.now();
     entry.contextEngineCleanupCompletedAt ??= entry.cleanupCompletedAt;
     persist(entry.runId);
@@ -194,7 +194,7 @@ export function createSubagentRegistryPublicApi(config: {
     releasePendingAgentSteeringItems,
     getSubagentRunByRunId,
     getSubagentRunsByRunIds,
-    completeCollectorLaunchCleanup,
+    completeFailedLaunchCleanup,
     recordSwarmStructuredOutput,
     listSwarmRunsForGroup,
     getSwarmRunByLaunchReplayKey,

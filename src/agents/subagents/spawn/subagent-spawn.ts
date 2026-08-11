@@ -325,8 +325,7 @@ export async function spawnSubagentDirect(
         attachmentSandboxFsBridge =
           getSubagentSpawnDeps().createSandboxWorkspaceIngressFsBridge(childSandbox);
         attachmentWorkspaceDir = childSandbox.workspaceDir ?? attachmentWorkspaceDir;
-        attachmentSandboxWorkspaceDir =
-          childSandbox.agentWorkspaceDir ?? attachmentWorkspaceDir;
+        attachmentSandboxWorkspaceDir = childSandbox.agentWorkspaceDir ?? attachmentWorkspaceDir;
       } catch (error) {
         await cleanupCreatedSession(threadBindingReady);
         return {
@@ -390,7 +389,7 @@ export async function spawnSubagentDirect(
       attachmentSandboxDir = claim.sandboxDir;
       childSystemPrompt = `${childSystemPrompt}\n\n${claim.systemPromptSuffix}`;
       launchPlan = createLaunchPlan(childSystemPrompt);
-      const registration = buildRegistration(childIdem, launchPlan, true);
+      const registration = buildRegistration(childIdem, launchPlan, true, true);
       registerSubagentRun(registration);
       attachmentCleanupOwnerClaimed = true;
     };
@@ -399,6 +398,7 @@ export async function spawnSubagentDirect(
       runId: string,
       plan: ReturnType<typeof buildSubagentLaunchRequest>,
       queued: boolean,
+      launchCleanupPending = false,
     ) {
       if (params.collect) {
         const latestAdmission = resolveAdmission();
@@ -440,6 +440,7 @@ export async function spawnSubagentDirect(
         groupId: swarmGroupId,
         queuedLaunch: plan.queuedLaunch,
         queued,
+        launchCleanupPending,
         attachmentsDir: attachmentAbsDir,
         attachmentsRootDir: attachmentRootDir,
         attachmentsSandboxSessionKey: attachmentSandboxFsBridge ? childSessionKey : undefined,
@@ -479,10 +480,7 @@ export async function spawnSubagentDirect(
       claimCleanupOwner: params.attachments?.length ? applyAttachmentClaim : undefined,
     });
     if (materializedAttachments && materializedAttachments.status !== "ok") {
-      if (
-        materializedAttachments.status === "error" &&
-        materializedAttachments.ownerClaimed
-      ) {
+      if (materializedAttachments.status === "error" && materializedAttachments.ownerClaimed) {
         await retrySubagentCleanup(() =>
           settleFailedQueuedSubagentLaunch(childIdem, materializedAttachments.error),
         );

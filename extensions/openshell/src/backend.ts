@@ -544,20 +544,11 @@ class OpenShellSandboxBackendImpl {
     return await this.runRemoteShellScriptInternal(params);
   }
 
-  async mkdirpRemotePath(
-    remotePath: string,
-    signal?: AbortSignal,
-    mode?: number,
-  ): Promise<void> {
+  async mkdirpRemotePath(remotePath: string, signal?: AbortSignal, mode?: number): Promise<void> {
     const target = this.resolveRemoteTarget(remotePath);
     const formattedMode = formatRemoteDirectoryMode(mode);
     await this.runPinnedRemotePathMutation({
-      args: [
-        "mkdirp",
-        target.root,
-        target.relativePath,
-        ...(formattedMode ? [formattedMode] : []),
-      ],
+      args: ["mkdirp", target.root, target.relativePath, ...(formattedMode ? [formattedMode] : [])],
       signal,
     });
   }

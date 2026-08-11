@@ -3,8 +3,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 
 const legacyAttachmentLog = createSubsystemLogger("state/legacy-attachment-cleanup");
 const GENERATED_SUBAGENT_ATTACHMENT_ID =

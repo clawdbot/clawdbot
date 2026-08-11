@@ -904,7 +904,7 @@ describe("subagent registry seam flow", () => {
       archiveAtMs: now - 1,
       collect: true,
       groupId: "swarm:cleanup-pending",
-      collectorLaunchCleanupPending: true,
+      launchCleanupPending: true,
       collectorCompletion: { status: "failed" },
     });
     mocks.callGateway.mockRejectedValueOnce(new Error("delete unavailable"));
@@ -913,7 +913,7 @@ describe("subagent registry seam flow", () => {
 
     expect(mod.getSubagentRunByRunId("run-collector-clean")).toBeDefined();
     expect(mod.getSubagentRunByRunId("run-collector-cleanup-pending")).toMatchObject({
-      collectorLaunchCleanupPending: true,
+      launchCleanupPending: true,
     });
   });
 
@@ -1137,14 +1137,14 @@ describe("subagent registry seam flow", () => {
 
   it("atomically activates a provisional attachment owner under the gateway run id", () => {
     const provisionalRunId = "attachment-owner-provisional";
-    const attachmentsDir =
-      "/workspace/.openclaw/attachments/00000000-0000-4000-8000-000000000001";
+    const attachmentsDir = "/workspace/.openclaw/attachments/00000000-0000-4000-8000-000000000001";
     mod.addSubagentRunForTests({
       runId: provisionalRunId,
       childSessionKey: "agent:main:subagent:attachment-owner",
       task: "activate attachment owner",
       createdAt: Date.now(),
       execution: { status: "queued" },
+      launchCleanupPending: true,
       attachmentsDir,
       attachmentsRootDir: "/workspace",
     });
@@ -1167,8 +1167,8 @@ describe("subagent registry seam flow", () => {
       task: "retain failed attachment owner",
       createdAt: Date.now(),
       execution: { status: "queued" },
-      attachmentsDir:
-        "/workspace/.openclaw/attachments/00000000-0000-4000-8000-000000000002",
+      launchCleanupPending: true,
+      attachmentsDir: "/workspace/.openclaw/attachments/00000000-0000-4000-8000-000000000002",
       attachmentsRootDir: "/workspace",
     });
 
@@ -1179,7 +1179,7 @@ describe("subagent registry seam flow", () => {
       delivery: { status: "not_required" },
       execution: { status: "terminal", suppressSessionEffects: true },
     });
-    expect(mod.getSubagentRunByRunId(runId)?.collectorLaunchCleanupPending).toBeUndefined();
+    expect(mod.getSubagentRunByRunId(runId)?.launchCleanupPending).toBe(true);
   });
 
   it("records early structured output through the child session identity", () => {
@@ -1898,7 +1898,7 @@ describe("subagent registry seam flow", () => {
       parentSessionKey: "agent:main:main",
     });
     expect(mod.getSubagentRunByRunId("run-queued-failure")).toMatchObject({
-      collectorLaunchCleanupPending: false,
+      launchCleanupPending: false,
       contextEngineCleanupCompletedAt: expect.any(Number),
     });
     const contextEndCalls = mocks.onSubagentEnded.mock.calls.length;

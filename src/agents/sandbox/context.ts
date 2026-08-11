@@ -22,12 +22,12 @@ import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { resolveSandboxDockerUser } from "./docker-user.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
+import type { SandboxFsBridge } from "./fs-bridge.types.js";
 import { toSandboxProvisioningError } from "./provisioning-error.js";
 import { readRegisteredSandboxRuntimeIds, updateRegistry } from "./registry.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
-import type { SandboxFsBridge } from "./fs-bridge.types.js";
 import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
@@ -373,9 +373,7 @@ export async function resolveSandboxContext(params: {
  * Builds the host-owned ingress capability for files the sandboxed run must consume.
  * It exposes only the run's effective workspace and never grants tool-side writes.
  */
-export function createSandboxWorkspaceIngressFsBridge(
-  sandbox: SandboxContext,
-): SandboxFsBridge {
+export function createSandboxWorkspaceIngressFsBridge(sandbox: SandboxContext): SandboxFsBridge {
   const ingressContext = {
     workspaceDir: sandbox.workspaceDir,
     agentWorkspaceDir: sandbox.workspaceDir,

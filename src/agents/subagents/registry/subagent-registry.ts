@@ -211,10 +211,7 @@ function finalizeResumedAnnounceGiveUpInBackground(
     await finalizeResumedAnnounceGiveUp({ runId, entry, reason });
   }).catch((error: unknown) => {
     log.warn("failed to finalize exhausted subagent delivery", { runId, reason, error });
-    if (
-      subagentRuns.get(runId) === entry &&
-      typeof entry.cleanupCompletedAt !== "number"
-    ) {
+    if (subagentRuns.get(runId) === entry && typeof entry.cleanupCompletedAt !== "number") {
       scheduleSubagentDeliveryResumeRetry(runId, entry, GATEWAY_ADMISSION_RETRY_DELAY_MS);
       resumedRuns.add(runId);
     }
@@ -390,10 +387,10 @@ const subagentRestorer = createSubagentRegistryRestorer({
       timeoutMs,
       callGateway: subagentRegistryDeps.callGateway,
     }),
-  cleanupCollectorLaunchResources: contextCleanup.cleanupCollectorLaunchResources,
+  cleanupFailedLaunchResources: contextCleanup.cleanupFailedLaunchResources,
   settleFailedQueuedSubagentLaunch: (runId, error) =>
     subagentRunManager.settleFailedQueuedSubagentLaunch(runId, error),
-  completeCollectorLaunchCleanup: (runId) => publicApi.completeCollectorLaunchCleanup(runId),
+  completeFailedLaunchCleanup: (runId) => publicApi.completeFailedLaunchCleanup(runId),
   scheduleSweep: scheduleSubagentRegistrySweep,
   warn: (message, meta) => log.warn(message, meta),
 });
@@ -449,7 +446,7 @@ const subagentSweeper = createSubagentRegistrySweeper({
   shouldEmitEndedHookForRun: contextCleanup.shouldEmitEndedHookForRun,
   emitSubagentEndedHookForRun: contextCleanup.emitSubagentEndedHookForRun,
   callGateway: (request) => subagentRegistryDeps.callGateway(request),
-  cleanupCollectorLaunchResources: contextCleanup.cleanupCollectorLaunchResources,
+  cleanupFailedLaunchResources: contextCleanup.cleanupFailedLaunchResources,
   runContextEngineSubagentEnded: contextCleanup.runContextEngineSubagentEnded,
   notifyContextEngineSubagentEnded: contextCleanup.notifyContextEngineSubagentEnded,
   retireSupersededRun: retireSupersededSubagentRun,
@@ -626,7 +623,7 @@ export const ackPendingAgentSteeringItems = publicApi.ackPendingAgentSteeringIte
 export const releasePendingAgentSteeringItems = publicApi.releasePendingAgentSteeringItems;
 export const getSubagentRunByRunId = publicApi.getSubagentRunByRunId;
 export const getSubagentRunsByRunIds = publicApi.getSubagentRunsByRunIds;
-export const completeCollectorLaunchCleanup = publicApi.completeCollectorLaunchCleanup;
+export const completeFailedLaunchCleanup = publicApi.completeFailedLaunchCleanup;
 export const recordSwarmStructuredOutput = publicApi.recordSwarmStructuredOutput;
 export const listSwarmRunsForGroup = publicApi.listSwarmRunsForGroup;
 export const getSwarmRunByLaunchReplayKey = publicApi.getSwarmRunByLaunchReplayKey;

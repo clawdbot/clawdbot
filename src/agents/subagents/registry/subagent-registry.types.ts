@@ -306,8 +306,8 @@ export type SubagentRunRecord = {
   outputSchema?: Record<string, unknown>;
   structuredOutput?: SwarmStructuredOutputState;
   queuedLaunch?: SwarmQueuedLaunch;
-  /** Durable retry obligation for a prepared collector session whose launch failed. */
-  collectorLaunchCleanupPending?: boolean;
+  /** Durable owner from pre-write attachment staging through activation or failed-launch cleanup. */
+  launchCleanupPending?: boolean;
   /** Set after failed-launch context-engine cleanup succeeds, preventing duplicate end hooks. */
   contextEngineCleanupCompletedAt?: number;
   collectorCompletion?: SwarmCollectorCompletion;

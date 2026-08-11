@@ -98,7 +98,10 @@ export function createSubagentRegistrySweeper(params: {
   shouldEmitEndedHookForRun: SubagentLifecycleOptions["shouldEmitEndedHookForRun"];
   emitSubagentEndedHookForRun: SubagentLifecycleOptions["emitSubagentEndedHookForRun"];
   callGateway: typeof callGateway;
-  cleanupCollectorLaunchResources: (entry: SubagentRunRecord) => Promise<boolean>;
+  cleanupFailedLaunchResources: (
+    entry: SubagentRunRecord,
+    options?: { includeSessionEffects?: boolean },
+  ) => Promise<boolean>;
   runContextEngineSubagentEnded: (params: ContextEngineSubagentEndedParams) => Promise<void>;
   notifyContextEngineSubagentEnded: (params: ContextEngineSubagentEndedParams) => Promise<void>;
   retireSupersededRun: (runId: string, entry: SubagentRunRecord) => Promise<void>;
@@ -399,56 +402,56 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
 
-        if (entry.collect && entry.collectorCompletion) {
-          if (entry.collectorLaunchCleanupPending) {
-            const suppressSessionEffects = shouldSuppressSubagentRecoverySessionEffects(entry);
-            if (!suppressSessionEffects) {
-              const sessionIdentity = freezeSessionIdentity(entry.childSessionKey, storeCache);
-              if (!sessionIdentity) {
-                entry.execution = {
-                  ...entry.execution,
-                  suppressSessionEffects: true,
-                };
-              } else {
-                let deletion: "deleted" | "changed";
-                try {
-                  deletion = await deleteSession(entry.childSessionKey, sessionIdentity);
-                } catch (error) {
-                  params.warn("failed to retry collector launch cleanup", {
-                    runId,
-                    childSessionKey: entry.childSessionKey,
-                    error,
-                  });
-                  continue;
-                }
-                if (runs.get(runId) !== entry) {
-                  continue;
-                }
-                if (deletion === "changed") {
-                  entry.execution = {
-                    ...entry.execution,
-                    suppressSessionEffects: true,
-                  };
-                } else {
-                  if (!(await params.cleanupCollectorLaunchResources(entry))) {
-                    continue;
-                  }
-                  if (runs.get(runId) !== entry) {
-                    continue;
-                  }
-                  emitSessionLifecycleEvent({
-                    sessionKey: entry.childSessionKey,
-                    reason: "delete",
-                    parentSessionKey: entry.swarmRequesterSessionKey ?? entry.requesterSessionKey,
-                  });
-                }
+        if (entry.launchCleanupPending && entry.execution.status === "terminal") {
+          let includeSessionEffects = !shouldSuppressSubagentRecoverySessionEffects(entry);
+          let sessionDeleted = false;
+          if (includeSessionEffects) {
+            const sessionIdentity = freezeSessionIdentity(entry.childSessionKey, storeCache);
+            if (!sessionIdentity) {
+              includeSessionEffects = false;
+              entry.execution = { ...entry.execution, suppressSessionEffects: true };
+            } else {
+              let deletion: "deleted" | "changed";
+              try {
+                deletion = await deleteSession(entry.childSessionKey, sessionIdentity);
+              } catch (error) {
+                params.warn("failed to retry launch cleanup", {
+                  runId,
+                  childSessionKey: entry.childSessionKey,
+                  error,
+                });
+                continue;
+              }
+              if (runs.get(runId) !== entry) {
+                continue;
+              }
+              sessionDeleted = deletion === "deleted";
+              if (!sessionDeleted) {
+                includeSessionEffects = false;
+                entry.execution = { ...entry.execution, suppressSessionEffects: true };
               }
             }
-            entry.collectorLaunchCleanupPending = false;
-            entry.cleanupCompletedAt = now;
-            mutated = true;
-            mutatedRunIds.add(runId);
           }
+          if (!(await params.cleanupFailedLaunchResources(entry, { includeSessionEffects }))) {
+            continue;
+          }
+          if (runs.get(runId) !== entry) {
+            continue;
+          }
+          if (sessionDeleted) {
+            emitSessionLifecycleEvent({
+              sessionKey: entry.childSessionKey,
+              reason: "delete",
+              parentSessionKey: entry.swarmRequesterSessionKey ?? entry.requesterSessionKey,
+            });
+          }
+          entry.launchCleanupPending = undefined;
+          entry.cleanupCompletedAt = now;
+          mutated = true;
+          mutatedRunIds.add(runId);
+        }
+
+        if (entry.collect && entry.collectorCompletion) {
           const groupId = entry.groupId?.trim();
           const swarmRequesterSessionKey =
             entry.swarmRequesterSessionKey ?? entry.requesterSessionKey;
@@ -550,7 +553,7 @@ export function createSubagentRegistrySweeper(params: {
           groupEntries.some(
             ([, candidate]) =>
               !candidate.collectorCompletion ||
-              candidate.collectorLaunchCleanupPending === true ||
+              candidate.launchCleanupPending === true ||
               candidate.archiveAtMs === undefined ||
               candidate.archiveAtMs > now,
           )
@@ -651,7 +654,7 @@ export function createSubagentRegistrySweeper(params: {
             ([candidateRunId, candidate]) =>
               expectedGroupEntries.get(candidateRunId) !== candidate ||
               !candidate.collectorCompletion ||
-              candidate.collectorLaunchCleanupPending === true ||
+              candidate.launchCleanupPending === true ||
               candidate.archiveAtMs === undefined ||
               candidate.archiveAtMs > now,
           )

@@ -70,12 +70,12 @@ export function createSubagentRegistryRestorer(config: {
     expectedSessionId?: string;
     expectedLifecycleRevision?: string;
   }) => Promise<void>;
-  cleanupCollectorLaunchResources: (
+  cleanupFailedLaunchResources: (
     entry: SubagentRunRecord,
-    options?: { isCurrent?: () => boolean },
+    options?: { isCurrent?: () => boolean; includeSessionEffects?: boolean },
   ) => Promise<boolean>;
   settleFailedQueuedSubagentLaunch: (runId: string, error: string) => boolean;
-  completeCollectorLaunchCleanup: (runId: string) => void;
+  completeFailedLaunchCleanup: (runId: string) => void;
   scheduleSweep: (params?: { delayMs?: number }) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
@@ -92,9 +92,9 @@ export function createSubagentRegistryRestorer(config: {
     listSwarmRunsForGroup,
     startQueuedSubagentRun,
     terminateAcceptedRestoredCollectorRun,
-    cleanupCollectorLaunchResources,
+    cleanupFailedLaunchResources,
     settleFailedQueuedSubagentLaunch,
-    completeCollectorLaunchCleanup,
+    completeFailedLaunchCleanup,
     scheduleSweep,
     warn,
   } = config;
@@ -210,6 +210,22 @@ export function createSubagentRegistryRestorer(config: {
         // Restart recovery exclusively owns receipt-bearing source rows until it
         // remaps or terminalizes them. Generic resume would wait on an obsolete run.
         if (entry.execution.restartRecovery || entry.killIntent || entry.killReconciliation) {
+          continue;
+        }
+        if (!entry.collect && entry.execution.status === "queued" && entry.launchCleanupPending) {
+          const cleanupSessionEntry = loadSubagentSessionEntry({
+            childSessionKey: entry.childSessionKey,
+            storeCache: restoredSessionCache,
+          });
+          void failAndCleanupRestoredQueuedRun(
+            runId,
+            entry,
+            "subagent launch was interrupted before activation",
+            false,
+            getAgentEventLifecycleGeneration(),
+            cleanupSessionEntry?.sessionId,
+            cleanupSessionEntry?.lifecycleRevision,
+          );
           continue;
         }
         if (entry.collect && entry.execution.status === "queued") {
@@ -409,10 +425,13 @@ export function createSubagentRegistryRestorer(config: {
               }),
           },
         );
-        if (!cleanupSettled || !ownsCleanup() || sessionOwnershipChanged) {
-          return cleanupSettled && ownsCleanup();
+        if (!cleanupSettled || !ownsCleanup()) {
+          return false;
         }
-        return await cleanupCollectorLaunchResources(entry, { isCurrent: ownsCleanup });
+        return await cleanupFailedLaunchResources(entry, {
+          isCurrent: ownsCleanup,
+          includeSessionEffects: !sessionOwnershipChanged,
+        });
       }).catch((cleanupError: unknown) => {
         warn("failed to clean restored collector after launch failure", {
           runId,
@@ -493,7 +512,7 @@ export function createSubagentRegistryRestorer(config: {
             parentSessionKey: entry.swarmRequesterSessionKey ?? entry.requesterSessionKey,
           });
         }
-        completeCollectorLaunchCleanup(runId);
+        completeFailedLaunchCleanup(runId);
       }
       return true;
     } finally {
