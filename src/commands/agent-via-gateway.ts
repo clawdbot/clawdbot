@@ -98,11 +98,11 @@ const GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 
  * Transport error that occurs after the Gateway has already accepted a run.
  *
  * Carries the accepted run/session identity so callers can surface the
- * in-flight Gateway-owned run after post-acceptance transport loss (timeout
- * or connection close).  Without this, a long-running accepted turn that
- * hits the CLI deadline would silently discard the run ID, leaving the
- * operator unable to track or re-attach to the Gateway-owned run that is
- * still executing.
+ * in-flight Gateway-owned run ID after post-acceptance transport loss
+ * (timeout or connection close).  Without this, a long-running accepted
+ * turn that hits the CLI deadline would silently discard the run ID,
+ * leaving the operator unable to check whether the Gateway finished
+ * the turn.
  */
 class GatewayAcceptedRunTransportError extends Error {
   readonly acceptedRunId: string;
@@ -1356,10 +1356,10 @@ export async function agentCliCommand(
         }
         throw err;
       }
-      // Gateway accepted the run before the transport error — the turn is
-      // still executing (default 48-hour Gateway deadline).  Surface the
-      // accepted run ID so the operator can check status or re-attach
-      // instead of losing track of the in-flight Gateway-owned turn.
+      // Gateway accepted the run before the transport error — surface the
+      // accepted run ID so the operator can check Gateway status and the
+      // session transcript instead of losing track of the in-flight
+      // request.
       if (err instanceof GatewayAcceptedRunTransportError) {
         const reasonText =
           err.fallbackReason === "gateway_timeout" ? "timed out" : "connection closed";
@@ -1369,9 +1369,9 @@ export async function agentCliCommand(
         } else {
           runtime.error?.(
             `Gateway agent ${reasonText} after accepting run ${err.acceptedRunId}. ` +
-              `The run is still executing on the Gateway (default 48-hour deadline). ` +
-              `To extend the CLI deadline: --timeout <seconds>. ` +
-              `To re-attach: --run-id ${err.acceptedRunId}`,
+              `The Gateway may have finished the turn; check \`openclaw gateway status\` ` +
+              `and the session transcript before retrying. ` +
+              `To extend the CLI deadline: --timeout <seconds>.`,
           );
         }
         return result;
