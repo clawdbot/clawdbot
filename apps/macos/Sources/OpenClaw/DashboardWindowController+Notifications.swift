@@ -30,19 +30,18 @@ extension DashboardWindowController {
     }
 
     static func notificationsPermissionLabel(for status: UNAuthorizationStatus) -> String {
-        if PermissionManager.isNotificationAuthorized(status: status) {
-            return "granted"
-        }
         switch status {
+        case .authorized, .provisional:
+            "granted"
         case .denied:
-            return "denied"
+            "denied"
         case .notDetermined:
-            return "notDetermined"
+            "notDetermined"
         default:
             // .ephemeral is unavailable by name on macOS and cannot occur here;
             // map it and future cases to notDetermined so the UI offers the
             // permission request instead of claiming access.
-            return "notDetermined"
+            "notDetermined"
         }
     }
 
