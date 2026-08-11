@@ -23,6 +23,7 @@ import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime
 import { handleGatewayRequest } from "../../server-methods.js";
 import { resolveGatewayCronCreatorAuthorityAdmission } from "../../server-methods/cron-creator-authority-admission.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
+import { resolvePinnedClientMetadata } from "./connect-device-metadata.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
 const {
@@ -105,7 +106,7 @@ vi.mock("../health-state.js", () => ({
   incrementPresenceVersion: incrementPresenceVersionMock,
 }));
 
-import { testing, attachGatewayWsMessageHandler } from "./message-handler.js";
+import { attachGatewayWsMessageHandler } from "./message-handler.js";
 
 const DEVICE_TOKEN_MUTATION_PARAMS = {
   deviceId: "device-1",
@@ -1410,7 +1411,7 @@ describe("resolvePinnedClientMetadata", () => {
     "pins legacy node-host platform alias %s to paired canonical %s",
     (claimedPlatform, pairedPlatform) => {
       expect(
-        testing.resolvePinnedClientMetadata({
+        resolvePinnedClientMetadata({
           clientId: "node-host",
           clientMode: "node",
           claimedPlatform,
@@ -1434,7 +1435,7 @@ describe("resolvePinnedClientMetadata", () => {
     "normalizes exact legacy node-host platform %s to canonical %s",
     (legacyPlatform, canonicalPlatform, deviceFamily) => {
       expect(
-        testing.resolvePinnedClientMetadata({
+        resolvePinnedClientMetadata({
           clientId: "node-host",
           clientMode: "node",
           claimedPlatform: legacyPlatform,
@@ -1458,7 +1459,7 @@ describe("resolvePinnedClientMetadata", () => {
     "pins canonical node-host platform %s over paired legacy alias %s",
     (claimedPlatform, pairedPlatform, deviceFamily) => {
       expect(
-        testing.resolvePinnedClientMetadata({
+        resolvePinnedClientMetadata({
           clientId: "node-host",
           clientMode: "node",
           claimedPlatform,
@@ -1486,7 +1487,7 @@ describe("resolvePinnedClientMetadata", () => {
     "allows %s platform version refresh without metadata-upgrade approval",
     (clientId, claimedPlatform, pairedPlatform, deviceFamily) => {
       expect(
-        testing.resolvePinnedClientMetadata({
+        resolvePinnedClientMetadata({
           clientId,
           clientMode: "node",
           claimedPlatform,
@@ -1506,7 +1507,7 @@ describe("resolvePinnedClientMetadata", () => {
 
   it.each(["node", "ui"])("allows a macOS platform version refresh in %s mode", (clientMode) => {
     expect(
-      testing.resolvePinnedClientMetadata({
+      resolvePinnedClientMetadata({
         clientId: "openclaw-macos",
         clientMode,
         claimedPlatform: "macOS 26.5.2",
@@ -1525,7 +1526,7 @@ describe("resolvePinnedClientMetadata", () => {
 
   it("accepts a node-host macOS alias against the shared Mac app platform pin", () => {
     expect(
-      testing.resolvePinnedClientMetadata({
+      resolvePinnedClientMetadata({
         clientId: "node-host",
         clientMode: "node",
         claimedPlatform: "macos",
@@ -1543,7 +1544,7 @@ describe("resolvePinnedClientMetadata", () => {
 
   it("refreshes a shared node-host macOS pin from the native Mac app", () => {
     expect(
-      testing.resolvePinnedClientMetadata({
+      resolvePinnedClientMetadata({
         clientId: "openclaw-macos",
         clientMode: "ui",
         claimedPlatform: "macOS 26.5.2",
@@ -1562,7 +1563,7 @@ describe("resolvePinnedClientMetadata", () => {
 
   it("still requires approval when an iOS device family changes", () => {
     expect(
-      testing.resolvePinnedClientMetadata({
+      resolvePinnedClientMetadata({
         clientId: "openclaw-ios",
         clientMode: "node",
         claimedPlatform: "iOS 26.5.0",
@@ -1581,7 +1582,7 @@ describe("resolvePinnedClientMetadata", () => {
 
   it("still requires approval when a macOS device family changes", () => {
     expect(
-      testing.resolvePinnedClientMetadata({
+      resolvePinnedClientMetadata({
         clientId: "openclaw-macos",
         clientMode: "node",
         claimedPlatform: "macOS 26.5.2",
@@ -1606,7 +1607,7 @@ describe("resolvePinnedClientMetadata", () => {
     "keeps non-version macOS platform changes approval-bound for %s",
     (clientId, claimed, paired) => {
       expect(
-        testing.resolvePinnedClientMetadata({
+        resolvePinnedClientMetadata({
           clientId,
           clientMode: "node",
           claimedPlatform: claimed,
@@ -1624,7 +1625,7 @@ describe("resolvePinnedClientMetadata", () => {
 
   it("keeps non-native-app platform version changes approval-bound", () => {
     expect(
-      testing.resolvePinnedClientMetadata({
+      resolvePinnedClientMetadata({
         clientId: "node-host",
         clientMode: "node",
         claimedPlatform: "linux 6.9",
