@@ -637,8 +637,9 @@ function expectClaimOnlyTranscriptMedia(
   expectedMedia: unknown[],
   forbiddenValues: string[],
 ) {
-  const media = (message as { __openclaw?: { media?: Array<Record<string, unknown>> } } | undefined)
-    ?.__openclaw?.media;
+  const media = (
+    message as { __openclaw?: { media?: Array<Record<string, unknown>> } } | undefined
+  )?.["__openclaw"]?.media;
   expect(media).toEqual(expectedMedia);
   for (const fact of media ?? []) {
     expect(fact.url).toMatch(/^media:\/\/inbound\/[^?#]+$/u);
