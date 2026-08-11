@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { patchSessionEntry } from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
@@ -55,7 +55,7 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
     sessionKey: string,
     patch: Record<string, unknown>,
   ): Promise<void> {
-    await patchSessionEntry({ storePath, sessionKey }, () => patch, { preserveActivity: true });
+    await patchSessionEntryCore({ storePath, sessionKey }, () => patch, { preserveActivity: true });
   }
 
   async function readEntry(storePath: string, sessionKey: string): Promise<StoredEntry> {

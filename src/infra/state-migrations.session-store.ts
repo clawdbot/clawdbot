@@ -267,7 +267,7 @@ function resolveUpdatedAt(entry: SessionEntryLike): number {
     : 0;
 }
 
-export function mergeSessionEntry(params: {
+export function selectNewerSessionEntry(params: {
   existing: SessionEntryLike | undefined;
   incoming: SessionEntryLike;
   preferIncomingOnTie?: boolean;

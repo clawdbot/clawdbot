@@ -14,7 +14,7 @@ import { parseConfigJson5, resetConfigRuntimeState } from "../config/config.js";
 import { resolveMainSessionKeyFromConfig, type SessionEntry } from "../config/sessions.js";
 import {
   applySessionEntryLifecycleMutation,
-  listSessionEntries,
+  listSessionEntriesCore,
   replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
@@ -286,7 +286,7 @@ export async function writeSessionStore(params: {
     upsertsByAgentId.set(normalizeAgentId(params.agentId ?? DEFAULT_AGENT_ID), []);
   }
   for (const [agentId, upserts] of upsertsByAgentId) {
-    const removals = listSessionEntries({ agentId, storePath }).map(({ sessionKey }) => ({
+    const removals = listSessionEntriesCore({ agentId, storePath }).map(({ sessionKey }) => ({
       sessionKey,
     }));
     await applySessionEntryLifecycleMutation({

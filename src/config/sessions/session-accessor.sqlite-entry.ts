@@ -401,7 +401,7 @@ export function listSessionTranscriptInstances(
 }
 
 /** Reads a session activity timestamp from the additive SQLite session store. */
-export function readSessionUpdatedAt(scope: SessionAccessScope): number | undefined {
+export function readSessionUpdatedAtCore(scope: SessionAccessScope): number | undefined {
   const resolved = resolveSqliteScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   const row = readSessionEntryRow(database, resolved.sessionKey)?.row;
@@ -413,7 +413,7 @@ export async function upsertSessionEntry(
   scope: SessionAccessScope,
   patch: Partial<SessionEntry>,
 ): Promise<SessionEntry | null> {
-  return await patchSessionEntry(scope, () => patch, {
+  return await patchSessionEntryCore(scope, () => patch, {
     fallbackEntry: createFallbackSessionEntry(patch),
   });
 }
@@ -423,7 +423,7 @@ export async function replaceSessionEntry(
   scope: SessionAccessScope,
   entry: SessionEntry,
 ): Promise<SessionEntry | null> {
-  return await patchSessionEntry(scope, () => entry, {
+  return await patchSessionEntryCore(scope, () => entry, {
     fallbackEntry: entry,
     replaceEntry: true,
   });
@@ -487,7 +487,7 @@ export function ensureSessionEntrySync(
 }
 
 /** Patches one entry in the additive SQLite session store. */
-export async function patchSessionEntry(
+export async function patchSessionEntryCore(
   scope: SessionAccessScope,
   update: (
     entry: SessionEntry,
@@ -663,7 +663,7 @@ export async function recordInboundSessionMeta(params: {
   createIfMissing?: boolean;
 }): Promise<SessionEntry | null> {
   const createIfMissing = params.createIfMissing ?? true;
-  return await patchSessionEntry(
+  return await patchSessionEntryCore(
     { sessionKey: params.sessionKey, storePath: params.storePath },
     (_entry, context) => {
       const metadataPatch = deriveSessionMetaPatch({
@@ -710,7 +710,7 @@ export async function updateSessionLastRoute(params: {
   createIfMissing?: boolean;
 }): Promise<SessionEntry | null> {
   const createIfMissing = params.createIfMissing ?? true;
-  return await patchSessionEntry(
+  return await patchSessionEntryCore(
     { sessionKey: params.sessionKey, storePath: params.storePath },
     (_entry, context) => {
       const routePatch = deriveLastRoutePatch({

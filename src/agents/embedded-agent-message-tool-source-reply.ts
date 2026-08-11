@@ -11,7 +11,7 @@ import {
   isMessagingToolDeliveryAction,
 } from "./embedded-agent-messaging.js";
 import { isToolResultError } from "./embedded-agent-subscribe.tools.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 
 const MESSAGE_TOOL_NAME = "message";
 const SESSIONS_SEND_TOOL_NAME = "sessions_send";
@@ -535,7 +535,7 @@ export function isDeliveredMessagingToolResult(params: {
   if (params.isError || isToolResultError(params.result) || isToolResultError(params.hookResult)) {
     return false;
   }
-  const normalizedToolName = normalizeToolName(params.toolName ?? MESSAGE_TOOL_NAME);
+  const normalizedToolName = normalizeToolPolicyName(params.toolName ?? MESSAGE_TOOL_NAME);
   const mutationHasBareOk =
     isMessagingToolDeliveryAction(normalizedToolName, args) &&
     action !== "broadcast" &&
@@ -590,7 +590,7 @@ export function isDeliveredMessageToolOnlySourceReplyResult(params: {
   if (params.sourceReplyDeliveryMode !== "message_tool_only" && !confirmedCurrentSourceRoute) {
     return false;
   }
-  if (normalizeToolName(params.toolName) !== MESSAGE_TOOL_NAME) {
+  if (normalizeToolPolicyName(params.toolName) !== MESSAGE_TOOL_NAME) {
     return false;
   }
   const args = asOptionalRecord(params.args) ?? {};

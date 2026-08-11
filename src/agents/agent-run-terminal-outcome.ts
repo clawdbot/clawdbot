@@ -1,5 +1,6 @@
 /** Normalizes agent run wait/liveness/timeout metadata into sticky terminal outcomes. */
 import { asFiniteNumber as asFiniteTimestamp } from "@openclaw/normalization-core/number-coercion";
+import { readNonBlankString as asNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   formatAbandonedLivenessError,
   formatBlockedLivenessError,
@@ -457,10 +458,6 @@ type AgentRunLifecycleTerminalData = Omit<AgentRunTerminalWaitInput, "status"> &
 export const AGENT_RUN_TERMINAL_RETRY_GRACE_MS = 15_000;
 
 const HARD_TIMEOUT_PHASES = new Set<AgentRunTimeoutPhase>(["preflight", "provider", "post_turn"]);
-
-function asNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
 
 /** True when a timeout phase should be treated as a hard agent-run timeout. */
 function isHardAgentRunTimeoutPhase(value: unknown): value is AgentRunTimeoutPhase {

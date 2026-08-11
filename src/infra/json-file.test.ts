@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { loadJsonFile, saveJsonFile } from "./json-file.js";
+import { loadJsonFileThroughSymlink, saveJsonFile } from "./json-file.js";
 
 const SAVED_PAYLOAD = { enabled: true, count: 2 };
 const PREVIOUS_JSON = '{"enabled":false}\n';
@@ -45,8 +45,8 @@ async function withJsonSymlink<T>(
 
 function expectSavedPayloadThroughSymlink(linkPath: string, targetPath: string) {
   expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
-  expect(loadJsonFile(targetPath)).toEqual(SAVED_PAYLOAD);
-  expect(loadJsonFile(linkPath)).toEqual(SAVED_PAYLOAD);
+  expect(loadJsonFileThroughSymlink(targetPath)).toEqual(SAVED_PAYLOAD);
+  expect(loadJsonFileThroughSymlink(linkPath)).toEqual(SAVED_PAYLOAD);
 }
 
 describe("json-file helpers", () => {
@@ -74,7 +74,7 @@ describe("json-file helpers", () => {
   ])("returns undefined for $name", async ({ setup }) => {
     await withJsonPath(({ pathname }) => {
       setup(pathname);
-      expect(loadJsonFile(pathname)).toBeUndefined();
+      expect(loadJsonFileThroughSymlink(pathname)).toBeUndefined();
     });
   });
 
@@ -85,7 +85,7 @@ describe("json-file helpers", () => {
 
       const raw = fs.readFileSync(pathname, "utf8");
       expect(raw.endsWith("\n")).toBe(true);
-      expect(loadJsonFile(pathname)).toEqual(SAVED_PAYLOAD);
+      expect(loadJsonFileThroughSymlink(pathname)).toEqual(SAVED_PAYLOAD);
 
       const fileMode = fs.statSync(pathname).mode & 0o777;
       const dirMode = fs.statSync(path.dirname(pathname)).mode & 0o777;
@@ -111,7 +111,7 @@ describe("json-file helpers", () => {
     await withJsonPath(({ pathname }) => {
       setup(pathname);
       saveJsonFile(pathname, SAVED_PAYLOAD);
-      expect(loadJsonFile(pathname)).toEqual(SAVED_PAYLOAD);
+      expect(loadJsonFileThroughSymlink(pathname)).toEqual(SAVED_PAYLOAD);
     });
   });
 
@@ -125,7 +125,7 @@ describe("json-file helpers", () => {
       const renameCall = renameSpy.mock.calls.find(([, target]) => target === pathname);
       expect(renameCall?.[0]).toMatch(new RegExp(`^${escapeRegExp(pathname)}\\..+\\.tmp$`));
       expect(renameSpy).toHaveBeenCalledWith(renameCall?.[0], pathname);
-      expect(loadJsonFile(pathname)).toEqual(SAVED_PAYLOAD);
+      expect(loadJsonFileThroughSymlink(pathname)).toEqual(SAVED_PAYLOAD);
     });
   });
 
@@ -195,7 +195,7 @@ describe("json-file helpers", () => {
       saveJsonFile(pathname, SAVED_PAYLOAD);
 
       expect(renameSpy).toHaveBeenCalled();
-      expect(loadJsonFile(pathname)).toEqual(SAVED_PAYLOAD);
+      expect(loadJsonFileThroughSymlink(pathname)).toEqual(SAVED_PAYLOAD);
       expect(fs.readdirSync(root)).toEqual(["config.json"]);
     });
   });

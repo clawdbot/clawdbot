@@ -70,7 +70,7 @@ vi.mock("../../config/sessions.js", () => ({
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  patchSessionEntry: vi.fn(),
+  patchSessionEntryCore: vi.fn(),
   updateSessionEntry: updateSessionEntryMock,
 }));
 

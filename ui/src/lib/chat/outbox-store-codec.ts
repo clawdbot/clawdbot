@@ -1,3 +1,4 @@
+import { readNonBlankString as normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentId } from "../sessions/session-key.ts";
 import type { ChatAttachment, ChatQueueItem } from "./chat-types.ts";
 import { normalizeSenderIdentity } from "./sender-label.ts";
@@ -17,10 +18,6 @@ export type StoredComposerSession = {
   queue?: ChatQueueItem[];
   updatedAt: number;
 };
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
 
 function normalizeOptionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;

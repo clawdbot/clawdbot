@@ -10,7 +10,7 @@ import {
 } from "../config/sessions.js";
 import {
   listSessionChildEntriesReadOnly,
-  listSessionEntries as listAccessorSessionEntries,
+  listSessionEntriesCore as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
   loadExactSessionEntryReadOnly,
   type SessionEntryListScope,

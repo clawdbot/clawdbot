@@ -8,7 +8,7 @@ import {
   normalizeOpenAICompatibleReasoningReplay,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNonArrayRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isOpenRouterDeepSeekV4ModelId, normalizeOpenRouterModelFamilyId } from "./models.js";
 import {
   isOpenRouterProxyReasoningUnsupportedModel,
@@ -243,10 +243,7 @@ function applyOpenRouterDeepSeekV4ReasoningEffort(
     delete payload.reasoning;
     return false;
   }
-  const reasoning =
-    payload.reasoning && typeof payload.reasoning === "object" && !Array.isArray(payload.reasoning)
-      ? (payload.reasoning as Record<string, unknown>)
-      : {};
+  const reasoning = asNonArrayRecord(payload.reasoning);
   reasoning.effort = effort;
   payload.reasoning = reasoning;
   return true;

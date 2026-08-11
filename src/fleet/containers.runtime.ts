@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -164,13 +164,10 @@ function readStringRecord(value: unknown): Record<string, string> {
   if (value === undefined || value === null) {
     return {};
   }
-  const record = requireRecord(value);
-  for (const entry of Object.values(record)) {
-    if (typeof entry !== "string") {
-      throw new InvalidInspectOutputError();
-    }
+  if (!isStringRecord(value)) {
+    throw new InvalidInspectOutputError();
   }
-  return record as Record<string, string>;
+  return value;
 }
 
 function readStringArray(value: unknown): string[] {

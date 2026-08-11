@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentIds, resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
@@ -9,7 +10,7 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/r
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+import { loadJsonFileThroughSymlink, saveJsonFile } from "../infra/json-file.js";
 import { shortenHomePath } from "../utils.js";
 import { resolveLegacyAuthProfilesPath as resolveAuthStorePath } from "./doctor-auth-legacy-paths.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -49,10 +50,6 @@ type LegacyOAuthSidecarRepairResult = {
   changes: string[];
   warnings: string[];
 };
-
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
 
 function addCandidate(
   candidates: Map<string, AuthProfileRepairCandidate>,
@@ -107,7 +104,7 @@ function resolveLegacyOAuthSidecarStore(
   if (!fs.existsSync(candidate.authPath)) {
     return null;
   }
-  const raw = loadJsonFile(candidate.authPath);
+  const raw = loadJsonFileThroughSymlink(candidate.authPath);
   if (!isRecord(raw) || !isRecord(raw.profiles)) {
     return null;
   }
@@ -151,7 +148,9 @@ function listUnreferencedLegacyOAuthSidecars(
       return [];
     }
     const sidecarPath = path.join(sidecarDir, entry.name);
-    return isLegacyOAuthSidecarPayload(loadJsonFile(sidecarPath)) ? [{ sidecarPath }] : [];
+    return isLegacyOAuthSidecarPayload(loadJsonFileThroughSymlink(sidecarPath))
+      ? [{ sidecarPath }]
+      : [];
   });
 }
 

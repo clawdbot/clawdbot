@@ -9,7 +9,10 @@ import {
 } from "../agents/agent-scope-config.js";
 import { resolveStorePath } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { listSessionEntries, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  listSessionEntriesCore,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
@@ -142,7 +145,7 @@ function expectSessionStore(
   expect(
     Object.fromEntries(
       [...agentIds].flatMap((storeAgentId) =>
-        listSessionEntries({
+        listSessionEntriesCore({
           agentId: storeAgentId,
           storePath: resolveStorePath(cfg.session?.store, { agentId: storeAgentId }),
         }).map(({ entry, sessionKey }) => [sessionKey, entry]),

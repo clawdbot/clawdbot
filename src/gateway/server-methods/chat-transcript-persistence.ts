@@ -4,7 +4,7 @@ import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import {
   findTranscriptEvent,
   loadTranscriptEventRowsAfterSeqSync,
-  patchSessionEntry,
+  patchSessionEntryCore,
   publishTranscriptUpdate,
   readSessionTranscriptWatermark,
   rewriteTranscriptEventRowsExact,
@@ -305,7 +305,7 @@ async function touchAssistantTranscriptSessionEntry(
     return;
   }
   const transcriptMarkerUpdatedAt = Date.now();
-  await patchSessionEntry(
+  await patchSessionEntryCore(
     {
       storePath: scope.storePath,
       sessionKey: scope.sessionKey,

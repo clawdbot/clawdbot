@@ -13,7 +13,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import {
   hasSessionEntriesByStatusReadOnly,
-  listSessionEntries,
+  listSessionEntriesCore,
   listSessionEntriesReadOnly,
   resolveTranscriptSessionKeyBySessionId,
   upsertSessionEntry,
@@ -52,7 +52,7 @@ describe("session accessor readonly listing", () => {
       { ...listScope, sessionKey: "agent:worker-1:telegram:dm:42" },
       { sessionId: "session-2", updatedAt: 20 },
     );
-    const writableEntries = listSessionEntries(listScope);
+    const writableEntries = listSessionEntriesCore(listScope);
     closeOpenClawAgentDatabasesForTest();
 
     expect(listSessionEntriesReadOnly(listScope)).toEqual(writableEntries);

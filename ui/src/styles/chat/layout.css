@@ -402,6 +402,7 @@ openclaw-chat-page {
   left: 0;
   display: flow-root;
   width: 100%;
+  content-visibility: auto;
 }
 
 .chat-virtual-row--first > :first-child {

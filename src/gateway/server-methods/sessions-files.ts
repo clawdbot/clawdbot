@@ -25,7 +25,7 @@ import { FsSafeError } from "../../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
-  readSessionTranscriptVisibleMessageDelta,
+  readSessionTranscriptVisibleMessageDeltaCore,
   resolveTranscriptReadTarget,
   sqliteMessageEventWithSeq,
   toTranscriptReadScope,
@@ -257,7 +257,7 @@ async function foldSqliteTouchedFiles(
   let maxBytes = TOUCHED_FILES_DELTA_MAX_BYTES;
 
   while (true) {
-    const delta = readSessionTranscriptVisibleMessageDelta(scope, {
+    const delta = readSessionTranscriptVisibleMessageDeltaCore(scope, {
       ...(cursor ? { cursor } : {}),
       maxBytes,
       maxMessages: TOUCHED_FILES_DELTA_MAX_MESSAGES,

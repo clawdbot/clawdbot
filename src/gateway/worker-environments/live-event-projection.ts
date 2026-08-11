@@ -4,7 +4,7 @@ import {
   sanitizeToolArgs,
   sanitizeToolResult,
 } from "../../agents/embedded-agent-subscribe.tools.js";
-import { normalizeToolName } from "../../agents/tool-policy.js";
+import { normalizeToolPolicyName } from "../../agents/tool-policy.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 
 export type WorkerLiveTrajectoryTarget = {
@@ -23,7 +23,7 @@ export function prepareWorkerLiveEventData(
   if (event.kind !== "tool") {
     return payload;
   }
-  const toolName = normalizeToolName(event.payload.name);
+  const toolName = normalizeToolPolicyName(event.payload.name);
   payload.name = toolName;
   if (event.payload.phase === "start") {
     payload.args = sanitizeToolArgs(event.payload.args);

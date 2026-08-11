@@ -11,7 +11,7 @@ import {
   resolveAllAgentSessionStoreTargetsSync,
   type SessionEntry,
 } from "../config/sessions.js";
-import { listSessionEntries } from "../config/sessions/session-accessor.js";
+import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { verifyBoardViewTicket } from "./board-view-ticket.js";
@@ -367,7 +367,7 @@ function resolveSessionGroupMutationTargets(params: {
     return undefined;
   }
   return resolveAllAgentSessionStoreTargetsSync(params.getCfg()).flatMap((storeTarget) =>
-    listSessionEntries({
+    listSessionEntriesCore({
       agentId: storeTarget.agentId,
       storePath: storeTarget.storePath,
     }).flatMap(({ sessionKey, entry }) =>

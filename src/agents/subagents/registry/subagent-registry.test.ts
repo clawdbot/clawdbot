@@ -122,7 +122,7 @@ const mocks = vi.hoisted(() => ({
     >;
     return store[scope.sessionKey];
   }),
-  listSessionEntries: vi.fn((scope: Omit<SessionAccessScope, "sessionKey">) => {
+  listSessionEntriesCore: vi.fn((scope: Omit<SessionAccessScope, "sessionKey">) => {
     const store = mocks.loadSessionStore(scope.storePath, { clone: false }) as Record<
       string,
       SessionEntry
@@ -130,7 +130,7 @@ const mocks = vi.hoisted(() => ({
     return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
   }),
   loadSessionStore: vi.fn((_storePath?: string, _options?: { clone?: boolean }) => ({})),
-  patchSessionEntry: vi.fn(
+  patchSessionEntryCore: vi.fn(
     async (
       scope: SessionAccessScope,
       update: (
@@ -243,11 +243,11 @@ vi.mock("../../../config/sessions.js", () => ({
 }));
 
 vi.mock("../../../config/sessions/session-accessor.js", () => ({
-  listSessionEntries: mocks.listSessionEntries,
-  listSessionEntriesReadOnly: mocks.listSessionEntries,
+  listSessionEntriesCore: mocks.listSessionEntriesCore,
+  listSessionEntriesReadOnly: mocks.listSessionEntriesCore,
   loadSessionEntry: mocks.loadSessionEntry,
   loadSessionEntryReadOnly: mocks.loadSessionEntry,
-  patchSessionEntry: mocks.patchSessionEntry,
+  patchSessionEntryCore: mocks.patchSessionEntryCore,
 }));
 
 vi.mock("../../../sessions/session-lifecycle-events.js", () => ({
@@ -1062,7 +1062,7 @@ describe("subagent registry seam flow", () => {
 
   it("keeps killed session timing root-admitted after task finalization", async () => {
     let finishTiming: (() => void) | undefined;
-    mocks.patchSessionEntry.mockImplementationOnce(async () => {
+    mocks.patchSessionEntryCore.mockImplementationOnce(async () => {
       await new Promise<void>((resolve) => {
         finishTiming = resolve;
       });
@@ -4803,7 +4803,7 @@ describe("subagent registry seam flow", () => {
       timingWriteStarted = resolve;
     });
     const timingWriteFinished = new Promise<void>((resolveFinished) => {
-      mocks.patchSessionEntry.mockImplementationOnce(async (scope, update) => {
+      mocks.patchSessionEntryCore.mockImplementationOnce(async (scope, update) => {
         timingWriteStarted?.();
         await new Promise<void>((resolve) => {
           releaseTimingWrite = resolve;
@@ -4908,7 +4908,7 @@ describe("subagent registry seam flow", () => {
       ),
     ).toBe(false);
     expect(
-      mocks.patchSessionEntry.mock.calls.some(
+      mocks.patchSessionEntryCore.mock.calls.some(
         ([scope]) => (scope as SessionAccessScope).sessionKey === childSessionKey,
       ),
     ).toBe(false);

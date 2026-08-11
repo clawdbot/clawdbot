@@ -5,7 +5,7 @@ type OutputDeps = Pick<
   OutputRuntime,
   | "callGateway"
   | "getRuntimeConfig"
-  | "readSessionEntry"
+  | "readSubagentSessionEntry"
   | "readSessionMessagesAsync"
   | "resolveAgentIdFromSessionKey"
   | "resolveStorePath"

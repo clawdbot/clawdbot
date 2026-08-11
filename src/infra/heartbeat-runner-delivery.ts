@@ -6,7 +6,7 @@ import { replaceGenericExternalRunFailureText } from "../agents/failover/user-co
 import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { buildRecoverablePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import { sendDurableMessageBatch } from "../channels/message/runtime.js";
-import { patchSessionEntry } from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { formatErrorMessage } from "./errors.js";
 import {
@@ -435,7 +435,7 @@ export async function finalizeHeartbeatOutcome(params: {
   const visibleSendSucceeded = send.status === "sent";
   if (visibleSendSucceeded) {
     const hasHeartbeatText = Boolean(deliveryText.trim());
-    await patchSessionEntry(
+    await patchSessionEntryCore(
       { storePath, sessionKey },
       (current, context) => {
         if (!context.existingEntry) {
@@ -492,7 +492,7 @@ async function clearSatisfiedPendingFinalDelivery(
   prepared: PreparedHeartbeatRun,
   expectedText?: string,
 ) {
-  await patchSessionEntry(
+  await patchSessionEntryCore(
     { storePath: prepared.storePath, sessionKey: prepared.sessionKey },
     (current, context) => {
       if (!context.existingEntry) {

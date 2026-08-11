@@ -15,7 +15,10 @@ import {
   resolveSessionResetPolicy,
   type SessionFreshness,
 } from "../../config/sessions/reset-policy.js";
-import { listSessionEntries, loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  listSessionEntriesCore,
+  loadSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -152,10 +155,9 @@ export function resolveCronSession(params: {
   const store =
     params.store ??
     Object.fromEntries(
-      listSessionEntries({ agentId: params.agentId, storePath }).map(({ sessionKey, entry }) => [
-        sessionKey,
-        entry,
-      ]),
+      listSessionEntriesCore({ agentId: params.agentId, storePath }).map(
+        ({ sessionKey, entry }) => [sessionKey, entry],
+      ),
     );
   const sourceSessionKey = params.sourceSessionKey?.trim();
   const sourceSessionDiffers = Boolean(sourceSessionKey && sourceSessionKey !== params.sessionKey);

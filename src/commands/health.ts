@@ -72,6 +72,7 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   timeoutMs?: number;
   token?: string;
   password?: string;
+  ignoreEnvUrlOverride?: boolean;
   localPortOverride?: number;
   json?: boolean;
 }): Promise<boolean> {
@@ -94,6 +95,7 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
     config: params.config,
     token: params.token,
     password: params.password,
+    ignoreEnvUrlOverride: params.ignoreEnvUrlOverride,
     localPortOverride: params.localPortOverride,
   });
   const probe = await probeGatewayStatus({
@@ -226,6 +228,7 @@ export async function healthCommand(
     config?: OpenClawConfig;
     token?: string;
     password?: string;
+    ignoreEnvUrlOverride?: boolean;
     localPortOverride?: number;
   },
   runtime: RuntimeEnv,
@@ -248,6 +251,7 @@ export async function healthCommand(
           config: cfg,
           token: opts.token,
           password: opts.password,
+          ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
           localPortOverride: opts.localPortOverride,
         }),
     );
@@ -260,6 +264,7 @@ export async function healthCommand(
         timeoutMs: opts.timeoutMs,
         token: opts.token,
         password: opts.password,
+        ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
         localPortOverride: opts.localPortOverride,
         json: opts.json,
       })
@@ -290,6 +295,7 @@ export async function healthCommand(
     if (opts.verbose) {
       const details = buildGatewayConnectionDetails({
         config: cfg,
+        ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
         localPortOverride: opts.localPortOverride,
       });
       logGatewayConnectionDetails({

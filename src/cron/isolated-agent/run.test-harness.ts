@@ -381,7 +381,7 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
   return {
     ...actual,
     replaceSessionEntry: replaceSessionEntryMock,
-    patchSessionEntry: patchSessionEntryMock,
+    patchSessionEntryCore: patchSessionEntryMock,
   };
 });
 
@@ -789,7 +789,7 @@ function resetRunSessionMocks(): void {
 }
 
 /**
- * In-memory stand-in for the SQLite accessor `patchSessionEntry` used by the
+ * In-memory stand-in for the SQLite accessor `patchSessionEntryCore` used by the
  * cron persist path. Prod flips real session storage to per-agent SQLite, but
  * these orchestration tests must stay off disk. The store keys on
  * storePath+sessionKey so successive persists in one run observe the row the

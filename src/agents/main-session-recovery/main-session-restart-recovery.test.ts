@@ -13,7 +13,7 @@ import type { InternalSessionEntry as SessionEntry } from "../../config/sessions
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   appendTranscriptMessage,
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry as loadSessionEntryRaw,
   loadTranscriptEvents,
   replaceSessionEntry,
@@ -363,7 +363,7 @@ async function writeMainSession({
 
 function readStore(storePath: string): Record<string, SessionEntry> {
   return Object.fromEntries(
-    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
 }
 

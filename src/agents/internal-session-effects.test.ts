@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   appendTranscriptMessage,
-  listSessionEntries,
+  listSessionEntriesCore,
   loadExactSessionEntry,
   loadTranscriptEvents,
   persistSessionResetLifecycle,
@@ -114,7 +114,7 @@ describe("internal session effects", () => {
         delivery: { kind: "internal" },
         createdAt: expect.any(Number),
       });
-      expect(listSessionEntries({ agentId: "main", storePath })).toEqual([]);
+      expect(listSessionEntriesCore({ agentId: "main", storePath })).toEqual([]);
       await expect(loadTranscriptEvents(target)).resolves.toEqual([
         expect.objectContaining({ id: target.sessionId, type: "session" }),
       ]);
@@ -173,7 +173,7 @@ describe("internal session effects", () => {
           type: "message",
         }),
       );
-      expect(listSessionEntries({ agentId: "main", storePath })).toEqual([
+      expect(listSessionEntriesCore({ agentId: "main", storePath })).toEqual([
         expect.objectContaining({ sessionKey: source.sessionKey }),
       ]);
     });

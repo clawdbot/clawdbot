@@ -35,7 +35,7 @@ export function saveJsonFile(pathname: string, data: unknown): void {
 }
 
 // oxlint-disable-next-line typescript-eslint/no-unnecessary-type-parameters -- legacy typed JSON loader alias.
-export function loadJsonFile<T = unknown>(pathname: string): T | undefined {
+export function loadJsonFileThroughSymlink<T = unknown>(pathname: string): T | undefined {
   const direct = tryReadJsonSync<T>(pathname);
   if (direct !== null) {
     return direct;

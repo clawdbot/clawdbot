@@ -4,7 +4,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import {
-  listSessionEntries,
+  listSessionEntriesCore,
   resolveTranscriptSessionKeyBySessionId,
   resolveSessionTranscriptRuntimeTarget,
   type SessionTranscriptRuntimeTarget,
@@ -104,7 +104,7 @@ export async function resolveAgentRunSessionTarget(params: {
     (params.missingSessionKey === "create" ? plainCompatibilitySessionKey : undefined);
   const markerEntries =
     legacyMarker && !hasCompleteTypedTarget
-      ? listSessionEntries({
+      ? listSessionEntriesCore({
           agentId: legacyMarker.agentId,
           storePath: legacyMarker.storePath,
         })
