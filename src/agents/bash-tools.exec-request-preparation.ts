@@ -23,6 +23,7 @@ import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { type ExecWorkdirResolution, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { buildSandboxEnv, coerceEnv } from "./bash-tools.shared.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
 
 export type ExecToolArgs = Record<string, unknown> & {
   command: string;
@@ -353,16 +354,54 @@ export function resolvePreparedExecEnvironment(params: {
   channelContext?: PluginHookChannelContext;
   defaultPathPrepend: string[];
   pluginEnv?: Record<string, string>;
+  storeEnv?: Record<string, string>;
   warnings: string[];
 }): { env: Record<string, string>; requestedEnv?: Record<string, string> } {
   const inheritedBaseEnv = coerceEnv(process.env);
   const channelContextEnv = buildChannelContextEnv(params.channelContext);
-  const requestedEnv: Record<string, string> | undefined =
+  const explicitEnv: Record<string, string> | undefined =
     params.execParams.env !== undefined ||
     params.pluginEnv !== undefined ||
     channelContextEnv !== undefined
       ? { ...params.execParams.env, ...params.pluginEnv, ...channelContextEnv }
       : undefined;
+  const storeEnvResult = params.storeEnv
+    ? sanitizeHostExecEnvWithDiagnostics({
+        baseEnv: {},
+        overrides: params.storeEnv,
+        blockPathOverrides: true,
+      })
+    : undefined;
+  const { [OPENCLAW_CLI_ENV_VAR]: _storeMarker, ...acceptedStoreEnv } = storeEnvResult?.env ?? {};
+  let storeEnv = Object.keys(acceptedStoreEnv).length > 0 ? acceptedStoreEnv : undefined;
+  const rejectedStoreKeys = new Set([
+    ...(storeEnvResult?.rejectedOverrideBlockedKeys ?? []),
+    ...(storeEnvResult?.rejectedOverrideInvalidKeys ?? []),
+  ]);
+  if (params.storeEnv && Object.hasOwn(params.storeEnv, OPENCLAW_CLI_ENV_VAR)) {
+    rejectedStoreKeys.add(OPENCLAW_CLI_ENV_VAR);
+  }
+  if (params.host === "sandbox" && storeEnv) {
+    const sandboxStoreEnvResult = sanitizeEnvVars(storeEnv);
+    storeEnv = sandboxStoreEnvResult.allowed;
+    for (const key of sandboxStoreEnvResult.blocked) {
+      rejectedStoreKeys.add(key);
+    }
+    if (sandboxStoreEnvResult.warnings.length > 0) {
+      params.warnings.push(
+        `Warning: secret store environment entries need attention: ${sandboxStoreEnvResult.warnings.join("; ")}.`,
+      );
+    }
+  }
+  if (rejectedStoreKeys.size > 0) {
+    params.warnings.push(
+      `Warning: secret store environment entries were not applied for host=${params.host}: ${Array.from(rejectedStoreKeys).toSorted().join(", ")}.`,
+    );
+  }
+  const hasStoreEnv = storeEnv && Object.keys(storeEnv).length > 0;
+  const requestedEnv: Record<string, string> | undefined = hasStoreEnv
+    ? { ...storeEnv, ...explicitEnv }
+    : explicitEnv;
   const hostEnvResult =
     params.host === "sandbox"
       ? null
