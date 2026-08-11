@@ -13,8 +13,8 @@ import {
   listSessionEntries,
   loadSessionEntry,
   loadTranscriptEvents,
+  type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
-import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
 import {
   isCanonicalSessionTranscriptEntry,
   scanSessionTranscriptTree,

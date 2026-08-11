@@ -16,7 +16,7 @@ import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state
 import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
   startTestGatewayServer,
   testState,
@@ -271,7 +271,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
         });
         testState.gatewayAuth = undefined;
 
-        const port = await getFreePort();
+        const port = await getGatewayTestPort();
         server = await startTestGatewayServer(port);
         const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
 
@@ -434,7 +434,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
         },
       });
 
-      const port = await getFreePort();
+      const port = await getGatewayTestPort();
       server = await startTestGatewayServer(port, { auth: { mode: "none" } });
       const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
 
@@ -507,7 +507,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
             },
           });
 
-          const port = await getFreePort();
+          const port = await getGatewayTestPort();
           server = await startTestGatewayServer(port, { auth: { mode: "none" } });
           const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
 
@@ -581,7 +581,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
         );
         await writeConfig(config);
 
-        const port = await getFreePort();
+        const port = await getGatewayTestPort();
         server = await startTestGatewayServer(port, { auth: { mode: "none" } });
         const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
         expect(ready.status).toBe(200);
@@ -631,7 +631,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
       });
       testState.gatewayAuth = undefined;
 
-      await expect(startTestGatewayServer(await getFreePort())).rejects.toThrow(
+      await expect(startTestGatewayServer(await getGatewayTestPort())).rejects.toThrow(
         /Startup failed: required secrets are unavailable/,
       );
     });

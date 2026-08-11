@@ -3,8 +3,11 @@ import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
 } from "../../config/sessions/legacy-sqlite-marker.js";
-import { listSessionEntries, loadSessionEntry } from "../../config/sessions/session-accessor.js";
-import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
+import {
+  listSessionEntries,
+  loadSessionEntry,
+  type SessionTranscriptRuntimeTarget,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CompactResult } from "../../context-engine/types.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";

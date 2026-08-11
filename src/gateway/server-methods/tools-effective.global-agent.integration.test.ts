@@ -7,7 +7,10 @@ import { getGatewayConfigModule, sessionStoreEntry } from "../test/server-sessio
 import { toolsEffectiveGlobalAgentRuntimeMocks as inventoryMocks } from "./__mocks__/tools-effective.runtime.js";
 import { testing, toolsEffectiveHandlers } from "./tools-effective.js";
 
-vi.mock("./tools-effective.runtime.js");
+vi.mock("./tools-effective.runtime.js", async () => {
+  const mockModule = await import("./__mocks__/tools-effective.runtime.js");
+  return { ...mockModule, ...mockModule.toolsEffectiveRuntimeMockModule };
+});
 
 installGatewayTestHooks();
 

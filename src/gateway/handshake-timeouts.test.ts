@@ -9,7 +9,7 @@ import {
   MIN_CONNECT_CHALLENGE_TIMEOUT_MS,
   resolveConnectChallengeTimeoutMs,
 } from "../../packages/gateway-client/src/timeouts.js";
-import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
+import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../../packages/gateway-client/src/timeouts.js";
 import { resolvePreauthHandshakeTimeoutMs } from "./handshake-timeouts.js";
 
 describe("gateway handshake timeouts", () => {

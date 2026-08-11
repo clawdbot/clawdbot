@@ -6,7 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { openAuthenticatedGatewayWs, waitForGatewayWsClose } from "./shared-auth.test-helpers.js";
 import {
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
   rpcReq,
   startTestGatewayServer,
@@ -42,7 +42,7 @@ beforeAll(async () => {
   if (!configPath) {
     throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
   }
-  port = await getFreePort();
+  port = await getGatewayTestPort();
   testState.gatewayAuth = undefined;
   setTestEnvValue(SECRET_REF_TOKEN_ID, OLD_TOKEN);
   await fs.writeFile(
