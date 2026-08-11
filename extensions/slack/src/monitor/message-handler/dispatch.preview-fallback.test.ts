@@ -877,7 +877,7 @@ vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => {
   const readMockOptionalString = (value?: string) => value;
   return {
     isRecord: isMockRecord,
-    asOptionalRecord: isMockRecord,
+    asOptionalRecord: (value: unknown) => (isMockRecord(value) ? value : undefined),
     normalizeOptionalLowercaseString: normalizeMockLowercaseString,
     normalizeOptionalString: readMockOptionalString,
   };
