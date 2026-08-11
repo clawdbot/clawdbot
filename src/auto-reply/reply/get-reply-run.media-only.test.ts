@@ -38,6 +38,8 @@ import { drainFormattedSystemEvents } from "./session-system-events.js";
 import {
   publishPreparedHarnessSourceReplyDeliveryMode,
   readSourceReplyDeliveryModeOrigin,
+  setSourceReplyDeliveryModeOrigin,
+  setSourceReplyDeliveryPromptComponents,
   type SourceReplyDeliveryRuntimeOptions,
 } from "./source-reply-delivery-runtime.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
@@ -687,15 +689,50 @@ describe("runPreparedReply media-only handling", () => {
     const run = requireLastRunReplyAgentCall().followupRun.run;
     expect(run.extraSystemPrompt).toBe("direct:message_tool_only");
     expect(run.extraSystemPromptStatic).toBe("direct:message_tool_only");
+    run.extraSystemPrompt += "\n\npost-compaction refresh";
     publishPreparedHarnessSourceReplyDeliveryMode(run, "automatic");
-    expect(run.extraSystemPrompt).toBe("direct:automatic");
+    expect(run.extraSystemPrompt).toBe("direct:automatic\n\npost-compaction refresh");
     expect(run.extraSystemPromptStatic).toBe("direct:message_tool_only");
     publishPreparedHarnessSourceReplyDeliveryMode(run, "message_tool_only");
-    expect(run.extraSystemPrompt).toBe("direct:message_tool_only");
+    expect(run.extraSystemPrompt).toBe("direct:message_tool_only\n\npost-compaction refresh");
     expect(run.cliSessionBindingFacts).toEqual({
       extraSystemPromptStatic: "direct:message_tool_only",
       sourceReplyDeliveryMode: "message_tool_only",
     });
+  });
+
+  it("replaces only the bound delivery prompt component", () => {
+    const repeatedPrefix = "same guidance\n\nindependent context\n\n";
+    const run = { extraSystemPrompt: `${repeatedPrefix}same guidance\n\nlater context` };
+    setSourceReplyDeliveryModeOrigin(run, "runtime_default");
+    setSourceReplyDeliveryPromptComponents(
+      run,
+      { automatic: "automatic guidance", message_tool_only: "same guidance" },
+      repeatedPrefix.length,
+    );
+
+    publishPreparedHarnessSourceReplyDeliveryMode(run, "automatic");
+    expect(run.extraSystemPrompt).toBe(`${repeatedPrefix}automatic guidance\n\nlater context`);
+
+    const absent = { extraSystemPrompt: "independent context only" };
+    setSourceReplyDeliveryModeOrigin(absent, "runtime_default");
+    setSourceReplyDeliveryPromptComponents(
+      absent,
+      { automatic: "automatic guidance", message_tool_only: "missing guidance" },
+      undefined,
+    );
+    publishPreparedHarnessSourceReplyDeliveryMode(absent, "automatic");
+    expect(absent.extraSystemPrompt).toBe("independent context only");
+
+    const empty = { extraSystemPrompt: "independent context only" };
+    setSourceReplyDeliveryModeOrigin(empty, "runtime_default");
+    setSourceReplyDeliveryPromptComponents(
+      empty,
+      { automatic: "", message_tool_only: "" },
+      undefined,
+    );
+    publishPreparedHarnessSourceReplyDeliveryMode(empty, "automatic");
+    expect(empty.extraSystemPrompt).toBe("independent context only");
   });
 
   it("keeps addressed message-tool delivery hints out of persisted transcript rows", async () => {

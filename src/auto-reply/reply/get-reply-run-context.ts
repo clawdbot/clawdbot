@@ -213,6 +213,11 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     groupSystemPrompt,
     execOverridePromptHint,
   ].filter(Boolean);
+  const sourceConversationContextPromptOffset = sessionStableConversationContext
+    ? inboundMetaPrompt
+      ? inboundMetaPrompt.length + 2
+      : 0
+    : undefined;
   const extraSystemPromptStatic = [
     sessionStableConversationContext,
     groupIntro,
@@ -221,21 +226,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   ]
     .filter(Boolean)
     .join("\n\n");
-  const buildExtraSystemPrompt = (mode: keyof typeof sourceConversationContextByMode) =>
-    [
-      inboundMetaPrompt,
-      sourceConversationContextByMode[mode],
-      groupIntro,
-      groupSystemPrompt,
-      execOverridePromptHint,
-    ]
-      .filter(Boolean)
-      .join("\n\n");
-  // Prepared harness selects one bounded variant; both are never model-visible together.
-  const extraSystemPromptBySourceReplyDeliveryMode = {
-    automatic: buildExtraSystemPrompt("automatic"),
-    message_tool_only: buildExtraSystemPrompt("message_tool_only"),
-  };
   const cliSessionBindingFacts = {
     extraSystemPromptStatic,
     ...(sessionPromptSourceReplyDeliveryMode
@@ -421,7 +411,8 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     fullAccessState,
     isFirstTurnInSession,
     extraSystemPromptParts,
-    extraSystemPromptBySourceReplyDeliveryMode,
+    sourceConversationContextByMode,
+    sourceConversationContextPromptOffset,
     extraSystemPromptStatic,
     cliSessionBindingFacts,
     baseBodyTrimmedRaw,

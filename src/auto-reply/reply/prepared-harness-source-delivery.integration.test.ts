@@ -32,7 +32,7 @@ import { buildDirectChatContext } from "./groups.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import {
   setSourceReplyDeliveryModeOrigin,
-  setSourceReplyDeliveryPromptVariants,
+  setSourceReplyDeliveryPromptComponents,
 } from "./source-reply-delivery-runtime.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -243,14 +243,15 @@ describe("prepared harness source delivery", () => {
           sourceReplyDeliveryMode: "message_tool_only",
         }),
       };
-      setSourceReplyDeliveryPromptVariants(
-        followupRun.run,
-        extraSystemPromptBySourceReplyDeliveryMode,
-      );
       followupRun.run.extraSystemPrompt =
         extraSystemPromptBySourceReplyDeliveryMode[
           runtimeOpts.sourceReplyDeliveryMode ?? "automatic"
         ];
+      setSourceReplyDeliveryPromptComponents(
+        followupRun.run,
+        extraSystemPromptBySourceReplyDeliveryMode,
+        0,
+      );
       setSourceReplyDeliveryModeOrigin(followupRun.run, runtimeOpts.sourceReplyDeliveryModeOrigin);
       // Dispatch already captured its session snapshot; the embedded fixture uses
       // a SQLite compatibility key and has no durable row for writer admission.

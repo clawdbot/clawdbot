@@ -28,6 +28,11 @@ import { runMemoryFlushIfNeeded, runPreflightCompactionIfNeeded } from "./agent-
 import { setAgentRunnerMemoryTestDeps } from "./agent-runner-memory.test-support.js";
 import { createTestFollowupRun, writeTestSessionStore } from "./agent-runner.test-fixtures.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
+import {
+  publishPreparedHarnessSourceReplyDeliveryMode,
+  setSourceReplyDeliveryModeOrigin,
+  setSourceReplyDeliveryPromptComponents,
+} from "./source-reply-delivery-runtime.js";
 
 const compactEmbeddedAgentSessionMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
@@ -3308,7 +3313,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 
-  it("still byte-guards a genuine embedded SQLite-backed session", async () => {
+  it("preserves post-compaction context when prepared delivery ownership changes", async () => {
     const storePath = path.join(rootDir, "sqlite-large-session.json");
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
@@ -3327,6 +3332,33 @@ describe("runMemoryFlushIfNeeded", () => {
       compactionCount: 0,
     };
     const replyOperation = createReplyOperation();
+    await fs.writeFile(
+      path.join(rootDir, "AGENTS.md"),
+      [
+        "## Session Startup",
+        "Reload this required startup context after compaction.",
+        "",
+        "## Unrelated",
+        "Do not inject this section.",
+      ].join("\n"),
+      "utf-8",
+    );
+    const inboundPrompt = "current inbound metadata";
+    const messageToolPrompt = "message-tool delivery guidance";
+    const automaticPrompt = "automatic delivery guidance";
+    const independentPrompt = "group and operator context";
+    const followupRun = createTestFollowupRun({
+      sessionId: "session",
+      sessionKey,
+      workspaceDir: rootDir,
+      extraSystemPrompt: [inboundPrompt, messageToolPrompt, independentPrompt].join("\n\n"),
+    });
+    setSourceReplyDeliveryModeOrigin(followupRun.run, "runtime_default");
+    setSourceReplyDeliveryPromptComponents(
+      followupRun.run,
+      { automatic: automaticPrompt, message_tool_only: messageToolPrompt },
+      inboundPrompt.length + 2,
+    );
 
     const entry = await runPreflightCompactionIfNeeded({
       cfg: {
@@ -3334,14 +3366,12 @@ describe("runMemoryFlushIfNeeded", () => {
           defaults: {
             compaction: {
               maxActiveTranscriptBytes: "10b",
+              postCompactionSections: ["Session Startup"],
             },
           },
         },
       },
-      followupRun: createTestFollowupRun({
-        sessionId: "session",
-        sessionKey,
-      }),
+      followupRun,
       defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 100_000,
       sessionEntry,
@@ -3356,6 +3386,19 @@ describe("runMemoryFlushIfNeeded", () => {
     const compactCall = requireCompactEmbeddedAgentSessionCall();
     expect(compactCall.trigger).toBe("budget");
     expect(compactCall.preflightCompactionTrigger).toBe("transcript_bytes");
+    expect(followupRun.run.extraSystemPrompt).toContain(
+      "Reload this required startup context after compaction.",
+    );
+
+    publishPreparedHarnessSourceReplyDeliveryMode(followupRun.run, "automatic");
+    expect(followupRun.run.extraSystemPrompt).toContain(automaticPrompt);
+    expect(followupRun.run.extraSystemPrompt).not.toContain(messageToolPrompt);
+    expect(followupRun.run.extraSystemPrompt).toContain(inboundPrompt);
+    expect(followupRun.run.extraSystemPrompt).toContain(independentPrompt);
+    expect(followupRun.run.extraSystemPrompt).toContain(
+      "Reload this required startup context after compaction.",
+    );
+    expect(followupRun.run.extraSystemPrompt).not.toContain("Do not inject this section.");
   });
 
   it("keeps incognito preflight compaction in the process-local transcript store", async () => {

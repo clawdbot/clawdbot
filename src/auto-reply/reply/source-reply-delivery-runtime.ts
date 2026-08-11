@@ -17,7 +17,8 @@ type SourceReplyDeliveryRuntimeBinding = {
   origin?: SourceReplyDeliveryModeOrigin;
   preparedHarnessMode?: SourceReplyDeliveryMode;
   preparedHarnessModeListener?: (mode: SourceReplyDeliveryMode) => void;
-  extraSystemPromptByMode?: Record<SourceReplyDeliveryMode, string>;
+  promptComponentByMode?: Record<SourceReplyDeliveryMode, string>;
+  promptComponentOffset?: number;
 };
 type SourceReplyDeliveryModeOwner = {
   [sourceReplyDeliveryModeOriginKey]?: SourceReplyDeliveryRuntimeBinding;
@@ -44,12 +45,14 @@ export function readSourceReplyDeliveryModeOrigin(
   return readSourceReplyDeliveryRuntimeBinding(owner)?.origin;
 }
 
-export function setSourceReplyDeliveryPromptVariants(
+export function setSourceReplyDeliveryPromptComponents(
   owner: object,
-  variants: Record<SourceReplyDeliveryMode, string>,
+  components: Record<SourceReplyDeliveryMode, string>,
+  componentOffset: number | undefined,
 ): void {
   const binding = readSourceReplyDeliveryRuntimeBinding(owner) ?? {};
-  binding.extraSystemPromptByMode = variants;
+  binding.promptComponentByMode = components;
+  binding.promptComponentOffset = componentOffset;
   (owner as SourceReplyDeliveryModeOwner)[sourceReplyDeliveryModeOriginKey] = binding;
 }
 
@@ -67,9 +70,22 @@ export function publishPreparedHarnessSourceReplyDeliveryMode(
   const binding = readSourceReplyDeliveryRuntimeBinding(owner);
   if (binding?.origin === "runtime_default") {
     binding.preparedHarnessMode = mode;
-    const extraSystemPrompt = binding.extraSystemPromptByMode?.[mode];
-    if (extraSystemPrompt !== undefined) {
-      (owner as { extraSystemPrompt?: string }).extraSystemPrompt = extraSystemPrompt;
+    const components = binding.promptComponentByMode;
+    const nextComponent = components?.[mode];
+    const promptOwner = owner as { extraSystemPrompt?: string };
+    const prompt = promptOwner.extraSystemPrompt;
+    if (components && nextComponent && prompt) {
+      const offset = binding.promptComponentOffset ?? -1;
+      const currentComponent = [...new Set(Object.values(components))].find(
+        (component) => component && prompt.slice(offset, offset + component.length) === component,
+      );
+      // Replace only the delivery-owned prompt component. Later context additions
+      // must survive prepared harness selection instead of restoring a stale prompt.
+      if (currentComponent && currentComponent !== nextComponent && offset >= 0) {
+        promptOwner.extraSystemPrompt =
+          prompt.slice(0, offset) + nextComponent + prompt.slice(offset + currentComponent.length);
+        binding.promptComponentOffset = offset;
+      }
     }
     binding.preparedHarnessModeListener?.(mode);
   }
