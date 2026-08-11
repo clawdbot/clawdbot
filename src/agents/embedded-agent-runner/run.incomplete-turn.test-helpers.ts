@@ -149,7 +149,7 @@ export function makeSilentReplyParams(
   };
 }
 
-export function warnMessages(): string[] {
+function warnMessages(): string[] {
   return mockedLog.warn.mock.calls.map(([message]) => String(message));
 }
 
