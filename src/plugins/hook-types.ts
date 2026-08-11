@@ -65,12 +65,14 @@ export type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookInboundMessageMetadata,
+  PluginHookLocation,
   PluginHookMediaFact,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
+  PluginHookProviderUpdate,
 } from "./hook-message.types.js";
 export {
   PluginApprovalResolutions,

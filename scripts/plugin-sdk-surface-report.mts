@@ -270,7 +270,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: add the account-aware native approval request selector.
       // +3: add canonical coercion exports while retaining the shipped asString compatibility name.
       // +2: add high-use coercion primitives while retaining shipped object-record exports.
-      4868,
+      // +2: channel-neutral location and provider-update hook contracts.
+      4870,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

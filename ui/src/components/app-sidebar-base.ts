@@ -69,8 +69,6 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
     agentId: string,
     target?: NewSessionTarget,
   ) => void;
-  /** Agent id of the in-flight new-session draft; renders the draft row. */
-  @property({ attribute: false }) draftSessionAgentId = "";
   @property({ attribute: false }) onUpdateSidebarEntries?: (entries: string[]) => void;
   @property({ attribute: false }) onPairMobile?: () => void;
   @property({ attribute: false })
