@@ -62,11 +62,15 @@ export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): voi
       pids = [{ pid, startTime: getProcessStartTime(pid) }];
     } else {
       const cached = treeSnapshotCache.get(pid);
-      if (cached && getProcessStartTime(pid) === cached.rootStartTime) {
-        pids = cached.pids;
-      } else {
-        pids = getUnixProcessTreePids(pid);
+      if (
+        !cached ||
+        cached.rootStartTime === undefined ||
+        getProcessStartTime(pid) !== cached.rootStartTime
+      ) {
+        treeSnapshotCache.delete(pid);
+        return;
       }
+      pids = cached.pids;
     }
     const stillAlive = useGroupKill
       ? isProcessAlive(-pid) || isProcessAlive(pid)
@@ -337,8 +341,7 @@ function signalProcessTreeUnix(
     try {
       if (
         signal === "SIGKILL" &&
-        p.startTime !== undefined &&
-        getProcessStartTime(p.pid) !== p.startTime
+        (p.startTime === undefined || getProcessStartTime(p.pid) !== p.startTime)
       ) {
         continue;
       }
