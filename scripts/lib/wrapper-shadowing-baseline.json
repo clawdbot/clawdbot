@@ -60,17 +60,6 @@
     "wrapper": "src/channels/streaming.ts"
   },
   {
-    "name": "drainPendingDeliveries",
-    "wrapped": "src/infra/outbound/delivery-queue-recovery.ts",
-    "wrapper": "src/plugin-sdk/delivery-queue-runtime.ts",
-    "via": "src/infra/outbound/delivery-queue.ts"
-  },
-  {
-    "name": "formatSkillsForPrompt",
-    "wrapped": "src/skills/loading/skill-contract.ts",
-    "wrapper": "src/skills/loading/session.ts"
-  },
-  {
     "name": "getActivePluginRegistryWorkspaceDirFromState",
     "wrapped": "src/plugins/runtime-workspace-state.ts",
     "wrapper": "src/plugins/runtime-state.ts"
