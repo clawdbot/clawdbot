@@ -48,10 +48,12 @@ public enum ShareGatewayRelaySettings {
         guard let data = self.defaults.data(forKey: self.relayConfigKey) else { return nil }
         guard let config = try? JSONDecoder().decode(ShareGatewayRelayConfig.self, from: data) else { return nil }
         if config.token != nil || config.password != nil {
-            // Legacy defaults held the full config. Scrub it even if Keychain access is unavailable;
-            // this load can still use the decoded credentials while the host app repairs persistence.
-            _ = self.saveCredentials(config)
-            self.saveMetadata(config)
+            // Legacy defaults held the full config. Commit the scrub only after
+            // Keychain persistence succeeds so a transient failure remains retryable.
+            _ = self.commitConfig(
+                config,
+                saveCredentials: self.saveCredentials,
+                saveMetadata: self.saveMetadata)
             return config
         }
         // Keep relay identity in the Keychain bundle with its secrets. A partial
@@ -87,9 +89,16 @@ public enum ShareGatewayRelaySettings {
 
     @discardableResult
     public static func saveConfig(_ config: ShareGatewayRelayConfig) -> Bool {
-        let credentialsSaved = self.saveCredentials(config)
-        self.saveMetadata(config)
-        return credentialsSaved
+        let saved = self.commitConfig(
+            config,
+            saveCredentials: self.saveCredentials,
+            saveMetadata: self.saveMetadata)
+        guard saved else {
+            self.defaults.removeObject(forKey: self.relayConfigKey)
+            self.saveLastEvent("Share unavailable: reconnect OpenClaw to save gateway access securely.")
+            return false
+        }
+        return true
     }
 
     public static func clearConfig() {
@@ -122,6 +131,16 @@ public enum ShareGatewayRelaySettings {
         self.defaults.set(data, forKey: self.relayConfigKey)
     }
 
+    static func commitConfig(
+        _ config: ShareGatewayRelayConfig,
+        saveCredentials: (ShareGatewayRelayConfig) -> Bool,
+        saveMetadata: (ShareGatewayRelayConfig) -> Void) -> Bool
+    {
+        guard saveCredentials(config) else { return false }
+        saveMetadata(config)
+        return true
+    }
+
     private static func loadCredentials() -> ShareGatewayRelayConfig? {
         guard let json = GenericPasswordKeychainStore.loadString(
                   service: self.relayCredentialService,
@@ -135,8 +154,7 @@ public enum ShareGatewayRelaySettings {
 
     private static func saveCredentials(_ config: ShareGatewayRelayConfig) -> Bool {
         guard config.token != nil || config.password != nil else {
-            _ = self.deleteCredentials()
-            return true
+            return self.deleteCredentials()
         }
         guard let data = try? JSONEncoder().encode(config),
               let json = String(data: data, encoding: .utf8),
@@ -146,7 +164,6 @@ public enum ShareGatewayRelaySettings {
                   account: self.relayCredentialAccount,
                   accessGroup: self.suiteName)
         else {
-            _ = self.deleteCredentials()
             return false
         }
         return true
