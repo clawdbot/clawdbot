@@ -731,6 +731,37 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     ]);
   });
 
+  it("normalizes the open-DM wildcard doctor capability from persisted metadata", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndex(rootDir);
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: {
+        ...index,
+        plugins: [
+          {
+            ...expectDefined(index.plugins[0], "index.plugins[0] test invariant"),
+            packageChannel: {
+              id: "installed",
+              doctorCapabilities: {
+                openDmRequiresAllowFromWildcard: false,
+              },
+            },
+          },
+        ],
+      },
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(
+      registry.plugins[0]?.packageChannel?.doctorCapabilities?.openDmRequiresAllowFromWildcard,
+    ).toBe(false);
+  });
+
   it("round-trips bundle metadata through the persisted index before reconstruction", async () => {
     const stateDir = makeTempDir();
     const rootDir = makeTempDir();
