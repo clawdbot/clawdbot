@@ -35,6 +35,7 @@ function configResponse(config: Record<string, unknown>, hash: string, appliedCo
 
 function mutationParams(request: MockGatewayRequest): {
   baseHash?: string;
+  deliveryContext?: { channel?: string; to?: string };
   note?: string;
   raw?: string;
   sessionKey?: string;
@@ -45,6 +46,7 @@ function mutationParams(request: MockGatewayRequest): {
   }
   return params as {
     baseHash?: string;
+    deliveryContext?: { channel?: string; to?: string };
     note?: string;
     raw?: string;
     sessionKey?: string;
@@ -79,6 +81,7 @@ suite.define(() => {
         viewport: { height: 1000, width: 1440 },
       },
       async ({ page }) => {
+        const activeSessionKey = "agent:main:webchat:control-ui";
         const initialConfig = {
           laboratory: { endpoint: "local-api", retryBudget: 2 },
           tools: { codeMode: { enabled: false } },
@@ -88,6 +91,7 @@ suite.define(() => {
           tools: {},
         };
         const gateway = await installMockGateway(page, {
+          sessionKey: activeSessionKey,
           methodResponses: {
             "config.get": configResponse(initialConfig, "snapshot-1"),
             "config.schema": {
@@ -141,7 +145,11 @@ suite.define(() => {
         await codeModeRow.locator("wa-switch").click();
         const patchParams = mutationParams(await gateway.waitForRequest("config.patch"));
         expect(patchParams.baseHash).toBe("snapshot-1");
-        expect(patchParams.sessionKey).toBe("main");
+        expect(patchParams.sessionKey).toBe(activeSessionKey);
+        expect(patchParams.deliveryContext).toEqual({
+          channel: "webchat",
+          to: activeSessionKey,
+        });
         expect(JSON.parse(String(patchParams.raw))).toEqual({
           tools: { codeMode: { enabled: null } },
         });
@@ -249,7 +257,11 @@ suite.define(() => {
         const applyParams = mutationParams(await gateway.waitForRequest("config.apply"));
         expect(applyParams.baseHash).toBe("mock-config-hash-2");
         expect(applyParams.raw).toBe(rawDraft);
-        expect(applyParams.sessionKey).toBe("main");
+        expect(applyParams.sessionKey).toBe(activeSessionKey);
+        expect(applyParams.deliveryContext).toEqual({
+          channel: "webchat",
+          to: activeSessionKey,
+        });
         await expect.poll(() => saveIndicator.textContent()).toContain("Applying");
         await capture(page, "03-applying.png");
 

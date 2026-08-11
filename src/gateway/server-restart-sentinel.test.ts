@@ -99,10 +99,6 @@ const mocks = vi.hoisted(() => {
         | { channel?: string; to?: string; accountId?: string; threadId?: string | number }
         | undefined => undefined,
     ),
-    mergeDeliveryContext: vi.fn((a?: Record<string, unknown>, b?: Record<string, unknown>) => ({
-      ...b,
-      ...a,
-    })),
     getChannelPlugin: vi.fn((): ChannelPlugin | undefined => undefined),
     normalizeChannelId: vi.fn<(channel?: string | null) => string | null>(),
     resolveOutboundTarget: vi.fn(((_params?: { to?: string }) => ({
@@ -245,7 +241,6 @@ vi.mock("./session-utils.js", () => ({
 vi.mock("../utils/delivery-context.shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../utils/delivery-context.shared.js")>()),
   deliveryContextFromSession: mocks.deliveryContextFromSession,
-  mergeDeliveryContext: mocks.mergeDeliveryContext,
 }));
 
 vi.mock("../channels/plugins/index.js", async () => {
@@ -2767,6 +2762,69 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.enqueueDeliveryOnce).not.toHaveBeenCalled();
     expect(mocks.resolveOutboundTarget).not.toHaveBeenCalled();
   });
+
+  it.each(["config-patch", "config-apply"] as const)(
+    "keeps a %s webchat wake away from stale external routing",
+    async (kind) => {
+      const deliveryContext = { channel: "webchat", to: "agent:main:main" };
+      mocks.readRestartSentinel.mockResolvedValue({
+        version: 1,
+        revision: 123,
+        payload: {
+          kind,
+          status: "ok",
+          ts: 123,
+          sessionKey: "agent:main:main",
+          deliveryContext,
+          message: null,
+          stats: {
+            mode: kind === "config-patch" ? "config.patch" : "config.apply",
+            root: "/tmp/openclaw.json",
+            requiresRestart: true,
+          },
+        },
+      });
+      mocks.deliveryContextFromSession.mockReturnValue({
+        channel: "telegram",
+        to: "telegram:200482621",
+        accountId: "default",
+      });
+      mocks.resolveOutboundTarget.mockReturnValue({
+        ok: false,
+        error: new Error("WebChat does not support outbound delivery"),
+      });
+
+      await scheduleRestartSentinelWake({ deps: {} as never });
+
+      expect(mocks.resolveOutboundTarget).toHaveBeenCalledWith({
+        channel: "webchat",
+        to: "agent:main:main",
+        cfg: {},
+        accountId: undefined,
+        mode: "implicit",
+      });
+      expect(mocks.enqueueSessionDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "systemEvent",
+          sessionKey: "agent:main:main",
+          text: "restart message",
+          deliveryContext,
+        }),
+      );
+      expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
+        sessionKey: "agent:main:main",
+        deliveryContext,
+      });
+      expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
+        source: "restart-sentinel",
+        intent: "immediate",
+        reason: "wake",
+        sessionKey: "agent:main:main",
+      });
+      expect(mocks.enqueueDeliveryOnce).not.toHaveBeenCalled();
+      expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    },
+  );
 
   it("resolves session routing before queueing the heartbeat wake", async () => {
     mocks.readRestartSentinel.mockResolvedValue({

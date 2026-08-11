@@ -54,6 +54,9 @@ type RuntimeConfigDispatchOptions = {
 /** Debounce window between the last form edit and its automatic config.set. */
 const CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS = 800;
 
+// Gateway delivery contract: config restarts return to their originating Control UI session.
+const CONTROL_UI_DELIVERY_CHANNEL = "webchat";
+
 /** Reads the additive ack hash from a config.set/config.apply response. */
 function readAckHash(ack: unknown): string | null {
   const hash = (ack as { hash?: unknown } | null | undefined)?.hash;
@@ -973,6 +976,7 @@ async function applyConfig(state: ConfigState, canDispatch?: () => boolean): Pro
     "configApplying",
     {
       sessionKey: state.applySessionKey,
+      deliveryContext: { channel: CONTROL_UI_DELIVERY_CHANNEL, to: state.applySessionKey },
     },
     undefined,
     canDispatch,
@@ -1005,6 +1009,7 @@ async function patchConfig(
       baseHash,
       raw: typeof options.raw === "string" ? options.raw : JSON.stringify(options.raw),
       sessionKey: state.applySessionKey,
+      deliveryContext: { channel: CONTROL_UI_DELIVERY_CHANNEL, to: state.applySessionKey },
       note: options.note,
       ...(options.replacePaths?.length ? { replacePaths: options.replacePaths } : {}),
     });
