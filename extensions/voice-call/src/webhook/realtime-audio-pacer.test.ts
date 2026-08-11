@@ -109,6 +109,29 @@ function runPacedFrames(params: { frameCount: number; overheadMs: number }): {
   return { delaysMs, elapsedMs: clockMs, sentFrames };
 }
 
+function capturePacingDelays(run: (advanceTime: (durationMs: number) => void) => void): number[] {
+  let nowMs = 0;
+  const delaysMs: number[] = [];
+  const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => nowMs);
+  const timeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+    _: () => void,
+    delayMs?: number,
+  ) => {
+    delaysMs.push(delayMs ?? 0);
+    return 1 as unknown as ReturnType<typeof setTimeout>;
+  }) as unknown as typeof setTimeout);
+
+  try {
+    run((durationMs) => {
+      nowMs += durationMs;
+    });
+  } finally {
+    timeoutSpy.mockRestore();
+    nowSpy.mockRestore();
+  }
+  return delaysMs;
+}
+
 describe("RealtimeAudioPacer", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -124,6 +147,37 @@ describe("RealtimeAudioPacer", () => {
     expect(sentFrames).toBe(frameCount);
     // Relative rescheduling adds `overheadMs` to every frame and drifts ~15% over this run.
     expect(elapsedMs).toBeLessThanOrEqual(idealMs + 50);
+  });
+
+  it("subtracts synchronous send work from the first paced delay", () => {
+    const delaysMs = capturePacingDelays((advanceTime) => {
+      const pacer = new RealtimeAudioPacer({
+        serializer: createCompactSerializer(),
+        send: () => {
+          advanceTime(5);
+          return true;
+        },
+      });
+
+      pacer.sendAudio(Buffer.alloc(320));
+    });
+
+    expect(delaysMs).toEqual([15]);
+  });
+
+  it("starts a fresh cadence after a successful terminal send", () => {
+    const delaysMs = capturePacingDelays((advanceTime) => {
+      const pacer = new RealtimeAudioPacer({
+        serializer: createCompactSerializer(),
+        send: () => true,
+      });
+
+      pacer.sendAudio(Buffer.alloc(160));
+      advanceTime(40);
+      pacer.sendAudio(Buffer.alloc(320));
+    });
+
+    expect(delaysMs).toEqual([20]);
   });
 
   it("does not burst-send to catch up after a stall beyond the pacing window", () => {

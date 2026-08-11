@@ -176,7 +176,6 @@ export class RealtimeAudioPacer {
     let sent;
     if (item.type === "audio") {
       this.queuedAudioBytes = Math.max(0, this.queuedAudioBytes - item.chunk.length);
-      sent = this.params.send(this.params.serializer.media(item.chunk.toString("base64")));
       // Schedule against a running deadline instead of sleeping a full frame after each
       // send; a relative sleep adds send and event-loop cost to every frame, and that
       // underfeed accumulates into carrier jitter-buffer concealment.
@@ -184,17 +183,19 @@ export class RealtimeAudioPacer {
       // Monotonic clock: `setTimeout` schedules against libuv's monotonic time, so pacing
       // must use the same domain. A wall-clock source would let an NTP correction distort
       // the cadence and reintroduce the artifacts this pacing exists to prevent.
-      const nowMs = performance.now();
+      const beforeSendMs = performance.now();
       // Drop the deadline once it is no longer meaningful, i.e. after a stall longer than
       // the pacing window.
       if (
         this.nextSendDeadlineMs === null ||
-        nowMs - this.nextSendDeadlineMs > MAX_PACING_CATCHUP_MS
+        beforeSendMs - this.nextSendDeadlineMs > MAX_PACING_CATCHUP_MS
       ) {
-        this.nextSendDeadlineMs = nowMs;
+        this.nextSendDeadlineMs = beforeSendMs;
       }
       this.nextSendDeadlineMs += frameDurationMs;
-      delayMs = Math.max(0, this.nextSendDeadlineMs - nowMs);
+      sent = this.params.send(this.params.serializer.media(item.chunk.toString("base64")));
+      // Synchronous serialization and sending consume part of this frame's pacing window.
+      delayMs = Math.max(0, this.nextSendDeadlineMs - performance.now());
     } else {
       sent = this.params.send(this.params.serializer.mark(item.name));
     }
@@ -204,8 +205,12 @@ export class RealtimeAudioPacer {
       this.queuedAudioBytes = 0;
       return;
     }
-    if (this.pendingQueueSize > 0) {
-      this.timer = setTimeout(() => this.pump(), delayMs);
+    if (this.pendingQueueSize === 0) {
+      // No timer can consume this deadline after the terminal send; a later delta must
+      // begin a fresh cadence rather than treating the completed utterance as overdue.
+      this.nextSendDeadlineMs = null;
+      return;
     }
+    this.timer = setTimeout(() => this.pump(), delayMs);
   }
 }
