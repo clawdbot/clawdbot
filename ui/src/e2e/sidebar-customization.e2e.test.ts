@@ -20,7 +20,6 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const catalogLabelProofVariant = process.env.OPENCLAW_CATALOG_LABEL_PROOF_VARIANT ?? "after";
 const hiddenSessionCatalogsStorageKey = "openclaw:sidebar:sessions:hidden-catalogs";
 const uiProofArtifactDir = path.join(
   process.cwd(),
@@ -123,11 +122,16 @@ async function openSidebarTestPage() {
 
 suite.define(() => {
   it("uses catalog labels in the hidden-section recovery rows", async () => {
-    const page = await suite.browser.newPage({ viewport: { height: 900, width: 1440 } });
-    await page.addInitScript(
-      ({ key, value }) => localStorage.setItem(key, JSON.stringify(value)),
-      { key: hiddenSessionCatalogsStorageKey, value: ["claude", "offline-catalog"] },
-    );
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await page.addInitScript(({ key, value }) => localStorage.setItem(key, JSON.stringify(value)), {
+      key: hiddenSessionCatalogsStorageKey,
+      value: ["claude", "offline-catalog"],
+    });
     const gateway = await installMockGateway(page, {
       featureMethods: ["sessions.catalog.list"],
       methodResponses: {
@@ -146,23 +150,15 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
-      if (catalogLabelProofVariant !== "before") {
-        await gateway.waitForRequest("sessions.catalog.list");
-      }
-      const recovery = page
-        .getByRole("heading", { name: "Hidden session sections" })
-        .locator("xpath=following-sibling::*[1]");
-      const expectedClaudeLabel = catalogLabelProofVariant === "before" ? "claude" : "Claude Code";
-      const row = recovery.locator(".settings-row", { hasText: expectedClaudeLabel });
-      const fallbackRow = recovery.locator(".settings-row", { hasText: "offline-catalog" });
-      await expect.poll(() => row.isVisible()).toBe(true);
-      await expect.poll(() => fallbackRow.isVisible()).toBe(true);
-      expect(
-        await recovery.getByText(
-          catalogLabelProofVariant === "before" ? "Claude Code" : "claude",
-          { exact: true },
-        ).count(),
-      ).toBe(0);
+      await waitForControlUiSettingsTakeover(page);
+      await gateway.waitForRequest("sessions.catalog.list");
+      const sidebarSettings = page.locator("#settings-appearance-sidebar");
+      await sidebarSettings.getByRole("heading", { name: "Hidden session sections" }).waitFor();
+      const recovery = sidebarSettings.locator(".settings-group", { hasText: "offline-catalog" });
+      const row = recovery.locator(".settings-row", { hasText: "Claude Code" });
+      await expect.poll(() => recovery.textContent()).toContain("Claude Code");
+      await expect.poll(() => recovery.textContent()).toContain("offline-catalog");
+      expect(await recovery.getByText("claude", { exact: true }).count()).toBe(0);
 
       if (captureUiProofEnabled) {
         await mkdir(uiProofArtifactDir, { recursive: true });
@@ -171,11 +167,11 @@ suite.define(() => {
           await setThemeMode(page, theme);
           await page.screenshot({
             animations: "disabled",
-            path: path.join(uiProofArtifactDir, `${catalogLabelProofVariant}-${theme}-context.png`),
+            path: path.join(uiProofArtifactDir, `after-${theme}-context.png`),
           });
           await recovery.screenshot({
             animations: "disabled",
-            path: path.join(uiProofArtifactDir, `${catalogLabelProofVariant}-${theme}-rows.png`),
+            path: path.join(uiProofArtifactDir, `after-${theme}-rows.png`),
           });
         }
       }
@@ -186,7 +182,7 @@ suite.define(() => {
         await page.evaluate((key) => localStorage.getItem(key), hiddenSessionCatalogsStorageKey),
       ).toBe('["offline-catalog"]');
     } finally {
-      await page.close();
+      await context.close();
     }
   });
 

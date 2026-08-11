@@ -2149,8 +2149,7 @@ describe("config view", () => {
     );
     const fallbackRow = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
       (candidate) =>
-        candidate.querySelector(".settings-row__title")?.textContent?.trim() ===
-        "offline-catalog",
+        candidate.querySelector(".settings-row__title")?.textContent?.trim() === "offline-catalog",
     );
     expect(heading).toBeDefined();
     expect(labeledRow).toBeDefined();
