@@ -3,7 +3,7 @@ import { formatAssistantErrorText } from "../../embedded-agent-helpers.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import { normalizeUsage, type UsageLike } from "../../usage.js";
 import { hasOutboundDeliveryEvidence } from "../delivery-evidence.js";
-import { embeddedAgentLog } from "../logger.js";
+import { log } from "../logger.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "../replay-state.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
@@ -183,7 +183,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
       `Idle-timeout cost-runaway breaker tripped: ${breakerStep.consecutive} consecutive idle timeouts ` +
       `without completed model progress (cap=${MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT}). ` +
       "Halting further attempts to bound paid model calls. See issue #76293.";
-    embeddedAgentLog.error(
+    log.error(
       `[idle-timeout-circuit-breaker-tripped] sessionKey=${params.sessionKey ?? params.sessionId} ` +
         `provider=${provider}/${modelId} consecutive=${breakerStep.consecutive} ` +
         `cap=${MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT}`,
@@ -259,7 +259,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
       : undefined;
   if (!signalOwnedInterruption && !preparedRuntime.nativeModelOwned && preflightRecovery?.handled) {
     const retryingFromTranscript = preflightRecovery.source === "mid-turn";
-    embeddedAgentLog.info(
+    log.info(
       `[context-overflow-precheck] early recovery route=${preflightRecovery.route} completed for ${provider}/${modelId}; ` +
         (retryingFromTranscript ? "retrying from current transcript" : "retrying prompt"),
     );

@@ -850,7 +850,7 @@ vi.mock("../history.js", () => ({
 }));
 
 vi.mock("../logger.js", () => ({
-  embeddedAgentLog: {
+  log: {
     debug: () => {},
     info: () => {},
     warn: () => {},

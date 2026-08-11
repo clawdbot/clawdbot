@@ -49,7 +49,7 @@ import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
 import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
-import { embeddedAgentLog } from "./logger.js";
+import { log } from "./logger.js";
 import { executePreparedEmbeddedRun } from "./run-execution.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
@@ -315,7 +315,7 @@ async function runEmbeddedAgentInternal(
           const { notifyExecutionPhase } = progressController;
           const emitStartupStageSummary = createEmbeddedRunStageSummaryEmitter({
             label: "startup stages",
-            log: embeddedAgentLog,
+            log,
             runId: params.runId,
             sessionId: params.sessionId,
             tracker: startupStages,
@@ -330,7 +330,7 @@ async function runEmbeddedAgentInternal(
           const redactedSessionKey = redactRunIdentifier(params.sessionKey);
           const redactedWorkspace = redactRunIdentifier(resolvedWorkspace);
           if (requestedWorkspaceResolution.usedFallback) {
-            embeddedAgentLog.warn(
+            log.warn(
               `[workspace-fallback] caller=runEmbeddedAgent reason=${requestedWorkspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${preparedAgentId} workspace=${redactedWorkspace}`,
             );
           }

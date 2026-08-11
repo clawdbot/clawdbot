@@ -39,7 +39,7 @@ import { resolveProviderRequestPolicyConfig } from "../provider-request-config.j
 import type { AgentRuntimeTransport } from "../runtime-plan/types.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { SettingsManager } from "../sessions/index.js";
-import { embeddedAgentLog } from "./logger.js";
+import { log } from "./logger.js";
 import { parseCacheRetention, resolveCacheRetention } from "./prompt-cache-retention.js";
 
 function requireBaseStreamFn(streamFn: StreamFn | undefined): StreamFn {
@@ -484,9 +484,7 @@ function createStreamFnWithExtraParams(
   ) {
     // Provider params stay open-ended, so validate this shared knob at its consumer boundary.
     // Never echo the authored value: model params can contain sensitive custom data.
-    embeddedAgentLog.warn(
-      'ignoring invalid cacheRetention param; expected "none", "short", or "long"',
-    );
+    log.warn('ignoring invalid cacheRetention param; expected "none", "short", or "long"');
   }
 
   const streamParams: CacheRetentionStreamOptions = {};
@@ -520,7 +518,7 @@ function createStreamFnWithExtraParams(
       typeof extraParams.transport === "string"
         ? extraParams.transport
         : typeof extraParams.transport;
-    embeddedAgentLog.warn(`ignoring invalid transport param: ${transportSummary}`);
+    log.warn(`ignoring invalid transport param: ${transportSummary}`);
   }
   const cachedContent =
     typeof extraParams.cachedContent === "string"
@@ -578,7 +576,7 @@ function createStreamFnWithExtraParams(
     const debugParams = initialCacheRetention
       ? { ...streamParams, cacheRetention: initialCacheRetention }
       : streamParams;
-    embeddedAgentLog.debug(`creating streamFn wrapper with params: ${JSON.stringify(debugParams)}`);
+    log.debug(`creating streamFn wrapper with params: ${JSON.stringify(debugParams)}`);
   }
 
   const underlying = requireBaseStreamFn(baseStreamFn);
@@ -689,7 +687,7 @@ function createParallelToolCallsWrapper(
     if (!supportsGptParallelToolCallsPayload(model.api)) {
       return underlying(model, context, options);
     }
-    embeddedAgentLog.debug(
+    log.debug(
       `applying parallel_tool_calls=${enabled} for ${model.provider ?? "unknown"}/${model.id ?? "unknown"} api=${model.api}`,
     );
     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
@@ -743,7 +741,7 @@ function resolveExtraBodyParam(rawExtraBody: unknown): Record<string, unknown> |
   }
   if (typeof rawExtraBody !== "object" || Array.isArray(rawExtraBody)) {
     const summary = typeof rawExtraBody === "string" ? rawExtraBody : typeof rawExtraBody;
-    embeddedAgentLog.warn(`ignoring invalid extra_body param: ${summary}`);
+    log.warn(`ignoring invalid extra_body param: ${summary}`);
     return undefined;
   }
   const extraBody = sanitizeExtraBodyRecord(rawExtraBody as Record<string, unknown>);
@@ -761,7 +759,7 @@ function resolveChatTemplateKwargsParam(
       typeof rawChatTemplateKwargs === "string"
         ? rawChatTemplateKwargs
         : typeof rawChatTemplateKwargs;
-    embeddedAgentLog.warn(`ignoring invalid chat_template_kwargs param: ${summary}`);
+    log.warn(`ignoring invalid chat_template_kwargs param: ${summary}`);
     return undefined;
   }
   const chatTemplateKwargs = sanitizeExtraBodyRecord(
@@ -805,9 +803,7 @@ function createOpenAICompletionsExtraBodyWrapper(
     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
       const collisions = Object.keys(extraBody).filter((key) => Object.hasOwn(payloadObj, key));
       if (collisions.length > 0) {
-        embeddedAgentLog.warn(
-          `extra_body overwriting request payload keys: ${collisions.join(", ")}`,
-        );
+        log.warn(`extra_body overwriting request payload keys: ${collisions.join(", ")}`);
       }
       Object.assign(payloadObj, extraBody);
     });
@@ -842,9 +838,7 @@ function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
   );
 
   if (wrappedStreamFn) {
-    embeddedAgentLog.debug(
-      `applying extraParams to agent streamFn for ${ctx.provider}/${ctx.modelId}`,
-    );
+    log.debug(`applying extraParams to agent streamFn for ${ctx.provider}/${ctx.modelId}`);
     ctx.agent.streamFn = wrappedStreamFn;
   }
 
@@ -855,7 +849,7 @@ function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
       thinkingLevel: ctx.thinkingLevel,
     })
   ) {
-    embeddedAgentLog.debug(
+    log.debug(
       `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${ctx.provider}/${ctx.modelId})`,
     );
     ctx.agent.streamFn = createSiliconFlowThinkingWrapper(ctx.agent.streamFn);
@@ -954,12 +948,12 @@ function applyPostPluginStreamWrappers(
     return;
   }
   if (rawParallelToolCalls === null) {
-    embeddedAgentLog.debug("parallel_tool_calls suppressed by null override, skipping injection");
+    log.debug("parallel_tool_calls suppressed by null override, skipping injection");
     return;
   }
   const summary =
     typeof rawParallelToolCalls === "string" ? rawParallelToolCalls : typeof rawParallelToolCalls;
-  embeddedAgentLog.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
+  log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
 }
 
 function normalizeDeepSeekV4CandidateId(modelId: unknown): string | undefined {

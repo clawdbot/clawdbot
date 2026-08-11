@@ -29,7 +29,7 @@ vi.mock("./context-engine-maintenance.js", () => ({
 }));
 
 vi.mock("./logger.js", () => ({
-  embeddedAgentLog: {
+  log: {
     debug: mocks.debug,
     info: mocks.info,
     isEnabled: mocks.isDebugEnabled,

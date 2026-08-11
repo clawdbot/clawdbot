@@ -10,7 +10,7 @@ import {
   type CapturedCompactionCheckpointSnapshot,
 } from "../../gateway/session-compaction-checkpoints.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { embeddedAgentLog } from "./logger.js";
+import { log } from "./logger.js";
 
 export const compactionCheckpointStore = createFileBackedCompactionCheckpointStore();
 
@@ -60,7 +60,7 @@ export async function persistCompactionCheckpoint(params: {
     });
     return stored !== null;
   } catch (err) {
-    embeddedAgentLog.warn("failed to persist compaction checkpoint", {
+    log.warn("failed to persist compaction checkpoint", {
       errorMessage: formatErrorMessage(err),
     });
     return false;

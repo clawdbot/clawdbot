@@ -35,7 +35,7 @@ import {
 import { findActiveSessionTask } from "../session-async-task-status.js";
 import { SessionManager } from "../sessions/index.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
-import { embeddedAgentLog } from "./logger.js";
+import { log } from "./logger.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
 import { resolveRuntimeTranscriptReadTarget } from "./transcript-runtime-state.js";
 
@@ -107,7 +107,7 @@ async function disposeDeferredMaintenanceContextEngine(
   try {
     await contextEngine.dispose?.();
   } catch (err) {
-    embeddedAgentLog.warn("context engine dispose failed after deferred maintenance", {
+    log.warn("context engine dispose failed after deferred maintenance", {
       errorMessage: formatErrorMessage(err),
     });
   }
@@ -310,7 +310,7 @@ async function executeContextEngineMaintenance(
     }),
   });
   if (result.changed) {
-    embeddedAgentLog.info(
+    log.info(
       `[context-engine] maintenance(${params.reason}) changed transcript ` +
         `rewrittenEntries=${result.rewrittenEntries} bytesFreed=${result.bytesFreed} ` +
         `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
@@ -357,7 +357,7 @@ async function runDeferredTurnMaintenanceWorker(
           eventSummary: summary,
         });
       } catch (error) {
-        embeddedAgentLog.warn(`failed to surface deferred maintenance progress: ${String(error)}`);
+        log.warn(`failed to surface deferred maintenance progress: ${String(error)}`);
       }
     }, TURN_MAINTENANCE_LONG_WAIT_MS);
 
@@ -406,7 +406,7 @@ async function runDeferredTurnMaintenanceWorker(
       progressSummary: "Deferred maintenance failed.",
       terminalSummary: reason,
     });
-    embeddedAgentLog.warn(`deferred context engine maintenance failed: ${reason}`);
+    log.warn(`deferred context engine maintenance failed: ${reason}`);
   } finally {
     if (longRunningTimer) {
       clearTimeout(longRunningTimer);
@@ -469,22 +469,20 @@ function scheduleDeferredTurnMaintenance(
       sessionKey,
     });
   if (!task) {
-    embeddedAgentLog.warn("[context-engine] failed to create deferred turn maintenance task", {
+    log.warn("[context-engine] failed to create deferred turn maintenance task", {
       sessionKey,
     });
     return undefined;
   }
   const lane = `${TURN_MAINTENANCE_LANE_PREFIX}${sessionKey}`;
-  embeddedAgentLog.info(
+  log.info(
     `[context-engine] deferred turn maintenance ${reusableTask ? "resuming" : "queued"} ` +
       `taskId=${task.taskId} sessionKey=${sessionKey} lane=${lane}`,
   );
 
   const cancelFailedTask = (error: unknown) => {
     const errorMessage = formatErrorMessage(error);
-    embeddedAgentLog.warn(
-      `failed to schedule deferred context engine maintenance: ${errorMessage}`,
-    );
+    log.warn(`failed to schedule deferred context engine maintenance: ${errorMessage}`);
     cancelTaskByIdForOwner({
       taskId: task.taskId,
       callerOwnerKey: sessionKey,
@@ -577,9 +575,7 @@ export async function runContextEngineMaintenance(
         params.onDeferredMaintenance?.(deferred);
       }
     } catch (err) {
-      embeddedAgentLog.warn(
-        `failed to schedule deferred context engine maintenance: ${String(err)}`,
-      );
+      log.warn(`failed to schedule deferred context engine maintenance: ${String(err)}`);
     }
     return undefined;
   }
@@ -587,7 +583,7 @@ export async function runContextEngineMaintenance(
   try {
     return await executeContextEngineMaintenance({ ...params, contextEngine, executionMode });
   } catch (err) {
-    embeddedAgentLog.warn(`context engine maintain failed (${params.reason}): ${String(err)}`);
+    log.warn(`context engine maintain failed (${params.reason}): ${String(err)}`);
     return undefined;
   }
 }

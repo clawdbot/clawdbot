@@ -25,7 +25,7 @@ import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
-import { embeddedAgentLog } from "../logger.js";
+import { log } from "../logger.js";
 import { markActiveEmbeddedRunAbandoned, type EmbeddedAgentQueueHandle } from "../runs.js";
 import { buildEmbeddedAgentEndContext } from "./agent-end-context.js";
 import {
@@ -283,7 +283,7 @@ export async function completeEmbeddedAttemptAfterTurn(
           }),
         sessionManager: transcript.sessionManager,
         config: attempt.config,
-        warn: (message) => embeddedAgentLog.warn(message),
+        warn: (message) => log.warn(message),
         isHeartbeat: isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind),
       });
     };
@@ -352,9 +352,7 @@ export async function completeEmbeddedAttemptAfterTurn(
             sessionId: attempt.sessionId,
           });
         } catch (entryErr) {
-          embeddedAgentLog.warn(
-            `failed to persist bootstrap completion entry: ${String(entryErr)}`,
-          );
+          log.warn(`failed to persist bootstrap completion entry: ${String(entryErr)}`);
         }
       }
     });

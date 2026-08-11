@@ -10,7 +10,7 @@ import {
   formatFastModeAutoProgressText,
   resolveFastModeForElapsed,
 } from "../../fast-mode.js";
-import { embeddedAgentLog } from "../logger.js";
+import { log } from "../logger.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import type { EmbeddedRunFastModeParam } from "./types.js";
 
@@ -67,9 +67,7 @@ export function createEmbeddedRunProgressController(params: {
         },
       });
     } catch (error) {
-      embeddedAgentLog.debug(
-        `embedded run fast mode auto global event failed: ${formatErrorMessage(error)}`,
-      );
+      log.debug(`embedded run fast mode auto global event failed: ${formatErrorMessage(error)}`);
     }
     try {
       await params.attempt.onAgentEvent?.({
@@ -83,9 +81,7 @@ export function createEmbeddedRunProgressController(params: {
         ...(params.attempt.sessionKey ? { sessionKey: params.attempt.sessionKey } : {}),
       });
     } catch (error) {
-      embeddedAgentLog.debug(
-        `embedded run fast mode auto event failed: ${formatErrorMessage(error)}`,
-      );
+      log.debug(`embedded run fast mode auto event failed: ${formatErrorMessage(error)}`);
     }
     try {
       await params.attempt.onToolResult?.({
@@ -93,9 +89,7 @@ export function createEmbeddedRunProgressController(params: {
         channelData: { openclawProgressKind: FAST_MODE_AUTO_PROGRESS_KIND },
       });
     } catch (error) {
-      embeddedAgentLog.debug(
-        `embedded run fast mode auto progress failed: ${formatErrorMessage(error)}`,
-      );
+      log.debug(`embedded run fast mode auto progress failed: ${formatErrorMessage(error)}`);
     }
   };
   const maybeAnnounceFastModeAutoOff = async () => {
@@ -154,9 +148,7 @@ export function createEmbeddedRunProgressController(params: {
     try {
       await maybeEmitFastModeAutoReset();
     } catch (error) {
-      embeddedAgentLog.warn(
-        `embedded run fast mode auto reset progress failed: ${formatErrorMessage(error)}`,
-      );
+      log.warn(`embedded run fast mode auto reset progress failed: ${formatErrorMessage(error)}`);
     }
   };
 

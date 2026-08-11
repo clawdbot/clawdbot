@@ -1,6 +1,6 @@
 import { deriveContextPromptTokens, normalizeUsage } from "../../usage.js";
 import { runPostCompactionSideEffects } from "../compaction-hooks.js";
-import { embeddedAgentLog } from "../logger.js";
+import { log } from "../logger.js";
 import {
   compactEmbeddedRunForRecovery,
   type EmbeddedRunCompactionRecoveryInput,
@@ -41,7 +41,7 @@ export async function recoverEmbeddedRunTimeout(
       ? lastTurnPromptTokens / input.contextTokenBudget
       : 0;
   if (input.state.timeoutCompactionAttempts >= MAX_TIMEOUT_COMPACTION_ATTEMPTS) {
-    embeddedAgentLog.warn(
+    log.warn(
       `[timeout-compaction] already attempted timeout compaction ${input.state.timeoutCompactionAttempts} time(s); falling through to failover rotation`,
     );
     return false;
@@ -52,7 +52,7 @@ export async function recoverEmbeddedRunTimeout(
 
   const timeoutDiagId = createRunRecoveryDiagId();
   input.state.timeoutCompactionAttempts += 1;
-  embeddedAgentLog.warn(
+  log.warn(
     `[timeout-compaction] LLM timed out with high prompt token usage (${Math.round(tokenUsedRatio * 100)}%); ` +
       `attempting compaction before retry (attempt ${input.state.timeoutCompactionAttempts}/${MAX_TIMEOUT_COMPACTION_ATTEMPTS}) diagId=${timeoutDiagId}`,
   );
@@ -67,7 +67,7 @@ export async function recoverEmbeddedRunTimeout(
       maxAttempts: MAX_TIMEOUT_COMPACTION_ATTEMPTS,
     }));
   } catch (compactErr) {
-    embeddedAgentLog.warn(
+    log.warn(
       `[timeout-compaction] contextEngine.compact() threw during timeout recovery for ${input.provider}/${input.modelId}: ${String(compactErr)}`,
     );
     timeoutCompactResult = {
@@ -86,7 +86,7 @@ export async function recoverEmbeddedRunTimeout(
     previousSessionId,
   );
   if (!timeoutCompactResult.compacted) {
-    embeddedAgentLog.warn(
+    log.warn(
       `[timeout-compaction] compaction did not reduce context for ${input.provider}/${input.modelId}; falling through to normal handling`,
     );
     return false;
@@ -107,7 +107,7 @@ export async function recoverEmbeddedRunTimeout(
       sessionFile: activeSession.file,
     });
   }
-  embeddedAgentLog.info(
+  log.info(
     `[timeout-compaction] compaction succeeded for ${input.provider}/${input.modelId}; retrying prompt`,
   );
   input.armPostCompactionGuard();

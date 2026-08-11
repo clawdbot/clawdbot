@@ -1079,7 +1079,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
 
   vi.doMock("./logger.js", () => ({
-    embeddedAgentLog: mockedLog,
+    log: mockedLog,
   }));
 
   vi.doMock("./run/payloads.js", () => ({

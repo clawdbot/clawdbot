@@ -10,7 +10,7 @@ import {
   isLikelyContextOverflowError,
 } from "../../embedded-agent-helpers.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
-import { embeddedAgentLog } from "../logger.js";
+import { log } from "../logger.js";
 import {
   getProviderPromptState,
   markLastProviderPromptContextRejected,
@@ -117,7 +117,7 @@ export async function recoverEmbeddedRunOverflow(
     preflightEstimatedPromptTokens ??
     (input.contextTokenBudget > 0 ? input.contextTokenBudget + 1 : undefined);
   const activeSession = input.getActiveSession();
-  embeddedAgentLog.warn(
+  log.warn(
     `[context-overflow-diag] sessionKey=${runParams.sessionKey ?? runParams.sessionId} ` +
       `provider=${input.provider}/${input.modelId} source=${contextOverflowError.source} ` +
       `messages=${input.attempt.messagesSnapshot?.length ?? 0} sessionFile=${activeSession.file} ` +
@@ -136,7 +136,7 @@ export async function recoverEmbeddedRunOverflow(
     input.state.overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
   ) {
     input.state.overflowCompactionAttempts += 1;
-    embeddedAgentLog.warn(
+    log.warn(
       `context overflow persisted after in-attempt compaction (attempt ${input.state.overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); retrying prompt without additional compaction for ${input.provider}/${input.modelId}`,
     );
     if (preflightRecovery?.source === "mid-turn") {
@@ -150,15 +150,15 @@ export async function recoverEmbeddedRunOverflow(
     input.attemptCompactionCount === 0 &&
     input.state.overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
   ) {
-    if (embeddedAgentLog.isEnabled("debug")) {
-      embeddedAgentLog.debug(
+    if (log.isEnabled("debug")) {
+      log.debug(
         `[compaction-diag] decision diagId=${overflowDiagId} branch=compact ` +
           `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=unknown ` +
           `attempt=${input.state.overflowCompactionAttempts + 1} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
       );
     }
     input.state.overflowCompactionAttempts += 1;
-    embeddedAgentLog.warn(
+    log.warn(
       `context overflow detected (attempt ${input.state.overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${input.provider}/${input.modelId}`,
     );
     let compactResult: CompactResult;
@@ -191,7 +191,7 @@ export async function recoverEmbeddedRunOverflow(
         });
       }
     } catch (compactErr) {
-      embeddedAgentLog.warn(
+      log.warn(
         `contextEngine.compact() threw during overflow recovery for ${input.provider}/${input.modelId}: ${String(compactErr)}`,
       );
       compactResult = { ok: false, compacted: false, reason: String(compactErr) };
@@ -206,7 +206,7 @@ export async function recoverEmbeddedRunOverflow(
         sessionKey: runParams.sessionKey,
         agentId: input.sessionAgentId,
       });
-      embeddedAgentLog.info(
+      log.info(
         `[context-overflow-precheck] stale token state had no real conversation messages for ` +
           `${input.provider}/${input.modelId}; resetting the context snapshot and retrying prompt`,
       );
@@ -241,19 +241,17 @@ export async function recoverEmbeddedRunOverflow(
           projectionState: input.toolResultPromptProjectionState,
         });
         if (truncResult.truncated) {
-          embeddedAgentLog.info(
+          log.info(
             `[context-overflow-precheck] post-compaction tool-result truncation succeeded for ${input.provider}/${input.modelId}; truncated ${truncResult.truncatedCount} tool result(s)`,
           );
         } else {
-          embeddedAgentLog.warn(
+          log.warn(
             `[context-overflow-precheck] post-compaction tool-result truncation did not help for ${input.provider}/${input.modelId}: ${truncResult.reason ?? "unknown"}`,
           );
         }
       }
       input.state.autoCompactionCount += 1;
-      embeddedAgentLog.info(
-        `auto-compaction succeeded for ${input.provider}/${input.modelId}; retrying prompt`,
-      );
+      log.info(`auto-compaction succeeded for ${input.provider}/${input.modelId}; retrying prompt`);
       input.armPostCompactionGuard();
       if (preflightRecovery?.source === "mid-turn") {
         input.prepareCurrentTranscriptRetry();
@@ -262,7 +260,7 @@ export async function recoverEmbeddedRunOverflow(
       }
       return { action: "retry" };
     }
-    embeddedAgentLog.warn(
+    log.warn(
       `auto-compaction failed for ${input.provider}/${input.modelId}: ${compactResult.reason ?? "nothing to compact"}`,
     );
   }
@@ -280,7 +278,7 @@ export async function recoverEmbeddedRunOverflow(
       : false;
     if (hasOversized) {
       input.state.toolResultTruncationAttempted = true;
-      embeddedAgentLog.warn(
+      log.warn(
         `[context-overflow-recovery] Attempting tool result truncation for ${input.provider}/${input.modelId} ` +
           `(contextWindow=${input.contextTokenBudget} tokens)`,
       );
@@ -300,7 +298,7 @@ export async function recoverEmbeddedRunOverflow(
         projectionState: input.toolResultPromptProjectionState,
       });
       if (truncResult.truncated) {
-        embeddedAgentLog.info(
+        log.info(
           `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt`,
         );
         if (preflightRecovery?.source === "mid-turn") {
@@ -308,7 +306,7 @@ export async function recoverEmbeddedRunOverflow(
         }
         return { action: "retry" };
       }
-      embeddedAgentLog.warn(
+      log.warn(
         `[context-overflow-recovery] Tool result truncation did not help: ${truncResult.reason ?? "unknown"}`,
       );
     }
@@ -317,9 +315,9 @@ export async function recoverEmbeddedRunOverflow(
   if (
     (isCompactionFailure ||
       input.state.overflowCompactionAttempts >= MAX_OVERFLOW_COMPACTION_ATTEMPTS) &&
-    embeddedAgentLog.isEnabled("debug")
+    log.isEnabled("debug")
   ) {
-    embeddedAgentLog.debug(
+    log.debug(
       `[compaction-diag] decision diagId=${overflowDiagId} branch=give_up ` +
         `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=unknown ` +
         `attempt=${input.state.overflowCompactionAttempts} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
@@ -329,7 +327,7 @@ export async function recoverEmbeddedRunOverflow(
   const userText =
     "Context overflow: prompt too large for the model. " +
     "Try /reset (or /new) to start a fresh session, or use a larger-context model.";
-  embeddedAgentLog.warn(
+  log.warn(
     `[context-overflow-recovery] exhausted provider overflow recovery for ${input.provider}/${input.modelId}; ` +
       `livenessState=blocked suggestedAction=reset_or_new kind=${kind}`,
   );

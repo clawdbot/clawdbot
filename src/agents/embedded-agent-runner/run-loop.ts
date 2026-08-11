@@ -21,7 +21,7 @@ import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeUsage } from "../usage.js";
-import { embeddedAgentLog } from "./logger.js";
+import { log } from "./logger.js";
 import {
   createPostCompactionLoopGuard,
   PostCompactionLoopPersistedError,
@@ -325,7 +325,7 @@ export async function runPreparedEmbeddedLoop(
         const message =
           `Exceeded retry limit after ${runRetryBudget.attemptsDispatched} attempts ` +
           `(counted attempts=${runRetryBudget.attemptsCounted}, max=${runRetryBudget.maxAttempts}).`;
-        embeddedAgentLog.error(
+        log.error(
           `[run-retry-limit] sessionKey=${params.sessionKey ?? params.sessionId} ` +
             `provider=${provider}/${modelId} attempts=${runRetryBudget.attemptsDispatched} ` +
             `countedAttempts=${runRetryBudget.attemptsCounted} maxAttempts=${runRetryBudget.maxAttempts}`,
@@ -684,7 +684,7 @@ export async function runPreparedEmbeddedLoop(
         runId: params.runId,
         sessionId: params.sessionId,
         step: "context-engine-dispose",
-        log: embeddedAgentLog,
+        log,
         cleanup: async () => {
           await contextEngineLogicalTurnLease.dispose();
         },
@@ -695,10 +695,10 @@ export async function runPreparedEmbeddedLoop(
         runId: params.runId,
         sessionId: params.sessionId,
         step: "bundle-mcp-retire",
-        log: embeddedAgentLog,
+        log,
         cleanup: async () => {
           const onError = (errorLocal: unknown, sessionId: string) => {
-            embeddedAgentLog.warn(
+            log.warn(
               `bundle-mcp cleanup failed after run for ${sessionId}: ${formatErrorMessage(errorLocal)}`,
             );
           };

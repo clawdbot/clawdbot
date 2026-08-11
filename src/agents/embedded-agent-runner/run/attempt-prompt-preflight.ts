@@ -6,7 +6,7 @@ import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outc
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SessionManager } from "../../sessions/index.js";
-import { embeddedAgentLog } from "../logger.js";
+import { log } from "../logger.js";
 import {
   resolveLiveToolResultMaxChars,
   truncateOversizedToolResultsInSessionManager,
@@ -65,7 +65,7 @@ export function handleEmbeddedAttemptMidTurnPrecheck(input: {
 } {
   const { attempt, request } = input;
   const logMidTurnPrecheck = (route: string, extra?: string) => {
-    embeddedAgentLog.warn(
+    log.warn(
       `[context-overflow-midturn-precheck] sessionKey=${attempt.sessionKey ?? attempt.sessionId} ` +
         `provider=${attempt.provider}/${attempt.modelId} route=${route} ` +
         `estimatedPromptTokens=${request.estimatedPromptTokens} ` +
@@ -202,7 +202,7 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
       input.contextEnginePromptAuthority !== "preassembly_may_overflow");
 
   if (shouldSkipPrecheck && !skipPromptSubmission) {
-    embeddedAgentLog.info(
+    log.info(
       `[context-overflow-precheck] skipped: context engine "${input.activeContextEngine!.info.id}" owns compaction`,
     );
   }
@@ -239,7 +239,7 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
         ? { unwindowedMessageCount: input.unwindowedContextEngineMessagesForPrecheck.length }
         : {}),
     });
-    embeddedAgentLog.debug(
+    log.debug(
       formatPrePromptPrecheckLog({
         result: preemptiveCompaction,
         provider: attempt.provider,
@@ -259,7 +259,7 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
     if (preemptiveCompaction.route !== "fits") {
       // Character pressure remains observable, but it is not authoritative enough to
       // discard history or manufacture an overflow before the provider sees the payload.
-      embeddedAgentLog.info(
+      log.info(
         `[context-pressure-diagnostic] admitted provider attempt for ` +
           `${attempt.provider}/${attempt.modelId} route=${preemptiveCompaction.route} ` +
           `estimatedPromptTokens=${preemptiveCompaction.estimatedPromptTokens} ` +

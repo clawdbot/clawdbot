@@ -29,7 +29,7 @@ import {
 } from "../../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { FailoverError } from "../../failover-error.js";
-import { embeddedAgentLog } from "../logger.js";
+import { log } from "../logger.js";
 import { readAgentModelContextTokens } from "../model-context-tokens.js";
 
 type HookContext = {
@@ -121,17 +121,17 @@ export async function resolveHookModelSelection(params: {
         : { prompt: params.prompt };
       modelResolveOverride = await hookRunner.runBeforeModelResolve(event, params.hookContext);
     } catch (hookErr) {
-      embeddedAgentLog.warn(`before_model_resolve hook failed: ${String(hookErr)}`);
+      log.warn(`before_model_resolve hook failed: ${String(hookErr)}`);
     }
   }
 
   if (modelResolveOverride?.providerOverride) {
     provider = modelResolveOverride.providerOverride;
-    embeddedAgentLog.info(`[hooks] provider overridden to ${provider}`);
+    log.info(`[hooks] provider overridden to ${provider}`);
   }
   if (modelResolveOverride?.modelOverride) {
     modelId = modelResolveOverride.modelOverride;
-    embeddedAgentLog.info(`[hooks] model overridden to ${modelId}`);
+    log.info(`[hooks] model overridden to ${modelId}`);
   }
 
   return {
@@ -237,7 +237,7 @@ function resolveEffectiveRuntimeModel(params: {
       ? (params.runtimeModel as { baseUrl: string }).baseUrl
       : undefined;
   if (ctxGuard.shouldWarn) {
-    embeddedAgentLog.warn(
+    log.warn(
       formatContextWindowWarningMessage({
         provider: params.provider,
         modelId: params.modelId,
@@ -251,7 +251,7 @@ function resolveEffectiveRuntimeModel(params: {
       guard: ctxGuard,
       runtimeBaseUrl,
     });
-    embeddedAgentLog.error(
+    log.error(
       `blocked model (context window too small): ${params.provider}/${params.modelId} ctx=${ctxGuard.tokens} (min=${ctxGuard.hardMinTokens}) source=${ctxGuard.source}; ${message}`,
     );
     throw new FailoverError(message, {

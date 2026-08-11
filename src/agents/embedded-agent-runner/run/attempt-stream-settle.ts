@@ -24,7 +24,7 @@ import {
   resolveExplicitSettingsTransport,
   resolvePreparedExtraParams,
 } from "../extra-params.js";
-import { embeddedAgentLog } from "../logger.js";
+import { log } from "../logger.js";
 import {
   completePromptCacheObservation,
   type PromptCacheBreak,
@@ -226,7 +226,7 @@ export async function settleEmbeddedAttemptStream(input: {
         joinWork: () => input.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted }),
         runAbortSignal: input.runAbortSignal,
         onTimeout: () => {
-          embeddedAgentLog.warn(
+          log.warn(
             `block-reply flush did not settle within ${RUN_LIVENESS_JOIN_TIMEOUT_MS}ms; ` +
               `proceeding with settlement: runId=${attempt.runId}`,
           );
@@ -249,7 +249,7 @@ export async function settleEmbeddedAttemptStream(input: {
     if (compactionRetryWait.timedOut) {
       input.markTimedOutDuringCompaction();
       if (!input.isProbeSession) {
-        embeddedAgentLog.warn(
+        log.warn(
           `compaction retry aggregate timeout (${aggregateTimeoutMs}ms): ` +
             `proceeding with pre-compaction state runId=${attempt.runId} sessionId=${attempt.sessionId}`,
         );
@@ -266,9 +266,7 @@ export async function settleEmbeddedAttemptStream(input: {
       state.promptErrorSource = promptErrorSource;
     }
     if (!input.isProbeSession) {
-      embeddedAgentLog.debug(
-        `compaction wait aborted: runId=${attempt.runId} sessionId=${attempt.sessionId}`,
-      );
+      log.debug(`compaction wait aborted: runId=${attempt.runId} sessionId=${attempt.sessionId}`);
     }
   }
 
@@ -302,7 +300,7 @@ export async function settleEmbeddedAttemptStream(input: {
         sessionManager,
       });
       if (removedEntries > 0 && !input.isProbeSession) {
-        embeddedAgentLog.warn(
+        log.warn(
           `normalized compaction timeout transcript tail: removedEntries=${removedEntries} ` +
             `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
         );
@@ -317,7 +315,7 @@ export async function settleEmbeddedAttemptStream(input: {
       currentSessionId: activeSession.sessionId,
     });
     if (timedOutDuringCompaction && !input.isProbeSession) {
-      embeddedAgentLog.warn(
+      log.warn(
         `using ${snapshotSelection.source} snapshot: timed out during compaction ` +
           `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
       );
@@ -407,7 +405,7 @@ export async function settleEmbeddedAttemptStream(input: {
           error: formatErrorMessage(promptError),
         });
       } catch (entryErr) {
-        embeddedAgentLog.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
+        log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
       }
     }
 
@@ -596,7 +594,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
   const effectiveAgentTransport = agentTransportOverride ?? session.agent.transport;
   if (agentTransportOverride && session.agent.transport !== agentTransportOverride) {
     const previousTransport = session.agent.transport;
-    embeddedAgentLog.debug(
+    log.debug(
       `embedded agent transport override: ${previousTransport} -> ${agentTransportOverride} ` +
         `(${attempt.provider}/${attempt.modelId})`,
     );

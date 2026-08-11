@@ -6,7 +6,7 @@ import {
 } from "../../../infra/heartbeat-outcome-store.js";
 import { releasePendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
-import { embeddedAgentLog } from "../logger.js";
+import { log } from "../logger.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { runEmbeddedAttemptBeforeAgentRun } from "./attempt-before-agent-run.js";
 import {
@@ -197,7 +197,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       promptErrorSource: "precheck",
     });
     skipPromptSubmission = true;
-    embeddedAgentLog.warn(`[tools] ${input.emptyExplicitToolAllowlistError.message}`);
+    log.warn(`[tools] ${input.emptyExplicitToolAllowlistError.message}`);
   }
 
   let promptToolSurface: PromptToolSurface | undefined;
@@ -407,7 +407,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     }
   } finally {
     input.lifecycle.stopAcceptingSteerMessages();
-    embeddedAgentLog.debug(
+    log.debug(
       `embedded run prompt end: runId=${attempt.runId} sessionId=${attempt.sessionId} durationMs=${Date.now() - promptStartedAt}`,
     );
   }

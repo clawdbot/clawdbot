@@ -15,7 +15,7 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock("../logger.js", () => ({
-  embeddedAgentLog: { info: hoisted.info, warn: hoisted.warn },
+  log: { info: hoisted.info, warn: hoisted.warn },
 }));
 vi.mock("../tool-result-truncation.js", () => ({
   resolveLiveToolResultAggregateMaxChars: hoisted.resolveLiveToolResultAggregateMaxChars,

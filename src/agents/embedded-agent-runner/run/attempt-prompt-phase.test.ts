@@ -26,7 +26,7 @@ vi.mock("../google-prompt-cache.js", () => ({
   prepareGooglePromptCacheStreamFn: mocks.prepareGooglePromptCache,
 }));
 vi.mock("../logger.js", () => ({
-  embeddedAgentLog: { debug: mocks.debug, warn: mocks.warn },
+  log: { debug: mocks.debug, warn: mocks.warn },
 }));
 vi.mock("../stream-resolution.js", () => ({
   resolveEmbeddedAgentApiKey() {

@@ -4,7 +4,7 @@
  * Invalid operator-supplied values are ignored with a warning instead of leaking into API payloads.
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { embeddedAgentLog } from "./embedded-agent-runner/logger.js";
+import { log } from "./embedded-agent-runner/logger.js";
 
 /** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export type OpenAITextVerbosity = "low" | "medium" | "high";
@@ -28,7 +28,7 @@ export function resolveOpenAITextVerbosity(
   const normalized = normalizeOpenAITextVerbosity(raw);
   if (raw !== undefined && normalized === undefined) {
     const rawSummary = typeof raw === "string" ? raw : typeof raw;
-    embeddedAgentLog.warn(`ignoring invalid OpenAI text verbosity param: ${rawSummary}`);
+    log.warn(`ignoring invalid OpenAI text verbosity param: ${rawSummary}`);
   }
   return normalized;
 }

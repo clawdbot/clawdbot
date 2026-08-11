@@ -12,7 +12,7 @@ import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
-import { embeddedAgentLog } from "../logger.js";
+import { log } from "../logger.js";
 import { collectPromptCacheTools } from "../prompt-cache-observability.js";
 import { repairRejectedThinkingReplayInSessionManager } from "../thinking-replay-repair.js";
 import {
@@ -76,8 +76,7 @@ export function installEmbeddedAttemptStreamGuards(input: {
 }) {
   const attempt = input.attempt;
   const session = input.session;
-  const cacheObservabilityEnabled =
-    Boolean(input.cacheTrace) || embeddedAgentLog.isEnabled("debug");
+  const cacheObservabilityEnabled = Boolean(input.cacheTrace) || log.isEnabled("debug");
   const promptCacheTools = cacheObservabilityEnabled
     ? collectPromptCacheTools(input.allCustomTools)
     : [];
@@ -119,7 +118,7 @@ export function installEmbeddedAttemptStreamGuards(input: {
       id: session.sessionId,
       onRecoveredAnthropicThinking: () => {
         if (!input.sessionManager) {
-          embeddedAgentLog.warn(
+          log.warn(
             `[session-recovery] unable to repair rejected thinking replay: session manager unavailable sessionId=${session.sessionId}`,
           );
           return;
@@ -135,7 +134,7 @@ export function installEmbeddedAttemptStreamGuards(input: {
           input.onRejectedThinkingReplayRepaired();
           return;
         }
-        embeddedAgentLog.warn(
+        log.warn(
           `[session-recovery] rejected thinking replay retry succeeded but transcript repair made no changes: ` +
             `sessionId=${session.sessionId} reason=${repair.reason ?? "unknown"}`,
         );

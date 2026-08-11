@@ -9,7 +9,7 @@ import {
   shouldSuppressRawErrorConsoleSuffix,
 } from "../../embedded-agent-error-observation.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
-import { embeddedAgentLog } from "../logger.js";
+import { log } from "../logger.js";
 
 /** Structured fields emitted whenever embedded run failover chooses an action. */
 type FailoverDecisionLoggerInput = {
@@ -81,7 +81,7 @@ export function createFailoverDecisionLogger(
       !shouldSuppressRawErrorConsoleSuffix(observedError.providerRuntimeFailureKind)
         ? ` rawError=${safeRawErrorPreview}`
         : "";
-    embeddedAgentLog.warn("embedded run failover decision", {
+    log.warn("embedded run failover decision", {
       event: "embedded_run_failover_decision",
       tags: ["error_handling", "failover", normalizedBase.stage, decision],
       runId: normalizedBase.runId,
