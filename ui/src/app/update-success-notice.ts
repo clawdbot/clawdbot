@@ -41,7 +41,8 @@ export function announceVerifiedUpdateInstall(identity: UpdateInstallIdentity): 
     // Storage is best effort; a document that stays put still announces below.
   }
   if (!reloadControlUiIfStale(identity)) {
-    announceRecordedUpdateSuccess();
+    takeRecordedUpdateSuccess();
+    showToast({ message: formatUpdateSuccess(identity) });
   }
 }
 
