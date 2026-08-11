@@ -124,7 +124,6 @@ export async function finishGatewayStartup(params: {
     activateRuntimeSecrets,
     applyFixedGatewayOverlays,
     resolveSharedGatewaySessionGenerationForConfig,
-    reloadAttachedGatewayPlugins,
     stopRegisteredPostReadySidecars,
     chatMetadataLifecycle,
     gatewayRequestContext,
@@ -404,22 +403,13 @@ export async function finishGatewayStartup(params: {
       }),
     deps,
     broadcast,
-    getState: () => ({
-      hooksConfig: runtimeState.hooksConfig,
-      hookClientIpConfig: runtimeState.hookClientIpConfig,
-      heartbeatRunner: runtimeState.heartbeatRunner,
-      cronState: runtimeState.cronState,
-      channelHealthMonitor: runtimeState.channelHealthMonitor,
-    }),
+    getState: kernel.getReloadState,
     setState: (nextState) => {
-      const cronStateChanged = nextState.cronState !== runtimeState.cronState;
-      runtimeState.hooksConfig = nextState.hooksConfig;
-      runtimeState.hookClientIpConfig = nextState.hookClientIpConfig;
-      runtimeState.heartbeatRunner = nextState.heartbeatRunner;
-      runtimeState.cronState = nextState.cronState;
-      deps.cron = runtimeState.cronState.cron;
-      runtimeState.channelHealthMonitor = nextState.channelHealthMonitor;
-      if (cronStateChanged) {
+      kernel.setReloadHookState(nextState);
+      kernel.swapHeartbeatRunner(nextState.heartbeatRunner);
+      const previousCronState = kernel.swapCronState(nextState.cronState);
+      kernel.setChannelHealthMonitor(nextState.channelHealthMonitor);
+      if (previousCronState !== nextState.cronState) {
         cronStartState.handled = true;
       }
     },
@@ -427,7 +417,7 @@ export async function finishGatewayStartup(params: {
     stopChannel,
     getChannelAutostartSuppression: channelManager.getAutostartSuppression,
     stopPostReadySidecars: stopRegisteredPostReadySidecars,
-    reloadPlugins: reloadAttachedGatewayPlugins,
+    reloadPlugins: kernel.reloadPlugins,
     logHooks,
     logChannels,
     logCron,
