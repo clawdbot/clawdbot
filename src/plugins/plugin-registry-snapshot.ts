@@ -33,7 +33,10 @@ import {
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
-import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
+import {
+  loadPluginManifestRegistryCore,
+  type PluginManifestRegistry,
+} from "./manifest-registry.js";
 import { getPackageManifestMetadata, type PackageManifest } from "./manifest.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
 import type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
@@ -451,7 +454,7 @@ function hasConfiguredGlobalSourcePluginMissingFromPersistedIndex(
     workspaceDir: params.workspaceDir,
     env,
   });
-  const registry = loadPluginManifestRegistry({
+  const registry = loadPluginManifestRegistryCore({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env,
