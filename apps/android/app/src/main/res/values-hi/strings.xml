@@ -81,6 +81,7 @@
     <string name="native_0979c6fdbdca1675" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"चैट खोलें"</string>
     <string name="native_09ce95090659d069" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"इस Gateway सत्र में डिवाइस पेयरिंग की कार्रवाइयाँ उपलब्ध नहीं हैं। Gateway होस्ट पर openclaw devices list चलाएँ और अनुरोध को वहीं प्रबंधित करें। नोड क्षमता की स्वीकृति अलग है और अब भी nodes approve &lt;request id&gt; का उपयोग करती है।"</string>
     <string name="native_0a0b7cf7c428c703" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"कार्रवाई का अनुरोध"</string>
+    <string name="native_0a598c4b7044dab3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Publish Delegate Artifacts"</string>
     <string name="native_0a708e7b03aaf1fa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"list pins"</string>
     <string name="native_0ab0e1629576aecf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Skill Workshop प्रस्ताव लोड करने के लिए किसी Gateway से कनेक्ट करें."</string>
     <string name="native_0b0c15d15d686c72" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"सेटअप कोड स्वीकार नहीं किया गया"</string>
@@ -118,6 +119,7 @@
     <string name="native_1039e92fa05c1279" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway स्थिति, फ़ोन नोड की तैयारी, और हाल की लॉग स्ट्रीम।"</string>
     <string name="native_106808530413298b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ऑटोमेशन का विवरण खोलें"</string>
     <string name="native_1093115897879aa3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"रनटाइम"</string>
+    <string name="native_109fa9f54c849bb7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"discard"</string>
     <string name="native_10d2f9ed07a13f84" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 और worker"</string>
     <string name="native_1102bd820f68901b" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"एजेंट %1$s"</string>
     <string name="native_11252dd2410324bc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Get Goal"</string>
@@ -145,6 +147,7 @@
     <string name="native_146c4d822cea4531" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s ऐप्स को फ़ॉरवर्ड करने से ब्लॉक किया गया है।"</string>
     <string name="native_1485bc093cdbef6d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"पेयर किए गए डिवाइस"</string>
     <string name="native_14a01f1f39e117c7" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">":%1$s"</string>
+    <string name="native_14a60637758cb026" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"inspect"</string>
     <string name="native_1520b570498730a0" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s लंबित"</string>
     <string name="native_155106be1173d757" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"डिवाइस का नाम"</string>
     <string name="native_155f816c0407310c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"सबमिट करें"</string>
@@ -250,6 +253,7 @@
     <string name="native_24c55f66c5795fc5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"पिछले उत्तर में इस कमांड की पहले ही एक बार अनुमति दी गई थी।"</string>
     <string name="native_24cacf5004bf68ae" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"generate"</string>
     <string name="native_24e1028cd7aef320" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"केवल विश्वसनीय निजी नेटवर्क पर उपयोग करें।"</string>
+    <string name="native_2559add2956492d3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Delegate Artifacts"</string>
     <string name="native_255b076dd8285543" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"सेटिंग्स खोजें"</string>
     <string name="native_255e7e69c14a57f0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"बातचीत लाइव है"</string>
     <string name="native_25872d47f3f6a397" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway प्रमाणीकरण कॉन्फ़िगर नहीं किया गया है। इस कनेक्शन को संपादित करें और फिर से प्रयास करें।"</string>
@@ -828,6 +832,7 @@
     <string name="native_7c5b2da19293eb98" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"वर्तमान ब्रांच"</string>
     <string name="native_7c5c9a83536e33d2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"पेयरिंग एक्सेस की जाँच की जा रही है"</string>
     <string name="native_7c79875c4f9d1990" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"सीमित Gateway एक्सेस"</string>
+    <string name="native_7ce005155a41089d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"materialize"</string>
     <string name="native_7d2227b96bc40069" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"स्वीकृति जाँची जा रही है…"</string>
     <string name="native_7d3951124ae2ca1d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"इस फ़ोन से फ़ोटो और क्लिप कैप्चर करें"</string>
     <string name="native_7d483b027c9427f2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"कनेक्टेड और तैयार"</string>
@@ -907,6 +912,7 @@
     <string name="native_8b8fc46055e32971" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Screen खोलें"</string>
     <string name="native_8ba35bb80ddab5a3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"चैट कार्रवाइयाँ"</string>
     <string name="native_8ba5517fc10b3db5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"अन्य ऐप्स के नियंत्रण की अनुमति दें?"</string>
+    <string name="native_8ba7e72db4bf4539" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Continue Work"</string>
     <string name="native_8bb7ec15b1e350a5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Inspect हो रहा है"</string>
     <string name="native_8bf253a125f66985" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"कोई और gateway जोड़ने के लिए सेटअप कोड स्कैन करें या पेस्ट करें।"</string>
     <string name="native_8c13f73ba145c626" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Swarm"</string>
@@ -1081,6 +1087,7 @@
     <string name="native_a53a8b84da7bc600" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway सत्र जारी है"</string>
     <string name="native_a61935d6be7b9f04" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"समीक्षा की प्रतीक्षा में"</string>
     <string name="native_a626442da425ff22" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"कोई Skills इंस्टॉल नहीं हैं।"</string>
+    <string name="native_a6311fa12af0f624" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Request Compaction"</string>
     <string name="native_a67d4aa392f75557" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway जाँच रहा है"</string>
     <string name="native_a68658a5db8b891d" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"अंतराल %1$s"</string>
     <string name="native_a6a20a23827b4cbd" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s का परिणाम अज्ञात है। फिर से कनेक्ट करें, Skills को रीफ़्रेश करें, फिर दोबारा कोशिश करें; Gateway अब भी चल रहे समान इंस्टॉलेशन से सुरक्षित रूप से जुड़ जाता है।"</string>
@@ -1361,6 +1368,7 @@
     <string name="native_d30f33731adb6b40" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"योजना चेकलिस्ट विस्तृत करें"</string>
     <string name="native_d31de1a5c5c8ba2a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Browser"</string>
     <string name="native_d354ee936f59115e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"screen record"</string>
+    <string name="native_d3878f0cbd93de0f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Continue Delegate"</string>
     <string name="native_d3974fd6d3b6c81f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"रन लंबित है"</string>
     <string name="native_d3a99679bf6ce596" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"सक्षम करने पर OpenClaw आर्म होने पर अन्य ऐप्स की स्क्रीन देख और नियंत्रित कर सकता है। Android एक्सेसिबिलिटी एक्सेस आवश्यक है।"</string>
     <string name="native_d3e1c5f8a6e240fc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"मूल"</string>
