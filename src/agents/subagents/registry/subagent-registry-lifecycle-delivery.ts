@@ -31,9 +31,11 @@ import {
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import { resolveFinalizedSubagentTaskState } from "./subagent-registry-completion.js";
 import { capFrozenResultText } from "./subagent-registry-helpers.js";
-import type {
-  SubagentLifecycleCommonContext,
-  SubagentLifecycleOptions,
+import {
+  buildSafeLifecycleErrorMeta,
+  maskLifecycleIdentifier,
+  type SubagentLifecycleCommonContext,
+  type SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle.js";
 import type { PendingFinalDeliveryPayload, SubagentRunRecord } from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
@@ -161,7 +163,6 @@ const resolveSubagentTaskTarget = (
 
 export const safeSetSubagentTaskDeliveryStatus = (
   params: SubagentLifecycleOptions,
-  context: SubagentLifecycleCommonContext,
   args: {
     entry: SubagentRunRecord;
     deliveryStatus: Extract<TaskDeliveryStatus, "pending" | "delivered" | "failed">;
@@ -179,9 +180,9 @@ export const safeSetSubagentTaskDeliveryStatus = (
     });
   } catch (err) {
     params.warn("failed to update subagent background task delivery state", {
-      error: context.buildSafeLifecycleErrorMeta(err),
-      runId: context.maskRunId(target.runId),
-      childSessionKey: context.maskSessionKey(target.sessionKey),
+      error: buildSafeLifecycleErrorMeta(err),
+      runId: maskLifecycleIdentifier(target.runId, "run"),
+      childSessionKey: maskLifecycleIdentifier(target.sessionKey, "session"),
       deliveryStatus: args.deliveryStatus,
     });
   }
@@ -189,7 +190,6 @@ export const safeSetSubagentTaskDeliveryStatus = (
 
 export const safeFinalizeSubagentTaskRun = (
   params: SubagentLifecycleOptions,
-  context: SubagentLifecycleCommonContext,
   args: {
     entry: SubagentRunRecord;
     outcome: SubagentRunOutcome;
@@ -225,9 +225,9 @@ export const safeFinalizeSubagentTaskRun = (
     });
   } catch (err) {
     params.warn("failed to finalize subagent background task state", {
-      error: context.buildSafeLifecycleErrorMeta(err),
-      runId: context.maskRunId(args.entry.runId),
-      childSessionKey: context.maskSessionKey(args.entry.childSessionKey),
+      error: buildSafeLifecycleErrorMeta(err),
+      runId: maskLifecycleIdentifier(args.entry.runId, "run"),
+      childSessionKey: maskLifecycleIdentifier(args.entry.childSessionKey, "session"),
       outcomeStatus: args.outcome.status,
     });
     return [];
@@ -236,7 +236,6 @@ export const safeFinalizeSubagentTaskRun = (
 
 export const safeMarkRequiredCompletionDeliveryBlocked = (
   params: SubagentLifecycleOptions,
-  context: SubagentLifecycleCommonContext,
   args: {
     entry: SubagentRunRecord;
     reason?: string;
@@ -264,19 +263,19 @@ export const safeMarkRequiredCompletionDeliveryBlocked = (
     });
   } catch (err) {
     params.warn("failed to mark subagent completion delivery blocked", {
-      error: context.buildSafeLifecycleErrorMeta(err),
-      runId: context.maskRunId(args.entry.runId),
-      childSessionKey: context.maskSessionKey(args.entry.childSessionKey),
+      error: buildSafeLifecycleErrorMeta(err),
+      runId: maskLifecycleIdentifier(args.entry.runId, "run"),
+      childSessionKey: maskLifecycleIdentifier(args.entry.childSessionKey, "session"),
     });
   }
 };
 
 export const freezeRunResultAtCompletion = async (
-  params: SubagentLifecycleOptions,
   context: SubagentLifecycleCommonContext,
   entry: SubagentRunRecord,
   outcome: SubagentRunOutcome,
 ): Promise<boolean> => {
+  const params = context.options;
   if (ensureCompletionState(entry).resultText !== undefined) {
     return false;
   }
@@ -371,10 +370,10 @@ const listPendingCompletionRunsForSession = (
 };
 
 export const refreshFrozenResultFromSession = async (
-  params: SubagentLifecycleOptions,
   context: SubagentLifecycleCommonContext,
   sessionKey: string,
 ): Promise<boolean> => {
+  const params = context.options;
   const candidates = listPendingCompletionRunsForSession(params, sessionKey).filter(
     (entry) => entry.execution.outcome?.status !== "error",
   );

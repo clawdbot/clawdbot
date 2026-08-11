@@ -26,29 +26,21 @@ import {
   refreshPendingFinalDeliveryPayload,
   safeFinalizeSubagentTaskRun,
 } from "./subagent-registry-lifecycle-delivery.js";
-import type {
-  SubagentLifecycleCompletionContext,
-  SubagentLifecycleOptions,
-} from "./subagent-registry-lifecycle.js";
+import type { SubagentLifecycleCompletionContext } from "./subagent-registry-lifecycle.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   resolveSubagentRunDeadlineMs,
   resolveSubagentRunEffectiveEndedAt,
 } from "./subagent-run-timeout.js";
 
-type BrowserCleanupModule = Pick<
-  typeof import("../../../browser-lifecycle-cleanup.js"),
-  "cleanupBrowserSessionsForLifecycleEnd"
->;
+type BrowserCleanupModule = typeof import("../../../browser-lifecycle-cleanup.js");
+type BrowserCleanup = BrowserCleanupModule["cleanupBrowserSessionsForLifecycleEnd"];
 
 const browserCleanupLoader = createLazyImportLoader<BrowserCleanupModule>(
   () => import("../../../browser-lifecycle-cleanup.js"),
 );
 
-export type SubagentLifecycleBrowserCleanup =
-  BrowserCleanupModule["cleanupBrowserSessionsForLifecycleEnd"];
-
-export async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<SubagentLifecycleBrowserCleanup> {
+async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<BrowserCleanup> {
   return (await browserCleanupLoader.load()).cleanupBrowserSessionsForLifecycleEnd;
 }
 
@@ -114,9 +106,9 @@ export function isOlderEquivalentTerminalCallback(params: {
 
 export async function completeSubagentRunAttempt(
   context: SubagentLifecycleCompletionContext,
-  params: SubagentLifecycleOptions,
   completeParams: SubagentCompletionRequest,
 ): Promise<void> {
+  const params = context.options;
   const releaseCompletionLock = await context.acquireTerminalCompletionLock(completeParams.runId);
   let entry: SubagentRunRecord | undefined;
   let terminalGeneration = 0;
@@ -509,12 +501,7 @@ export async function completeSubagentRunAttempt(
         mutated = true;
       }
     } else {
-      const didFreezeResult = await freezeRunResultAtCompletion(
-        params,
-        context,
-        entry,
-        executionOutcome,
-      );
+      const didFreezeResult = await freezeRunResultAtCompletion(context, entry, executionOutcome);
       sessionSuperseded = context.newerGenerationOwnsSession(entry);
       if (sessionSuperseded) {
         const completion = ensureCompletionState(entry);
@@ -560,7 +547,7 @@ export async function completeSubagentRunAttempt(
     // A steer abort ends one agent run but continues the same detached task.
     // The successor must remain able to publish its eventual terminal state.
     if (provisionalKillSnapshot) {
-      const finalizedTasks = safeFinalizeSubagentTaskRun(params, context, {
+      const finalizedTasks = safeFinalizeSubagentTaskRun(params, {
         entry,
         outcome: executionOutcome,
         taskResolution: postCaptureTaskResolution,
@@ -616,7 +603,7 @@ export async function completeSubagentRunAttempt(
         throw error;
       }
       if (!suppressTaskFinalization) {
-        safeFinalizeSubagentTaskRun(params, context, {
+        safeFinalizeSubagentTaskRun(params, {
           entry,
           outcome: executionOutcome,
         });
@@ -632,7 +619,7 @@ export async function completeSubagentRunAttempt(
   if (!entry) {
     return;
   }
-  await completeTerminalEffects(context, params, {
+  await completeTerminalEffects(context, {
     completeParams,
     completionReason,
     entry,

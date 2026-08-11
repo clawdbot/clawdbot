@@ -34,40 +34,27 @@ import {
   markRequesterSettleWakePending,
   scheduleRequesterSettleWake,
 } from "./subagent-registry-lifecycle-wake.js";
-import type {
-  SubagentLifecycleCommonContext,
-  SubagentLifecycleCompletionContext,
-  SubagentLifecycleCleanupContext,
-  SubagentLifecycleOptions,
-  SubagentLifecycleWakeContext,
+import {
+  buildSafeLifecycleErrorMeta,
+  maskLifecycleIdentifier,
+  type SubagentLifecycleCommonContext,
+  type SubagentLifecycleCompletionContext,
+  type SubagentLifecycleCleanupContext,
+  type SubagentLifecycleWakeContext,
 } from "./subagent-registry-lifecycle.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
 const MAX_DETACHED_CLEANUP_RETRIES = 3;
-
-function isCleanupGenerationCurrent(
-  context: SubagentLifecycleCleanupContext,
-  params: SubagentLifecycleOptions,
-  runId: string,
-  entry: SubagentRunRecord,
-  generation: number,
-): boolean {
-  return (
-    params.runs.get(runId) === entry &&
-    entry.pauseReason !== "sessions_yield" &&
-    context.isCleanupGeneration(entry, generation) &&
-    !context.newerGenerationOwnsSession(entry)
-  );
-}
+type BrowserCleanup = typeof cleanupBrowserSessionsForLifecycleEnd;
 
 export function scheduleResumeSubagentRun(
   context: SubagentLifecycleCleanupContext,
-  params: SubagentLifecycleOptions,
   runId: string,
   entry: SubagentRunRecord,
   delayMs: number,
   cleanupGeneration?: number,
 ): void {
+  const params = context.options;
   const timer = setTimeout(() => {
     context.deleteScheduledResumeTimer(timer);
     void runWithGatewayIndependentRootWorkAdmission(async () => {
@@ -75,7 +62,7 @@ export function scheduleResumeSubagentRun(
         return;
       }
       if (cleanupGeneration !== undefined) {
-        if (!isCleanupGenerationCurrent(context, params, runId, entry, cleanupGeneration)) {
+        if (!context.isCleanupGenerationCurrent(runId, entry, cleanupGeneration)) {
           return;
         }
         if (entry.cleanupHandled) {
@@ -95,7 +82,6 @@ export function scheduleResumeSubagentRun(
       ) {
         scheduleResumeSubagentRun(
           context,
-          params,
           runId,
           entry,
           Math.max(delayMs, MIN_ANNOUNCE_RETRY_DELAY_MS),
@@ -108,22 +94,8 @@ export function scheduleResumeSubagentRun(
   context.addScheduledResumeTimer(timer);
 }
 
-export function isCleanupAttemptCurrent(
-  context: SubagentLifecycleCleanupContext,
-  params: SubagentLifecycleOptions,
-  runId: string,
-  entry: SubagentRunRecord,
-  generation: number,
-): boolean {
-  return (
-    entry.cleanupHandled === true &&
-    isCleanupGenerationCurrent(context, params, runId, entry, generation)
-  );
-}
-
 export function runDetachedCleanupAttempt(
   context: SubagentLifecycleCleanupContext,
-  params: SubagentLifecycleOptions,
   args: {
     runId: string;
     entry: SubagentRunRecord;
@@ -131,6 +103,7 @@ export function runDetachedCleanupAttempt(
     run: () => Promise<void>;
   },
 ): void {
+  const params = context.options;
   // Completion makes the task projection non-blocking before delivery and
   // cleanup finish. This independent lease bridges that handoff and owns the
   // full detached attempt, including its final durable registry write.
@@ -149,7 +122,7 @@ export function runDetachedCleanupAttempt(
         if (
           !current ||
           current.cleanupCompletedAt ||
-          !isCleanupAttemptCurrent(context, params, args.runId, args.entry, args.cleanupGeneration)
+          !context.isCleanupAttemptCurrent(args.runId, args.entry, args.cleanupGeneration)
         ) {
           return;
         }
@@ -160,7 +133,6 @@ export function runDetachedCleanupAttempt(
         if (failureCount <= MAX_DETACHED_CLEANUP_RETRIES) {
           scheduleResumeSubagentRun(
             context,
-            params,
             args.runId,
             current,
             resolveAnnounceRetryDelayMs(failureCount),
@@ -175,7 +147,6 @@ export function runDetachedCleanupAttempt(
       if (isGatewayRestartDraining()) {
         scheduleResumeSubagentRun(
           context,
-          params,
           args.runId,
           args.entry,
           MIN_ANNOUNCE_RETRY_DELAY_MS,
@@ -188,7 +159,6 @@ export function runDetachedCleanupAttempt(
 
 export function suspendPendingFinalDelivery(
   context: SubagentLifecycleCleanupContext & SubagentLifecycleWakeContext,
-  params: SubagentLifecycleOptions,
   args: {
     runId: string;
     entry: SubagentRunRecord;
@@ -196,6 +166,7 @@ export function suspendPendingFinalDelivery(
     error?: string;
   },
 ): void {
+  const params = context.options;
   const previousEntry = structuredClone(args.entry);
   markPendingFinalDelivery({
     entry: args.entry,
@@ -212,12 +183,12 @@ export function suspendPendingFinalDelivery(
   completion.fallbackResultText = undefined;
   completion.fallbackCapturedAt = undefined;
   params.resumedRuns.delete(args.runId);
-  safeSetSubagentTaskDeliveryStatus(params, context, {
+  safeSetSubagentTaskDeliveryStatus(params, {
     entry: args.entry,
     deliveryStatus: "failed",
     deliveryError: getDeliveryLastError(args.entry) ?? args.reason,
   });
-  safeMarkRequiredCompletionDeliveryBlocked(params, context, {
+  safeMarkRequiredCompletionDeliveryBlocked(params, {
     entry: args.entry,
     reason: getDeliveryLastError(args.entry) ?? args.reason,
   });
@@ -235,31 +206,31 @@ export function suspendPendingFinalDelivery(
   }
   // Suspension is terminal for automatic retries, so it settles this child
   // for requester-drain purposes even though cleanup stays incomplete.
-  scheduleRequesterSettleWake(context, params, args.runId, args.entry);
+  scheduleRequesterSettleWake(context, args.runId, args.entry);
 }
 
 export function beginSubagentCleanup(
   context: SubagentLifecycleCleanupContext,
-  params: SubagentLifecycleOptions,
   runId: string,
-): boolean {
+): number | undefined {
+  const params = context.options;
   const entry = params.runs.get(runId);
   if (!entry || entry.cleanupCompletedAt || entry.cleanupHandled) {
-    return false;
+    return undefined;
   }
   entry.cleanupHandled = true;
-  context.bumpCleanupGeneration(entry);
+  const generation = context.bumpCleanupGeneration(entry);
   params.persist(runId);
-  return true;
+  return generation;
 }
 
 export async function retireSupersededCleanupIfNeeded(
   context: SubagentLifecycleCleanupContext,
-  params: SubagentLifecycleOptions,
   runId: string,
   entry: SubagentRunRecord,
   generation: number,
 ): Promise<boolean> {
+  const params = context.options;
   if (
     params.runs.get(runId) !== entry ||
     !context.isCleanupGeneration(entry, generation) ||
@@ -275,7 +246,6 @@ export async function retireSupersededCleanupIfNeeded(
 
 export function retireSupersededCleanupInBackground(
   context: SubagentLifecycleCleanupContext,
-  params: SubagentLifecycleOptions,
   runId: string,
   entry: SubagentRunRecord,
   generation: number,
@@ -283,7 +253,7 @@ export function retireSupersededCleanupInBackground(
   // Delivery callbacks are synchronous and may arrive after their announce
   // attempt returns. Give the async retirement tail its own snapshot blocker.
   void runWithGatewayIndependentRootWorkAdmission(async () => {
-    await retireSupersededCleanupIfNeeded(context, params, runId, entry, generation);
+    await retireSupersededCleanupIfNeeded(context, runId, entry, generation);
   }).catch((error: unknown) => {
     defaultRuntime.log(
       `[warn] subagent superseded cleanup retirement failed (${runId}): ${String(error)}`,
@@ -291,35 +261,11 @@ export function retireSupersededCleanupInBackground(
   });
 }
 
-export function isTerminalCallbackCurrent(
-  context: SubagentLifecycleCompletionContext,
-  params: SubagentLifecycleOptions,
-  runId: string,
-  entry: SubagentRunRecord,
-  generation: number,
-): boolean {
-  return (
-    params.runs.get(runId) === entry &&
-    entry.pauseReason !== "sessions_yield" &&
-    context.isTerminalGeneration(entry, generation)
-  );
-}
-
-export function isEndedHookOwnerCurrent(
-  context: SubagentLifecycleCleanupContext,
-  params: SubagentLifecycleOptions,
-  runId: string,
-  entry: SubagentRunRecord,
-): boolean {
-  const current = params.runs.get(runId);
-  return (current === undefined || current === entry) && !context.newerGenerationOwnsSession(entry);
-}
-
 export async function retireRunModeBundleMcpRuntime(
   context: SubagentLifecycleCommonContext,
-  params: SubagentLifecycleOptions,
   cleanupParams: { runId: string; entry: SubagentRunRecord; reason: string },
 ): Promise<void> {
+  const params = context.options;
   if (cleanupParams.entry.spawnMode === "session") {
     return;
   }
@@ -329,10 +275,10 @@ export async function retireRunModeBundleMcpRuntime(
     preserveActiveLeases: true,
     onError: (error, sessionId) => {
       params.warn("failed to retire subagent bundle MCP runtime", {
-        error: context.buildSafeLifecycleErrorMeta(error),
+        error: buildSafeLifecycleErrorMeta(error),
         sessionId,
-        runId: context.maskRunId(cleanupParams.runId),
-        childSessionKey: context.maskSessionKey(cleanupParams.entry.childSessionKey),
+        runId: maskLifecycleIdentifier(cleanupParams.runId, "run"),
+        childSessionKey: maskLifecycleIdentifier(cleanupParams.entry.childSessionKey, "session"),
       });
     },
   });
@@ -340,7 +286,6 @@ export async function retireRunModeBundleMcpRuntime(
 
 export async function completeTerminalEffects(
   context: SubagentLifecycleCompletionContext,
-  params: SubagentLifecycleOptions,
   args: {
     completeParams: SubagentCompletionRequest;
     completionReason: SubagentLifecycleEndedReason;
@@ -349,15 +294,14 @@ export async function completeTerminalEffects(
     sessionSuperseded: boolean;
     suppressSessionEffects: boolean;
     terminalGeneration: number;
-    loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
-      typeof cleanupBrowserSessionsForLifecycleEnd
-    >;
+    loadCleanupBrowserSessionsForLifecycleEnd(): Promise<BrowserCleanup>;
   },
 ): Promise<void> {
+  const params = context.options;
   const { completeParams, completionReason, entry, mutated, terminalGeneration } = args;
   let { sessionSuperseded, suppressSessionEffects } = args;
   const isCurrentTerminalCallback = () =>
-    isTerminalCallbackCurrent(context, params, completeParams.runId, entry, terminalGeneration);
+    context.isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration);
   const isCurrentSessionEffectsOwner = () =>
     isCurrentTerminalCallback() &&
     !context.newerGenerationOwnsSession(entry) &&
@@ -502,7 +446,7 @@ export async function completeTerminalEffects(
   }
 
   refreshSessionEffectsSuppression();
-  await completeTerminalCleanup(context, params, {
+  await completeTerminalCleanup(context, {
     completeParams,
     entry,
     isProvisionalKill,
@@ -517,7 +461,6 @@ export async function completeTerminalEffects(
 
 export async function completeTerminalCleanup(
   context: SubagentLifecycleCompletionContext,
-  params: SubagentLifecycleOptions,
   args: {
     completeParams: SubagentCompletionRequest;
     entry: SubagentRunRecord;
@@ -526,11 +469,10 @@ export async function completeTerminalCleanup(
     suppressedForSteerRestart: boolean;
     suppressSessionEffects: boolean;
     terminalGeneration: number;
-    loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
-      typeof cleanupBrowserSessionsForLifecycleEnd
-    >;
+    loadCleanupBrowserSessionsForLifecycleEnd(): Promise<BrowserCleanup>;
   },
 ): Promise<void> {
+  const params = context.options;
   const {
     completeParams,
     entry,
@@ -543,7 +485,7 @@ export async function completeTerminalCleanup(
   // Session cleanup belongs to the exact registry row and child generation.
   // A replacement may reuse either the run id or the child session key.
   const isSessionEffectsOwnerCurrent = () =>
-    isTerminalCallbackCurrent(context, params, completeParams.runId, entry, terminalGeneration) &&
+    context.isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration) &&
     !context.newerGenerationOwnsSession(entry);
   const refreshSessionEffectsSuppression = () => {
     if (
@@ -568,9 +510,7 @@ export async function completeTerminalCleanup(
     return;
   }
   refreshSessionEffectsSuppression();
-  if (
-    !isTerminalCallbackCurrent(context, params, completeParams.runId, entry, terminalGeneration)
-  ) {
+  if (!context.isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
     return;
   }
   if (context.newerGenerationOwnsSession(entry)) {
@@ -592,15 +532,13 @@ export async function completeTerminalCleanup(
       cleanupBrowserSessions ??= await args.loadCleanupBrowserSessionsForLifecycleEnd();
     } catch (error) {
       params.warn("failed to load browser cleanup for completed subagent", {
-        error: context.buildSafeLifecycleErrorMeta(error),
-        runId: context.maskRunId(completeParams.runId),
-        childSessionKey: context.maskSessionKey(entry.childSessionKey),
+        error: buildSafeLifecycleErrorMeta(error),
+        runId: maskLifecycleIdentifier(completeParams.runId, "run"),
+        childSessionKey: maskLifecycleIdentifier(entry.childSessionKey, "session"),
       });
     }
     if (cleanupBrowserSessions) {
-      if (
-        !isTerminalCallbackCurrent(context, params, completeParams.runId, entry, terminalGeneration)
-      ) {
+      if (!context.isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
         return;
       }
       if (context.newerGenerationOwnsSession(entry)) {
@@ -622,17 +560,15 @@ export async function completeTerminalCleanup(
           });
         } catch (error) {
           params.warn("failed to cleanup browser sessions for completed subagent", {
-            error: context.buildSafeLifecycleErrorMeta(error),
-            runId: context.maskRunId(completeParams.runId),
-            childSessionKey: context.maskSessionKey(entry.childSessionKey),
+            error: buildSafeLifecycleErrorMeta(error),
+            runId: maskLifecycleIdentifier(completeParams.runId, "run"),
+            childSessionKey: maskLifecycleIdentifier(entry.childSessionKey, "session"),
           });
         }
       }
     }
     if (dispatchedBrowserCleanup) {
-      if (
-        !isTerminalCallbackCurrent(context, params, completeParams.runId, entry, terminalGeneration)
-      ) {
+      if (!context.isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
         return;
       }
       refreshSessionEffectsSuppression();
@@ -644,9 +580,7 @@ export async function completeTerminalCleanup(
   }
 
   if (!suppressSessionEffects) {
-    if (
-      !isTerminalCallbackCurrent(context, params, completeParams.runId, entry, terminalGeneration)
-    ) {
+    if (!context.isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
       return;
     }
     if (context.newerGenerationOwnsSession(entry)) {
@@ -654,21 +588,19 @@ export async function completeTerminalCleanup(
       return;
     }
     try {
-      await retireRunModeBundleMcpRuntime(context, params, {
+      await retireRunModeBundleMcpRuntime(context, {
         runId: completeParams.runId,
         entry,
         reason: "subagent-run-complete",
       });
     } catch (error) {
       params.warn("failed to retire subagent bundle MCP runtime after completion", {
-        error: context.buildSafeLifecycleErrorMeta(error),
-        runId: context.maskRunId(completeParams.runId),
-        childSessionKey: context.maskSessionKey(entry.childSessionKey),
+        error: buildSafeLifecycleErrorMeta(error),
+        runId: maskLifecycleIdentifier(completeParams.runId, "run"),
+        childSessionKey: maskLifecycleIdentifier(entry.childSessionKey, "session"),
       });
     }
-    if (
-      !isTerminalCallbackCurrent(context, params, completeParams.runId, entry, terminalGeneration)
-    ) {
+    if (!context.isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
       return;
     }
     refreshSessionEffectsSuppression();

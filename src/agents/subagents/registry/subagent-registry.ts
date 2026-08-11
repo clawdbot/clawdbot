@@ -55,13 +55,11 @@ import {
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
 const log = createSubsystemLogger("agents/subagent-registry");
 
-type SubagentRegistryRestorer = ReturnType<typeof createSubagentRegistryRestorer>;
-type SubagentRegistryBootstrapState = {
+const subagentRegistryBootstrapState: {
   pending?: boolean;
   ready?: boolean;
-  restorer?: SubagentRegistryRestorer;
-};
-const subagentRegistryBootstrapState: SubagentRegistryBootstrapState = {};
+  restorer?: ReturnType<typeof createSubagentRegistryRestorer>;
+} = {};
 
 const resumeRetryTimers = new Set<ReturnType<typeof setTimeout>>();
 const SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
@@ -403,6 +401,7 @@ const subagentSweeper = createSubagentRegistrySweeper({
   resumeRequesterSettleWake,
   startSubagentAnnounceCleanupFlow,
   completeCleanupBookkeeping,
+  discardTerminalDelivery: SubagentLifecycleController.discardTerminalDelivery,
   shouldEmitEndedHookForRun: contextCleanup.shouldEmitEndedHookForRun,
   emitSubagentEndedHookForRun: contextCleanup.emitSubagentEndedHookForRun,
   callGateway: (request) => subagentRegistryDeps.callGateway(request),
@@ -564,6 +563,7 @@ function addSubagentRunForTests(entry: SubagentRunRecord) {
 }
 
 export const markSubagentRunTerminated = subagentRunManager.markSubagentRunTerminated;
+export const discardSubagentTerminalDelivery = SubagentLifecycleController.discardTerminalDelivery;
 
 export { prependAgentSteeringPrompt };
 

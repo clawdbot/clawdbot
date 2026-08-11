@@ -49,9 +49,6 @@ const restartRecoveryLoader = createLazyImportLoader(
 );
 const killRuntimeLoader = createLazyImportLoader(() => import("./subagent-control.runtime.js"));
 
-type LifecycleController = SubagentLifecycleController;
-type LifecycleOptions = SubagentLifecycleOptions;
-
 export function createSubagentRegistrySweeper(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
@@ -94,11 +91,12 @@ export function createSubagentRegistrySweeper(params: {
   finalizeInterruptedSubagentRun: ReturnType<
     typeof createSubagentRegistryCompletionRuntime
   >["finalizeInterruptedSubagentRun"];
-  resumeRequesterSettleWake: LifecycleController["resumeRequesterSettleWake"];
-  startSubagentAnnounceCleanupFlow: LifecycleController["startSubagentAnnounceCleanupFlow"];
-  completeCleanupBookkeeping: LifecycleController["completeCleanupBookkeeping"];
-  shouldEmitEndedHookForRun: LifecycleOptions["shouldEmitEndedHookForRun"];
-  emitSubagentEndedHookForRun: LifecycleOptions["emitSubagentEndedHookForRun"];
+  resumeRequesterSettleWake: SubagentLifecycleController["resumeRequesterSettleWake"];
+  startSubagentAnnounceCleanupFlow: SubagentLifecycleController["startSubagentAnnounceCleanupFlow"];
+  completeCleanupBookkeeping: SubagentLifecycleController["completeCleanupBookkeeping"];
+  discardTerminalDelivery: typeof SubagentLifecycleController.discardTerminalDelivery;
+  shouldEmitEndedHookForRun: SubagentLifecycleOptions["shouldEmitEndedHookForRun"];
+  emitSubagentEndedHookForRun: SubagentLifecycleOptions["emitSubagentEndedHookForRun"];
   callGateway: typeof callGateway;
   cleanupCollectorLaunchResources: (entry: SubagentRunRecord) => Promise<boolean>;
   runContextEngineSubagentEnded: (params: ContextEngineSubagentEndedParams) => Promise<void>;
@@ -309,6 +307,7 @@ export function createSubagentRegistrySweeper(params: {
               resumedRuns,
               clearPendingLifecycleError: params.clearPendingLifecycleError,
               clearPendingLifecycleTimeout: params.clearPendingLifecycleTimeout,
+              discardTerminalDelivery: params.discardTerminalDelivery,
               completeCleanupBookkeeping: params.completeCleanupBookkeeping,
               shouldEmitEndedHookForRun: params.shouldEmitEndedHookForRun,
               emitSubagentEndedHookForRun: params.emitSubagentEndedHookForRun,
