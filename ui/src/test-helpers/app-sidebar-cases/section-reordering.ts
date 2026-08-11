@@ -38,7 +38,11 @@ describe("AppSidebar section reordering", () => {
   async function mountWithGroups(
     groups: string[],
     sectionOrder: string[] = [],
-    options: { withCatalog?: boolean; scopes?: string[] } = {},
+    options: {
+      withCatalog?: boolean;
+      scopes?: string[];
+      groupSessionCategories?: readonly string[];
+    } = {},
   ) {
     const request = vi
       .fn()
@@ -86,6 +90,9 @@ describe("AppSidebar section reordering", () => {
         throw new Error(`expected session fixture for ${group}`);
       }
       row.category = group;
+      if (options.groupSessionCategories?.includes(group)) {
+        row.kind = "group";
+      }
     }
     const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
     sidebar.connected = true;
@@ -208,6 +215,31 @@ describe("AppSidebar section reordering", () => {
 
     await waitForFast(() =>
       expect(harness.groupsPut).toHaveBeenCalledWith([], ["work", "ungrouped", "groups"]),
+    );
+  });
+
+  it("clears a group session category when it drops onto Groups", async () => {
+    const { sidebar, harness } = await mountWithGroups(["Done"], [], {
+      groupSessionCategories: ["Done"],
+    });
+    const source = sidebar.querySelector('[data-session-key="agent:main:group-0"]');
+    const groupsSection = sidebar.querySelector('[data-session-section="groups"]');
+    if (!source || !groupsSection) {
+      throw new Error("expected categorized group session and Groups section");
+    }
+    const dataTransfer = createDataTransferStub();
+
+    dispatchDragEvent(source, "dragstart", dataTransfer);
+    dispatchDragEvent(groupsSection, "dragover", dataTransfer);
+    expect(dataTransfer.dropEffect).toBe("move");
+    dispatchDragEvent(groupsSection, "drop", dataTransfer);
+
+    await waitForFast(() =>
+      expect(harness.patch).toHaveBeenCalledWith(
+        "agent:main:group-0",
+        { category: null },
+        { agentId: "main" },
+      ),
     );
   });
 

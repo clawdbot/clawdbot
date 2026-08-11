@@ -959,6 +959,7 @@ export const en: TranslationMap = {
     moveToGroupMenu: "Move to group",
     moveToGroupMenuCount: "Move {count} to group",
     removeFromGroup: "Remove from group",
+    moveBackToGroups: "Move back to Groups",
     groupMenu: "Group options for {group}",
     renameGroupMenu: "Rename group…",
     renameGroupTitle: 'Rename group "{group}"',

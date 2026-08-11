@@ -201,6 +201,19 @@ type SidebarGroupableRow = {
   acpSession?: boolean;
 };
 
+/** Clearing the manual category reveals the built-in Groups destination. */
+export function categoryClearReturnsToGroups(
+  row: SidebarGroupableRow,
+  grouping: SidebarSessionsGrouping,
+): boolean {
+  return (
+    grouping === "category" &&
+    row.pinned !== true &&
+    Boolean(row.category?.trim()) &&
+    row.kind === "group"
+  );
+}
+
 /**
  * Zone partition: pinned, named categories (persisted `knownGroups` order,
  * new ones alphabetical), threads ("ungrouped" — the agent's chat sessions),
