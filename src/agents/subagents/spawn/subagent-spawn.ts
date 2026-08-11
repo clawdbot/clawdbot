@@ -22,7 +22,7 @@ import {
   summarizeSpawnError,
 } from "../../spawn-pipeline.js";
 import {
-  completeCollectorLaunchCleanup,
+  completeFailedLaunchCleanup,
   registerSubagentRun,
   releaseSubagentRun,
   settleFailedQueuedSubagentLaunch,
@@ -701,7 +701,7 @@ export async function spawnSubagentDirect(
               reason: "delete",
               parentSessionKey: requesterInternalKey,
             });
-            completeCollectorLaunchCleanup(childRunId);
+            completeFailedLaunchCleanup(childRunId);
           }
           return true;
         },

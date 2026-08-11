@@ -605,6 +605,7 @@ function addSubagentRunForTests(entry: SubagentRunRecord) {
 }
 
 export const markSubagentRunTerminated = subagentRunManager.markSubagentRunTerminated;
+export const releaseSubagentRun = subagentRunManager.releaseSubagentRun;
 export const discardSubagentTerminalDelivery = SubagentLifecycleController.discardTerminalDelivery;
 
 export { prependAgentSteeringPrompt };
