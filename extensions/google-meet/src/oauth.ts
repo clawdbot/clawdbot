@@ -12,7 +12,11 @@ import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { readGoogleApiErrorDetail } from "./google-api-errors.js";
 
-const GOOGLE_MEET_REDIRECT_URI = "http://localhost:8085/oauth2callback";
+const GOOGLE_MEET_DEFAULT_CALLBACK_PORT = 8085;
+function buildGoogleMeetRedirectUri(port: number): string {
+  return `http://localhost:${port}/oauth2callback`;
+}
+const GOOGLE_MEET_REDIRECT_URI = buildGoogleMeetRedirectUri(GOOGLE_MEET_DEFAULT_CALLBACK_PORT);
 const GOOGLE_MEET_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_MEET_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_MEET_TOKEN_HOST = "oauth2.googleapis.com";
@@ -252,12 +256,13 @@ export async function waitForGoogleMeetAuthCode(params: {
     });
   }
   try {
+    const callbackPort = params.callbackPort ?? GOOGLE_MEET_DEFAULT_CALLBACK_PORT;
     const callback = await waitForLocalOAuthCallback({
       expectedState: params.state,
       timeoutMs: params.timeoutMs,
-      port: params.callbackPort ?? 8085,
+      port: callbackPort,
       callbackPath: "/oauth2callback",
-      redirectUri: GOOGLE_MEET_REDIRECT_URI,
+      redirectUri: buildGoogleMeetRedirectUri(callbackPort),
       successTitle: "Google Meet OAuth complete",
     });
     return callback.code;
