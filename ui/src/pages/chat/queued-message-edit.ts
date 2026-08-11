@@ -31,6 +31,14 @@ type QueuedMessageEditHost = ChatQueueScopedSessionHost & {
   chatQueuedEdit?: QueuedMessageEdit | null;
 };
 
+function releaseUnretainedAttachments(
+  owned: readonly ChatAttachment[],
+  retained: readonly ChatAttachment[],
+): void {
+  const retainedIds = new Set(retained.map((attachment) => attachment.id));
+  releaseChatAttachmentPayloads(owned.filter((attachment) => !retainedIds.has(attachment.id)));
+}
+
 /** Closed outcomes so the page owns the operator-visible wording. */
 type QueuedMessageEditResult = "started" | "unavailable" | "composer-busy";
 
@@ -94,9 +102,13 @@ export function beginQueuedMessageEdit(
 
 /** Cancel touches storage not at all: the row never left the queue. */
 export function cancelQueuedMessageEdit(host: QueuedMessageEditHost): boolean {
-  if (!activeQueuedMessageEdit(host)) {
+  const edit = activeQueuedMessageEdit(host);
+  if (!edit) {
     return false;
   }
+  // The durable row still owns its original payloads, but anything attached in
+  // the composer during the edit has no owner after cancellation.
+  releaseUnretainedAttachments(host.chatAttachments, edit.attachments);
   host.chatQueuedEdit = null;
   host.chatMessage = "";
   host.chatAttachments = [];
@@ -128,8 +140,5 @@ export function retireEditedQueuedMessageSource(
   // ones the replacement still carries must survive, so release only the rest.
   // The payloads come from the token: a successful write already retired the row
   // and told every pane, so re-reading it here would find nothing to release.
-  const retained = new Set(nextAttachments.map((attachment) => attachment.id));
-  releaseChatAttachmentPayloads(
-    edit.attachments.filter((attachment) => !retained.has(attachment.id)),
-  );
+  releaseUnretainedAttachments(edit.attachments, nextAttachments);
 }

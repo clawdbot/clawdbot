@@ -116,6 +116,21 @@ describe("queued message edit round-trip", () => {
     unsubscribe();
   });
 
+  it("releases images added during an abandoned edit", () => {
+    const original = stageQueuedImage("att-original");
+    const added = stageQueuedImage("att-added");
+    const { host, unsubscribe } = queueHost([{ attachments: [original] }]);
+    beginQueuedMessageEdit(host as never, "queued-1");
+    host.chatAttachments = [original, added];
+
+    expect(cancelQueuedMessageEdit(host as never)).toBe(true);
+
+    expect(storedOrder(host)).toEqual(["message 1"]);
+    expect(getChatAttachmentDataUrl(original)).not.toBeNull();
+    expect(getChatAttachmentDataUrl(added)).toBeNull();
+    unsubscribe();
+  });
+
   it("replaces the row in the same slot when the edited message is sent", async () => {
     const { host, unsubscribe } = queueHost([{}, {}, {}]);
     beginQueuedMessageEdit(host as never, "queued-2");
