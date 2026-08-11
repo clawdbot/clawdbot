@@ -18,13 +18,11 @@ import type {
   McpToolCatalog,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
+import { isMcpToolModelVisible } from "./agent-bundle-mcp-visibility.js";
 import { mcpContentBlockToAgentContent } from "./mcp-content.js";
 import { buildMcpAppCanvasPayload, fetchMcpAppView } from "./mcp-ui-resource.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
-function isAppOnlyTool(tool: McpCatalogTool): boolean {
-  return tool.uiVisibility !== undefined && !tool.uiVisibility.includes("model");
-}
 
 async function releaseRuntimeLease(params: {
   runtime: SessionMcpRuntime;
@@ -52,10 +50,12 @@ function buildAppToolPolicyProjections(params: {
     ...(params.reservedToolNames ?? []),
     ...params.modelTools.map((tool) => tool.name),
   ]);
-  const appOnlyTools = params.catalog.tools.filter(isAppOnlyTool).toSorted((a, b) => {
-    const serverOrder = a.safeServerName.localeCompare(b.safeServerName);
-    return serverOrder || a.toolName.localeCompare(b.toolName);
-  });
+  const appOnlyTools = params.catalog.tools
+    .filter((tool) => !isMcpToolModelVisible(tool))
+    .toSorted((a, b) => {
+      const serverOrder = a.safeServerName.localeCompare(b.safeServerName);
+      return serverOrder || a.toolName.localeCompare(b.toolName);
+    });
   for (const tool of appOnlyTools) {
     const server = params.catalog.servers[tool.serverName];
     const name = buildSafeToolName({
@@ -307,7 +307,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
   });
 
   for (const tool of sortedCatalogTools) {
-    if (isAppOnlyTool(tool)) {
+    if (!isMcpToolModelVisible(tool)) {
       continue;
     }
     const originalName = tool.toolName.trim();

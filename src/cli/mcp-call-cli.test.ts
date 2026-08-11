@@ -65,7 +65,8 @@ async function createWorkspace(): Promise<string> {
 async function writeCallMcpServer(filePath: string): Promise<void> {
   await fs.writeFile(
     filePath,
-    `let buffer = "";
+    `import fs from "node:fs";
+let buffer = "";
 function send(message) {
   process.stdout.write(JSON.stringify(message) + "\\n");
 }
@@ -90,12 +91,25 @@ function handle(message) {
         tools: [
           { name: "ping", inputSchema: { type: "object" } },
           { name: "echo", inputSchema: { type: "object" } },
+          {
+            name: "app_only",
+            inputSchema: { type: "object" },
+            _meta: { ui: { resourceUri: "ui://test/app", visibility: ["app"] } },
+          },
+          {
+            name: "hidden",
+            inputSchema: { type: "object" },
+            _meta: { ui: { visibility: [] } },
+          },
         ],
       },
     });
     return;
   }
   if (message.method === "tools/call") {
+    if (process.env.MCP_CALL_MARKER) {
+      fs.appendFileSync(process.env.MCP_CALL_MARKER, String(message.params?.name ?? "") + "\\n");
+    }
     const isError = process.env.MCP_TOOL_ERROR === "1";
     send({
       jsonrpc: "2.0",
@@ -318,6 +332,42 @@ describe("mcp cli call", () => {
         `MCP tool "ping" is unavailable on server "docs" (unknown, filtered, or not advertised)`,
       );
       expect(lastErrorLine()).toContain("Available tools: echo");
+    });
+  });
+
+  it("rejects App-only and hidden MCP tools before invoking the transport", async () => {
+    await withTempHome("openclaw-cli-mcp-call-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      const serverPath = path.join(workspaceDir, "call-server.mjs");
+      const markerPath = path.join(workspaceDir, "called-tools.txt");
+      await writeCallMcpServer(serverPath);
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+      await runMcpCommand([
+        "mcp",
+        "set",
+        "docs",
+        JSON.stringify({
+          command: process.execPath,
+          args: [serverPath],
+          env: { MCP_CALL_MARKER: markerPath },
+        }),
+      ]);
+
+      mockError.mockClear();
+      await runMcpCommand(["mcp", "call", "docs", "app_only"]);
+      expect(lastErrorLine()).toContain(
+        `MCP tool "app_only" is unavailable on server "docs" (unknown, filtered, or not advertised)`,
+      );
+      expect(lastErrorLine()).toContain("Available tools: echo, ping");
+
+      mockError.mockClear();
+      await runMcpCommand(["mcp", "call", "docs", "hidden"]);
+      expect(lastErrorLine()).toContain(
+        `MCP tool "hidden" is unavailable on server "docs" (unknown, filtered, or not advertised)`,
+      );
+
+      await expect(fs.readFile(markerPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 

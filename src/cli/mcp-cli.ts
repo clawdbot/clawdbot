@@ -12,6 +12,7 @@ import {
 import { Command } from "commander";
 import { buildBundleMcpToolsFromCatalog } from "../agents/agent-bundle-mcp-materialize.js";
 import { createSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
+import { isMcpToolModelVisible } from "../agents/agent-bundle-mcp-visibility.js";
 import {
   buildMcpHttpFetch,
   withoutMcpAuthorizationHeader,
@@ -915,11 +916,14 @@ export function registerMcpCli(program: Command) {
             return `MCP call did not connect to "${serverName}" in ${loaded.path}.`;
           }
           const matchedTool = catalog.tools.find(
-            (tool) => tool.serverName === serverName && tool.toolName === toolName,
+            (tool) =>
+              tool.serverName === serverName &&
+              tool.toolName === toolName &&
+              isMcpToolModelVisible(tool),
           );
           if (!matchedTool) {
             const available = catalog.tools
-              .filter((tool) => tool.serverName === serverName)
+              .filter((tool) => tool.serverName === serverName && isMcpToolModelVisible(tool))
               .map((tool) => tool.toolName)
               .toSorted();
             return `MCP tool "${toolName}" is unavailable on server "${serverName}" (unknown, filtered, or not advertised). Available tools: ${available.length > 0 ? available.join(", ") : "(none)"}.`;
