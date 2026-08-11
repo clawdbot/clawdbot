@@ -6,7 +6,7 @@ import {
   type LocalizationCatalog,
   validateCatalog,
 } from "../packages/localization-core/src/catalog.js";
-import { OPENCLAW_LOCALES } from "../packages/localization-core/src/locale-registry.js";
+import { SUPPORTED_LOCALES } from "../packages/localization-core/src/locale-registry.js";
 
 type CatalogTarget = {
   locale: string;
@@ -187,7 +187,7 @@ async function readRegistry(root: string, registryPath: string): Promise<Catalog
     }
     const locales = new Set<string>();
     for (const target of area.targets) {
-      if (!(OPENCLAW_LOCALES as readonly string[]).includes(target.locale)) {
+      if (!(SUPPORTED_LOCALES as readonly string[]).includes(target.locale)) {
         throw new Error(`area ${area.id} uses unsupported locale ${target.locale}`);
       }
       if (locales.has(target.locale)) {
