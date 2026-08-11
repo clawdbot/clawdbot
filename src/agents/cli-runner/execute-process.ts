@@ -13,7 +13,7 @@ import { extractCliErrorMessage, parseCliOutput } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
-import { runClaudeLiveSessionTurn } from "./claude-live-session.js";
+import { runClaudeTurn } from "./claude-live-session.js";
 import type { CliExecuteDeps } from "./execute-deps.js";
 import type { CliEventHandlers } from "./execute-events.js";
 import {
@@ -111,7 +111,7 @@ export async function executeCliProcess(params: {
       backend: context.backendResolved.id,
     });
     params.claimFallbackCleanup();
-    const liveResult = await runClaudeLiveSessionTurn({
+    const liveResult = await runClaudeTurn({
       context,
       args: params.executionArgs,
       executableCommand: params.executionCommand,

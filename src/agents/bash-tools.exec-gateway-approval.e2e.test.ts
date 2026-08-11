@@ -152,7 +152,7 @@ describe("gateway-hosted exec approvals", () => {
       const pending = await tool.execute("exec-approval-e2e", {
         command: "printf 'smoke\\n'",
         workdir: workspaceDir,
-        timeout: 5,
+        timeoutSeconds: 5,
       });
 
       expect(pending.details.status).toBe("approval-pending");

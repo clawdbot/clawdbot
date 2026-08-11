@@ -125,8 +125,10 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   // Reliability's runtime-free provider check dropped its wall time from
   // ~245s to ~5s; the narrow anthropic cli-api artifact removes the same
   // full-barrel evaluation for the remaining facade importers (spawn).
+  // The live-session extraction rebalanced these stripes without changing the
+  // fleet-scale import wall that dominates each compact group.
   ["agentic-agents-core-runner-cli-1", 8],
-  ["agentic-agents-core-runner-cli-2", 9],
+  ["agentic-agents-core-runner-cli-2", 8],
   ["agentic-agents-core-runner-cli-3", 8],
   ["agentic-agents-core-runner-commands", 27],
   ["agentic-agents-core-runner-embedded", 20],
@@ -143,7 +145,7 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-agents-embedded-incomplete-turn", 146],
   ["agentic-agents-embedded-overflow-compaction", 150],
   ["agentic-agents-embedded-run", 30],
-  ["agentic-agents-support", 105],
+  ["agentic-agents-support", 110],
   ["agentic-agents-tools", 42],
   ["agentic-cli", 72],
   ["agentic-command-support", 41],
@@ -228,7 +230,7 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/agents/cli-runner.context-engine.test.ts", 6],
   // Fresh profile: 5.1s total, 3.8s import; retain a conservative packing hint.
   ["src/agents/cli-runner.reliability.test.ts", 8],
-  ["src/agents/cli-runner.spawn.test.ts", 18],
+  ["src/agents/cli-runner.spawn.test.ts", 45],
   ["src/auto-reply/reply/commands-export-session.test.ts", 8],
   ["src/auto-reply/reply/commands-gating.test.ts", 6],
   ["src/auto-reply/reply/commands-learn.test.ts", 8],

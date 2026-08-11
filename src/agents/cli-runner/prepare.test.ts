@@ -380,7 +380,7 @@ describe("prepareCliRunContext", () => {
         args: [],
         cleanup: vi.fn(async () => undefined),
       })),
-      getClaudeLiveSessionGenerationForOwner: vi.fn(() => undefined),
+      getClaudeGeneration: vi.fn(() => undefined),
       readExternalCliBootstrapCredential: readExternalCliBootstrapCredentialImpl,
       resolveApiKeyForProfile: resolveApiKeyForProfileImpl,
     });
@@ -4218,7 +4218,7 @@ describe("prepareCliRunContext", () => {
     setCliRunnerPrepareTestDeps({
       claudeCliSessionTranscriptHasContent: transcriptCheck,
       claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
-      getClaudeLiveSessionGenerationForOwner: getLiveSessionGeneration,
+      getClaudeGeneration: getLiveSessionGeneration,
     });
 
     const context = await fixture.prepare({
