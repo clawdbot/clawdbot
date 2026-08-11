@@ -168,11 +168,11 @@ public enum ShareGatewayRelaySettings {
 
     private static func loadCredentials() -> ShareGatewayRelayConfig? {
         guard let json = GenericPasswordKeychainStore.loadString(
-                  service: self.relayCredentialService,
-                  account: self.relayCredentialAccount,
-                  accessGroup: self.suiteName),
-              let data = json.data(using: .utf8),
-              let credentials = try? JSONDecoder().decode(ShareGatewayRelayConfig.self, from: data)
+            service: self.relayCredentialService,
+            account: self.relayCredentialAccount,
+            accessGroup: self.suiteName),
+            let data = json.data(using: .utf8),
+            let credentials = try? JSONDecoder().decode(ShareGatewayRelayConfig.self, from: data)
         else { return nil }
         return credentials
     }
