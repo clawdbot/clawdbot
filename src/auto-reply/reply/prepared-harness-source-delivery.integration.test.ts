@@ -17,6 +17,7 @@ import {
   getExecuteAgentTurnForTest,
   setupAgentRunnerExecutionTestState,
   type FallbackRunnerParams,
+  useProductionEmbeddedRunExecutionParamsForTest,
 } from "./agent-runner-execution.test-support.js";
 import { emptyConfig, sessionStoreMocks } from "./dispatch-from-config.shared.test-harness.js";
 import {
@@ -58,7 +59,18 @@ describe("prepared harness source delivery", () => {
       expectedPartials: 0,
       expectedFinals: 0,
     },
+    {
+      name: "keeps prepared tool ownership after a failed CLI primary",
+      failsCliPrimary: true,
+      preliminaryVisibleReplies: "automatic" as const,
+      preparedVisibleReplies: "message_tool" as const,
+      expectedTransitions: ["message_tool_only", "message_tool_only"],
+      expectedDeliveries: 0,
+      expectedPartials: 0,
+      expectedFinals: 0,
+    },
   ])("$name", async (testCase) => {
+    await useProductionEmbeddedRunExecutionParamsForTest();
     const { runEmbeddedAgent, registerPreparedAgentHarness } =
       await loadRunOverflowCompactionHarness();
     mockedGlobalHookRunner.hasHooks.mockImplementation(
@@ -219,7 +231,6 @@ describe("prepared harness source delivery", () => {
       expect.any(Object),
     );
     expect(emittedStreamingCallbacks).toEqual(["partial", "block"]);
-    expect(modeTransitions).toEqual(testCase.expectedTransitions);
     expect(onPartialReply).toHaveBeenCalledTimes(testCase.expectedPartials);
     expect(result.queuedFinal).toBe(testCase.expectedDeliveries === 1);
     if (testCase.expectedDeliveries === 1) {
@@ -238,5 +249,6 @@ describe("prepared harness source delivery", () => {
       final: testCase.expectedFinals,
     });
     expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
+    expect(modeTransitions).toEqual(testCase.expectedTransitions);
   });
 });

@@ -802,6 +802,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     prepareProviderRuntimeAuth: mockedPrepareProviderRuntimeAuth,
     resolveProviderCapabilitiesWithPlugin: vi.fn(() => ({})),
     resolveProviderAuthProfileId: vi.fn(() => undefined),
+    resolveProviderReasoningOutputModeWithPlugin: vi.fn(() => undefined),
     shouldPreferProviderRuntimeResolvedModel: vi.fn(() => false),
     prepareProviderExtraParams: vi.fn(async () => ({})),
     wrapProviderStreamFn: vi.fn((_cfg: unknown, _model: unknown, fn: unknown) => fn),
@@ -950,7 +951,10 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     redactRunIdentifier: vi.fn((value?: string) => value ?? ""),
   }));
 
-  vi.doMock("../embedded-agent-helpers.js", () => ({
+  vi.doMock("../embedded-agent-helpers.js", async () => ({
+    ...(await vi.importActual<typeof import("../embedded-agent-helpers.js")>(
+      "../embedded-agent-helpers.js",
+    )),
     formatBillingErrorMessage: mockedFormatBillingErrorMessage,
     classifyFailoverReason: mockedClassifyFailoverReason,
     classifyAssistantFailoverReason: mockedClassifyAssistantFailoverReason,
@@ -1058,10 +1062,12 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     DEFAULT_PROVIDER: "anthropic",
   }));
 
-  vi.doMock("../failover-error.js", () => ({
+  vi.doMock("../failover-error.js", async () => ({
+    ...(await vi.importActual<typeof import("../failover-error.js")>("../failover-error.js")),
     FailoverError: MockedFailoverError,
     coerceToFailoverError: mockedCoerceToFailoverError,
     describeFailoverError: mockedDescribeFailoverError,
+    isFailoverError: (error: unknown) => error instanceof MockedFailoverError,
     resolveFailoverStatus: mockedResolveFailoverStatus,
   }));
 
