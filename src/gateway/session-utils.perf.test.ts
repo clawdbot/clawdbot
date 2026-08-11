@@ -225,18 +225,6 @@ describe("listSessionsFromStore resolver cache", () => {
         ]),
       );
 
-      const aboveSqliteVariableLimit = Array.from({ length: 33_000 }, (_, index) => ({
-        sessionKey: `agent:default:webchat:dm:missing-${index}`,
-        entry: {
-          sessionId: `missing-session-${index}`,
-          updatedAt: index,
-        } satisfies SessionEntry,
-      }));
-      const largeBatch = readAcpSessionMetaBatch({ entries: aboveSqliteVariableLimit });
-      expect(largeBatch.size).toBe(aboveSqliteVariableLimit.length);
-      expect(largeBatch.get(aboveSqliteVariableLimit[0]!.entry)).toBeUndefined();
-      expect(largeBatch.get(aboveSqliteVariableLimit.at(-1)!.entry)).toBeUndefined();
-
       const database = openOpenClawStateDatabase();
       const originalPrepare = database.db.prepare.bind(database.db);
       let acpSelects = 0;
@@ -247,6 +235,22 @@ describe("listSessionsFromStore resolver cache", () => {
         return originalPrepare(sql);
       });
       try {
+        // Cross the production 500-key chunk boundary without materializing
+        // tens of thousands of rows just to prove the same batching behavior.
+        const aboveBatchChunkSize = Array.from({ length: 501 }, (_, index) => ({
+          sessionKey: `agent:default:webchat:dm:missing-${index}`,
+          entry: {
+            sessionId: `missing-session-${index}`,
+            updatedAt: index,
+          } satisfies SessionEntry,
+        }));
+        const chunkedBatch = readAcpSessionMetaBatch({ entries: aboveBatchChunkSize });
+        expect(chunkedBatch.size).toBe(aboveBatchChunkSize.length);
+        expect(chunkedBatch.get(aboveBatchChunkSize[0]!.entry)).toBeUndefined();
+        expect(chunkedBatch.get(aboveBatchChunkSize.at(-1)!.entry)).toBeUndefined();
+        expect(acpSelects).toBe(2);
+
+        acpSelects = 0;
         const result = listSessionsFromStore({
           cfg,
           storePath: path.join(stateDir, "agents", "default", "sessions", "sessions.json"),
