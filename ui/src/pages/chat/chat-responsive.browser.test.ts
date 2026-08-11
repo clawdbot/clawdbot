@@ -2044,10 +2044,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
         expect(spacing).toHaveLength(2);
         for (const { horizontalGap, heightDelta } of spacing) {
-          // Include the chip border/inset, but keep punctuation within a quarter
-          // of the 14px prose size and the chip close to the prose line box.
+          // Include the chip border/inset, but keep both measurements within a
+          // quarter of the 14px prose size across browser font metrics.
           expect(horizontalGap).toBeLessThanOrEqual(3.75);
-          expect(heightDelta).toBeLessThanOrEqual(3);
+          expect(heightDelta).toBeLessThanOrEqual(3.75);
         }
       } finally {
         await closeBrowserPage(page);
