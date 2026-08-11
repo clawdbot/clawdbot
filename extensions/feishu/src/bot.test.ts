@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import nodePath from "node:path";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 // Feishu tests cover bot plugin behavior.
 import type {
@@ -7,6 +10,7 @@ import type {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
+import { clearConfigCache, getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveGroupSessionKey } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
@@ -3664,6 +3668,76 @@ describe("createFeishuMessageReceiveHandler media dedupe", () => {
     expect(secondCall.processingClaim?.commit).toBeTypeOf("function");
   });
 });
+// Proof-grade: the config the turn reads comes from a real file through the real
+// loader, not a stubbed `config.current`. Only transport and agent dispatch are stubbed.
+describe("inbound runtime config freshness (real config file)", () => {
+  it("a group turn reads the hot-reloaded config file, not the account-start snapshot", async () => {
+    vi.clearAllMocks();
+    const home = await fs.mkdtemp(nodePath.join(os.tmpdir(), "feishu-cfg-proof-"));
+    const configPath = nodePath.join(home, "openclaw.json");
+    const prevConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    try {
+      // On disk is the hot-reloaded config; the handler is handed the older snapshot.
+      await fs.writeFile(configPath, JSON.stringify(proofCfg("live-model")));
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      clearConfigCache();
+      setFeishuRuntime({
+        ...createFeishuBotRuntime(),
+        config: { current: () => getRuntimeConfig({ skipPluginValidation: true, pin: false }) },
+      } as PluginRuntime);
+      await dispatchMessage({ cfg: proofCfg("startup-model"), event: proofGroupEvent() });
+      expect(dispatchedPrimaryModel()).toBe("live-model");
+    } finally {
+      if (prevConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = prevConfigPath;
+      }
+      clearConfigCache();
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+});
+
+const PROOF_FEISHU = {
+  enabled: true,
+  allowFrom: ["*"],
+  dmPolicy: "open",
+  groups: { "oc-proof-group": { requireMention: false } },
+};
+
+function proofCfg(model: string): ClawdbotConfig {
+  return {
+    channels: { feishu: PROOF_FEISHU },
+    agents: { list: [{ id: "main", model: { primary: model } }] },
+  } as ClawdbotConfig;
+}
+
+function proofGroupEvent(): FeishuMessageEvent {
+  return {
+    sender: { sender_id: { open_id: "ou-sender" } },
+    message: {
+      message_id: "msg-proof-group",
+      chat_id: "oc-proof-group",
+      chat_type: "group",
+      message_type: "text",
+      content: JSON.stringify({ text: "hello" }),
+    },
+  };
+}
+
+function dispatchedPrimaryModel(): string | undefined {
+  const arg = mockCallArg<{ cfg?: ClawdbotConfig }>(mockDispatchInboundMessage, 0, 0);
+  const agents = arg.cfg?.agents as
+    | { list?: { model?: unknown }[]; entries?: Record<string, { model?: unknown }> }
+    | undefined;
+  // The real loader normalizes the legacy `agents.list` roster into keyed `agents.entries`;
+  // a mocked config keeps whichever shape the test wrote. Read both so the assertion is
+  // about the config's identity, not about which roster shape produced it.
+  const model = agents?.list?.[0]?.model ?? agents?.entries?.main?.model;
+  return typeof model === "string" ? model : (model as { primary?: string } | undefined)?.primary;
+}
+
 describe("inbound runtime config freshness", () => {
   beforeEach(() => {
     vi.clearAllMocks();
