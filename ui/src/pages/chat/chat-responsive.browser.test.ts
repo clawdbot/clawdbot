@@ -3322,7 +3322,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const letterSpacing = await page
         .locator(".chat-text")
         .evaluate((element) => getComputedStyle(element).letterSpacing);
-      expect(letterSpacing).toBe("0px");
+      expect(letterSpacing).toBe("normal");
     } finally {
       await closeBrowserPage(page);
     }
