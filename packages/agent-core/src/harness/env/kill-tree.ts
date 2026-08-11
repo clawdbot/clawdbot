@@ -175,7 +175,10 @@ function getProcessStartTime(pid: number): string | undefined {
     if (!res.error && res.status === 0 && res.stdout) {
       const lines = res.stdout.trim().split("\n");
       if (lines.length > 1) {
-        return lines[1].trim();
+        const lstart = lines[1];
+        if (lstart !== undefined) {
+          return lstart.trim();
+        }
       }
     }
   } catch {}
