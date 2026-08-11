@@ -48,13 +48,13 @@ type SystemAgentConfiguredRouteIdentity = DistributiveOmit<
   SystemAgentConfiguredRoute,
   "runConfig" | "authProfileId"
 >;
-export type SystemAgentVerifiedExecutionRoute =
+type SystemAgentVerifiedExecutionRoute =
   | Extract<SystemAgentConfiguredRoute, { runner: "cli" }>
   | (Extract<SystemAgentConfiguredRoute, { runner: "embedded" }> & {
       agentHarnessRuntimeOverride: string;
     });
 
-export type SystemAgentVerifiedInferenceState = Readonly<{
+type SystemAgentVerifiedInferenceState = Readonly<{
   config: OpenClawConfig;
   route: SystemAgentVerifiedExecutionRoute;
 }>;
