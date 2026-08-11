@@ -3,7 +3,6 @@
  *
  * Validates spawn requests, prepares child sessions, stages attachments, binds delivery context, and registers runs.
  */
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import type { SubagentSpawnPreparation } from "../../../context-engine/types.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
@@ -11,11 +10,6 @@ import {
   GatewayDrainingError,
   runWithGatewayIndependentRootWorkContinuation,
 } from "../../../process/gateway-work-admission.js";
-import {
-  recordSessionCreated,
-  recordSubagentSpawned,
-} from "../../../sessions/session-state-events.js";
-import type { SandboxFsBridge } from "../../sandbox/fs-bridge.types.js";
 import {
   runSpawnPipeline,
   type SpawnBackendAdapter,
@@ -35,6 +29,11 @@ import {
   type SubagentAttachmentReceiptFile,
 } from "./subagent-attachments.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
+import {
+  resolveSubagentAttachmentStagingBoundary,
+  sanitizeSubagentAttachmentMountPathHint,
+  type SubagentAttachmentStagingBoundary,
+} from "./subagent-spawn-attachment-boundary.js";
 import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
 import {
   cleanupFailedSpawnBeforeAgentStart,
@@ -52,10 +51,13 @@ import type {
   SpawnSubagentParams,
   SpawnSubagentResult,
 } from "./subagent-spawn-contract.js";
-import { getSubagentSpawnDeps, setSubagentSpawnDepsForTest } from "./subagent-spawn-deps.js";
+import { setSubagentSpawnDepsForTest } from "./subagent-spawn-deps.js";
 import { callSubagentGateway, readGatewayRunId } from "./subagent-spawn-gateway.js";
 import { buildSubagentLaunchRequest } from "./subagent-spawn-launch-request.js";
-import { createSubagentSpawnLifecycleEmitter } from "./subagent-spawn-lifecycle.js";
+import {
+  createSubagentSpawnLifecycleEmitter,
+  recordInitialSubagentSpawn,
+} from "./subagent-spawn-lifecycle.js";
 import { resolveSubagentSpawnRequest } from "./subagent-spawn-request.js";
 import {
   createInitialSubagentSession,
@@ -72,30 +74,6 @@ import {
 } from "./subagent-spawn.runtime.js";
 
 export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
-
-function sanitizeMountPathHint(value?: string): string | undefined {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  if (hasPromptUnsafeControlCharacter(trimmed)) {
-    return undefined;
-  }
-  if (!/^[A-Za-z0-9._\-/:]+$/.test(trimmed)) {
-    return undefined;
-  }
-  return trimmed;
-}
-
-function hasPromptUnsafeControlCharacter(value: string): boolean {
-  for (const char of value) {
-    const code = char.charCodeAt(0);
-    if (code <= 0x1f || code === 0x7f || code === 0x85 || code === 0x2028 || code === 0x2029) {
-      return true;
-    }
-  }
-  return false;
-}
 
 export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
@@ -274,7 +252,7 @@ export async function spawnSubagentDirect(
       childSessionOrigin =
         mergeDeliveryContext(bindResult.deliveryOrigin, childSessionOrigin) ?? childSessionOrigin;
     }
-    const mountPathHint = sanitizeMountPathHint(params.attachMountPath);
+    const mountPathHint = sanitizeSubagentAttachmentMountPathHint(params.attachMountPath);
 
     let childSystemPrompt = buildSubagentSystemPrompt({
       requesterSessionKey,
@@ -308,28 +286,17 @@ export async function spawnSubagentDirect(
     let attachmentAbsDir: string | undefined;
     let attachmentRootDir: string | undefined;
     let attachmentSandboxDir: string | undefined;
-    let attachmentSandboxFsBridge: SandboxFsBridge | undefined;
-    let attachmentSandboxWorkspaceDir: string | undefined;
-    let attachmentWorkspaceDir = spawnedCwd ?? spawnedWorkspaceDir;
+    let attachmentBoundary: SubagentAttachmentStagingBoundary = {
+      workspaceDir: spawnedCwd ?? spawnedWorkspaceDir,
+    };
     if (params.attachments?.length && childRuntimeSandboxed) {
       try {
-        const childSandbox = await getSubagentSpawnDeps().resolveSandboxContext({
+        attachmentBoundary = await resolveSubagentAttachmentStagingBoundary({
           config: cfg,
-          agentId: targetAgentId,
-          sessionKey: childSessionKey,
-          workspaceDir: attachmentWorkspaceDir,
+          targetAgentId,
+          childSessionKey,
+          workspaceDir: attachmentBoundary.workspaceDir,
         });
-        if (!childSandbox) {
-          throw new Error("child sandbox context was unavailable");
-        }
-        attachmentWorkspaceDir = childSandbox.workspaceDir ?? attachmentWorkspaceDir;
-        if (
-          childSandbox.backend?.capabilities?.workspaceMutationVisibility !== "shared-host"
-        ) {
-          attachmentSandboxFsBridge =
-            getSubagentSpawnDeps().createSandboxWorkspaceIngressFsBridge(childSandbox);
-          attachmentSandboxWorkspaceDir = childSandbox.agentWorkspaceDir ?? attachmentWorkspaceDir;
-        }
       } catch (error) {
         await cleanupCreatedSession(threadBindingReady);
         return {
@@ -340,8 +307,8 @@ export async function spawnSubagentDirect(
       }
     }
 
-    const attachmentSandboxTargetDir = attachmentSandboxFsBridge?.resolvePath({
-      filePath: attachmentWorkspaceDir ?? attachmentSandboxWorkspaceDir ?? "",
+    const attachmentSandboxTargetDir = attachmentBoundary.sandboxFsBridge?.resolvePath({
+      filePath: attachmentBoundary.workspaceDir ?? attachmentBoundary.sandboxWorkspaceDir ?? "",
     }).containerPath;
 
     const deliverInitialChildRunDirectly =
@@ -392,7 +359,7 @@ export async function spawnSubagentDirect(
 
     function buildRegistration(
       runId: string,
-      plan: ReturnType<typeof buildSubagentLaunchRequest>,
+      launchRequest: ReturnType<typeof buildSubagentLaunchRequest>,
       queued: boolean,
       launchCleanupPending = false,
     ) {
@@ -411,7 +378,7 @@ export async function spawnSubagentDirect(
         controllerSessionKey: ownership.controllerSessionKey,
         requesterSessionKey: ownership.completionRequesterSessionKey,
         requesterOrigin,
-        progressOrigin: plan.progressOrigin,
+        progressOrigin: launchRequest.progressOrigin,
         requesterDisplayKey: ownership.completionRequesterDisplayKey,
         task,
         taskName,
@@ -421,9 +388,9 @@ export async function spawnSubagentDirect(
         label: label || undefined,
         model: resolvedModel,
         agentDir: targetAgentDir,
-        workspaceDir: plan.spawnedMetadata.workspaceDir,
+        workspaceDir: launchRequest.spawnedMetadata.workspaceDir,
         runTimeoutSeconds,
-        expectsCompletionMessage: plan.shouldAnnounceCompletion,
+        expectsCompletionMessage: launchRequest.shouldAnnounceCompletion,
         spawnMode,
         collect: params.collect === true,
         swarmRequesterSessionKey: params.collect ? requesterInternalKey : undefined,
@@ -434,7 +401,7 @@ export async function spawnSubagentDirect(
           : undefined,
         outputSchema: params.outputSchema,
         groupId: swarmGroupId,
-        queuedLaunch: plan.queuedLaunch,
+        queuedLaunch: launchRequest.queuedLaunch,
         queued,
         launchCleanupPending,
         launchCleanupSessionIdentity:
@@ -448,12 +415,16 @@ export async function spawnSubagentDirect(
             : undefined,
         attachmentsDir: attachmentAbsDir,
         attachmentsRootDir: attachmentRootDir,
-        attachmentsSandboxSessionKey: attachmentSandboxFsBridge ? childSessionKey : undefined,
-        attachmentsSandboxAgentId: attachmentSandboxFsBridge ? targetAgentId : undefined,
-        attachmentsSandboxWorkspaceDir: attachmentSandboxFsBridge
-          ? attachmentSandboxWorkspaceDir
+        attachmentsSandboxSessionKey: attachmentBoundary.sandboxFsBridge
+          ? childSessionKey
           : undefined,
-        attachmentsSandboxDir: attachmentSandboxFsBridge ? attachmentSandboxDir : undefined,
+        attachmentsSandboxAgentId: attachmentBoundary.sandboxFsBridge ? targetAgentId : undefined,
+        attachmentsSandboxWorkspaceDir: attachmentBoundary.sandboxFsBridge
+          ? attachmentBoundary.sandboxWorkspaceDir
+          : undefined,
+        attachmentsSandboxDir: attachmentBoundary.sandboxFsBridge
+          ? attachmentSandboxDir
+          : undefined,
         retainAttachmentsOnKeep: retainOnSessionKeep,
       };
     }
@@ -466,7 +437,7 @@ export async function spawnSubagentDirect(
         childSessionKey,
         attachmentAbsDir,
         attachmentRootDir,
-        attachmentSandboxFsBridge,
+        attachmentSandboxFsBridge: attachmentBoundary.sandboxFsBridge,
         attachmentSandboxDir,
         emitLifecycleHooks,
         deleteTranscript: true,
@@ -477,10 +448,10 @@ export async function spawnSubagentDirect(
     const materializedAttachments = await materializeSubagentAttachments({
       config: cfg,
       targetAgentId,
-      workspaceDir: attachmentWorkspaceDir,
+      workspaceDir: attachmentBoundary.workspaceDir,
       attachments: params.attachments,
       mountPathHint,
-      sandboxFsBridge: attachmentSandboxFsBridge,
+      sandboxFsBridge: attachmentBoundary.sandboxFsBridge,
       sandboxWorkspaceDir: attachmentSandboxTargetDir,
       claimCleanupOwner: applyAttachmentClaim,
     });
@@ -503,18 +474,12 @@ export async function spawnSubagentDirect(
     }
     const resolvedLaunchPlan = launchPlan ?? createLaunchPlan(childSystemPrompt);
     const { childLaunch, progressOrigin } = resolvedLaunchPlan;
-    if (initialSession.entry) {
-      recordSessionCreated({
-        sessionKey: childSessionKey,
-        agentId: targetAgentId,
-        entry: initialSession.entry,
-      });
-    }
-    recordSubagentSpawned({
+    recordInitialSubagentSpawn({
       childSessionKey,
       childRunId,
       requesterSessionKey: requesterInternalKey,
-      agentId: targetAgentId,
+      targetAgentId,
+      initialSessionEntry: initialSession.entry,
     });
     const launchChildRun = async () =>
       await callSubagentGateway(
@@ -756,12 +721,7 @@ export async function spawnSubagentDirect(
   }
 }
 
-const testing = {
-  setDepsForTest(overrides?: Parameters<typeof setSubagentSpawnDepsForTest>[0]) {
-    setSubagentSpawnDepsForTest(overrides);
-  },
-};
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.subagentSpawnTestApi")] =
-    testing;
+    { setDepsForTest: setSubagentSpawnDepsForTest };
 }

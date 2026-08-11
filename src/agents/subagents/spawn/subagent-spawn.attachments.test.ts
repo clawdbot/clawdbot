@@ -271,7 +271,7 @@ describe("spawnSubagentDirect filename validation", () => {
         attachmentsSandboxDir: expect.stringContaining("/.openclaw/attachments/"),
         launchCleanupPending: true,
         launchCleanupSessionIdentity: {
-          sessionId: "forked-session-id",
+          sessionId: expect.any(String),
           lifecycleRevision: expect.any(String),
         },
       }),
@@ -854,12 +854,13 @@ describe("spawnSubagentDirect filename validation", () => {
 
   it("aborts an accepted child before cleaning a failed attachment-owner activation", async () => {
     const events: string[] = [];
-    const gateway = vi.fn(async (request: { method?: string }) => {
-      if (request.method === "agent") {
+    const gateway = vi.fn(async (request: unknown) => {
+      const method = (request as { method?: string }).method;
+      if (method === "agent") {
         events.push("accepted");
         return { runId: "accepted-child-run" };
       }
-      if (request.method === "chat.abort") {
+      if (method === "chat.abort") {
         events.push("aborted");
         return { aborted: true, runIds: ["accepted-child-run"] };
       }

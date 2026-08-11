@@ -1,6 +1,33 @@
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
+import {
+  recordSessionCreated,
+  recordSubagentSpawned,
+} from "../../../sessions/session-state-events.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
+
+export function recordInitialSubagentSpawn(params: {
+  childSessionKey: string;
+  childRunId: string;
+  requesterSessionKey: string;
+  targetAgentId: string;
+  initialSessionEntry?: SessionEntry;
+}): void {
+  if (params.initialSessionEntry) {
+    recordSessionCreated({
+      sessionKey: params.childSessionKey,
+      agentId: params.targetAgentId,
+      entry: params.initialSessionEntry,
+    });
+  }
+  recordSubagentSpawned({
+    childSessionKey: params.childSessionKey,
+    childRunId: params.childRunId,
+    requesterSessionKey: params.requesterSessionKey,
+    agentId: params.targetAgentId,
+  });
+}
 
 export function createSubagentSpawnLifecycleEmitter(params: {
   hookRunner: SubagentLifecycleHookRunner | null;

@@ -905,6 +905,10 @@ describe("subagent registry seam flow", () => {
       collect: true,
       groupId: "swarm:cleanup-pending",
       launchCleanupPending: true,
+      launchCleanupSessionIdentity: {
+        sessionId: "session-collector-cleanup-pending",
+        lifecycleRevision: "revision-collector-cleanup-pending",
+      },
       collectorCompletion: { status: "failed" },
     });
     mocks.callGateway.mockRejectedValueOnce(new Error("delete unavailable"));
@@ -1140,6 +1144,7 @@ describe("subagent registry seam flow", () => {
     const attachmentsDir = "/workspace/.openclaw/attachments/00000000-0000-4000-8000-000000000001";
     mod.addSubagentRunForTests({
       runId: provisionalRunId,
+      taskRunId: provisionalRunId,
       childSessionKey: "agent:main:subagent:attachment-owner",
       task: "activate attachment owner",
       createdAt: Date.now(),
@@ -1163,10 +1168,12 @@ describe("subagent registry seam flow", () => {
     const runId = "attachment-owner-failed";
     mod.addSubagentRunForTests({
       runId,
+      taskRunId: runId,
       childSessionKey: "agent:main:subagent:attachment-owner-failed",
       task: "retain failed attachment owner",
       createdAt: Date.now(),
       execution: { status: "queued" },
+      cleanupHandled: false,
       launchCleanupPending: true,
       attachmentsDir: "/workspace/.openclaw/attachments/00000000-0000-4000-8000-000000000002",
       attachmentsRootDir: "/workspace",
@@ -1898,9 +1905,11 @@ describe("subagent registry seam flow", () => {
       parentSessionKey: "agent:main:main",
     });
     expect(mod.getSubagentRunByRunId("run-queued-failure")).toMatchObject({
-      launchCleanupPending: false,
       contextEngineCleanupCompletedAt: expect.any(Number),
     });
+    expect(
+      mod.getSubagentRunByRunId("run-queued-failure")?.launchCleanupPending,
+    ).toBeUndefined();
     const contextEndCalls = mocks.onSubagentEnded.mock.calls.length;
     await mod.testing.sweepOnceForTests();
     expect(mocks.onSubagentEnded).toHaveBeenCalledTimes(contextEndCalls);
