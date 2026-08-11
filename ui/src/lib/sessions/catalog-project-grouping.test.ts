@@ -3,6 +3,7 @@ import type { SessionCatalogSession } from "../../../../packages/gateway-protoco
 import {
   groupCatalogSessionsByPerson,
   groupCatalogSessionsByProject,
+  migrateCollapsedCatalogProjectSection,
   normalizeCatalogProjectGrouping,
 } from "./catalog-project-grouping.ts";
 
@@ -86,7 +87,11 @@ describe("groupCatalogSessionsByProject", () => {
   });
 
   it.each([
-    ["/Users/dev/openclaw/.claude/worktrees/fix-1", "/Users/dev/openclaw", "project:/Users/dev/openclaw"],
+    [
+      "/Users/dev/openclaw/.claude/worktrees/fix-1",
+      "/Users/dev/openclaw",
+      "project:/Users/dev/openclaw",
+    ],
     [
       "/Users/dev/openclaw/.claude/worktrees/fix-1/ui/src",
       "/Users/dev/openclaw",
@@ -146,13 +151,13 @@ describe("groupCatalogSessionsByProject", () => {
   ])(
     "normalizes %s to project %s with label %s",
     (cwd, expectedPath, expectedLabel, expectedKey) => {
-    const result = groupCatalogSessionsByProject([session("one", cwd)]);
+      const result = groupCatalogSessionsByProject([session("one", cwd)]);
 
-    expect(result.groups[0]).toMatchObject({
-      key: expectedKey,
-      legacySectionKey: expectedPath,
-      label: expectedLabel,
-      title: expectedPath,
+      expect(result.groups[0]).toMatchObject({
+        key: expectedKey,
+        legacySectionKey: expectedPath,
+        label: expectedLabel,
+        title: expectedPath,
       });
     },
   );
@@ -244,11 +249,35 @@ describe("groupCatalogSessionsByProject", () => {
     ]);
 
     expect(result.groups.map((group) => group.key)).toEqual([
-      "/Work/Notes",
-      "/work/notes",
-      "//mnt/Repo",
-      "//mnt/repo",
+      "project:/Work/Notes",
+      "project:/work/notes",
+      "project://mnt/Repo",
+      "project://mnt/repo",
     ]);
+  });
+});
+
+describe("catalog project collapse migration", () => {
+  it("replaces an equivalent Windows worktree key and preserves unrelated sections", () => {
+    const prefix = "catalog-project:codex:gateway:local:";
+    const canonical = `${prefix}project:windows:drive:c:/work/openclaw`;
+    const unrelated = "catalog:claude";
+    const migrated = migrateCollapsedCatalogProjectSection(
+      new Set([`${prefix}${String.raw`C:\Work\OpenClaw\.CLAUDE\WORKTREES\fix-1`}`, unrelated]),
+      prefix,
+      canonical,
+      "windows:drive:c:/work/openclaw",
+    );
+
+    expect(migrated).toEqual(new Set([unrelated, canonical]));
+    expect(
+      migrateCollapsedCatalogProjectSection(
+        migrated ?? new Set(),
+        prefix,
+        canonical,
+        "windows:drive:c:/work/openclaw",
+      ),
+    ).toBeNull();
   });
 });
 

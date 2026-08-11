@@ -60,6 +60,11 @@ type SessionCatalogGroupsParams = {
   ownerId?: string | null;
   renderLiveRow: (row: GatewaySessionRow, display: CatalogBackingSessionDisplay) => unknown;
   onToggleSection: (sectionId: string) => void;
+  onMigrateCollapsedProjectSection: (
+    sectionPrefix: string,
+    sectionId: string,
+    projectIdentity: string,
+  ) => boolean;
   draggingSectionId: string | null;
   sectionDropTarget: { sectionId: string; position: "before" | "after" } | null;
   onSectionDragOver: (event: DragEvent, sectionId: string) => void;
@@ -470,14 +475,25 @@ function renderCatalogHostGroup(
                 (group) => group.key,
                 (group) => {
                   const sectionId = `catalog-${group.kind}:${catalog.id}:${host.hostId}:${group.key}`;
+                  const sectionPrefix = `catalog-project:${catalog.id}:${host.hostId}:`;
+                  const migrated =
+                    group.kind === "project"
+                      ? params.onMigrateCollapsedProjectSection(
+                          sectionPrefix,
+                          sectionId,
+                          group.key.slice("project:".length),
+                        )
+                      : false;
                   const legacySectionId = group.legacySectionKey
                     ? `catalog-project:${catalog.id}:${host.hostId}:${group.legacySectionKey}`
                     : null;
                   const collapsedSectionId = params.collapsedSections.has(sectionId)
                     ? sectionId
-                    : legacySectionId && params.collapsedSections.has(legacySectionId)
-                      ? legacySectionId
-                      : null;
+                    : migrated
+                      ? sectionId
+                      : legacySectionId && params.collapsedSections.has(legacySectionId)
+                        ? legacySectionId
+                        : null;
                   const collapsed = collapsedSectionId !== null;
                   return html`
                     <div class="sidebar-session-catalog-project" role="listitem">
