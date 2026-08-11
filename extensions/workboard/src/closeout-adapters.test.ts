@@ -117,6 +117,17 @@ describe("closeout tracker plugin adapters", () => {
       throw new Error("expected one owner closeout tool");
     }
 
+    const actionSchema = (
+      tool.parameters as {
+        properties?: { action?: { anyOf?: unknown; enum?: unknown; type?: unknown } };
+      }
+    ).properties?.action;
+    expect(actionSchema).toEqual({
+      type: "string",
+      enum: ["send", "reconcile", "complete", "get", "list"],
+    });
+    expect(actionSchema).not.toHaveProperty("anyOf");
+
     const sendResult = await tool.execute("tool-call-1", {
       action: "send",
       closeoutId: "NAC-78",

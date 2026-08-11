@@ -292,9 +292,7 @@ export function ensureConversationDeliveryReceiptSourceProjection(db: DatabaseSy
   if (!columns || columns.has("platform_message_id_source")) {
     return;
   }
-  db.exec(
-    "ALTER TABLE conversation_deliveries ADD COLUMN platform_message_id_source TEXT CHECK (platform_message_id_source IS NULL OR platform_message_id_source IN ('receipt', 'inbound-reply'));",
-  );
+  db.exec("ALTER TABLE conversation_deliveries ADD COLUMN platform_message_id_source TEXT;");
 }
 
 /** Adds the validity projection and settles only rows left pending by older writers. */

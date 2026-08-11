@@ -1,3 +1,4 @@
+import { stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import type { AnyAgentTool, OpenClawPluginToolFactory } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
@@ -9,14 +10,10 @@ import {
   type ConversationSendResult,
 } from "./closeout-tracker.js";
 
+const CLOSEOUT_TRACKER_ACTIONS = ["send", "reconcile", "complete", "get", "list"] as const;
+
 const CloseoutTrackerParams = Type.Object({
-  action: Type.Union([
-    Type.Literal("send"),
-    Type.Literal("reconcile"),
-    Type.Literal("complete"),
-    Type.Literal("get"),
-    Type.Literal("list"),
-  ]),
+  action: stringEnum(CLOSEOUT_TRACKER_ACTIONS),
   closeoutId: Type.Optional(Type.String({ maxLength: 128 })),
   conversationRef: Type.Optional(Type.String({ maxLength: 512 })),
   message: Type.Optional(Type.String({ maxLength: 16_000 })),

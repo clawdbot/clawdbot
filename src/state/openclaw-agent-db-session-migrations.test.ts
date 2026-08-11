@@ -36,6 +36,11 @@ describe("agent DB conversation migration", () => {
       name?: unknown;
     }>;
     expect(columns.some((column) => column.name === "platform_message_id_source")).toBe(true);
+    const tableSql = database
+      .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?")
+      .get("conversation_deliveries") as { sql?: unknown } | undefined;
+    expect(tableSql?.sql).toContain("platform_message_id_source TEXT");
+    expect(tableSql?.sql).not.toContain("platform_message_id_source IN");
     expect(
       database
         .prepare(
