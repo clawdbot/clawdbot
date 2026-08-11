@@ -76,7 +76,10 @@ async function captureMessages(
   const command = send.mock.calls.at(-1)?.[0] as {
     input?: { messages?: Array<{ content?: unknown; role?: unknown }> };
   };
-  return command.input?.messages ?? [];
+  if (!command.input || !Array.isArray(command.input.messages)) {
+    throw new Error("expected ConverseStreamCommand messages");
+  }
+  return command.input.messages;
 }
 
 afterEach(() => {
