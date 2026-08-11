@@ -12,7 +12,7 @@ import type { Message, Model as CanonicalModel } from "./types.js";
 const IMAGE_OMISSION = "(image omitted: model does not support images)";
 const VIDEO_OMISSION = "(video omitted: provider does not support video input)";
 
-export function projectUserMediaForTransport(
+function projectUserMediaForTransport(
   content: ModelInputContent[],
   supportsImages: boolean,
 ): Exclude<ModelInputContent, VideoContent>[] {
