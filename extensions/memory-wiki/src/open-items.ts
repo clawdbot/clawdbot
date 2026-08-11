@@ -5,7 +5,7 @@ import {
   collectWikiClaimHealth,
 } from "./claim-health.js";
 import type { WikiPageSummary } from "./markdown.js";
-import { readQueryableWikiPages } from "./query.js";
+import { readQueryableWikiPages, type QueryableWikiPage } from "./query.js";
 
 export const WIKI_OPEN_ITEM_KINDS = [
   "open-question",
@@ -178,7 +178,8 @@ function deriveMemoryWikiOpenItems(
 export async function collectMemoryWikiOpenItems(
   rootDir: string,
   now?: Date,
+  canReadPage: (page: QueryableWikiPage) => boolean = () => true,
 ): Promise<MemoryWikiOpenItemsResult> {
   const pages = await readQueryableWikiPages(rootDir);
-  return deriveMemoryWikiOpenItems(pages, now);
+  return deriveMemoryWikiOpenItems(pages.filter(canReadPage), now);
 }

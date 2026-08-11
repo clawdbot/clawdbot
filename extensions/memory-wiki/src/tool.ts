@@ -2,6 +2,7 @@
 import path from "node:path";
 import { optionalFiniteNumberSchema, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { Type } from "typebox";
 import type { AnyAgentTool, OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
@@ -16,7 +17,12 @@ import {
   countMemoryWikiOpenItems,
   WIKI_OPEN_ITEM_KINDS,
 } from "./open-items.js";
-import { getMemoryWikiPage, searchMemoryWiki, WIKI_SEARCH_MODES } from "./query.js";
+import {
+  createWikiPageVisibilityFilter,
+  getMemoryWikiPage,
+  searchMemoryWiki,
+  WIKI_SEARCH_MODES,
+} from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { renderMemoryWikiStatus, resolveMemoryWikiStatus } from "./status.js";
 
@@ -92,6 +98,12 @@ const WikiClaimSchema = Type.Object(
 // so even an explicit caller cannot request an unbounded listing.
 const WIKI_OPEN_ITEMS_DEFAULT_LIMIT = 20;
 const WIKI_OPEN_ITEMS_MAX_LIMIT = 100;
+// Bound individual model-visible fields as well as the number of returned
+// items. This prevents a single malformed or unusually long question/claim
+// from consuming an unbounded share of an agent's context window.
+const WIKI_OPEN_ITEM_TEXT_MAX_CHARS = 500;
+const WIKI_OPEN_ITEM_VARIANTS_MAX_COUNT = 10;
+const WIKI_OPEN_ITEM_RELATED_PATHS_MAX_COUNT = 20;
 const WikiOpenItemsSchema = Type.Object(
   {
     kinds: Type.Optional(Type.Array(stringEnum(WIKI_OPEN_ITEM_KINDS), { minItems: 1 })),
@@ -134,6 +146,54 @@ type WikiToolMemoryContext = {
   sandboxed?: boolean;
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
 };
+
+function truncateOpenItemText(value: string): string {
+  if (value.length <= WIKI_OPEN_ITEM_TEXT_MAX_CHARS) {
+    return value;
+  }
+  return `${truncateUtf16Safe(value, WIKI_OPEN_ITEM_TEXT_MAX_CHARS - 1)}…`;
+}
+
+function boundMemoryWikiOpenItem<T extends {
+  text: string;
+  pagePath: string;
+  pageTitle: string;
+  claimId?: string;
+  variants?: Array<{
+    text: string;
+    status: string;
+    pagePath: string;
+    pageTitle: string;
+    confidence?: number;
+  }>;
+  relatedPagePaths?: string[];
+}>(item: T): T {
+  return {
+    ...item,
+    text: truncateOpenItemText(item.text),
+    pagePath: truncateOpenItemText(item.pagePath),
+    pageTitle: truncateOpenItemText(item.pageTitle),
+    ...(item.claimId ? { claimId: truncateOpenItemText(item.claimId) } : {}),
+    ...(item.variants
+      ? {
+          variants: item.variants.slice(0, WIKI_OPEN_ITEM_VARIANTS_MAX_COUNT).map((variant) => ({
+            ...variant,
+            text: truncateOpenItemText(variant.text),
+            status: truncateOpenItemText(variant.status),
+            pagePath: truncateOpenItemText(variant.pagePath),
+            pageTitle: truncateOpenItemText(variant.pageTitle),
+          })),
+        }
+      : {}),
+    ...(item.relatedPagePaths
+      ? {
+          relatedPagePaths: item.relatedPagePaths
+            .slice(0, WIKI_OPEN_ITEM_RELATED_PATHS_MAX_COUNT)
+            .map(truncateOpenItemText),
+        }
+      : {}),
+  };
+}
 
 export function createWikiStatusTool(
   config: ResolvedMemoryWikiConfig,
@@ -255,6 +315,7 @@ export function createWikiLintTool(
 export function createWikiOpenItemsTool(
   config: ResolvedMemoryWikiConfig,
   appConfig?: OpenClawConfig,
+  memoryContext: WikiToolMemoryContext = {},
 ): AnyAgentTool {
   return {
     name: "wiki_open_items",
@@ -265,7 +326,16 @@ export function createWikiOpenItemsTool(
     execute: async (_toolCallId, rawParams) => {
       const params = rawParams as { kinds?: WikiOpenItemKind[]; limit?: number };
       await syncImportedSourcesIfNeeded(config, appConfig);
-      const result = await collectMemoryWikiOpenItems(config.vault.path);
+      const result = await collectMemoryWikiOpenItems(
+        config.vault.path,
+        undefined,
+        createWikiPageVisibilityFilter({
+          appConfig,
+          agentId: memoryContext.agentId,
+          agentSessionKey: memoryContext.agentSessionKey,
+          sandboxed: memoryContext.sandboxed,
+        }),
+      );
       const kindFilter = params.kinds && params.kinds.length > 0 ? new Set(params.kinds) : null;
       let items = kindFilter
         ? result.items.filter((item) => kindFilter.has(item.kind))
@@ -275,10 +345,11 @@ export function createWikiOpenItemsTool(
       // entire vault. The schema maximum bounds explicit callers.
       const limit = params.limit ?? WIKI_OPEN_ITEMS_DEFAULT_LIMIT;
       items = items.slice(0, limit);
+      const boundedItems = items.map(boundMemoryWikiOpenItem);
       const text =
-        items.length === 0
+        boundedItems.length === 0
           ? "No open wiki items."
-          : items
+          : boundedItems
               .map((item, index) => {
                 const claimSuffix = item.claimId ? ` (claim ${item.claimId})` : "";
                 const confidenceSuffix =
@@ -292,7 +363,11 @@ export function createWikiOpenItemsTool(
         content: [{ type: "text", text }],
         // counts describe the returned (filtered/limited) items; vaultCounts is
         // the unfiltered whole-vault tally so callers can tell the two apart.
-        details: { counts: countMemoryWikiOpenItems(items), vaultCounts: result.counts, items },
+        details: {
+          counts: countMemoryWikiOpenItems(boundedItems),
+          vaultCounts: result.counts,
+          items: boundedItems,
+        },
       };
     },
   };

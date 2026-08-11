@@ -149,7 +149,7 @@ describe("memory-wiki plugin", () => {
           vault: { scope: "agent", path: path.join(rootDir, "marketing") },
         },
       });
-      if (registration.name === "wiki_status") {
+      if (registration.name === "wiki_status" || registration.name === "wiki_open_items") {
         expect(supportTool).toMatchObject({ testMemoryContext: { agentId: "support" } });
         expect(marketingTool).toMatchObject({ testMemoryContext: { agentId: "marketing" } });
       }

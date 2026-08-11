@@ -231,6 +231,66 @@ describe("memory-wiki tools", () => {
     expect(text).not.toContain("21. ");
   });
 
+  it("caps oversized open-item fields in both rendered text and details", async () => {
+    const { rootDir, config } = await harness.createVault({ initialize: true });
+    const oversizedQuestion = "x".repeat(2_000);
+    await writeSynthesisPage(rootDir, path.join("syntheses", "oversized.md"), [
+      "id: synth-oversized",
+      "title: Oversized",
+      "questions:",
+      `  - ${oversizedQuestion}`,
+    ]);
+
+    const tool = createWikiOpenItemsTool(config);
+    const result = await tool.execute("open-items-oversized", {});
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    const details = asSchemaObject(result.details);
+    const [item] = details.items as Array<Record<string, unknown>>;
+
+    expect(text).toContain(`${"x".repeat(499)}…`);
+    expect(text).not.toContain("x".repeat(500));
+    expect(item?.text).toBe(`${"x".repeat(499)}…`);
+    expect(String(item?.text)).toHaveLength(500);
+  });
+
+  it("excludes foreign and unowned bridge-page items for sandboxed callers", async () => {
+    const { rootDir, config } = await harness.createVault({ initialize: true });
+    const writeBridgeQuestion = async (slug: string, agentIds: string[], question: string) => {
+      await fs.writeFile(
+        path.join(rootDir, "sources", `${slug}.md`),
+        [
+          "---",
+          "pageType: source",
+          `id: source.${slug}`,
+          `title: ${slug}`,
+          "sourceType: memory-bridge",
+          "bridgeAgentIds:",
+          ...agentIds.map((agentId) => `  - ${agentId}`),
+          "questions:",
+          `  - ${question}`,
+          "---",
+          "",
+          "Body.",
+        ].join("\n"),
+        "utf8",
+      );
+    };
+    await writeBridgeQuestion("owned", ["main"], "owned open question");
+    await writeBridgeQuestion("foreign", ["secondary"], "foreign open question");
+    await writeBridgeQuestion("unowned", [], "unowned open question");
+
+    const tool = createWikiOpenItemsTool(config, undefined, {
+      agentId: "main",
+      sandboxed: true,
+    });
+    const result = await tool.execute("open-items-sandboxed", { kinds: ["open-question"] });
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+
+    expect(text).toContain("owned open question");
+    expect(text).not.toContain("foreign open question");
+    expect(text).not.toContain("unowned open question");
+  });
+
   it("declares a bounded limit with a schema maximum", () => {
     const tool = createWikiOpenItemsTool({} as ResolvedMemoryWikiConfig);
     const properties = asSchemaObject(asSchemaObject(tool.parameters).properties);
