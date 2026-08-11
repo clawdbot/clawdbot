@@ -66,16 +66,6 @@ describe("listSessionsFromStore resolver cache", () => {
           model: tuple.model,
           inputTokens: 100,
           outputTokens: 50,
-          // Keep runtime selection outside this cache proof. ACP metadata gives
-          // the row a concrete runtime without cold-loading provider plugins.
-          acp: {
-            backend: "acpx",
-            agent: "codex",
-            runtimeSessionName: `cache-proof-${i}`,
-            mode: "oneshot",
-            state: "idle",
-            lastActivityAt: now,
-          },
         } as SessionEntry;
       }
 
