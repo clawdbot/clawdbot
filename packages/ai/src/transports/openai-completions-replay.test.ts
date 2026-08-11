@@ -1,6 +1,6 @@
-import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import { buildOpenAICompletionsParams } from "./openai-transport-stream.js";
+import type { Model } from "../types.js";
+import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
 import {
   openRouterModel,
   openRouterAnthropicModel,
@@ -18,8 +18,8 @@ import {
   getAssistantMessage,
   buildReplayParams,
   customReasoningProxyModel,
-} from "./openai-transport-stream.test-harness.js";
-import { testing } from "./openai-transport-stream.test-support.js";
+} from "./openai-completions.test-support.js";
+import { getCompat } from "./openai-transport-params.js";
 
 describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () => {
   it.each(["reasoning_details", "reasoning_content", "reasoning", "reasoning_text"])(
@@ -311,7 +311,7 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
   });
 
   it("honors compat.requiresReasoningContentOnAssistantMessages from config on a custom provider (#89660)", () => {
-    const resolved = testing.getCompat({
+    const resolved = getCompat({
       ...customReasoningProxyModel,
       compat: { requiresReasoningContentOnAssistantMessages: true },
     } as never);
@@ -320,7 +320,7 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
   });
 
   it("falls back to detection (false) for the same custom provider when the flag is absent", () => {
-    const resolved = testing.getCompat(customReasoningProxyModel as never);
+    const resolved = getCompat(customReasoningProxyModel as never);
 
     expect(resolved.requiresReasoningContentOnAssistantMessages).toBe(false);
   });
