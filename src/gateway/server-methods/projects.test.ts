@@ -6,6 +6,7 @@ import { expect, test } from "vitest";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerProjectRegistry } from "../../projects/project-registry.js";
+import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { projectsHandlers } from "./projects.js";
 
@@ -152,7 +153,9 @@ test("projects.list returns only the caller's deterministic resolved recents", a
   try {
     const repo = await initializeRepository(state.root);
     const project = await registerProjectRegistry({ path: repo, name: "Registered" });
-    const actor = { type: "human" as const, id: "profile-ada" };
+    const sourceProfile = ensureProfileForEmail("source@example.test");
+    const targetProfile = ensureProfileForEmail("target@example.test");
+    const actor = { type: "human" as const, id: sourceProfile.id };
     const entries: Array<{
       key: string;
       updatedAt: number;
@@ -190,11 +193,28 @@ test("projects.list returns only the caller's deterministic resolved recents", a
       },
     );
     const cfg = { agents: { list: [{ id: "main", default: true, workspace: "/workspace" }] } };
-    const result = await invokeProjectMethod("projects.list", {}, cfg, ["operator.read"], actor.id);
-    if (!result?.payload) {
+    linkEmail("source@example.test", targetProfile.id);
+    const readResult = await invokeProjectMethod(
+      "projects.list",
+      {},
+      cfg,
+      ["operator.read"],
+      targetProfile.id,
+    );
+    if (!readResult?.payload) {
       throw new Error("projects.list did not return recents");
     }
-    expect((result.payload as { recents?: unknown[] }).recents).toEqual([
+    expect((readResult.payload as { recents?: unknown[] }).recents).toEqual([
+      { kind: "project", projectId: project.id, displayName: "Registered" },
+    ]);
+    const writeResult = await invokeProjectMethod(
+      "projects.list",
+      {},
+      cfg,
+      ["operator.write"],
+      targetProfile.id,
+    );
+    expect((writeResult?.payload as { recents?: unknown[] } | undefined)?.recents).toEqual([
       { kind: "project", projectId: project.id, displayName: "Registered" },
       { kind: "folder", folder: "/work/scratch", displayName: "scratch" },
       ...Array.from({ length: 6 }, (_, index) => ({

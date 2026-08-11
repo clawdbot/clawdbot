@@ -5,6 +5,7 @@ import {
   USER_PREFS_VALUE_BYTES,
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -50,6 +51,35 @@ function openUserPreferencesDatabase(options: OpenClawStateDatabaseOptions = {})
   ensureUserPreferencesSchema(options);
   const state = openOpenClawStateDatabase(options);
   return { sqlite: state.db, kysely: getNodeSqliteKysely<UserPreferencesDatabase>(state.db) };
+}
+
+/** Moves one retired profile's preferences without overwriting the merge target's choices. */
+export function mergeUserPreferences(
+  database: DatabaseSync,
+  sourceProfileId: string,
+  targetProfileId: string,
+): void {
+  if (sourceProfileId === targetProfileId || !tableExists(database, "user_preferences")) {
+    return;
+  }
+  const db = getNodeSqliteKysely<UserPreferencesDatabase>(database);
+  const rows = executeSqliteQuerySync(
+    database,
+    db.selectFrom("user_preferences").selectAll().where("profile_id", "=", sourceProfileId),
+  ).rows;
+  for (const row of rows) {
+    executeSqliteQuerySync(
+      database,
+      db
+        .insertInto("user_preferences")
+        .values({ ...row, profile_id: targetProfileId })
+        .onConflict((conflict) => conflict.columns(["profile_id", "pref_key"]).doNothing()),
+    );
+  }
+  executeSqliteQuerySync(
+    database,
+    db.deleteFrom("user_preferences").where("profile_id", "=", sourceProfileId),
+  );
 }
 
 export function getUserPreferences(

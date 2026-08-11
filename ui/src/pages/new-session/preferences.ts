@@ -5,6 +5,7 @@ import { getSafeLocalStorage } from "../../local-storage.ts";
 
 const STORAGE_KEY_PREFIX = "openclaw.new-session.preferences.v1:";
 const IDENTITY_KEY_PREFIX = "new-session.v1:";
+export const PREFS_MIGRATION_KEY = "new-session.migration.v1";
 
 export type NewSessionPreference = {
   workspace?: string;

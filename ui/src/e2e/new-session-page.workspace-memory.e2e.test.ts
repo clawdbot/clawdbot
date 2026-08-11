@@ -454,6 +454,7 @@ suite.define(() => {
                 {
                   status: "ok",
                   entries: {
+                    "new-session.migration.v1": true,
                     "new-session.v1:main": {
                       folder: PICKED,
                       workspace: WORKSPACE,
@@ -510,6 +511,54 @@ suite.define(() => {
         await expect.poll(async () => (await readMainPreference(page))?.model).toBeUndefined();
       },
     );
+  });
+
+  it("resumes a partial multi-batch identity preference migration", async () => {
+    await withNewSessionPage(BASE_CONTEXT, async (page) => {
+      const appUrl = new URL(suite.server.baseUrl);
+      const gatewayUrl = `${appUrl.protocol === "https:" ? "wss:" : "ws:"}//${appUrl.host}`;
+      const storageKey = `openclaw.new-session.preferences.v1:${gatewayOriginScope(gatewayUrl)}`;
+      const agentIds = ["main", ...Array.from({ length: 32 }, (_, index) => `agent${index + 1}`)];
+      const browserAgents = Object.fromEntries(
+        agentIds.map((agentId) => [agentId, { workspace: WORKSPACE, folder: WORKSPACE }]),
+      );
+      const remoteEntries = Object.fromEntries(
+        agentIds
+          .slice(0, 32)
+          .map((agentId) => [`new-session.v1:${agentId}`, browserAgents[agentId]]),
+      );
+      await page.addInitScript(
+        ({ key, agents }) => {
+          localStorage.setItem(key, JSON.stringify({ agents }));
+        },
+        { key: storageKey, agents: browserAgents },
+      );
+      const gateway = await installMockGateway(page, {
+        presenceUsers: [{ self: true, id: "profile-alice", name: "Alice" }],
+        featureMethods: [
+          "chat.metadata",
+          "chat.startup",
+          "sessions.create",
+          "users.prefs.get",
+          "users.prefs.set",
+        ],
+        methodResponses: {
+          "agents.list": mainAgentList(),
+          "users.prefs.get": { status: "ok", entries: remoteEntries },
+          "users.prefs.set": { status: "ok" },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}new`);
+      const resumed = await gateway.waitForRequest("users.prefs.set");
+      expect(resumed.params).toEqual({
+        entries: {
+          "new-session.v1:agent32": { workspace: WORKSPACE, folder: WORKSPACE },
+          "new-session.migration.v1": true,
+        },
+      });
+      await expect.poll(async () => (await gateway.getRequests("users.prefs.set")).length).toBe(1);
+    });
   });
 
   it("blocks an immediate submit until remembered model and worktree choices validate", async () => {

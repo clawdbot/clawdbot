@@ -86,6 +86,7 @@ import {
   loadBrowserPreferences,
   loadNewSessionPreference,
   patchNewSessionPreference,
+  PREFS_MIGRATION_KEY,
   replaceBrowserPreference,
   type NewSessionPreference,
 } from "./preferences.ts";
@@ -422,20 +423,40 @@ class NewSessionPage extends OpenClawLightDomElement {
       }
       let preferences = decodeIdentityPreferences(result.entries);
       const browserPreferences = loadBrowserPreferences(params.gatewayUrl);
-      if (Object.keys(preferences).length === 0 && Object.keys(browserPreferences).length > 0) {
-        const migrationEntries = Object.entries(encodeIdentityPreferences(browserPreferences));
+      if (result.entries[PREFS_MIGRATION_KEY] !== true) {
+        const missingBrowserPreferences = Object.fromEntries(
+          Object.entries(browserPreferences).filter(
+            ([agentId]) => !Object.hasOwn(preferences, agentId),
+          ),
+        );
+        const migrationEntries = [
+          ...Object.entries(encodeIdentityPreferences(missingBrowserPreferences)),
+          [PREFS_MIGRATION_KEY, true] as const,
+        ];
+        let migrationFailed = false;
         for (let offset = 0; offset < migrationEntries.length; offset += 32) {
-          const response = await params.client.request<UsersPrefsSetResult>("users.prefs.set", {
-            entries: Object.fromEntries(migrationEntries.slice(offset, offset + 32)),
-          });
-          if (response.status !== "ok") {
+          const batch = Object.fromEntries(migrationEntries.slice(offset, offset + 32));
+          let response: UsersPrefsSetResult;
+          try {
+            response = await params.client.request<UsersPrefsSetResult>("users.prefs.set", {
+              entries: batch,
+            });
+          } catch {
+            migrationFailed = true;
             break;
           }
+          if (this.preferenceScope !== params.scope) {
+            return;
+          }
+          if (response.status !== "ok") {
+            migrationFailed = true;
+            break;
+          }
+          Object.assign(preferences, decodeIdentityPreferences(batch));
         }
-        if (this.preferenceScope !== params.scope) {
-          return;
+        if (migrationFailed) {
+          preferences = { ...browserPreferences, ...preferences };
         }
-        preferences = browserPreferences;
       }
       this.identityPreferences = preferences;
       this.preferenceMode = "remote";

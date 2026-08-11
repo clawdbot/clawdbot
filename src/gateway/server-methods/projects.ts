@@ -16,6 +16,7 @@ import {
   removeProjectRegistry,
 } from "../../projects/project-registry.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { listProfiles, resolveUserProfileId } from "../../state/user-profiles.js";
 import { WRITE_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { loadCombinedSessionStoreForGateway } from "../session-utils.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -49,13 +50,15 @@ function resolvePathProject(
 
 function listProjectRecents(
   cfg: Parameters<typeof listProjectRegistry>[0],
-  profileId: string,
+  profileIds: ReadonlySet<string>,
   projects: readonly ProjectRegistryEntry[],
 ): ProjectRecent[] {
   const store = loadCombinedSessionStoreForGateway(cfg, { projection: "list" }).store;
   const candidates = Object.entries(store)
     .filter(
-      ([, entry]) => entry.createdActor?.type === "human" && entry.createdActor.id === profileId,
+      ([, entry]) =>
+        entry.createdActor?.type === "human" &&
+        Boolean(entry.createdActor.id && profileIds.has(entry.createdActor.id)),
     )
     .toSorted(
       ([leftKey, left], [rightKey, right]) =>
@@ -108,8 +111,19 @@ export const projectsHandlers: GatewayRequestHandlers = {
     }
     const projects = listProjectRegistry(context.getRuntimeConfig());
     const profileId = client?.authenticatedUserProfile?.profileId;
-    const recents = profileId
-      ? listProjectRecents(context.getRuntimeConfig(), profileId, projects)
+    const canonicalProfileId = profileId
+      ? (resolveUserProfileId(profileId) ?? profileId)
+      : undefined;
+    const recentProfileIds = canonicalProfileId
+      ? new Set([
+          canonicalProfileId,
+          ...listProfiles()
+            .filter((profile) => profile.mergedInto === canonicalProfileId)
+            .map((profile) => profile.id),
+        ])
+      : undefined;
+    const recents = recentProfileIds
+      ? listProjectRecents(context.getRuntimeConfig(), recentProfileIds, projects)
       : undefined;
     const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
     if (authorizeOperatorScopesForRequiredScope(WRITE_SCOPE, scopes).allowed) {
@@ -135,7 +149,7 @@ export const projectsHandlers: GatewayRequestHandlers = {
                 source: project.source,
               },
         ),
-        ...(recents ? { recents } : {}),
+        ...(recents ? { recents: recents.filter((recent) => recent.kind === "project") } : {}),
       },
       undefined,
     );

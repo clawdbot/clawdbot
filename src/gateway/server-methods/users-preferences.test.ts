@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { usersHandlers } from "./users.js";
 
@@ -52,6 +52,14 @@ test("users.prefs remains self-scoped across durable identities", async () => {
     expect(await invokePreferenceMethod("users.prefs.get", {}, grace.id)).toMatchObject({
       ok: true,
       payload: { status: "ok", entries: {} },
+    });
+    linkEmail("ada@example.test", grace.id);
+    expect(await invokePreferenceMethod("users.prefs.get", {}, grace.id)).toMatchObject({
+      ok: true,
+      payload: {
+        status: "ok",
+        entries: { "new-session.v1:main": { folder: "/ada" } },
+      },
     });
   } finally {
     await state.cleanup();
