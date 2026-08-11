@@ -81,6 +81,7 @@ jobs:
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       docs_changed: ${{ steps.manifest.outputs.docs_changed }}
       run_node: ${{ steps.manifest.outputs.run_node }}
+      run_localization: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_localization || 'false' }}
       run_macos: ${{ steps.manifest.outputs.run_macos }}
       run_android: ${{ steps.manifest.outputs.run_android }}
       run_skills_python: ${{ steps.manifest.outputs.run_skills_python }}
@@ -1486,7 +1487,7 @@ jobs:
       contents: read
     name: localization-catalogs
     needs: [preflight]
-    if: needs.preflight.outputs.run_node == 'true'
+    if: needs.preflight.outputs.run_localization == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 10
     steps:

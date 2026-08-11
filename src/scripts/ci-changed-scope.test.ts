@@ -12,6 +12,7 @@ const {
   detectNodeFastScope,
   listChangedPaths,
   parseArgs,
+  shouldRunLocalization,
   shouldRunNativeI18n,
   writeGitHubOutput,
 } = await import("../../scripts/ci-changed-scope.mjs");
@@ -99,6 +100,33 @@ describe("parseArgs", () => {
 });
 
 describe("detectChangedScope", () => {
+  it("runs localization only for shared infrastructure and enrolled roots", () => {
+    expect(shouldRunLocalization(null)).toBe(true);
+    expect(shouldRunLocalization([])).toBe(false);
+    expect(shouldRunLocalization(["src/config/defaults.ts"])).toBe(false);
+    expect(shouldRunLocalization(["localization/catalogs.json"])).toBe(true);
+    expect(shouldRunLocalization(["packages/localization-core/src/catalog.ts"])).toBe(true);
+    expect(shouldRunLocalization(["src/wizard/i18n/catalogs/en.json"])).toBe(true);
+    expect(shouldRunLocalization(["src/wizard/i18n/catalogs/generated/zh-CN.json"])).toBe(true);
+  });
+
+  it("expands localization scope from newly registered owner roots", () => {
+    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-localization-scope-"));
+    tempDirs.push(repoDir);
+    writeRepoFile(
+      repoDir,
+      "localization/surfaces.json",
+      `${JSON.stringify({
+        schemaVersion: 1,
+        adapters: [{ id: "tui", owner: "tui", roots: ["src/tui/i18n/locales"] }],
+        surfaces: [],
+      })}\n`,
+    );
+
+    expect(shouldRunLocalization(["src/tui/i18n/locales/en.ts"], repoDir)).toBe(true);
+    expect(shouldRunLocalization(["src/tui/tui.ts"], repoDir)).toBe(false);
+  });
+
   it("routes only native i18n-owned paths to the native inventory job", () => {
     for (const changedPath of [
       "apps/.i18n/native-source.json",
@@ -1043,7 +1071,7 @@ describe("detectChangedScope", () => {
 
     const output = parseGitHubOutput(fs.readFileSync(outputPath, "utf8"));
     expect(Object.keys(output).toSorted()).toEqual(
-      "changed_paths_json run_android run_changed_smoke run_control_ui_i18n run_fast_install_smoke run_full_install_smoke run_ios_build run_macos run_native_i18n run_node run_node_fast_ci_routing run_node_fast_only run_node_fast_plugin_contracts run_skills_python run_ui_tests run_windows strict_control_ui_i18n strict_native_i18n".split(
+      "changed_paths_json run_android run_changed_smoke run_control_ui_i18n run_fast_install_smoke run_full_install_smoke run_ios_build run_localization run_macos run_native_i18n run_node run_node_fast_ci_routing run_node_fast_only run_node_fast_plugin_contracts run_skills_python run_ui_tests run_windows strict_control_ui_i18n strict_native_i18n".split(
         " ",
       ),
     );

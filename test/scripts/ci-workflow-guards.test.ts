@@ -2831,6 +2831,16 @@ NODE
     });
   });
 
+  it("runs the shared localization job only for its preflight-selected scope", () => {
+    const workflow = readCiWorkflow();
+    expect(workflow.jobs.preflight.outputs.run_localization).toContain(
+      "steps.changed_scope.outputs.run_localization",
+    );
+    expect(workflow.jobs["localization-catalogs"].if).toBe(
+      "needs.preflight.outputs.run_localization == 'true'",
+    );
+  });
+
   it("keeps sticky dependency snapshots on trusted Blacksmith Node shards", () => {
     const workflow = readCiWorkflow();
     const blacksmithJobs = Object.entries(workflow.jobs).filter(([, job]) => {
