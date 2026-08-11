@@ -132,6 +132,12 @@ export function resolveConfiguredBindingRoute(
 export function resolveRuntimeConversationBindingRoute(
   params: {
     route: ResolvedAgentRoute;
+    /**
+     * When `false`, skip the binding-activity touch so read-only lookups (e.g. footer
+     * attribution) do not prolong binding idle expiry. Defaults to `true` to preserve
+     * the existing routing behavior.
+     */
+    touch?: boolean;
   } & ConfiguredBindingRouteConversationInput,
 ): RuntimeConversationBindingRouteResult {
   const bindingRecord = getSessionBindingService().resolveByConversation(
@@ -156,7 +162,9 @@ export function resolveRuntimeConversationBindingRoute(
     };
   }
 
-  getSessionBindingService().touch(bindingRecord.bindingId);
+  if (params.touch !== false) {
+    getSessionBindingService().touch(bindingRecord.bindingId);
+  }
   if (isPluginOwnedRuntimeBindingRecord(bindingRecord)) {
     // Plugin-owned binding records are observed but not route-rewritten by core; the owning
     // plugin is responsible for its runtime target handoff.

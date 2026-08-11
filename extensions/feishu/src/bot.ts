@@ -22,7 +22,7 @@ import {
   createChannelHistoryWindow,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
-import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
+import { isAcpSessionKey, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
@@ -929,9 +929,13 @@ export async function handleFeishuMessage(params: {
     let outboundAgentId = route.agentId;
     if (isGroup && !feishuAcpConversationSupported) {
       // Plain groups keep session ownership on the default route; core may still dispatch via
-      // a runtime conversation binding. Resolve attribution without rewriting route.sessionKey.
+      // a runtime conversation binding. Resolve footer attribution with a read-only binding
+      // lookup (touch: false, so binding idle expiry is not prolonged) and only when core
+      // would actually dispatch through the bound ACP session target. Non-ACP (subagent)
+      // targets keep main as the executing agent, so the footer must not name them.
       const attributionRoute = resolveRuntimeConversationBindingRoute({
         route,
+        touch: false,
         conversation: {
           channel: "feishu",
           accountId: account.accountId,
@@ -939,7 +943,9 @@ export async function handleFeishuMessage(params: {
           ...(parentConversationId ? { parentConversationId } : {}),
         },
       });
-      outboundAgentId = attributionRoute.boundAgentId ?? route.agentId;
+      if (attributionRoute.boundSessionKey && isAcpSessionKey(attributionRoute.boundSessionKey)) {
+        outboundAgentId = attributionRoute.boundAgentId ?? route.agentId;
+      }
     }
 
     if (configuredBinding) {

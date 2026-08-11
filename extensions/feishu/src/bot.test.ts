@@ -447,6 +447,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
       mockResolveConfiguredBindingRoute(params as { route: ResolvedAgentRoute }),
     resolveRuntimeConversationBindingRoute: (params: {
       route: ResolvedAgentRoute;
+      touch?: boolean;
       conversation: Parameters<
         ReturnType<typeof actual.getSessionBindingService>["resolveByConversation"]
       >[0];
@@ -456,7 +457,9 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
       if (!bindingRecord || !boundSessionKey) {
         return { bindingRecord: null, route: params.route };
       }
-      mockTouchBinding(bindingRecord.bindingId);
+      if (params.touch !== false) {
+        mockTouchBinding(bindingRecord.bindingId);
+      }
       const boundAgentId = resolveAgentIdFromSessionKey(boundSessionKey) || params.route.agentId;
       return {
         bindingRecord,
@@ -717,6 +720,50 @@ describe("handleFeishuMessage ACP routing", () => {
         sessionKey: "agent:main:feishu:group:oc_group_chat",
       }),
     );
+    // Footer attribution is a read-only lookup; it must not touch binding activity.
+    expect(mockTouchBinding).not.toHaveBeenCalled();
+  });
+
+  it("keeps main in plain group reply footer when the bound target is not an ACP session", async () => {
+    mockResolveBoundConversation.mockReturnValue({
+      ...createPlainGroupBoundConversation(),
+      targetSessionKey: "agent:review:feishu:group:oc_group_chat",
+    });
+    mockResolveAgentRoute.mockReturnValue(
+      createFeishuTestRoute({
+        agentId: "main",
+        sessionKey: "agent:main:feishu:group:oc_group_chat",
+        matchedBy: "default",
+      }),
+    );
+
+    await dispatchMessage({
+      cfg: createFeishuTestConfig({
+        groups: {
+          oc_group_chat: {
+            requireMention: false,
+            groupSessionScope: "group",
+          },
+        },
+      }),
+      event: createFeishuTestEvent({
+        messageId: "msg-plain-subagent",
+        senderOpenId: "ou_sender_1",
+        chatId: "oc_group_chat",
+        chatType: "group",
+        text: "hello plain group subagent",
+      }),
+    });
+
+    // A non-ACP (subagent) target is not dispatched through by core, so the footer must
+    // keep main instead of naming an agent that did not handle the reply.
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "agent:main:feishu:group:oc_group_chat",
+      }),
+    );
+    expect(mockTouchBinding).not.toHaveBeenCalled();
   });
 
   it("records Feishu DM last-route updates on the resolved session", async () => {
