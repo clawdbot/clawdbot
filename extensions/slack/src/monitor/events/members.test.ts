@@ -145,6 +145,32 @@ describe("registerSlackMemberEvents", () => {
     expect(trackEvent).toHaveBeenCalledTimes(1);
   });
 
+  it("records and propagates member handler failures", async () => {
+    const harness = initSlackHarness();
+    const runtimeError = vi.fn();
+    const failure = new Error("users.info temporarily unavailable");
+    harness.ctx.runtime.error = runtimeError;
+    harness.ctx.resolveUserName = async () => {
+      throw failure;
+    };
+    registerSlackMemberEvents({ ctx: harness.ctx });
+    const handler = harness.getHandler("member_joined_channel");
+    if (!handler) {
+      throw new Error("expected Slack member joined handler");
+    }
+
+    await expect(
+      handler({
+        event: makeMemberEvent(),
+        body: { event_id: "Ev-member-failure" },
+      }),
+    ).rejects.toBe(failure);
+
+    expect(runtimeError).toHaveBeenCalledWith(
+      expect.stringContaining("slack joined handler failed: users.info temporarily unavailable"),
+    );
+  });
+
   it("keys each queued event by the envelope occurrence", async () => {
     await runMemberCase({ body: { event_id: "Ev-member-2" } });
 
