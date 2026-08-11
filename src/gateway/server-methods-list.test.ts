@@ -275,9 +275,7 @@ describe("listGatewayMethods", () => {
     );
     expect(methods.indexOf("secrets.store.set")).toBe(methods.indexOf("secrets.store.list") + 1);
     expect(methods.indexOf("secrets.store.delete")).toBe(methods.indexOf("secrets.store.set") + 1);
-    expect(methods.indexOf("users.prefs.get")).toBe(
-      methods.indexOf("secrets.store.delete") + 1,
-    );
+    expect(methods.indexOf("users.prefs.get")).toBe(methods.indexOf("secrets.store.delete") + 1);
     expect(methods.indexOf("users.prefs.set")).toBe(methods.indexOf("users.prefs.get") + 1);
   });
 
