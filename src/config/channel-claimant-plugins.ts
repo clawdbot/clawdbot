@@ -501,6 +501,25 @@ export function createChannelClaimantResolution(params: {
     });
   };
 
+  // Channel-scoped supersession for a claim whose plugin fate already landed. The global check
+  // above (an edge from ANY channel) is what kills a plugin; reusing it per claim would let a
+  // sibling channel's edge suppress a claim no same-channel replacement contests — an anchored
+  // sole claimant's own channel, or a revived plugin's uncontested claim. Only a live claimant
+  // of THIS channel replaces the claim.
+  const isClaimSupersededOnOwnChannel = (candidate: ChannelClaimCandidate): boolean => {
+    const policyId = normalizePluginPolicyId(candidate.pluginId);
+    const group = groupOf(candidate);
+    return params.candidates.some((other) => {
+      if (normalizePluginPolicyId(other.pluginId) === policyId) {
+        return false;
+      }
+      if (groupOf(other) !== group || !declaresPreferenceOver(other, candidate.pluginId)) {
+        return false;
+      }
+      return liveAsSuperseder(other, group, new Set([policyId]), { tainted: false });
+    });
+  };
+
   return {
     decide(candidate: ChannelClaimCandidate): ChannelClaimantDecision {
       const policyId = normalizePluginPolicyId(candidate.pluginId);
@@ -518,14 +537,20 @@ export function createChannelClaimantResolution(params: {
         fates.set(policyId, "enable");
         return "enable";
       }
-      if (fates.get(policyId) === "dead") {
-        return "forbidden";
-      }
-      // A landed enable is as authoritative as a landed dead: an earlier claim's enable — or the
-      // planner's re-grounding pin — already serves this plugin, and a later same-pass supersede
-      // would flip-flop a liveness other claims were resolved against.
-      if (fates.get(policyId) === "enable") {
-        return "enable";
+      // A landed fate — dead, or enable from an earlier claim, a capability, a pin, or an
+      // anchor — is authoritative for the PLUGIN: re-deciding it would flip-flop a liveness other
+      // claims were resolved against. It does not land ownership of THIS channel: a live
+      // same-channel replacement still supersedes the claim, and only a recorded
+      // supersede-disable reaches loader suppression and the validation projection — a
+      // plugin-level forbidden or enable here lets a loaded plugin's replaced claim race
+      // first-wins registration over its planned replacement.
+      const landedFate = fates.get(policyId);
+      if (landedFate === "dead" || landedFate === "enable") {
+        liveMemo = new Map();
+        if (isClaimSupersededOnOwnChannel(candidate)) {
+          return "supersede-disable";
+        }
+        return landedFate === "dead" ? "forbidden" : "enable";
       }
       // Each decision starts a fresh memo: the fates a decision lands invalidate liveness
       // computed for earlier candidates.

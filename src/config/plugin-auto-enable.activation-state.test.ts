@@ -730,8 +730,9 @@ describe("load-order ranking includes default-active omitted claimants", () => {
 // #120332 round 30 (P1): a configured channel's sole activatable claimant is never plugin-globally
 // disabled by a replacement elsewhere. Enablement is plugin-global, so superseding such a claimant
 // on one channel would orphan the sibling channel it alone serves — no fallback exists and a
-// re-grounding pin is vetoed by the live preferring claim. The claimant stays live; the
-// replacement's takeover fails exactly as the runtime's first-wins registration dictates.
+// re-grounding pin is vetoed by the live preferring claim. The claimant stays live for its sole
+// channel; since round 45 its REPLACED sibling claim still records supersede-disable, so loader
+// suppression hands the contested channel to the replacement in either registration order.
 describe("supersession preserves a sibling channel's sole claimant", () => {
   const MULTI_B: RegistryPlugins[number] = {
     id: "Acme-B-Multi",
@@ -749,9 +750,9 @@ describe("supersession preserves a sibling channel's sole claimant", () => {
     channelConfigs: { "acme-x": { schema: { type: "object" }, preferOver: ["acme-b-multi"] } },
   };
 
-  for (const [registryOrder, plugins, xOwner] of [
-    ["victim first", [MULTI_B, REP_A], "Acme-B-Multi"],
-    ["victim last", [REP_A, MULTI_B], "acme-a-rep"],
+  for (const [registryOrder, plugins] of [
+    ["victim first", [MULTI_B, REP_A]],
+    ["victim last", [REP_A, MULTI_B]],
   ] as const) {
     it(`keeps the sole claimant serving its sibling channel (${registryOrder})`, () => {
       const registry = makeRegistry([...plugins]);
@@ -761,12 +762,13 @@ describe("supersession preserves a sibling channel's sole claimant", () => {
       const env = makeIsolatedEnv();
       const result = applyPluginAutoEnable({ config, env, manifestRegistry: registry });
 
-      // The victim stays loaded for acme-y; the first-loaded active claimant serves acme-x.
+      // The victim stays loaded for acme-y; its suppressed acme-x claim leaves the replacement
+      // owning the contested channel regardless of registration order.
       expect(result.config.plugins?.entries?.["Acme-B-Multi"]?.enabled).not.toBe(false);
       expect(activatedClaimants(registry, "acme-y", result.config)).toContain("Acme-B-Multi");
       const metadata = collectChannelSchemaMetadataWithOwnership(registry, config, env);
       expect(metadata.find((entry) => entry.id === "acme-y")?.schemaPluginId).toBe("Acme-B-Multi");
-      expect(metadata.find((entry) => entry.id === "acme-x")?.schemaPluginId).toBe(xOwner);
+      expect(metadata.find((entry) => entry.id === "acme-x")?.schemaPluginId).toBe("acme-a-rep");
     });
   }
 });

@@ -161,8 +161,13 @@ export function resolveChannelClaimPreferOver(params: {
   }
   const installedPlugin = params.registry.plugins.find((record) => record.id === params.pluginId);
   const resolved = (() => {
-    const manifestChannelPreferOver =
-      installedPlugin?.channelConfigs?.[params.channelId]?.preferOver;
+    // channelConfigs keys are the manifest's declared spellings while callers pass raw or
+    // canonical ids: match by canonical identity, or a variant-spelled claim (built-in alias,
+    // case variant) silently loses its declared replacement edge.
+    const requestedChannelId = normalizeChatChannelId(params.channelId) ?? params.channelId;
+    const manifestChannelPreferOver = Object.entries(installedPlugin?.channelConfigs ?? {}).find(
+      ([channelId]) => (normalizeChatChannelId(channelId) ?? channelId) === requestedChannelId,
+    )?.[1]?.preferOver;
     if (manifestChannelPreferOver?.length) {
       return [...manifestChannelPreferOver];
     }

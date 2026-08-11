@@ -731,4 +731,85 @@ describe("plugin loader preferOver activation", () => {
     });
     expect(configured.channels.map((entry) => entry.pluginId)).toEqual(["qqbot-bb-rep"]);
   });
+
+  // #120332 round 45 (P2): the restore path compares channel identity canonically. A suppressed
+  // incumbent registering a variant spelling of a built-in channel id and a replacement
+  // registering the canonical id serve the SAME logical channel — raw-id equality concluded the
+  // replacement never landed and restored the incumbent beside it.
+  it("does not restore a claim whose channel the replacement serves under another spelling", () => {
+    const bundledRoot = makePluginLoaderTempDir();
+    writeChannelToolPlugin({
+      rootDir: bundledRoot,
+      id: "qqbot",
+      channelId: "QQBot",
+      enabledByDefault: true,
+      autoEnableWhenConfiguredProviders: ["acme-prov"],
+      toolName: "qqbot_remind_legacy",
+    });
+    writeChannelToolPlugin({
+      rootDir: bundledRoot,
+      id: "openclaw-qqbot",
+      channelId: "qqbot",
+      enabledByDefault: true,
+      preferOver: ["qqbot"],
+    });
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+    };
+    const rawConfig: OpenClawConfig = {
+      channels: { qqbot: { appId: "app", clientSecret: "secret" } },
+      auth: { profiles: { "acme-prov:default": { provider: "acme-prov", mode: "api_key" } } },
+    };
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      env,
+    });
+
+    // The capability-loaded incumbent's variant-spelled claim stays suppressed: the replacement
+    // owns the canonical channel, so no restore may put a second implementation beside it.
+    expect(registry.channels.map((entry) => entry.pluginId)).toEqual(["openclaw-qqbot"]);
+  });
+
+  // #120332 round 45 (P1): a scoped setup-only load deliberately executes an inactive incumbent
+  // with status "disabled" — that is its SUCCESS status. When the planned replacement is outside
+  // the scope and never registers, the restore path must replay the stashed claim; rejecting the
+  // status strips the setup registration the operator requested.
+  it("restores a suppressed claim from a successful setup-only scoped load", () => {
+    const bundledRoot = makePluginLoaderTempDir();
+    writeChannelToolPlugin({
+      rootDir: bundledRoot,
+      id: "qqbot",
+      channelId: "qqbot",
+      toolName: "qqbot_remind_legacy",
+    });
+    writeChannelToolPlugin({
+      rootDir: bundledRoot,
+      id: "openclaw-qqbot",
+      channelId: "qqbot",
+      preferOver: ["qqbot"],
+    });
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+    };
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: { channels: { qqbot: { appId: "app", clientSecret: "secret" } } },
+      env,
+      onlyPluginIds: ["qqbot"],
+      includeSetupOnlyChannelPlugins: true,
+      activate: false,
+    });
+
+    // The scope excludes the replacement, so the channel ended unserved: the incumbent's
+    // successful setup-only registration is restored for the operator's setup flow.
+    expect(registry.channelSetups.map((entry) => entry.pluginId)).toContain("qqbot");
+  });
 });

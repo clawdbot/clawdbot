@@ -276,26 +276,32 @@ function collectConfiguredChannelIds(
   ambientEnvTriggers: AmbientEnvTriggerPolicy = "allow",
 ): string[] {
   const configuredStateChannelIds = new Set(listBundledChannelIdsWithConfiguredState(discovery));
-  return listPotentialConfiguredChannelPresenceSignals(cfg, env, {
-    includePersistedAuthState: false,
-    discovery,
-    ambientEnvTriggers,
-  })
-    .map((signal) => ({
-      source: signal.source,
-      channelId: normalizeChatChannelId(signal.channelId) ?? signal.channelId,
-    }))
-    .filter(({ channelId, source }) =>
-      isAutoEnableConfiguredChannelSignal({
-        cfg,
-        env,
-        channelId,
-        source,
-        configuredStateChannelIds,
-        discovery,
-      }),
-    )
-    .map(({ channelId }) => channelId);
+  return (
+    listPotentialConfiguredChannelPresenceSignals(cfg, env, {
+      includePersistedAuthState: false,
+      discovery,
+      ambientEnvTriggers,
+    })
+      .map((signal) => ({
+        source: signal.source,
+        channelId: normalizeChatChannelId(signal.channelId) ?? signal.channelId,
+      }))
+      .filter(({ channelId, source }) =>
+        isAutoEnableConfiguredChannelSignal({
+          cfg,
+          env,
+          channelId,
+          source,
+          configuredStateChannelIds,
+          discovery,
+        }),
+      )
+      .map(({ channelId }) => channelId)
+      // Presence signals dedupe per SOURCE, so one channel configured through both `channels.*`
+      // settings and credential env vars repeats here — and a duplicate claim candidate re-decides
+      // against the fates the first one landed, overwriting its recorded per-channel decision.
+      .filter((channelId, index, ids) => ids.indexOf(channelId) === index)
+  );
 }
 
 function isAutoEnableConfiguredChannelSignal(params: {
@@ -1599,8 +1605,13 @@ export function planPluginAutoEnable(params: {
       // A plugin with a configured capability candidate stays loaded: the replacement takes the
       // channel (this claim's decision stands for ownership) while the capability's own enable
       // keeps the plugin — writing `enabled: false` here would silently remove a provider or
-      // tool the operator configured.
-      if (!capabilityPolicyIds.has(normalizePluginPolicyId(entry.pluginId))) {
+      // tool the operator configured. A claimant the pass itself preserved (anchored or pinned
+      // for a sibling channel) is equally live: suppression of this claim stands while the
+      // plugin keeps serving the channel that anchored it, so no disable write either.
+      if (
+        !capabilityPolicyIds.has(normalizePluginPolicyId(entry.pluginId)) &&
+        !resolved.isClaimantLive(entry.pluginId)
+      ) {
         next = disableImplicitPreferredOverPlugin({
           config: next,
           pluginId: entry.pluginId,

@@ -1,6 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import { channelClaimSuppressionKey } from "../config/channel-claimant-plugins.js";
+import {
+  channelClaimSuppressionKey,
+  normalizeManifestChannelId,
+} from "../config/channel-claimant-plugins.js";
 import { createPluginGatewayMethodDescriptor } from "../gateway/methods/registry.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler, RespondFn } from "../gateway/server-methods/types.js";
@@ -436,21 +439,28 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
   // so the configured channel keeps a live runtime owner.
   const restoreUnservedSuppressedChannelClaims = () => {
     for (const stashed of stashedSuppressedChannelClaims.splice(0)) {
-      // Skip only when ANOTHER plugin owns the channel: a claim already restored for this same
+      // Skip only when ANOTHER plugin owns the channel — compared by CANONICAL identity, since a
+      // replacement can register the same logical channel under a different spelling (built-in
+      // alias, case variant) than the stashed claim. A claim already restored for this same
       // plugin must still replay later same-owner registrations, which update the existing
       // registration in place — otherwise the fallback serves the first call's stale callbacks
       // instead of the plugin's final registration.
+      const stashedChannelId = normalizeManifestChannelId(stashed.channelId);
       const servedByOther = registry.channelSetups.some(
-        (entry) => entry.plugin.id === stashed.channelId && entry.pluginId !== stashed.record.id,
+        (entry) =>
+          normalizeManifestChannelId(entry.plugin.id) === stashedChannelId &&
+          entry.pluginId !== stashed.record.id,
       );
       if (servedByOther) {
         continue;
       }
       // A stashed claim from a plugin whose registration later failed was rolled back with the
       // plugin's other contributions; restoring it would expose callbacks from a plugin whose
-      // required registrations no longer exist.
+      // required registrations no longer exist. Failure is `failedAt`/`error`, NOT a non-loaded
+      // status: a scoped setup-only load completes successfully with status "disabled", and its
+      // stashed registration must restore for the operator's setup flow.
       const owner = registry.plugins.find((plugin) => plugin.id === stashed.record.id);
-      if (!owner || owner.status !== "loaded" || owner.failedAt != null) {
+      if (!owner || owner.status === "error" || owner.failedAt != null) {
         continue;
       }
       state.supersededChannelClaims.delete(

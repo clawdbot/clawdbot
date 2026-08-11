@@ -5,13 +5,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
-import { isPluginExplicitlySelected } from "../plugins/config-state.js";
 import { isActivatedManifestOwner } from "../plugins/manifest-owner-policy.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { declaresPluginPreferenceOver } from "../plugins/plugin-policy-id.js";
 import {
   collectPluginIdsForConfiguredChannel,
+  isPluginSelectedWithAliases,
   normalizeManifestChannelId,
   normalizePluginsConfigWithManifestAliases,
   type ChannelClaimantDecision,
@@ -480,6 +480,10 @@ function selectChannelSchemaOwners(
   env: NodeJS.ProcessEnv = process.env,
   options?: ChannelSchemaOwnershipOptions,
 ): Map<string, ChannelSchemaClaim> {
+  // Claims group by CANONICAL channel identity — the identity activation planning and runtime
+  // registration reconcile on. Raw manifest spellings (built-in aliases, case variants) would
+  // split one logical channel into per-spelling groups, each electing its own owner, and the
+  // superseded incumbent's schema would validate a channel its replacement serves.
   const claimsByChannelId = new Map<string, ChannelSchemaClaim[]>();
   const closestDeclaredRank = new Map<string, number>();
   const declareChannel = (channelId: string, originRank: number): void => {
@@ -492,18 +496,21 @@ function selectChannelSchemaOwners(
   for (const [discoveryIndex, record] of registry.plugins.entries()) {
     const originRank = PLUGIN_ORIGIN_RANK[record.origin] ?? Number.MAX_SAFE_INTEGER;
     for (const channelId of record.channels) {
-      declareChannel(channelId, originRank);
+      declareChannel(normalizeManifestChannelId(channelId), originRank);
     }
     const channelConfigs = Object.entries(record.channelConfigs ?? {});
     if (channelConfigs.length === 0) {
       continue;
     }
     // Auto-enable's replacement policy owns "did the operator choose this plugin?", so the explicit
-    // tier reads that predicate. The activation resolver's wider explicit set also counts bundled
-    // channel enablement and slots, which auto-enable still supersedes — reading it would keep the
-    // schema of a plugin the runtime disables and reject the replacement's own channel keys.
-    const explicitlySelected = isPluginExplicitlySelected(config?.plugins, record.id);
+    // tier reads that predicate — through the registry alias fold, like every planner selection
+    // read: a legacy-keyed entry is the operator's choice of the current plugin. The activation
+    // resolver's wider explicit set also counts bundled channel enablement and slots, which
+    // auto-enable still supersedes — reading it would keep the schema of a plugin the runtime
+    // disables and reject the replacement's own channel keys.
+    const explicitlySelected = isPluginSelectedWithAliases(config?.plugins, record.id, registry);
     for (const [channelId, channelConfig] of channelConfigs) {
+      const canonicalChannelId = normalizeManifestChannelId(channelId);
       const claim: ChannelSchemaClaim = {
         record,
         preferOver: channelConfig.preferOver,
@@ -512,22 +519,23 @@ function selectChannelSchemaOwners(
         // Catalog metadata can merge a channelConfigs entry for a channel the manifest never
         // claims; auto-enable only considers manifest claimants, so only they can serve it.
         claimsChannel: (record.channels ?? []).some(
-          (id) => normalizeManifestChannelId(id) === normalizeManifestChannelId(channelId),
+          (id) => normalizeManifestChannelId(id) === canonicalChannelId,
         ),
         explicitlySelected,
         suppliesSchema: channelConfig.schema !== undefined,
         // A closer-origin plugin that declared this channel id first keeps the incumbent owner,
         // so a farther-origin claim behind it cannot take a schema that closer metadata shadows.
-        behindCloserDeclaration: (closestDeclaredRank.get(channelId) ?? originRank) < originRank,
+        behindCloserDeclaration:
+          (closestDeclaredRank.get(canonicalChannelId) ?? originRank) < originRank,
         plannedActive: true,
         planDecided: false,
       };
-      declareChannel(channelId, originRank);
-      const claims = claimsByChannelId.get(channelId);
+      declareChannel(canonicalChannelId, originRank);
+      const claims = claimsByChannelId.get(canonicalChannelId);
       if (claims) {
         claims.push(claim);
       } else {
-        claimsByChannelId.set(channelId, [claim]);
+        claimsByChannelId.set(canonicalChannelId, [claim]);
       }
     }
   }
@@ -613,13 +621,17 @@ export function collectChannelSchemaMetadataWithOwnership(
   const byChannelId = new Map<string, ChannelMetadataRecord>();
   const schemaOwners = selectChannelSchemaOwners(registry, config, env, options);
 
+  // Emitted metadata carries the canonical channel id: claims under variant manifest spellings
+  // merge into the one logical channel activation and validation resolve, instead of surfacing a
+  // second entry whose schema competes with the selected owner's.
   const entryFor = (channelId: string): ChannelMetadataRecord => {
-    const existing = byChannelId.get(channelId);
+    const id = normalizeManifestChannelId(channelId);
+    const existing = byChannelId.get(id);
     if (existing) {
       return existing;
     }
-    const created: ChannelMetadataRecord = { id: channelId, presentationRanks: {} };
-    byChannelId.set(channelId, created);
+    const created: ChannelMetadataRecord = { id, presentationRanks: {} };
+    byChannelId.set(id, created);
     return created;
   };
 
@@ -635,7 +647,8 @@ export function collectChannelSchemaMetadataWithOwnership(
     // registry order.
     for (const channelId of record.channels) {
       const entry = entryFor(channelId);
-      const ownsChannel = schemaOwners.get(channelId)?.record === record;
+      const ownsChannel =
+        schemaOwners.get(normalizeManifestChannelId(channelId))?.record === record;
       writeChannelPresentationField(entry, "label", rootLabel, originRank, record.id, ownsChannel);
       writeChannelPresentationField(
         entry,
@@ -656,7 +669,7 @@ export function collectChannelSchemaMetadataWithOwnership(
       // replaces, an equal-or-farther loser fills absence — it can never relabel presentation an
       // equally close or closer claim wrote, and a sparse closer loser cannot starve fields it
       // never supplied.
-      const owner = schemaOwners.get(channelId);
+      const owner = schemaOwners.get(normalizeManifestChannelId(channelId));
       if (owner?.record !== record) {
         writeChannelPresentationField(
           entry,
