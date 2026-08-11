@@ -164,7 +164,7 @@ describe("scripts/bench-sqlite-reliability", () => {
       "synced-snapshots",
     );
     const previousArtifact = path.join(previousSyncedRepository, "previous-artifact");
-    fs.mkdirSync(previousSyncedRepository, { recursive: true });
+    fs.mkdirSync(previousSyncedRepository, { recursive: true, mode: 0o700 });
     fs.writeFileSync(previousArtifact, "retained");
 
     const existingDatabase = openOpenClawStateDatabase({

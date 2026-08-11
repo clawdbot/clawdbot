@@ -18,6 +18,7 @@ import {
   serveOpenClawChannelMcp,
 } from "./mcp-cli.test-harness.js";
 import { writeProbeMcpServer } from "./mcp-cli.test-support.js";
+import { runCliWithExitFinalization } from "./one-shot-exit.js";
 
 describe("mcp cli", () => {
   beforeEach(() => {
@@ -656,6 +657,84 @@ describe("mcp cli", () => {
       expect(lastErrorLine()).toBe(
         `MCP server "docs" is disabled in ${configPath}. Run openclaw mcp configure docs --enable before probing it.`,
       );
+    });
+  });
+
+  it("reports omitted enabled servers while accepting omitted disabled servers", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
+      const workspaceDir = await createWorkspace();
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      let catalogServers: Record<
+        string,
+        { serverName: string; launchSummary: string; toolCount: number }
+      > = {};
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ mcp: { servers: { incomplete: { command: "node" } } } })}\n`,
+        "utf8",
+      );
+      setCreateSessionMcpRuntimeOverride((params) => ({
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: "cli-probe-test",
+        createdAt: 0,
+        lastUsedAt: 0,
+        getCatalog: async () => ({
+          version: 1,
+          generatedAt: Date.now(),
+          servers: catalogServers,
+          tools: [],
+          diagnostics: [],
+        }),
+        peekCatalog: () => null,
+        markUsed: () => {},
+        callTool: async () => ({ content: [] }),
+        dispose: async () => {},
+      }));
+
+      mockError.mockClear();
+      await runCliWithExitFinalization({
+        run: () => runMcpCommand(["mcp", "probe", "--json"]),
+        onError: (error) => {
+          throw error;
+        },
+      });
+
+      expect(JSON.parse(lastLogLine())).toMatchObject({ servers: {}, diagnostics: [] });
+      expect(lastErrorLine()).toBe(`MCP probe did not connect to "incomplete" in ${configPath}.`);
+
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({
+          mcp: {
+            servers: {
+              healthy: { command: "node" },
+              disabled: { enabled: false },
+            },
+          },
+        })}\n`,
+        "utf8",
+      );
+      catalogServers = {
+        healthy: { serverName: "healthy", launchSummary: "node", toolCount: 1 },
+      };
+      mockError.mockClear();
+      mockLog.mockClear();
+
+      await runCliWithExitFinalization({
+        run: () => runMcpCommand(["mcp", "probe", "--json"]),
+        onError: (error) => {
+          throw error;
+        },
+      });
+
+      expect(JSON.parse(lastLogLine())).toMatchObject({
+        servers: { healthy: { tools: 1 } },
+        diagnostics: [],
+      });
+      expect(lastErrorLine()).toBe("");
     });
   });
 

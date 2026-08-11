@@ -1,4 +1,5 @@
 // Control UI chat module owns low-level WebRTC offer and media-message helpers.
+import { normalizeRealtimeVoiceResponseOutcome } from "../../../../src/talk/provider-types.js";
 import type { RealtimeTalkWebRtcSdpSessionResult } from "./realtime-talk-shared.ts";
 import type { RealtimeTalkVideoFrame } from "./realtime-talk-video.ts";
 
@@ -17,8 +18,10 @@ export type RealtimeServerEvent = {
   arguments?: string;
   error?: unknown;
   response?: {
+    id?: string;
     status?: string;
     status_details?: unknown;
+    output?: unknown[];
   };
   item?: {
     id?: string;
@@ -31,6 +34,56 @@ export type RealtimeServerEvent = {
     transcript?: string;
   };
 };
+
+export class RealtimeTalkResponseOutcomeOwner {
+  private activeResponseId: string | undefined;
+  private unkeyedSettled = false;
+  private readonly settledResponseIds = new Set<string>();
+
+  constructor(private readonly maxSettledResponses: number) {}
+
+  start(responseId: string | undefined): void {
+    this.activeResponseId = responseId;
+    this.unkeyedSettled = false;
+  }
+
+  finish(event: RealtimeServerEvent) {
+    const outcome =
+      event.type === "response.cancelled"
+        ? ({
+            status: "cancelled",
+            ...(event.response?.id ? { responseId: event.response.id } : {}),
+          } as const)
+        : normalizeRealtimeVoiceResponseOutcome({
+            providerLabel: "OpenAI realtime voice",
+            response: event.response,
+          });
+    if (
+      (outcome.responseId && this.settledResponseIds.has(outcome.responseId)) ||
+      (!outcome.responseId && this.unkeyedSettled) ||
+      (outcome.responseId &&
+        this.activeResponseId !== undefined &&
+        outcome.responseId !== this.activeResponseId)
+    ) {
+      return undefined;
+    }
+    const overflow =
+      outcome.responseId !== undefined && this.settledResponseIds.size >= this.maxSettledResponses;
+    if (outcome.responseId && !overflow) {
+      this.settledResponseIds.add(outcome.responseId);
+    } else if (!outcome.responseId) {
+      this.unkeyedSettled = true;
+    }
+    this.activeResponseId = undefined;
+    return { outcome, overflow };
+  }
+
+  reset(): void {
+    this.activeResponseId = undefined;
+    this.unkeyedSettled = false;
+    this.settledResponseIds.clear();
+  }
+}
 
 type PendingOfferRequest = {
   controller: AbortController;

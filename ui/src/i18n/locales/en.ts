@@ -693,7 +693,6 @@ export const en: TranslationMap = {
   newSession: {
     title: "New session",
     hint: "Pick where this session works, then say what to do.",
-    draftRow: "New session",
     agent: "Agent",
     where: "Where",
     gateway: "Gateway · local",

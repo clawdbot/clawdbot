@@ -66,7 +66,7 @@ export interface ShellViewHost {
   readonly sidebarWorkboardRenderers: SidebarWorkboardRenderers | undefined;
   readonly sidebarWorkboardSnapshot: SidebarWorkboardSnapshot;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
-  draftSessionAgentId(): string;
+  newSessionRouteAgentId(): string;
   enabledRouteIds(): readonly RouteId[];
   exitSettings(): void;
   handleCommandPaletteSlashCommand(command: string): void;
@@ -198,10 +198,10 @@ export function renderApplicationShell(host: ShellViewHost) {
     mobileNavLayout,
   });
   const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
-  // Mirror the sidebar brand action: an open new-session draft wins over the
-  // persisted selection so the collapsed cluster "+" targets the same agent.
+  // Mirror the sidebar brand action: the open new-session route target wins
+  // over persisted selection so the collapsed cluster "+" uses the same agent.
   const selectedAgentId = normalizeAgentId(
-    host.draftSessionAgentId() ||
+    host.newSessionRouteAgentId() ||
       (context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId),
   );
   const newSessionAccess = readSessionMethodAccess(gatewaySnapshot, {
@@ -270,7 +270,6 @@ export function renderApplicationShell(host: ShellViewHost) {
       onOpenApprovals: () => host.openApprovals(),
       onRetryConnect: () => context.gateway.connect(),
       onOpenNewSession: openNewSession,
-      draftSessionAgentId: host.draftSessionAgentId(),
       onUpdateSidebarEntries: (entries: string[]) =>
         context.navigation.update({ sidebarEntries: entries }),
       onPairMobile: () => void context.overlays.openDevicePairSetup(),
