@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { backupVerifyCommand } from "../commands/backup-verify.js";
 import { CONFIG_AUDIT_MAX_ENTRIES, CONFIG_AUDIT_SCOPE } from "../config/io.audit.js";
+import { resolveGatewayLockDir } from "../config/paths.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
@@ -33,6 +34,7 @@ import {
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
 import { createBackupVolatileStatCache } from "./backup-volatile-stat-cache.js";
+import { acquireGatewayLock } from "./gateway-lock.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
 import { detectLegacyAuditLogs, migrateLegacyAuditLogs } from "./state-migrations.audit-logs.js";
@@ -368,6 +370,37 @@ describe("writeTarArchiveWithRetry", () => {
     ).rejects.toThrow(/Backup archive write failed/);
     expect(runTar).toHaveBeenCalledOnce();
     expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("reports the actual attempt count when bailing out before the retry limit", async () => {
+    const nonEofErr = new Error("permission denied");
+    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
+      path: "/state/logs/gateway.jsonl",
+    });
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    const singleAttempt = vi.fn<() => Promise<void>>().mockRejectedValue(nonEofErr);
+    await expect(
+      writeTarArchiveWithRetry({
+        tempArchivePath: "/tmp/backup.tar.gz.tmp",
+        runTar: singleAttempt,
+        sleepMs: sleep,
+      }),
+    ).rejects.toThrow(/after 1 attempt\)/);
+    expect(singleAttempt).toHaveBeenCalledOnce();
+
+    const twoAttempts = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(eofErr)
+      .mockRejectedValueOnce(nonEofErr);
+    await expect(
+      writeTarArchiveWithRetry({
+        tempArchivePath: "/tmp/backup.tar.gz.tmp",
+        runTar: twoAttempts,
+        sleepMs: sleep,
+      }),
+    ).rejects.toThrow(/after 2 attempts\)/);
+    expect(twoAttempts).toHaveBeenCalledTimes(2);
   });
 
   it("retries on EOF-class errors and eventually succeeds", async () => {
@@ -982,7 +1015,7 @@ describe("createBackupArchive", () => {
             INSERT INTO state_leases (
               scope, lease_key, owner, expires_at, heartbeat_at,
               payload_json, created_at, updated_at
-            ) VALUES ('plugin:memory-core:qmd', 'embed', 'worker', 9999999999999, 10, NULL, 10, 10)
+            ) VALUES ('core:test-fixture', 'write', 'worker', 9999999999999, 10, NULL, 10, 10)
           `,
         ).run();
 
@@ -1166,7 +1199,7 @@ describe("createBackupArchive", () => {
                 INSERT INTO state_leases (
                   scope, lease_key, owner, expires_at, heartbeat_at,
                   payload_json, created_at, updated_at
-                ) VALUES ('plugin:memory-core:qmd', 'write', 'worker', 9999999999999, 1, NULL, 1, 1)
+                ) VALUES ('core:test-fixture', 'write', 'worker', 9999999999999, 1, NULL, 1, 1)
               `,
             )
             .run();
@@ -1659,7 +1692,7 @@ describe("createBackupArchive", () => {
     );
   });
 
-  it("snapshots nested live SQLite databases with transaction continuity", async () => {
+  it("snapshots lock-named plugin SQLite databases with transaction continuity", async () => {
     await withOpenClawTestState(
       {
         layout: "state-only",
@@ -1669,7 +1702,7 @@ describe("createBackupArchive", () => {
       async (state) => {
         const outputDir = state.path("backups");
         const extractDir = state.path("extract");
-        const dbPath = state.statePath("plugins", "dedicated", "live.sqlite");
+        const dbPath = state.statePath("plugins", "dedicated", "cache.lock.sqlite");
         await fs.mkdir(path.dirname(dbPath), { recursive: true });
         await fs.mkdir(outputDir, { recursive: true });
         await fs.mkdir(extractDir, { recursive: true });
@@ -1714,13 +1747,13 @@ describe("createBackupArchive", () => {
           });
           const entries = await listArchiveEntries(result.archivePath);
           const archivedDbEntries = entries.filter((entry) =>
-            entry.endsWith("/state/plugins/dedicated/live.sqlite"),
+            entry.endsWith("/state/plugins/dedicated/cache.lock.sqlite"),
           );
           expect(archivedDbEntries).toHaveLength(1);
           for (const suffix of ["-wal", "-shm", "-journal"]) {
             expect(
               entries.some((entry) =>
-                entry.endsWith(`/state/plugins/dedicated/live.sqlite${suffix}`),
+                entry.endsWith(`/state/plugins/dedicated/cache.lock.sqlite${suffix}`),
               ),
               suffix,
             ).toBe(false);
@@ -2025,6 +2058,135 @@ describe("createBackupArchive", () => {
     );
   });
 
+  it("excludes the state-local gateway lock tree while backing up durable SQLite", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-gateway-lock-sqlite-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const extractDir = state.path("extract");
+        const lockDir = resolveGatewayLockDir(state.stateDir);
+        const pluginDbPath = state.statePath("plugins", "dedicated", "durable.sqlite");
+        const producerShapedDbPath = state.statePath(
+          "plugins",
+          "dedicated",
+          "gateway.12345678.lock.sqlite",
+        );
+        const colocatedDbPath = path.join(lockDir, "retained.sqlite");
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.mkdir(extractDir, { recursive: true });
+        await fs.mkdir(path.dirname(pluginDbPath), { recursive: true });
+        await fs.mkdir(lockDir, { recursive: true });
+
+        const sqlite = requireNodeSqlite();
+        for (const [databasePath, value] of [
+          [pluginDbPath, "plugin-state"],
+          [producerShapedDbPath, "producer-shaped-state"],
+          [colocatedDbPath, "colocated-state"],
+        ] as const) {
+          const database = new sqlite.DatabaseSync(databasePath);
+          try {
+            database.exec("CREATE TABLE durable_state (value TEXT NOT NULL)");
+            database.prepare("INSERT INTO durable_state (value) VALUES (?)").run(value);
+          } finally {
+            database.close();
+          }
+        }
+
+        const gatewayLock = await acquireGatewayLock({
+          allowInTests: true,
+          env: state.env,
+          lockDir,
+          timeoutMs: 100,
+        });
+        if (!gatewayLock) {
+          throw new Error("expected test gateway lock");
+        }
+        const gatewayCoordinatorPaths = [
+          `${gatewayLock.lockPath}.sqlite`,
+          `${gatewayLock.stateLockPath}.sqlite`,
+        ];
+        const extraTransientPaths = [
+          path.join(lockDir, "device-identity.12345678.lock.sqlite"),
+          state.statePath("memory", "main.sqlite.reindex-lock.sqlite"),
+        ];
+
+        try {
+          for (const transientPath of [...gatewayCoordinatorPaths, ...extraTransientPaths]) {
+            await fs.mkdir(path.dirname(transientPath), { recursive: true });
+            if (!gatewayCoordinatorPaths.includes(transientPath)) {
+              await fs.writeFile(transientPath, "transient coordinator database");
+            }
+            for (const suffix of ["-wal", "-shm", "-journal"]) {
+              await fs.writeFile(`${transientPath}${suffix}`, "transient coordinator sidecar");
+            }
+          }
+
+          const result = await createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 7, 5, 12, 0, 0),
+          });
+          const entries = await listArchiveEntries(result.archivePath);
+          for (const transientPath of [...gatewayCoordinatorPaths, ...extraTransientPaths]) {
+            const relativeTransientPath = path
+              .relative(state.stateDir, transientPath)
+              .split(path.sep)
+              .join("/");
+            for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+              expect(
+                entries.some((entry) => entry.endsWith(`/state/${relativeTransientPath}${suffix}`)),
+                `${relativeTransientPath}${suffix}`,
+              ).toBe(false);
+            }
+          }
+          expect(
+            entries.some((entry) => entry.endsWith("/state/plugins/dedicated/durable.sqlite")),
+          ).toBe(true);
+          expect(
+            entries.some((entry) =>
+              entry.endsWith("/state/plugins/dedicated/gateway.12345678.lock.sqlite"),
+            ),
+          ).toBe(true);
+          expect(entries.some((entry) => entry.includes(`/${path.basename(lockDir)}/`))).toBe(
+            false,
+          );
+
+          const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+          await expect(
+            backupVerifyCommand(runtime, { archive: result.archivePath }),
+          ).resolves.toMatchObject({ ok: true });
+
+          await tar.x({ file: result.archivePath, gzip: true, cwd: extractDir });
+          for (const [entrySuffix, value] of [
+            ["/state/plugins/dedicated/durable.sqlite", "plugin-state"],
+            ["/state/plugins/dedicated/gateway.12345678.lock.sqlite", "producer-shaped-state"],
+          ] as const) {
+            const archivedEntry = expectDefined(
+              entries.find((entry) => entry.endsWith(entrySuffix)),
+              `archive entry ending with ${entrySuffix}`,
+            );
+            const archivedDb = new sqlite.DatabaseSync(path.join(extractDir, archivedEntry), {
+              readOnly: true,
+            });
+            try {
+              expect(archivedDb.prepare("SELECT value FROM durable_state").get()).toEqual({
+                value,
+              });
+            } finally {
+              archivedDb.close();
+            }
+          }
+        } finally {
+          await gatewayLock.release();
+        }
+      },
+    );
+  });
+
   it("preserves noncanonical symlinked SQLite paths without dereferencing them", async () => {
     if (process.platform === "win32") {
       return;
@@ -2245,7 +2407,7 @@ describe("createBackupArchive", () => {
           PRAGMA user_version = 1;
           PRAGMA wal_checkpoint(TRUNCATE);
           INSERT INTO durable_state (id, value) VALUES (1, 'committed-in-wal');
-          INSERT INTO state_leases (scope, lease_key) VALUES ('plugin:memory-core:qmd', 'write');
+          INSERT INTO state_leases (scope, lease_key) VALUES ('core:test-fixture', 'write');
         `);
         await fs.symlink(backingDbPath, linkedDbPath);
         await fs.link(backingDbPath, hardlinkedDbPath);

@@ -808,7 +808,6 @@ describe("doctor canonical session-key repair", () => {
         category: "investigation",
         chatType: "group",
         endedAt: 24,
-        icon: "archive",
         label: "Recovered metadata",
         displayName: "Projected display name",
         lastActivityAt: 29,
@@ -825,6 +824,7 @@ describe("doctor canonical session-key repair", () => {
         startedAt: 23,
         status: "failed",
       });
+      expect(repaired).not.toHaveProperty("icon");
       expect(deliveryContextFromSession(repaired)).toEqual({
         accountId: "work",
         channel: "matrix",

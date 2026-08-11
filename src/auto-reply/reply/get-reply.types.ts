@@ -1,11 +1,13 @@
+import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
 // Shared get-reply type contracts for command, directive, and runtime layers.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ReplyOptionsWithHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
+import type { PluginCommandReplyOptions } from "../../plugins/plugin-command-dispatch-contract.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
-import type { FollowupQueueDisposition, QueueMode } from "./queue/types.js";
+import type { FollowupQueueDisposition } from "./queue/types.js";
+import type { ReplyOptionsWithAdmissionTicket } from "./reply-admission-ticket.js";
 import type { ReplyOptionsWithOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
@@ -37,9 +39,10 @@ type InternalReplySessionOptions = {
 };
 
 export type InternalGetReplyOptions = GetReplyOptions &
+  PluginCommandReplyOptions &
   InternalReplySessionOptions &
-  ReplyOptionsWithHeartbeatRunScope &
-  ReplyOptionsWithOperationRunState;
+  ReplyOptionsWithOperationRunState &
+  ReplyOptionsWithAdmissionTicket;
 
 export function shouldBridgeCliPreambleEvents(opts: InternalGetReplyOptions | undefined): boolean {
   return opts?.commentaryProgressEnabled === true || opts?.progressPreambleEnabled === true;

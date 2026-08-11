@@ -102,6 +102,7 @@ class DefaultSentMessageCache implements SentMessageCache {
         text: lookup.text,
         media: lookup.media,
         messageId: lookup.messageId,
+        skipIdShortCircuit: resolvedOptions.skipIdShortCircuit,
         includePendingText: resolvedOptions.includePendingText,
       })
     ) {

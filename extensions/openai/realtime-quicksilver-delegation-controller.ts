@@ -1,5 +1,6 @@
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type { RealtimeVoiceAgentConsultRunner } from "openclaw/plugin-sdk/realtime-voice";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import type { RawData } from "ws";
 import {
   buildOpenAIQuicksilverDelegationPrompt,
@@ -43,16 +44,6 @@ function shortFailureReason(error: unknown): string {
   return toError(error).message.replaceAll(/\s+/g, " ").trim().slice(0, 180) || "unknown error";
 }
 
-function decodeTextFrame(data: RawData): string {
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data).toString("utf8");
-  }
-  return data.toString("utf8");
-}
-
 function readWireEventType(payload: string): string | undefined {
   try {
     const decoded = JSON.parse(payload) as Record<string, unknown>;
@@ -78,7 +69,7 @@ export class OpenAIQuicksilverDelegationController {
       this.fail(new Error("OpenAI GPT-Live sideband returned an unexpected binary frame"));
       return;
     }
-    const payload = decodeTextFrame(data);
+    const payload = rawDataToString(data);
     if (this.options.onWireEventType) {
       const eventType = readWireEventType(payload);
       if (eventType) {

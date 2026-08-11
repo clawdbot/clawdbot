@@ -28,10 +28,6 @@ export function isLiveTerminalForRun(message: unknown, runId: string): boolean {
   );
 }
 
-export function clearAuthoritativeTerminal(host: object): void {
-  authoritativeTerminals.delete(host);
-}
-
 export function rememberAuthoritativeTerminal(options: {
   event: {
     clientRunId?: string | null;

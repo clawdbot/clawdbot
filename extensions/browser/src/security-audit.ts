@@ -49,6 +49,18 @@ export function collectBrowserSecurityAuditFindings(ctx: OpenClawPluginSecurityA
     return findings;
   }
 
+  if (resolved.extensionRelay.allowLegacyAuth) {
+    findings.push({
+      checkId: "browser.extension_relay_legacy_auth",
+      severity: "warn" as const,
+      title: "Legacy browser extension relay authentication is enabled",
+      detail:
+        "browser.extensionRelay.allowLegacyAuth defaults to true for one migration window, so old relay Bearer, Basic, and token-subprotocol clients can still authenticate.",
+      remediation:
+        "Update paired Chrome extensions and external CDP clients to Browser Relay Authentication v2, then set browser.extensionRelay.allowLegacyAuth=false.",
+    });
+  }
+
   const browserAuth = resolveBrowserControlAuth(ctx.config, ctx.env);
   const explicitAuthMode = ctx.config.gateway?.auth?.mode;
   const tokenConfigured =

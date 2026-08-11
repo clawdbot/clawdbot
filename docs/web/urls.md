@@ -103,9 +103,15 @@ slug matching.
 If one short id matches more than one session and the slug does not settle it,
 the UI does not guess. It shows a small disambiguation view with the matching
 display names, agents, and longer id prefixes. Use a longer prefix to make the
-URL unique. Resolution examines at
-most five pages of search results; if more remain, the view says that the search
-was incomplete instead of guessing.
+URL unique. Current Gateways return at most ten recent candidates; when that
+bound is reached, the view treats the result as incomplete instead of guessing.
+Against an older Gateway that predates short-id resolve support, the UI falls
+back to the prior bounded list search, scanning at most five pages of results.
+It likewise reports an incomplete search instead of guessing when that fallback
+cannot prove uniqueness.
+
+To continue one of these links in the terminal or attach a coding harness, see
+[Session synchronization and attachment](/concepts/session-attachment).
 
 Canonical links do not use `?session=` or `?face=`. Released links such as
 `/chat?session=<sessionKey>` are accepted only at the application boundary as a
@@ -192,9 +198,11 @@ the agent path while keeping other query parameters and the fragment.
 These Gateway-served documents sit outside the application route table:
 
 - `/?onboarding=1` opens the first-run onboarding presentation.
-- `/?view=terminal` opens the full-screen terminal-only document used by the
-  mobile apps. Availability still requires `gateway.terminal.enabled` and
-  `operator.admin`.
+- `/terminal` opens the user-facing full-screen terminal. With a base path, use
+  `<basePath>/terminal`.
+- `/?view=terminal` opens the same terminal-only document in the WebView/embed
+  form used by the mobile apps. Terminal availability in either form still
+  requires `gateway.terminal.enabled` and `operator.admin`.
 - `/approve/<approvalId>` opens a standalone approval document. With a base
   path, use `<basePath>/approve/<approvalId>`. The id identifies an approval but
   never authorizes it; normal Gateway authentication still applies.

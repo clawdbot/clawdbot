@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -40,6 +41,151 @@ function linkRequiredShellTools(bin: string) {
 
 describe("install-cli.sh", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
+
+  it("fails a low-space fresh Git install before Node or checkout work", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-disk-low-"));
+    const commandLog = join(tmp, "commands.log");
+    const repo = join(tmp, "new", "openclaw");
+
+    try {
+      const result = runInstallCliShell(
+        [
+          "set -euo pipefail",
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "available_disk_kib() { printf '2097152\\n'; }",
+          `install_node() { printf 'node\\n' >> ${JSON.stringify(commandLog)}; }`,
+          `install_openclaw_from_git() { printf 'git\\n' >> ${JSON.stringify(commandLog)}; }`,
+          `main --json --git --git-dir ${JSON.stringify(repo)}`,
+        ].join("\n"),
+      );
+
+      expect(result.status).toBe(1);
+      expect(existsSync(commandLog)).toBe(false);
+      const events = result.stdout
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { event: string; name?: string; message?: string });
+      expect(events).toEqual([
+        { event: "step", name: "disk-space", status: "start" },
+        {
+          event: "error",
+          message:
+            "Fresh Git installs require at least 6 GiB of free disk space; only 2.0 GiB is available. Free disk space and retry.",
+        },
+      ]);
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
+  it("allows a fresh Git install with enough free space", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-disk-ok-"));
+    const repo = join(tmp, "new", "openclaw");
+
+    try {
+      const result = runInstallCliShell(
+        [
+          "set -euo pipefail",
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "JSON=1",
+          "available_disk_kib() { printf '7340032\\n'; }",
+          `preflight_fresh_git_disk_space ${JSON.stringify(repo)}`,
+          "printf 'continued\\n'",
+        ].join("\n"),
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain('{"event":"step","name":"disk-space","status":"start"}');
+      expect(result.stdout).toContain('{"event":"step","name":"disk-space","status":"ok"}');
+      expect(result.stdout).toContain("continued");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
+  it("does not apply the fresh-install disk threshold to an existing checkout", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-disk-existing-"));
+    const repo = join(tmp, "openclaw");
+    mkdirSync(join(repo, ".git"), { recursive: true });
+
+    try {
+      const result = runInstallCliShell(
+        [
+          "set -euo pipefail",
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "JSON=1",
+          "available_disk_kib() { printf 'disk check should not run\\n' >&2; return 99; }",
+          `preflight_fresh_git_disk_space ${JSON.stringify(repo)}`,
+        ].join("\n"),
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
+  it("emits ordered stages for an existing Git checkout build", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-events-"));
+    const repo = join(tmp, "openclaw");
+    mkdirSync(join(repo, ".git"), { recursive: true });
+
+    try {
+      const result = runInstallCliShell(
+        [
+          "set -euo pipefail",
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "JSON=1",
+          `PREFIX=${JSON.stringify(join(tmp, "prefix"))}`,
+          "ensure_git() { :; }",
+          "ensure_pnpm() { :; }",
+          "ensure_pnpm_binary_for_scripts() { :; }",
+          "ensure_pnpm_git_prepare_allowlist() { :; }",
+          "activate_repo_pnpm_version() { :; }",
+          "cleanup_legacy_submodules() { :; }",
+          "resolve_git_openclaw_ref() { printf 'main\\n'; }",
+          "checkout_git_openclaw_ref() { :; }",
+          "run_pnpm() { :; }",
+          "git() {",
+          '  if [[ "$1" == --git-dir=* ]]; then return 0; fi',
+          '  if [[ "$1" == "-C" && "$3" == "status" ]]; then return 0; fi',
+          "  return 0",
+          "}",
+          `install_openclaw_from_git ${JSON.stringify(repo)}`,
+        ].join("\n"),
+      );
+
+      expect(result.status).toBe(0);
+      const stages = result.stdout
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { event: string; name?: string; status?: string })
+        .filter((event) => event.event === "step")
+        .map((event) => `${event.name}:${event.status}`);
+      expect(stages).toEqual([
+        "openclaw:start",
+        "git-tools:start",
+        "git-tools:ok",
+        "git-update:start",
+        "git-update:ok",
+        "dependencies:start",
+        "dependencies:ok",
+        "control-ui:start",
+        "control-ui:ok",
+        "cli-build:start",
+        "cli-build:ok",
+        "openclaw:ok",
+      ]);
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
 
   it("rejects a git checkout without a commit before updating it", () => {
     const result = runInstallCliShell(`
@@ -215,6 +361,87 @@ describe("install-cli.sh", () => {
     expect(result.status).toBe(1);
     expect(result.stdout + result.stderr).toContain("Missing value for --prefix");
     expect(result.stdout + result.stderr).not.toContain("unbound variable");
+  });
+
+  it("matches the Gateway future-config compatibility rule", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      node_bin() { command -v node; }
+      set +e
+      for pair in \
+        2026.7.1-2:2026.7.2 \
+        2026.7.2-beta.6:2026.7.2-beta.7 \
+        2026.7.2:2026.7.2-beta.7 \
+        2026.7.2-beta.7:2026.7.2 \
+        2026.7.2-1:2026.7.2-2 \
+        2026.7.3-beta.1:2026.7.2; do
+        candidate="\${pair%%:*}"
+        writer="\${pair#*:}"
+        openclaw_version_is_compatible_with "$candidate" "$writer"
+        printf '%s=%s\\n' "$pair" "$?"
+      done
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("2026.7.1-2:2026.7.2=1");
+    expect(result.stdout).toContain("2026.7.2-beta.6:2026.7.2-beta.7=1");
+    expect(result.stdout).toContain("2026.7.2:2026.7.2-beta.7=0");
+    expect(result.stdout).toContain("2026.7.2-beta.7:2026.7.2=0");
+    expect(result.stdout).toContain("2026.7.2-1:2026.7.2-2=0");
+    expect(result.stdout).toContain("2026.7.3-beta.1:2026.7.2=0");
+  });
+
+  it("rejects an incompatible channel before replacing an existing managed CLI", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-compatible-"));
+    const prefix = join(tmp, "prefix");
+    const bin = join(prefix, "bin");
+    const openclaw = join(bin, "openclaw");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(openclaw, "existing-managed-cli\n");
+
+    try {
+      const result = runInstallCliShell(`
+        set -euo pipefail
+        source "${SCRIPT_PATH}"
+        PREFIX=${JSON.stringify(prefix)}
+        OPENCLAW_VERSION=latest
+        REQUIRED_COMPATIBLE_VERSION=2026.7.2
+        node_bin() { command -v node; }
+        npm_bin() { printf 'npm\\n'; }
+        npm_config_has_raw_key() { return 1; }
+        npm() {
+          if [[ "$1" == "view" ]]; then printf '2026.7.1-2\\n'; return 0; fi
+          if [[ "$1" == "config" ]]; then printf 'null\\n'; return 0; fi
+          printf 'unexpected mutation: %s\\n' "$*" >&2
+          return 99
+        }
+        install_openclaw
+      `);
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("OpenClaw 2026.7.1-2 is older than config writer 2026.7.2");
+      expect(result.stderr).not.toContain("unexpected mutation");
+      expect(readFileSync(openclaw, "utf8")).toBe("existing-managed-cli\n");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
+  it("checks a git checkout version before dependency install or wrapper replacement", () => {
+    const checkoutIndex = script.indexOf('checkout_git_openclaw_ref "$repo_dir" "$git_ref"');
+    const compatibilityIndex = script.indexOf(
+      'require_openclaw_version_compatible "$resolved_version"',
+    );
+    const dependencyInstallIndex = script.indexOf(
+      'CI="${CI:-true}" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"',
+    );
+    const wrapperIndex = script.indexOf('cat > "${PREFIX}/bin/openclaw"', compatibilityIndex);
+
+    expect(checkoutIndex).toBeGreaterThan(-1);
+    expect(compatibilityIndex).toBeGreaterThan(checkoutIndex);
+    expect(dependencyInstallIndex).toBeGreaterThan(compatibilityIndex);
+    expect(wrapperIndex).toBeGreaterThan(compatibilityIndex);
   });
 
   it("does not restart a gateway again after force-install activates it", () => {

@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import { validateJsonSchemaValue } from "../../plugins/schema-validator.js";
 import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
-import type { SwarmStructuredOutputState } from "../subagent-registry.types.js";
+import type { SwarmStructuredOutputState } from "../subagents/registry/subagent-registry.types.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, ToolInputError } from "./common.js";
 

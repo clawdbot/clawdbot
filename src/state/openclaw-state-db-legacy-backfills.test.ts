@@ -1,9 +1,21 @@
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   repairLegacySubagentExecutionPayloads,
   repairLegacySubagentRetainedResults,
 } from "./openclaw-state-db-legacy-backfills.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "./openclaw-state-db.js";
+
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  });
+});
 
 type StoredRun = {
   run_id: string;
@@ -53,6 +65,57 @@ function readWithShippedBeta6Projection(row: StoredRun) {
     },
   };
 }
+
+describe("repairLegacySubagentSuspensionReasons", () => {
+  it("rewrites the shipped reason on open and stays canonical after a second open", () => {
+    const stateDir = tempDirs.make("openclaw-subagent-suspension-backfill-");
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const initial = openOpenClawStateDatabase(options);
+    const runId = "legacy-retry-limit";
+    initial.db
+      .prepare(
+        `INSERT INTO subagent_runs (
+          run_id, child_session_key, requester_session_key, requester_display_key,
+          task, cleanup, created_at, payload_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        runId,
+        "agent:main:subagent:legacy",
+        "agent:main:main",
+        "main",
+        "legacy retry limit",
+        "keep",
+        100,
+        JSON.stringify({
+          runId,
+          childSessionKey: "agent:main:subagent:legacy",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: "legacy retry limit",
+          cleanup: "keep",
+          createdAt: 100,
+          execution: { status: "terminal" },
+          completion: { required: true },
+          delivery: { status: "suspended", suspendedReason: "retry-limit" },
+        }),
+      );
+    closeOpenClawStateDatabaseForTest();
+
+    const firstOpen = openOpenClawStateDatabase(options);
+    const firstStored = firstOpen.db
+      .prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
+      .get(runId) as { payload_json: string };
+    expect(JSON.parse(firstStored.payload_json).delivery.suspendedReason).toBe("permanent_failure");
+    closeOpenClawStateDatabaseForTest();
+
+    const secondOpen = openOpenClawStateDatabase(options);
+    const secondStored = secondOpen.db
+      .prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
+      .get(runId);
+    expect(secondStored).toEqual(firstStored);
+  });
+});
 
 describe("repairLegacySubagentExecutionPayloads", () => {
   it("moves shipped paused and killed terminal facts into execution once", () => {

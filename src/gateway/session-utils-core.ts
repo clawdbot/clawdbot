@@ -3,11 +3,11 @@ import {
   countActiveDescendantRuns,
   getSessionDisplaySubagentRunByChildSessionKey,
   listSubagentRunsForController,
-} from "../agents/subagent-registry-read.js";
+} from "../agents/subagents/registry/subagent-registry-read.js";
 import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
-} from "../agents/subagent-run-liveness.js";
+} from "../agents/subagents/registry/subagent-run-liveness.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -26,16 +26,6 @@ import {
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 const DERIVED_TITLE_MAX_LEN = 60;
-
-function formatSessionIdPrefix(sessionId: string, updatedAt?: number | null): string {
-  const prefix = sessionId.slice(0, 8);
-  if (updatedAt && updatedAt > 0) {
-    const d = new Date(updatedAt);
-    const date = d.toISOString().slice(0, 10);
-    return `${prefix} (${date})`;
-  }
-  return prefix;
-}
 
 function truncateTitle(text: string, maxLen: number): string {
   if (text.length <= maxLen) {
@@ -83,10 +73,8 @@ export function deriveSessionTitle(
     return truncateTitle(normalized, DERIVED_TITLE_MAX_LEN);
   }
 
-  if (entry.sessionId) {
-    return formatSessionIdPrefix(entry.sessionId, entry.updatedAt);
-  }
-
+  // Derived titles are human content only; UI/TUI/ACP own key-based fallbacks,
+  // which an id prefix here would mask.
   return undefined;
 }
 

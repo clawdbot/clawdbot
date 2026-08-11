@@ -123,6 +123,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
                 "then [#99815](https://github.com/openclaw/openclaw/issues/99815).",
                 "A [missing item](https://github.com/openclaw/openclaw/issues/999999) stays usable.",
                 "The [repository](https://github.com/openclaw/openclaw) has no item preview.",
+                "Styling notes live in [the docs](https://docs.openclaw.ai/web/control-ui).",
               ].join(" "),
             },
           ],
@@ -134,7 +135,16 @@ describeControlUiE2e("GitHub link hover cards", () => {
     await page.goto(`${server.baseUrl}chat`);
 
     const pullLink = page.getByRole("link", { name: "#99816" });
+
+    // The mark carries the link signal at rest, so the underline only returns on
+    // hover. Non-GitHub links keep the base underline, which keeps the rule scoped.
+    const decorationLine = (link: Locator) =>
+      link.evaluate((element) => getComputedStyle(element).textDecorationLine);
+    expect(await decorationLine(pullLink)).toBe("none");
+    expect(await decorationLine(page.getByRole("link", { name: "the docs" }))).toBe("underline");
+
     await pullLink.hover();
+    await expect.poll(() => decorationLine(pullLink)).toBe("underline");
     const card = page.locator(".github-link-hovercard");
     await expectText(card, "Merged");
     await expectText(card, "openclaw/openclaw #99816");

@@ -22,12 +22,11 @@ export { resolveCanonicalGatewaySessionStoreKey } from "./session-utils-store.js
 export { listAgentsForGateway } from "./session-utils-store.js";
 export { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
 export { resolveGatewaySessionStoreTarget } from "./session-utils-store-lookup.js";
-export { resolveGatewaySessionThinkingProjection } from "./session-utils-model.js";
 export { getSessionDefaults } from "./session-utils-model.js";
 export { resolveGatewayModelSupportsImages } from "./session-utils-model.js";
-export { resolveSessionDisplayModelIdentityRef } from "./session-utils-model.js";
 export { buildGatewaySessionRow } from "./session-utils-row.js";
 export { loadGatewaySessionRow } from "./session-utils-search.js";
+export { loadGatewaySessionLifecycleSnapshot } from "./session-utils-search.js";
 export { buildGatewaySessionInfo } from "./session-utils-search.js";
 export { filterAndSortSessionEntries } from "./session-utils-list.js";
 export { listSessionsFromStore } from "./session-utils-list.js";

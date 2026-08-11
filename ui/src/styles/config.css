@@ -678,7 +678,7 @@
 
 /* Collapsible nested-object summary behaves like a nav row. */
 .cfg-object__summary {
-  cursor: pointer;
+  cursor: var(--cursor-action);
   list-style: none;
   transition: background var(--duration-fast) ease;
 }

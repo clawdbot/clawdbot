@@ -1,6 +1,6 @@
-// Proves the plugin approval lifecycle through authenticated Gateway WebSockets.
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+// Proves the plugin approval lifecycle through authenticated Gateway WebSockets.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../../../../src/gateway/method-scopes.js";
@@ -11,7 +11,7 @@ import {
 import {
   getFreePort,
   installGatewayTestHooks,
-  startGatewayServer,
+  startTestGatewayServer,
 } from "../../../../src/gateway/test-helpers.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
 import { setLoggerOverride } from "../../../../src/logging.js";
@@ -39,12 +39,7 @@ type ApprovalDecision = {
   terminalReason: string | null;
 };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -85,7 +80,7 @@ describe("gateway plugin approvals QA", () => {
       const port = await getFreePort();
       const token = "gateway-plugin-approvals-qa-token";
       const url = `ws://127.0.0.1:${port}`;
-      const server = await startGatewayServer(port, {
+      const server = await startTestGatewayServer(port, {
         bind: "loopback",
         auth: { mode: "token", token },
         controlUiEnabled: false,
@@ -186,7 +181,9 @@ describe("gateway plugin approvals QA", () => {
         .finally(() => {
           waitSettled = true;
         });
-      await new Promise((resolve) => setTimeout(resolve, 25));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 25);
+      });
       expect(waitSettled).toBe(false);
 
       markStage("reviewer resolve");

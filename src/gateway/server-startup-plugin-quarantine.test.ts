@@ -13,13 +13,13 @@ import {
   getFreePort,
   installGatewayTestHooks,
   setTestPluginRegistry,
-  startGatewayServer,
+  startTestGatewayServer,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
 describe("Gateway startup plugin quarantine", () => {
-  let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+  let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
   const tempDirs: string[] = [];
 
   afterEach(async () => {
@@ -158,7 +158,7 @@ describe("Gateway startup plugin quarantine", () => {
     });
 
     const port = await getFreePort();
-    server = await startGatewayServer(port, { auth: { mode: "none" } });
+    server = await startTestGatewayServer(port, { auth: { mode: "none" } });
     const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
 
     expect(ready.status).toBe(200);

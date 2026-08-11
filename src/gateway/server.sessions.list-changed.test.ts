@@ -4,6 +4,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { subscribePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -18,7 +19,6 @@ import {
   setupGatewaySessionsTestHarness,
   getGatewayConfigModule,
   getSessionsHandlers,
-  createDeferred,
   loadSeededTranscriptEvents,
   seedSessionTranscript,
   sessionStoreEntry,
@@ -180,6 +180,9 @@ async function invokeSessionMutation({
     respond,
     context: {
       broadcastToConnIds,
+      chatAbortControllers: new Map(),
+      chatQueuedTurns: new Map(),
+      dedupe: new Map(),
       getSessionEventSubscriberConnIds: () => subscribedConnIds,
       loadGatewayModelCatalog: async () => ({ providers: [] }),
       getRuntimeConfig,
@@ -564,6 +567,73 @@ test("sessions.list exposes effective fast auto defaults from the selected model
   });
 });
 
+test.each([
+  {
+    label: "rosterless global default",
+    agents: {
+      defaults: {
+        fastModeDefault: true,
+        models: { "openai/gpt-5.5": { params: { fastMode: false } } },
+      },
+    },
+    expectedFastMode: undefined,
+    expectedEffectiveFastMode: true,
+    expectedSource: "agent",
+  },
+  {
+    label: "per-agent default",
+    agents: {
+      defaults: {
+        fastModeDefault: true,
+        models: { "openai/gpt-5.5": { params: { fastMode: true } } },
+      },
+      entries: { main: { fastModeDefault: false } },
+    },
+    expectedFastMode: undefined,
+    expectedEffectiveFastMode: false,
+    expectedSource: "agent",
+  },
+  {
+    label: "session override",
+    agents: {
+      defaults: {
+        fastModeDefault: false,
+        models: { "openai/gpt-5.5": { params: { fastMode: false } } },
+      },
+      entries: { main: { fastModeDefault: false } },
+    },
+    sessionFastMode: "auto" as const,
+    expectedFastMode: "auto",
+    expectedEffectiveFastMode: "auto",
+    expectedSource: "session",
+  },
+])("sessions.list projects $label fast-mode precedence", async (scenario) => {
+  await writeMainSessionStore({
+    modelProvider: "openai",
+    model: "gpt-5.5",
+    ...(scenario.sessionFastMode === undefined ? {} : { fastMode: scenario.sessionFastMode }),
+  });
+  const storePath = expectDefined(testState.sessionStorePath, "session store path");
+
+  const { respond } = await invokeSessionsList({
+    requestId: `req-sessions-list-fast-${scenario.label.replaceAll(" ", "-")}`,
+    context: {
+      getRuntimeConfig: () => ({
+        agents: scenario.agents,
+        session: { store: storePath },
+      }),
+    },
+  });
+
+  const payload = expectRespondPayload(respond);
+  const session = findSession(payload, "agent:main:main");
+  expectFields(session, {
+    fastMode: scenario.expectedFastMode,
+    effectiveFastMode: scenario.expectedEffectiveFastMode,
+    effectiveFastModeSource: scenario.expectedSource,
+  });
+});
+
 test("sessions.list resolves effective fast metadata from the raw runtime provider", async () => {
   testState.agentConfig = {
     model: { primary: "openai-codex/gpt-5.5" },
@@ -679,6 +749,30 @@ test("sessions.list ignores hidden internal abortable runs", async () => {
     { controlUiVisible: false },
     false,
   );
+});
+
+test("sessions.list leaves failed-first-turn dashboard sessions untitled instead of an id-prefix title", async () => {
+  const sessionKey = "agent:main:dashboard:fade729d-1111-2222-3333-444455556666";
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      "dashboard:fade729d-1111-2222-3333-444455556666": sessionStoreEntry("sess-dash-untitled"),
+    },
+  });
+  await seedSessionTranscript({
+    sessionId: "sess-dash-untitled",
+    sessionKey,
+    storePath,
+    messages: [{ role: "assistant", content: "The first turn failed before a user message." }],
+  });
+
+  const { respond } = await invokeSessionsList({
+    requestId: "req-sessions-list-untitled-dashboard",
+    params: { includeDerivedTitles: true },
+  });
+
+  const session = findSession(expectRespondPayload(respond), sessionKey);
+  expect(session.derivedTitle).toBeUndefined();
 });
 
 test("sessions.list yields before responding during bulk transcript hydration", async () => {
@@ -929,26 +1023,6 @@ test("sessions.changed mutation events include session management metadata", asy
     reason: "patch",
     pinned: false,
     pinnedAt: null,
-  });
-
-  const icon = await invokeSessionsPatch({
-    key: "discord:group:dev",
-    icon: "name:spark",
-  });
-  expectChangedBroadcast(icon.broadcastToConnIds, {
-    sessionKey: "agent:main:discord:group:dev",
-    reason: "patch",
-    icon: "name:spark",
-  });
-
-  const iconCleared = await invokeSessionsPatch({
-    key: "discord:group:dev",
-    icon: null,
-  });
-  expectChangedBroadcast(iconCleared.broadcastToConnIds, {
-    sessionKey: "agent:main:discord:group:dev",
-    reason: "patch",
-    icon: null,
   });
 
   const unread = await invokeSessionsPatch({

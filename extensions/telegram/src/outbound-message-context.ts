@@ -4,11 +4,12 @@ import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { TELEGRAM_GENERAL_TOPIC_ID, type TelegramThreadSpec } from "./bot/helpers.js";
+import type { TelegramThreadSpec } from "./bot/helpers.js";
 import { buildTelegramSelfSenderName } from "./group-history-window.js";
 import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
 import { createTelegramMessageCache } from "./message-cache.js";
 import type { TelegramPromptContextProjection } from "./prompt-context-projection.js";
+import { resolveTelegramProviderObservedThreadSpec } from "./provider-thread-proof.js";
 
 type TelegramOutboundPromptContextUser = {
   id?: number;
@@ -29,6 +30,7 @@ export type TelegramOutboundPromptContextMessage = {
   text?: string;
   caption?: string;
   message_thread_id?: number;
+  direct_messages_topic?: { topic_id?: number };
 };
 
 type TelegramOutboundPromptContextAccount = {
@@ -141,15 +143,11 @@ export async function recordOutboundMessageForPromptContext(params: {
   recordGroupHistory?: boolean;
 }): Promise<boolean> {
   try {
-    const providerGeneralTopicId =
-      params.message.message_thread_id === undefined &&
-      params.message.chat?.type === "supergroup" &&
-      params.successfulSendThread?.scope === "forum" &&
-      params.successfulSendThread.id === TELEGRAM_GENERAL_TOPIC_ID
-        ? TELEGRAM_GENERAL_TOPIC_ID
-        : undefined;
-    const providerObservedThreadId = params.message.message_thread_id ?? providerGeneralTopicId;
-    const messageThreadId = params.messageThreadId ?? providerGeneralTopicId;
+    const providerObservedThread = resolveTelegramProviderObservedThreadSpec({
+      message: params.message,
+      successfulSendThread: params.successfulSendThread,
+    });
+    const messageThreadId = providerObservedThread?.id ?? params.messageThreadId;
     const cacheMessage = buildOutboundCacheMessage({
       ...params,
       ...(messageThreadId !== undefined ? { messageThreadId } : {}),
@@ -169,7 +167,7 @@ export async function recordOutboundMessageForPromptContext(params: {
       ...(params.promptContextProjection
         ? { promptContextProjection: params.promptContextProjection }
         : {}),
-      ...(providerObservedThreadId !== undefined ? { providerObservedThreadId } : {}),
+      ...(providerObservedThread ? { providerObservedThread } : {}),
       ...(messageThreadId !== undefined ? { threadId: messageThreadId } : {}),
     });
     if (params.recordGroupHistory !== false) {

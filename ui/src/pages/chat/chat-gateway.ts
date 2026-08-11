@@ -193,12 +193,19 @@ function appendCachedChatMessage(
   state: ChatState,
   sessionKey: string,
   message: unknown,
+  eventClaim: object,
   agentId?: string,
 ) {
   if (!state.chatMessagesBySession) {
     return;
   }
-  appendChatMessageToCache(state.chatMessagesBySession, state, { sessionKey, agentId }, message);
+  appendChatMessageToCache(
+    state.chatMessagesBySession,
+    state,
+    { sessionKey, agentId },
+    message,
+    eventClaim,
+  );
 }
 
 function handleChatEvent(
@@ -229,7 +236,7 @@ function handleChatEvent(
         const cacheAgentId = isUiGlobalSessionKey(payload.sessionKey)
           ? (payload.agentId ?? resolveUiDefaultAgentId(state))
           : payload.agentId;
-        appendCachedChatMessage(state, payload.sessionKey, finalMessage, cacheAgentId);
+        appendCachedChatMessage(state, payload.sessionKey, finalMessage, payload, cacheAgentId);
       }
     }
     return null;

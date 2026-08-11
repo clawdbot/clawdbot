@@ -7,10 +7,12 @@ import type { RealtimeTranscriptionSessionCreateRequest } from "../realtime-tran
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-import { getUnifiedTalkSession, rememberUnifiedTalkSession } from "./talk-session-registry.js";
 import {
-  cancelTalkTranscriptionRelayTurn,
-  closeTalkTranscriptionRelaySessionsForConnection,
+  cleanupTalkConnection,
+  getUnifiedTalkSession,
+  rememberUnifiedTalkSession,
+} from "./talk-session-registry.js";
+import {
   createTalkTranscriptionRelaySession,
   sendTalkTranscriptionRelayAudio,
   stopTalkTranscriptionRelaySession,
@@ -72,7 +74,7 @@ async function createStartedRelaySession(
   onRequest?: (req: RealtimeTranscriptionSessionCreateRequest) => void,
 ) {
   const provider = createTranscriptionProvider(sttSession, onRequest);
-  const { context, events } = createBroadcastContext();
+  const { context, events, logGateway } = createBroadcastContext();
   const session = createTalkTranscriptionRelaySession({
     context,
     connId: "conn-1",
@@ -80,7 +82,7 @@ async function createStartedRelaySession(
     providerConfig,
   });
   await Promise.resolve();
-  return { provider, events, session };
+  return { provider, events, logGateway, session };
 }
 
 function findPayloadByType(events: BroadcastEvent[], type: string): Record<string, unknown> {
@@ -478,9 +480,13 @@ describe("talk transcription gateway relay", () => {
     sttSession.close.mockImplementationOnce(() => {
       queueMicrotask(() => request?.onTranscript?.("disconnected provider transcript"));
     });
-    const { events, session } = await createStartedRelaySession(sttSession, {}, (value) => {
-      request = value;
-    });
+    const { events, logGateway, session } = await createStartedRelaySession(
+      sttSession,
+      {},
+      (value) => {
+        request = value;
+      },
+    );
 
     sendTalkTranscriptionRelayAudio({
       transcriptionSessionId: session.transcriptionSessionId,
@@ -491,7 +497,7 @@ describe("talk transcription gateway relay", () => {
       transcriptionSessionId: session.transcriptionSessionId,
       connId: "conn-1",
     });
-    closeTalkTranscriptionRelaySessionsForConnection("conn-1");
+    cleanupTalkConnection("conn-1", logGateway);
     await Promise.resolve();
 
     expect(
@@ -672,8 +678,7 @@ describe("talk transcription gateway relay", () => {
       throw new Error("provider close failed");
     });
 
-    expect(() => closeTalkTranscriptionRelaySessionsForConnection("conn-owner")).not.toThrow();
-    closeTalkTranscriptionRelaySessionsForConnection("conn-owner");
+    expect(() => cleanupTalkConnection("conn-owner", logGateway)).not.toThrow();
     await Promise.resolve();
     await Promise.resolve();
 
@@ -734,7 +739,7 @@ describe("talk transcription gateway relay", () => {
       transcriptionSessionId: unrelatedSession.transcriptionSessionId,
       connId: "conn-other",
     });
-    closeTalkTranscriptionRelaySessionsForConnection("conn-other");
+    cleanupTalkConnection("conn-other", logGateway);
     expect(unrelated.close).toHaveBeenCalledOnce();
   });
 
@@ -768,49 +773,5 @@ describe("talk transcription gateway relay", () => {
       }),
     ).toThrow("Transcription relay session expiry is outside the supported Date range");
     expect(provider.createSession).not.toHaveBeenCalled();
-  });
-
-  it("cancels an active transcription turn and closes the provider session", async () => {
-    let sttRequest: RealtimeTranscriptionSessionCreateRequest | undefined;
-    const sttSession = createSttSessionMock(async () => {
-      sttRequest?.onSpeechStart?.();
-    });
-    const { events, session } = await createStartedRelaySession(sttSession, {}, (req) => {
-      sttRequest = req;
-    });
-    sttSession.close.mockImplementationOnce(() => {
-      sttRequest?.onTranscript?.("cancelled provider transcript");
-    });
-
-    cancelTalkTranscriptionRelayTurn({
-      transcriptionSessionId: session.transcriptionSessionId,
-      connId: "conn-1",
-      reason: "barge-in",
-    });
-
-    expect(sttSession.close).toHaveBeenCalledOnce();
-    const cancelledPayload = findPayloadByTalkEventType(events, "turn.cancelled");
-    expectRecordFields(cancelledPayload, "cancelled payload", {
-      transcriptionSessionId: session.transcriptionSessionId,
-    });
-    expectTalkEventFields(cancelledPayload, {
-      type: "turn.cancelled",
-      turnId: "turn-1",
-      payload: { reason: "barge-in" },
-      final: true,
-    });
-
-    const closePayload = findPayloadByType(events, "close");
-    expectRecordFields(closePayload, "close payload", {
-      transcriptionSessionId: session.transcriptionSessionId,
-      type: "close",
-      reason: "completed",
-    });
-    expect(
-      events.some(
-        (event) =>
-          isRecord(event.payload) && event.payload.text === "cancelled provider transcript",
-      ),
-    ).toBe(false);
   });
 });

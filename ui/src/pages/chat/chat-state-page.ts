@@ -12,6 +12,7 @@ import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
 import {
+  moveQueuedChatMessage,
   resumeStoredChatOutboxes,
   retryQueuedChatMessage,
   steerQueuedChatMessage,
@@ -214,8 +215,6 @@ export function createPageState(
     eventLogBuffer: [],
     basePath: context.basePath,
     chatNewMessagesBelow: false,
-    chatViewMenuOpen: false,
-    chatViewMenuTrigger: null,
     chatLocalInputHistoryBySession: {},
     chatInputHistorySessionKey: null,
     chatInputHistoryItems: null,
@@ -263,7 +262,8 @@ export function createPageState(
   state.handleChatScroll = (event) => handleChatScroll(state, event);
   state.handleChatDraftChange = (next) => handleChatDraftChange(state, next);
   state.handleChatInputHistoryKey = (input) => handleChatInputHistoryKey(state, input);
-  state.applySettings = (next) => {
+  state.applySettings = (patch) => {
+    const next = { ...state.settings, ...patch };
     state.settings = patchSettings({
       chatShowThinking: next.chatShowThinking,
       chatShowToolCalls: next.chatShowToolCalls,
@@ -271,26 +271,6 @@ export function createPageState(
       chatSendShortcut: next.chatSendShortcut,
     });
     renderLifecycle.invalidate();
-  };
-  state.setChatViewMenuOpen = (open, options) => {
-    if (open) {
-      state.chatViewMenuTrigger = options?.trigger ?? state.chatViewMenuTrigger;
-      state.chatViewMenuOpen = true;
-      renderLifecycle.invalidate();
-      return;
-    }
-    const focusTarget = options?.restoreFocus ? state.chatViewMenuTrigger : null;
-    state.chatViewMenuOpen = false;
-    state.chatViewMenuTrigger = null;
-    renderLifecycle.invalidate();
-    if (!(focusTarget instanceof HTMLElement) || !focusTarget.isConnected) {
-      return;
-    }
-    requestAnimationFrame(() => {
-      if (focusTarget.isConnected) {
-        focusTarget.focus();
-      }
-    });
   };
   attachChatRealtimeActions(state);
   state.loadAssistantIdentity = () => loadPageAssistantIdentity(state);
@@ -311,6 +291,10 @@ export function createPageState(
   };
   state.steerQueuedChatMessage = async (id) => {
     await steerQueuedChatMessage(state, id);
+    renderLifecycle.invalidate();
+  };
+  state.moveQueuedChatMessage = (id, toIndex) => {
+    moveQueuedChatMessage(state, id, toIndex);
     renderLifecycle.invalidate();
   };
   state.updateSidebarLayout = (layout) => {

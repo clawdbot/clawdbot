@@ -55,7 +55,7 @@ describe("deduplicateBlockSentMedia", () => {
     expect(result).toEqual({ text: "captioned", mediaUrl: undefined, mediaUrls: [] });
   });
 
-  it("preserves legacy mediaUrl when some mediaUrls remain", () => {
+  it("clears already-sent legacy mediaUrl when other mediaUrls remain", () => {
     const payload = {
       text: "hey",
       mediaUrl: "/tmp/a.jpg",
@@ -63,6 +63,42 @@ describe("deduplicateBlockSentMedia", () => {
     };
     const sent = new Set(["/tmp/a.jpg"]);
     const result = deduplicateBlockSentMedia(payload, sent);
-    expect(result).toEqual({ text: "hey", mediaUrl: "/tmp/a.jpg", mediaUrls: ["/tmp/b.jpg"] });
+    expect(result).toEqual({ text: "hey", mediaUrl: undefined, mediaUrls: ["/tmp/b.jpg"] });
+  });
+
+  it("preserves legacy mediaUrl when its attachment remains unsent", () => {
+    const payload = {
+      text: "hey",
+      mediaUrl: "/tmp/b.jpg",
+      mediaUrls: ["/tmp/a.jpg", "/tmp/b.jpg"],
+    };
+    const sent = new Set(["/tmp/a.jpg"]);
+    const result = deduplicateBlockSentMedia(payload, sent);
+    expect(result).toEqual({ text: "hey", mediaUrl: "/tmp/b.jpg", mediaUrls: ["/tmp/b.jpg"] });
+  });
+
+  it.each(["/tmp/dog.jpg", " /tmp/dog.jpg "])(
+    "preserves unsent legacy mediaUrl outside the remaining mediaUrls (%s)",
+    (mediaUrl) => {
+      const payload = {
+        text: "hey",
+        mediaUrl,
+        mediaUrls: ["/tmp/cat.jpg", "/tmp/bird.jpg"],
+      };
+      const sent = new Set(["/tmp/cat.jpg"]);
+      const result = deduplicateBlockSentMedia(payload, sent);
+      expect(result).toEqual({ text: "hey", mediaUrl, mediaUrls: ["/tmp/bird.jpg"] });
+    },
+  );
+
+  it("clears whitespace-padded legacy mediaUrl after its normalized attachment was sent", () => {
+    const payload = {
+      text: "hey",
+      mediaUrl: " /tmp/a.jpg ",
+      mediaUrls: ["/tmp/a.jpg", "/tmp/b.jpg"],
+    };
+    const sent = new Set(["/tmp/a.jpg"]);
+    const result = deduplicateBlockSentMedia(payload, sent);
+    expect(result).toEqual({ text: "hey", mediaUrl: undefined, mediaUrls: ["/tmp/b.jpg"] });
   });
 });

@@ -120,7 +120,7 @@ export async function copiedViaExec(page: Page): Promise<string[]> {
 }
 
 export async function chatThreadDistanceFromBottom(page: Page): Promise<number> {
-  return page.locator(".chat-thread").evaluate((element) => {
+  return page.locator(".chat-pane-cache__pane--active .chat-thread").evaluate((element) => {
     const thread = element as HTMLElement;
     return Math.round(thread.scrollHeight - thread.scrollTop - thread.clientHeight);
   });
@@ -130,7 +130,7 @@ export async function waitForChatScrollIdle(page: Page): Promise<void> {
   await expect
     .poll(
       () =>
-        page.locator(".chat-thread").evaluate(async (element) => {
+        page.locator(".chat-pane-cache__pane--active .chat-thread").evaluate(async (element) => {
           const thread = element as HTMLElement;
           const readGeometry = () => ({
             clientHeight: thread.clientHeight,
@@ -159,7 +159,7 @@ export async function waitForChatScrollIdle(page: Page): Promise<void> {
 }
 
 export async function scrollChatThreadToTop(page: Page): Promise<void> {
-  await page.locator(".chat-thread").evaluate((element) => {
+  await page.locator(".chat-pane-cache__pane--active .chat-thread").evaluate((element) => {
     const thread = element as HTMLElement;
     thread.scrollTop = 0;
     thread.dispatchEvent(new Event("scroll", { bubbles: true }));
@@ -184,7 +184,7 @@ export async function captureSessionAccessibilityProof(page: Page, name: string)
 }
 
 export async function visibleChatBubbleTexts(page: Page): Promise<string[]> {
-  return page.locator(".chat-thread").evaluate((element) => {
+  return page.locator(".chat-pane-cache__pane--active .chat-thread").evaluate((element) => {
     const thread = element as HTMLElement;
     const viewport = thread.getBoundingClientRect();
     return Array.from(thread.querySelectorAll(".chat-bubble"))

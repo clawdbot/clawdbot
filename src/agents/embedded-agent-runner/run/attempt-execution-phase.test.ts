@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./attempt-stream-runtime-prepare.js", () => ({
   prepareEmbeddedAttemptStreamRuntime: mocks.prepareStreamRuntime,
 }));
-vi.mock("./attempt-execution-settle.js", () => ({
+vi.mock("./attempt-settle.js", () => ({
   runEmbeddedAttemptSettledPhase: mocks.runSettledPhase,
 }));
 
@@ -89,8 +89,7 @@ function createFixture() {
     sessionLock: {
       compactionTimeoutMs: 1_000,
       ownedTranscriptWriteContext: {},
-      sessionLockController: {},
-      withOwnedSessionWriteLock: vi.fn(),
+      withOwnedTranscriptWrite: vi.fn(),
     },
     setup: {
       effectiveFsWorkspaceOnly: false,

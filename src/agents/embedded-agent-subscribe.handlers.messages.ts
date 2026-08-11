@@ -14,6 +14,7 @@ import {
 } from "../auto-reply/reply/reply-directives.js";
 import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import { coerceChatContentText } from "../shared/chat-content.js";
@@ -26,6 +27,7 @@ import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
 } from "./embedded-agent-helpers.js";
+import { updateLiveEditDiffProgress } from "./embedded-agent-live-edit-diff.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type {
@@ -446,23 +448,6 @@ function copyPartialBlockState(
   target.pendingTagFragment = source.pendingTagFragment;
 }
 
-/** Replaces a silent-reply token with the latest sent messaging-tool text when available. */
-function resolveSilentReplyFallbackText(params: {
-  text: unknown;
-  messagingToolSentTexts: string[];
-}): string {
-  const text = coerceChatContentText(params.text);
-  const trimmed = text.trim();
-  if (trimmed !== SILENT_REPLY_TOKEN) {
-    return text;
-  }
-  const fallback = coerceChatContentText(params.messagingToolSentTexts.at(-1)).trim();
-  if (!fallback) {
-    return text;
-  }
-  return fallback;
-}
-
 function clearPendingToolMedia(
   state: Pick<
     EmbeddedAgentSubscribeState,
@@ -832,6 +817,16 @@ export function handleMessageUpdate(
       ? (assistantEvent as Record<string, unknown>)
       : undefined;
   const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
+  const liveEditDiff = updateLiveEditDiffProgress(ctx.state.liveEditDiffStateById, assistantRecord);
+  if (liveEditDiff) {
+    const data = { phase: "input_delta", ...liveEditDiff };
+    emitAgentEvent({ runId: ctx.params.runId, stream: "tool", data });
+    runBestEffortCallback({
+      label: "live edit diff agent event",
+      log: ctx.log,
+      callback: () => ctx.params.onAgentEvent?.({ stream: "tool", data }),
+    });
+  }
   const eventAssistantMessage =
     assistantRecord?.partial && typeof assistantRecord.partial === "object"
       ? (assistantRecord.partial as AssistantMessage)
@@ -1257,7 +1252,6 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
     buildAssistantStreamData,
     recordPendingAssistantReplyDirectives,
     resolveCurrentSourceMessagingToolPartial,
-    resolveSilentReplyFallbackText,
   };
 }
 
@@ -1357,10 +1351,10 @@ export function handleMessageEnd(
     ? ctx.stripBlockTags(visibleText, { thinking: false, final: false }, { final: true })
     : visibleText;
 
-  const text = resolveSilentReplyFallbackText({
-    text: finalVisibleText,
-    messagingToolSentTexts: ctx.state.messagingToolSentTexts,
-  });
+  // Exact NO_REPLY stays silent. The legacy rewrite (silentReplyRewrite) was
+  // removed by contract; global messaging-tool send evidence is not a
+  // user-route reply and must never be mirrored into the final payload.
+  const text = finalVisibleText;
   const rawThinking =
     ctx.state.includeReasoning || ctx.state.streamReasoning
       ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)

@@ -2,11 +2,10 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import { replaceGenericExternalRunFailureText } from "../agents/failover/user-copy.js";
 import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
-import { replaceGenericExternalRunFailureText } from "../auto-reply/reply/agent-runner-failure-copy.js";
 import { buildRecoverablePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import { sendDurableMessageBatch } from "../channels/message/runtime.js";
-import { markCommitmentsStatus } from "../commitments/store.js";
 import { patchSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { formatErrorMessage } from "./errors.js";
@@ -126,9 +125,19 @@ export function classifyHeartbeatAgentOutcome(params: {
     normalized.text = replacement.text;
     normalized.shouldSkip = false;
   }
+  const hasStructuredReplyContent =
+    !heartbeatToolResponse &&
+    replyPayload !== undefined &&
+    hasOutboundReplyContent({
+      ...replyPayload,
+      text: undefined,
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+    });
   const shouldSkipMain =
     normalized.shouldSkip &&
     !normalized.hasMedia &&
+    (!hasStructuredReplyContent || normalized.isInternalPlaceholderOnly) &&
     (!params.hasRelayableExecCompletion || normalized.isInternalPlaceholderOnly);
   if (heartbeatTerminalToolFailure) {
     return {
@@ -147,6 +156,8 @@ export function classifyHeartbeatAgentOutcome(params: {
     kind: "delivery",
     normalized,
     deliveredAgentRunFailure,
+    hasStructuredReplyContent,
+    replyPayload: heartbeatToolResponse ? undefined : replyPayload,
     mediaUrls:
       heartbeatToolResponse || !replyPayload
         ? []
@@ -166,10 +177,8 @@ export async function finalizeHeartbeatOutcome(params: {
   outboundIdentity: ReturnType<typeof resolveAgentOutboundIdentity>;
 }): Promise<HeartbeatRunResult> {
   const { cfg, agentId, scheduledTasks, startedAt, wakeSource } = params.wake;
-  const { delivery, dueCommitmentIds, entry, previousUpdatedAt } = params.prepared;
+  const { delivery, entry, previousUpdatedAt } = params.prepared;
   const { runSessionKey, sessionKey, storePath, visibility } = params.prepared;
-  const markDueCommitments = (status: "dismissed" | "sent") =>
-    markCommitmentsStatus({ ids: dueCommitmentIds, status, nowMs: startedAt });
   const outcome = params.outcome;
   if (outcome.kind === "terminal-failure") {
     const failureChannel = delivery.channel;
@@ -284,11 +293,16 @@ export async function finalizeHeartbeatOutcome(params: {
         ? resolveIndicatorType(outcome.eventStatus)
         : undefined,
     });
-    await markDueCommitments("dismissed");
     consumeInspectedSystemEvents(params.wake, params.prepared);
     return { status: "ran", durationMs: Date.now() - startedAt };
   }
-  const { deliveredAgentRunFailure, mediaUrls, normalized } = outcome;
+  const {
+    deliveredAgentRunFailure,
+    hasStructuredReplyContent,
+    mediaUrls,
+    normalized,
+    replyPayload,
+  } = outcome;
   // Suppress duplicate heartbeats (same payload) within a short window.
   // This prevents "nagging" when nothing changed but the model repeats the same items.
   const prevHeartbeatText =
@@ -297,9 +311,12 @@ export async function finalizeHeartbeatOutcome(params: {
     typeof entry?.lastHeartbeatSentAt === "number" ? entry.lastHeartbeatSentAt : undefined;
   const isDuplicateMain =
     !mediaUrls.length &&
+    !hasStructuredReplyContent &&
     Boolean(prevHeartbeatText.trim()) &&
     normalized.text.trim() === prevHeartbeatText.trim() &&
     typeof prevHeartbeatAt === "number" &&
+    // A future timestamp after clock rollback cannot prove a recent prior send.
+    prevHeartbeatAt <= startedAt &&
     startedAt - prevHeartbeatAt < 24 * 60 * 60 * 1000;
 
   if (isDuplicateMain) {
@@ -314,7 +331,6 @@ export async function finalizeHeartbeatOutcome(params: {
       channel: delivery.channel !== "none" ? delivery.channel : undefined,
       accountId: delivery.accountId,
     });
-    await markDueCommitments("dismissed");
     consumeInspectedSystemEvents(params.wake, params.prepared);
     return { status: "ran", durationMs: Date.now() - startedAt };
   }
@@ -382,7 +398,13 @@ export async function finalizeHeartbeatOutcome(params: {
     session: params.outboundSession,
     identity: params.outboundIdentity,
     threadId: delivery.threadId,
-    payloads: [{ text: normalized.text, mediaUrls }],
+    payloads: [
+      copyReplyPayloadMetadata(replyPayload ?? {}, {
+        ...replyPayload,
+        text: normalized.text,
+        mediaUrls,
+      }),
+    ],
     deps: params.opts.deps,
     silent: normalized.silent,
   });
@@ -390,31 +412,25 @@ export async function finalizeHeartbeatOutcome(params: {
     throw send.error;
   }
   const visibleSendSucceeded = send.status === "sent";
-  // Suppressed durable sends committed no visible channel message. Keep due
-  // commitments and heartbeat dedupe state active so a later heartbeat can retry.
   if (visibleSendSucceeded) {
-    await markDueCommitments("sent");
-  }
-
-  // Record last delivered heartbeat payload for dedupe.
-  if (visibleSendSucceeded && normalized.text.trim()) {
+    const hasHeartbeatText = Boolean(normalized.text.trim());
     await patchSessionEntry(
       { storePath, sessionKey },
       (current, context) => {
         if (!context.existingEntry) {
           return null;
         }
-        // A heartbeat-driven agent run can leave its own pendingFinalDelivery
-        // set; a successful send completes it, so clear the recovery fields.
-        // Only clear the pending-final this run owns — an older final the run
-        // did not produce keeps its own recovery path.
-        const clearedRecoveryFields = heartbeatRunOwnsPendingFinalDelivery(current, startedAt)
-          ? CLEARED_PENDING_FINAL_DELIVERY_FIELDS
-          : {};
+        // Visible structured-only sends satisfy their own pending final too;
+        // preserve old text dedupe markers and another run's recovery state.
+        const ownsPendingFinalDelivery = heartbeatRunOwnsPendingFinalDelivery(current, startedAt);
+        if (!hasHeartbeatText && !ownsPendingFinalDelivery) {
+          return null;
+        }
         return {
-          lastHeartbeatText: normalized.text,
-          lastHeartbeatSentAt: startedAt,
-          ...clearedRecoveryFields,
+          ...(hasHeartbeatText
+            ? { lastHeartbeatText: normalized.text, lastHeartbeatSentAt: startedAt }
+            : {}),
+          ...(ownsPendingFinalDelivery ? CLEARED_PENDING_FINAL_DELIVERY_FIELDS : {}),
         };
       },
       { preserveActivity: true },

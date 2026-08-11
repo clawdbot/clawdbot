@@ -38,7 +38,6 @@ export function getSecurityNoteMessage(): string {
     formatCliCommand("openclaw security audit --deep"),
     formatCliCommand("openclaw security audit --fix"),
     "",
-    heading(t("wizard.security.learnMore")),
-    "- https://docs.openclaw.ai/gateway/security",
+    `${t("wizard.security.learnMore")} https://docs.openclaw.ai/gateway/security`,
   ].join("\n");
 }

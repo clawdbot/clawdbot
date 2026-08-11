@@ -1,4 +1,3 @@
-import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
@@ -6,11 +5,17 @@ import { resolveDelegationCapability } from "../../delegation-capability.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "../../harness/runtime-artifact.types.js";
 import { appendIncognitoSystemPrompt } from "../../incognito-system-prompt.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
+import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
+import { resolveSandboxContext } from "../../sandbox/context.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../../tools/gateway-caller-context.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
 import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approval-continuation.js";
-import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-tool-policy.js";
+import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
 import {
   EMBEDDED_RUN_LANE_HEARTBEAT_MS,
@@ -76,7 +81,7 @@ type AttemptTranscriptOwnership =
     }
   | {
       kind: "runtime-target";
-      sessionTarget?: ContextEngineSessionTarget;
+      sessionTarget?: AgentRunSessionTarget;
     };
 
 type AttemptControl = {
@@ -200,7 +205,19 @@ export async function dispatchEmbeddedRunAttempt(input: {
           finalize: params.finalizePromptForResolvedTools,
         })
       : undefined;
+  const pluginSandbox = control.pluginHarnessOwnsTransport
+    ? await resolveSandboxContext({
+        config: params.config,
+        sessionKey: params.sandboxSessionKey ?? runtime.sessionKey ?? runtime.sessionId,
+        workspaceDir: runtime.workspaceDir,
+      })
+    : undefined;
+  if (!params.admittedRunContext) {
+    throw new Error("embedded attempt reached dispatch without an admitted run context");
+  }
   const attemptParams: EmbeddedRunAttemptParams = {
+    admittedRunContext: params.admittedRunContext,
+    ...(control.pluginHarnessOwnsTransport ? { sandbox: pluginSandbox } : {}),
     operation: "attempt",
     sessionId: runtime.sessionId,
     sessionKey: runtime.sessionKey,
@@ -217,6 +234,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     agentAccountId: params.agentAccountId,
     messageTo: params.messageTo,
     messageThreadId: params.messageThreadId,
+    conversationToolPolicy: params.conversationToolPolicy,
     messageActionTurnCapability: params.messageActionTurnCapability,
     groupId: params.groupId,
     groupChannel: params.groupChannel,
@@ -267,6 +285,9 @@ export async function dispatchEmbeddedRunAttempt(input: {
     finalizePromptForResolvedTools:
       pluginHarnessPrompt === undefined ? params.finalizePromptForResolvedTools : undefined,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+    // The outer run-loop owns the begun lease; the inner attempt reports only
+    // the accepted candidate boundary to that owner.
+    onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
     skipPreparedUserTurnMessage: runtime.skipPreparedUserTurnMessage,
     currentInboundEventKind: params.currentInboundEventKind,
     currentInboundContext: params.currentInboundContext,
@@ -386,6 +407,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
     scheduledToolPolicy: params.scheduledToolPolicy,
+    cronCreatorAuthorityUnavailableReason: params.cronCreatorAuthorityUnavailableReason,
     streamParams: params.streamParams,
     modelRun: params.modelRun,
     disableTrajectory: params.disableTrajectory,
@@ -425,7 +447,18 @@ export async function dispatchEmbeddedRunAttempt(input: {
     onUserMessagePersistenceInvalidated: control.onUserMessagePersistenceInvalidated,
     onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
   };
-  const rawAttempt = await runEmbeddedAttemptWithBackend(attemptParams)
+  const callerIdentity = createAdmittedGatewayToolCallerIdentity({
+    admittedRunContext: attemptParams.admittedRunContext,
+    agentId: runtime.agentId,
+    sessionKey: runtime.sessionKey,
+    turnSourceChannel: params.messageChannel ?? params.messageProvider,
+    turnSourceTo: params.currentMessagingTarget ?? params.currentChannelId,
+    turnSourceAccountId: params.agentAccountId,
+    turnSourceThreadId: params.currentThreadTs,
+  });
+  const rawAttempt = await withGatewayToolCallerIdentity(callerIdentity, () =>
+    runEmbeddedAttemptWithBackend(attemptParams),
+  )
     .catch((err: unknown): never => {
       throw control.getPostCompactionAbortError() ?? err;
     })

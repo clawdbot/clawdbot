@@ -1,16 +1,24 @@
+import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   OpenClawPluginNodeInvokePolicy,
   OpenClawPluginNodeInvokePolicyResult,
 } from "../plugins/plugin-registration.types.js";
+import type { MeetingAudioBackendSelection } from "./audio-backend.js";
 import { isMeetingAudioBase64 } from "./audio-base64.js";
+import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
 
 export type MeetingBrowserNodeStartConfig = {
   launch: boolean;
   browserProfile?: string;
   joinTimeoutMs: number;
+  audioBackend?: MeetingAudioBackendSelection;
+  audioBufferBytes?: number;
+  audioFormat?: MeetingRealtimeAudioFormat;
   audioInputCommand?: string[];
+  audioInputCommandOverride?: string[];
   audioOutputCommand?: string[];
+  audioOutputCommandOverride?: string[];
   bargeInInputCommand?: string[];
   audioBridgeCommand?: string[];
   audioBridgeHealthCommand?: string[];
@@ -39,11 +47,56 @@ function readPositiveNumber(value: unknown): number | undefined {
 }
 
 function readOutputGeneration(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  return asSafeIntegerInRange(value, { min: 0 });
 }
 
 function copyCommand(command: string[] | undefined): string[] | undefined {
   return command && command.length > 0 ? [...command] : undefined;
+}
+
+function copyConfiguredAudio(
+  target: Record<string, unknown>,
+  start: MeetingBrowserNodeStartConfig,
+): void {
+  if (
+    start.audioBackend === "auto" ||
+    start.audioBackend === "blackhole-2ch" ||
+    start.audioBackend === "pipewire-pulse"
+  ) {
+    target.audioBackend = start.audioBackend;
+  }
+  if (typeof start.audioBufferBytes === "number" && start.audioBufferBytes > 0) {
+    target.audioBufferBytes = start.audioBufferBytes;
+  }
+  if (start.audioFormat === "pcm16-24khz" || start.audioFormat === "g711-ulaw-8khz") {
+    target.audioFormat = start.audioFormat;
+  }
+  const hasCommandOverrideFields =
+    "audioInputCommandOverride" in start || "audioOutputCommandOverride" in start;
+  const audioInputCommand = copyCommand(
+    start.audioInputCommandOverride ??
+      (hasCommandOverrideFields ? undefined : start.audioInputCommand),
+  );
+  const audioOutputCommand = copyCommand(
+    start.audioOutputCommandOverride ??
+      (hasCommandOverrideFields ? undefined : start.audioOutputCommand),
+  );
+  if (audioInputCommand) {
+    target.audioInputCommand = audioInputCommand;
+  }
+  if (audioOutputCommand) {
+    target.audioOutputCommand = audioOutputCommand;
+  }
+  for (const key of [
+    "bargeInInputCommand",
+    "audioBridgeCommand",
+    "audioBridgeHealthCommand",
+  ] as const) {
+    const command = copyCommand(start[key]);
+    if (command) {
+      target[key] = command;
+    }
+  }
 }
 
 function denied(options: MeetingBrowserNodePolicyOptions, message: string) {
@@ -87,17 +140,7 @@ function buildStartParams(
   if (mode) {
     startParams.mode = mode;
   }
-  for (const key of [
-    "audioInputCommand",
-    "audioOutputCommand",
-    "audioBridgeCommand",
-    "audioBridgeHealthCommand",
-  ] as const) {
-    const command = copyCommand(options.start[key]);
-    if (command) {
-      startParams[key] = command;
-    }
-  }
+  copyConfiguredAudio(startParams, options.start);
   return approved(startParams);
 }
 
@@ -257,16 +300,7 @@ export function createMeetingBrowserNodeInvokePolicy(
       const action = readString(params.action);
       if (action === "setup" && options.useConfiguredSetupCommands) {
         const setupParams: Record<string, unknown> = { action };
-        for (const key of [
-          "audioInputCommand",
-          "audioOutputCommand",
-          "bargeInInputCommand",
-        ] as const) {
-          const command = copyCommand(options.start[key]);
-          if (command) {
-            setupParams[key] = command;
-          }
-        }
+        copyConfiguredAudio(setupParams, options.start);
         return await ctx.invokeNode({ params: setupParams });
       }
       const decision =

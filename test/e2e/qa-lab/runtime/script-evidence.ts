@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   buildScriptEvidenceSummary,
   QA_EVIDENCE_FILENAME,
+  readQaScenarioById,
   type QaEvidencePackageSource,
   type QaEvidenceStatus,
   type QaEvidenceSummaryJson,
@@ -44,6 +45,7 @@ type QaScriptEvidenceResult = {
 
 type QaScriptEvidenceWriterOptions = {
   artifactBase: string;
+  coverageBinding?: "catalog" | "none";
   env?: NodeJS.ProcessEnv;
   evidenceMode?: "full" | "slim";
   logFileName: string;
@@ -146,6 +148,18 @@ export function createQaScriptBlockedStatusTracker(blockedPatterns: readonly Reg
 }
 
 export function createQaScriptEvidenceWriter(options: QaScriptEvidenceWriterOptions) {
+  const coverage =
+    options.coverageBinding === "none" ? undefined : readQaScenarioById(options.target.id).coverage;
+  // The catalog owns semantic coverage; producers own execution facts only.
+  const evidenceTarget = {
+    codeRefs: options.target.codeRefs,
+    docsRefs: options.target.docsRefs,
+    id: options.target.id,
+    primaryCoverageIds: coverage?.primary ?? [],
+    secondaryCoverageIds: coverage?.secondary ?? [],
+    sourcePath: options.target.sourcePath,
+    title: options.target.title,
+  };
   const maxLogBytes = resolveByteLimit(options.maxLogBytes, DEFAULT_CHILD_OUTPUT_TAIL_BYTES);
   const logFile = resolveArtifactPath(options.artifactBase, options.logFileName);
   const maxDetailsBytes = resolveByteLimit(
@@ -201,7 +215,7 @@ export function createQaScriptEvidenceWriter(options: QaScriptEvidenceWriterOpti
       providerMode: options.providerMode,
       repoRoot: options.repoRoot,
       runner: "script",
-      targets: [options.target],
+      targets: [evidenceTarget],
       results: [
         {
           id: options.target.id,

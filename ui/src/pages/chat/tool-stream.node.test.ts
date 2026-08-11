@@ -387,6 +387,58 @@ describe("app-tool-stream throttled projections", () => {
 });
 
 describe("app-tool-stream result blocks", () => {
+  it("projects live edit counts and lets the resolved result replace them without flicker", () => {
+    useToolStreamFakeTimers();
+    try {
+      const host = createHost({ chatRunId: "run-1" });
+      const toolCallId = "call-live-edit";
+      const identity = buildToolStreamIdentity("run-1", toolCallId);
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 1, "tool", {
+          phase: "start",
+          name: "edit",
+          toolCallId,
+          args: { path: "src/report.ts" },
+        }),
+      );
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 2, "tool", {
+          phase: "input_delta",
+          name: "edit",
+          toolCallId,
+          diff: { added: 12, removed: 3 },
+        }),
+      );
+      vi.advanceTimersByTime(80);
+
+      expect(host.toolStreamById.get(identity)?.liveDiffStat).toEqual({ added: 12, removed: 3 });
+      expect(host.chatToolMessages[0]?.["__openclawToolStreamDiffStat"]).toEqual({
+        added: 12,
+        removed: 3,
+      });
+
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 3, "tool", {
+          phase: "result",
+          name: "edit",
+          toolCallId,
+          result: { details: { diff: "-1 old\n+1 new" } },
+        }),
+      );
+
+      const resolved = host.toolStreamById.get(identity);
+      expect(resolved?.liveDiffStat).toBeUndefined();
+      expect(resolved?.details).toEqual({ diff: "-1 old\n+1 new" });
+      expect(resolved?.message).not.toHaveProperty("__openclawToolStreamDiffStat");
+      expect(host.chatToolMessages[0]).not.toHaveProperty("__openclawToolStreamDiffStat");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("emits a result block for completed tools with empty output", () => {
     useToolStreamFakeTimers();
     const host = createHost();

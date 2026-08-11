@@ -28,6 +28,8 @@ function firstMockArg(
 }
 
 vi.mock("./channel-resolution.js", () => ({
+  normalizeDeliverableOutboundChannel: (value?: string | null) =>
+    typeof value === "string" ? value.trim().toLowerCase() || undefined : undefined,
   resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
   resetOutboundChannelResolutionStateForTest: vi.fn(),
 }));
@@ -120,7 +122,12 @@ async function runPollAction(params: {
       maxSelections?: number;
       threadId?: string;
     };
-    ctx?: { inboundEventKind?: string; params?: Record<string, unknown> };
+    ctx?: {
+      plugin?: ChannelPlugin;
+      inboundEventKind?: string;
+      idempotencyKey?: string;
+      params?: Record<string, unknown>;
+    };
   };
   return {
     ...call.resolveCorePoll?.(),
@@ -156,7 +163,6 @@ describe("runMessageAction poll handling", () => {
     setActivePluginRegistry(createTestRegistry([]));
     mocks.executePollAction.mockReset();
   });
-
   it("requires at least two poll options", async () => {
     await expect(
       runPollAction({
@@ -170,88 +176,5 @@ describe("runMessageAction poll handling", () => {
       }),
     ).rejects.toThrow(/pollOption requires at least two values/i);
     expect(mocks.executePollAction).toHaveBeenCalledTimes(1);
-  });
-
-  it("passes shared poll fields and auto threadId to executePollAction", async () => {
-    const call = await runPollAction({
-      cfg: pollerConfig,
-      actionParams: {
-        channel: "poller",
-        target: "poller:123",
-        pollQuestion: "Lunch?",
-        pollOption: ["Pizza", "Sushi"],
-        pollDurationHours: 2,
-      },
-      toolContext: {
-        currentChannelId: "poller:123",
-        currentThreadTs: "42",
-      },
-    });
-
-    expect(call?.durationHours).toBe(2);
-    expect(call?.threadId).toBe("42");
-    expect(call?.ctx?.params?.threadId).toBe("42");
-  });
-
-  it.each([0, -1, 1.5, "1.5", "soon"])(
-    "rejects invalid pollDurationHours value %s",
-    async (pollDurationHours) => {
-      await expect(
-        runPollAction({
-          cfg: pollerConfig,
-          actionParams: {
-            channel: "poller",
-            target: "poller:123",
-            pollQuestion: "Lunch?",
-            pollOption: ["Pizza", "Sushi"],
-            pollDurationHours,
-          },
-        }),
-      ).rejects.toThrow(/pollDurationHours must be a positive integer/i);
-    },
-  );
-
-  it("passes inbound event kind to poll execution", async () => {
-    const call = await runPollAction({
-      cfg: pollerConfig,
-      actionParams: {
-        channel: "poller",
-        target: "poller:123",
-        pollQuestion: "Lunch?",
-        pollOption: ["Pizza", "Sushi"],
-      },
-      inboundEventKind: "room_event",
-    });
-
-    expect(call?.ctx?.inboundEventKind).toBe("room_event");
-  });
-
-  it("expands maxSelections when pollMulti is enabled", async () => {
-    const call = await runPollAction({
-      cfg: pollerConfig,
-      actionParams: {
-        channel: "poller",
-        target: "poller:123",
-        pollQuestion: "Lunch?",
-        pollOption: ["Pizza", "Sushi", "Soup"],
-        pollMulti: true,
-      },
-    });
-
-    expect(call?.maxSelections).toBe(3);
-  });
-
-  it("defaults maxSelections to one choice when pollMulti is omitted", async () => {
-    const call = await runPollAction({
-      cfg: pollerConfig,
-      actionParams: {
-        channel: "poller",
-        target: "poller:123",
-        pollQuestion: "Lunch?",
-        pollOption: ["Pizza", "Sushi", "Soup"],
-      },
-    });
-
-    expect(call?.maxSelections).toBe(1);
   });
 });

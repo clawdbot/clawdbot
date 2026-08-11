@@ -7,7 +7,7 @@ import {
   type NodePairingRequestInput,
   type NodePairingSupersededRequest,
   type RequestNodePairingResult,
-} from "../infra/node-pairing.js";
+} from "../infra/device-pairing-node.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { createDeferred, type Deferred } from "../shared/deferred.js";
 import {

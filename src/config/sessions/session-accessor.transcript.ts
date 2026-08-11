@@ -1,9 +1,8 @@
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { readSqliteTranscriptRawDelta as readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
+import { resolveSqliteSessionKeyBySessionId as resolveTranscriptSessionKeyBySessionId } from "./session-accessor.sqlite-entry.js";
+import { publishSqliteTranscriptUpdate as publishTranscriptUpdate } from "./session-accessor.sqlite-events.js";
 import {
-  appendSqliteTranscriptEvent as appendTranscriptEvent,
-  appendSqliteTranscriptEventSync as appendTranscriptEventSync,
-  appendSqliteTranscriptMessage as appendTranscriptMessage,
-  appendSqliteTranscriptMessageSync as appendTranscriptMessageSync,
   findSqliteTranscriptEvent,
   loadLatestSqliteAssistantText as readLatestTranscriptAssistantText,
   loadSqliteTranscriptEventRowsAfterSeqSync as loadTranscriptEventRowsAfterSeqSync,
@@ -13,16 +12,19 @@ import {
   loadSqliteTranscriptTailEventsSync as loadTranscriptTailEventsSync,
   readSqliteTranscriptStatsSync as readTranscriptStatsSync,
   readSqliteTranscriptEventAtSeqSync as readTranscriptEventAtSeqSync,
-  readSqliteTranscriptRawDelta as readTranscriptRawDelta,
-  publishSqliteTranscriptUpdate as publishTranscriptUpdate,
+} from "./session-accessor.sqlite-read.js";
+import {
+  appendSqliteTranscriptEvent as appendTranscriptEvent,
+  appendSqliteTranscriptEventSync as appendTranscriptEventSync,
+  appendSqliteTranscriptMessage as appendTranscriptMessage,
+  appendSqliteTranscriptMessageSync as appendTranscriptMessageSync,
   replaceSqliteTranscriptEvents as replaceTranscriptEvents,
   replaceSqliteTranscriptEventsSync as replaceTranscriptEventsSync,
   rewriteSqliteTranscriptEventRowsExact as rewriteTranscriptEventRowsExact,
-  resolveSqliteSessionKeyBySessionId as resolveTranscriptSessionKeyBySessionId,
   trimSqliteTranscriptForManualCompact,
   withSqliteTranscriptWriteLock as withTranscriptWriteLock,
   withSqliteTranscriptWriteTransaction as withTranscriptWriteTransaction,
-} from "./session-accessor.sqlite.js";
+} from "./session-accessor.sqlite-transcript-write.js";
 import type {
   SessionTranscriptRuntimeScope,
   SessionTranscriptReadScope,
@@ -35,8 +37,7 @@ import {
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
 
-// Persisted transcripts have one SQLite owner. Preserve public operation names
-// as direct exports so append, idempotency, locks, and events cannot drift.
+// Persisted transcripts have one SQLite owner. Re-export its canonical operations directly.
 export {
   appendTranscriptEvent,
   appendTranscriptEventSync,

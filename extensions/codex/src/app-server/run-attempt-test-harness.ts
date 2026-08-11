@@ -6,7 +6,7 @@ import {
   nativeHookRelayTesting,
   queueAgentHarnessMessage,
   resetAgentEventsForTest,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import { resetDiagnosticEventsForTest } from "openclaw/plugin-sdk/diagnostic-runtime";
@@ -18,6 +18,11 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import type { CodexAppServerClient } from "./client.js";
+import {
+  mockClientRuntimeMethods as createMockClientRuntimeMethods,
+  threadStartResult as createThreadStartResult,
+  turnStartResult as createTurnStartResult,
+} from "./codex-app-server.test-fixtures.js";
 import * as codexRequirements from "./config-requirements.js";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
@@ -44,6 +49,18 @@ import { codexWorkspaceDirCache } from "./workspace-dir-cache.js";
 const execApprovalsRuntimeMocks = vi.hoisted(() => ({
   loadExecApprovals: vi.fn<() => ExecApprovalsFile>(() => ({ version: 1, agents: {} })),
 }));
+
+function createHarnessHostCapabilities(): EmbeddedRunAttemptParams["hostCapabilities"] {
+  return Object.freeze({
+    kind: "agent-harness-host-capability",
+    version: 1,
+    assertActive: () => {},
+    bindToolSurface: (tools) => tools,
+    runBeforeToolCall: async (request) => ({ blocked: false, params: request.params }),
+    requestApproval: async () => undefined,
+    waitForApproval: async () => undefined,
+  });
+}
 
 vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => {
   const actual =
@@ -90,14 +107,14 @@ export function setCodexAppServerClientFactoryForTest(
     // Narrow test doubles still need the client lifecycle hook installed by
     // the keyed router, even when the test never simulates transport closure.
     testClient.addCloseHandler ??= () => () => undefined;
-    multiplexTestClientHandlers(client);
+    multiplexCodexTestClientHandlers(client);
     return client;
   });
 }
 
 // The keyed router, client runtime, and subagent monitor each register their
 // own handlers; single-slot test doubles would silently drop all but the last.
-function multiplexTestClientHandlers(client: CodexAppServerClient): void {
+export function multiplexCodexTestClientHandlers(client: CodexAppServerClient): void {
   if (multiplexedTestClients.has(client)) {
     return;
   }
@@ -203,16 +220,30 @@ async function drainActiveAppServerAttemptsForTest(): Promise<void> {
   }
 }
 
-export function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
-  const model = createCodexTestModel("codex");
+export function createParams(
+  sessionFile: string,
+  workspaceDir: string,
+  identity: {
+    prompt?: string;
+    provider?: string;
+    runId?: string;
+    sessionId?: string;
+    sessionKey?: string;
+  } = {},
+): EmbeddedRunAttemptParams {
+  const sessionId = identity.sessionId ?? "session-1";
+  const sessionKey = identity.sessionKey ?? "agent:main:session-1";
+  const provider = identity.provider ?? "codex";
+  const model = createCodexTestModel(provider);
   return {
-    prompt: "hello",
-    sessionId: "session-1",
-    sessionKey: "agent:main:session-1",
+    hostCapabilities: createHarnessHostCapabilities(),
+    prompt: identity.prompt ?? "hello",
+    sessionId,
+    sessionKey,
     sessionFile,
     workspaceDir,
-    runId: "run-1",
-    provider: "codex",
+    runId: identity.runId ?? "run-1",
+    provider,
     modelId: "gpt-5.4-codex",
     model: {
       ...model,
@@ -315,60 +346,16 @@ export function getMockRuntimeIdentity() {
 }
 
 export function mockClientRuntimeMethods() {
-  return {
-    getInstanceId: () => "test-client-1",
-    getRuntimeIdentity: getMockRuntimeIdentity,
-    getServerVersion: getMockServerVersion,
-  };
-}
-
-export function threadStartResult(threadId = "thread-1") {
-  return {
-    thread: {
-      id: threadId,
-      sessionId: "session-1",
-      forkedFromId: null,
-      preview: "",
-      ephemeral: false,
-      modelProvider: "openai",
-      createdAt: 1,
-      updatedAt: 1,
-      status: { type: "idle" },
-      path: null,
-      cwd: tempDir || "/tmp/openclaw-codex-test",
-      cliVersion: "0.146.0",
-      source: "unknown",
-      agentNickname: null,
-      agentRole: null,
-      gitInfo: null,
-      name: null,
-      turns: [],
-    },
-    model: "gpt-5.4-codex",
-    modelProvider: "openai",
-    serviceTier: null,
-    cwd: tempDir || "/tmp/openclaw-codex-test",
-    instructionSources: [],
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    sandbox: { type: "dangerFullAccess" },
-    permissionProfile: null,
-    reasoningEffort: null,
-  };
+  return createMockClientRuntimeMethods();
 }
 
 export function turnStartResult(turnId = "turn-1", status = "inProgress") {
-  return {
-    turn: {
-      id: turnId,
-      status,
-      items: [],
-      error: null,
-      startedAt: null,
-      completedAt: null,
-      durationMs: null,
-    },
-  };
+  return createTurnStartResult(turnId, status);
+}
+
+export function threadStartResult(threadId = "thread-1", options: { cwd?: string } = {}) {
+  const cwd = options.cwd ?? tempDir ?? "/tmp/openclaw-codex-test";
+  return createThreadStartResult(threadId, cwd);
 }
 
 export function rateLimitsUpdated(resetsAt: number): CodexServerNotification {

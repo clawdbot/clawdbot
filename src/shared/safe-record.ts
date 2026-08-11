@@ -1,4 +1,7 @@
-/** Defensive object guard for values that may have hostile traps. */
+/**
+ * Plugin values may use Proxy traps that throw during `Array.isArray`; keep this guard
+ * exception-safe so untrusted-plugin inspection cannot escape into the host.
+ */
 export function isRecordWithoutThrowing(value: unknown): value is Record<string, unknown> {
   try {
     return Boolean(value && typeof value === "object" && !Array.isArray(value));

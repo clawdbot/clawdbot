@@ -27,14 +27,22 @@ import {
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import {
+  externalCliDiscoveryForProviderAuth,
+  loadAuthProfileStoreForRuntime,
+  markAuthProfileFailure,
+  markAuthProfileSuccess,
+  type AuthProfileStore,
+} from "./auth-profiles.js";
 import { isHeartbeatLifecycleRunKind } from "./bootstrap-mode.js";
 import {
   resolveCliRuntimeArtifactFingerprint,
   resolveCliRuntimeOwnerFingerprint,
 } from "./cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
-import type { CliOutput } from "./cli-output.js";
-import { shouldUseClaudeLiveSession } from "./cli-runner/claude-live-session.js";
+import type { CliOutput } from "./cli-output-contracts.js";
+import { CliAuthProfilePreparationError } from "./cli-runner/auth-profile-preparation-error.js";
+import { acceptsClaudeLive } from "./cli-runner/claude-live-session-policy.js";
 import {
   attachCliMessagingDeliveryEvidence,
   getCliMessagingDeliveryEvidence,
@@ -58,6 +66,8 @@ import { claudeCliSessionTranscriptHasContent as claudeCliSessionTranscriptHasCo
 import { classifyFailoverReason, isFailoverErrorMessage } from "./embedded-agent-helpers.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
 import { waitForDeferredTurnMaintenanceForSession } from "./embedded-agent-runner/context-engine-maintenance.js";
+import { resolveExplicitFinalSourceReplyDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
+import { resolveAuthProfileFailureReason } from "./embedded-agent-runner/run/auth-profile-failure-policy.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
 import { FailoverError, isFailoverError, resolveFailoverStatus } from "./failover-error.js";
 import {
@@ -89,6 +99,9 @@ const cliRunnerDeps = {
       setTimeout(resolve, delayMs);
     });
   },
+  loadAuthProfileStoreForRuntime,
+  markAuthProfileFailure,
+  markAuthProfileSuccess,
 };
 
 /** Overrides top-level CLI runner dependencies for tests. */
@@ -104,6 +117,60 @@ export function restoreCliRunnerTestDeps(): void {
       setTimeout(resolve, delayMs);
     });
   };
+  cliRunnerDeps.loadAuthProfileStoreForRuntime = loadAuthProfileStoreForRuntime;
+  cliRunnerDeps.markAuthProfileFailure = markAuthProfileFailure;
+  cliRunnerDeps.markAuthProfileSuccess = markAuthProfileSuccess;
+}
+
+async function settleCliAuthProfile(params: {
+  store: AuthProfileStore;
+  profileId: string;
+  provider: string;
+  agentDir?: string;
+  terminal:
+    | { outcome: "success" }
+    | {
+        outcome: "failure";
+        error: unknown;
+        config?: RunCliAgentParams["config"];
+        runId: string;
+        modelId?: string;
+      };
+}): Promise<void> {
+  try {
+    if (params.terminal.outcome === "success") {
+      await cliRunnerDeps.markAuthProfileSuccess({
+        store: params.store,
+        profileId: params.profileId,
+        provider: params.provider,
+        agentDir: params.agentDir,
+      });
+      return;
+    }
+    const error = params.terminal.error;
+    const reason = resolveAuthProfileFailureReason({
+      failoverReason: isFailoverError(error) ? error.reason : null,
+      providerStarted:
+        isFailoverError(error) && error.reason === "timeout"
+          ? error.cliTimeout?.observedActivity
+          : undefined,
+    });
+    if (reason) {
+      await cliRunnerDeps.markAuthProfileFailure({
+        store: params.store,
+        profileId: params.profileId,
+        reason,
+        cfg: params.terminal.config,
+        agentDir: params.agentDir,
+        runId: params.terminal.runId,
+        modelId: params.terminal.modelId,
+      });
+    }
+  } catch (error) {
+    log.warn(
+      `CLI auth-profile ${params.terminal.outcome} settlement failed: ${formatErrorMessage(error)}`,
+    );
+  }
 }
 
 function isClaudeCliProvider(provider: string): boolean {
@@ -130,6 +197,8 @@ function shouldRetryFreshCliSessionAfterFailover(params: {
       return params.error.code === "cli_unknown_empty_failure";
     case "empty_response":
       return params.error.code === "cli_unknown_empty_failure";
+    case "format":
+      return params.error.code === "cli_synthetic_no_response";
     case "timeout":
       return params.error.code === "cli_no_output_timeout";
     case "context_overflow":
@@ -351,19 +420,39 @@ async function persistCliAssistantTranscript(params: {
     cacheWrite?: number;
     total?: number;
   };
-}): Promise<boolean> {
+}): Promise<{
+  owned: boolean;
+  terminalAnchor?: import("../config/sessions/session-accessor.js").TranscriptEntryAnchor;
+}> {
   const { runParams } = params;
-  if (!runParams.persistAssistantTranscript || !runParams.sessionKey || !params.text) {
-    return false;
-  }
   if (runParams.currentInboundEventKind === "room_event") {
-    return true;
+    const admission = runParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
+    return {
+      owned: true,
+      ...(admission ? { terminalAnchor: admission } : {}),
+    };
+  }
+  if (!params.text) {
+    const admission = runParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
+    return {
+      owned: false,
+      ...(admission ? { terminalAnchor: admission } : {}),
+    };
+  }
+  if (!runParams.persistAssistantTranscript || !runParams.sessionKey) {
+    return { owned: false };
   }
   try {
     const result = await appendExactAssistantMessageToSessionTranscript({
       sessionKey: runParams.sessionKey,
       agentId: runParams.agentId,
       expectedSessionId: runParams.sessionId,
+      ...(runParams.expectedLifecycleRevision !== undefined
+        ? { expectedLifecycleRevision: runParams.expectedLifecycleRevision }
+        : {}),
+      ...(runParams.expectedWriterRunId !== undefined
+        ? { expectedWriterRunId: runParams.expectedWriterRunId }
+        : {}),
       storePath: runParams.storePath,
       idempotencyKey: `cli-assistant:${runParams.runId}`,
       config: runParams.config,
@@ -387,12 +476,12 @@ async function persistCliAssistantTranscript(params: {
     });
     if (!result.ok) {
       log.warn(`CLI assistant transcript persistence skipped: ${result.reason}`);
-      return result.code === "blocked" || result.code === "session-rebound";
+      return { owned: result.code === "blocked" || result.code === "session-rebound" };
     }
-    return true;
+    return { owned: true, ...(result.anchor ? { terminalAnchor: result.anchor } : {}) };
   } catch (error) {
     log.warn(`CLI assistant transcript persistence failed: ${formatErrorMessage(error)}`);
-    return false;
+    return { owned: false };
   }
 }
 
@@ -412,6 +501,7 @@ async function finalizeCliContextEngineTurn(params: {
   context: PreparedCliRunContext;
   historyMessages: unknown[];
   assistantText: string;
+  terminalAnchor?: import("../config/sessions/session-accessor.js").TranscriptEntryAnchor;
   output: Awaited<
     ReturnType<typeof import("./cli-runner/execute.runtime.js").executePreparedCliRun>
   >;
@@ -438,36 +528,71 @@ async function finalizeCliContextEngineTurn(params: {
     );
   }
 
-  let deferredTurnMaintenance: Promise<void> | undefined;
   const contextEngineHostSupport = buildGenericCliContextEngineHostSupport({
     backendId: context.backendResolved.id,
   });
-  const result = await finalizeHarnessContextEngineTurn({
-    contextEngine: context.contextEngine,
-    promptError: false,
-    aborted: runParams.abortSignal?.aborted === true,
-    yieldAborted: false,
-    sessionIdUsed: runParams.sessionId,
-    sessionKey: runParams.sessionKey,
-    sessionFile: runParams.sessionFile,
-    isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
-    messagesSnapshot: [...prePromptMessages, ...turnMessages],
-    prePromptMessageCount: prePromptMessages.length,
-    config: context.contextEngineConfig,
-    contextEngineHostSupport,
-    providerId: runParams.provider,
-    modelId: context.modelId,
-    runMaintenance: async (maintenanceParams) =>
-      await runHarnessContextEngineMaintenance({
-        ...maintenanceParams,
-        onDeferredMaintenance: (promise) => {
-          deferredTurnMaintenance = promise;
-        },
-      }),
-    warn: (message) => log.warn(message),
-  });
-  if (result.postTurnFinalizationSucceeded && deferredTurnMaintenance) {
-    context.contextEngineDeferredTurnMaintenance = deferredTurnMaintenance;
+  const finalizeTurn = async (transcript: {
+    messagesSnapshot: AgentMessage[];
+    prePromptMessageCount: number;
+    sessionManager?: SessionManager;
+    withSessionManagerRewriteLock: <T>(operation: () => Promise<T> | T) => Promise<T>;
+  }) => {
+    let deferredTurnMaintenance: Promise<void> | undefined;
+    const result = await finalizeHarnessContextEngineTurn({
+      contextEngine: context.contextEngine,
+      promptError: false,
+      aborted: runParams.abortSignal?.aborted === true,
+      yieldAborted: false,
+      sessionIdUsed: runParams.sessionId,
+      sessionKey: runParams.sessionKey,
+      sessionFile: runParams.sessionFile,
+      isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
+      messagesSnapshot: transcript.messagesSnapshot,
+      prePromptMessageCount: transcript.prePromptMessageCount,
+      sessionManager: transcript.sessionManager,
+      config: context.contextEngineConfig,
+      contextEngineHostSupport,
+      providerId: runParams.provider,
+      modelId: context.modelId,
+      runMaintenance: async (maintenanceParams) =>
+        await runHarnessContextEngineMaintenance({
+          ...maintenanceParams,
+          withSessionManagerRewriteLock: transcript.withSessionManagerRewriteLock,
+          onDeferredMaintenance: (promise) => {
+            deferredTurnMaintenance = promise;
+          },
+        }),
+      warn: (message) => log.warn(message),
+    });
+    if (result.postTurnFinalizationSucceeded && deferredTurnMaintenance) {
+      context.contextEngineDeferredTurnMaintenance = deferredTurnMaintenance;
+    }
+  };
+  const admission = runParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
+  if (runParams.onContextEngineTurnCandidate) {
+    if (admission && params.terminalAnchor) {
+      runParams.onContextEngineTurnCandidate({
+        boundary: { admission, terminal: params.terminalAnchor },
+        sessionIdUsed: runParams.sessionId,
+        sessionKey: runParams.sessionKey,
+        sessionTarget: runParams.sessionTarget,
+        sessionFile: runParams.sessionFile,
+        promptError: false,
+        aborted: runParams.abortSignal?.aborted === true,
+        yieldAborted: false,
+        contextEngineHostSupport,
+        providerId: runParams.provider,
+        modelId: context.modelId,
+        config: context.contextEngineConfig,
+        isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
+      });
+    }
+  } else {
+    await finalizeTurn({
+      messagesSnapshot: [...prePromptMessages, ...turnMessages],
+      prePromptMessageCount: prePromptMessages.length,
+      withSessionManagerRewriteLock: async (operation) => await operation(),
+    });
   }
 }
 
@@ -563,7 +688,34 @@ async function runCliAgentInternal(
     };
   }
   const { prepareCliRunContext } = await import("./cli-runner/prepare.runtime.js");
-  const context = await prepareCliRunContext(params);
+  let context: PreparedCliRunContext;
+  try {
+    context = await prepareCliRunContext(params);
+  } catch (error) {
+    if (error instanceof CliAuthProfilePreparationError) {
+      const store = cliRunnerDeps.loadAuthProfileStoreForRuntime(error.agentDir, {
+        externalCli: externalCliDiscoveryForProviderAuth({
+          cfg: params.config,
+          provider: error.provider,
+          profileId: error.profileId,
+        }),
+      });
+      await settleCliAuthProfile({
+        store,
+        profileId: error.profileId,
+        provider: error.provider,
+        agentDir: error.agentDir,
+        terminal: {
+          outcome: "failure",
+          error,
+          config: params.config,
+          runId: params.runId,
+          modelId: params.model,
+        },
+      });
+    }
+    throw error;
+  }
   let result: EmbeddedAgentRunResult | undefined;
   let runError: unknown;
   try {
@@ -571,15 +723,15 @@ async function runCliAgentInternal(
   } catch (error) {
     runError = error;
   }
+  const terminalRunError = runError;
   let cleanupError: unknown;
   const recordCleanupError = (error: unknown) => {
     cleanupError ??= error;
   };
   if (params.cleanupCliLiveSessionOnRunEnd === true) {
     try {
-      const { closeClaudeLiveSessionForContext } =
-        await import("./cli-runner/claude-live-session.js");
-      await closeClaudeLiveSessionForContext(context);
+      const { closeClaudeSession } = await import("./cli-runner/claude-live-registry.js");
+      await closeClaudeSession(context, "restart");
     } catch (error) {
       recordCleanupError(error);
     }
@@ -605,6 +757,36 @@ async function runCliAgentInternal(
       diagnosticLifecycle?.setPhase("cleanup");
       runError =
         cleanupError instanceof Error ? cleanupError : new Error(formatErrorMessage(cleanupError));
+    }
+  }
+  // Settle only after backend recovery is exhausted. Recording inside an
+  // attempt would quarantine a healthy profile for a recovered session fault.
+  if (context.effectiveAuthProfileId && context.authProfileStore) {
+    const profileId = context.effectiveAuthProfileId;
+    const authProfileStore = context.authProfileStore;
+    if (terminalRunError) {
+      await settleCliAuthProfile({
+        store: authProfileStore,
+        profileId,
+        provider: authProfileStore.profiles[profileId]?.provider ?? params.provider,
+        agentDir: context.agentDir,
+        terminal: {
+          outcome: "failure",
+          error: terminalRunError,
+          config: params.config,
+          runId: params.runId,
+          modelId: context.modelId,
+        },
+      });
+    } else if (result?.meta.executionTrace?.attempts?.at(-1)?.result === "success") {
+      const provider = authProfileStore.profiles[profileId]?.provider ?? params.provider;
+      await settleCliAuthProfile({
+        store: authProfileStore,
+        profileId,
+        provider,
+        agentDir: context.agentDir,
+        terminal: { outcome: "success" },
+      });
     }
   }
   if (runError) {
@@ -762,19 +944,19 @@ export async function runPreparedCliAgent(
       CliOutput,
       | "didSendViaMessagingTool"
       | "didDeliverSourceReplyViaMessageTool"
+      | "messagingToolSentTargets"
       | "messagingToolSourceReplyPayloads"
     >,
   ): ReplyPayload[] => {
     return buildEmbeddedRunPayloads({
       assistantTexts: [],
-      toolMetas: [],
       lastAssistant: undefined,
-      inlineToolResultsAllowed: false,
       sessionKey: params.sessionKey ?? "",
       provider: params.provider,
       model: context.modelId,
       didSendViaMessagingTool: evidence.didSendViaMessagingTool,
       didDeliverSourceReplyViaMessageTool: evidence.didDeliverSourceReplyViaMessageTool,
+      messagingToolSentTargets: evidence.messagingToolSentTargets,
       messagingToolSourceReplyPayloads: evidence.messagingToolSourceReplyPayloads,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       agentId: params.agentId,
@@ -787,6 +969,7 @@ export async function runPreparedCliAgent(
       CliOutput,
       | "didSendViaMessagingTool"
       | "didDeliverSourceReplyViaMessageTool"
+      | "messagingToolSentTargets"
       | "messagingToolSourceReplyPayloads"
     >,
   ) => {
@@ -809,9 +992,15 @@ export async function runPreparedCliAgent(
   ): EmbeddedAgentRunResult => {
     const message = formatErrorMessage(error);
     const { payloads } = resolveCliSourceReplyMirror(evidence);
+    const visiblePayloads =
+      payloads.length > 0
+        ? payloads
+        : resolveExplicitFinalSourceReplyDeliveryEvidence(evidence) === false
+          ? [{ text: "The reply stopped after sending progress. Please try again.", isError: true }]
+          : undefined;
     deliveredMessagingSideEffect = true;
     return {
-      ...(payloads.length > 0 ? { payloads } : {}),
+      ...(visiblePayloads ? { payloads: visiblePayloads } : {}),
       meta: {
         durationMs: Date.now() - context.started,
         systemPromptReport: context.systemPromptReport,
@@ -1232,6 +1421,9 @@ export async function runPreparedCliAgent(
           ...preparedContextAgentMeta,
           usage: resultParams.output.usage,
           ...(resultParams.output.usage ? { lastCallUsage: resultParams.output.usage } : {}),
+          ...(resultParams.output.diagnosticUsage
+            ? { diagnosticUsage: resultParams.output.diagnosticUsage }
+            : {}),
           ...(persistedCliSessionId
             ? {
                 cliSessionBinding: {
@@ -1330,19 +1522,20 @@ export async function runPreparedCliAgent(
       try {
         await assertSuccessfulCliRuntimeBindingCurrent(context);
         const effectiveCliSessionId = output.sessionId ?? fallbackCliSessionId;
-        await finalizeCliContextEngineTurn({
-          context,
-          historyMessages: context.contextEngine ? contextEngineHistoryMessages : historyMessages,
-          assistantText,
-          output,
-        });
-        const assistantTranscriptOwned = await persistCliAssistantTranscript({
+        const assistantTranscript = await persistCliAssistantTranscript({
           runParams: params,
           // Dispatch owns source-reply transcript mirrors and their idempotency keys.
           // Persisting them here would duplicate the same visible assistant reply.
           text: sourceReplyWasDelivered ? "" : assistantText,
           modelId: context.modelId,
           usage: output.usage,
+        });
+        await finalizeCliContextEngineTurn({
+          context,
+          historyMessages: context.contextEngine ? contextEngineHistoryMessages : historyMessages,
+          assistantText,
+          terminalAnchor: assistantTranscript.terminalAnchor,
+          output,
         });
         // A stateless backend may emit an id, but it never becomes continuity.
         // Managed stdio sessions own continuity in-process and write no native transcript.
@@ -1352,7 +1545,7 @@ export async function runPreparedCliAgent(
               effectiveCliSessionId,
               params.provider,
               context.cwd ?? context.workspaceDir,
-              { skipTranscriptProbe: shouldUseClaudeLiveSession(context) },
+              { skipTranscriptProbe: acceptsClaudeLive(context) },
             );
         await runCliAgentEndHook(params, {
           event: {
@@ -1367,7 +1560,7 @@ export async function runPreparedCliAgent(
           output,
           effectiveCliSessionId,
           bindingFlushOk,
-          assistantTranscriptOwned,
+          assistantTranscriptOwned: assistantTranscript.owned,
           usedHistoryPrompt,
         });
       } catch (error) {

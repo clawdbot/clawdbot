@@ -16,8 +16,9 @@ import { startGatewayServer } from "../../../../src/gateway/server.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  getFreeGatewayPort,
+  getGatewayE2ePortBlock,
 } from "../../../../src/gateway/test-helpers.e2e.js";
+import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../../../../src/gateway/test-helpers.env.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
 import { createTaskRecord, deleteTaskRecordById } from "../../../../src/tasks/task-registry.js";
@@ -120,11 +121,11 @@ vi.mock("../../../../src/gateway/server-request-context.js", async () => {
 
 const ENV_KEYS = [
   "HOME",
+  ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_TOKEN",
   "OPENCLAW_GATEWAY_PASSWORD",
-  "OPENCLAW_GATEWAY_PORT",
   "OPENCLAW_SKIP_CHANNELS",
   "OPENCLAW_SKIP_GMAIL_WATCHER",
   "OPENCLAW_SKIP_CRON",
@@ -203,13 +204,12 @@ describe("Gateway agent and artifact APIs", () => {
     clearConfigCache();
     clearSessionStoreCacheForTest();
 
-    const port = await getFreeGatewayPort();
+    const port = await getGatewayE2ePortBlock();
     setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
     let server = await startGatewayServer(port, {
       bind: "loopback",
       auth: { mode: "token", token },
       controlUiEnabled: false,
-      sidecarStartup: "defer",
     });
     cleanup.push(() => server.close());
 
@@ -230,7 +230,6 @@ describe("Gateway agent and artifact APIs", () => {
         bind: "loopback",
         auth: { mode: "token", token },
         controlUiEnabled: false,
-        sidecarStartup: "defer",
       });
       client = await connectGatewayClient({
         url: `ws://127.0.0.1:${port}`,
@@ -290,6 +289,21 @@ describe("Gateway agent and artifact APIs", () => {
       workspace: createdWorkspace,
     });
     await restartGateway("gateway agent artifact APIs after create");
+    const createdEnvironmentAfterRestart = await client.request<{ id: string }>(
+      "environments.create",
+      {
+        profileId: "qa-provider",
+        idempotencyKey: "qa-environment-request-after-restart",
+      },
+    );
+    await expect(client.request("environments.list", {})).resolves.toMatchObject({
+      environments: expect.arrayContaining([
+        expect.objectContaining({
+          id: createdEnvironmentAfterRestart.id,
+          status: "available",
+        }),
+      ]),
+    });
     await expect(client.request("agents.list", {})).resolves.toMatchObject({
       agents: expect.arrayContaining([
         expect.objectContaining({

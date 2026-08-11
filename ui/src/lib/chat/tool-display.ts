@@ -125,7 +125,7 @@ export function resolveToolDisplay(params: {
     fallbackDetailKeys: FALLBACK.detailKeys,
     detailMode: "first",
     toolDetailMode: params.detailMode,
-    detailCoerce: { includeFalse: true, includeZero: true },
+    detailCoerce: { includeFalsy: true },
   });
   const { verb } = toolDisplayParts;
   let { detail } = toolDisplayParts;

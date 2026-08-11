@@ -25,9 +25,10 @@ import {
   connectDeviceAuthReq,
   disconnectGatewayClient,
   connectGatewayClient,
-  getFreeGatewayPort,
+  getGatewayE2ePortBlock,
   startGatewayWithClient,
 } from "./test-helpers.e2e.js";
+import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 import { installOpenAiResponsesMock } from "./test-helpers.openai-mock.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
@@ -36,6 +37,7 @@ const GATEWAY_E2E_TIMEOUT_MS = 90_000;
 let gatewayTestSeq = 0;
 const GATEWAY_TEST_ENV_KEYS = [
   "HOME",
+  ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_TOKEN",
@@ -77,7 +79,7 @@ async function removeGatewayTempHome(tempHome: string): Promise<void> {
 }
 
 async function startLoopbackTokenGateway(token: string) {
-  const port = await getFreeGatewayPort();
+  const port = await getGatewayE2ePortBlock();
   const server = await startGatewayServer(port, {
     bind: "loopback",
     auth: { mode: "token", token },
@@ -201,7 +203,7 @@ describe("gateway e2e", () => {
         logging: { level: "info" },
       };
       await createConfigIO({ configPath }).writeConfigFile(initialConfig);
-      const port = await getFreeGatewayPort();
+      const port = await getGatewayE2ePortBlock();
       server = await startGatewayServer(port, {
         bind: "loopback",
         controlUiEnabled: false,
@@ -314,7 +316,7 @@ describe("gateway e2e", () => {
           authSource === "explicit-override"
             ? { mode: "off" as const, serviceName: "svc:startup" }
             : undefined;
-        const port = await getFreeGatewayPort();
+        const port = await getGatewayE2ePortBlock();
         server = await startGatewayServer(port, {
           bind: "loopback",
           ...(callerAuthOverride ? { auth: callerAuthOverride } : {}),
@@ -430,7 +432,7 @@ describe("gateway e2e", () => {
           logging: { level: "info" },
         });
         setTestEnvValue("OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN", oldToken);
-        const port = await getFreeGatewayPort();
+        const port = await getGatewayE2ePortBlock();
         server = await startGatewayServer(port, {
           bind: "loopback",
           auth: {
@@ -497,7 +499,7 @@ describe("gateway e2e", () => {
       logging: { level: "info" },
     };
     await configIO.writeConfigFile(initialConfig);
-    const port = await getFreeGatewayPort();
+    const port = await getGatewayE2ePortBlock();
     const server = await startGatewayServer(port, {
       bind: "lan",
       controlUiEnabled: false,
@@ -722,7 +724,7 @@ module.exports = {
       clearConfigCache();
 
       const wizardToken = nextGatewayId("wiz-token");
-      const port = await getFreeGatewayPort();
+      const port = await getGatewayE2ePortBlock();
       const server = await startGatewayServer(port, {
         bind: "loopback",
         auth: { mode: "token", token: wizardToken },
@@ -803,7 +805,7 @@ module.exports = {
         await server.close({ reason: "wizard e2e complete" });
       }
 
-      const port2 = await getFreeGatewayPort();
+      const port2 = await getGatewayE2ePortBlock();
       const server2 = await startGatewayServer(port2, {
         bind: "loopback",
         controlUiEnabled: false,
@@ -842,7 +844,7 @@ module.exports = {
         minimalGateway: true,
       });
       const wizardToken = nextGatewayId("wiz-contained-exit");
-      const port = await getFreeGatewayPort();
+      const port = await getGatewayE2ePortBlock();
       const server = await startGatewayServer(port, {
         bind: "loopback",
         auth: { mode: "token", token: wizardToken },
@@ -910,7 +912,7 @@ module.exports = {
         minimalGateway: true,
       });
       const wizAuth = nextGatewayId("wiz-chan");
-      const port = await getFreeGatewayPort();
+      const port = await getGatewayE2ePortBlock();
       const channelRuns: Array<string | undefined> = [];
       const server = await startGatewayServer(port, {
         bind: "loopback",
@@ -986,17 +988,7 @@ module.exports = {
     { timeout: GATEWAY_E2E_TIMEOUT_MS },
     async () => {
       const envSnapshot = captureEnv([
-        "HOME",
-        "OPENCLAW_STATE_DIR",
-        "OPENCLAW_CONFIG_PATH",
-        "OPENCLAW_GATEWAY_TOKEN",
-        "OPENCLAW_SKIP_CHANNELS",
-        "OPENCLAW_SKIP_GMAIL_WATCHER",
-        "OPENCLAW_SKIP_CRON",
-        "OPENCLAW_SKIP_CANVAS_HOST",
-        "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-        "OPENCLAW_SKIP_PROVIDERS",
-        "OPENCLAW_BUNDLED_PLUGINS_DIR",
+        ...GATEWAY_TEST_ENV_KEYS,
         "OPENCLAW_TEST_MINIMAL_GATEWAY",
         "DISCORD_BOT_TOKEN",
       ]);

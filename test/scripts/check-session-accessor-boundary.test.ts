@@ -23,7 +23,7 @@ import {
   migratedSessionAccessorWriteFiles,
   migratedTranscriptWriterFiles,
   readOnlyGatewaySessionAccessorFiles,
-} from "../../scripts/check-session-accessor-boundary.mjs";
+} from "../../scripts/check-session-accessor-boundary.mts";
 
 describe("session accessor boundary guard", () => {
   it("keeps Gateway read paths on non-materializing accessors", () => {
@@ -58,7 +58,7 @@ describe("session accessor boundary guard", () => {
         "src/acp/control-plane/manager.background-task.ts",
         "src/acp/control-plane/manager.core.ts",
         "src/acp/runtime/session-meta.ts",
-        "src/agents/acp-spawn.ts",
+        "src/agents/subagents/spawn/acp-spawn.ts",
         "src/agents/auth-profiles/session-override.ts",
         "src/agents/embedded-agent-runner/compaction-successor-transcript.ts",
         "src/agents/embedded-agent-runner/run/attempt.ts",
@@ -66,8 +66,8 @@ describe("session accessor boundary guard", () => {
         "src/agents/embedded-agent-runner/transcript-rewrite.ts",
         "src/agents/embedded-agent-runner/transcript-runtime-state.ts",
         "src/agents/live-model-switch.ts",
-        "src/agents/subagent-control.ts",
-        "src/agents/subagent-registry-helpers.ts",
+        "src/agents/subagents/registry/subagent-control.ts",
+        "src/agents/subagents/registry/subagent-registry-helpers.ts",
         "src/auto-reply/reply/abort.ts",
         "src/auto-reply/reply/agent-runner-helpers.ts",
         "src/auto-reply/reply/agent-runner.ts",
@@ -167,13 +167,13 @@ describe("session accessor boundary guard", () => {
         "src/agents/embedded-agent-runner/run/attempt.ts",
         "src/agents/embedded-agent-subscribe.handlers.compaction.runtime.ts",
         "src/agents/live-model-switch.ts",
-        "src/agents/main-session-restart-recovery-checkpoint.ts",
-        "src/agents/main-session-restart-recovery-marking.ts",
-        "src/agents/main-session-restart-recovery-store.ts",
+        "src/agents/main-session-recovery/main-session-restart-recovery-checkpoint.ts",
+        "src/agents/main-session-recovery/main-session-restart-recovery-marking.ts",
+        "src/agents/main-session-recovery/main-session-restart-recovery-store.ts",
         "src/agents/session-suspension.ts",
         "src/auto-reply/reply/abort.ts",
-        "src/agents/subagent-control.ts",
-        "src/agents/subagent-registry-helpers.ts",
+        "src/agents/subagents/registry/subagent-control.ts",
+        "src/agents/subagents/registry/subagent-registry-helpers.ts",
         "src/agents/tools/session-status-tool.ts",
         "src/auto-reply/reply/abort-cutoff.runtime.ts",
         "src/auto-reply/reply/agent-runner-cli-dispatch.ts",

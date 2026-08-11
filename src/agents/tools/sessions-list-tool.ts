@@ -9,10 +9,10 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import pMap from "p-map";
 import { Type } from "typebox";
+import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { callGateway } from "../../gateway/call.js";
 import { readSessionTitleFieldsFromTranscriptAsync } from "../../gateway/session-transcript-title-reader.js";
 import { deriveSessionTitle } from "../../gateway/session-utils.js";
 import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -37,6 +37,10 @@ import {
   readStringParam,
 } from "./common.js";
 import {
+  callAgentToolGatewayRequest,
+  type AgentToolGatewayRequestCaller,
+} from "./in-process-gateway.js";
+import {
   createAgentToAgentPolicy,
   createSessionVisibilityRowChecker,
   classifySessionKind,
@@ -47,7 +51,6 @@ import {
   resolveSandboxedSessionToolContext,
   type GatewaySessionListRow,
   type SessionListRow,
-  type SessionRunStatus,
 } from "./sessions-helpers.js";
 
 const SessionsListToolSchema = Type.Object({
@@ -122,7 +125,7 @@ const SessionsListOutputSchema = Type.Object(
   { additionalProperties: false },
 );
 
-type GatewayCaller = typeof callGateway;
+type GatewayCaller = AgentToolGatewayRequestCaller;
 
 const SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS = 100;
 
@@ -183,7 +186,7 @@ export function createSessionsListTool(opts?: {
       const archived = params.archived === true;
       const includeDerivedTitles = params.includeDerivedTitles === true;
       const includeLastMessage = params.includeLastMessage === true;
-      const gatewayCall = opts?.callGateway ?? callGateway;
+      const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const hydrateTranscriptFieldsAfterFiltering = includeDerivedTitles || includeLastMessage;
 

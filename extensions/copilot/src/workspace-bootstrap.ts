@@ -1,7 +1,7 @@
 // Copilot plugin module implements workspace bootstrap behavior.
 import path from "node:path";
 import type {
-  AgentHarnessAttemptParams,
+  AgentHarnessAttemptParamsV2,
   EmbeddedContextFile,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -61,7 +61,7 @@ type CopilotWorkspaceBootstrapResult = {
  * surfaces.
  */
 export async function resolveCopilotWorkspaceBootstrapContext(params: {
-  attempt: AgentHarnessAttemptParams;
+  attempt: AgentHarnessAttemptParamsV2;
   /**
    * Sandbox-aware working directory the SDK session will run in.
    * When this differs from the canonical `attempt.workspaceDir`

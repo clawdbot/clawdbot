@@ -1,7 +1,10 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
+import {
+  resolveSessionSubscriptionKey,
+  resolveSessionSubscriptionKeys,
+} from "../session-subscription-keys.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ChatBroadcastContext = Pick<
@@ -27,21 +30,21 @@ function nextChatSeq(context: { agentRunSeq: Map<string, number> }, runId: strin
   return next;
 }
 
-function resolveGlobalAwareNodeChatDeliveryKeys(params: {
-  cfg: OpenClawConfig;
+function resolveChatSessionKeys(params: {
+  context: Partial<Pick<GatewayRequestContext, "getRuntimeConfig">>;
   sessionKey: string;
   agentId?: string;
 }): string[] {
-  if (params.sessionKey !== "global") {
-    return [params.sessionKey];
+  const canonicalKey = resolveSessionSubscriptionKey(params.sessionKey, params.agentId ?? "");
+  if (canonicalKey === params.sessionKey) {
+    return [canonicalKey];
   }
-  const defaultAgentId = resolveDefaultAgentId(params.cfg);
-  const scopedAgentId = params.agentId ?? defaultAgentId;
-  const keys = [`agent:${scopedAgentId}:global`];
-  if (scopedAgentId === defaultAgentId) {
-    keys.push("global");
-  }
-  return keys;
+  const defaultAgentId = resolveDefaultAgentId(params.context.getRuntimeConfig?.() ?? {});
+  return resolveSessionSubscriptionKeys(
+    params.sessionKey,
+    params.agentId ?? defaultAgentId,
+    defaultAgentId,
+  );
 }
 
 export function sendGlobalAwareNodeChatPayload(params: {
@@ -52,8 +55,8 @@ export function sendGlobalAwareNodeChatPayload(params: {
   event: string;
   payload: unknown;
 }): void {
-  const deliveryKeys = resolveGlobalAwareNodeChatDeliveryKeys({
-    cfg: params.context.getRuntimeConfig?.() ?? ({} as OpenClawConfig),
+  const deliveryKeys = resolveChatSessionKeys({
+    context: params.context,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
   });
@@ -80,8 +83,8 @@ export function broadcastChatFinal(params: {
     message: projectChatDisplayMessage(params.message),
   };
   params.context.broadcast("chat", payload, {
-    sessionKeys: resolveGlobalAwareNodeChatDeliveryKeys({
-      cfg: params.context.getRuntimeConfig?.() ?? ({} as OpenClawConfig),
+    sessionKeys: resolveChatSessionKeys({
+      context: params.context,
       sessionKey: params.sessionKey,
       agentId: payloadAgentId,
     }),
@@ -121,8 +124,8 @@ export function broadcastSideResult(params: {
     seq,
   };
   params.context.broadcast("chat.side_result", payload, {
-    sessionKeys: resolveGlobalAwareNodeChatDeliveryKeys({
-      cfg: params.context.getRuntimeConfig?.() ?? ({} as OpenClawConfig),
+    sessionKeys: resolveChatSessionKeys({
+      context: params.context,
       sessionKey: params.payload.sessionKey,
       agentId: payloadAgentId,
     }),
@@ -154,8 +157,8 @@ export function broadcastChatError(params: {
     errorMessage: params.errorMessage,
   };
   params.context.broadcast("chat", payload, {
-    sessionKeys: resolveGlobalAwareNodeChatDeliveryKeys({
-      cfg: params.context.getRuntimeConfig?.() ?? ({} as OpenClawConfig),
+    sessionKeys: resolveChatSessionKeys({
+      context: params.context,
       sessionKey: params.sessionKey,
       agentId: payloadAgentId,
     }),

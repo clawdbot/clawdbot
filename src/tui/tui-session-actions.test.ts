@@ -1,5 +1,6 @@
 // Covers TUI session action routing and backend calls.
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { ChatLog } from "./components/chat-log.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
@@ -30,15 +31,6 @@ describe("tui session actions", () => {
     clear: vi.fn(),
     showResult: vi.fn(),
   });
-  const createDeferred = <T>() => {
-    let resolve: (value: T) => void = () => {};
-    let reject: (reason?: unknown) => void = () => {};
-    const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-      resolve = resolvePromise;
-      reject = rejectPromise;
-    });
-    return { promise, resolve, reject };
-  };
   const createHistoryChatLog = () => {
     const addSystem = vi.fn();
     const addUser = vi.fn();

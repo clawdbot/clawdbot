@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   closeOpenClawStateDatabaseForTest,
+  openExistingOpenClawStateDatabaseReadOnly,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -255,6 +256,57 @@ describe("workspace state store", () => {
     expect(resolveWorkspaceStateIdentity(alias)).not.toStrictEqual(identity);
     expect(readWorkspaceStateSnapshot(alias).identity).toStrictEqual(identity);
     expect(clearExpiredWorkspaceStateForVanishedWorkspace(alias, 2_000)).toBe(false);
+  });
+
+  it("registers missing aliases in the caller-selected state database", () => {
+    const dir = workspaceDir();
+    const alias = testState!.path("workspace-link");
+    const env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: testState!.path("custom-state"),
+    };
+    fs.symlinkSync(dir, alias, process.platform === "win32" ? "junction" : "dir");
+    const identity = resolveWorkspaceStateIdentity(dir);
+    mergeWorkspaceSetupState(dir, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000, {
+      env,
+    });
+
+    expect(readWorkspaceStateSnapshot(alias, { env }).identity).toStrictEqual(identity);
+    fs.unlinkSync(alias);
+
+    expect(readWorkspaceStateSnapshot(alias, { env }).identity).toStrictEqual(identity);
+    expect(readWorkspaceStateSnapshot(alias, { env }).setupExists).toBe(true);
+    expect(resolveOpenClawStateSqlitePath(env)).not.toBe(resolveOpenClawStateSqlitePath());
+    expect(readWorkspaceStateSnapshot(alias).setupExists).toBe(false);
+  });
+
+  it("does not register missing aliases through a read-only database", async () => {
+    const dir = workspaceDir();
+    const alias = testState!.path("workspace-link");
+    const env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: testState!.path("custom-state"),
+    };
+    mergeWorkspaceSetupState(dir, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000, {
+      env,
+    });
+    closeOpenClawStateDatabaseForTest();
+    fs.symlinkSync(dir, alias, process.platform === "win32" ? "junction" : "dir");
+    const database = await openExistingOpenClawStateDatabaseReadOnly({ env });
+    if (!database) {
+      throw new Error("expected read-only database");
+    }
+
+    try {
+      expect(readWorkspaceStateSnapshot(alias, { database, env, readOnly: true }).setupExists).toBe(
+        true,
+      );
+    } finally {
+      database.walMaintenance.close();
+    }
+    fs.unlinkSync(alias);
+
+    expect(readWorkspaceStateSnapshot(alias, { env }).setupExists).toBe(false);
   });
 
   it("fails closed when a persisted symlink alias is repointed", () => {

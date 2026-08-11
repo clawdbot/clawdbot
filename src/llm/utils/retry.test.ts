@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AssistantMessage } from "../types.js";
+import { PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE, type AssistantMessage } from "../types.js";
 import { isRetryableAssistantError } from "./retry.js";
 
 function errorMessage(message: string): AssistantMessage {
@@ -24,6 +24,15 @@ function errorMessage(message: string): AssistantMessage {
 }
 
 describe("isRetryableAssistantError", () => {
+  it("does not retry an ambiguous post-dispatch provider outcome", () => {
+    expect(
+      isRetryableAssistantError({
+        ...errorMessage("The WebSocket closed after dispatch"),
+        errorCode: PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
+      }),
+    ).toBe(false);
+  });
+
   it.each([
     "An error occurred while processing your request. You can retry your request.",
     "The system encountered an unexpected error. Try your request again.",

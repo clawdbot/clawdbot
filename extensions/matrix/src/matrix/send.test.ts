@@ -1,4 +1,3 @@
-// Matrix tests cover send plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +5,8 @@ import {
   resetPluginBlobStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+// Matrix tests cover send plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
 import { setMatrixRuntime } from "../runtime.js";
@@ -165,12 +166,7 @@ function makeEncryptedMediaClient() {
   return result;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function requireArray(value: unknown, label: string): Array<unknown> {
   expect(Array.isArray(value), label).toBe(true);
@@ -1000,6 +996,25 @@ describe("sendMessageMatrix media", () => {
     expect(mediaOptions.localRoots).toBeUndefined();
     expect(resolveTextChunkLimitMock).toHaveBeenCalledWith(explicitCfg, "matrix", "ops");
   });
+
+  it.each([{ mediaMaxMb: 0 }, { mediaMaxMb: -5 }])(
+    "leaves outbound media uncapped when mediaMaxMb is $mediaMaxMb",
+    async ({ mediaMaxMb }) => {
+      const { client } = makeClient();
+
+      await sendMessageMatrix("room:!room:example", "caption", {
+        client,
+        cfg: { channels: { matrix: { mediaMaxMb } } },
+        mediaUrl: "file:///tmp/photo.png",
+      });
+
+      const mediaOptions = requireRecord(
+        mockCallArg(loadWebMediaMock, "loadWebMedia", 1),
+        "media options",
+      );
+      expect(mediaOptions.maxBytes).toBeUndefined();
+    },
+  );
 
   it("passes caller mediaLocalRoots to media loading", async () => {
     const { client } = makeClient();

@@ -55,7 +55,6 @@
     "shutdown": "Android relies on socket close plus reconnect/backoff instead of the shutdown notice.",
     "skills.changed": "Skills settings is a macOS operator surface; Android does not expose skill management yet.",
     "talk.mode": "Android toggles talk mode locally; gateway talk.mode sync is not consumed.",
-    "task": "Background task activity is not surfaced in the Android app.",
     "task.suggestion": "Task suggestion cards are a Control UI-only surface; Android does not render them.",
     "terminal.data": "Embedded terminal is a web/desktop surface; Android has no terminal client.",
     "terminal.exit": "Embedded terminal is a web/desktop surface; Android has no terminal client.",

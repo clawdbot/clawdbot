@@ -4,6 +4,7 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import type { IMessageApprovalGatewayRuntime } from "./approval-gateway-types.js";
 import {
   extractIMessageApprovalPromptBinding,
   handleIMessageApprovalReaction,
@@ -12,7 +13,6 @@ import {
   type PendingIMessageApprovalReactionPollTarget,
   type IMessageApprovalConversationKey,
 } from "./approval-reactions.js";
-import type { IMessageApprovalGatewayRuntime } from "./approval-resolver.js";
 import type { IMessageRpcClient } from "./client.js";
 import type { IMessagePayload } from "./monitor/types.js";
 

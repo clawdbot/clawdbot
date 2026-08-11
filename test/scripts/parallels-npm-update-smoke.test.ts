@@ -1,6 +1,5 @@
 // Parallels Npm Update Smoke tests cover parallels npm update smoke script behavior.
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -24,6 +23,7 @@ import {
 } from "../../scripts/e2e/parallels/npm-update-smoke.ts";
 import type { HostServer, Platform } from "../../scripts/e2e/parallels/types.ts";
 import { withEnv, withEnvAsync } from "../../src/test-utils/env.js";
+import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = "scripts/e2e/parallels/npm-update-smoke.ts";
 const GUEST_TRANSPORTS_PATH = "scripts/e2e/parallels/guest-transports.ts";
@@ -35,13 +35,7 @@ const TEST_AUTH = {
   apiKeyValue: "test-key",
   modelId: "gpt-5.4",
 };
-const tempDirs: string[] = [];
-
-function makeTempDir(): string {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-parallels-npm-update-"));
-  tempDirs.push(root);
-  return root;
-}
+const tempDirs = createTempDirTracker();
 
 function pidIsAlive(pid: number): boolean {
   try {
@@ -103,9 +97,7 @@ function extractWindowsBackgroundControlMarkers(decoded: string): {
 
 afterEach(() => {
   vi.useRealTimers();
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { force: true, recursive: true });
-  }
+  tempDirs.cleanup();
 });
 
 describe("parallels npm update smoke", () => {
@@ -160,7 +152,7 @@ describe("parallels npm update smoke", () => {
     class FailingNpmUpdateSmoke extends NpmUpdateSmoke {
       protected override async makeRunTempDir(prefix: string): Promise<string> {
         void prefix;
-        return makeTempDir();
+        return tempDirs.make("openclaw-parallels-npm-update-");
       }
 
       protected override async runSteps(): Promise<void> {
@@ -188,7 +180,7 @@ describe("parallels npm update smoke", () => {
   });
 
   it("removes uploaded guest update scripts when chmod fails", () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const logPath = path.join(root, "prlctl.log");
     const prlctlPath = path.join(root, "prlctl");
     writeFileSync(
@@ -255,7 +247,7 @@ exit 1
   });
 
   it("uses one macOS guest identity to write and execute update scripts", async () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const logPath = path.join(root, "prlctl.log");
     const prlctlPath = path.join(root, "prlctl");
     writeFileSync(
@@ -559,7 +551,7 @@ exit 1
   });
 
   it("streams fresh lane logs instead of retaining them in memory", async () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const logPath = path.join(root, "fresh.log");
     const output: string[] = [];
 
@@ -600,7 +592,7 @@ exit 1
   });
 
   it("clamps oversized fresh lane command timeouts before scheduling", async () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const logPath = path.join(root, "fresh.log");
 
     const code = await spawnLoggedCommand(
@@ -616,7 +608,7 @@ exit 1
   });
 
   it.runIf(process.platform !== "win32")("times out fresh lane process groups", async () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const logPath = path.join(root, "fresh.log");
     const scriptPath = path.join(root, "hung-fresh-lane.mjs");
     const descendantPidPath = path.join(root, "descendant.pid");
@@ -656,7 +648,7 @@ exit 1
   it.runIf(process.platform !== "win32")(
     "lets fresh lane descendants exit during timeout kill grace",
     async () => {
-      const root = makeTempDir();
+      const root = tempDirs.make("openclaw-parallels-npm-update-");
       const logPath = path.join(root, "fresh.log");
       const scriptPath = path.join(root, "graceful-fresh-lane.mjs");
       const readyPath = path.join(root, "ready");
@@ -735,7 +727,7 @@ exit 1
   it.runIf(process.platform !== "win32")(
     "lets update stream descendants exit during timeout kill grace",
     async () => {
-      const root = makeTempDir();
+      const root = tempDirs.make("openclaw-parallels-npm-update-");
       const scriptPath = path.join(root, "stream-update-grace.mjs");
       const readyPath = path.join(root, "stream-ready");
       const donePath = path.join(root, "stream-done");
@@ -1054,7 +1046,7 @@ exit 1
   });
 
   it("selects macOS desktop users with homes on spaced mounted volumes", () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const prlctlPath = path.join(root, "prlctl");
     writeFileSync(
       prlctlPath,
@@ -1102,7 +1094,7 @@ exit 7
   });
 
   it("keeps spaces in macOS sudo fallback desktop homes", () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const prlctlPath = path.join(root, "prlctl");
     writeFileSync(
       prlctlPath,

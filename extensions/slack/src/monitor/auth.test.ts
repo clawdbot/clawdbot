@@ -41,6 +41,7 @@ function makeSlackCtx(allowFrom: string[]): SlackMonitorContext {
     allowFrom,
     accountId: "main",
     dmPolicy: "pairing",
+    installationIdentity: { kind: "workspace", teamId: "T_MAIN" },
   } as unknown as SlackMonitorContext;
 }
 
@@ -168,6 +169,32 @@ describe("resolveSlackEffectiveAllowFrom", () => {
       expect(readChannelIngressStoreAllowFromForDmPolicyMock).toHaveBeenCalledTimes(expectedCalls);
     }
   });
+
+  it("reads only the current Enterprise workspace's pairing approvals", async () => {
+    readChannelIngressStoreAllowFromForDmPolicyMock.mockResolvedValue([
+      "ULEGACY123",
+      "team:T11111111:user:U11111111",
+      "team:T22222222:user:U22222222",
+    ]);
+    const ctx = makeSlackCtx(["UCONFIG123"]);
+    ctx.installationIdentity = { kind: "enterprise", enterpriseId: "E11111111" };
+
+    await expect(
+      resolveSlackEffectiveAllowFrom(ctx, {
+        includePairingStore: true,
+        eventScope: { teamId: "T11111111", client: {} as never },
+      }),
+    ).resolves.toEqual(["uconfig123", "u11111111"]);
+    await expect(
+      resolveSlackEffectiveAllowFrom(ctx, {
+        includePairingStore: true,
+        eventScope: { teamId: "T22222222", client: {} as never },
+      }),
+    ).resolves.toEqual(["uconfig123", "u22222222"]);
+    await expect(
+      resolveSlackEffectiveAllowFrom(ctx, { includePairingStore: true }),
+    ).resolves.toEqual(["uconfig123"]);
+  });
 });
 
 describe("authorizeSlackSystemEventSender", () => {
@@ -220,6 +247,59 @@ describe("authorizeSlackSystemEventSender", () => {
     await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
     expect(conversationsMembers).toHaveBeenCalledTimes(1);
   });
+
+  it("authorizes an owner found on a later channel member page", async () => {
+    type MembersResponse = {
+      members: string[];
+      response_metadata: { next_cursor?: string };
+    };
+    const conversationsMembers = vi
+      .fn<() => Promise<MembersResponse>>()
+      .mockResolvedValueOnce({
+        members: ["UOTHER"],
+        response_metadata: { next_cursor: "cursor-next" },
+      })
+      .mockResolvedValueOnce({ members: ["UOWNER"], response_metadata: {} });
+    const { authorize } = makeChannelMemberAuth(conversationsMembers);
+
+    await expect(authorize()).resolves.toBe(true);
+    expect(conversationsMembers.mock.calls).toEqual([
+      [{ token: "xoxb-test", channel: "C1", limit: 999 }],
+      [{ token: "xoxb-test", channel: "C1", limit: 999, cursor: "cursor-next" }],
+    ]);
+  });
+
+  it.each([
+    ["a repeated cursor", ["cursor-a", "cursor-a"]],
+    ["a cursor cycle", ["cursor-a", "cursor-b", "cursor-a"]],
+  ] as const)(
+    "denies channel bot authorization on %s and retries cleanly",
+    async (_name, cursors) => {
+      type MembersResponse = {
+        members: string[];
+        response_metadata: { next_cursor?: string };
+      };
+      const remainingCursors = [...cursors];
+      const conversationsMembers = vi.fn(async (): Promise<MembersResponse> => {
+        const nextCursor = remainingCursors.shift();
+        if (!nextCursor) {
+          throw new Error("channel member pagination escaped the cursor guard");
+        }
+        return { members: ["UOWNER"], response_metadata: { next_cursor: nextCursor } };
+      });
+      const { authorize } = makeChannelMemberAuth(conversationsMembers);
+
+      await expect(authorize()).resolves.toBe(false);
+      expect(conversationsMembers).toHaveBeenCalledTimes(cursors.length);
+
+      conversationsMembers.mockResolvedValueOnce({
+        members: ["UOWNER"],
+        response_metadata: {},
+      });
+      await expect(authorize()).resolves.toBe(true);
+      expect(conversationsMembers).toHaveBeenCalledTimes(cursors.length + 1);
+    },
+  );
 
   it.each([
     {

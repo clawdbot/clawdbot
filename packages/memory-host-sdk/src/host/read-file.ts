@@ -16,13 +16,18 @@ import {
   root,
   statRegularFile,
 } from "./fs-utils.js";
-import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
+import {
+  isMemoryPath,
+  matchesExtraMemoryPathEntry,
+  normalizeExtraMemoryPathEntries,
+} from "./internal.js";
 import {
   buildMemoryReadResult,
   DEFAULT_MEMORY_READ_LINES,
   type MemoryReadResult,
 } from "./read-file-shared.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
+import type { MemoryExtraPath } from "./types.js";
 
 // Secure markdown memory-file reader for workspace and configured extra paths.
 
@@ -66,7 +71,7 @@ function isFileDisappearedDuringReadError(err: unknown): boolean {
 /** Read a validated memory markdown file from workspace or configured extra paths. */
 export async function readMemoryFile(params: {
   workspaceDir: string;
-  extraPaths?: string[];
+  extraPaths?: MemoryExtraPath[];
   relPath: string;
   from?: number;
   lines?: number;
@@ -85,15 +90,18 @@ export async function readMemoryFile(params: {
   const allowedWorkspace = inWorkspace && isMemoryPath(relPath);
   let allowedAdditional = false;
   if (!allowedWorkspace && (params.extraPaths?.length ?? 0) > 0) {
-    const additionalPaths = normalizeExtraMemoryPaths(params.workspaceDir, params.extraPaths);
+    const additionalPaths = normalizeExtraMemoryPathEntries(params.workspaceDir, params.extraPaths);
     for (const additionalPath of additionalPaths) {
       try {
-        const stat = await fs.lstat(additionalPath);
+        const stat = await fs.lstat(additionalPath.path);
         if (stat.isSymbolicLink()) {
           continue;
         }
         if (stat.isDirectory()) {
-          if (await isAllowedAdditionalDirectoryPath(additionalPath, absPath)) {
+          if (
+            matchesExtraMemoryPathEntry(additionalPath, absPath) &&
+            (await isAllowedAdditionalDirectoryPath(additionalPath.path, absPath))
+          ) {
             const candidateStat = await fs.lstat(absPath).catch(() => null);
             if (candidateStat?.isSymbolicLink()) {
               continue;
@@ -103,7 +111,7 @@ export async function readMemoryFile(params: {
           }
           continue;
         }
-        if (stat.isFile() && absPath === additionalPath && absPath.endsWith(".md")) {
+        if (stat.isFile() && absPath === additionalPath.path && absPath.endsWith(".md")) {
           allowedAdditional = true;
           break;
         }

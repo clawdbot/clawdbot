@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginHookSkillProposalEvaluationOutcome } from "../../plugins/hook-types.js";
 import type { SkillScanFinding } from "../security/scanner.js";
+import type { SkillCollectionReconcileContext } from "./collection-contracts.js";
 
 /** Schema id for persisted skill workshop proposal records. */
 export const SKILL_WORKSHOP_SCHEMA = "openclaw.skill-workshop.proposal.v1" as const;
@@ -73,6 +74,8 @@ export type SkillWorkshopProposalMutationBudget = {
   failedMutations?: number;
   /** Run-local identity set used to keep idea counts distinct. */
   mutatedProposalIds?: Set<string>;
+  /** Content hash per live skill read this run; autonomous updates require a matching receipt. */
+  readSkillHashes?: Map<string, string>;
 };
 
 export type SkillWorkshopProposalReviewProgress = {
@@ -93,10 +96,12 @@ export type SkillWorkshopProposalReviewCompletion = {
 export type SkillWorkshopRunOptions = {
   env?: NodeJS.ProcessEnv;
   proposalOnly?: boolean;
+  updateProposals?: boolean;
   autonomousCapture?: boolean;
   origin?: SkillProposalOrigin;
   proposalMutationBudget?: SkillWorkshopProposalMutationBudget;
   proposalReviewCompletion?: SkillWorkshopProposalReviewCompletion;
+  collectionReconcile?: SkillCollectionReconcileContext;
 };
 
 export type SkillProposalScan = {
@@ -225,7 +230,15 @@ export type SkillProposalUpdateInput = {
   env?: NodeJS.ProcessEnv;
   skillName: string;
   description?: string;
-  content: string;
+  /** Complete replacement body. Exactly one of content or composePatch is required. */
+  content?: string;
+  /**
+   * Targeted find-and-replace composed onto the live body inside the same read that
+   * hash-binds the proposal. An empty oldString appends newString to the end.
+   */
+  composePatch?: { oldString: string; newString: string };
+  /** Refuse composition when the service's own read hashes differently (reviewer receipt). */
+  expectedCurrentContentHash?: string;
   supportFiles?: SkillProposalSupportFileInput[];
   createdBy?: SkillProposalSource;
   autonomousCapture?: boolean;

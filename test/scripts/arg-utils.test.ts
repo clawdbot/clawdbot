@@ -7,7 +7,7 @@ import {
   readFlagValue,
   stringFlag,
   stringListFlag,
-} from "../../scripts/lib/arg-utils.mjs";
+} from "../../scripts/lib/arg-utils.runtime.mjs";
 
 describe("scripts/lib/arg-utils parseFlagArgs", () => {
   it("uses the last value when a flag is repeated", () => {

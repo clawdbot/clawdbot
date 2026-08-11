@@ -1,7 +1,14 @@
+import {
+  readConfigFileSnapshot,
+  readConfigFileSnapshotWithPluginMetadata,
+  type ConfigSnapshotReadMeasure,
+} from "../config/io.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { addDoctorLegacyIssues } from "./doctor/shared/legacy-config-issues.js";
+import { completeDoctorPluginMetadataSnapshot } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
 
 const loadInstalledPluginIndexStore = createLazyRuntimeModule(
   () => import("../plugins/installed-plugin-index-store.js"),
@@ -19,6 +26,44 @@ function throwPluginRegistryPersistenceFailed(reason: string): never {
   throw new Error(
     `OpenClaw refreshed the plugin registry but could not verify the persisted replacement (${reason}); refusing to write the migration checkpoint. Run "openclaw doctor --fix" and retry.`,
   );
+}
+
+export async function readDoctorConfigPreflightSnapshot(params: {
+  allowCurrentPluginMetadata: boolean;
+  includePluginMetadata: boolean;
+  measure?: ConfigSnapshotReadMeasure;
+  observe?: boolean;
+  preparePluginMetadataSnapshot: boolean;
+  skipPluginValidation: boolean;
+}): Promise<DoctorConfigPreflightPluginSnapshotRead> {
+  const sharedOptions = {
+    ...(params.observe === false ? { observe: false } : {}),
+    ...(params.measure ? { measure: params.measure } : {}),
+    ...(params.allowCurrentPluginMetadata ? {} : { allowCurrentPluginMetadata: false }),
+  };
+  if (params.includePluginMetadata && !params.skipPluginValidation) {
+    const result = await readConfigFileSnapshotWithPluginMetadata(sharedOptions);
+    const pluginMetadataSnapshot = params.preparePluginMetadataSnapshot
+      ? completeDoctorPluginMetadataSnapshot({
+          snapshot: result.pluginMetadataSnapshot,
+          config: result.snapshot.sourceConfig ?? result.snapshot.config ?? {},
+        })
+      : result.pluginMetadataSnapshot;
+    return {
+      snapshot: addDoctorLegacyIssues(result.snapshot, pluginMetadataSnapshot),
+      pluginMigrationFingerprint: pluginMetadataSnapshot?.configFingerprint?.trim() || null,
+      ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+    };
+  }
+  return {
+    snapshot: addDoctorLegacyIssues(
+      await readConfigFileSnapshot({
+        ...sharedOptions,
+        skipPluginValidation: params.skipPluginValidation,
+      }),
+    ),
+    pluginMigrationFingerprint: null,
+  };
 }
 
 export function needsRefreshedPluginIndexPersistence(

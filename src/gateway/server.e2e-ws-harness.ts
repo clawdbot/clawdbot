@@ -5,7 +5,7 @@ import { captureEnv } from "../test-utils/env.js";
 import {
   connectOk,
   getFreePort,
-  startGatewayServer,
+  startTestGatewayServer,
   trackConnectChallengeNonce,
 } from "./test-helpers.js";
 
@@ -16,7 +16,7 @@ type GatewayWsClient = {
 
 export type GatewayServerHarness = {
   port: number;
-  server: Awaited<ReturnType<typeof startGatewayServer>>;
+  server: Awaited<ReturnType<typeof startTestGatewayServer>>;
   openClient: (opts?: Parameters<typeof connectOk>[1]) => Promise<GatewayWsClient>;
   close: () => Promise<void>;
 };
@@ -27,7 +27,7 @@ export async function startGatewayServerHarness(): Promise<GatewayServerHarness>
   const clients = new Set<WebSocket>();
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
   const port = await getFreePort();
-  const server = await startGatewayServer(port, {
+  const server = await startTestGatewayServer(port, {
     auth: { mode: "none" },
     bind: "loopback",
     controlUiEnabled: false,

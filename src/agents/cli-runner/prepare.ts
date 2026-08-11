@@ -15,6 +15,7 @@ import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
 import {
   activateMcpLoopbackClientGrantCapture,
+  bindMcpLoopbackClientGrantAdmission,
   deactivateMcpLoopbackClientGrantCapture,
   mintMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
@@ -29,6 +30,7 @@ import {
   resolveMcpLoopbackScopedTools,
 } from "../../gateway/mcp-http.runtime.js";
 import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
+import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import type {
   CliBackendAuthEpochMode,
@@ -47,6 +49,7 @@ import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import { resolvePreparedRunAdmission } from "../admitted-run-context.js";
 import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { resolveAgentConfig, resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { hasUsableOAuthCredential } from "../auth-profiles/credential-state.js";
@@ -71,6 +74,7 @@ import {
   makeBootstrapWarn as makeBootstrapWarnImpl,
   resolveBootstrapContextForRun as resolveBootstrapContextForRunImpl,
 } from "../bootstrap-files.js";
+import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import { isPrimaryBootstrapRun, resolveWorkspaceBootstrapRouting } from "../bootstrap-routing.js";
 import {
   CLI_AUTH_EPOCH_VERSION,
@@ -86,21 +90,23 @@ import {
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import { resolvePromptBuildHookResult } from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
+import {
+  prependSystemPromptAddition,
+  resolveAttemptMediaTaskSystemPromptAddition,
+} from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
+import { composeSystemPromptWithHookContext } from "../embedded-agent-runner/run/attempt-thread-helpers.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
 } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { resolvePromptBuildHookResult } from "../embedded-agent-runner/run/attempt.prompt-helpers.js";
-import {
-  prependSystemPromptAddition,
-  resolveAttemptMediaTaskSystemPromptAddition,
-} from "../embedded-agent-runner/run/attempt.prompt-helpers.js";
-import { composeSystemPromptWithHookContext } from "../embedded-agent-runner/run/attempt.thread-helpers.js";
 import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import {
   mapSandboxSkillEntriesForPrompt,
   resolveSandboxSkillRuntimeInputs,
 } from "../embedded-agent-runner/sandbox-skills.js";
+import { selectContextEngineForTranscriptHost } from "../harness/context-engine-logical-turn.js";
+import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
@@ -114,8 +120,9 @@ import {
   DEFAULT_BOOTSTRAP_FILENAME,
   isWorkspaceBootstrapPending as isWorkspaceBootstrapPendingImpl,
 } from "../workspace.js";
+import { CliAuthProfilePreparationError } from "./auth-profile-preparation-error.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
-import { getClaudeLiveSessionGenerationForOwner } from "./claude-live-session.js";
+import { getClaudeGeneration } from "./claude-live-registry.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import {
   resolveBundledCliBackendAuthPolicy,
@@ -172,6 +179,7 @@ const prepareDeps = {
   ensureMcpLoopbackServer,
   createMcpLoopbackServerConfig,
   activateMcpLoopbackClientGrantCapture,
+  bindMcpLoopbackClientGrantAdmission,
   deactivateMcpLoopbackClientGrantCapture,
   mintMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
@@ -183,7 +191,7 @@ const prepareDeps = {
   prepareClaudeCliSkillsPlugin,
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
-  getClaudeLiveSessionGenerationForOwner,
+  getClaudeGeneration,
   readExternalCliBootstrapCredential,
   resolveApiKeyForProfile,
 };
@@ -376,15 +384,19 @@ function buildCliAuthProfileResolutionError(params: {
   backendId: string;
   profileId: string;
   provider: string;
+  agentDir: string;
   failure: CliAuthProfileResolutionFailure;
-}): Error {
+}): CliAuthProfilePreparationError {
   const loginCommand = buildOAuthRefreshFailureLoginCommand(params.provider, {
     profileId: params.profileId,
   });
   const reason = describeCliAuthProfileResolutionFailure(params.profileId, params.failure);
-  return new Error(
-    `CLI backend "${params.backendId}" ${reason}. Re-authenticate with: ${loginCommand}. OpenClaw did not start the run.`,
-  );
+  return new CliAuthProfilePreparationError({
+    message: `CLI backend "${params.backendId}" ${reason}. Re-authenticate with: ${loginCommand}. OpenClaw did not start the run.`,
+    profileId: params.profileId,
+    provider: params.provider,
+    agentDir: params.agentDir,
+  });
 }
 
 /** Builds the complete context required to execute a CLI-backed agent run. */
@@ -413,6 +425,20 @@ export async function prepareCliRunContext(
   const started = Date.now();
   const executionMode = params.executionMode ?? "agent";
   const isSideQuestion = executionMode === "side-question";
+  const admitPreparedParams = async (
+    candidate: RunCliAgentParams,
+  ): Promise<
+    RunCliAgentParams & { admittedRunContext: NonNullable<RunCliAgentParams["admittedRunContext"]> }
+  > => {
+    const admittedRunContext = await resolvePreparedRunAdmission({
+      runId: candidate.runId,
+      runtimeKind: "embedded",
+      admittedRunContext: candidate.admittedRunContext,
+      preparedRunAdmission: candidate.preparedRunAdmission,
+    });
+    const { preparedRunAdmission: _preparedRunAdmission, ...rest } = candidate;
+    return { ...rest, admittedRunContext };
+  };
   const runtimeChatType = params.chatType ?? params.sessionEntry?.chatType;
   const workspaceResolution = resolveRunWorkspaceDir({
     workspaceDir: params.workspaceDir,
@@ -590,6 +616,7 @@ export async function prepareCliRunContext(
         backendId: backendResolved.id,
         profileId: authProfileId,
         provider: nativeClaudeCliCredential.provider,
+        agentDir,
         failure: { kind: "native-login-missing" },
       });
     }
@@ -598,6 +625,7 @@ export async function prepareCliRunContext(
         backendId: backendResolved.id,
         profileId: authProfileId,
         provider: nativeClaudeCliCredential.provider,
+        agentDir,
         failure: { kind: "native-login-identity-mismatch" },
       });
     }
@@ -629,6 +657,7 @@ export async function prepareCliRunContext(
         backendId: backendResolved.id,
         profileId: authProfileId,
         provider: writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
+        agentDir,
         failure: { kind: "unmaterialized" },
       });
     }
@@ -641,6 +670,7 @@ export async function prepareCliRunContext(
         backendId: backendResolved.id,
         profileId: authProfileId,
         provider: writableAuthStore.profiles[authProfileId]?.provider ?? params.provider,
+        agentDir,
         failure: { kind: "resolved-as-other", resolvedProfileId: resolvedAuth.profileId },
       });
     }
@@ -656,6 +686,7 @@ export async function prepareCliRunContext(
         backendId: backendResolved.id,
         profileId: authProfileId,
         provider: resolvedAuth?.provider ?? params.provider,
+        agentDir,
         failure: { kind: "unmaterialized" },
       });
     }
@@ -1066,9 +1097,25 @@ export async function prepareCliRunContext(
         ? prepareDeps.mintMcpLoopbackClientGrant({
             context: mcpGrantContext,
             runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
+            admittedRunContext: params.admittedRunContext,
             ...(mcpToolAuth ? { toolAuth: mcpToolAuth } : {}),
           })
         : undefined;
+    const bindMcpClientGrantAdmission = (
+      admittedRunContext: NonNullable<RunCliAgentParams["admittedRunContext"]>,
+    ) => {
+      if (
+        mcpClientGrant &&
+        mcpLoopbackRuntime &&
+        !prepareDeps.bindMcpLoopbackClientGrantAdmission({
+          token: mcpClientGrant.token,
+          runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
+          admittedRunContext,
+        })
+      ) {
+        throw new Error("CLI MCP client grant is no longer valid for this admitted run");
+      }
+    };
     const mcpClientGrantCapture =
       mcpClientGrant && mcpLoopbackRuntime
         ? {
@@ -1166,23 +1213,38 @@ export async function prepareCliRunContext(
           isolatedCompletionSystemPrompt: params.extraSystemPrompt ?? "",
         }
       : prepareExecutionContext;
-    preparedExecution =
-      (await backendResolved.prepareExecution?.(
-        (backendAuthPolicy
-          ? {
-              ...privatePrepareExecutionContext,
-              // The core-internal auth policy table owns this private credential and isolated
-              // completion bridge; third-party backends cannot opt into either capability.
-              authCredential,
-            }
-          : privatePrepareExecutionContext) as typeof prepareExecutionContext & {
-          authCredential?: AuthProfileCredential;
-          isolatedCompletionCwd?: string;
-          isolatedCompletionModelId?: string;
-          isolatedCompletionPrompt?: string;
-          isolatedCompletionSystemPrompt?: string;
-        },
-      )) ?? undefined;
+    try {
+      preparedExecution =
+        (await backendResolved.prepareExecution?.(
+          (backendAuthPolicy
+            ? {
+                ...privatePrepareExecutionContext,
+                // The core-internal auth policy table owns this private credential and isolated
+                // completion bridge; third-party backends cannot opt into either capability.
+                authCredential,
+              }
+            : privatePrepareExecutionContext) as typeof prepareExecutionContext & {
+            authCredential?: AuthProfileCredential;
+            isolatedCompletionCwd?: string;
+            isolatedCompletionModelId?: string;
+            isolatedCompletionPrompt?: string;
+            isolatedCompletionSystemPrompt?: string;
+          },
+        )) ?? undefined;
+    } catch (error) {
+      if (error instanceof CliBackendAuthProfilePreparationError && effectiveAuthProfileId) {
+        // Preserve the selected-profile fact across lazy plugin preparation so
+        // the generic runner can settle it once without backend-owned writes.
+        throw new CliAuthProfilePreparationError({
+          message: error.message,
+          profileId: effectiveAuthProfileId,
+          provider: authStore?.profiles[effectiveAuthProfileId]?.provider ?? params.provider,
+          agentDir,
+          cause: error,
+        });
+      }
+      throw error;
+    }
     const preparedBackendCleanup =
       cleanupPreparedBackend || preparedExecution?.cleanup
         ? async () => {
@@ -1342,7 +1404,7 @@ export async function prepareCliRunContext(
       preparedBackendFinal.backend.liveSession === "claude-stdio" &&
       preparedBackendFinal.backend.output === "jsonl" &&
       preparedBackendFinal.backend.input === "stdin" &&
-      prepareDeps.getClaudeLiveSessionGenerationForOwner({
+      prepareDeps.getClaudeGeneration({
         backendId: backendResolved.id,
         agentAccountId: params.agentAccountId,
         agentId: params.agentId,
@@ -1374,14 +1436,13 @@ export async function prepareCliRunContext(
         `cli session reset: provider=${params.provider} reason=${invalidatedReason}`,
       );
     }
-    const heartbeatPrompt =
-      isSideQuestion || params.bootstrapContextRunKind === "commitment-only"
-        ? undefined
-        : resolveHeartbeatPromptForSystemPrompt({
-            config: params.config,
-            agentId: sessionAgentId,
-            defaultAgentId,
-          });
+    const heartbeatPrompt = isSideQuestion
+      ? undefined
+      : resolveHeartbeatPromptForSystemPrompt({
+          config: params.config,
+          agentId: sessionAgentId,
+          defaultAgentId,
+        });
     const openClawReferences = isSideQuestion
       ? { docsPath: null, sourcePath: null }
       : await prepareDeps.resolveOpenClawReferencePaths({
@@ -1586,17 +1647,19 @@ export async function prepareCliRunContext(
     });
     const contextEngineConfig = params.config ?? getRuntimeConfig();
     if (isSideQuestion) {
-      const preparedParams: RunCliAgentParams = {
+      const preparedParams = await admitPreparedParams({
         ...params,
         config: contextEngineConfig,
         prompt: preparedPrompt,
         transcriptPrompt: finalizedTranscriptPrompt,
         ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
-      };
+      });
+      bindMcpClientGrantAdmission(preparedParams.admittedRunContext);
 
       return {
         params: preparedParams,
         effectiveAuthProfileId,
+        ...(authStore ? { authProfileStore: authStore } : {}),
         agentDir,
         started,
         workspaceDir,
@@ -1634,20 +1697,39 @@ export async function prepareCliRunContext(
     // Context remains session-owned. Trusted helper runs may borrow a different
     // agentDir only for model/auth execution.
     const contextEngineAgentDir = resolveAgentDir(contextEngineConfig, contextEngineSessionAgentId);
-    const resolvedContextEngine = await resolveContextEngine(contextEngineConfig, {
-      agentDir: contextEngineAgentDir,
-      workspaceDir,
+    const contextEngineHostSupport = buildGenericCliContextEngineHostSupport({
+      backendId: backendResolved.id,
+      capabilities: backendResolved.contextEngineHostCapabilities,
     });
+    let resolvedContextEngine;
+    if (params.contextEngineLogicalTurnLease) {
+      selectContextEngineForTranscriptHost({
+        lease: params.contextEngineLogicalTurnLease,
+        host: contextEngineHostSupport,
+        operation: "agent-run",
+        recorder: params.userTurnTranscriptRecorder,
+      });
+      await drainPendingContextEngineTurnsBeforeRun({
+        admission: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
+        isHeartbeat: isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind),
+        lease: params.contextEngineLogicalTurnLease,
+        recorder: params.userTurnTranscriptRecorder,
+        sessionTarget: params.sessionTarget,
+      });
+      resolvedContextEngine = params.contextEngineLogicalTurnLease.begin().engine;
+    } else {
+      resolvedContextEngine = await resolveContextEngine(contextEngineConfig, {
+        agentDir: contextEngineAgentDir,
+        workspaceDir,
+      });
+    }
     const contextEngine =
       resolvedContextEngine.info.id !== "legacy" ? resolvedContextEngine : undefined;
     if (contextEngine) {
       assertContextEngineHostSupport({
         contextEngine,
         operation: "agent-run",
-        host: buildGenericCliContextEngineHostSupport({
-          backendId: backendResolved.id,
-          capabilities: backendResolved.contextEngineHostCapabilities,
-        }),
+        host: contextEngineHostSupport,
       });
     }
     const hadSessionFile = await hasCliSessionTranscript({
@@ -1658,17 +1740,19 @@ export async function prepareCliRunContext(
       config: contextEngineConfig,
     });
     const contextEngineTurnPrompt = params.transcriptPrompt ?? params.prompt;
-    const preparedParams: RunCliAgentParams = {
+    const preparedParams = await admitPreparedParams({
       ...params,
       config: contextEngineConfig,
       prompt: preparedPrompt,
       transcriptPrompt: finalizedTranscriptPrompt,
       ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
-    };
+    });
+    bindMcpClientGrantAdmission(preparedParams.admittedRunContext);
 
     return {
       params: preparedParams,
       effectiveAuthProfileId,
+      ...(authStore ? { authProfileStore: authStore } : {}),
       agentDir,
       started,
       workspaceDir,

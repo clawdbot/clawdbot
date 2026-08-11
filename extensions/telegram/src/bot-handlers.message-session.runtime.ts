@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import {
   getSessionEntry,
-  listSessionEntries,
   readAmbientTranscriptWatermark,
   resolveAmbientTranscriptWatermarkKey,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -25,6 +24,7 @@ export function createTelegramMessageSessionRuntime({
   RegisterTelegramHandlerParams,
   "accountId" | "resolveTelegramGroupConfig" | "telegramDeps"
 >) {
+  const loadSessionEntry = telegramDeps.getSessionEntry ?? getSessionEntry;
   const resolveTelegramSessionState = (params: {
     chatId: number | string;
     isGroup: boolean;
@@ -79,15 +79,11 @@ export function createTelegramMessageSessionRuntime({
     const storePath = telegramDeps.resolveStorePath(params.runtimeCfg.session?.store, {
       agentId: route.agentId,
     });
-    const entry = (telegramDeps.getSessionEntry ?? getSessionEntry)({ storePath, sessionKey });
-    const store = Object.fromEntries(
-      (telegramDeps.listSessionEntries ?? listSessionEntries)({ storePath, readOnly: true }).map(
-        ({ sessionKey: key, entry: value }) => [key, value],
-      ),
-    );
+    const entry = loadSessionEntry({ storePath, sessionKey });
     const storedOverride = resolveStoredModelOverride({
       sessionEntry: entry,
-      sessionStore: store,
+      loadSessionEntry: (parentSessionKey) =>
+        loadSessionEntry({ storePath, sessionKey: parentSessionKey }),
       sessionKey,
       defaultProvider: resolveDefaultModelForAgent({
         cfg: params.runtimeCfg,

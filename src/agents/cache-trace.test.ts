@@ -221,6 +221,14 @@ describe("createCacheTrace", () => {
             },
           ],
         },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "visible" }],
+          providerReplay: {
+            type: "openai-responses-compaction",
+            data: "opaque-cache-trace-compaction",
+          },
+        },
       ] as unknown as [],
     });
 
@@ -248,30 +256,11 @@ describe("createCacheTrace", () => {
         safe: "keep-me",
         tokenCount: 42,
       },
-      images: [
-        {
-          type: "image",
-          mimeType: "image/png",
-          data: "<redacted>",
-          bytes: 4,
-          sha256: crypto.createHash("sha256").update("QUJDRA==").digest("hex"),
-        },
-      ],
+      images: "<redacted>",
     });
     expect((event.options as { diagnosticText?: string }).diagnosticText).not.toBe(bareGithubKey);
     expect((event.options as { diagnosticText?: string }).diagnosticText).not.toContain(
       bareGithubKey,
-    );
-
-    const optionsImages = (
-      ((event.options as { images?: unknown[] } | undefined)?.images ?? []) as Array<
-        Record<string, unknown>
-      >
-    )[0];
-    expect(optionsImages?.data).toBe("<redacted>");
-    expect(optionsImages?.bytes).toBe(4);
-    expect(optionsImages?.sha256).toBe(
-      crypto.createHash("sha256").update("QUJDRA==").digest("hex"),
     );
 
     const firstMessage = ((event.messages as Array<Record<string, unknown>> | undefined) ?? [])[0];
@@ -293,6 +282,8 @@ describe("createCacheTrace", () => {
     expect(source.bytes).toBe(6);
     expect(source.sha256).toBe(crypto.createHash("sha256").update("U0VDUkVU").digest("hex"));
     const serialized = JSON.stringify(event);
+    expect(serialized).not.toContain("providerReplay");
+    expect(serialized).not.toContain("opaque-cache-trace-compaction");
     expect(serialized).not.toContain(bareAwsKey);
     expect(serialized).not.toContain(bareGoogleKey);
     expect(serialized).not.toContain(bareGithubKey);

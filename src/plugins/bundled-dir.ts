@@ -70,6 +70,8 @@ function hasUsableBundledPluginTree(pluginsDir: string): boolean {
 
 function safeRealpathSync(targetPath: string): string | null {
   try {
+    // Trusted-root containment requires native platform canonicalization here.
+    // The shared plain-realpath helper must not replace this security boundary.
     return fs.realpathSync.native(targetPath);
   } catch {
     return null;

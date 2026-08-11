@@ -43,6 +43,7 @@ type ApplicationConfig = {
   embedSandboxMode: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
   terminalEnabled: boolean;
+  cliAgentsEnabled?: boolean;
   pluginFrameGrants: ControlUiPluginFrameGrantAck[];
 };
 
@@ -79,6 +80,7 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
   embedSandboxMode: "strict",
   allowExternalEmbedUrls: false,
   terminalEnabled: readDocumentTerminalEnabled() ?? false,
+  cliAgentsEnabled: false,
   pluginFrameGrants: [],
 };
 
@@ -155,6 +157,7 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
           : "scripts",
     allowExternalEmbedUrls: parsed.allowExternalEmbedUrls === true,
     terminalEnabled: parsed.terminalEnabled === true,
+    cliAgentsEnabled: parsed.cliAgentsEnabled === true,
     pluginFrameGrants: Array.isArray(parsed.pluginFrameGrants)
       ? parsed.pluginFrameGrants.filter(
           (grant): grant is ControlUiPluginFrameGrantAck =>

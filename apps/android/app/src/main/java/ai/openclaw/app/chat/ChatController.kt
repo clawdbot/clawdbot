@@ -58,6 +58,7 @@ import java.util.concurrent.atomic.AtomicLong
 internal const val SESSION_LIST_FETCH_LIMIT = 200
 private val QUESTION_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
 private val SWARM_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
+private const val SUBAGENT_ACTIVITY_RETENTION_MS = 60_000L
 private const val SESSION_EDITOR_MAX_BASE64_CHARS = ((OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES + 2) / 3) * 4
 private val MANAGED_MEDIA_PATH_REGEX =
   Regex("^/api/chat/media/outgoing/[^/]+/([0-9a-fA-F-]{36})/full(?:\\?.*)?$")
@@ -134,6 +135,7 @@ class ChatController internal constructor(
   private val recordModelRecent: (String) -> Unit = {},
   private val onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
   private val onOfflineDefaultAgentRestored: (String) -> Unit = {},
+  private val onAssistantReplyFinalized: (owner: ChatComposerOwner, runId: String, text: String) -> Unit = { _, _, _ -> },
 ) {
   internal constructor(
     scope: CoroutineScope,
@@ -147,6 +149,7 @@ class ChatController internal constructor(
     recordModelRecent: (String) -> Unit = {},
     onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
     onOfflineDefaultAgentRestored: (String) -> Unit = {},
+    onAssistantReplyFinalized: (owner: ChatComposerOwner, runId: String, text: String) -> Unit = { _, _, _ -> },
   ) : this(
     scope = scope,
     json = json,
@@ -171,6 +174,7 @@ class ChatController internal constructor(
     recordModelRecent = recordModelRecent,
     onSessionDeleted = onSessionDeleted,
     onOfflineDefaultAgentRestored = onOfflineDefaultAgentRestored,
+    onAssistantReplyFinalized = onAssistantReplyFinalized,
   )
 
   suspend fun loadImageArtifact(artifactId: String): GatewayLoadedImage? {
@@ -323,6 +327,11 @@ class ChatController internal constructor(
   private val pendingToolCallsById = ConcurrentHashMap<String, ChatPendingToolCall>()
   private val _pendingToolCalls = MutableStateFlow<List<ChatPendingToolCall>>(emptyList())
   val pendingToolCalls: StateFlow<List<ChatPendingToolCall>> = _pendingToolCalls.asStateFlow()
+
+  private val subagentActivityLock = Any()
+  private val subagentActivityExpiryJobs = mutableMapOf<String, Job>()
+  private val _subagentActivities = MutableStateFlow<Map<String, ChatSubagentActivity>>(emptyMap())
+  val subagentActivities: StateFlow<Map<String, ChatSubagentActivity>> = _subagentActivities.asStateFlow()
 
   private val _questions = MutableStateFlow<List<ChatQuestionPrompt>>(emptyList())
   val questions: StateFlow<List<ChatQuestionPrompt>> = _questions.asStateFlow()
@@ -691,6 +700,7 @@ class ChatController internal constructor(
         clearMessages = true,
         markLoading = false,
       )
+      clearSubagentActivities()
       clearLiveHistoryMarker()
       _sessions.value = emptyList()
       publishRunPresentation()
@@ -2222,6 +2232,7 @@ class ChatController internal constructor(
       _sessionBranches.value = emptyList()
       _sessionBranchesLoading.value = false
       _sessionBranchSwitching.value = false
+      clearSubagentActivities()
     }
     _sessionKey.value = key
     _sessionOwnerAgentId.value = owner
@@ -3093,6 +3104,7 @@ class ChatController internal constructor(
         invalidateIncompleteRunTelemetry()
         publishRunPresentation()
         clearLiveRunUi()
+        clearSubagentActivities()
         refreshQuestions()
         refreshHistoryForRecovery()
       }
@@ -3118,6 +3130,10 @@ class ChatController internal constructor(
       "agent" -> {
         if (payloadJson.isNullOrBlank()) return
         handleAgentEvent(payloadJson)
+      }
+      "task" -> {
+        if (payloadJson.isNullOrBlank()) return
+        handleTaskEvent(payloadJson)
       }
       "question.requested" -> {
         if (payloadJson.isNullOrBlank()) return
@@ -5324,20 +5340,27 @@ class ChatController internal constructor(
   private fun handleChatEvent(payloadJson: String) {
     val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
     val sessionKey = payload["sessionKey"].asStringOrNull()?.trim()
+    val runId = payload["runId"].asStringOrNull()
+    val state = payload["state"].asStringOrNull()
+    val projection = runId?.let(pendingRunProjectionsByRunId::get)
     if (!sessionKey.isNullOrEmpty() && sessionKey != _sessionKey.value) {
-      val state = payload["state"].asStringOrNull()
       if (state == "final" || state == "aborted" || state == "error") {
-        payload["runId"].asStringOrNull()?.let(::clearPendingRun)
+        handleInactiveChatTerminal(
+          payload = payload,
+          runId = runId,
+          owner = resolveChatEventRoutingOwner(sessionKey, projection),
+        )
       }
       return
     }
 
-    val runId = payload["runId"].asStringOrNull()
-    val state = payload["state"].asStringOrNull()
-    val projection = runId?.let(pendingRunProjectionsByRunId::get)
     if (projection != null && projection.owner != currentChatComposerRoutingOwner()) {
       if (state == "final" || state == "aborted" || state == "error") {
-        clearPendingRun(runId)
+        handleInactiveChatTerminal(
+          payload = payload,
+          runId = runId,
+          owner = resolveChatEventRoutingOwner(sessionKey, projection),
+        )
       }
       return
     }
@@ -5367,6 +5390,11 @@ class ChatController internal constructor(
             // Another client or chat.inject can finish the open session. Refresh
             // idle history without allowing its terminal state to own local UI.
             lastHandledTerminalRunId = runId
+            publishAssistantReplyFinalized(
+              payload = payload,
+              runId = runId,
+              owner = currentChatComposerRoutingOwner(),
+            )
             refreshCurrentHistoryBestEffort(updateSessionInfo = true)
           }
           return
@@ -5375,6 +5403,11 @@ class ChatController internal constructor(
           lastHandledTerminalRunId = runId
           retireRunTelemetry(runId)
         }
+        publishAssistantReplyFinalized(
+          payload = payload,
+          runId = runId,
+          owner = currentChatComposerRoutingOwner(),
+        )
         if (wasTimedOut) {
           val hasNewerRun =
             synchronized(pendingRuns) { pendingRuns.isNotEmpty() } || unresolvedRepliesByRunId.isNotEmpty()
@@ -5684,20 +5717,37 @@ class ChatController internal constructor(
         if (phase.isNullOrEmpty() || name.isNullOrEmpty() || toolCallId.isNullOrEmpty()) return
 
         val ts = payload["ts"].asLongOrNull() ?: System.currentTimeMillis()
-        if (phase == "start") {
-          val args = data.get("args").asObjectOrNull()
-          pendingToolCallsById[toolCallId] =
-            ChatPendingToolCall(
-              toolCallId = toolCallId,
-              name = name,
-              args = args,
-              startedAtMs = ts,
-              isError = null,
-            )
-          publishPendingToolCalls()
-        } else if (phase == "result") {
-          pendingToolCallsById.remove(toolCallId)
-          publishPendingToolCalls()
+        when (phase) {
+          "start" -> {
+            val existing = pendingToolCallsById[toolCallId]
+            pendingToolCallsById[toolCallId] =
+              ChatPendingToolCall(
+                toolCallId = toolCallId,
+                name = name,
+                args = data.get("args").asObjectOrNull(),
+                startedAtMs = existing?.startedAtMs ?: ts,
+                isError = null,
+                liveDiff = existing?.liveDiff,
+              )
+            publishPendingToolCalls()
+          }
+          "input_delta" -> {
+            val diff = parseChatDiffStat(data["diff"], includeFiles = false) ?: return
+            val existing = pendingToolCallsById[toolCallId]
+            pendingToolCallsById[toolCallId] =
+              existing?.copy(name = name, liveDiff = diff)
+                ?: ChatPendingToolCall(
+                  toolCallId = toolCallId,
+                  name = name,
+                  startedAtMs = ts,
+                  liveDiff = diff,
+                )
+            publishPendingToolCalls()
+          }
+          "result" -> {
+            pendingToolCallsById.remove(toolCallId)
+            publishPendingToolCalls()
+          }
         }
       }
       "plan" -> {
@@ -5722,6 +5772,63 @@ class ChatController internal constructor(
     }
   }
 
+  private fun handleInactiveChatTerminal(
+    payload: JsonObject,
+    runId: String?,
+    owner: ChatComposerOwner?,
+  ) {
+    val normalizedRunId = runId?.trim()?.takeIf(String::isNotEmpty)
+    if (normalizedRunId != null && normalizedRunId != lastHandledTerminalRunId) {
+      lastHandledTerminalRunId = normalizedRunId
+      retireRunTelemetry(normalizedRunId)
+      publishAssistantReplyFinalized(
+        payload = payload,
+        runId = normalizedRunId,
+        owner = owner,
+      )
+    }
+    normalizedRunId?.let(::clearPendingRun)
+  }
+
+  private fun resolveChatEventRoutingOwner(
+    sessionKey: String?,
+    projection: PendingRunProjection?,
+  ): ChatComposerOwner? {
+    val gatewayStableId = currentCacheScope()?.gatewayId
+    val normalizedSessionKey = sessionKey?.trim()?.takeIf(String::isNotEmpty)
+    if (projection != null) {
+      return projection.owner.takeIf { owner ->
+        owner.gatewayStableId == gatewayStableId &&
+          (normalizedSessionKey == null || owner.sessionKey == normalizedSessionKey)
+      }
+    }
+
+    val eventSessionKey =
+      when (normalizedSessionKey) {
+        null -> return null
+        "main" -> appliedMainSessionKey.trim().takeIf(String::isNotEmpty) ?: return null
+        else -> normalizedSessionKey
+      }
+    return resolveChatComposerRoutingOwner(
+      gatewayStableId = gatewayStableId,
+      gatewayDefaultAgentId = effectiveDefaultAgentId(),
+      sessionKey = eventSessionKey,
+      mainSessionKey = appliedMainSessionKey,
+    )
+  }
+
+  private fun publishAssistantReplyFinalized(
+    payload: JsonObject,
+    runId: String?,
+    owner: ChatComposerOwner?,
+  ) {
+    if (payload["state"].asStringOrNull() != "final") return
+    val normalizedRunId = runId?.trim()?.takeIf(String::isNotEmpty) ?: return
+    val verifiedOwner = owner?.takeIf { it.routingVerified } ?: return
+    val text = parseAssistantDeltaText(payload)?.trim()?.takeIf(String::isNotEmpty) ?: return
+    runCatching { onAssistantReplyFinalized(verifiedOwner, normalizedRunId, text) }
+  }
+
   private fun parseAssistantDeltaText(payload: JsonObject): String? {
     val message = payload["message"].asObjectOrNull() ?: return null
     if (message["role"].asStringOrNull() != "assistant") return null
@@ -5740,6 +5847,93 @@ class ChatController internal constructor(
   private fun publishPendingToolCalls() {
     _pendingToolCalls.value =
       pendingToolCallsById.values.sortedBy { it.startedAtMs }
+  }
+
+  private fun handleTaskEvent(payloadJson: String) {
+    val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
+    if (payload["action"].asStringOrNull() == "deleted") {
+      payload["taskId"]
+        .asStringOrNull()
+        ?.trim()
+        ?.takeIf(String::isNotEmpty)
+        ?.let(::removeSubagentActivity)
+      return
+    }
+    val task = payload["task"].asObjectOrNull() ?: return
+    if (task["runtime"].asStringOrNull() != "subagent") return
+    if (task["sessionKey"].asStringOrNull()?.trim() != _sessionKey.value) return
+    val taskId = task["id"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) ?: return
+    val status = task["status"].asStringOrNull()?.trim()?.lowercase() ?: return
+    if (status !in setOf("queued", "running", "completed", "failed", "cancelled", "timed_out")) return
+
+    val terminal = status != "queued" && status != "running"
+    val now = System.currentTimeMillis()
+    synchronized(subagentActivityLock) {
+      val existing = _subagentActivities.value[taskId]
+      val lastActivity = task["lastActivity"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
+      val fallback =
+        task["progressSummary"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
+          ?: task["lastToolName"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
+      val activity =
+        ChatSubagentActivity(
+          id = taskId,
+          status = status,
+          snippet =
+            lastActivity
+              ?: if (terminal) existing?.snippet ?: fallback else fallback ?: existing?.snippet,
+          diffStat = parseChatDiffStat(task["diffStat"], includeFiles = true) ?: existing?.diffStat,
+          terminalSummary =
+            task["terminalSummary"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
+              ?: existing?.terminalSummary,
+          error =
+            task["error"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
+              ?: existing?.error,
+          startedAtMs =
+            task["startedAt"]?.let(::parseTaskTimestampMs)
+              ?: existing?.startedAtMs
+              ?: task["createdAt"]?.let(::parseTaskTimestampMs)
+              ?: now,
+          endedAtMs =
+            if (terminal) {
+              task["endedAt"]?.let(::parseTaskTimestampMs) ?: existing?.endedAtMs ?: now
+            } else {
+              null
+            },
+          childSessionKey =
+            task["childSessionKey"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
+              ?: existing?.childSessionKey,
+        )
+      _subagentActivities.value = _subagentActivities.value + (taskId to activity)
+      subagentActivityExpiryJobs.remove(taskId)?.cancel()
+      if (!activity.isWorking) {
+        subagentActivityExpiryJobs[taskId] =
+          scope.launch {
+            val expiresAt = (activity.endedAtMs ?: now) + SUBAGENT_ACTIVITY_RETENTION_MS
+            delay((expiresAt - System.currentTimeMillis()).coerceAtLeast(0L))
+            synchronized(subagentActivityLock) {
+              if (_subagentActivities.value[taskId] == activity) {
+                _subagentActivities.value = _subagentActivities.value - taskId
+              }
+              subagentActivityExpiryJobs.remove(taskId)
+            }
+          }
+      }
+    }
+  }
+
+  private fun removeSubagentActivity(taskId: String) {
+    synchronized(subagentActivityLock) {
+      subagentActivityExpiryJobs.remove(taskId)?.cancel()
+      _subagentActivities.value = _subagentActivities.value - taskId
+    }
+  }
+
+  private fun clearSubagentActivities() {
+    synchronized(subagentActivityLock) {
+      subagentActivityExpiryJobs.values.forEach(Job::cancel)
+      subagentActivityExpiryJobs.clear()
+      _subagentActivities.value = emptyMap()
+    }
   }
 
   private fun clearLiveRunUi() {
@@ -6227,6 +6421,17 @@ class ChatController internal constructor(
       key = key,
       updatedAtMs = obj["updatedAt"].asLongOrNull(),
       ownerAgentId = obj["agentId"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+      classification = obj["classification"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+      accountId = obj["accountId"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+      peerKind = obj["peerKind"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+      isMain = obj["isMain"].asBooleanOrNull(),
+      isBackground = obj["isBackground"].asBooleanOrNull(),
+      hasClassificationMetadata =
+        "classification" in obj ||
+          "accountId" in obj ||
+          "peerKind" in obj ||
+          "isMain" in obj ||
+          "isBackground" in obj,
       displayName = obj["displayName"].asStringOrNull()?.trim(),
       derivedTitle = obj["derivedTitle"].asStringOrNull()?.trim(),
       label = obj["label"].asStringOrNull()?.trim(),
@@ -7098,6 +7303,26 @@ private fun JsonElement?.asBooleanOrNull(): Boolean? =
     else -> null
   }
 
+private fun parseChatDiffStat(
+  element: JsonElement?,
+  includeFiles: Boolean,
+): ChatDiffStat? {
+  val value = element.asObjectOrNull() ?: return null
+
+  fun count(key: String): Int? =
+    value[key]
+      .asLongOrNull()
+      ?.takeIf { it in 0..Int.MAX_VALUE.toLong() }
+      ?.toInt()
+
+  val files = if (includeFiles) count("files") ?: return null else null
+  return ChatDiffStat(
+    added = count("added") ?: return null,
+    removed = count("removed") ?: return null,
+    files = files,
+  )
+}
+
 internal fun resolvePreferredActiveRunId(
   localRunIds: Collection<String>,
   advertisedRunIds: List<String>,
@@ -7139,6 +7364,12 @@ internal fun mergeChatSessionEntry(
   return existing.copy(
     updatedAtMs = next.updatedAtMs ?: existing.updatedAtMs,
     ownerAgentId = next.ownerAgentId ?: existing.ownerAgentId,
+    classification = if (next.hasClassificationMetadata) next.classification else existing.classification,
+    accountId = if (next.hasClassificationMetadata) next.accountId else existing.accountId,
+    peerKind = if (next.hasClassificationMetadata) next.peerKind else existing.peerKind,
+    isMain = if (next.hasClassificationMetadata) next.isMain else existing.isMain,
+    isBackground = if (next.hasClassificationMetadata) next.isBackground else existing.isBackground,
+    hasClassificationMetadata = existing.hasClassificationMetadata || next.hasClassificationMetadata,
     displayName = next.displayName ?: existing.displayName,
     label = next.label ?: existing.label,
     category = next.category ?: existing.category,

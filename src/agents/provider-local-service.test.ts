@@ -21,7 +21,7 @@ import {
   getManagedProviderLocalServiceDiagnosticsForTest,
   getModelProviderLocalService,
   hasLocalServiceProcessExited,
-  stopManagedProviderLocalServicesForTest,
+  stopManagedProviderLocalServices,
 } from "./provider-local-service.js";
 
 const ONE_SHOT_HOST_READY_TIMEOUT_MS = 30_000;
@@ -182,7 +182,7 @@ describe("provider local service", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   afterEach(() => {
-    stopManagedProviderLocalServicesForTest();
+    stopManagedProviderLocalServices();
   });
 
   it("attaches local service metadata to model objects", () => {

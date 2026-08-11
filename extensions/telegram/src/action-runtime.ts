@@ -47,6 +47,7 @@ import {
   resolveTelegramMessageMutationChatId,
   type TelegramMessageMutationContext,
 } from "./message-topic-binding.js";
+import { rejectTelegramNativeButtonParams } from "./native-button-params.js";
 import { resolveTelegramPollVisibility } from "./poll-visibility.js";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import {
@@ -161,6 +162,10 @@ function resolveActionTopicNameCacheScope(cfg: OpenClawConfig, accountId?: strin
 
 function formatTelegramDeliveryTarget(to: string, messageThreadId?: number | null): string {
   const parsed = parseTelegramTarget(to);
+  const directTopicId = parsed.directMessagesTopicId;
+  if (directTopicId != null) {
+    return `${parsed.chatId}:direct-topic:${directTopicId}`;
+  }
   const topicId = messageThreadId ?? parsed.messageThreadId;
   if (topicId == null) {
     return to;
@@ -414,6 +419,7 @@ export async function handleTelegramAction(
     toolContext?: TelegramMessageMutationContext["toolContext"];
   },
 ): Promise<AgentToolResult<unknown>> {
+  rejectTelegramNativeButtonParams(params);
   const { action, accountId } = {
     action: normalizeTelegramActionName(readStringParam(params, "action", { required: true })),
     accountId: readStringParam(params, "accountId"),
@@ -750,6 +756,8 @@ export async function handleTelegramAction(
       messageId: result.messageId,
       chatId: result.chatId,
       pollId: result.pollId,
+      ...(result.pollAnswerRouting ? { pollAnswerRouting: result.pollAnswerRouting } : {}),
+      ...(result.warning ? { warning: result.warning } : {}),
     });
   }
 
