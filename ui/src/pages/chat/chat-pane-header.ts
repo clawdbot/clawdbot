@@ -64,22 +64,20 @@ import {
 export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
   /** Gateway-served project icon for a session workspace, on the same credentials as agent avatars. */
   private resolveWorkspaceIcon(sessionKey: string | undefined) {
+    if (!sessionKey) {
+      return null;
+    }
     const gateway = this.context.gateway;
-    return sessionKey
-      ? {
-          routeUrl: workspaceIconRouteUrl(this.context.basePath, sessionKey),
-          authTokens: resolveControlUiAuthCandidates({
-            hello: gateway.snapshot.hello,
-            settings: { token: gateway.connection.token },
-            password: gateway.connection.password,
-          }),
-          authReady: Boolean(
-            gateway.snapshot.hello ||
-            gateway.connection.token.trim() ||
-            gateway.connection.password.trim(),
-          ),
-        }
-      : null;
+    const authTokens = resolveControlUiAuthCandidates({
+      hello: gateway.snapshot.hello,
+      settings: { token: gateway.connection.token },
+      password: gateway.connection.password,
+    });
+    return {
+      routeUrl: workspaceIconRouteUrl(this.context.basePath, sessionKey),
+      authTokens,
+      authReady: Boolean(gateway.snapshot.hello || authTokens.length),
+    };
   }
 
   protected renderPaneHeader(
