@@ -267,7 +267,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: channel-account-bound native approval request selection.
       // +6: required-capability V2 harness contracts through the focused and runtime barrels,
       // including the side-question compatibility split.
-      4863,
+      // +1: add the account-aware native approval request selector.
+      // +3: add canonical coercion exports while retaining the shipped asString compatibility name.
+      4866,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -327,7 +329,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +7: restore still-existing deprecated inbound-dispatch callable re-exports.
       // -3: keep the generic plugin-command reply carrier opaque and non-callable.
       // +1: channel-account-bound native approval request selection.
-      2919,
+      // +1: add the account-aware native approval request selector.
+      // +3: add canonical coercion exports while retaining the shipped asString compatibility name.
+      2922,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

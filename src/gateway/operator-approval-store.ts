@@ -1,3 +1,4 @@
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 // Persistent operator approval lifecycle and first-answer-wins transitions.
 import type { Selectable } from "kysely";
 import {
@@ -211,12 +212,12 @@ CREATE TABLE IF NOT EXISTS operator_approval_execution_identities (
 
 function normalizeExecutionIdentityBinding(input: NewOperatorApproval) {
   const binding = input.executionIdentityToken;
-  const sourceRunId = normalizeString(input.source?.runId);
-  if (!binding || normalizeString(binding.runId) !== sourceRunId) {
+  const sourceRunId = normalizeNullableString(input.source?.runId);
+  if (!binding || normalizeNullableString(binding.runId) !== sourceRunId) {
     return undefined;
   }
-  const sourceContextId = normalizeString(binding.contextId);
-  const sourceExecutionId = normalizeString(binding.executionId);
+  const sourceContextId = normalizeNullableString(binding.contextId);
+  const sourceExecutionId = normalizeNullableString(binding.executionId);
   if (
     !sourceContextId ||
     !sourceExecutionId ||
@@ -252,13 +253,8 @@ function parseStringArray(raw: string): string[] | null {
   }
 }
 
-function normalizeString(value: string | null | undefined): string | null {
-  const normalized = value?.trim();
-  return normalized ? normalized : null;
-}
-
 function requireString(value: string, label: string): string {
-  const normalized = normalizeString(value);
+  const normalized = normalizeNullableString(value);
   if (!normalized) {
     throw new Error(`${label} must not be empty`);
   }
@@ -307,7 +303,7 @@ function decodeOperatorApprovalHistoryCursor(raw: string): OperatorApprovalHisto
 function normalizeStringArray(values: readonly string[] | undefined): string[] {
   const result: string[] = [];
   for (const value of values ?? []) {
-    const normalized = normalizeString(value);
+    const normalized = normalizeNullableString(value);
     if (normalized && !result.includes(normalized)) {
       result.push(normalized);
     }
@@ -617,16 +613,16 @@ function inputMatchesExistingRow(
     row.status === "pending" &&
     row.kind === input.kind &&
     row.presentation_json === serialized.presentationJson &&
-    row.requested_by_device_id === normalizeString(input.requester?.deviceId) &&
-    row.requested_by_client_id === normalizeString(input.requester?.clientId) &&
+    row.requested_by_device_id === normalizeNullableString(input.requester?.deviceId) &&
+    row.requested_by_client_id === normalizeNullableString(input.requester?.clientId) &&
     row.requested_by_device_token_auth === (input.requester?.deviceTokenAuth === true ? 1 : 0) &&
     row.reviewer_device_ids_json === serialized.reviewerDeviceIdsJson &&
-    row.source_agent_id === normalizeString(source.agentId) &&
-    row.source_session_key === normalizeString(source.sessionKey) &&
-    row.source_session_id === normalizeString(source.sessionId) &&
-    row.source_run_id === normalizeString(source.runId) &&
-    row.source_tool_call_id === normalizeString(source.toolCallId) &&
-    row.source_tool_name === normalizeString(source.toolName) &&
+    row.source_agent_id === normalizeNullableString(source.agentId) &&
+    row.source_session_key === normalizeNullableString(source.sessionKey) &&
+    row.source_session_id === normalizeNullableString(source.sessionId) &&
+    row.source_run_id === normalizeNullableString(source.runId) &&
+    row.source_tool_call_id === normalizeNullableString(source.toolCallId) &&
+    row.source_tool_name === normalizeNullableString(source.toolName) &&
     row.audience_session_keys_json === serialized.audienceSessionKeysJson &&
     row.runtime_epoch === input.runtimeEpoch.trim() &&
     row.created_at_ms === input.createdAtMs &&
@@ -694,16 +690,16 @@ export function insertOperatorApproval(params: {
           kind: input.kind,
           status: "pending",
           presentation_json: presentationJson,
-          requested_by_device_id: normalizeString(input.requester?.deviceId),
-          requested_by_client_id: normalizeString(input.requester?.clientId),
+          requested_by_device_id: normalizeNullableString(input.requester?.deviceId),
+          requested_by_client_id: normalizeNullableString(input.requester?.clientId),
           requested_by_device_token_auth: input.requester?.deviceTokenAuth === true ? 1 : 0,
           reviewer_device_ids_json: reviewerDeviceIdsJson,
-          source_agent_id: normalizeString(source.agentId),
-          source_session_key: normalizeString(source.sessionKey),
-          source_session_id: normalizeString(source.sessionId),
-          source_run_id: normalizeString(source.runId),
-          source_tool_call_id: normalizeString(source.toolCallId),
-          source_tool_name: normalizeString(source.toolName),
+          source_agent_id: normalizeNullableString(source.agentId),
+          source_session_key: normalizeNullableString(source.sessionKey),
+          source_session_id: normalizeNullableString(source.sessionId),
+          source_run_id: normalizeNullableString(source.runId),
+          source_tool_call_id: normalizeNullableString(source.toolCallId),
+          source_tool_name: normalizeNullableString(source.toolName),
           audience_session_keys_json: audienceSessionKeysJson,
           runtime_epoch: runtimeEpoch,
           created_at_ms: input.createdAtMs,
@@ -982,7 +978,7 @@ export function resolveOperatorApproval(params: {
   databaseOptions?: OpenClawStateDatabaseOptions;
 }): ResolveOperatorApprovalResult {
   const id = requireApprovalId(params.id);
-  const resolverId = normalizeString(params.resolver.id);
+  const resolverId = normalizeNullableString(params.resolver.id);
   const runtimeEpoch =
     params.runtimeEpoch === undefined
       ? undefined
@@ -1130,7 +1126,7 @@ export function forceDenyOperatorApproval(params: {
         terminal_reason: params.reason,
         resolved_at_ms: auditTimestampMs,
         resolver_kind: params.resolver.kind,
-        resolver_id: normalizeString(params.resolver.id),
+        resolver_id: normalizeNullableString(params.resolver.id),
         updated_at_ms: auditTimestampMs,
       })
       .where("approval_id", "=", id)

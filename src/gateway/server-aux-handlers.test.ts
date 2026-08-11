@@ -4,6 +4,25 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const secretStoreMocks = vi.hoisted(() => ({
+  deleteEntry: vi.fn(),
+  listEntries: vi.fn(() => []),
+  purgeEntries: vi.fn(() => 0),
+  writeEntry: vi.fn(),
+}));
+
+vi.mock("../secrets/store/secret-store.js", () => {
+  class SecretStoreValidationError extends Error {}
+  return {
+    deleteSecretStoreEntry: secretStoreMocks.deleteEntry,
+    listSecretStoreEntries: secretStoreMocks.listEntries,
+    purgeExpiredSecretStoreEntries: secretStoreMocks.purgeEntries,
+    SECRET_STORE_VALUE_MAX_BYTES: 64 * 1024,
+    SecretStoreValidationError,
+    writeSecretStoreEntry: secretStoreMocks.writeEntry,
+  };
+});
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshot,
@@ -149,6 +168,21 @@ async function invokeSecretsReload(params: {
   });
 }
 
+async function invokeSecretStoreSet(params: {
+  handlers: ReturnType<typeof createGatewayAuxHandlers>["extraHandlers"];
+  respond: ReturnType<typeof vi.fn>;
+  name: string;
+}) {
+  await params.handlers["secrets.store.set"]({
+    req: { type: "req", id: "store-1", method: "secrets.store.set" },
+    params: { name: params.name, value: "next-value", kind: "secret" },
+    client: null,
+    isWebchatConnect: () => false,
+    respond: params.respond as never,
+    context: {} as never,
+  });
+}
+
 type RespondCall = [boolean, unknown, { message?: string } | undefined];
 type GatewayAuxHandlerParams = Parameters<typeof createGatewayAuxHandlers>[0];
 type ChannelName = Parameters<GatewayAuxHandlerParams["startChannel"]>[0];
@@ -240,6 +274,10 @@ function createSecretsReloadHarnessWithChannelMocks(
 beforeEach(() => {
   delete process.env.OPENCLAW_SKIP_CHANNELS;
   delete process.env.OPENCLAW_SKIP_PROVIDERS;
+  secretStoreMocks.deleteEntry.mockReset();
+  secretStoreMocks.listEntries.mockReset().mockReturnValue([]);
+  secretStoreMocks.purgeEntries.mockReset().mockReturnValue(0);
+  secretStoreMocks.writeEntry.mockReset();
 });
 
 afterEach(() => {
@@ -512,6 +550,60 @@ describe("gateway aux handlers", () => {
     expect(startChannel.mock.calls).toEqual([["slack"]]);
     expect(respond).toHaveBeenNthCalledWith(1, true, { ok: true, warningCount: 0 });
     expect(respond).toHaveBeenNthCalledWith(2, true, { ok: true, warningCount: 0 });
+  });
+
+  it("runs a trailing refresh when a referenced store mutation overlaps reload", async () => {
+    const sourceConfig = asConfig({
+      models: {
+        providers: {
+          test: {
+            apiKey: { source: "store", provider: "default", id: "SERVICE_API_KEY" },
+            models: [],
+          },
+        },
+      },
+    });
+    activateSecretsRuntimeSnapshot(createSourceSnapshot(sourceConfig));
+    let releaseFirst: (() => void) | undefined;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstStarted: (() => void) | undefined;
+    const firstEntered = new Promise<void>((resolve) => {
+      firstStarted = resolve;
+    });
+    const activateRuntimeSecrets = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        firstStarted?.();
+        await firstBlocked;
+        return createSourceSnapshot(sourceConfig);
+      })
+      .mockResolvedValue(createSourceSnapshot(sourceConfig));
+    const { extraHandlers, reload } = createSecretsReloadHarness({ activateRuntimeSecrets });
+    const reloadPromise = reload();
+    await firstEntered;
+
+    const setRespond = vi.fn();
+    const setPromise = invokeSecretStoreSet({
+      handlers: extraHandlers,
+      respond: setRespond,
+      name: "SERVICE_API_KEY",
+    });
+    await vi.waitFor(() => expect(secretStoreMocks.writeEntry).toHaveBeenCalledOnce());
+    expect(activateRuntimeSecrets).toHaveBeenCalledTimes(1);
+    releaseFirst?.();
+    await Promise.all([reloadPromise, setPromise]);
+
+    expect(activateRuntimeSecrets).toHaveBeenCalledTimes(2);
+    expect(activateRuntimeSecrets.mock.calls[1]?.[1]).toMatchObject({
+      forceColdRefKeys: new Set(["store:default:SERVICE_API_KEY"]),
+    });
+    expect(setRespond).toHaveBeenCalledWith(true, {
+      ok: true,
+      reloaded: true,
+      warningCount: 0,
+    });
   });
 
   it("retries from the canonical source when it changes during secrets.reload preparation", async () => {

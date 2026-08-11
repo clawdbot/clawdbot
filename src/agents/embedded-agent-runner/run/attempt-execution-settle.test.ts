@@ -58,7 +58,6 @@ function createFixture() {
     systemPromptText: "system prompt",
   };
   const state: SettledInput["state"] = {
-    beforeAgentRunBlocked: false,
     beforeAgentRunBlockedBy: undefined,
     terminal: { kind: "ok" },
     trajectoryEndRecorded: false,
@@ -258,7 +257,6 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     ]);
     expect(fixture.state).toEqual(
       expect.objectContaining({
-        beforeAgentRunBlocked: true,
         beforeAgentRunBlockedBy: "before_agent",
         terminal: { kind: "ok" },
         trajectoryEndRecorded: true,

@@ -288,14 +288,25 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
-    const sessionRows = Array.from({ length: 15 }, (_, index) =>
-      sessionRow(
+    const sessionRows = Array.from({ length: 15 }, (_, index) => {
+      const row = sessionRow(
         `agent:main:archive-refresh-${index}`,
         `Archive refresh ${index}`,
         baseTime - (index + 1) * 1_000,
-      ),
-    );
+      );
+      return index === 2
+        ? {
+            ...row,
+            displayName: undefined,
+            label: undefined,
+            derivedTitle: `Archive refresh ${index}`,
+            parentSessionKey: "agent:main:main",
+            sessionId: `archive-refresh-${index}`,
+          }
+        : row;
+    });
     const selected = sessionRows[2]!;
+    const selectedWithoutDerivedTitle = { ...selected, derivedTitle: undefined };
     const batchRows = [sessionRows[0]!, sessionRows[1]!, sessionRows[3]!];
     const gateway = await installMockGateway(page, {
       methodResponses: {
@@ -334,6 +345,86 @@ suite.define(() => {
       await page
         .locator('openclaw-chat-pane[aria-hidden="false"] .agent-chat__input textarea')
         .waitFor({ state: "visible" });
+      await page.evaluate((sessionKey) => {
+        const titleHistory: string[] = [];
+        const paneTitleHistory: string[] = [];
+        const documentTitleHistory: string[] = [];
+        const sessionStateHistory: Array<{
+          gatewaySessionKey?: string;
+          loading?: boolean;
+          selectedTitle?: string;
+        }> = [];
+        const recordTitle = () => {
+          const row = [...document.querySelectorAll<HTMLElement>(".sidebar-recent-session")].find(
+            (candidate) => candidate.dataset.sessionKey === sessionKey,
+          );
+          const title = row
+            ?.querySelector(".sidebar-recent-session__name")
+            ?.textContent?.replace(/\s+/g, " ")
+            .trim();
+          if (title && titleHistory.at(-1) !== title) {
+            titleHistory.push(title);
+          }
+          const paneTitle = document
+            .querySelector(".chat-pane__session-title")
+            ?.textContent?.replace(/\s+/g, " ")
+            .trim();
+          if (paneTitle && paneTitleHistory.at(-1) !== paneTitle) {
+            paneTitleHistory.push(paneTitle);
+          }
+          if (document.title && documentTitleHistory.at(-1) !== document.title) {
+            documentTitleHistory.push(document.title);
+          }
+        };
+        new MutationObserver(recordTitle).observe(document.documentElement, {
+          childList: true,
+          characterData: true,
+          subtree: true,
+        });
+        recordTitle();
+        (window as Window & { archiveTitleHistory?: string[] }).archiveTitleHistory = titleHistory;
+        (
+          window as Window & {
+            archivePaneTitleHistory?: string[];
+            archiveDocumentTitleHistory?: string[];
+          }
+        ).archivePaneTitleHistory = paneTitleHistory;
+        (
+          window as Window & {
+            archivePaneTitleHistory?: string[];
+            archiveDocumentTitleHistory?: string[];
+            archiveSessionStateHistory?: typeof sessionStateHistory;
+          }
+        ).archiveDocumentTitleHistory = documentTitleHistory;
+        const shell = document.querySelector("openclaw-app-shell") as HTMLElement & {
+          runtime?: {
+            context?: {
+              gateway?: { snapshot?: { sessionKey?: string } };
+              sessions?: {
+                subscribe: (
+                  listener: (state: {
+                    loading?: boolean;
+                    result?: { sessions?: Array<{ key: string; derivedTitle?: string }> } | null;
+                  }) => void,
+                ) => () => void;
+              };
+            };
+          };
+        };
+        shell.runtime?.context?.sessions?.subscribe((state) => {
+          const selectedRow = state.result?.sessions?.find((session) => session.key === sessionKey);
+          sessionStateHistory.push({
+            gatewaySessionKey: shell.runtime?.context?.gateway?.snapshot?.sessionKey,
+            loading: state.loading,
+            selectedTitle: selectedRow?.derivedTitle,
+          });
+        });
+        (
+          window as Window & {
+            archiveSessionStateHistory?: typeof sessionStateHistory;
+          }
+        ).archiveSessionStateHistory = sessionStateHistory;
+      }, selected.key);
 
       for (const row of batchRows) {
         await rowFor(row.key).click({ modifiers: ["Meta"] });
@@ -354,10 +445,10 @@ suite.define(() => {
         await assertSelectedRoute();
       }
 
-      await gateway.setMethodResponse("sessions.describe", {
-        session: { ...selected, archived: true },
-      });
       const selectedRow = rowFor(selected.key);
+      await gateway.setMethodResponse("sessions.describe", {
+        session: { ...selectedWithoutDerivedTitle, archived: true },
+      });
       await selectedRow.hover();
       await selectedRow.getByRole("button", { name: "Open session menu" }).click();
       await activateMenuItem(
@@ -375,9 +466,54 @@ suite.define(() => {
         reason: "update",
         sessionKey: selected.key,
       });
+      await expect.poll(() => selectedRow.textContent()).toContain("Archive refresh 2");
 
       await assertSelectedRoute();
       await selectedRow.locator(".sidebar-session__archive-glyph").waitFor({ state: "visible" });
+      await expect.poll(() => selectedRow.textContent()).toContain("Archive refresh 2");
+      expect(
+        await page.evaluate(
+          () => (window as Window & { archiveTitleHistory?: string[] }).archiveTitleHistory ?? [],
+        ),
+      ).toEqual(["Archive refresh 2"]);
+      const sessionStateHistory = await page.evaluate(
+        () =>
+          (
+            window as Window & {
+              archiveSessionStateHistory?: Array<{
+                gatewaySessionKey?: string;
+                loading?: boolean;
+                selectedTitle?: string;
+              }>;
+            }
+          ).archiveSessionStateHistory ?? [],
+      );
+      const missingTitleSnapshot = sessionStateHistory.find(
+        (snapshot) => snapshot.selectedTitle !== "Archive refresh 2",
+      );
+      if (missingTitleSnapshot) {
+        throw new Error(`Selected title changed: ${JSON.stringify(sessionStateHistory)}`);
+      }
+      expect(
+        await page.evaluate(
+          () =>
+            (
+              window as Window & {
+                archivePaneTitleHistory?: string[];
+              }
+            ).archivePaneTitleHistory ?? [],
+        ),
+      ).toEqual(["Archive refresh 2"]);
+      expect(
+        await page.evaluate(
+          () =>
+            (
+              window as Window & {
+                archiveDocumentTitleHistory?: string[];
+              }
+            ).archiveDocumentTitleHistory ?? [],
+        ),
+      ).not.toContain("New session — OpenClaw");
       const archivedNotice = page.locator(".agent-chat__disabled-banner");
       await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => archivedNotice.textContent()).toContain("This session is archived.");
@@ -385,6 +521,9 @@ suite.define(() => {
         .poll(() => page.locator(".chat-pane-cache__pane--visible .agent-chat__input").count())
         .toBe(0);
 
+      const archiveToast = page.locator("openclaw-toast-host .app-toast");
+      await expect.poll(() => archiveToast.textContent()).toContain("Session archived");
+      await archiveToast.getByRole("button", { name: "Dismiss" }).click();
       await archivedNotice.getByRole("button", { name: "Unarchive" }).click();
       await waitForPatch(
         gateway,

@@ -1,8 +1,6 @@
 // Formats detailed subagent run information for the info action.
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
-import { subagentRuns } from "../../../agents/subagents/registry/subagent-registry-memory.js";
-import { countPendingDescendantRunsFromRuns } from "../../../agents/subagents/registry/subagent-registry-queries.js";
-import { getSubagentRunsSnapshotForRead } from "../../../agents/subagents/registry/subagent-registry-state.js";
+import { countPendingDescendantRuns } from "../../../agents/subagents/registry/subagent-registry-read.js";
 import { resolveSubagentDisplayStatus } from "../../../agents/subagents/registry/subagent-session-metrics.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
@@ -77,13 +75,7 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
 
   const lines = [
     "ℹ️ Subagent info",
-    `Status: ${resolveSubagentDisplayStatus(
-      run,
-      countPendingDescendantRunsFromRuns(
-        getSubagentRunsSnapshotForRead(subagentRuns),
-        run.childSessionKey,
-      ),
-    )}`,
+    `Status: ${resolveSubagentDisplayStatus(run, countPendingDescendantRuns(run.childSessionKey))}`,
     `Label: ${formatRunLabel(run)}`,
     `Task: ${taskText}`,
     `Run: ${run.runId}`,

@@ -549,6 +549,42 @@ describe("refreshChat", () => {
     expect(requestUpdate).toHaveBeenCalled();
   });
 
+  it("keeps the routed archived descriptor when history confirms archive state", async () => {
+    const key = "agent:main:dashboard:archived";
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.history": {
+          messages: [],
+          sessionInfo: row(key, {
+            archived: true,
+            sessionId: "archived-session",
+          }),
+        },
+      },
+      sessionKey: key,
+      sessionsResult: createSessionsResult([
+        row(key, {
+          derivedTitle: "Readable archived title",
+          sessionId: "archived-session",
+        }),
+      ]),
+    });
+
+    await refreshPageChat(asChatPageHost(host), {
+      awaitHistory: true,
+      scheduleScroll: false,
+    });
+
+    expect(asChatPageHost(host).selectedChatSessionArchived).toBe(true);
+    expect(host.sessions.state.result?.sessions).toEqual([
+      expect.objectContaining({
+        key,
+        archived: true,
+        derivedTitle: "Readable archived title",
+      }),
+    ]);
+  });
+
   it("keeps an active run adopted from history over newer stale catalog metadata", async () => {
     const runId = "run-restored";
     const host = makeChatHost({

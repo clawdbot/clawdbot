@@ -111,13 +111,13 @@ function extractFirstToolCall(message: AssistantMessage) {
 
 function normalizeCacheUsage(usage: AssistantMessage["usage"] | undefined): CacheUsage {
   const value = usage as Record<string, unknown> | null | undefined;
-  const readNumber = (key: keyof CacheUsage): number | undefined =>
+  const readUsageNumber = (key: keyof CacheUsage): number | undefined =>
     typeof value?.[key] === "number" ? value[key] : undefined;
   return {
-    input: readNumber("input"),
-    output: readNumber("output"),
-    cacheRead: readNumber("cacheRead"),
-    cacheWrite: readNumber("cacheWrite"),
+    input: readUsageNumber("input"),
+    output: readUsageNumber("output"),
+    cacheRead: readUsageNumber("cacheRead"),
+    cacheWrite: readUsageNumber("cacheWrite"),
   };
 }
 

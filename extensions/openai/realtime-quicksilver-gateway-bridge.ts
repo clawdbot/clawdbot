@@ -1,5 +1,6 @@
 // Gateway-owned GPT-Live WebRTC bridge: werift media peer plus OpenAI sideband control.
 import { randomUUID } from "node:crypto";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   RealtimeVoiceBridge,
@@ -32,10 +33,6 @@ const RELAY_SAMPLE_RATE = 24_000;
 const QUICKSILVER_SESSION_TTL_MS = 30 * 60_000;
 const QUICKSILVER_CONNECT_TIMEOUT_MS = 30_000;
 const WEBSOCKET_OPEN = 1;
-
-function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
-}
 
 function isAbortLikeError(error: unknown): boolean {
   if (!error || typeof error !== "object") {
@@ -100,7 +97,7 @@ function waitForConnectStep<T>(promise: Promise<T>, signal: AbortSignal): Promis
       },
       (error: unknown) => {
         signal.removeEventListener("abort", onAbort);
-        reject(toError(error));
+        reject(toErrorObject(error, "OpenAI GPT-Live gateway relay failed"));
       },
     );
   });
@@ -302,7 +299,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       }
     } catch (error) {
       this.releaseResources();
-      throw toError(error);
+      throw toErrorObject(error, "OpenAI GPT-Live gateway relay failed");
     }
   }
 

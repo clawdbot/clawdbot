@@ -378,17 +378,27 @@ export function startGatewayEventSubscriptions(params: {
   });
 
   let taskObserverDisposed = false;
+  const lastTaskSummaryById = new Map<string, string>();
   const taskObservers = {
     onEvent: (event: TaskRegistryObserverEvent) => {
       let payload: TaskEventPayload;
       switch (event.kind) {
-        case "upserted":
-          payload = { action: "upserted", task: mapTaskSummary(event.task) };
+        case "upserted": {
+          const task = mapTaskSummary(event.task);
+          const summary = JSON.stringify(task);
+          if (lastTaskSummaryById.get(task.id) === summary) {
+            return;
+          }
+          lastTaskSummaryById.set(task.id, summary);
+          payload = { action: "upserted", task };
           break;
+        }
         case "deleted":
+          lastTaskSummaryById.delete(event.taskId);
           payload = { action: "deleted", taskId: event.taskId };
           break;
         case "restored":
+          lastTaskSummaryById.clear();
           payload = { action: "restored" };
           break;
       }

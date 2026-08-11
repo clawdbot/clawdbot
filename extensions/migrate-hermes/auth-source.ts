@@ -1,7 +1,8 @@
 // Hermes-native auth discovery and reauthentication planning.
 import { createMigrationManualItem } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
-import { isRecord, readString, readText } from "./helpers.js";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readText } from "./helpers.js";
 import type { HermesSource } from "./source.js";
 
 const HERMES_OPENAI_CODEX_SOURCE_PROVIDER_ID = "openai-codex";
@@ -48,8 +49,8 @@ function readHermesProviderCandidate(
     ? providers[HERMES_OPENAI_CODEX_SOURCE_PROVIDER_ID]
     : undefined;
   const tokens = isRecord(provider?.tokens) ? provider.tokens : undefined;
-  const access = readString(tokens?.access_token);
-  const refresh = readString(tokens?.refresh_token);
+  const access = normalizeOptionalString(tokens?.access_token);
+  const refresh = normalizeOptionalString(tokens?.refresh_token);
   if (!access || !refresh) {
     return undefined;
   }
@@ -76,8 +77,8 @@ function readHermesPoolCandidates(
     if (!isRecord(entry)) {
       return [];
     }
-    const access = readString(entry.access_token);
-    const refresh = readString(entry.refresh_token);
+    const access = normalizeOptionalString(entry.access_token);
+    const refresh = normalizeOptionalString(entry.refresh_token);
     if (!access || !refresh) {
       return [];
     }
@@ -87,7 +88,7 @@ function readHermesPoolCandidates(
         refresh,
         sourceKind: "hermes-auth-json" as const,
         sourceSlot: "pool" as const,
-        sourceLabel: readString(entry.label) ?? "Hermes OpenAI Codex credential pool",
+        sourceLabel: normalizeOptionalString(entry.label) ?? "Hermes OpenAI Codex credential pool",
         sourcePath,
         updatedAt: readTimestamp(entry.last_refresh) ?? readTimestamp(entry.last_status_at),
       },
@@ -142,7 +143,9 @@ async function readHermesOAuthProviderIds(authPath: string | undefined): Promise
       ? Object.entries(parsed.credential_pool).flatMap(([provider, entries]) =>
           Array.isArray(entries) &&
           entries.some(
-            (entry) => isRecord(entry) && readString(entry.auth_type)?.toLowerCase() === "oauth",
+            (entry) =>
+              isRecord(entry) &&
+              normalizeOptionalString(entry.auth_type)?.toLowerCase() === "oauth",
           )
             ? [provider]
             : [],

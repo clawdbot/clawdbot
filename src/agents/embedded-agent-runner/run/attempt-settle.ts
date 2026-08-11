@@ -292,7 +292,6 @@ export async function runEmbeddedAttemptSettledPhase(
           finalPromptText = prompt;
         },
         markBeforeAgentRunBlocked: (outcome) => {
-          state.beforeAgentRunBlocked = true;
           state.beforeAgentRunBlockedBy = outcome.blockedBy;
         },
         markYieldAborted: () => {

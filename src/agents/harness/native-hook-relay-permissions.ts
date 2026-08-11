@@ -36,7 +36,7 @@ import type {
   NativeHookRelayProviderAdapter,
   NativeHookRelayRegistration,
 } from "./native-hook-relay-types.js";
-import { readOptionalString, truncateRelayText } from "./native-hook-relay-utils.js";
+import { readOptionalNonEmptyString, truncateRelayText } from "./native-hook-relay-utils.js";
 
 export type NativeHookRelayDeferredToolApprovalRequester = typeof requestDeferredPluginToolApproval;
 
@@ -280,7 +280,7 @@ function nativeHookRelayPermissionAllowAlwaysKey(params: {
 }
 
 function permissionRequestFallbackKey(request: NativeHookRelayPermissionApprovalRequest): string {
-  const command = readOptionalString(request.toolInput.command);
+  const command = readOptionalNonEmptyString(request.toolInput.command);
   if (command) {
     return `${request.toolName}:command:${truncateRelayText(command, 240)}`;
   }
@@ -590,7 +590,7 @@ function formatPermissionApprovalDescription(
 }
 
 function formatToolInputPreview(toolInput: Record<string, unknown>): string | undefined {
-  const command = readOptionalString(toolInput.command);
+  const command = readOptionalNonEmptyString(toolInput.command);
   if (command) {
     return `Command: ${truncateRelayText(sanitizeApprovalText(command), 240)}`;
   }

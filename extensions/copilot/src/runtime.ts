@@ -118,7 +118,7 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
       try {
         return await client.stop();
       } catch (error: unknown) {
-        return [toError(error)];
+        return [toCopilotRuntimeError(error)];
       } finally {
         entry.state = { kind: "stopped" };
         maybeDeleteEntry(entry);
@@ -136,7 +136,7 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
           await entry.state.promise;
         } catch (error: unknown) {
           maybeDeleteEntry(entry);
-          return [toError(error)];
+          return [toCopilotRuntimeError(error)];
         }
         return stopEntry(entry);
       }
@@ -187,7 +187,7 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
       } catch (error: unknown) {
         entry.state = { kind: "stopped" };
         maybeDeleteEntry(entry);
-        throw toError(error);
+        throw toCopilotRuntimeError(error);
       }
     })();
 
@@ -220,7 +220,7 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
           }
           return { key: created.entry.key, client };
         } catch (error: unknown) {
-          throw toError(error);
+          throw toCopilotRuntimeError(error);
         }
       }
 
@@ -235,7 +235,7 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
             }
             return { key: existing.key, client };
           } catch (error: unknown) {
-            throw toError(error);
+            throw toCopilotRuntimeError(error);
           }
         }
         case "ready":
@@ -390,7 +390,7 @@ function normalizeCopilotHome(copilotHome: string): string {
   return normalizedHome;
 }
 
-function toError(error: unknown): Error {
+function toCopilotRuntimeError(error: unknown): Error {
   if (error instanceof Error) {
     return error;
   }

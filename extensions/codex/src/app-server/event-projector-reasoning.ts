@@ -1,9 +1,9 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AgentPlanStep, AgentPlanStepStatus } from "openclaw/plugin-sdk/channel-outbound";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   readNonNegativeInteger,
   readNullableString,
-  readString,
   splitPlanText,
 } from "./event-projector-values.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";

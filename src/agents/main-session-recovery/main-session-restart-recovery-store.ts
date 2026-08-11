@@ -14,6 +14,7 @@ import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runti
 import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { findDeliveryIntentOwner } from "../../infra/outbound/delivery-queue-storage.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { resolveDefaultAgentId } from "../agent-scope-config.js";
 import {
@@ -52,6 +53,32 @@ import {
   MAX_RECOVERY_RETRIES,
   normalizeStringSet,
 } from "./main-session-restart-recovery-shared.js";
+
+function pendingFinalRecoveryAction(
+  pending: NonNullable<SessionEntry["pendingFinalDelivery"]>,
+  stateDir?: string,
+): "complete" | "defer" | "fail" | "retry" {
+  const deliveries = pending.deliveries;
+  if (!deliveries?.length) {
+    return "fail";
+  }
+  if (deliveries.every(({ state }) => state === "delivered" || state === "suppressed")) {
+    return "complete";
+  }
+  const owners = deliveries.map(({ id }) => findDeliveryIntentOwner(id, stateDir));
+  if (owners.some((owner) => owner?.status === "pending")) {
+    return "defer";
+  }
+  for (const [index, delivery] of deliveries.entries()) {
+    const owner = owners[index];
+    if (owner || delivery.state === "delivered" || delivery.state === "unknown") {
+      return "fail";
+    }
+  }
+  return pending.kind === "replayable" && deliveries.every(({ state }) => state === "prepared")
+    ? "retry"
+    : "fail";
+}
 
 export function loadExpectedRestartRecoveryTarget(params: {
   expected: ExpectedRestartRecoveryTarget;
@@ -99,6 +126,7 @@ export async function recoverStore(params: {
   observationOnly?: boolean;
   onExhaustedTarget?: (target: ExhaustedRestartRecoveryTarget) => void;
   storePath: string;
+  stateDir?: string;
   resumedSessionKeys: Set<string>;
   expectedClaim?: ExpectedRestartRecoveryClaim;
   expectedTarget?: ExpectedRestartRecoveryTarget;
@@ -293,7 +321,7 @@ export async function recoverStore(params: {
         }
       }
     };
-    const failCurrent = async (reason: string) => {
+    const failCurrent = async (reason: string, noticeText?: string) => {
       if (stopped()) {
         return false;
       }
@@ -303,6 +331,7 @@ export async function recoverStore(params: {
         gatewayRuntime: params.gatewayRuntime,
         observation: recoveryView.observation,
         reason,
+        ...(noticeText ? { noticeText } : {}),
         sessionKey,
         storePath: params.storePath,
       });
@@ -362,6 +391,44 @@ export async function recoverStore(params: {
         }),
       );
     };
+
+    const pendingAction = entry.pendingFinalDelivery
+      ? pendingFinalRecoveryAction(entry.pendingFinalDelivery, params.stateDir)
+      : undefined;
+    if (pendingAction === "defer") {
+      result.failed++;
+      continue;
+    }
+    if (pendingAction === "complete") {
+      const completion = await markSessionCompletedAfterRecoveryCheckpoint({
+        agentId,
+        entry,
+        messages: [],
+        pendingFinalDeliveryIntentId: entry.pendingFinalDelivery?.intentId,
+        reason: "delivered-terminal-receipt",
+        sessionKey,
+        storePath: params.storePath,
+      });
+      if (completion.outcome === "completed") {
+        params.resumedSessionKeys.add(resumeDedupeKey);
+        result.recovered++;
+      } else {
+        result.skipped++;
+      }
+      continue;
+    }
+    if (pendingAction === "fail") {
+      if (
+        !(await failCurrent(
+          "pending final delivery outcome is unknown",
+          "My previous response was interrupted during delivery. " +
+            "Please ask for any missing remainder; I won't rerun your previous request automatically.",
+        ))
+      ) {
+        return result;
+      }
+      continue;
+    }
 
     if (
       entry.pendingFinalDelivery?.kind === "replayable" &&

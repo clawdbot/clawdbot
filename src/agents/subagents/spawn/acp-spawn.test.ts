@@ -231,9 +231,13 @@ vi.mock("./acp-spawn-parent-stream.js", () => ({
 
 vi.mock("../registry/subagent-registry.js", () => ({
   countActiveRunsForSession: hoisted.countActiveRunsForSessionMock,
-  getSubagentRunByChildSessionKey: hoisted.getSubagentRunByChildSessionKeyMock,
   // ACP registration deliberately moved behind the shared spawn pipeline.
   registerSubagentRun: hoisted.registerSubagentRunMock,
+}));
+
+vi.mock("../registry/subagent-registry-read.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../registry/subagent-registry-read.js")>()),
+  getSubagentRunByChildSessionKey: hoisted.getSubagentRunByChildSessionKeyMock,
 }));
 
 vi.mock("../../../tasks/runtime-internal.js", () => ({

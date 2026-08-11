@@ -37,6 +37,13 @@ export * from "./schema/sessions-suggestions.js";
 export * from "./migration-api.js";
 export type * from "./public-session-catalog.js";
 export * from "./validator-registry.js";
+export type {
+  SecretStoreEntry,
+  SecretsStoreDeleteParams,
+  SecretsStoreListResult,
+  SecretsStoreMutationResult,
+  SecretsStoreSetParams,
+} from "./schema/secrets.js";
 // Explicit schema exports keep public protocol changes reviewable.
 export {
   isCloudWorkerPlacementState,
@@ -149,6 +156,14 @@ export {
   WakeParamsSchema,
   PushTestParamsSchema,
   PushTestResultSchema,
+  SecretStoreSecretEntrySchema,
+  SecretStoreEnvEntrySchema,
+  SecretStoreEntrySchema,
+  SecretsStoreListParamsSchema,
+  SecretsStoreListResultSchema,
+  SecretsStoreSetParamsSchema,
+  SecretsStoreDeleteParamsSchema,
+  SecretsStoreMutationResultSchema,
   WebPushVapidPublicKeyParamsSchema,
   WebPushSubscribeParamsSchema,
   WebPushUnsubscribeParamsSchema,

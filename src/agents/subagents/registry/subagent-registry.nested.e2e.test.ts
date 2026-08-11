@@ -4,7 +4,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
-import { countPendingDescendantRuns } from "./subagent-registry-announce-read.js";
+import { countPendingDescendantRuns } from "./subagent-registry-read.js";
 import { countActiveDescendantRuns } from "./subagent-registry-read.js";
 
 vi.mock("../../../config/config.js", async () => {

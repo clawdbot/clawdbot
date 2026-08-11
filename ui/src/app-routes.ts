@@ -48,6 +48,7 @@ import { page as newSessionPage } from "./pages/new-session/route.ts";
 import { page as pluginPage } from "./pages/plugin/route.ts";
 import { page as pluginsPage } from "./pages/plugins/route.ts";
 import { page as profilePage } from "./pages/profile/route.ts";
+import { page as secretsPage } from "./pages/secrets/route.ts";
 import { page as sessionsPage } from "./pages/sessions/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
 import { page as skillsPage } from "./pages/skills/route.ts";
@@ -94,6 +95,7 @@ const APP_ROUTE_TREE = [
   workboardPage,
   worktreesPage,
   sessionsPage,
+  secretsPage,
   usagePage,
   debugPage,
   logsPage,

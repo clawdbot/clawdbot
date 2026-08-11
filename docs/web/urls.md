@@ -146,6 +146,7 @@ no route-specific URL parameters.
 | Appearance          | `/settings/appearance`      | `/appearance`             | Shared settings parameters below                 |
 | Notifications       | `/settings/notifications`   | -                         | Shared settings parameters below                 |
 | Security            | `/settings/security`        | -                         | Shared settings parameters below                 |
+| Secrets             | `/settings/secrets`         | -                         | Shared settings parameters below                 |
 | Advanced            | `/settings/advanced`        | -                         | Shared settings parameters below                 |
 | Approvals           | `/settings/approvals`       | -                         | Shared settings parameters below                 |
 | Automation settings | `/settings/automation`      | `/automation`             | Shared settings parameters below                 |

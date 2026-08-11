@@ -34,7 +34,7 @@ export function isBoardWidgetBridgeRequest(value: unknown): value is BoardWidget
   );
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
+function assertWidgetRequestRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("widget host request params are invalid");
   }
@@ -133,7 +133,7 @@ export class BoardWidgetBridgeController {
     if (request.ticket !== this.ticket) {
       throw new Error("widget view ticket does not match the active frame");
     }
-    const params = asRecord(request.params);
+    const params = assertWidgetRequestRecord(request.params);
     switch (request.method) {
       case "prompt.send": {
         if (options.promptUserActivated !== true) {

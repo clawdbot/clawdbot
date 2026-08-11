@@ -828,7 +828,7 @@ describe("agentCommand compaction transcript rotation", () => {
     },
   );
 
-  it("skips post-turn compaction before delivering sendable finals that pending text cannot replay", async () => {
+  it("compacts after persisting transport ownership for finals that text cannot replay", async () => {
     const sessionId = "unrecoverable-media-before-compaction";
     const sessionKey = `agent:main:explicit:${sessionId}`;
     const payloads = [{ mediaUrl: "/tmp/reply.ogg", audioAsVoice: true }];
@@ -845,7 +845,7 @@ describe("agentCommand compaction transcript rotation", () => {
       deliver: true,
     });
 
-    expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
+    expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledOnce();
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
       expect.objectContaining({ payloads }),

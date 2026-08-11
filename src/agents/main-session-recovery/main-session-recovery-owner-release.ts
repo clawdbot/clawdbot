@@ -14,6 +14,7 @@ export function scheduleMainSessionRecoveryPendingTarget(
         getConfig: getRuntimeConfig,
         getGatewayRuntime: getGatewayRecoveryRuntime,
         sessionKey: target.sessionKey,
+        stateDir: target.stateDir,
         storePath: target.storePath,
       }),
     () => {}, // Startup recovery remains the fallback if this optional module cannot load.

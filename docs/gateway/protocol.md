@@ -603,6 +603,8 @@ methods. Treat this as feature discovery, not a full enumeration of
   <Accordion title="Secrets, config, update, and wizard">
     - `secrets.reload` re-resolves active SecretRefs and atomically publishes owner-aware runtime state. Eligible owner failures can publish as cold or stale degradation with `warningCount`; strict or unmapped failures reject the reload and preserve the active snapshot.
     - `secrets.resolve` resolves command-target secret assignments for a specific command/target set.
+    - `secrets.store.list` (`operator.admin`) returns team-scoped metadata and values only for `kind: "env"` entries. `kind: "secret"` entries use a distinct result shape with no value field; there is no reveal method.
+    - `secrets.store.set` and `secrets.store.delete` (`operator.admin`) create/update or soft-delete one team-scoped entry. After a successful write, the Gateway refreshes the active secrets runtime only when the name is referenced by a `store` SecretRef in the active source config.
     - `config.get` returns the current on-disk config snapshot, raw root-file `hash`, resolved `configRevisionHash`, and optional `appliedConfigHash` for the resolved revision accepted by the active Gateway runtime.
     - `config.set` writes a validated config payload.
     - `config.patch` merges a partial config update. Destructive array replacement requires the affected path in `replacePaths`; nested arrays under array entries use `[]` paths such as `agents.entries.*.skills`.

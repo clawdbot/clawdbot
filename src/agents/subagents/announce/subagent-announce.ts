@@ -31,6 +31,14 @@ import {
   type AgentInternalEvent,
 } from "../../internal-events.js";
 import { isAnnounceSkip } from "../../tools/sessions-send-tokens.js";
+import {
+  countPendingDescendantRuns,
+  getLatestSubagentRunByChildSessionKey,
+  isSubagentSessionRunActive,
+  listSubagentRunsForRequester,
+  resolveRequesterForChildSession,
+  shouldIgnorePostCompletionAnnounceForSession,
+} from "../registry/subagent-registry-read.js";
 import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
 import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
 import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
@@ -259,38 +267,29 @@ export async function runSubagentAnnounceFlow(params: {
       subagentRegistryRuntime = await subagentAnnounceDeps.loadSubagentRegistryRuntime();
       if (
         requesterDepth >= 1 &&
-        subagentRegistryRuntime.shouldIgnorePostCompletionAnnounceForSession(
-          targetRequesterSessionKey,
-        )
+        shouldIgnorePostCompletionAnnounceForSession(targetRequesterSessionKey)
       ) {
         return "delivered";
       }
 
       const pendingChildDescendantRuns = !childSessionEffectsAllowed()
         ? 0
-        : Math.max(0, subagentRegistryRuntime.countPendingDescendantRuns(params.childSessionKey));
+        : Math.max(0, countPendingDescendantRuns(params.childSessionKey));
       if (pendingChildDescendantRuns > 0 && announceType !== "cron job") {
         shouldDeleteChildSession = false;
         return "retryable";
       }
 
-      if (
-        childSessionEffectsAllowed() &&
-        typeof subagentRegistryRuntime.listSubagentRunsForRequester === "function"
-      ) {
-        const directChildren = subagentRegistryRuntime.listSubagentRunsForRequester(
-          params.childSessionKey,
-          {
-            requesterRunId: params.childRunId,
-          },
-        );
+      if (childSessionEffectsAllowed()) {
+        const directChildren = listSubagentRunsForRequester(params.childSessionKey, {
+          requesterRunId: params.childRunId,
+        });
         if (Array.isArray(directChildren) && directChildren.length > 0) {
           childCompletionFindings = buildChildCompletionFindings(
             dedupeLatestChildCompletionRows(
               filterCurrentDirectChildCompletionRows(directChildren, {
                 requesterSessionKey: params.childSessionKey,
-                getLatestSubagentRunByChildSessionKey:
-                  subagentRegistryRuntime.getLatestSubagentRunByChildSessionKey,
+                getLatestSubagentRunByChildSessionKey,
               }),
             ),
           );
@@ -466,11 +465,6 @@ export async function runSubagentAnnounceFlow(params: {
 
     let requesterIsSubagent = requesterIsInternalSession();
     if (requesterIsSubagent) {
-      const {
-        isSubagentSessionRunActive,
-        resolveRequesterForChildSession,
-        shouldIgnorePostCompletionAnnounceForSession,
-      } = subagentRegistryRuntime ?? (await loadSubagentRegistryRuntime());
       if (!isSubagentSessionRunActive(targetRequesterSessionKey)) {
         if (shouldIgnorePostCompletionAnnounceForSession(targetRequesterSessionKey)) {
           return "delivered";

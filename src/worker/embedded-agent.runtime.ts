@@ -42,7 +42,7 @@ import {
 } from "./tool-authority.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
 
-function toError(value: unknown, fallback: string): Error {
+function toWorkerAgentError(value: unknown, fallback: string): Error {
   return value instanceof Error ? value : new Error(fallback, { cause: value });
 }
 
@@ -264,7 +264,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
   let runFailure: Error | undefined;
   try {
     if (params.signal?.aborted) {
-      throw toError(params.signal.reason, "Worker agent turn aborted.");
+      throw toWorkerAgentError(params.signal.reason, "Worker agent turn aborted.");
     }
     await session.agent.prompt({
       role: "user",
@@ -273,7 +273,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     });
     await session.agent.waitForIdle();
     if (params.signal?.aborted) {
-      throw toError(params.signal.reason, "Worker agent turn aborted.");
+      throw toWorkerAgentError(params.signal.reason, "Worker agent turn aborted.");
     }
     const terminalAssistant = session.agent.state.messages
       .toReversed()
@@ -286,8 +286,8 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     }
   } catch (error) {
     runFailure = params.signal?.aborted
-      ? toError(params.signal.reason, "Worker agent turn aborted.")
-      : toError(error, "Worker agent turn failed.");
+      ? toWorkerAgentError(params.signal.reason, "Worker agent turn aborted.")
+      : toWorkerAgentError(error, "Worker agent turn failed.");
     liveRuntime.enqueueRunFailure({
       aborted: params.signal?.aborted === true,
       error: runFailure,
@@ -299,7 +299,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     try {
       await transcriptRuntime.withSessionWriteSettlement(() => undefined);
     } catch (error) {
-      finalTranscriptFailure = toError(error, "Worker transcript flush failed.");
+      finalTranscriptFailure = toWorkerAgentError(error, "Worker transcript flush failed.");
     }
     await liveRuntime.flush();
     if (finalTranscriptFailure === undefined) {

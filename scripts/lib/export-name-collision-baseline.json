@@ -28,15 +28,6 @@
     ]
   },
   {
-    "name": "asString",
-    "files": [
-      "src/channels/plugins/status-issues/shared.ts",
-      "src/cli/nodes-media-utils.ts",
-      "src/tui/tui-formatters.ts"
-    ],
-    "sdk": true
-  },
-  {
     "name": "authorizeConfigWrite",
     "files": [
       "src/channels/plugins/config-writes.ts",
@@ -1178,13 +1169,6 @@
     "files": [
       "src/cli/config-cli-path.ts",
       "src/secrets/shared.ts"
-    ]
-  },
-  {
-    "name": "toError",
-    "files": [
-      "src/agents/prepared-model-runtime.owner.ts",
-      "src/worker/worker-connection-contract.ts"
     ]
   },
   {

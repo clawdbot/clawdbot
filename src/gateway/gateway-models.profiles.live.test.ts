@@ -12,6 +12,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   clampThinkingLevel,
   type Api,
@@ -1269,10 +1270,6 @@ function resolveBedrockDiscoveryRegion(cfg: OpenClawConfig | undefined): string 
   }
   const region = discoveryConfig.region;
   return typeof region === "string" ? normalizeOptionalEnvValue(region) : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function resolveAwsProfileRegion(env: NodeJS.ProcessEnv): string | undefined {

@@ -47,6 +47,7 @@ describe("sidebar entries", () => {
       "custodian",
       "channels",
       "security",
+      "secrets",
       "notifications",
       "advanced",
     ] as const) {
@@ -61,6 +62,13 @@ describe("sidebar entries", () => {
       (group) => group.labelKey === "nav.settingsGroupSystem",
     );
     expect(system?.routes.slice(-2)).toEqual(["updates", "about"]);
+  });
+
+  it("places team secrets between Privacy & Security and Approvals", () => {
+    const security = SETTINGS_NAVIGATION_GROUPS.find(
+      (group) => group.labelKey === "nav.settingsGroupSecurity",
+    );
+    expect(security?.routes).toEqual(["security", "secrets", "approvals"]);
   });
 
   it("keeps model setup as a settings subpage without a sidebar entry", () => {

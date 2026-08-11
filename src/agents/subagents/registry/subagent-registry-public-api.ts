@@ -9,7 +9,6 @@ import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
 import {
   countActiveRunsForSessionFromRuns,
   getLatestSubagentRunByChildSessionKeyFromRuns,
-  getSubagentRunByChildSessionKeyFromRuns,
 } from "./subagent-registry-queries.js";
 import { markRequesterTurnYieldedInRuns } from "./subagent-registry-requester-yield.js";
 import type { SubagentRunRecord, SwarmStructuredOutputState } from "./subagent-registry.types.js";
@@ -186,13 +185,6 @@ export function createSubagentRegistryPublicApi(config: {
     return countActiveRunsForSessionFromRuns(readRuns(), requesterSessionKey, options);
   }
 
-  function getSubagentRunByChildSessionKey(childSessionKey: string): SubagentRunRecord | null {
-    return getSubagentRunByChildSessionKeyFromRuns(
-      deps().getSubagentRunsSnapshotForChildSession(runs, childSessionKey),
-      childSessionKey,
-    );
-  }
-
   /** Records sessions_yield before the active requester run is aborted. */
   function markRequesterTurnYielded(params: {
     requesterSessionKey: string;
@@ -217,7 +209,6 @@ export function createSubagentRegistryPublicApi(config: {
     listSwarmRunsForGroup,
     getSwarmRunByLaunchReplayKey,
     countActiveRunsForSession,
-    getSubagentRunByChildSessionKey,
     settleRequesterAfterSessionSpawns: settleRequesterTurn,
     markRequesterTurnYielded,
   };

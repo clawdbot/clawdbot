@@ -4237,6 +4237,160 @@ public struct UiCommandResult: Codable, Sendable {
 
 public struct SecretsReloadParams: Codable, Sendable {}
 
+public struct SecretStoreSecretEntry: Codable, Sendable {
+    public let name: String
+    public let scopekind: String
+    public let scopeid: String
+    public let createdatms: Int
+    public let updatedatms: Int
+    public let updatedby: String?
+    public let kind: String
+
+    public init(
+        name: String,
+        scopekind: String,
+        scopeid: String,
+        createdatms: Int,
+        updatedatms: Int,
+        updatedby: String? = nil,
+        kind: String)
+    {
+        self.name = name
+        self.scopekind = scopekind
+        self.scopeid = scopeid
+        self.createdatms = createdatms
+        self.updatedatms = updatedatms
+        self.updatedby = updatedby
+        self.kind = kind
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case scopekind = "scopeKind"
+        case scopeid = "scopeId"
+        case createdatms = "createdAtMs"
+        case updatedatms = "updatedAtMs"
+        case updatedby = "updatedBy"
+        case kind
+    }
+}
+
+public struct SecretStoreEnvEntry: Codable, Sendable {
+    public let name: String
+    public let scopekind: String
+    public let scopeid: String
+    public let createdatms: Int
+    public let updatedatms: Int
+    public let updatedby: String?
+    public let kind: String
+    public let value: String
+
+    public init(
+        name: String,
+        scopekind: String,
+        scopeid: String,
+        createdatms: Int,
+        updatedatms: Int,
+        updatedby: String? = nil,
+        kind: String,
+        value: String)
+    {
+        self.name = name
+        self.scopekind = scopekind
+        self.scopeid = scopeid
+        self.createdatms = createdatms
+        self.updatedatms = updatedatms
+        self.updatedby = updatedby
+        self.kind = kind
+        self.value = value
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case scopekind = "scopeKind"
+        case scopeid = "scopeId"
+        case createdatms = "createdAtMs"
+        case updatedatms = "updatedAtMs"
+        case updatedby = "updatedBy"
+        case kind
+        case value
+    }
+}
+
+public struct SecretsStoreListParams: Codable, Sendable {}
+
+public struct SecretsStoreListResult: Codable, Sendable {
+    public let entries: [SecretStoreEntry]
+
+    public init(
+        entries: [SecretStoreEntry])
+    {
+        self.entries = entries
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case entries
+    }
+}
+
+public struct SecretsStoreSetParams: Codable, Sendable {
+    public let name: String
+    public let value: String
+    public let kind: AnyCodable
+
+    public init(
+        name: String,
+        value: String,
+        kind: AnyCodable)
+    {
+        self.name = name
+        self.value = value
+        self.kind = kind
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case value
+        case kind
+    }
+}
+
+public struct SecretsStoreDeleteParams: Codable, Sendable {
+    public let name: String
+
+    public init(
+        name: String)
+    {
+        self.name = name
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+    }
+}
+
+public struct SecretsStoreMutationResult: Codable, Sendable {
+    public let ok: Bool
+    public let reloaded: Bool
+    public let warningcount: Int?
+
+    public init(
+        ok: Bool,
+        reloaded: Bool,
+        warningcount: Int? = nil)
+    {
+        self.ok = ok
+        self.reloaded = reloaded
+        self.warningcount = warningcount
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case reloaded
+        case warningcount = "warningCount"
+    }
+}
+
 public struct SecretsResolveParams: Codable, Sendable {
     public let commandname: String
     public let targetids: [String]
@@ -18679,6 +18833,37 @@ public enum UiCommand: Codable, Sendable {
         case .sidebar(let value): try value.encode(to: encoder)
         case .panel(let value): try value.encode(to: encoder)
         case .navigate(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public enum SecretStoreEntry: Codable, Sendable {
+    case secret(SecretStoreSecretEntry)
+    case env(SecretStoreEnvEntry)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "kind"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "secret": self = try .secret(SecretStoreSecretEntry(from: decoder))
+        case "env": self = try .env(SecretStoreEnvEntry(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown SecretStoreEntry discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .secret(let value): try value.encode(to: encoder)
+        case .env(let value): try value.encode(to: encoder)
         }
     }
 }

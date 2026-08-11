@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import { password } from "@clack/prompts";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
-import { parse as parseDotEnv } from "dotenv";
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
+import { parseSecretStoreDotEnvText } from "../secrets/store/dotenv.js";
 import { SECRET_STORE_VALUE_MAX_BYTES } from "../secrets/store/secret-store.js";
 
 const SECRET_STORE_IMPORT_MAX_BYTES = 16 * 1024 * 1024;
@@ -58,7 +58,7 @@ export async function readSecretStoreInput(params: { valueFile?: string }): Prom
 }
 
 export function parseSecretStoreDotEnv(raw: string | Buffer): Record<string, string> {
-  return parseDotEnv(raw);
+  return parseSecretStoreDotEnvText(raw.toString());
 }
 
 export async function readSecretStoreImport(from?: string): Promise<Record<string, string>> {
