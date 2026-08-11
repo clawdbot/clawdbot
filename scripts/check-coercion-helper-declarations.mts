@@ -82,6 +82,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "resolveExpiresAtMsFromDurationOrEpoch",
       "resolveExpiresAtMsFromDurationSeconds",
       "resolveExpiresAtMsFromEpochSeconds",
+      "resolveIntegerOption",
       "resolveNonNegativeIntegerOption",
       "resolveOptionalIntegerOption",
       "resolvePositiveTimerTimeoutMs",

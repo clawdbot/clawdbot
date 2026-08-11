@@ -48,6 +48,7 @@ describe("coercion helper declaration AST guard", () => {
       "function normalizeOptionalString() {}",
       "const parseDateFirstTimestampMs = () => 0;",
       "function safeParseJsonRecord() {}",
+      "function resolveIntegerOption() {}",
     ].join("\n");
 
     expect(findBannedCoercionHelperDeclarations(source, "src/example.ts")).toEqual([
@@ -95,6 +96,12 @@ describe("coercion helper declaration AST guard", () => {
         kind: "function",
         line: 31,
         name: "safeParseJsonRecord",
+      },
+      {
+        file: "src/example.ts",
+        kind: "function",
+        line: 32,
+        name: "resolveIntegerOption",
       },
     ]);
   });
