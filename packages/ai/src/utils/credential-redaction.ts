@@ -47,7 +47,7 @@ function normalizeDiagnosticFieldName(value: string): string {
   return value.toLowerCase().replaceAll(/[^a-z0-9]/g, "");
 }
 
-export function isCredentialFieldName(key: string): boolean {
+function isCredentialFieldName(key: string): boolean {
   const normalized = normalizeDiagnosticFieldName(key);
   if (!normalized || NON_CREDENTIAL_FIELD_NAMES.has(normalized)) {
     return false;
@@ -59,7 +59,7 @@ export function isCredentialFieldName(key: string): boolean {
   );
 }
 
-export function redactCredentialText(value: string): string {
+function redactCredentialText(value: string): string {
   return value
     .replace(AUTHORIZATION_VALUE_RE, "$1 <redacted>")
     .replace(JWT_VALUE_RE, "<redacted-jwt>")
@@ -70,7 +70,7 @@ export function redactCredentialText(value: string): string {
     .replace(LOOSE_CREDENTIAL_PAIR_RE, "$1=<redacted>");
 }
 
-export function diagnosticBytes(value: unknown, numericArrays = false): Uint8Array | undefined {
+function diagnosticBytes(value: unknown, numericArrays = false): Uint8Array | undefined {
   return value instanceof ArrayBuffer
     ? new Uint8Array(value)
     : ArrayBuffer.isView(value)
@@ -82,7 +82,7 @@ export function diagnosticBytes(value: unknown, numericArrays = false): Uint8Arr
         : undefined;
 }
 
-export function isDiagnosticMediaPayload(descriptors: PropertyDescriptorMap): boolean {
+function isDiagnosticMediaPayload(descriptors: PropertyDescriptorMap): boolean {
   const type = descriptors.type?.value;
   return (
     (typeof type === "string" &&
@@ -96,7 +96,7 @@ export function isDiagnosticMediaPayload(descriptors: PropertyDescriptorMap): bo
   );
 }
 
-export type DiagnosticMediaField =
+type DiagnosticMediaField =
   | { kind: "context" }
   | {
       kind: "redacted";
@@ -113,7 +113,7 @@ export type DiagnosticProjectionPolicy = {
   ) => Record<string, unknown>;
 };
 
-export function extractDiagnosticMediaField(
+function extractDiagnosticMediaField(
   key: string,
   value: unknown,
   parentMedia: boolean,
