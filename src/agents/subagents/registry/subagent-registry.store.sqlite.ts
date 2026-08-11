@@ -89,13 +89,8 @@ function boolToSqlite(value: boolean | undefined): number | null {
 /** Rehydrates one sqlite row into the normalized subagent run record shape. */
 function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | null {
   const payload = parseJson(row.payload_json);
-  // SQLite nested state is canonical; remove v2026.6.34's retry-limit map after its 7-day retention window.
   if (!isCanonicalSubagentRunRecord(payload)) {
     return null;
-  }
-  const suspendedReason: unknown = payload.delivery.suspendedReason;
-  if (suspendedReason === "retry-limit") {
-    payload.delivery.suspendedReason = "permanent_failure";
   }
   // This module owns every production write and commits indexed columns with
   // this complete payload atomically; rehydrating both created competing state.

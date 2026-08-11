@@ -321,29 +321,6 @@ describe("subagent registry sqlite store", () => {
     });
   });
 
-  it("normalizes the shipped retry-limit suspension on restore", async () => {
-    await withTempStateEnv(async () => {
-      const run = createRun({
-        delivery: {
-          status: "suspended",
-          suspendedAt: 300,
-          suspendedReason: "permanent_failure",
-        },
-      });
-      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
-
-      const { db } = openOpenClawStateDatabase();
-      db.prepare(
-        "UPDATE subagent_runs SET payload_json = json_set(payload_json, '$.delivery.suspendedReason', 'retry-limit') WHERE run_id = ?",
-      ).run(run.runId);
-      closeOpenClawStateDatabaseForTest();
-
-      expect(loadSubagentRegistryFromSqlite().get(run.runId)?.delivery?.suspendedReason).toBe(
-        "permanent_failure",
-      );
-    });
-  });
-
   it("loads a canonical lightweight session-list projection", async () => {
     await withTempStateEnv(async () => {
       const run = createRun({
