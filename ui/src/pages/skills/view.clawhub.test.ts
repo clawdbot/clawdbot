@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SkillStatusReport } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
 import { clawhubVerdictKey } from "../../lib/skills/index.ts";
 import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
