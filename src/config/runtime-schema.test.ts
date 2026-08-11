@@ -578,11 +578,14 @@ describe("loadGatewayRuntimeConfigSchema", () => {
       diagnostics: [],
       plugins: [
         // Discovery-first claimant of the config-configured channel; also the incumbent of the
-        // env-only qqbot channel, where a replacement edge kills it plugin-globally.
-        makeClaimant({ id: "acme-aa-multi", channels: { qqbot: "aOption", acmey: "aOption" } }),
+        // env-only clickclack channel, where a replacement edge kills it plugin-globally.
         makeClaimant({
-          id: "qqbot-bb-rep",
-          channels: { qqbot: "bOption" },
+          id: "acme-aa-multi",
+          channels: { clickclack: "aOption", acmey: "aOption" },
+        }),
+        makeClaimant({
+          id: "clickclack-bb-rep",
+          channels: { clickclack: "bOption" },
           preferOver: ["acme-aa-multi"],
         }),
         makeClaimant({ id: "acme-cc-fallback", channels: { acmey: "cOption" } }),
@@ -592,8 +595,7 @@ describe("loadGatewayRuntimeConfigSchema", () => {
       ...explicitMainRoster(),
       channels: { acmey: { token: "y" } },
     });
-    process.env.QQBOT_APP_ID = "app";
-    process.env.QQBOT_CLIENT_SECRET = "secret";
+    process.env.CLICKCLACK_BOT_TOKEN = "token";
     try {
       const acmeySchemaText = () => {
         const schema = loadGatewayRuntimeConfigSchema().schema as {
@@ -603,17 +605,16 @@ describe("loadGatewayRuntimeConfigSchema", () => {
         return JSON.stringify(channels.properties?.acmey);
       };
 
-      // Default policy: the env-only qqbot channel joins the plan, its replacement kills the
-      // multi-channel incumbent, and the configured channel falls back to its other claimant.
+      // Default policy: the env-only clickclack channel joins the plan, its replacement kills
+      // the multi-channel incumbent, and the configured channel falls back to its other claimant.
       expect(acmeySchemaText()).toContain("cOption");
 
-      // Suppressed ambient triggers: qqbot is outside the plan exactly as it is outside loader
-      // suppression, so the configured channel keeps its discovery-first claimant.
+      // Suppressed ambient triggers: clickclack is outside the plan exactly as it is outside
+      // loader suppression, so the configured channel keeps its discovery-first claimant.
       setRuntimeAmbientEnvTriggers("suppress");
       expect(acmeySchemaText()).toContain("aOption");
     } finally {
-      delete process.env.QQBOT_APP_ID;
-      delete process.env.QQBOT_CLIENT_SECRET;
+      delete process.env.CLICKCLACK_BOT_TOKEN;
     }
   });
 

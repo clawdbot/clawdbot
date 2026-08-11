@@ -606,17 +606,18 @@ describe("plugin loader preferOver activation", () => {
     const bundledRoot = makePluginLoaderTempDir();
     writeChannelToolPlugin({
       rootDir: bundledRoot,
-      id: "qqbot-aa-inc",
-      channelId: "qqbot",
+      id: "clickclack-aa-inc",
+      channelId: "clickclack",
       enabledByDefault: true,
-      toolName: "qqbot_remind_legacy",
+      toolName: "clickclack_remind_legacy",
     });
     writeChannelToolPlugin({
       rootDir: bundledRoot,
-      id: "qqbot-bb-rep",
-      channelId: "qqbot",
+      id: "clickclack-bb-rep",
+      channelId: "clickclack",
       enabledByDefault: true,
-      preferOver: ["qqbot-aa-inc"],
+      preferOver: ["clickclack-aa-inc"],
+      toolName: "clickclack_remind",
     });
     const baseEnv = {
       OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
@@ -625,26 +626,26 @@ describe("plugin loader preferOver activation", () => {
 
     // No channel anywhere: no supersession candidates, first-wins registration.
     const unconfigured = loadOpenClawPlugins({ config: {}, env: baseEnv, activate: false });
-    expect(unconfigured.channels.map((entry) => entry.pluginId)).toEqual(["qqbot-aa-inc"]);
+    expect(unconfigured.channels.map((entry) => entry.pluginId)).toEqual(["clickclack-aa-inc"]);
 
     // An ambient credential env var configures the channel: the plan supersedes the implicit
     // incumbent, and the cached env-less registry must not be served.
     const envConfigured = loadOpenClawPlugins({
       config: {},
-      env: { ...baseEnv, QQBOT_APP_ID: "app", QQBOT_CLIENT_SECRET: "secret" },
+      env: { ...baseEnv, CLICKCLACK_BOT_TOKEN: "token" },
       activate: false,
     });
-    expect(envConfigured.channels.map((entry) => entry.pluginId)).toEqual(["qqbot-bb-rep"]);
+    expect(envConfigured.channels.map((entry) => entry.pluginId)).toEqual(["clickclack-bb-rep"]);
 
     // Suppressing ambient triggers removes the env-only channel from the plan — a distinct
     // cache identity AND a plan with no supersession.
     const suppressed = loadOpenClawPlugins({
       config: {},
-      env: { ...baseEnv, QQBOT_APP_ID: "app", QQBOT_CLIENT_SECRET: "secret" },
+      env: { ...baseEnv, CLICKCLACK_BOT_TOKEN: "token" },
       ambientEnvTriggers: "suppress",
       activate: false,
     });
-    expect(suppressed.channels.map((entry) => entry.pluginId)).toEqual(["qqbot-aa-inc"]);
+    expect(suppressed.channels.map((entry) => entry.pluginId)).toEqual(["clickclack-aa-inc"]);
   });
 
   // #120332 round 42 (P2): the loader cache key covers MATERIAL selection. A raw authored
