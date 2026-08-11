@@ -1968,6 +1968,45 @@ describe("projectRecentChatDisplayMessages", () => {
     );
   });
 
+  it("dedupes a channel-final mirror identified by its source assistant message id when the reply has commentary and final_answer phased text", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "thinking like caveman",
+            textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
+          },
+          {
+            type: "text",
+            text: "Actual final answer",
+            textSignature: JSON.stringify({ v: 1, id: "msg_final", phase: "final_answer" }),
+          },
+        ],
+        provider: "openai-completions",
+        model: "deepseek-v4-flash-free",
+        __openclaw: { id: "asst-turn-phased" },
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Actual final answer" }],
+        idempotencyKey: "channel-final:telegram-final:phased:0",
+        openclawDeliveryMirror: {
+          kind: "channel-final",
+          sourceMessageId: "telegram-final:phased",
+          sourceAssistantMessageId: "asst-turn-phased",
+        },
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toHaveLength(1);
+  });
+
   it("keeps a channel-final mirror visible when its source assistant message id does not match the preceding reply", () => {
     const result = projectRecentChatDisplayMessages([
       assistantHistoryMessage("Repeated reply", {
