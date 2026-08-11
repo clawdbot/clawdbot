@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 import { decodeMeetingAudioBase64 } from "./audio-base64.js";
@@ -9,10 +10,6 @@ import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.j
 const NODE_OUTPUT_GENERATION_CAPABILITY = Symbol.for(
   "openclaw.internal.meeting-node-output-generation.v1",
 );
-
-function readNonBlankString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
 
 export function createNodeMeetingRealtimeAudioTransport(params: {
   runtime: PluginRuntime;

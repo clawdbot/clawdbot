@@ -1,15 +1,7 @@
+import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 export function parseQaProgressBooleanEnv(value: string | undefined): boolean | undefined {
-  const normalized = value?.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") {
-    return true;
-  }
-  if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") {
-    return false;
-  }
-  return undefined;
+  return parseBooleanValue(value);
 }
 
 export function sanitizeQaProgressValue(value: string): string {

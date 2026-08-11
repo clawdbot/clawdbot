@@ -8,6 +8,7 @@ import {
   resolveBootstrapContextForRun,
   resolveUserPath,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { hasNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 // Filenames the Copilot SDK already loads natively from the working
 // directory / instructionDirectories (per
@@ -235,7 +236,7 @@ function getCopilotContextFileBasename(filePath: string): string {
 }
 
 function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+  return hasNonEmptyString(value) ? value : undefined;
 }
 
 function readResolvedWorkspacePath(value: unknown): string | undefined {

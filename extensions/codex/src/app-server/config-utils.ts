@@ -1,7 +1,10 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeTrimmedStringList,
+  parseBooleanValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawExecAsk, OpenClawExecSecurity } from "./config-contracts.js";
 import type { CodexServiceTier } from "./protocol.js";
 
@@ -73,17 +76,7 @@ export function normalizeStringList(value: unknown): string[] {
 }
 
 export function readBooleanEnv(value: string | undefined): boolean | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const normalized = value.trim().toLowerCase();
-  if (["1", "true", "yes", "on"].includes(normalized)) {
-    return true;
-  }
-  if (["0", "false", "no", "off"].includes(normalized)) {
-    return false;
-  }
-  return undefined;
+  return parseBooleanValue(value);
 }
 
 export function readExecSecurity(value: unknown): OpenClawExecSecurity | undefined {

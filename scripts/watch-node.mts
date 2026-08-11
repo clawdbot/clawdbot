@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { toErrorObject } from "./lib/error-format.mts";
 import { sleep } from "./lib/sleep.mjs";
 import { createRunNodePathClassifier, runNodeWatchedPaths } from "./run-node-watch-paths.mts";
 
@@ -23,6 +24,10 @@ const WATCH_DIST_ENTRY_TIMEOUT_MS = 5 * 60 * 1_000;
 const AUTO_DOCTOR_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
 type ProcessSignal = `SIG${string}`;
 type TimerHandle = ReturnType<typeof setTimeout>;
+
+function coerceWatchError(value: unknown, fallbackMessage: string): Error {
+  return toErrorObject(value, fallbackMessage);
+}
 
 type WatchChild = {
   pid?: number;
@@ -538,7 +543,7 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<number
       if (onSigTerm) {
         deps.process.off("SIGTERM", onSigTerm);
       }
-      reject(toLintErrorObject(err, "Non-Error rejection"));
+      reject(coerceWatchError(err, "Non-Error rejection"));
     };
 
     const resolveCreateWatcher = async () => {
@@ -759,20 +764,6 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       }
       process.exit(1);
     });
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string) {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }
 
 function errorCode(error: unknown): unknown {

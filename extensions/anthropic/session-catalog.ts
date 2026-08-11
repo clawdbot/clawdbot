@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import { parseDateFirstTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
@@ -12,7 +13,10 @@ import type {
   SessionCatalogPullRequestSummary,
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
-import { asFiniteNumber, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeBoundedOptionalString as readBoundedString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readClaudeDesktopCustomGroups } from "./claude-desktop-groups.js";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_MODEL_REF } from "./cli-constants.js";
 import {
@@ -222,14 +226,6 @@ function cacheCatalogDiscovery(filePath: string, entry: CatalogDiscoveryCacheEnt
   setBoundedCache(catalogDiscoveryCache, filePath, entry, MAX_CATALOG_DISCOVERY_CACHE_ENTRIES);
 }
 
-function readBoundedString(value: unknown, maxLength = MAX_STRING_LENGTH): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed && trimmed.length <= maxLength ? trimmed : undefined;
-}
-
 function pullRequestState(value: unknown): SessionCatalogPullRequestSummary["state"] | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -326,7 +322,7 @@ function isCliEntrypoint(value: unknown): value is string {
 // Claude's persisted string timestamps are date expressions, including numeric-looking years.
 // Numeric fields are already millisecond values, so preserve that distinct mixed-input contract.
 function parseClaudeCatalogTimestampMs(value: unknown): number | undefined {
-  return typeof value === "string" ? asFiniteNumber(Date.parse(value)) : asFiniteNumber(value);
+  return parseDateFirstTimestampMs(value);
 }
 
 function isWithin(root: string, candidate: string): boolean {
@@ -644,7 +640,7 @@ async function readIndexRecords(context: ClaudeSessionScanContext): Promise<{
     records.set(sessionId, {
       threadId: sessionId,
       name: summary ?? firstPrompt ?? null,
-      cwd: readBoundedString(entry.projectPath),
+      cwd: readBoundedString(entry.projectPath, MAX_STRING_LENGTH),
       status: "stored",
       ...(createdAt !== undefined ? { createdAt } : {}),
       ...(updatedAt !== undefined ? { updatedAt, recencyAt: updatedAt } : {}),
@@ -822,7 +818,7 @@ async function discoverCliRecords(
         records.set(sessionId, {
           threadId: sessionId,
           name: aiTitle ?? firstPrompt ?? null,
-          cwd: readBoundedString(raw.cwd),
+          cwd: readBoundedString(raw.cwd, MAX_STRING_LENGTH),
           status: "stored",
           ...(createdAt !== undefined ? { createdAt } : {}),
           updatedAt: stat.mtimeMs,
@@ -947,7 +943,9 @@ async function scanClaudeSessions(
       }),
       name: readBoundedString(metadata.title, 500) ?? existing?.name ?? null,
       cwd:
-        readBoundedString(metadata.cwd) ?? readBoundedString(metadata.originCwd) ?? existing?.cwd,
+        readBoundedString(metadata.cwd, MAX_STRING_LENGTH) ??
+        readBoundedString(metadata.originCwd, MAX_STRING_LENGTH) ??
+        existing?.cwd,
       ...(createdAt !== undefined ? { createdAt } : {}),
       ...(updatedAt !== undefined ? { updatedAt, recencyAt: updatedAt } : {}),
       ...(customGroup ? { customGroup } : {}),

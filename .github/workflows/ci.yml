@@ -619,6 +619,11 @@ jobs:
                     runtime: "node",
                     task: "max-lines-ratchet",
                   },
+                  {
+                    check_name: "checks-fast-coercion-helpers",
+                    runtime: "node",
+                    task: "coercion-helpers",
+                  },
                 ]
             : [];
           if (runNodeFull) {
@@ -1758,6 +1763,9 @@ jobs:
               ;;
             ci-routing)
               pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope*.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-run-node-test-shard.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
+              ;;
+            coercion-helpers)
+              pnpm check:coercion-helpers
               ;;
             max-lines-ratchet)
               if ! has_package_script "check:max-lines-ratchet"; then

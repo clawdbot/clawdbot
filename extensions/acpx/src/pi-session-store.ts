@@ -2,7 +2,10 @@ import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { SessionCatalogSession } from "openclaw/plugin-sdk/session-catalog";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeBoundedOptionalString as readBoundedString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { piAcpSessionStoreRoot, piSessionStore } from "./pi-session-paths.js";
 import { parsePiSessionTimestampMs } from "./pi-session-timestamp.js";
 
@@ -83,14 +86,6 @@ function cacheSummary(file: string, value: CachedSummary): void {
     }
     forgetCachedSummary(oldest);
   }
-}
-
-function readBoundedString(value: unknown, maxLength: number): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed && trimmed.length <= maxLength ? trimmed : undefined;
 }
 
 async function discoverPiSessionFiles(

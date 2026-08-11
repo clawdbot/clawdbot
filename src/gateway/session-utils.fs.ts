@@ -4,6 +4,7 @@ import fs from "node:fs";
 import readline from "node:readline";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
+  asPositiveFiniteNumber as resolvePositiveUsageNumber,
   resolveIntegerOption,
   resolveNonNegativeIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
@@ -969,10 +970,6 @@ function extractTranscriptUsageCost(raw: unknown): number | undefined {
   }
   const total = (cost as { total?: unknown }).total;
   return typeof total === "number" && Number.isFinite(total) && total >= 0 ? total : undefined;
-}
-
-function resolvePositiveUsageNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 function extractTranscriptContentEstimatedChars(content: unknown): number {

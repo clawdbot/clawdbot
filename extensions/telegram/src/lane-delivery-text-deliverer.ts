@@ -175,10 +175,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     ) {
       return payload;
     }
-    const telegramRest =
-      telegramData && typeof telegramData === "object" && !Array.isArray(telegramData)
-        ? (telegramData as Record<string, unknown>)
-        : {};
+    const telegramRest = asNonArrayRecord(telegramData);
     return {
       ...payload,
       channelData: {
@@ -535,3 +532,4 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     return delivered ? result("sent") : result("skipped");
   };
 }
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";

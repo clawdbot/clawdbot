@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString as optionalNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   managedImageRecordFromRow,
   managedImageRecordsEqual,
@@ -125,10 +126,6 @@ function readLegacySourceSnapshot(sourcePath: string): LegacySourceSnapshot {
     label: "managed image",
     maxBytes: LEGACY_RECORD_MAX_BYTES,
   });
-}
-
-function optionalNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 function nullableNonNegativeInteger(value: unknown): number | null | undefined {
