@@ -14,6 +14,7 @@ import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import {
   buildAgentMainSessionKey,
   canonicalUiSessionKeyForPersistence,
+  isUiSelectedGlobalSessionKey,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
   uiSessionEventMatches,
@@ -26,6 +27,7 @@ import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
+import { retireChatModelSelectionOwnership } from "./chat-session.ts";
 import {
   invalidateChatMetadataCache,
   refreshChatModelAuthStatus,
@@ -37,6 +39,7 @@ import {
   reconcileStaleChatRunAfterSessionStatePublication,
   replayPendingChatAbort,
 } from "./run-lifecycle.ts";
+import { cancelChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache } from "./session-message-cache.ts";
 import { normalizeSidebarLayout } from "./sidebar-layout.ts";
 import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream.ts";
@@ -73,18 +76,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.sessionsResultAgentId = stateValue.agentId;
     state.sessionsLoading = stateValue.loading;
     state.sessionsError = stateValue.error;
-    for (const row of stateValue.result?.sessions ?? []) {
-      const sessionKey = this.resolveObserverDigestHistoryKey(
-        row.key,
-        row.observerDigest?.agentId ?? stateValue.agentId ?? undefined,
-      );
-      this.observerDigestHistory.sync(sessionKey, row.sessionId);
-      if (row.observerDigest) {
-        this.observerDigestHistory.hydrate(sessionKey, row.observerDigest, row.sessionId);
-      }
-    }
     this.refreshSwarmRoster();
-    this.refreshBuiltinBoardSnapshot();
     const selectedSession = selectedChatSessionRow(state);
     if (applySelectedSessionProjection(state, selectedSession)) {
       this.markSessionRead(selectedSession);
@@ -98,8 +90,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         parseAgentSessionKey(state.sessionKey)?.agentId ??
         this.context.agentSelection.state.selectedId ??
         "main";
-      this.onPaneSessionChange?.(
+      this.onSessionDeleted?.(
         this.paneId,
+        state.sessionKey,
         buildAgentMainSessionKey({
           agentId,
           mainKey: resolveUiConfiguredMainKey({
@@ -168,6 +161,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     }
     const previousMediaAuthToken = resolveAssistantAttachmentAuthToken(state);
     const wasConnected = state.connected;
+    const previousAssistantAgentId = state.assistantAgentId;
     const previousSidebarSessionKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
     const connectionLifecycle = (this.gatewayConnectionLifecycle ??=
       createGatewayConnectionLifecycle({
@@ -176,6 +170,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       }));
     const sourceChanged = connectionLifecycle.transition(snapshot);
     const clientChanged = this.connectedClient !== snapshot.client;
+    if (clientChanged) {
+      this.replaceStagedAttachmentGatewayOwner(snapshot.client);
+    }
     if (snapshot.phase !== "connected") {
       this.presencePayload = undefined;
     } else if (clientChanged || !wasConnected) {
@@ -183,7 +180,16 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.presencePayload = presence ? { presence } : undefined;
     }
     if (sourceChanged) {
+      this.cancelHeaderRename();
+      cancelChatScroll(state);
       releaseChatMediaResourceSubscriber(state.requestUpdate);
+      if (wasConnected) {
+        if (snapshot.phase === "connected") {
+          markQueuedChatSendsWaitingForReconnect(state);
+        }
+        state.chatSending = false;
+        state.chatSendingScopeKey = null;
+      }
       // A reconnect can retain the browser client. Keep async ownership tied
       // to the logical connection, not only the transport object identity.
       this.connectionGeneration += 1;
@@ -193,12 +199,11 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       invalidateChatMetadataCache(state);
       this.swarmHydrator?.dispose();
       this.swarmHydrator = null;
-      this.builtinBoardSnapshot = null;
-      this.builtinBoardSnapshotBase = null;
       this.taskSuggestionsRequestVersion += 1;
       this.taskSuggestions = [];
       this.taskSuggestionBusyIds.clear();
       this.taskSuggestionOperations.clear();
+      this.resetTaskSuggestionCloudProfiles();
       this.resetSessionSuggestions();
       this.clearTypingActors();
       this.sessionDiscussionStates.clear();
@@ -212,6 +217,13 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.resetSessionPullRequests();
       this.resetOlderMessagesViewport();
       state.chatLoading = false;
+    }
+    if (
+      sourceChanged ||
+      (previousAssistantAgentId !== snapshot.assistantAgentId &&
+        isUiSelectedGlobalSessionKey(state, state.sessionKey))
+    ) {
+      retireChatModelSelectionOwnership(state);
     }
     state.client = snapshot.client;
     state.connected = snapshot.phase === "connected";
@@ -242,8 +254,14 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     }
     if (sourceChanged && snapshot.phase === "connected" && state.sessionKey && !clientChanged) {
       // A logical reconnect can retain the browser client and skip full startup.
-      // The existing transcript is already authoritative, so rehydrate after its next commit.
-      this.deferSessionHydrationUntilTranscript(state.sessionKey, Promise.resolve());
+      // Disconnect cleanup drops transient tool rows, so reload this pane's
+      // active-run snapshot before secondary session surfaces hydrate.
+      const historyRefresh = refreshPageChat(state, {
+        startup: true,
+        awaitHistory: true,
+        deferBranches: true,
+      });
+      this.deferSessionHydrationUntilTranscript(state.sessionKey, historyRefresh);
     }
     state.terminalAvailable =
       this.context.config.current.terminalEnabled &&
@@ -264,7 +282,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (
       routeSessionKey &&
       canonicalRouteSessionKey &&
-      canonicalRouteSessionKey !== routeSessionKey
+      canonicalRouteSessionKey !== routeSessionKey &&
+      this.active &&
+      this.presented
     ) {
       this.onPaneSessionChange?.(this.paneId, canonicalRouteSessionKey, { replace: true });
       state.requestUpdate?.();

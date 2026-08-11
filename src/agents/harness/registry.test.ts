@@ -14,10 +14,23 @@ import {
 import { selectAgentHarness } from "./selection.js";
 import type { AgentHarness } from "./types.js";
 
+const resolveProviderRefOwnership = vi.hoisted(() => vi.fn(() => ({ status: "unowned" as const })));
+
+// Registry tests exercise selection handoff; provider owner/route tests own the real artifacts,
+// which would cold-load bundled plugin surfaces for this synthetic provider config.
+vi.mock("../../plugins/providers.js", () => ({
+  resolveProviderRefOwnership,
+}));
+vi.mock("../../plugins/provider-model-routes.js", () => ({
+  resolveProviderModelCatalogId: () => null,
+  resolveProviderModelRoutes: () => null,
+}));
+
 const originalRuntime = process.env.OPENCLAW_AGENT_RUNTIME;
 
 beforeEach(() => {
   clearAgentHarnesses();
+  resolveProviderRefOwnership.mockClear();
 });
 
 afterEach(() => {
@@ -67,6 +80,13 @@ function providerRuntimeConfig(provider: string, runtime: string): OpenClawConfi
 }
 
 describe("agent harness registry", () => {
+  it("rejects the built-in runtime id before mutating the registry", () => {
+    expect(() =>
+      registerAgentHarness(makeHarness("openclaw"), { ownerPluginId: "untrusted-plugin" }),
+    ).toThrow('agent harness id "openclaw" is reserved for the built-in runtime');
+    expect(listRegisteredAgentHarnesses()).toEqual([]);
+  });
+
   it("registers and retrieves a harness with owner metadata", () => {
     const harness = makeHarness("custom");
     registerAgentHarness(harness, { ownerPluginId: "plugin-a" });
@@ -204,13 +224,18 @@ describe("agent harness registry", () => {
     registerAgentHarness(makeHarness("custom", { providers: ["anthropic"] }), {
       ownerPluginId: "plugin-a",
     });
+    const config = providerRuntimeConfig("anthropic", "custom");
 
     expect(
       selectAgentHarness({
         provider: "anthropic",
         modelId: "sonnet-4.6",
-        config: providerRuntimeConfig("anthropic", "custom"),
+        config,
       }).id,
     ).toBe("custom");
+    expect(resolveProviderRefOwnership).toHaveBeenCalledWith({
+      provider: "anthropic",
+      config,
+    });
   });
 });

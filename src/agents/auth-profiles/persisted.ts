@@ -44,6 +44,14 @@ type CredentialRejectReason = "non_object" | "invalid_type" | "missing_provider"
 type RejectedCredentialEntry = { key: string; reason: CredentialRejectReason };
 
 const AUTH_PROFILE_TYPES = new Set<AuthProfileCredential["type"]>(["api_key", "oauth", "token"]);
+const INLINE_API_KEY_USAGE_ID_PREFIX = "inline-api-key:";
+
+function isRetainedUsageStatsId(
+  profileId: string,
+  profiles: AuthProfileStore["profiles"],
+): boolean {
+  return Boolean(profiles[profileId]) || profileId.startsWith(INLINE_API_KEY_USAGE_ID_PREFIX);
+}
 
 // Persisted credential normalization accepts old field names and SecretRef-ish
 // values, then emits the current credential discriminated union.
@@ -652,7 +660,9 @@ export function mergeAuthProfileStores(
   const mergedUsageStats = mergeRecord(base.usageStats, override.usageStats);
   const usageStats = mergedUsageStats
     ? Object.fromEntries(
-        Object.entries(mergedUsageStats).filter(([profileId]) => profiles[profileId]),
+        Object.entries(mergedUsageStats).filter(([profileId]) =>
+          isRetainedUsageStatsId(profileId, profiles),
+        ),
       )
     : undefined;
   const merged = {

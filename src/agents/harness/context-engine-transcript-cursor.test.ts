@@ -13,6 +13,7 @@ import {
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { ContextEngine, ContextEngineSessionTarget } from "../../context-engine/types.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   bootstrapHarnessContextEngine,
   finalizeHarnessContextEngineTurn,
@@ -51,6 +52,7 @@ describe("context engine transcript cursor contract", () => {
       agentId: "main",
       sessionId: "context-engine-cursor",
       sessionKey: "agent:main:context-engine-cursor",
+      sessionEntry: { sessionId: "context-engine-cursor", updatedAt: 10 },
       storePath,
     };
     const projectedMessages: AgentMessage[] = [];
@@ -87,7 +89,11 @@ describe("context engine transcript cursor contract", () => {
       }
     };
     const engine: ContextEngine = {
-      info: { id: "cursor-proof", name: "Cursor proof" },
+      info: {
+        id: "cursor-proof",
+        name: "Cursor proof",
+        transcriptSemantics: { currentTurnFence: "before-current-turn-entry-v1" },
+      },
       bootstrap: async (params) => {
         await consumeVisibleTranscript(params);
         return { bootstrapped: true, importedMessages: projectedMessages.length };
@@ -112,6 +118,15 @@ describe("context engine transcript cursor contract", () => {
         parentId: first?.messageId,
         now: 2_000,
       });
+      const admitted = await createUserTurnTranscriptRecorder({
+        message: { role: "user", content: "third", timestamp: 3_000 },
+        target,
+        updateMode: "none",
+      }).persistApproved();
+      if (!admitted) {
+        throw new Error("expected admitted user message with transcript admission");
+      }
+      const admission = admitted.admission;
 
       await bootstrapHarnessContextEngine({
         hadSessionFile: true,
@@ -120,14 +135,16 @@ describe("context engine transcript cursor contract", () => {
         sessionKey: target.sessionKey,
         sessionTarget: target,
         sessionFile: "sqlite://context-engine-cursor",
+        transcriptReadFence: admission,
         runMaintenance: skipMaintenance,
         warn: () => {},
       });
       expect(projectedMessages.map(readMessageContent)).toEqual(["first", "second"]);
 
       await appendTranscriptMessage(target, {
-        message: { role: "user", content: "third" },
-        now: 3_000,
+        message: { role: "assistant", content: "fourth" },
+        parentId: admitted.messageId,
+        now: 4_000,
       });
       await finalizeHarnessContextEngineTurn({
         contextEngine: engine,
@@ -143,14 +160,44 @@ describe("context engine transcript cursor contract", () => {
         runMaintenance: skipMaintenance,
         warn: () => {},
       });
-      expect(projectedMessages.map(readMessageContent)).toEqual(["first", "second", "third"]);
+      expect(projectedMessages.map(readMessageContent)).toEqual([
+        "first",
+        "second",
+        "third",
+        "fourth",
+      ]);
+
+      await appendTranscriptMessage(target, {
+        message: { role: "user", content: "failed turn" },
+        now: 5_000,
+      });
+      await finalizeHarnessContextEngineTurn({
+        contextEngine: engine,
+        promptError: true,
+        aborted: false,
+        yieldAborted: false,
+        sessionIdUsed: target.sessionId,
+        sessionKey: target.sessionKey,
+        sessionTarget: target,
+        sessionFile: "sqlite://context-engine-cursor",
+        messagesSnapshot: [],
+        prePromptMessageCount: 0,
+        runMaintenance: skipMaintenance,
+        warn: () => {},
+      });
+      expect(projectedMessages.map(readMessageContent)).toEqual([
+        "first",
+        "second",
+        "third",
+        "fourth",
+      ]);
 
       await replaceTranscriptEvents(target, [
         {
           type: "message",
           id: "replacement",
           parentId: null,
-          timestamp: "1970-01-01T00:00:04.000Z",
+          timestamp: "1970-01-01T00:00:06.000Z",
           message: { role: "user", content: "replacement" },
         },
       ]);

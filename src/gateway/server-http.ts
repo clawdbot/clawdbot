@@ -32,6 +32,7 @@ import {
   CONTROL_UI_CATALOG_ICON_PATH_PREFIX,
   CONTROL_UI_PLUGIN_ICON_PATH_PREFIX,
 } from "./control-ui-contract.js";
+import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
 import {
   isControlUiApprovalDocumentPath,
   isControlUiPluginManagerRequest,
@@ -71,7 +72,8 @@ import {
   type GatewayWsClient,
 } from "./server/ws-types.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
-import { matchUserProfileAvatarPath } from "./user-profiles-http-path.js";
+import { canonicalizeUserProfileAvatarPath } from "./user-profiles-http-path.js";
+import type { WorkerDesktopTunnels } from "./worker-environments/desktop-tunnel.js";
 
 type PluginGatewayDispatchContext = {
   gatewayAuthSatisfied?: boolean;
@@ -236,6 +238,9 @@ async function handleGatewayProbeRequest(
     body = JSON.stringify({ ok: true, status });
   }
   res.statusCode = statusCode;
+  // Node suppresses the HEAD body but never synthesizes Content-Length; set it
+  // explicitly so probes keep GET/HEAD header parity (RFC 9110 §8.6).
+  res.setHeader("Content-Length", String(Buffer.byteLength(body)));
   res.end(method === "HEAD" ? undefined : body);
   return true;
 }
@@ -523,16 +528,17 @@ export function createGatewayHttpServer(opts: {
         scopedRequestPath.startsWith("/__openclaw__/board/"),
         async () => (await getBoardHttpModule()).handleBoardHttpRequest(req, res),
       );
-      addAdmittedStage(
-        "user-profile-avatar",
-        matchUserProfileAvatarPath(scopedRequestPath) !== undefined,
-        async () =>
-          (await getUserProfilesHttpModule()).handleUserProfileAvatarHttpRequest(
-            req,
-            res,
-            scopedRequestPath,
-            routeAuth,
-          ),
+      const userProfileAvatarPath = canonicalizeUserProfileAvatarPath(
+        scopedRequestPath,
+        controlUiRouteBasePath,
+      );
+      addAdmittedStage("user-profile-avatar", userProfileAvatarPath !== undefined, async () =>
+        (await getUserProfilesHttpModule()).handleUserProfileAvatarHttpRequest(
+          req,
+          res,
+          userProfileAvatarPath ?? scopedRequestPath,
+          routeAuth,
+        ),
       );
       addAdmittedStage(
         "openresponses",
@@ -560,18 +566,14 @@ export function createGatewayHttpServer(opts: {
         }),
         async () => {
           if (!controlUiEnabled) {
-            res.statusCode = 404;
-            res.setHeader("Content-Type", "text/plain; charset=utf-8");
-            res.end("Not Found");
+            respondNotFound(res);
             return true;
           }
           const handled = await handleControlUiRequest();
           if (handled) {
             return true;
           }
-          res.statusCode = 404;
-          res.setHeader("Content-Type", "text/plain; charset=utf-8");
-          res.end("Not Found");
+          respondNotFound(res);
           return true;
         },
       );
@@ -727,17 +729,13 @@ export function createGatewayHttpServer(opts: {
       // Startup owns sidecar readiness. The plugin registry is still empty here, so an
       // unclaimed path may be a plugin route that would otherwise dead-end as a transient 404.
       if (opts.isStartupPluginRuntimeReady?.() === false) {
-        res.statusCode = 503;
         res.setHeader("Cache-Control", "no-store");
         res.setHeader("Retry-After", "1");
-        res.setHeader("Content-Type", "text/plain; charset=utf-8");
-        res.end("Plugin runtime is starting");
+        respondPlainText(res, 503, "Plugin runtime is starting");
         return;
       }
 
-      res.statusCode = 404;
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end("Not Found");
+      respondNotFound(res);
     } catch (err) {
       console.error("[gateway-http] unhandled error in request handler:", err);
       finishFailedGatewayHttpResponse(res);
@@ -816,6 +814,7 @@ export function attachGatewayUpgradeHandler(opts: {
   rateLimiter?: AuthRateLimiter;
   /** Optional logger for error diagnostics. */
   log?: { warn: (msg: string) => void };
+  workerDesktopTunnels?: WorkerDesktopTunnels;
 }) {
   const {
     httpServer,
@@ -914,6 +913,27 @@ export function attachGatewayUpgradeHandler(opts: {
         ) {
           return;
         }
+      }
+      if (requestPath === "/worker-desktop/observe") {
+        if (!opts.workerDesktopTunnels) {
+          writeGatewayUpgradeServiceUnavailable(socket, "desktop observe unavailable");
+          socket.destroy();
+          return;
+        }
+        // Desktop observers are long-lived Gateway sockets, so they obey the same
+        // suspension/restart admission boundary as core upgrades. Without this a
+        // drained Gateway would keep accepting new desktop streams.
+        if (isGatewayWorkAdmissionClosed()) {
+          writeGatewayUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
+          socket.destroy();
+          return;
+        }
+        const { handleWorkerDesktopUpgrade } =
+          await import("./worker-environments/desktop-observe.js");
+        handleWorkerDesktopUpgrade(req, socket, head, {
+          tunnels: opts.workerDesktopTunnels,
+        });
+        return;
       }
       // Plugin-owned upgrade routes have already had the opportunity to claim the socket.
       // Core Gateway upgrades must stop at the HTTP boundary so a client cannot hold an

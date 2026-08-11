@@ -5,14 +5,12 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { extractErrorCode, formatErrorMessage } from "../../infra/errors.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
   BundledChannelLegacySessionSurface,
-  BundledChannelLegacyStateMigrationDetector,
   BundledEntryModuleLoadOptions,
 } from "../../plugin-sdk/channel-entry-contract.types.js";
 import {
@@ -20,8 +18,6 @@ import {
   resolveBundledChannelGeneratedPath,
   type BundledChannelPluginMetadata,
 } from "../../plugins/bundled-channel-runtime.js";
-import { normalizePluginsConfig } from "../../plugins/config-state.js";
-import { passesManifestOwnerBasePolicy } from "../../plugins/manifest-owner-policy.js";
 import { unwrapDefaultModuleExport } from "../../plugins/module-export.js";
 import {
   getCachedPluginModuleLoader,
@@ -60,14 +56,10 @@ type BundledChannelSetupEntryRuntimeContract = {
   loadSetupSecrets?: (
     options?: BundledEntryModuleLoadOptions,
   ) => ChannelPlugin["secrets"] | undefined;
-  loadLegacyStateMigrationDetector?: (
-    options?: BundledEntryModuleLoadOptions,
-  ) => BundledChannelLegacyStateMigrationDetector;
   loadLegacySessionSurface?: (
     options?: BundledEntryModuleLoadOptions,
   ) => BundledChannelLegacySessionSurface;
   features?: {
-    legacyStateMigrations?: boolean;
     legacySessionSurfaces?: boolean;
   };
 };
@@ -112,23 +104,6 @@ const MAX_BUNDLED_CHANNEL_BOUNDARY_ROOTS = 256;
 const bundledChannelLoadContextsByRoot = new Map<string, BundledChannelLoadContext>();
 const bundledChannelBoundaryRoots = new Map<string, string>();
 const sourceBundledEntryLoaderCache: PluginModuleLoaderCache = new Map();
-
-function rememberBoundedBundledChannelValue<TKey, TValue>(
-  cache: Map<TKey, TValue>,
-  key: TKey,
-  value: TValue,
-  maxSize: number,
-): TValue {
-  cache.delete(key);
-  cache.set(key, value);
-  if (cache.size > maxSize) {
-    const oldestKey = cache.keys().next().value;
-    if (oldestKey !== undefined) {
-      cache.delete(oldestKey);
-    }
-  }
-  return value;
-}
 
 function isSourceModulePath(modulePath: string): boolean {
   return /\.(?:c|m)?tsx?$/iu.test(modulePath);
@@ -201,12 +176,10 @@ function resolveBundledChannelBoundaryRoot(params: {
   ].join("\0");
   const cached = bundledChannelBoundaryRoots.get(cacheKey);
   if (cached) {
-    return rememberBoundedBundledChannelValue(
-      bundledChannelBoundaryRoots,
-      cacheKey,
-      cached,
-      MAX_BUNDLED_CHANNEL_BOUNDARY_ROOTS,
-    );
+    bundledChannelBoundaryRoots.delete(cacheKey);
+    bundledChannelBoundaryRoots.set(cacheKey, cached);
+    pruneMapToMaxSize(bundledChannelBoundaryRoots, MAX_BUNDLED_CHANNEL_BOUNDARY_ROOTS);
+    return cached;
   }
   const canonicalModulePath = resolveCanonicalPathOrAbsolute(params.modulePath);
   const sourceRoot = path.resolve(params.packageRoot, "extensions", params.metadata.dirName);
@@ -222,12 +195,9 @@ function resolveBundledChannelBoundaryRoot(params: {
       .map(resolveCanonicalPathOrAbsolute)
       .find((root) => isPathInside(root, canonicalModulePath)) ??
     resolveCanonicalPathOrAbsolute(sourceRoot);
-  return rememberBoundedBundledChannelValue(
-    bundledChannelBoundaryRoots,
-    cacheKey,
-    boundaryRoot,
-    MAX_BUNDLED_CHANNEL_BOUNDARY_ROOTS,
-  );
+  bundledChannelBoundaryRoots.set(cacheKey, boundaryRoot);
+  pruneMapToMaxSize(bundledChannelBoundaryRoots, MAX_BUNDLED_CHANNEL_BOUNDARY_ROOTS);
+  return boundaryRoot;
 }
 
 function resolveGeneratedBundledChannelModulePath(params: {
@@ -406,12 +376,11 @@ function resolveActiveBundledChannelLoadScope(env: NodeJS.ProcessEnv = process.e
   loadContext: BundledChannelLoadContext;
 } {
   const rootScope = resolveBundledChannelRootScope(env);
-  const loadContext = rememberBoundedBundledChannelValue(
-    bundledChannelLoadContextsByRoot,
-    rootScope.cacheKey,
-    bundledChannelLoadContextsByRoot.get(rootScope.cacheKey) ?? createBundledChannelLoadContext(),
-    MAX_BUNDLED_CHANNEL_LOAD_CONTEXTS,
-  );
+  const loadContext =
+    bundledChannelLoadContextsByRoot.get(rootScope.cacheKey) ?? createBundledChannelLoadContext();
+  bundledChannelLoadContextsByRoot.delete(rootScope.cacheKey);
+  bundledChannelLoadContextsByRoot.set(rootScope.cacheKey, loadContext);
+  pruneMapToMaxSize(bundledChannelLoadContextsByRoot, MAX_BUNDLED_CHANNEL_LOAD_CONTEXTS);
   return {
     rootScope,
     loadContext,
@@ -434,62 +403,6 @@ function listBundledChannelPluginIdsForRoot(
   rootScope: BundledChannelRootScope,
 ): readonly ChannelId[] {
   return listBundledChannelMetadata(rootScope)
-    .map((metadata) => metadata.manifest.id)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-function shouldIncludeBundledChannelSetupFeatureForConfig(params: {
-  metadata: BundledChannelPluginMetadata;
-  config?: OpenClawConfig;
-}): boolean {
-  if (!params.config) {
-    return true;
-  }
-  const pluginId = params.metadata.manifest.id;
-  if (
-    !passesManifestOwnerBasePolicy({
-      plugin: { id: pluginId },
-      normalizedConfig: normalizePluginsConfig(params.config.plugins),
-      allowRestrictiveAllowlistBypass: true,
-    })
-  ) {
-    return false;
-  }
-
-  let hasExplicitChannelDisable = false;
-  for (const channelId of params.metadata.manifest.channels ?? [pluginId]) {
-    const normalizedChannelId = normalizeOptionalLowercaseString(channelId);
-    if (!normalizedChannelId) {
-      continue;
-    }
-    const channelConfig = (params.config.channels as Record<string, unknown> | undefined)?.[
-      normalizedChannelId
-    ];
-    if (!channelConfig || typeof channelConfig !== "object" || Array.isArray(channelConfig)) {
-      continue;
-    }
-    if ((channelConfig as { enabled?: unknown }).enabled === false) {
-      hasExplicitChannelDisable = true;
-      continue;
-    }
-    return true;
-  }
-
-  return !hasExplicitChannelDisable;
-}
-
-function listBundledChannelPluginIdsForSetupFeature(
-  rootScope: BundledChannelRootScope,
-  feature: keyof NonNullable<BundledChannelSetupEntryRuntimeContract["features"]>,
-  options: { config?: OpenClawConfig } = {},
-): readonly ChannelId[] {
-  const eligible = listBundledChannelMetadata(rootScope).filter((metadata) =>
-    shouldIncludeBundledChannelSetupFeatureForConfig({ metadata, config: options.config }),
-  );
-  const hinted = eligible.filter(
-    (metadata) => metadata.packageManifest?.setupFeatures?.[feature] === true,
-  );
-  return (hinted.length > 0 ? hinted : eligible)
     .map((metadata) => metadata.manifest.id)
     .toSorted((left, right) => left.localeCompare(right));
 }
@@ -689,50 +602,6 @@ export function listBundledChannelSetupPlugins(): readonly ChannelPlugin[] {
   });
 }
 
-function listBundledChannelLegacyArtifacts<TArtifact>(
-  feature: keyof NonNullable<BundledChannelSetupEntryRuntimeContract["features"]>,
-  options: { config?: OpenClawConfig },
-  loadFromEntry: (entry: BundledChannelSetupEntryRuntimeContract) => TArtifact | undefined,
-  loadFromPlugin: (plugin: ChannelPlugin) => TArtifact | undefined,
-): readonly TArtifact[] {
-  const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
-  return listBundledChannelPluginIdsForSetupFeature(rootScope, feature, options).flatMap((id) => {
-    const entry = getBundledChannelArtifactForRoot("setupEntry", id, rootScope, loadContext);
-    const artifact = entry ? loadFromEntry(entry) : undefined;
-    if (artifact) {
-      return [artifact];
-    }
-    if (entry?.features?.[feature] !== true) {
-      return [];
-    }
-    const plugin = getBundledChannelArtifactForRoot("setupPlugin", id, rootScope, loadContext);
-    const fallback = plugin ? loadFromPlugin(plugin) : undefined;
-    return fallback ? [fallback] : [];
-  });
-}
-
-export function listBundledChannelLegacySessionSurfaces(
-  options: { config?: OpenClawConfig } = {},
-): readonly BundledChannelLegacySessionSurface[] {
-  return listBundledChannelLegacyArtifacts(
-    "legacySessionSurfaces",
-    options,
-    (entry) => entry.loadLegacySessionSurface?.(),
-    (plugin) => plugin.messaging,
-  );
-}
-
-export function listBundledChannelLegacyStateMigrationDetectors(
-  options: { config?: OpenClawConfig } = {},
-): readonly BundledChannelLegacyStateMigrationDetector[] {
-  return listBundledChannelLegacyArtifacts(
-    "legacyStateMigrations",
-    options,
-    (entry) => entry.loadLegacyStateMigrationDetector?.(),
-    (plugin) => plugin.lifecycle?.detectLegacyStateMigrations,
-  );
-}
-
 export function getBundledChannelAccountInspector(
   id: ChannelId,
 ): NonNullable<ChannelPlugin["config"]["inspectAccount"]> | undefined {
@@ -779,4 +648,3 @@ export function setBundledChannelRuntime(id: ChannelId, runtime: PluginRuntime):
   }
   setter(runtime);
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

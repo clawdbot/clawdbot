@@ -67,6 +67,8 @@ export type EmptyWorkerPlacementMetadata = {
   lastTranscriptAckCursor: null;
   lastLiveEventAckCursor: null;
   recoveryError: null;
+  terminalReason: null;
+  terminalAtMs: null;
 };
 
 type ProvisioningPlacementMetadata = {
@@ -78,6 +80,8 @@ type ProvisioningPlacementMetadata = {
   lastTranscriptAckCursor: null;
   lastLiveEventAckCursor: null;
   recoveryError: null;
+  terminalReason: null;
+  terminalAtMs: null;
 };
 
 type SyncingPlacementMetadata = {
@@ -89,6 +93,8 @@ type SyncingPlacementMetadata = {
   lastTranscriptAckCursor: null;
   lastLiveEventAckCursor: null;
   recoveryError: null;
+  terminalReason: null;
+  terminalAtMs: null;
 };
 
 type StartingPlacementMetadata = {
@@ -100,6 +106,8 @@ type StartingPlacementMetadata = {
   lastTranscriptAckCursor: null;
   lastLiveEventAckCursor: null;
   recoveryError: null;
+  terminalReason: null;
+  terminalAtMs: null;
 };
 
 export type OwnedWorkerPlacementMetadata = {
@@ -111,6 +119,8 @@ export type OwnedWorkerPlacementMetadata = {
   lastTranscriptAckCursor: number | null;
   lastLiveEventAckCursor: number | null;
   recoveryError: null;
+  terminalReason: null;
+  terminalAtMs: null;
 };
 
 type TerminalPlacementMetadata = {
@@ -121,6 +131,8 @@ type TerminalPlacementMetadata = {
   workerBundleHash: string | null;
   lastTranscriptAckCursor: number | null;
   lastLiveEventAckCursor: number | null;
+  terminalReason: string | null;
+  terminalAtMs: number | null;
 };
 
 type LocalPlacementRecord = LocalClaimablePlacementRecordBase &
@@ -156,7 +168,8 @@ type ReconcilingPlacementRecord = UnclaimedPlacementRecordBase &
     state: "reconciling";
   };
 type ReclaimedPlacementRecord = UnclaimedPlacementRecordBase &
-  OwnedWorkerPlacementMetadata & {
+  Omit<OwnedWorkerPlacementMetadata, "terminalReason" | "terminalAtMs"> &
+  TerminalPlacementMetadata & {
     state: "reclaimed";
   };
 type FailedPlacementRecord = LocalClaimablePlacementRecordBase &
@@ -186,6 +199,7 @@ export type WorkerSessionPlacementTransitionPatch = {
   lastTranscriptAckCursor?: number | null;
   lastLiveEventAckCursor?: number | null;
   recoveryError?: string | null;
+  terminalReason?: string | null;
 };
 
 export function required(value: string, field: string): string {
@@ -208,6 +222,13 @@ export function normalizeEpoch(value: number, field: string): number {
 }
 
 export function normalizeCursor(value: number | null, field: string): number | null {
+  if (value !== null && (!Number.isSafeInteger(value) || value < 0)) {
+    throw new Error(`Worker session placement ${field} must be a non-negative safe integer`);
+  }
+  return value;
+}
+
+export function normalizeTimestamp(value: number | null, field: string): number | null {
   if (value !== null && (!Number.isSafeInteger(value) || value < 0)) {
     throw new Error(`Worker session placement ${field} must be a non-negative safe integer`);
   }
@@ -287,8 +308,22 @@ export function assertRecordShape(record: {
   lastTranscriptAckCursor: number | null;
   lastLiveEventAckCursor: number | null;
   recoveryError: string | null;
+  terminalReason: string | null;
+  terminalAtMs: number | null;
   turnClaim: PersistedTurnClaim | null;
 }): void {
+  const terminal = record.state === "reclaimed" || record.state === "failed";
+  if (terminal) {
+    normalizeTimestamp(record.terminalAtMs, "terminal timestamp");
+    if (record.state === "reclaimed" && record.terminalReason !== null) {
+      throw new Error("Reclaimed worker session placement cannot retain a terminal reason");
+    }
+    if (record.terminalReason !== null) {
+      required(record.terminalReason, "terminal reason");
+    }
+  } else if (record.terminalReason !== null || record.terminalAtMs !== null) {
+    throw new Error(`Worker session placement ${record.state} cannot retain terminal facts`);
+  }
   if (record.state === "local" || record.state === "requested") {
     if (
       record.environmentId !== null ||

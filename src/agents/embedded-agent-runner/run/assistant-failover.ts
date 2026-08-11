@@ -73,7 +73,6 @@ export async function handleAssistantFailover(params: {
   failoverReason: FailoverReason | null;
   harnessOwnsTransport: boolean;
   allowSameModelIdleTimeoutRetry: boolean;
-  allowSameModelRateLimitRetry: boolean;
   assistantProfileFailureReason: AuthProfileFailureReason | null;
   lastProfileId?: string;
   modelId: string;
@@ -102,14 +101,14 @@ export async function handleAssistantFailover(params: {
     reason?: AuthProfileFailureReason | null;
     modelId?: string;
   }) => Promise<void>;
-  maybeEscalateRateLimitProfileFallback: (params: {
-    failoverProvider: string;
-    failoverModel: string;
-    logFallbackDecision: (decision: "fallback_model", extra?: { status?: number }) => void;
-  }) => void;
   maybeRetrySameModelRateLimit: (retry?: ShortWindowRateLimitRetry) => Promise<boolean>;
   maybeBackoffBeforeOverloadFailover: (reason: FailoverReason | null) => Promise<void>;
   advanceAuthProfile: () => Promise<boolean>;
+  advanceRateLimitAuthProfile: (context: {
+    failoverProvider: string;
+    failoverModel: string;
+    logFallbackDecision: (decision: "fallback_model", extra?: { status?: number }) => void;
+  }) => Promise<boolean>;
 }): Promise<AssistantFailoverOutcome> {
   const terminal = projectAgentRunAttemptTerminal(params.terminal);
   const externalAbort = terminal.externalAbort || params.signalOwnedInterruption;
@@ -146,7 +145,7 @@ export async function handleAssistantFailover(params: {
     const timeoutFailure = terminal.timedOut;
     const failureReason = params.assistantProfileFailureReason;
     const markFailedProfile = async () => {
-      if (!failedProfileId || !failureReason) {
+      if (!failureReason) {
         return;
       }
       try {
@@ -190,30 +189,35 @@ export async function handleAssistantFailover(params: {
       }
     }
 
+    let rotated: boolean;
     if (params.failoverReason === "rate_limit") {
       // Minute-scale RPM windows can clear without spending a profile rotation
       // or model fallback. Keep the retry bounded; once exhausted, continue
       // through the existing rate-limit escalation path.
       const shortWindowRetry = resolveShortWindowRateLimitRetry(params.lastAssistant?.errorMessage);
-      if (
-        params.allowSameModelRateLimitRetry &&
-        shortWindowRetry &&
-        (await params.maybeRetrySameModelRateLimit(shortWindowRetry))
-      ) {
+      if (shortWindowRetry && (await params.maybeRetrySameModelRateLimit(shortWindowRetry))) {
         return sameModelRateLimitRetry();
       }
-      params.maybeEscalateRateLimitProfileFallback({
+      rotated = await params.advanceRateLimitAuthProfile({
         failoverProvider: params.activeErrorContext.provider,
         failoverModel: params.activeErrorContext.model,
         logFallbackDecision: params.logAssistantFailoverDecision,
       });
+    } else {
+      rotated = await params.advanceAuthProfile();
     }
 
-    const rotated = await params.advanceAuthProfile();
     const markFailedProfilePromise = markFailedProfile();
     if (timeoutFailure && !params.isProbeSession && failedProfileId) {
       const timeoutLabel = terminal.idleTimedOut ? "idle timeout (model silent)" : "timed out";
-      params.warn(`Profile ${failedProfileId} ${timeoutLabel}. Trying next account...`);
+      // Only promise a next account when one was actually selected. Credentials
+      // that config does not authorize are not rotation targets, so this can end
+      // with no further account even when one exists in the environment.
+      params.warn(
+        rotated
+          ? `Profile ${failedProfileId} ${timeoutLabel}. Trying next account...`
+          : `Profile ${failedProfileId} ${timeoutLabel}. No further authorized account for this provider; create a backup auth profile and add its id to auth.order to enable failover.`,
+      );
     }
     if (params.cloudCodeAssistFormatError && failedProfileId) {
       params.warn(

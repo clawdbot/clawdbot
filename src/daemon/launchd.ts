@@ -6,8 +6,9 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { formatPortDiagnostics } from "../infra/ports-format.js";
+import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { probePortUsage } from "../infra/ports-probe.js";
-import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { sleep } from "../utils.js";
@@ -44,7 +45,7 @@ import {
   isSystemLaunchDaemonOwnershipError,
 } from "./launchd-system.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
-import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
+import { resolveDaemonHomeDir, resolveGatewayStateDir } from "./paths.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
@@ -80,6 +81,11 @@ const OPENCLAW_NODE_RUNTIME_NAMES = new Set(["bun", "bun.exe", "node", "node.exe
 const OPENCLAW_SCRIPT_NAMES = new Set(["openclaw.mjs"]);
 const LAUNCH_AGENT_STOP_PORT_RELEASE_TIMEOUT_MS = LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000;
 const LAUNCH_AGENT_STOP_PORT_RELEASE_POLL_MS = 100;
+// launchd reserves the label until the outgoing job actually exits, and it
+// SIGKILLs that job once ExitTimeOut elapses. Bound the bootstrap retry by that
+// same deadline plus slack so a drain-on-SIGTERM gateway cannot outlast it.
+const LAUNCH_AGENT_BOOTSTRAP_TEARDOWN_TIMEOUT_MS = (LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS + 10) * 1_000;
+const LAUNCH_AGENT_BOOTSTRAP_TEARDOWN_POLL_MS = 500;
 const LAUNCHCTL_PROTECTED_PID_TIMEOUT_MS = 2_000;
 
 export type StaleOpenClawUpdateLaunchdJob = {
@@ -161,7 +167,7 @@ function resolveLaunchAgentPlistPathForLabel(
   env: Record<string, string | undefined>,
   label: string,
 ): string {
-  const home = toPosixPath(resolveHomeDir(env));
+  const home = toPosixPath(resolveDaemonHomeDir(env));
   return path.posix.join(home, "Library", "LaunchAgents", `${label}.plist`);
 }
 
@@ -635,6 +641,10 @@ async function bootstrapLaunchAgentOrThrow(params: {
   actionHint: string;
   onMutation?: (mode: "enable" | "bootstrap") => void;
   skipEnable?: boolean;
+  // Opt-in for callers that just issued `bootout` on this label. Only those can
+  // race a pending teardown, so start/install/recovery paths keep failing fast
+  // on an unrelated EIO instead of waiting out the teardown deadline.
+  retryPendingTeardown?: boolean;
 }) {
   // `disable` state survives bootout and plist rewrites; explicit start/repair
   // paths must clear it before asking launchd to load the job again.
@@ -644,27 +654,38 @@ async function bootstrapLaunchAgentOrThrow(params: {
       params.onMutation?.("enable");
     }
   }
-  const boot = await execLaunchctl(["bootstrap", params.domain, params.plistPath]);
-  if (boot.code === 0) {
-    params.onMutation?.("bootstrap");
-    return;
-  }
-  const detail = (boot.stderr || boot.stdout).trim();
-  if (isUnsupportedGuiDomain(detail)) {
-    throwBootstrapGuiSessionError({
-      detail,
-      domain: params.domain,
-      actionHint: params.actionHint,
-    });
-  }
-  if (isLaunchctlOperationAlreadyInProgress(detail)) {
-    const state = await probeLaunchAgentState(params.serviceTarget);
-    if (state.state === "running" || state.state === "stopped") {
+  const teardownDeadline = Date.now() + LAUNCH_AGENT_BOOTSTRAP_TEARDOWN_TIMEOUT_MS;
+  for (;;) {
+    const boot = await execLaunchctl(["bootstrap", params.domain, params.plistPath]);
+    if (boot.code === 0) {
       params.onMutation?.("bootstrap");
       return;
     }
+    const detail = (boot.stderr || boot.stdout).trim();
+    if (isUnsupportedGuiDomain(detail)) {
+      throwBootstrapGuiSessionError({
+        detail,
+        domain: params.domain,
+        actionHint: params.actionHint,
+      });
+    }
+    if (isLaunchctlOperationAlreadyInProgress(detail)) {
+      const state = await probeLaunchAgentState(params.serviceTarget);
+      if (state.state === "running" || state.state === "stopped") {
+        params.onMutation?.("bootstrap");
+        return;
+      }
+    }
+    const remainingMs = teardownDeadline - Date.now();
+    if (
+      !params.retryPendingTeardown ||
+      !isLaunchctlBootstrapPendingTeardown(boot) ||
+      remainingMs <= 0
+    ) {
+      throw new Error(`launchctl bootstrap failed: ${detail}`);
+    }
+    await sleep(Math.min(LAUNCH_AGENT_BOOTSTRAP_TEARDOWN_POLL_MS, remainingMs));
   }
-  throw new Error(`launchctl bootstrap failed: ${detail}`);
 }
 
 async function ensureLaunchAgentPlistReadable(plistPath: string): Promise<void> {
@@ -795,11 +816,47 @@ export function parseLaunchctlPrint(output: string): LaunchctlPrintInfo {
   return info;
 }
 
+export function parseLaunchAgentEnabled(output: string, label: string): boolean {
+  const labelPrefix = `"${label}"`;
+  for (const line of output.split("\n")) {
+    const entry = line.trim();
+    if (!entry.startsWith(labelPrefix)) {
+      continue;
+    }
+    const state = entry.slice(labelPrefix.length).trim();
+    if (state === "=> enabled") {
+      return true;
+    }
+    if (state === "=> disabled") {
+      return false;
+    }
+    throw new Error(`launchctl print-disabled returned an unrecognized state for ${label}`);
+  }
+  // No persisted override means launchd uses the plist's normal enabled state.
+  return true;
+}
+
+export async function isLaunchAgentEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {
+  const domain = resolveGuiDomain();
+  const label = resolveLaunchAgentLabel(args.env);
+  const res = await execLaunchctl(["print-disabled", domain]);
+  if (res.code !== 0) {
+    throw new Error(`launchctl print-disabled failed: ${formatLaunchctlResultDetail(res)}`);
+  }
+  return parseLaunchAgentEnabled(res.stdout || res.stderr || "", label);
+}
+
 export async function isLaunchAgentLoaded(args: GatewayServiceEnvArgs): Promise<boolean> {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel(args.env);
   const res = await execLaunchctl(["print", `${domain}/${label}`]);
-  return res.code === 0;
+  if (res.code === 0) {
+    return true;
+  }
+  if (isLaunchctlNotLoaded(res)) {
+    return false;
+  }
+  throw new Error(`launchctl print failed: ${formatLaunchctlResultDetail(res)}`);
 }
 
 export async function launchAgentPlistExists(env: GatewayServiceEnv): Promise<boolean> {
@@ -949,11 +1006,14 @@ export async function uninstallLaunchAgent({
   env,
   stdout,
 }: GatewayServiceManageArgs): Promise<void> {
+  assertExternalLaunchAgentMutation(env, "uninstall");
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel(env);
   const plistPath = resolveLaunchAgentPlistPath(env);
-  await execLaunchctl(["bootout", domain, plistPath]);
-  await execLaunchctl(["unload", plistPath]);
+  const bootout = await execLaunchctl(["bootout", domain, plistPath]);
+  if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
+    throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
+  }
 
   try {
     await fs.lstat(plistPath);
@@ -965,7 +1025,7 @@ export async function uninstallLaunchAgent({
     return;
   }
 
-  const home = toPosixPath(resolveHomeDir(env));
+  const home = toPosixPath(resolveDaemonHomeDir(env));
   const trashDir = path.posix.join(home, ".Trash");
   const dest = path.join(trashDir, `${label}.plist`);
   try {
@@ -1010,6 +1070,25 @@ function isLaunchctlOperationAlreadyInProgress(detail: string): boolean {
     normalized.includes("operation already in progress") ||
     normalized.includes("bootstrap failed: 37")
   );
+}
+
+function isLaunchctlBootstrapPendingTeardown(res: {
+  stdout: string;
+  stderr: string;
+  code: number;
+}): boolean {
+  // `bootout` returns once launchd accepts the request, not once the job is gone,
+  // so bootstrapping the same label mid-teardown answers EIO. The plist is valid
+  // here, so this is a timing conflict to retry rather than a real I/O fault.
+  //
+  // launchd answers the same EIO for a label that is simply still registered
+  // ("already exists in domain"). That job is not tearing down, so waiting for a
+  // teardown that never comes only delays the failure.
+  if (isLaunchctlAlreadyLoaded(res)) {
+    return false;
+  }
+  const normalized = normalizeLowercaseStringOrEmpty(res.stderr || res.stdout);
+  return normalized.includes("bootstrap failed: 5") || normalized.includes("input/output error");
 }
 
 async function bootoutLaunchAgentOrThrow(params: {
@@ -1258,20 +1337,8 @@ async function writeLaunchAgentPlist({
   const { logDir, stdoutPath } = resolveGatewaySupervisorLogPaths(env, { platform: "darwin" });
   await ensureSecureDirectory(logDir);
 
-  const domain = resolveGuiDomain();
-  for (const legacyLabel of resolveLegacyGatewayLaunchAgentLabels(env.OPENCLAW_PROFILE)) {
-    const legacyPlistPath = resolveLaunchAgentPlistPathForLabel(env, legacyLabel);
-    await execLaunchctl(["bootout", domain, legacyPlistPath]);
-    await execLaunchctl(["unload", legacyPlistPath]);
-    try {
-      await fs.unlink(legacyPlistPath);
-    } catch {
-      // ignore
-    }
-  }
-
   const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
-  const home = toPosixPath(resolveHomeDir(env));
+  const home = toPosixPath(resolveDaemonHomeDir(env));
   const libraryDir = path.posix.join(home, "Library");
   await ensureSecureDirectory(home);
   await ensureSecureDirectory(libraryDir);
@@ -1286,7 +1353,7 @@ async function writeLaunchAgentPlist({
     warn,
   });
 
-  const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
+  const serviceDescription = resolveGatewayServiceDescription({ env, description });
   const plist = buildLaunchAgentPlist({
     label,
     comment: serviceDescription,
@@ -1298,6 +1365,34 @@ async function writeLaunchAgentPlist({
   });
   await publishLaunchAgentPlist({ label, plistPath, contents: plist });
   return { plistPath, stdoutPath };
+}
+
+function currentGatewayLaunchAgentLabel(
+  targetEnv: Record<string, string | undefined>,
+): string | undefined {
+  const configuredCurrentLabel = process.env.OPENCLAW_LAUNCHD_LABEL?.trim();
+  const candidates = new Set([
+    resolveLaunchAgentLabel(targetEnv),
+    ...(configuredCurrentLabel ? [assertValidLaunchAgentLabel(configuredCurrentLabel)] : []),
+  ]);
+  return [...candidates].find((label) =>
+    isCurrentProcessLaunchdServiceLabel(label, process.env, {
+      allowConfiguredLabelFallback: false,
+    }),
+  );
+}
+
+function assertExternalLaunchAgentMutation(
+  env: Record<string, string | undefined>,
+  action: "install" | "uninstall",
+): void {
+  const currentLabel = currentGatewayLaunchAgentLabel(env);
+  if (!currentLabel) {
+    return;
+  }
+  throw new Error(
+    `Refusing to ${action} LaunchAgent ${resolveLaunchAgentLabel(env)} from inside ${currentLabel}; run this command from an external shell.`,
+  );
 }
 
 export async function stageLaunchAgent({
@@ -1316,29 +1411,282 @@ export async function stageLaunchAgent({
   return { plistPath };
 }
 
-async function activateLaunchAgent(params: { env: GatewayServiceEnv; plistPath: string }) {
+type LaunchAgentInstallSnapshot = {
+  plistContents: Buffer | null;
+  envFileContents: Buffer | null;
+  wrapperContents: Buffer | null;
+  legacy: Array<{
+    label: string;
+    plistPath: string;
+    contents: Buffer | null;
+    loaded: boolean;
+  }>;
+  loaded: boolean;
+};
+
+async function snapshotLaunchAgentLoadedState(
+  plistContents: Buffer | null,
+  serviceTarget: string,
+): Promise<boolean> {
+  const probe = await probeLaunchAgentState(serviceTarget);
+  if (probe.state === "unknown") {
+    throw new Error(
+      `launchctl print could not determine whether ${serviceTarget} is loaded: ${probe.detail ?? "unknown error"}`,
+    );
+  }
+  const loaded = probe.state !== "not-loaded";
+  if (loaded && plistContents === null) {
+    // launchd can retain a definition after its plist is deleted. Booting that
+    // job out would destroy the only copy, so no exact rollback is possible.
+    throw new Error(
+      `LaunchAgent ${serviceTarget} is loaded but its plist is missing; refusing an install that cannot restore the current definition if activation fails.`,
+    );
+  }
+  return loaded;
+}
+
+async function restoreLaunchAgentOwnedFile(params: {
+  path: string;
+  contents: Buffer | null;
+  mode: number;
+}): Promise<void> {
+  if (params.contents === null) {
+    await fs.unlink(params.path).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    });
+    return;
+  }
+  const temporaryPath = `${params.path}.openclaw-${randomUUID()}.rollback`;
+  try {
+    await fs.writeFile(temporaryPath, params.contents.toString("utf8"), {
+      flag: "wx",
+      mode: params.mode,
+    });
+    await fs.rename(temporaryPath, params.path);
+    await fs.chmod(params.path, params.mode).catch(() => undefined);
+  } finally {
+    await fs.unlink(temporaryPath).catch(() => undefined);
+  }
+}
+
+async function restoreLaunchAgentInstallArtifacts(params: {
+  env: GatewayServiceEnv;
+  label: string;
+  plistPath: string;
+  snapshot: LaunchAgentInstallSnapshot;
+}): Promise<void> {
+  await restoreLaunchAgentOwnedFile({
+    path: resolveLaunchAgentEnvFilePath(params.env, params.label),
+    contents: params.snapshot.envFileContents,
+    mode: LAUNCH_AGENT_ENV_FILE_MODE,
+  });
+  await restoreLaunchAgentOwnedFile({
+    path: resolveLaunchAgentEnvWrapperPath(params.env, params.label),
+    contents: params.snapshot.wrapperContents,
+    mode: LAUNCH_AGENT_ENV_WRAPPER_MODE,
+  });
+  for (const legacy of params.snapshot.legacy) {
+    await restoreLaunchAgentOwnedFile({
+      path: legacy.plistPath,
+      contents: legacy.contents,
+      mode: LAUNCH_AGENT_PLIST_MODE,
+    });
+  }
+  if (params.snapshot.plistContents === null) {
+    await fs.unlink(params.plistPath).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    });
+    return;
+  }
+  await publishLaunchAgentPlist({
+    label: params.label,
+    plistPath: params.plistPath,
+    contents: params.snapshot.plistContents.toString("utf8"),
+  });
+}
+
+async function restoreLaunchAgentInstall(params: {
+  domain: string;
+  env: GatewayServiceEnv;
+  label: string;
+  plistPath: string;
+  snapshot: LaunchAgentInstallSnapshot;
+}): Promise<void> {
+  const serviceTarget = `${params.domain}/${params.label}`;
+  // A failed bootstrap may leave no registered job. Restore files directly in
+  // that state; only a loaded replacement must be removed before rollback.
+  const currentState = await probeLaunchAgentState(serviceTarget);
+  if (currentState.state === "unknown") {
+    throw new Error(
+      `launchctl print could not determine whether ${serviceTarget} is loaded during LaunchAgent rollback: ${currentState.detail ?? "unknown error"}`,
+    );
+  }
+  if (currentState.state !== "not-loaded") {
+    const bootout = await execLaunchctl(["bootout", serviceTarget]);
+    if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
+      throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
+    }
+  }
+  await restoreLaunchAgentInstallArtifacts({
+    env: params.env,
+    label: params.label,
+    plistPath: params.plistPath,
+    snapshot: params.snapshot,
+  });
+  if (params.snapshot.loaded && params.snapshot.plistContents !== null) {
+    await bootstrapLaunchAgentOrThrow({
+      domain: params.domain,
+      serviceTarget,
+      plistPath: params.plistPath,
+      actionHint: "openclaw gateway start",
+      retryPendingTeardown: true,
+    });
+  }
+  for (const legacy of params.snapshot.legacy) {
+    if (!legacy.loaded || legacy.contents === null) {
+      continue;
+    }
+    await bootstrapLaunchAgentOrThrow({
+      domain: params.domain,
+      serviceTarget: `${params.domain}/${legacy.label}`,
+      plistPath: legacy.plistPath,
+      actionHint: "openclaw gateway start",
+      retryPendingTeardown: true,
+    });
+  }
+}
+
+async function deactivateLaunchAgentDefinition(domain: string, plistPath: string): Promise<void> {
+  for (const args of [
+    ["bootout", domain, plistPath],
+    ["unload", plistPath],
+  ]) {
+    const result = await execLaunchctl(args);
+    if (result.code !== 0 && !isLaunchctlNotLoaded(result)) {
+      throw new Error(
+        `launchctl ${args[0]} failed during LaunchAgent install: ${formatLaunchctlResultDetail(result)}`,
+      );
+    }
+  }
+}
+
+async function activateLaunchAgent(params: {
+  env: GatewayServiceEnv;
+  plistPath: string;
+  snapshot: LaunchAgentInstallSnapshot;
+}) {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel(params.env);
-  // Recheck immediately before activation so a system daemon installed after
-  // the plist write cannot race us into two KeepAlive managers.
-  await assertNoSystemLaunchDaemonOwnership(label);
-
-  await execLaunchctl(["bootout", domain, params.plistPath]);
-  await execLaunchctl(["unload", params.plistPath]);
-  // launchd can persist "disabled" state even after bootout + plist removal; clear it before bootstrap.
-  await bootstrapLaunchAgentOrThrow({
-    domain,
-    serviceTarget: `${domain}/${label}`,
-    plistPath: params.plistPath,
-    actionHint: "openclaw gateway install --force",
-  });
+  try {
+    // Recheck immediately before activation so a system daemon installed after
+    // the plist write cannot race us into two KeepAlive managers.
+    await assertNoSystemLaunchDaemonOwnership(label);
+    for (const legacy of params.snapshot.legacy) {
+      if (legacy.loaded) {
+        await deactivateLaunchAgentDefinition(domain, legacy.plistPath);
+      }
+    }
+    // Plist-form bootout reports EIO for a valid definition that was never loaded.
+    // The pre-publication snapshot is the authoritative cutover fact.
+    if (params.snapshot.loaded) {
+      await deactivateLaunchAgentDefinition(domain, params.plistPath);
+    }
+    // launchd can persist "disabled" state even after bootout + plist removal; clear it before bootstrap.
+    await bootstrapLaunchAgentOrThrow({
+      domain,
+      serviceTarget: `${domain}/${label}`,
+      plistPath: params.plistPath,
+      actionHint: "openclaw gateway install --force",
+      retryPendingTeardown: true,
+    });
+    for (const legacy of params.snapshot.legacy) {
+      await fs.unlink(legacy.plistPath).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
+      });
+    }
+  } catch (error) {
+    try {
+      await restoreLaunchAgentInstall({
+        domain,
+        env: params.env,
+        label,
+        plistPath: params.plistPath,
+        snapshot: params.snapshot,
+      });
+    } catch (rollbackError) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`${detail}\nThe previous LaunchAgent supervision could not be restored.`, {
+        cause: rollbackError,
+      });
+    }
+    throw error;
+  }
 }
 
 export async function installLaunchAgent(
   args: GatewayServiceInstallArgs,
 ): Promise<{ plistPath: string }> {
-  const { plistPath, stdoutPath } = await writeLaunchAgentPlist(args);
-  await activateLaunchAgent({ env: args.env, plistPath });
+  assertExternalLaunchAgentMutation(args.env, "install");
+  const targetPlistPath = resolveLaunchAgentPlistPath(args.env);
+  const previousContents = await readExistingLaunchAgentPlist(targetPlistPath);
+  const label = resolveLaunchAgentLabel(args.env);
+  const domain = resolveGuiDomain();
+  // Plist, generated environment files, and launchd registration form one cutover.
+  // Capture every prior owner before publication so any later failure can restore it.
+  const legacy = await Promise.all(
+    resolveLegacyGatewayLaunchAgentLabels(args.env.OPENCLAW_PROFILE).map(async (legacyLabel) => {
+      const plistPath = resolveLaunchAgentPlistPathForLabel(args.env, legacyLabel);
+      const contents = await readExistingLaunchAgentPlist(plistPath);
+      return {
+        label: legacyLabel,
+        plistPath,
+        contents,
+        loaded: await snapshotLaunchAgentLoadedState(contents, `${domain}/${legacyLabel}`),
+      };
+    }),
+  );
+  const snapshot: LaunchAgentInstallSnapshot = {
+    plistContents: previousContents,
+    envFileContents: await readExistingLaunchAgentPlist(
+      resolveLaunchAgentEnvFilePath(args.env, label),
+    ),
+    wrapperContents: await readExistingLaunchAgentPlist(
+      resolveLaunchAgentEnvWrapperPath(args.env, label),
+    ),
+    legacy,
+    loaded: await snapshotLaunchAgentLoadedState(previousContents, `${domain}/${label}`),
+  };
+  let plistPath: string;
+  let stdoutPath: string;
+  try {
+    ({ plistPath, stdoutPath } = await writeLaunchAgentPlist(args));
+  } catch (error) {
+    try {
+      await restoreLaunchAgentInstallArtifacts({
+        env: args.env,
+        label,
+        plistPath: targetPlistPath,
+        snapshot,
+      });
+    } catch (rollbackError) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`${detail}\nThe previous LaunchAgent files could not be restored.`, {
+        cause: rollbackError,
+      });
+    }
+    throw error;
+  }
+  await activateLaunchAgent({
+    env: args.env,
+    plistPath,
+    snapshot,
+  });
   // `bootstrap` already loads RunAtLoad agents. Avoid `kickstart -k` here:
   // on slow macOS guests it SIGTERMs the freshly booted gateway and pushes the
   // real listener startup past setup's health deadline.
@@ -1379,13 +1727,18 @@ async function rewriteLaunchAgentPlistForRestart({
 
   const serviceDescription = resolveGatewayServiceDescription({
     env,
-    environment: existing.environment,
   });
+  // Restart rewrites must retire install provenance from legacy plists instead
+  // of copying it into the next canonical definition.
+  const canonicalEnvironment = {
+    ...existing.environment,
+    OPENCLAW_SERVICE_VERSION: undefined,
+  };
   const prepared = await prepareLaunchAgentProgramArguments({
     env,
     label,
     programArguments: existing.programArguments,
-    environment: existing.environment,
+    environment: canonicalEnvironment,
     stdout,
     warn,
   });
@@ -1407,15 +1760,17 @@ async function rewriteLaunchAgentPlistForRestart({
   return true;
 }
 
+type LaunchAgentRestoreResult = { loaded: true } | { loaded: false; detail: string };
+
 async function ensureLaunchAgentLoadedAfterFailure(params: {
   domain: string;
   serviceTarget: string;
   plistPath: string;
   onMutation?: (mode: "enable" | "bootstrap") => void;
-}): Promise<void> {
+}): Promise<LaunchAgentRestoreResult> {
   const probe = await execLaunchctl(["print", params.serviceTarget]);
   if (probe.code === 0) {
-    return;
+    return { loaded: true };
   }
   try {
     await bootstrapLaunchAgentOrThrow({
@@ -1425,9 +1780,27 @@ async function ensureLaunchAgentLoadedAfterFailure(params: {
       actionHint: "openclaw gateway start",
       onMutation: params.onMutation,
     });
-  } catch {
-    // Best-effort only. Preserve the original kickstart failure below.
+    return { loaded: true };
+  } catch (error) {
+    // A failed restore is not recoverable by launchd: the label is gone, so
+    // KeepAlive has nothing to respawn. Report it instead of dropping it.
+    return { loaded: false, detail: error instanceof Error ? error.message : String(error) };
   }
+}
+
+function formatLaunchAgentLeftUnloadedError(params: {
+  domain: string;
+  serviceTarget: string;
+  plistPath: string;
+  failure: string;
+  restoreDetail: string;
+}): string {
+  return [
+    params.failure,
+    `LaunchAgent ${params.serviceTarget} is not loaded and could not be restored: ${params.restoreDetail}`,
+    "The gateway is down and launchd has no job left to respawn it.",
+    `Fix: run \`openclaw gateway start\`, or \`launchctl bootstrap ${params.domain} ${params.plistPath}\`.`,
+  ].join("\n");
 }
 
 export async function startLaunchAgent({
@@ -1560,13 +1933,39 @@ export async function restartLaunchAgent({
     if (bootout.code === 0) {
       reportMutation("bootout");
     }
-    await bootstrapLaunchAgentOrThrow({
-      domain,
-      serviceTarget,
-      plistPath,
-      actionHint: "openclaw gateway restart",
-      onMutation: reportMutation,
-    });
+    try {
+      await bootstrapLaunchAgentOrThrow({
+        domain,
+        serviceTarget,
+        plistPath,
+        actionHint: "openclaw gateway restart",
+        onMutation: reportMutation,
+        retryPendingTeardown: true,
+      });
+    } catch (error) {
+      // bootout already removed the job from the domain, so a failed bootstrap
+      // leaves the gateway down with no KeepAlive respawn to recover it. Restore
+      // the job before surfacing the original failure, as the kickstart path does.
+      const restored = await ensureLaunchAgentLoadedAfterFailure({
+        domain,
+        serviceTarget,
+        plistPath,
+        onMutation: reportMutation,
+      });
+      if (restored.loaded) {
+        throw error;
+      }
+      throw new Error(
+        formatLaunchAgentLeftUnloadedError({
+          domain,
+          serviceTarget,
+          plistPath,
+          failure: error instanceof Error ? error.message : String(error),
+          restoreDetail: restored.detail,
+        }),
+        { cause: error },
+      );
+    }
     writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
     return { outcome: "completed" };
   }
@@ -1579,13 +1978,25 @@ export async function restartLaunchAgent({
   }
 
   if (!isLaunchctlNotLoaded(start)) {
-    await ensureLaunchAgentLoadedAfterFailure({
+    const restored = await ensureLaunchAgentLoadedAfterFailure({
       domain,
       serviceTarget,
       plistPath,
       onMutation: reportMutation,
     });
-    throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
+    const failure = `launchctl kickstart failed: ${start.stderr || start.stdout}`.trim();
+    if (restored.loaded) {
+      throw new Error(failure);
+    }
+    throw new Error(
+      formatLaunchAgentLeftUnloadedError({
+        domain,
+        serviceTarget,
+        plistPath,
+        failure,
+        restoreDetail: restored.detail,
+      }),
+    );
   }
 
   // If the service was previously booted out, re-register the rewritten plist and retry.

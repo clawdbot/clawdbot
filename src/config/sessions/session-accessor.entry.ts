@@ -10,15 +10,18 @@ import { resolveAgentMainSessionKey } from "./main-session.js";
 import { resolveStorePath } from "./paths.js";
 import { clearPluginOwnedSessionState } from "./plugin-host-cleanup.js";
 import {
-  countSqliteSessionEntryRowsReadOnly as countSessionEntryRowsReadOnly,
   copySqliteSessionOwnedStateForCanonicalRepair as copySessionOwnedStateForCanonicalRepair,
-  hasSqliteSessionEntriesByStatusReadOnly as hasSessionEntriesByStatusReadOnly,
   listSqliteSessionGenerationIdsForCanonicalRepair as listSessionGenerationIdsForCanonicalRepair,
-  listSqliteSessionChildEntriesReadOnly as listSessionChildEntriesReadOnly,
-  listSqliteSessionEntries,
   listSqliteSessionEntriesForCanonicalRepair as listSessionEntriesForCanonicalRepair,
   rehomeSqliteSessionDeliveryReferencesForCanonicalRepair as rehomeSessionDeliveryReferencesForCanonicalRepair,
   rehomeSqliteSessionDeliveryReferencesForCanonicalRepairBatch as rehomeSessionDeliveryReferencesForCanonicalRepairBatch,
+} from "./session-accessor.sqlite-canonical-repair.js";
+import {
+  countSqliteSessionEntryRowsReadOnly as countSessionEntryRowsReadOnly,
+  ensureSqliteSessionEntrySync as ensureSessionEntrySync,
+  hasSqliteSessionEntriesByStatusReadOnly as hasSessionEntriesByStatusReadOnly,
+  listSqliteSessionChildEntriesReadOnly as listSessionChildEntriesReadOnly,
+  listSqliteSessionEntries,
   listSqliteSessionEntriesReadOnly as listSessionEntriesReadOnly,
   listSqliteSessionEntryKeysReadOnly as listSessionEntryKeysReadOnly,
   loadExactSqliteSessionEntry as loadExactSessionEntry,
@@ -32,7 +35,7 @@ import {
   replaceSqliteSessionEntrySync as replaceSessionEntrySync,
   resolveSqliteSessionEntry,
   upsertSqliteSessionEntry as upsertSessionEntry,
-} from "./session-accessor.sqlite.js";
+} from "./session-accessor.sqlite-entry.js";
 import type {
   SessionAccessScope,
   LogicalSessionAccessScope,
@@ -57,11 +60,11 @@ import type { SessionEntry } from "./types.js";
 
 export { clearPluginOwnedSessionState };
 
-// SQLite is the only runtime session store. Re-export its canonical entry
-// operations directly instead of maintaining a second pass-through layer.
+// SQLite is the only runtime session store. Re-export its canonical entry operations directly.
 export {
   countSessionEntryRowsReadOnly,
   copySessionOwnedStateForCanonicalRepair,
+  ensureSessionEntrySync,
   hasSessionEntriesByStatusReadOnly,
   listSessionGenerationIdsForCanonicalRepair,
   listSessionChildEntriesReadOnly,

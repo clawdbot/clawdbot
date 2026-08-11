@@ -1,10 +1,19 @@
 // OpenClaw chat engine: transport-agnostic conversation over typed operations.
-import type { SystemAgentChatQuestion } from "../../packages/gateway-protocol/src/index.js";
+import type {
+  SystemAgentChatQuestion,
+  SystemAgentWizardCancel,
+  WizardAnswer,
+} from "../../packages/gateway-protocol/src/index.js";
 import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { WizardSession, wizardStepAwaitsInput, type WizardStep } from "../wizard/session.js";
+import {
+  sanitizeWizardStepForClient,
+  WizardSession,
+  wizardStepAwaitsInput,
+  type WizardStep,
+} from "../wizard/session.js";
 import type {
   MemoryImportProviderOutcome,
   SetupMemoryImportOutcome,
@@ -132,6 +141,8 @@ type SystemAgentChatReply = {
   handoff?: SystemAgentOperation;
   /** Structured choice mirroring the awaited wizard step for card-capable clients. */
   question?: SystemAgentChatQuestion;
+  /** The awaited wizard step in full; `question` is its lossy card projection. */
+  step?: WizardStep;
 };
 
 type WizardPrompterLike = import("../wizard/prompts.js").WizardPrompter;
@@ -237,7 +248,6 @@ async function runHostedConfigWizard(params: {
   const committedConfig = await writeWizardConfigFile(result.nextConfig, {
     allowConfigSizeDrop: false,
     baseHash: snapshot.hash,
-    migrationBaseConfig: baseConfig,
     ...(params.afterWrite ? { afterWrite: params.afterWrite } : {}),
   });
   await result.afterWrite?.(committedConfig);
@@ -599,6 +609,48 @@ function parseWizardAnswer(step: WizardStep, text: string): { value: unknown } |
   return { value: step.type === "action" ? true : undefined };
 }
 
+function formatStructuredWizardAnswerForHistory(step: WizardStep, value: unknown): string {
+  if (step.sensitive === true) {
+    return "<redacted secret>";
+  }
+  if (step.type === "text") {
+    if (
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean" ||
+      typeof value === "bigint"
+    ) {
+      return String(value);
+    }
+    return "<wizard answer>";
+  }
+  if (step.type === "confirm") {
+    return typeof value === "boolean" ? (value ? "Yes" : "No") : "<wizard answer>";
+  }
+  if (step.type === "select") {
+    return (
+      step.options?.find((option) => Object.is(option.value, value))?.label ?? "<wizard answer>"
+    );
+  }
+  if (step.type === "multiselect") {
+    if (!Array.isArray(value)) {
+      return "<wizard answer>";
+    }
+    if (value.length === 0) {
+      return "None";
+    }
+    const labels = value.map(
+      (entry) => step.options?.find((option) => Object.is(option.value, entry))?.label,
+    );
+    return labels.every((label): label is string => label !== undefined)
+      ? labels.join(", ")
+      : "<wizard answer>";
+  }
+  return "Continue";
+}
+
+export class SystemAgentWizardAnswerError extends Error {}
+
 function formatOperationError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return `That did not go through: ${message}`;
@@ -647,7 +699,7 @@ export class SystemAgentChatEngine {
   private wizardBridge: ActiveWizardBridge | null = null;
   private lastSensitiveChannel: string | undefined;
   private awaitingSetupChannel = false;
-  private hostProposalResolution: "approved" | "declined" | undefined;
+  private proposalResolution: "approved" | "declined" | undefined;
   private readonly history: SystemAgentAssistantTurn[] = [];
   private readonly agentSession: SystemAgentSession;
   private verifiedInference: SystemAgentVerifiedInferenceBinding;
@@ -690,8 +742,10 @@ export class SystemAgentChatEngine {
         proposalHash,
         getProposal: () => this.getPendingOperatorProposal(),
         clear: () => this.clearPendingProposals(),
-        apply: (message) =>
-          this.pending ? this.applyPendingProposal() : this.resolveAssistantTurn(message, true),
+        apply: async (operation) => {
+          this.proposalResolution = "approved";
+          return await this.applyApprovedPersistentOperation(operation);
+        },
         denied: () => ({ text: "Denied. No change.", action: "none" }),
       });
       if (reply?.text) {
@@ -736,6 +790,18 @@ export class SystemAgentChatEngine {
     return await turn;
   }
 
+  async answerWizard(answer: WizardAnswer): Promise<SystemAgentChatReply> {
+    const turn = this.turnQueue.then(() => this.answerWizardSerialized(answer));
+    this.turnQueue = turn.catch(() => undefined);
+    return await turn;
+  }
+
+  async cancelWizard(cancel: SystemAgentWizardCancel): Promise<SystemAgentChatReply> {
+    const turn = this.turnQueue.then(() => this.cancelWizardSerialized(cancel));
+    this.turnQueue = turn.catch(() => undefined);
+    return await turn;
+  }
+
   private async handleSerialized(
     text: string,
     options?: SystemAgentChatTurnOptions,
@@ -744,30 +810,75 @@ export class SystemAgentChatEngine {
     // Snapshot before resolving: wizard answers to sensitive steps (tokens,
     // passwords) must never enter the AI-visible history.
     const sensitiveTurn = this.wizardBridge?.step?.sensitive === true;
-    const resolved = await this.resolveTurn(text, options);
+    const reply = await this.resolveTurn(text, options);
+    return this.completeTurn(
+      reply,
+      sensitiveTurn ? "<redacted secret>" : redactSensitiveCommandText(text),
+    );
+  }
+
+  private async answerWizardSerialized(answer: WizardAnswer): Promise<SystemAgentChatReply> {
+    await this.requireVerifiedInference();
+    const bridge = this.wizardBridge;
+    const step = bridge?.step;
+    if (!bridge || !step) {
+      throw new SystemAgentWizardAnswerError("No hosted wizard is awaiting an answer.");
+    }
+    if (answer.stepId !== step.id) {
+      throw new SystemAgentWizardAnswerError("The hosted wizard answer targets a stale step.");
+    }
+    const validationError = await bridge.session.answer(step.id, answer.value);
+    const text = validationError
+      ? [validationError, renderWizardStep(step)].join("\n\n")
+      : await this.pumpWizardBridge();
+    return this.completeTurn(
+      { text, action: "none" },
+      formatStructuredWizardAnswerForHistory(step, answer.value),
+    );
+  }
+
+  private async cancelWizardSerialized(
+    cancel: SystemAgentWizardCancel,
+  ): Promise<SystemAgentChatReply> {
+    const bridge = this.wizardBridge;
+    const step = bridge?.step;
+    if (!bridge || !step) {
+      throw new SystemAgentWizardAnswerError("No hosted wizard is awaiting cancellation.");
+    }
+    if (cancel.stepId !== step.id) {
+      throw new SystemAgentWizardAnswerError("The hosted wizard cancel targets a stale step.");
+    }
+    if (!bridge.session.cancel()) {
+      throw new SystemAgentWizardAnswerError("The hosted wizard cannot be cancelled right now.");
+    }
+    const text = await this.pumpWizardBridge();
+    return this.completeTurn({ text, action: "none" }, "Cancel");
+  }
+
+  private completeTurn(reply: SystemAgentChatReply, userHistoryText: string): SystemAgentChatReply {
     // The hint belongs to the outgoing message, not to each rendered step: one
     // turn can concatenate several auto-answered notes, and a wizard that just
     // ended must not offer a cancel that can no longer happen.
     const awaitedStep = this.wizardBridge?.step;
-    const reply: SystemAgentChatReply =
-      resolved.text && awaitedStep && wizardStepAwaitsInput(awaitedStep)
-        ? { ...resolved, text: `${resolved.text}\n${WIZARD_CANCEL_HINT}` }
-        : resolved;
-    this.history.push({
-      role: "user",
-      text: sensitiveTurn ? "<redacted secret>" : redactSensitiveCommandText(text),
-    });
-    if (reply.text) {
-      this.history.push({ role: "assistant", text: reply.text });
+    const completedReply: SystemAgentChatReply =
+      reply.text && awaitedStep && wizardStepAwaitsInput(awaitedStep)
+        ? { ...reply, text: `${reply.text}\n${WIZARD_CANCEL_HINT}` }
+        : reply;
+    this.history.push({ role: "user", text: userHistoryText });
+    if (completedReply.text) {
+      this.history.push({ role: "assistant", text: completedReply.text });
     }
     // While a hosted wizard awaits a step, every turn routes to it, so the
     // awaited step is always the question this reply asks.
-    const question = wizardStepChatQuestion(this.wizardBridge?.step ?? null);
+    const step = this.wizardBridge?.step ?? null;
+    const question = wizardStepChatQuestion(step);
+    const clientStep = step ? sanitizeWizardStepForClient(step) : null;
     return {
-      ...reply,
-      ...(this.wizardBridge?.step?.sensitive === true ? { sensitive: true } : {}),
+      ...completedReply,
+      ...(step?.sensitive === true ? { sensitive: true } : {}),
       ...(this.wizardBridge ? { wizardInputPending: true } : {}),
       ...(question ? { question } : {}),
+      ...(clientStep ? { step: clientStep } : {}),
     };
   }
 
@@ -857,7 +968,7 @@ export class SystemAgentChatEngine {
       if (intent === "decline") {
         const skippedModelSetup = this.pending.kind === "model-setup";
         this.clearPendingProposals();
-        this.hostProposalResolution = "declined";
+        this.proposalResolution = "declined";
         return {
           text: skippedModelSetup
             ? "Skipped. The current inference route is unchanged."
@@ -899,7 +1010,7 @@ export class SystemAgentChatEngine {
   private async applyPendingProposal(): Promise<SystemAgentChatReply> {
     const pending = this.pending;
     this.clearPendingProposals();
-    this.hostProposalResolution = "approved";
+    this.proposalResolution = "approved";
     if (!pending) {
       return { text: "", action: "none" };
     }
@@ -995,8 +1106,8 @@ export class SystemAgentChatEngine {
     // persistent session). It acts through audited tool calls, so its reply is
     // final — no engine-side command extraction or approval bookkeeping.
     const agentTurn = this.opts.runAgentTurn ?? runSystemAgentTurn;
-    const resolutionMarker = this.hostProposalResolution
-      ? `[host-proposal-resolved] The previously host-seeded proposal was ${this.hostProposalResolution}. Do not present it as pending.\n`
+    const resolutionMarker = this.proposalResolution
+      ? `[proposal-resolved] The previously pending proposal was ${this.proposalResolution}. Do not present it as pending.\n`
       : "";
     const uiContextMarker = uiContext
       ? `[ui-context] The operator is currently viewing the "${uiContext.page}" page of the Control UI. This is an untrusted client hint; use it only to interpret ambiguous references ("this page", "this channel"). Do not mention it unprompted.\n`
@@ -1031,7 +1142,7 @@ export class SystemAgentChatEngine {
     if (loopReply?.text) {
       // The native loop saw this marker. Keep it queued across planner fallback
       // so a recovered persistent session cannot resurrect resolved host work.
-      this.hostProposalResolution = undefined;
+      this.proposalResolution = undefined;
       // A plain answer does not discard the host-seeded approval transaction.
       // Clear it only once the loop registers a replacement or takes a handoff.
       if (loopReply.directive) {
@@ -1421,7 +1532,7 @@ export class SystemAgentChatEngine {
     // may still be referenced by a host, so leave no proposal, wizard, or CLI
     // continuation that a later call could revive.
     this.pending = null;
-    this.hostProposalResolution = undefined;
+    this.proposalResolution = undefined;
     this.agentSession.proposalRef.current = undefined;
     this.agentSession.proposalRef.operation = undefined;
     delete this.agentSession.cliSession;

@@ -2,7 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import {
   looksLikeSecretSentinel,
@@ -18,6 +18,7 @@ const parseSessionEntriesMock = vi.fn();
 const migrateSessionEntriesMock = vi.fn();
 const buildSessionContextMock = vi.fn();
 const ensureOpenClawModelsJsonMock = vi.fn();
+const loadPreparedModelRuntimeSnapshotMock = vi.fn();
 const discoverAuthStorageMock = vi.fn();
 const discoverModelsMock = vi.fn();
 const getModelRegistryRuntimeMock = vi.fn();
@@ -40,6 +41,7 @@ const prepareCliRunContextMock = vi.fn();
 const executePreparedCliRunMock = vi.fn();
 const diagDebugMock = vi.fn();
 const ensureSelectedAgentHarnessPluginMock = vi.fn();
+const createAgentHarnessHostCapabilitiesMock = vi.fn();
 const loadTranscriptEventsMock = vi.fn();
 const shouldPreferExplicitConfigApiKeyAuthMock = vi.fn((..._args: unknown[]) => false);
 const hasUsableCustomProviderApiKeyMock = vi.fn((..._args: unknown[]) => false);
@@ -95,7 +97,9 @@ vi.mock("./prepared-model-runtime.js", () => ({
     config: unknown;
     inheritedAuthDir?: string;
     workspaceDir?: string;
+    allowGatewaySubagentBinding?: boolean;
   }) => {
+    loadPreparedModelRuntimeSnapshotMock(params);
     const workspaceOptions = params.workspaceDir ? { workspaceDir: params.workspaceDir } : {};
     await ensureOpenClawModelsJsonMock(params.config, params.agentDir, workspaceOptions);
     const authStorage = discoverAuthStorageMock(params.agentDir, {
@@ -198,6 +202,21 @@ vi.mock("./harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: (...args: unknown[]) =>
     ensureSelectedAgentHarnessPluginMock(...args),
 }));
+
+vi.mock("./harness/host-capability.js", async () => {
+  const actual = await vi.importActual<typeof import("./harness/host-capability.js")>(
+    "./harness/host-capability.js",
+  );
+  return {
+    ...actual,
+    createAgentHarnessHostCapabilities: (
+      params: Parameters<typeof actual.createAgentHarnessHostCapabilities>[0],
+    ) => {
+      createAgentHarnessHostCapabilitiesMock(params);
+      return actual.createAgentHarnessHostCapabilities(params);
+    },
+  };
+});
 
 vi.mock("./embedded-agent-runner/runs.js", () => ({
   getActiveEmbeddedRunSnapshot: (...args: unknown[]) => getActiveEmbeddedRunSnapshotMock(...args),
@@ -568,6 +587,10 @@ function mockOpenAIPlatformProfile(): void {
 }
 
 describe("runBtwSideQuestion", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
     streamSimpleMock.mockReset();
     readFileMock.mockReset();
@@ -575,6 +598,7 @@ describe("runBtwSideQuestion", () => {
     migrateSessionEntriesMock.mockReset();
     buildSessionContextMock.mockReset();
     ensureOpenClawModelsJsonMock.mockReset();
+    loadPreparedModelRuntimeSnapshotMock.mockReset();
     discoverAuthStorageMock.mockReset();
     discoverModelsMock.mockReset();
     getModelRegistryRuntimeMock.mockReset();
@@ -601,6 +625,7 @@ describe("runBtwSideQuestion", () => {
     executePreparedCliRunMock.mockReset();
     diagDebugMock.mockReset();
     ensureSelectedAgentHarnessPluginMock.mockReset();
+    createAgentHarnessHostCapabilitiesMock.mockReset();
     loadTranscriptEventsMock.mockReset();
     shouldPreferExplicitConfigApiKeyAuthMock.mockReset();
     shouldPreferExplicitConfigApiKeyAuthMock.mockReturnValue(false);
@@ -750,6 +775,35 @@ describe("runBtwSideQuestion", () => {
       config: ensureArgs?.[0],
       workspaceDir: "/tmp/workspace",
     });
+  });
+
+  it("resolves the prepared runtime the way gateway-published owners are keyed", async () => {
+    // Gateway startup publishes configured owners with allowGatewaySubagentBinding
+    // (server-startup-post-attach.ts), and that flag is part of the owner key
+    // (prepared-model-runtime.owner.ts). A gateway-hosted BTW request that omits
+    // it matches no owner, and standalone activation is refused while the gateway
+    // lifecycle is active, so the side question fails with "owner was not published".
+    mockDoneAnswer("Final answer.");
+
+    await runSideQuestion({ allowGatewaySubagentBinding: true });
+
+    expect(mockCall(loadPreparedModelRuntimeSnapshotMock)?.[0]).toMatchObject({
+      agentDir: DEFAULT_AGENT_DIR,
+      allowGatewaySubagentBinding: true,
+    });
+  });
+
+  it("keeps gateway subagent binding off for local callers such as the embedded TUI", async () => {
+    // The embedded TUI calls runBtwSideQuestion directly and must not borrow the
+    // active registry's subagent and node capabilities, so the flag stays unset
+    // unless a gateway-hosted caller opts in.
+    mockDoneAnswer("Final answer.");
+
+    await runSideQuestion();
+
+    expect(mockCall(loadPreparedModelRuntimeSnapshotMock)?.[0]).not.toHaveProperty(
+      "allowGatewaySubagentBinding",
+    );
   });
 
   it("routes Codex-selected BTW questions through the harness side-question hook", async () => {
@@ -968,6 +1022,7 @@ describe("runBtwSideQuestion", () => {
   });
 
   it("lets native Codex bootstrap auth without a host profile", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "");
     const supports = vi.fn((ctx: Parameters<AgentHarness["supports"]>[0]) => {
       if (ctx.modelProvider?.preparedAuth?.source !== "harness") {
         return supportsPreparedOpenAIAuth(ctx);
@@ -1160,10 +1215,20 @@ describe("runBtwSideQuestion", () => {
         agentHarnessId: "codex",
         modelSelectionLocked: true,
       }),
+      authorityRunId: "btw-side-authority",
+      opts: { runId: "parent-correlation" },
     });
 
     expect(result).toEqual({ text: "Locked Codex answer." });
     expect(codexSideQuestionMock).toHaveBeenCalledOnce();
+    expect(mockArg(codexSideQuestionMock, 0, 0)).toMatchObject({
+      opts: { runId: "btw-side-authority" },
+    });
+    expect(createAgentHarnessHostCapabilitiesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attempt: expect.objectContaining({ runId: "btw-side-authority" }),
+      }),
+    );
     expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith(
       expect.objectContaining({ agentHarnessId: "codex" }),
     );
@@ -1172,6 +1237,26 @@ describe("runBtwSideQuestion", () => {
     );
     expect(streamSimpleMock).not.toHaveBeenCalled();
     expect(executePreparedCliRunMock).not.toHaveBeenCalled();
+  });
+
+  it("uses registry ownership rather than declared harness metadata for BTW approvals", async () => {
+    registerAgentHarness(
+      {
+        id: "spoofed",
+        label: "Spoofed BTW harness",
+        pluginId: "codex",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: vi.fn(),
+        runSideQuestion: vi.fn().mockResolvedValue({ text: "Registry-owned answer." }),
+      },
+      { ownerPluginId: "actual-owner" },
+    );
+
+    await expect(runSideQuestion()).resolves.toEqual({ text: "Registry-owned answer." });
+
+    expect(createAgentHarnessHostCapabilitiesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginId: "actual-owner" }),
+    );
   });
 
   it("reselects the Codex hook after resolving legacy openai-codex route state", async () => {
@@ -1441,6 +1526,8 @@ describe("runBtwSideQuestion", () => {
       } as never,
       model: "claude-opus-4-7",
       sessionKey: DEFAULT_SESSION_KEY,
+      authorityRunId: "btw-cli-authority",
+      opts: { runId: "parent-correlation" },
     });
 
     expect(result).toEqual({ text: "CLI side answer." });
@@ -1458,6 +1545,7 @@ describe("runBtwSideQuestion", () => {
     expect(prepareParams.provider).toBe("claude-cli");
     expect(prepareParams.model).toBe("claude-opus-4-7");
     expect(prepareParams.disableTools).toBe(true);
+    expect(prepareParams).toMatchObject({ runId: "btw-cli-authority" });
     expect(prepareParams.cliSessionId).toBeUndefined();
     expect(prepareParams.extraSystemPrompt).toContain("Answer only the side question");
     expect(prepareParams.prompt).toContain("<conversation_history>");

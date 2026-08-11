@@ -9,8 +9,13 @@ import {
   validateTasksCancelParams,
   validateTasksGetParams,
   validateTasksListParams,
+  validateTasksRecoveryParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import {
+  dismissSubagentCompletionDelivery,
+  retrySubagentCompletionDelivery,
+} from "../../agents/subagents/completion/subagent-completion-delivery.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { getTaskById, listTaskRecordPage } from "../../tasks/runtime-internal.js";
@@ -125,9 +130,9 @@ export const tasksHandlers: GatewayRequestHandlers = {
     }
     const taskId = params.taskId;
     const reason = normalizeOptionalString(params.reason);
-    const { cancelDetachedTaskRunById } =
+    const { cancelDetachedTaskRunByIdCore } =
       await import("../../tasks/task-executor-cancel.runtime.js");
-    const result = await cancelDetachedTaskRunById({
+    const result = await cancelDetachedTaskRunByIdCore({
       cfg: context.getRuntimeConfig(),
       taskId,
       ...(reason ? { reason } : {}),
@@ -137,6 +142,39 @@ export const tasksHandlers: GatewayRequestHandlers = {
       cancelled: result.cancelled,
       ...(result.reason ? { reason: result.reason } : {}),
       ...(result.task ? { task: mapTaskSummary(result.task) } : {}),
+    });
+  },
+  "tasks.retry": async ({ params, respond }) => {
+    if (!assertValidParams(params, validateTasksRecoveryParams, "tasks.retry", respond)) {
+      return;
+    }
+    const results = [];
+    for (const taskId of params.taskIds) {
+      const result = await retrySubagentCompletionDelivery(taskId);
+      results.push({
+        taskId,
+        ok: result.ok,
+        ...(result.reason ? { reason: result.reason } : {}),
+        ...(result.duplicateRisk ? { duplicateRisk: true } : {}),
+        ...(result.task ? { task: mapTaskSummary(result.task, { includePrompt: true }) } : {}),
+      });
+    }
+    respond(true, { results });
+  },
+  "tasks.dismiss": ({ params, respond }) => {
+    if (!assertValidParams(params, validateTasksRecoveryParams, "tasks.dismiss", respond)) {
+      return;
+    }
+    respond(true, {
+      results: params.taskIds.map((taskId) => {
+        const result = dismissSubagentCompletionDelivery(taskId);
+        return {
+          taskId,
+          ok: result.ok,
+          ...(result.reason ? { reason: result.reason } : {}),
+          ...(result.task ? { task: mapTaskSummary(result.task, { includePrompt: true }) } : {}),
+        };
+      }),
     });
   },
 };

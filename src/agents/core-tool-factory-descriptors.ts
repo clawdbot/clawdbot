@@ -50,7 +50,7 @@ const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "sessions_yield", family: "openclaw" },
   { name: "structured_output", family: "openclaw" },
   { name: "skill_workshop", family: "openclaw" },
-  { name: "spawn_task", family: "openclaw" },
+  { name: "suggest_task", family: "openclaw" },
   { name: "create_goal", family: "openclaw" },
   { name: "subagents", family: "openclaw" },
   { name: "terminal", family: "openclaw" },

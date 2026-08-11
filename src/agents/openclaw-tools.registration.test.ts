@@ -232,11 +232,11 @@ describe("openclaw-tools update_plan gating", () => {
       taskSuggestionDeliveryMode: "gateway",
     });
 
-    expect(withoutSession).not.toContain("spawn_task");
+    expect(withoutSession).not.toContain("suggest_task");
     expect(withoutSession).not.toContain("dismiss_task");
-    expect(withoutSink).not.toContain("spawn_task");
+    expect(withoutSink).not.toContain("suggest_task");
     expect(withoutSink).not.toContain("dismiss_task");
-    expect(withSink).toEqual(expect.arrayContaining(["spawn_task", "dismiss_task"]));
+    expect(withSink).toEqual(expect.arrayContaining(["suggest_task", "dismiss_task"]));
   });
 
   it("keeps explicitly allowed message tool in embedded completions", () => {
@@ -517,6 +517,53 @@ describe("Swarm registration", () => {
     expect(names).not.toContain("ask_user");
     expect(names).not.toContain("sessions_send");
     expect(names).not.toContain("sessions_yield");
+  });
+});
+
+describe("sessions_yield completion ownership", () => {
+  const controllerSessionKey = "agent:main:telegram:default:direct:1234";
+
+  it.each([
+    ["the durable run owner", "agent:main:main", "agent:main:main"],
+    ["a trimmed durable run owner", "  agent:main:main  ", "agent:main:main"],
+    ["the controller when the run owner is blank", "   ", controllerSessionKey],
+    ["the controller when the run owner is absent", undefined, controllerSessionKey],
+  ] as const)("records yield intent against %s", async (_, runSessionKey, expectedSessionKey) => {
+    const registry = await import("./subagents/registry/subagent-registry.js");
+    const markRequesterTurnYielded = vi
+      .spyOn(registry, "markRequesterTurnYielded")
+      .mockReturnValue(1);
+    const onYield = vi.fn(async () => undefined);
+
+    try {
+      const tool = expectToolNamed(
+        createTestOpenClawTools({
+          agentSessionKey: controllerSessionKey,
+          runSessionKey,
+          sessionId: "requester-session",
+          runId: "run-requester",
+          onYield,
+          disableMessageTool: true,
+          disablePluginTools: true,
+          wrapBeforeToolCallHook: false,
+        }),
+        "sessions_yield",
+      );
+
+      const result = await tool.execute("yield-requester", {});
+
+      expect(result.details).toMatchObject({ status: "yielded" });
+      expect(markRequesterTurnYielded).toHaveBeenCalledExactlyOnceWith({
+        requesterSessionKey: expectedSessionKey,
+        requesterTurnRunId: "run-requester",
+      });
+      expect(onYield).toHaveBeenCalledOnce();
+      expect(markRequesterTurnYielded.mock.invocationCallOrder[0]).toBeLessThan(
+        onYield.mock.invocationCallOrder[0]!,
+      );
+    } finally {
+      markRequesterTurnYielded.mockRestore();
+    }
   });
 });
 

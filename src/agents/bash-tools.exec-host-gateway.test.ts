@@ -33,7 +33,6 @@ import {
   buildHashedArgPatternFromArgv,
   resolvePolicyTargetCandidatePath,
 } from "../infra/exec-command-resolution.js";
-import { createSafeGatewayRestartPreflight } from "../infra/restart-coordinator.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -948,6 +947,7 @@ describe("processGatewayAllowlist", () => {
     fs.writeFileSync(shadowGit, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     try {
       const command = "git status";
+      const canonicalShadowGit = fs.realpathSync(shadowGit);
       await configurePlanBackedCommand({
         command,
         env: { PATH: tempDir },
@@ -961,9 +961,9 @@ describe("processGatewayAllowlist", () => {
       });
 
       expect(defaultExecAutoReviewerMock).toHaveBeenCalledWith(
-        expect.objectContaining({ resolvedPath: shadowGit }),
+        expect.objectContaining({ resolvedPath: canonicalShadowGit }),
       );
-      expect(result).toEqual({ execCommandOverride: `${shadowGit} status` });
+      expect(result).toEqual({ execCommandOverride: `${canonicalShadowGit} status` });
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -1157,6 +1157,15 @@ describe("processGatewayAllowlist", () => {
     if (!authorizationPlan.ok) {
       throw new Error(authorizationPlan.reason);
     }
+    const enforced = buildAuthorizedShellCommandFromPlan({
+      plan: authorizationPlan,
+      mode: "enforced",
+      segmentSatisfiedBy: ["safeBuiltins"],
+    });
+    expect(enforced.ok).toBe(true);
+    if (!enforced.ok) {
+      throw new Error(enforced.reason);
+    }
     hasDurableExecApprovalMock.mockReturnValue(true);
     hasExactCommandDurableExecApprovalMock.mockReturnValue(true);
     evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
@@ -1183,7 +1192,7 @@ describe("processGatewayAllowlist", () => {
     const result = await runGatewayAllowlist({ command });
 
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
-    expect(result).toEqual({ execCommandOverride: command });
+    expect(result).toEqual({ execCommandOverride: enforced.command });
     expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
       expect.objectContaining({
         authorization: expect.objectContaining({
@@ -2378,21 +2387,7 @@ EOF`,
 
     suspension?.release();
     await spawnStarted;
-    expect(
-      createSafeGatewayRestartPreflight({
-        getQueueSize: () => 0,
-        getPendingReplies: () => 0,
-        getEmbeddedRuns: () => 0,
-        getCronRuns: () => 0,
-        getBackgroundExecSessions: () => 0,
-        getActiveTasks: () => 0,
-        getTaskBlockers: () => [],
-      }),
-    ).toMatchObject({
-      safe: false,
-      counts: { rootRequests: 1, totalActive: 1 },
-      blockers: [{ kind: "root-request", count: 1 }],
-    });
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
     allowSpawn();
     await vi.waitFor(() => {
       expect(markBackgroundedMock).toHaveBeenCalledOnce();

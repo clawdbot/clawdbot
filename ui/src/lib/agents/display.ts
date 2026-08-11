@@ -352,15 +352,22 @@ export function agentBadgeText(agentId: string, defaultId: string | null) {
   return defaultId && agentId === defaultId ? t("agents.default") : null;
 }
 
-export function formatBytes(bytes?: number) {
+type FormatBytesOptions = {
+  fallback?: string;
+  maxUnit?: "kilo" | "mega" | "giga" | "tera";
+  fractionDigits?: Parameters<typeof formatByteSize>[1]["fractionDigits"];
+};
+
+export function formatBytes(bytes?: number, options: FormatBytesOptions = {}) {
   if (bytes == null || !Number.isFinite(bytes)) {
-    return "-";
+    return options.fallback ?? "-";
   }
   return formatByteSize(bytes, {
     style: "legacy-binary",
-    maxUnit: "tera",
+    maxUnit: options.maxUnit ?? "tera",
     separator: " ",
-    fractionDigits: (value, unit) => (unit === "byte" ? null : value < 10 ? 1 : 0),
+    fractionDigits:
+      options.fractionDigits ?? ((value, unit) => (unit === "byte" ? null : value < 10 ? 1 : 0)),
   });
 }
 

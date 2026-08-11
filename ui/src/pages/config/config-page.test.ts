@@ -11,6 +11,11 @@ import type {
 } from "../../app/context.ts";
 import { changedServerUiPrefs, resetServerUiPrefsSync } from "../../app/server-prefs.ts";
 import { loadSettings } from "../../app/settings.ts";
+import {
+  installDialogPolyfill,
+  nextFrame,
+  waitForRenderedModalDialog,
+} from "../../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as chatModels from "../chat/models.ts";
 import * as realtimeTalk from "../chat/realtime-talk.ts";
@@ -94,6 +99,14 @@ describe("configSelectionFromSearch", () => {
 
   it("gives Talk its own curated page", () => {
     expect(configSectionKeysForPage("talk")).toEqual(["talk"]);
+  });
+
+  it("gives Updates ownership of the update config section", () => {
+    expect(configSectionKeysForPage("updates")).toEqual(["update"]);
+    expect(configSelectionFromSearch("advanced", "?section=update")).toEqual({
+      activeSection: null,
+      activeSubsection: null,
+    });
   });
 
   it("keeps provider models off Agent Defaults", () => {
@@ -490,12 +503,13 @@ describe("ConfigPage session observer models", () => {
 
 describe("ConfigPage curated mutation eligibility", () => {
   it.each([
-    ["offline", { connected: false }, ["operator.admin"], false],
-    ["read-only operator", { connected: true }, ["operator.read"], false],
-    ["config save", { connected: true, configSaving: true }, ["operator.admin"], false],
-    ["app update", { connected: true }, ["operator.admin"], true],
-    ["idle administrator", { connected: true }, ["operator.admin"], false],
-  ])("locks server-backed controls for %s", (_name, statePatch, scopes, updateRunning) => {
+    ["offline", { connected: false }, ["operator.admin"], false, true],
+    ["read-only operator", { connected: true }, ["operator.read"], false, true],
+    ["config.set absent", { connected: true }, ["operator.admin"], false, false],
+    ["config save", { connected: true, configSaving: true }, ["operator.admin"], false, true],
+    ["app update", { connected: true }, ["operator.admin"], true, true],
+    ["idle administrator", { connected: true }, ["operator.admin"], false, true],
+  ])("locks server-backed controls for %s", (_name, statePatch, scopes, updateRunning, canSet) => {
     const page = new ConfigPage();
     const state = page as unknown as {
       context: ApplicationContext;
@@ -503,6 +517,7 @@ describe("ConfigPage curated mutation eligibility", () => {
     };
     state.context = {
       runtimeConfig: {
+        canSet,
         state: {
           configLoading: false,
           configSaving: false,
@@ -523,7 +538,148 @@ describe("ConfigPage curated mutation eligibility", () => {
   });
 });
 
+describe("ConfigPage Updates integration", () => {
+  it("refreshes update status once when the page becomes active", () => {
+    const refreshUpdateStatus = vi.fn(async () => {});
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      context: ApplicationContext;
+      syncUpdateStatusRefresh: () => void;
+    };
+    state.context = {
+      gateway: {
+        snapshot: {
+          client: {},
+          phase: "connected",
+          hello: {
+            auth: { role: "operator", scopes: ["operator.admin"] },
+            features: { methods: ["update.status"] },
+          },
+        },
+      },
+      overlays: { refreshUpdateStatus },
+    } as unknown as ApplicationContext;
+
+    page.pageId = "updates";
+    state.syncUpdateStatusRefresh();
+    state.syncUpdateStatusRefresh();
+    expect(refreshUpdateStatus).toHaveBeenCalledOnce();
+
+    page.pageId = "advanced";
+    state.syncUpdateStatusRefresh();
+    page.pageId = "updates";
+    state.syncUpdateStatusRefresh();
+    expect(refreshUpdateStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("stages policy changes through patchForm and confirms Update now before overlays", async () => {
+    const patchForm = vi.fn();
+    const runUpdate = vi.fn();
+    const page = new ConfigPage();
+    const state = page as unknown as { context: ApplicationContext };
+    page.pageId = "updates";
+    state.context = {
+      config: {
+        current: { assistantIdentity: { name: "OpenClaw" }, serverVersion: "2026.8.1" },
+      },
+      runtimeConfig: {
+        canSet: true,
+        state: {
+          connected: true,
+          configLoading: false,
+          configSaving: false,
+          configApplying: false,
+          configForm: { update: { channel: "stable", auto: { enabled: false } } },
+          configSnapshot: null,
+        },
+        patchForm,
+      },
+      gateway: {
+        snapshot: {
+          client: {},
+          phase: "connected",
+          hello: {
+            auth: { role: "operator", scopes: ["operator.admin"] },
+            features: { methods: ["update.run"] },
+          },
+        },
+      },
+      overlays: {
+        snapshot: {
+          updateAvailable: null,
+          updateSchedule: { channel: "stable", autoEnabled: false },
+          updateRunning: false,
+          updateReconciliationPending: false,
+          updateStatusBanner: null,
+        },
+        runUpdate,
+      },
+    } as unknown as ApplicationContext;
+    const container = document.createElement("div");
+    document.body.append(container);
+    const restoreDialogPolyfill = installDialogPolyfill();
+
+    render(page.render(), container);
+
+    const channel = container.querySelector<HTMLElement & { value: string }>("wa-radio-group");
+    if (!channel) {
+      throw new Error("Missing update channel control");
+    }
+    channel.value = "beta";
+    channel.dispatchEvent(new Event("change"));
+    const automatic = container.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    if (!automatic) {
+      throw new Error("Missing automatic update control");
+    }
+    automatic.checked = true;
+    automatic.dispatchEvent(new Event("change"));
+    [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.includes("Update now"))
+      ?.click();
+    await nextFrame();
+
+    expect(patchForm).toHaveBeenCalledWith(["update", "channel"], "beta");
+    expect(patchForm).toHaveBeenCalledWith(["update", "auto", "enabled"], true);
+    // Settings shares the sidebar card's confirmation gate: nothing runs on the click itself.
+    expect(runUpdate).not.toHaveBeenCalled();
+
+    const { modal } = await waitForRenderedModalDialog(document.body);
+    [...modal.querySelectorAll("button")]
+      .find((button) => button.textContent?.trim() === "Update and restart")
+      ?.click();
+    await nextFrame();
+
+    expect(runUpdate).toHaveBeenCalledOnce();
+    restoreDialogPolyfill();
+    container.remove();
+  });
+});
+
 describe("ConfigPage runtime config lifecycle", () => {
+  it("loads Updates without requesting the admin-only config schema", async () => {
+    const page = new ConfigPage();
+    page.pageId = "updates";
+    const state = page as unknown as {
+      synchronizeRuntimeConfig: (runtimeConfig: ApplicationContext["runtimeConfig"]) => void;
+    };
+    const runtimeConfig = {
+      state: {
+        configSnapshot: null,
+        configLoading: false,
+        configSchema: null,
+        configSchemaLoading: false,
+      },
+      ensureLoaded: vi.fn(() => Promise.resolve()),
+      ensureSchemaLoaded: vi.fn(() => Promise.resolve()),
+    } as unknown as ApplicationContext["runtimeConfig"];
+
+    state.synchronizeRuntimeConfig(runtimeConfig);
+    await Promise.resolve();
+
+    expect(runtimeConfig.ensureLoaded).toHaveBeenCalledOnce();
+    expect(runtimeConfig.ensureSchemaLoaded).not.toHaveBeenCalled();
+  });
+
   it("loads replacement sources and clears sensitive reveal state", async () => {
     const page = new ConfigPage();
     const state = page as unknown as {

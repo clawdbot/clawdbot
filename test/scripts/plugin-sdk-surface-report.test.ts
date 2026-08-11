@@ -6,7 +6,7 @@ import {
   collectPluginSdkSurfaceReport,
   evaluatePluginSdkSurfaceReport,
   readPluginSdkSurfaceBudgets,
-} from "../../scripts/plugin-sdk-surface-report.mjs";
+} from "../../scripts/plugin-sdk-surface-report.mts";
 
 const pluginSdkSurfaceBudgetEnvPattern = /^OPENCLAW_PLUGIN_SDK_MAX_/u;
 
@@ -17,14 +17,18 @@ function baseSurfaceReportEnv(): NodeJS.ProcessEnv {
 }
 
 function runSurfaceReport(env: Record<string, string>) {
-  return spawnSync(process.execPath, ["scripts/plugin-sdk-surface-report.mjs", "--check"], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    env: {
-      ...baseSurfaceReportEnv(),
-      ...env,
+  return spawnSync(
+    process.execPath,
+    ["--import", "tsx", "scripts/plugin-sdk-surface-report.mts", "--check"],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...baseSurfaceReportEnv(),
+        ...env,
+      },
     },
-  });
+  );
 }
 
 type PublicSurfaceCounts = {
@@ -59,25 +63,27 @@ describe("plugin SDK surface report", () => {
   });
 
   it("rejects unknown CLI options before collecting SDK stats", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["scripts/plugin-sdk-surface-report.mjs", "--chekc"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
+    for (const args of [["--chekc"], ["chekc", "--help"]]) {
+      const result = spawnSync(
+        process.execPath,
+        ["--import", "tsx", "scripts/plugin-sdk-surface-report.mts", ...args],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+        },
+      );
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("Unknown plugin SDK surface report option: --chekc");
-    expect(result.stderr).not.toContain("at ");
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr.trim()).toBe(`Unknown plugin SDK surface report option: ${args[0]}`);
+      expect(result.stderr).not.toContain("at ");
+    }
   });
 
   it("prints help before collecting SDK stats", () => {
     const result = spawnSync(
       process.execPath,
-      ["scripts/plugin-sdk-surface-report.mjs", "--help"],
+      ["--import", "tsx", "scripts/plugin-sdk-surface-report.mts", "--help"],
       {
         cwd: process.cwd(),
         encoding: "utf8",
@@ -85,7 +91,9 @@ describe("plugin SDK surface report", () => {
     );
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Usage: node scripts/plugin-sdk-surface-report.mjs");
+    expect(result.stdout).toContain(
+      "Usage: node --import tsx scripts/plugin-sdk-surface-report.mts",
+    );
     expect(result.stderr).toBe("");
     expect(result.stdout).not.toContain("all SDK entrypoints:");
   });
@@ -118,7 +126,7 @@ describe("plugin SDK surface report", () => {
 
   it("accepts exact deprecated export budget overrides by public entrypoint", () => {
     const budgetConfig = readPluginSdkSurfaceBudgets({
-      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT: JSON.stringify({ core: 2 }),
+      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT: JSON.stringify({ core: 3 }),
     });
 
     expect(evaluatePluginSdkSurfaceReport(surfaceReport, budgetConfig)).not.toContain(
@@ -177,7 +185,7 @@ describe("plugin SDK surface report", () => {
     });
 
     expect(evaluatePluginSdkSurfaceReport(surfaceReport, budgetConfig)).toContain(
-      "public deprecated exports in core 2 > 1",
+      "public deprecated exports in core 3 > 1",
     );
   });
 });

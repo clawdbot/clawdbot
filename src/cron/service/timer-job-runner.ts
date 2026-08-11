@@ -6,7 +6,6 @@ import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import type { CronAgentExecutionStarted, CronJob } from "../types.js";
 import {
   registerActiveCronTaskRun,
-  startActiveCronTaskRunSettlementGrace,
   trackActiveCronTaskRunSettlement,
 } from "./active-run-cancellation.js";
 import {
@@ -20,7 +19,7 @@ import {
   timeoutErrorMessage,
 } from "./execution-errors.js";
 import type { CronServiceState } from "./state.js";
-import { tryUpdateCronTaskRunSession } from "./task-runs.js";
+import { tryUpdateCronTaskRunSession, withCronTaskRunId } from "./task-runs.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 import {
   type IsolatedAgentSetupTimeoutSignal,
@@ -237,7 +236,7 @@ export async function executeJobCoreWithTimeout(
         recordTaskExecutionStart(info);
       };
       const progress: CronRunProgress = {};
-      const corePromise = executeJobCore(state, job, runAbortController.signal, {
+      const coreOptions = {
         activeJobMarker: opts?.activeJobMarker,
         owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
         streamBatch: opts?.streamBatch,
@@ -245,12 +244,15 @@ export async function executeJobCoreWithTimeout(
         streamSourceIdentity: opts?.streamSourceIdentity,
         onExecutionStarted: noteExecutionStarted,
         onExecutionPhase: accumulateExecution,
-      });
+      };
+      const corePromise = withCronTaskRunId(opts?.runId, () =>
+        executeJobCore(state, job, runAbortController.signal, coreOptions),
+      );
       const runPromise = corePromise.then(async (result) => {
         progress.completedCoreResult = result;
         return await deliverPrimaryWebhook(state, job, result, runAbortController.signal, progress);
       });
-      trackActiveCronTaskRunSettlement(runPromise);
+      trackActiveCronTaskRunSettlement(runPromise, runAbortController.signal);
       void runPromise.catch((err: unknown) => {
         if (runAbortController.signal.aborted) {
           state.deps.log.warn(
@@ -263,7 +265,6 @@ export async function executeJobCoreWithTimeout(
       if (first !== operatorCancellationMarker) {
         return first;
       }
-      startActiveCronTaskRunSettlementGrace();
       const settled = resolveInterruptedRunProgress({
         progress,
         job,
@@ -312,7 +313,7 @@ export async function executeJobCoreWithTimeout(
       recordTaskExecutionStart(info);
     };
     const progress: CronRunProgress = {};
-    const corePromise = executeJobCore(state, job, runAbortController.signal, {
+    const coreOptions = {
       activeJobMarker: opts?.activeJobMarker,
       owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
       streamBatch: opts?.streamBatch,
@@ -321,7 +322,10 @@ export async function executeJobCoreWithTimeout(
       onExecutionStarted: deferTimeoutUntilExecutionStart ? noteRunnerStarted : undefined,
       onExecutionPhase: deferTimeoutUntilExecutionStart ? watchdog.notePhase : undefined,
       onLaneWait: deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
-    });
+    };
+    const corePromise = withCronTaskRunId(opts?.runId, () =>
+      executeJobCore(state, job, runAbortController.signal, coreOptions),
+    );
     watchdog.start();
     const runPromise = corePromise.then(async (result) => {
       progress.completedCoreResult = result;
@@ -334,7 +338,7 @@ export async function executeJobCoreWithTimeout(
         watchdog.deadlineAtMs(),
       );
     });
-    trackActiveCronTaskRunSettlement(runPromise);
+    trackActiveCronTaskRunSettlement(runPromise, runAbortController.signal);
     void runPromise.catch((err: unknown) => {
       if (runAbortController.signal.aborted) {
         state.deps.log.warn(
@@ -346,7 +350,6 @@ export async function executeJobCoreWithTimeout(
     try {
       const first = await Promise.race([runPromise, timeoutPromise, operatorCancellationPromise]);
       if (first === operatorCancellationMarker) {
-        startActiveCronTaskRunSettlementGrace();
         const settled = resolveInterruptedRunProgress({
           progress,
           job,
@@ -360,7 +363,6 @@ export async function executeJobCoreWithTimeout(
       if (first !== timeoutMarker) {
         return first;
       }
-      startActiveCronTaskRunSettlementGrace();
       const activeExecution = watchdog.activeExecution();
       const settled = resolveInterruptedRunProgress({
         progress,

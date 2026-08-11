@@ -20,7 +20,6 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "archivedAt",
   "archivedBy",
   "pinnedAt",
-  "icon",
   "lastReadAt",
   "agentStatus",
   "observerDigest",
@@ -50,6 +49,8 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "inheritedToolPolicyVersion",
   "inheritedToolDeny",
   "inheritedToolAllow",
+  "lifecycleRunId",
+  "activeWriterRunId",
   "mainRestartRecovery",
   "subagentRecovery",
   "pluginOwnerId",
@@ -58,8 +59,6 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "restartRecoveryRuns",
   "restartRecoveryForceSafeTools",
   "goal",
-  "pendingSkillSuggestion",
-  "skillCaptureSignalHashes",
   "sessionStartedAt",
   "ambientTranscriptWatermarks",
   "lastInteractionAt",
@@ -131,6 +130,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "restartRecoveryTerminalDeliveryEvidence",
   "restartRecoveryTerminalRunIds",
   "totalTokensFresh",
+  "totalTokensVersion",
   "estimatedCostUsd",
   "cacheRead",
   "cacheWrite",
@@ -163,6 +163,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "hookExternalContentSource",
   "acp",
   "quotaSuspension",
+  "pendingTranscriptRepair",
   "visibility",
 ] as const satisfies ReadonlyArray<
   keyof SessionEntry | "__proto__" | "constructor" | "prototype" | "sessionFile" | "transcriptPath"
@@ -182,6 +183,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEYS = new Set<SessionEntryReservedSlotSetValu
   SESSION_ENTRY_RESERVED_SLOT_KEY_LIST,
 );
 const RETIRED_SESSION_SLOT_KEYS = new Set<string>([
+  "icon",
   "channel",
   "origin",
   "route",

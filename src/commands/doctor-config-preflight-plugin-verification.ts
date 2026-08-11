@@ -8,6 +8,7 @@ import {
   formatPluginVerificationDiagnostic,
   type DegradedPlugin,
 } from "../plugins/runtime-degraded-state.js";
+import { resolveCompatibilityHostVersion } from "../version.js";
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
 
 type StartupPluginVerificationDiagnostic = {
@@ -95,6 +96,7 @@ export async function runStartupUpgradeConvergence(params: {
       runPostCorePluginConvergence({
         cfg: params.cfg,
         env: params.env,
+        compatibilityHostVersion: resolveCompatibilityHostVersion(params.env),
         baselineInstallRecords: plan.installRecords,
       }),
     params.measure,
@@ -221,6 +223,6 @@ export function formatStartupPluginVerificationFailure(
   return [
     "OpenClaw plugin verification failed; refusing to report the gateway ready.",
     ...diagnostic.messages.map((message) => `- ${message}`),
-    "Resolve the plugin verification errors above, then restart the container.",
+    "Resolve the plugin verification errors above, then restart the Gateway.",
   ].join("\n");
 }

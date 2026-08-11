@@ -160,6 +160,25 @@ describe("memory-wiki agent-scoped cli", () => {
     },
   );
 
+  it.each([
+    { commandPath: ["search"], args: ["search", "query"] },
+    { commandPath: ["get"], args: ["get", "entity.alpha"] },
+  ])("keeps global-vault $commandPath scoped to the configured default agent", async (testCase) => {
+    const { config } = await createCliVault();
+    const appConfig = {
+      agents: { entries: { support: { default: true }, marketing: {} } },
+    };
+    const { program, resolveConfig } = createAgentSelectionProgram({
+      config,
+      appConfig,
+      commandPath: testCase.commandPath,
+    });
+
+    await program.parseAsync(["wiki", ...testCase.args], { from: "user" });
+
+    expect(resolveConfig).toHaveBeenCalledWith("support", appConfig);
+  });
+
   it.each(AGENT_SCOPED_WIKI_COMMANDS)(
     "gives actionable missing-agent guidance for wiki $label",
     async ({ path: commandPath, args }) => {

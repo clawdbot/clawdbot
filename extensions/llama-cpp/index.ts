@@ -3,11 +3,12 @@ import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider
 import {
   LLAMA_CPP_PROVIDER_ID,
   LLAMA_CPP_PROVIDER_LABEL,
+  LLAMA_CPP_LOCAL_BASE_URL,
   buildLlamaCppProviderConfig,
   resolveLlamaCppSyntheticApiKey,
 } from "./src/defaults.js";
 import { llamaCppEmbeddingProviderAdapter } from "./src/embedding-provider.js";
-import { createLlamaCppStreamFn } from "./src/inference-provider.js";
+import { createLlamaCppInferenceRuntime } from "./src/inference-provider.js";
 import { detectLlamaCppSetup, prepareLlamaCppSetup, runLlamaCppSetup } from "./src/setup.js";
 
 export default definePluginEntry({
@@ -15,6 +16,12 @@ export default definePluginEntry({
   name: "llama.cpp Provider",
   description: "Local GGUF text inference and embeddings through node-llama-cpp",
   register(api: OpenClawPluginApi) {
+    const inferenceRuntime = createLlamaCppInferenceRuntime();
+    api.registerService({
+      id: "llama-cpp-inference-runtime",
+      start: () => undefined,
+      stop: () => inferenceRuntime.dispose(),
+    });
     api.registerEmbeddingProvider(llamaCppEmbeddingProviderAdapter);
     api.registerProvider({
       id: LLAMA_CPP_PROVIDER_ID,
@@ -45,10 +52,15 @@ export default definePluginEntry({
         order: "late",
         run: async () => ({ provider: buildLlamaCppProviderConfig() }),
       },
-      createStreamFn: ({ config, provider }) =>
-        createLlamaCppStreamFn({
+      createStreamFn: ({ config, model, provider }) => {
+        // Explicit HTTP routes sharing this provider id stay on the configured transport.
+        if (model.baseUrl !== LLAMA_CPP_LOCAL_BASE_URL) {
+          return undefined;
+        }
+        return inferenceRuntime.createStreamFn({
           providerConfig: config?.models?.providers?.[provider],
-        }),
+        });
+      },
       resolveSyntheticAuth: () => ({
         apiKey: resolveLlamaCppSyntheticApiKey(),
         source: "local llama.cpp runtime",

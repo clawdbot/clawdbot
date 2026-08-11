@@ -116,6 +116,7 @@ function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupViewProp
     canVerify: true,
     canPrepare: true,
     gatewayTooOld: false,
+    refreshWarning: null,
     actionsDisabled: false,
     manualProviderId: "openai",
     manualApiKey: "",
@@ -963,12 +964,12 @@ describe("renderModelSetup", () => {
     expect(text(container)).toContain("Expires in 10 minutes");
   });
 
-  it("copies device codes through the plain-HTTP clipboard fallback", async () => {
-    vi.stubGlobal("navigator", {});
-    let copiedText: string | undefined;
+  it.each([true, false])("reports device-code fallback success: %s", async (copied) => {
+    const writeText = vi.fn().mockRejectedValue(new DOMException("Clipboard access denied"));
+    vi.stubGlobal("navigator", copied ? {} : { clipboard: { writeText } });
     const execCommand = vi.fn().mockImplementation(() => {
-      copiedText = document.querySelector<HTMLTextAreaElement>("textarea")?.value;
-      return true;
+      expect(document.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("ABCD-EFGH");
+      return copied;
     });
     (document as unknown as { execCommand: typeof execCommand }).execCommand = execCommand;
     const container = wizardStep({
@@ -977,14 +978,14 @@ describe("renderModelSetup", () => {
       deviceCode: { code: "ABCD-EFGH" },
     });
 
-    const copy = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.trim() === "Copy",
-    );
-    expect(copy).toBeDefined();
+    const copy = container.querySelector<HTMLButtonElement>(".wizard-step__device-code button");
     copy?.click();
 
-    await vi.waitFor(() => expect(execCommand).toHaveBeenCalledWith("copy"));
-    expect(copiedText).toBe("ABCD-EFGH");
+    const feedback = copied ? "Copied!" : "Copy failed";
+    await vi.waitFor(() => expect(copy?.textContent?.trim()).toBe(feedback));
+    expect(copy?.getAttribute("aria-label")).toBe(feedback);
+    expect(execCommand).toHaveBeenCalledWith("copy");
+    expect(writeText).toHaveBeenCalledTimes(copied ? 0 : 1);
     expect(document.querySelector("textarea")).toBeNull();
   });
 
@@ -1039,7 +1040,6 @@ describe("renderModelSetup", () => {
       "prepare",
     );
     expect(text(prepareConfirm)).toContain("Continue");
-    expect(text(prepareConfirm)).toContain("No");
     expect(text(prepareConfirm)).not.toContain("Yes");
   });
 

@@ -1,7 +1,8 @@
 // Real gateway WebSocket coverage for canonical node chat subscriptions and reconnects.
 import { describe, expect, test, vi } from "vitest";
-import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
-import { approveNodePairing, requestNodePairing } from "../infra/node-pairing.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import { registerAgentRunContext } from "../infra/agent-run-registry.js";
+import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
 import { describeWithGatewayServer } from "./server.node-pairing.test-support.js";

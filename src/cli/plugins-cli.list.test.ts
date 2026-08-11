@@ -1,6 +1,10 @@
 // Plugins CLI list tests cover plugin listing output and installed-state formatting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type {
+  ConfigFileSnapshot,
+  ConfigValidationIssue,
+  OpenClawConfig,
+} from "../config/types.openclaw.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -10,12 +14,13 @@ import {
   buildPluginSnapshotReport,
   inspectPluginRegistry,
   loadConfig,
+  loadPluginManifestRegistry,
   readConfigFileSnapshot,
   resetPluginsCliTestState,
   refreshPluginRegistry,
   runPluginsCommand,
   runtimeErrors,
-  runtimeLogs,
+  pluginsCliRuntimeLogs,
   setInstalledPluginIndexInstallRecords,
 } from "./plugins-cli-test-helpers.js";
 
@@ -26,6 +31,37 @@ const workshopMocks = vi.hoisted(() => ({
 const cleanDoctorMessage =
   "Plugin discovery, module loading, compatibility, and configuration checks passed. " +
   'Run "openclaw health" to check the running Gateway, including runtime quarantines and fallbacks.';
+
+async function mockPluginDoctorValidationWarnings(warnings: ConfigValidationIssue[]) {
+  const config: OpenClawConfig = {
+    plugins: {
+      allow: ["imessage", "memory-core"],
+      entries: { google: { config: { apiKey: "test-google-key" } } },
+    },
+  };
+  loadConfig.mockReturnValue(config);
+  const snapshot = (await readConfigFileSnapshot()) as ConfigFileSnapshot;
+  readConfigFileSnapshot.mockResolvedValueOnce({ ...snapshot, valid: true, warnings });
+  loadPluginManifestRegistry.mockReturnValue({
+    plugins: ["google", "imessage", "memory-core"].map((id) => ({
+      id,
+      channels: [],
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      origin: "bundled",
+      rootDir: `/plugins/${id}`,
+      source: `/plugins/${id}`,
+      manifestPath: `/plugins/${id}/openclaw.plugin.json`,
+    })),
+    diagnostics: [],
+  });
+  buildPluginDiagnosticsReport.mockReturnValue({
+    plugins: [createPluginRecord({ id: "google", enabled: false, status: "disabled" })],
+    diagnostics: [],
+  });
+}
 
 vi.mock("../skills/workshop/tool-policy-diagnostic.js", () => ({
   detectSkillWorkshopToolPolicyDiagnostic: workshopMocks.detectToolPolicyDiagnostic,
@@ -67,7 +103,7 @@ describe("plugins cli list", () => {
     expect(reportOptions?.logger?.warn).toBeTypeOf("function");
     expect(reportOptions?.logger?.error).toBeTypeOf("function");
 
-    const output = JSON.parse(runtimeLogs[0] ?? "null") as {
+    const output = JSON.parse(pluginsCliRuntimeLogs[0] ?? "null") as {
       workspaceDir?: string;
       registry?: { source?: string; diagnostics?: unknown[] };
       plugins?: Array<{
@@ -98,7 +134,111 @@ describe("plugins cli list", () => {
     await runPluginsCommand(["plugins", "doctor"]);
 
     expect(buildPluginDiagnosticsReport).toHaveBeenCalledWith({ config: {}, effectiveOnly: true });
-    expect(runtimeLogs).toContain(cleanDoctorMessage);
+    expect(pluginsCliRuntimeLogs).toContain(cleanDoctorMessage);
+  });
+
+  it.each([
+    { format: "human", args: [] },
+    { format: "JSON", args: ["--json"] },
+  ])(
+    "reports validated disabled-plugin configuration warnings in $format output",
+    async ({ args }) => {
+      await mockPluginDoctorValidationWarnings([
+        {
+          path: "plugins.entries.google",
+          message: "plugin disabled (not in allowlist) but config is present",
+        },
+      ]);
+
+      await runPluginsCommand(["plugins", "doctor", ...args]);
+
+      const warning =
+        "- plugins.entries.google: plugin disabled (not in allowlist) but config is present";
+      if (args.includes("--json")) {
+        const output = JSON.parse(pluginsCliRuntimeLogs[0] ?? "null") as {
+          ok: boolean;
+          configurationWarnings: string[];
+        };
+        expect(output.ok).toBe(false);
+        expect(output.configurationWarnings).toEqual([warning]);
+        return;
+      }
+      expect(pluginsCliRuntimeLogs.join("\n")).toContain(warning);
+      expect(pluginsCliRuntimeLogs).not.toContain(cleanDoctorMessage);
+    },
+  );
+
+  it("deduplicates plugin validation warnings while ignoring other config owners", async () => {
+    const googleWarning = {
+      path: "plugins.entries.google",
+      message: "plugin disabled (not in allowlist) but config is present",
+    };
+    await mockPluginDoctorValidationWarnings([
+      { path: "gateway.auth", message: "owned by gateway doctor" },
+      { path: "plugins", message: "root plugin warning" },
+      googleWarning,
+      googleWarning,
+      { path: "pluginsOther.entries.google", message: "not a plugin-owned path" },
+    ]);
+
+    await runPluginsCommand(["plugins", "doctor", "--json"]);
+
+    const output = JSON.parse(pluginsCliRuntimeLogs[0] ?? "null") as {
+      ok: boolean;
+      configurationWarnings: string[];
+    };
+    expect(output.ok).toBe(false);
+    expect(output.configurationWarnings).toEqual([
+      "- plugins: root plugin warning",
+      "- plugins.entries.google: plugin disabled (not in allowlist) but config is present",
+    ]);
+  });
+
+  it.each([
+    { format: "human", args: [] },
+    { format: "JSON", args: ["--json"] },
+  ])("ignores unrelated validation warnings in $format doctor output", async ({ args }) => {
+    await mockPluginDoctorValidationWarnings([
+      { path: "gateway.auth", message: "owned by gateway doctor" },
+    ]);
+
+    await runPluginsCommand(["plugins", "doctor", ...args]);
+
+    if (args.includes("--json")) {
+      expect(JSON.parse(pluginsCliRuntimeLogs[0] ?? "null")).toMatchObject({
+        ok: true,
+        configurationWarnings: [],
+      });
+      return;
+    }
+    expect(pluginsCliRuntimeLogs).toContain(cleanDoctorMessage);
+  });
+
+  it.each([
+    { format: "human", args: [] },
+    { format: "JSON", args: ["--json"] },
+  ])("sanitizes plugin warning terminal controls in $format doctor output", async ({ args }) => {
+    await mockPluginDoctorValidationWarnings([
+      {
+        path: "plugins.\nentries.google\u001b[31m",
+        message: "bad\r\n\tvalue\u001b[0m\u0007",
+      },
+    ]);
+
+    await runPluginsCommand(["plugins", "doctor", ...args]);
+
+    const warning = "- plugins.\\nentries.google: bad\\r\\n\\tvalue";
+    if (args.includes("--json")) {
+      expect(JSON.parse(pluginsCliRuntimeLogs[0] ?? "null")).toMatchObject({
+        ok: false,
+        configurationWarnings: [warning],
+      });
+      return;
+    }
+    const output = pluginsCliRuntimeLogs.join("\n");
+    expect(output).toContain(warning);
+    expect(output).not.toContain("\u0007");
+    expect(output).not.toContain("\u001b");
   });
 
   it("emits one sanitized JSON doctor report without human decoration", async () => {
@@ -133,12 +273,12 @@ describe("plugins cli list", () => {
       await runPluginsCommand(["plugins", "doctor", "--json"]);
     });
 
-    expect(runtimeLogs).toHaveLength(1);
+    expect(pluginsCliRuntimeLogs).toHaveLength(1);
     expect(runtimeErrors).toEqual([]);
-    expect(runtimeLogs[0]).not.toContain(homeDir);
-    expect(runtimeLogs[0]).not.toContain("Plugin errors:");
-    expect(runtimeLogs[0]).not.toContain("Docs:");
-    expect(JSON.parse(runtimeLogs[0] ?? "null")).toEqual({
+    expect(pluginsCliRuntimeLogs[0]).not.toContain(homeDir);
+    expect(pluginsCliRuntimeLogs[0]).not.toContain("Plugin errors:");
+    expect(pluginsCliRuntimeLogs[0]).not.toContain("Docs:");
+    expect(JSON.parse(pluginsCliRuntimeLogs[0] ?? "null")).toEqual({
       ok: false,
       pluginErrors: [
         {
@@ -204,7 +344,7 @@ describe("plugins cli list", () => {
 
       await runPluginsCommand(["plugins", "doctor"]);
 
-      const output = runtimeLogs.join("\n");
+      const output = pluginsCliRuntimeLogs.join("\n");
       expect(output).toContain("Diagnostics:");
       expect(output).toContain(expected);
       expect(output).not.toContain(cleanDoctorMessage);
@@ -222,7 +362,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "doctor"]);
 
-    const output = runtimeLogs.join("\n");
+    const output = pluginsCliRuntimeLogs.join("\n");
     expect(output).toContain("broken: plugin manifest invalid");
     expect(output).toContain("calendar: required plugin contacts is missing");
     expect(output).not.toContain(cleanDoctorMessage);
@@ -263,7 +403,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "doctor"]);
 
-    const output = runtimeLogs.join("\n");
+    const output = pluginsCliRuntimeLogs.join("\n");
     expect(output).toContain("Plugin configuration:");
     expect(output).toContain(
       "Stale plugin references (plugins.allow/deny/entries): lossless-claw.",
@@ -315,7 +455,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "doctor"]);
 
-    const output = runtimeLogs.join("\n");
+    const output = pluginsCliRuntimeLogs.join("\n");
     expect(output).toContain("Plugin configuration:");
     expect(output).toContain('Configured runtime "codex" requires the Codex plugin');
     expect(output).toContain("openclaw doctor --fix");
@@ -340,7 +480,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "doctor"]);
 
-    const output = runtimeLogs.join("\n");
+    const output = pluginsCliRuntimeLogs.join("\n");
     expect(output).toContain("Plugin configuration:");
     expect(output).toContain('Configured runtime "acpx" requires the ACPX Runtime plugin');
     expect(output).toContain("openclaw doctor --fix");
@@ -367,7 +507,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "doctor"]);
 
-    const output = runtimeLogs.join("\n");
+    const output = pluginsCliRuntimeLogs.join("\n");
     expect(output).toContain('Configured runtime "acpx" requires the ACPX Runtime plugin');
     expect(output).toContain("Set plugins.entries.acpx.enabled=true");
     expect(output).toContain("disable ACP/acpx in acp config");
@@ -390,7 +530,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "doctor"]);
 
-    const output = runtimeLogs.join("\n");
+    const output = pluginsCliRuntimeLogs.join("\n");
     expect(output).toContain('Configured runtime "acpx" requires the ACPX Runtime plugin');
     expect(output).toContain('Enable the "acpx" plugin');
     expect(output).toContain("disable ACP/acpx in acp config");
@@ -415,7 +555,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "doctor"]);
 
-    const output = runtimeLogs.join("\n");
+    const output = pluginsCliRuntimeLogs.join("\n");
     expect(output).not.toContain('Configured runtime "codex"');
     expect(output).toContain(cleanDoctorMessage);
   });
@@ -440,7 +580,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "doctor"]);
 
-    expect(runtimeLogs).toContain(cleanDoctorMessage);
+    expect(pluginsCliRuntimeLogs).toContain(cleanDoctorMessage);
   });
 
   it("reports configured Codex runtime when the plugin record is disabled", async () => {
@@ -463,7 +603,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "doctor"]);
 
-    const output = runtimeLogs.join("\n");
+    const output = pluginsCliRuntimeLogs.join("\n");
     expect(output).toContain('Configured runtime "codex" requires the Codex plugin');
     expect(output).toContain('but "codex" is disabled');
     expect(output).toContain('Enable the "codex" plugin');
@@ -494,7 +634,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "doctor"]);
 
-    const output = runtimeLogs.join("\n");
+    const output = pluginsCliRuntimeLogs.join("\n");
     expect(output).toContain('Configured runtime "codex" requires the Codex plugin');
     expect(output).toContain('but "codex" is blocked by plugin configuration');
     expect(output).toContain('Remove "codex" from plugins.deny');
@@ -528,7 +668,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "doctor"]);
 
-    const output = runtimeLogs.join("\n");
+    const output = pluginsCliRuntimeLogs.join("\n");
     expect(output).toContain('Configured runtime "codex" requires the Codex plugin');
     expect(output).toContain('but "codex" is blocked by plugin configuration');
     expect(output).toContain("Set plugins.entries.codex.enabled=true");
@@ -561,7 +701,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "doctor"]);
 
-    const output = runtimeLogs.join("\n");
+    const output = pluginsCliRuntimeLogs.join("\n");
     expect(output).toContain("Plugin source shadowing:");
     expect(output).toContain(
       "discord: duplicate plugin id resolved by explicit config-selected plugin",
@@ -594,7 +734,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "doctor"]);
 
-    expect(runtimeLogs).toContain(cleanDoctorMessage);
+    expect(pluginsCliRuntimeLogs).toContain(cleanDoctorMessage);
   });
 
   it("reports persisted plugin registry state without refreshing", async () => {
@@ -616,10 +756,10 @@ describe("plugins cli list", () => {
 
     expect(inspectPluginRegistry).toHaveBeenCalledWith({ config: {} });
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
-    expect(runtimeLogs.join("\n")).toContain("State:");
-    expect(runtimeLogs.join("\n")).toContain("stale");
-    expect(runtimeLogs.join("\n")).toContain("Refresh reasons:");
-    expect(runtimeLogs.join("\n")).toContain("openclaw plugins registry --refresh");
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain("State:");
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain("stale");
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain("Refresh reasons:");
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain("openclaw plugins registry --refresh");
   });
 
   it("refreshes the persisted plugin registry on request", async () => {
@@ -637,7 +777,7 @@ describe("plugins cli list", () => {
       reason: "manual",
     });
     expect(inspectPluginRegistry).not.toHaveBeenCalled();
-    expect(runtimeLogs.join("\n")).toContain("Plugin registry refreshed: 1/2 enabled");
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain("Plugin registry refreshed: 1/2 enabled");
   });
 
   it("keeps inspect on the static snapshot by default", async () => {
@@ -678,7 +818,11 @@ describe("plugins cli list", () => {
       cliCommands: [],
       services: [],
       gatewayDiscoveryServices: [],
-      mcpServers: [],
+      mcpServers: [
+        { name: "local", hasStdioTransport: true },
+        { name: "remote", hasStdioTransport: false },
+        { name: "broken", hasStdioTransport: false, unsupported: true },
+      ],
       lspServers: [],
       httpRouteCount: 0,
       bundleCapabilities: [],
@@ -695,16 +839,19 @@ describe("plugins cli list", () => {
     await runPluginsCommand(["plugins", "inspect", "openclaw-mem0"]);
 
     expect(buildPluginDiagnosticsReport).not.toHaveBeenCalled();
-    expect(runtimeLogs.join("\n")).toContain("Policy");
-    expect(runtimeLogs.join("\n")).toContain("allowConversationAccess: true");
-    expect(runtimeLogs.join("\n")).toContain("ClawHub package: openclaw-mem0");
-    expect(runtimeLogs.join("\n")).toContain("Artifact kind: npm-pack");
-    expect(runtimeLogs.join("\n")).toContain("Npm integrity: sha512-clawpack");
-    expect(runtimeLogs.join("\n")).toContain(
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain("Policy");
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain("allowConversationAccess: true");
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain("ClawHub package: openclaw-mem0");
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain("Artifact kind: npm-pack");
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain("Npm integrity: sha512-clawpack");
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain(
       "ClawPack sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     );
-    expect(runtimeLogs.join("\n")).toContain("ClawPack spec: 1");
-    expect(runtimeLogs.join("\n")).toContain("ClawPack size: 4096 bytes");
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain("ClawPack spec: 1");
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain("ClawPack size: 4096 bytes");
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain("remote");
+    expect(pluginsCliRuntimeLogs.join("\n")).not.toContain("remote (unsupported transport)");
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain("broken (unsupported transport)");
   });
 
   it("runtime-inspects without repairing deps", async () => {

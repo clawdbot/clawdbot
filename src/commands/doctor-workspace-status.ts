@@ -8,6 +8,7 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
   resolvePluginVersionDriftUpdateCommand,
   type PluginVersionDriftReport,
@@ -21,6 +22,7 @@ import { listTaskFlowRecords } from "../tasks/task-flow-runtime-internal.js";
 
 type NoteWorkspaceStatusOptions = {
   pluginVersionDrift?: PluginVersionDriftReport;
+  runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
 };
 
 const WORKSPACE_STATUS_CHECK_ID = "core/doctor/workspace-status";
@@ -150,21 +152,30 @@ export function collectWorkspaceStatusHealthFindings(
   }));
   const workspaceFindings: HealthFinding[] = [];
   for (const { agentId, workspaceDir } of scopes) {
-    const prefix = agentIds.length > 1 ? `Agent "${agentId}": ` : "";
-    const pluginRegistry = buildPluginRegistrySnapshotReport({ config: cfg, workspaceDir });
-    const compatibilityWarnings = buildPluginCompatibilityWarnings({
-      config: cfg,
-      workspaceDir,
-      report: pluginRegistry,
-    });
-    for (const message of compatibilityWarnings) {
-      workspaceFindings.push(pluginCompatibilityWarningToHealthFinding(`${prefix}${message}`));
-    }
-    for (const diagnostic of pluginRegistry.diagnostics) {
-      workspaceFindings.push(
-        pluginDiagnosticToHealthFinding(diagnostic, `${prefix}${diagnostic.message}`),
-      );
-    }
+    const collectForWorkspace = () => {
+      const findings: HealthFinding[] = [];
+      const prefix = agentIds.length > 1 ? `Agent "${agentId}": ` : "";
+      const pluginRegistry = buildPluginRegistrySnapshotReport({ config: cfg, workspaceDir });
+      const compatibilityWarnings = buildPluginCompatibilityWarnings({
+        config: cfg,
+        workspaceDir,
+        report: pluginRegistry,
+      });
+      for (const message of compatibilityWarnings) {
+        findings.push(pluginCompatibilityWarningToHealthFinding(`${prefix}${message}`));
+      }
+      for (const diagnostic of pluginRegistry.diagnostics) {
+        findings.push(
+          pluginDiagnosticToHealthFinding(diagnostic, `${prefix}${diagnostic.message}`),
+        );
+      }
+      return findings;
+    };
+    workspaceFindings.push(
+      ...(options.runWithPluginMetadataSnapshot
+        ? options.runWithPluginMetadataSnapshot({ config: cfg, workspaceDir }, collectForWorkspace)
+        : collectForWorkspace()),
+    );
   }
 
   return [
@@ -210,40 +221,47 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig, options: NoteWorkspaceS
     workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
   }));
   for (const { agentId, workspaceDir } of scopes) {
-    const prefix = agentIds.length > 1 ? `Agent "${agentId}":\n` : "";
-    const pluginRegistry = buildPluginRegistrySnapshotReport({ config: cfg, workspaceDir });
-    const errored = pluginRegistry.plugins
-      .filter((plugin) => plugin.status === "error")
-      .toSorted((a, b) => a.id.localeCompare(b.id));
-    if (errored.length > 0) {
-      const lines = [
-        `${prefix}Errors: ${errored.length}`,
-        `- ${errored
-          .slice(0, 10)
-          .map((plugin) => plugin.id)
-          .join("\n- ")}${errored.length > 10 ? "\n- ..." : ""}`,
-      ];
-      note(lines.join("\n"), "Plugins");
-    }
-    const compatibilityWarnings = buildPluginCompatibilityWarnings({
-      config: cfg,
-      workspaceDir,
-      report: pluginRegistry,
-    });
-    if (compatibilityWarnings.length > 0) {
-      note(
-        `${prefix}${compatibilityWarnings.map((line) => `- ${line}`).join("\n")}`,
-        "Plugin compatibility",
-      );
-    }
-    if (pluginRegistry.diagnostics.length > 0) {
-      const lines = pluginRegistry.diagnostics.map((diag) => {
-        const level = diag.level.toUpperCase();
-        const plugin = diag.pluginId ? ` ${diag.pluginId}` : "";
-        const source = diag.source ? ` (${diag.source})` : "";
-        return `- ${level}${plugin}: ${diag.message}${source}`;
+    const noteForWorkspace = () => {
+      const prefix = agentIds.length > 1 ? `Agent "${agentId}":\n` : "";
+      const pluginRegistry = buildPluginRegistrySnapshotReport({ config: cfg, workspaceDir });
+      const errored = pluginRegistry.plugins
+        .filter((plugin) => plugin.status === "error")
+        .toSorted((a, b) => a.id.localeCompare(b.id));
+      if (errored.length > 0) {
+        const lines = [
+          `${prefix}Errors: ${errored.length}`,
+          `- ${errored
+            .slice(0, 10)
+            .map((plugin) => plugin.id)
+            .join("\n- ")}${errored.length > 10 ? "\n- ..." : ""}`,
+        ];
+        note(lines.join("\n"), "Plugins");
+      }
+      const compatibilityWarnings = buildPluginCompatibilityWarnings({
+        config: cfg,
+        workspaceDir,
+        report: pluginRegistry,
       });
-      note(`${prefix}${lines.join("\n")}`, "Plugin diagnostics");
+      if (compatibilityWarnings.length > 0) {
+        note(
+          `${prefix}${compatibilityWarnings.map((line) => `- ${line}`).join("\n")}`,
+          "Plugin compatibility",
+        );
+      }
+      if (pluginRegistry.diagnostics.length > 0) {
+        const lines = pluginRegistry.diagnostics.map((diag) => {
+          const level = diag.level.toUpperCase();
+          const plugin = diag.pluginId ? ` ${diag.pluginId}` : "";
+          const source = diag.source ? ` (${diag.source})` : "";
+          return `- ${level}${plugin}: ${diag.message}${source}`;
+        });
+        note(`${prefix}${lines.join("\n")}`, "Plugin diagnostics");
+      }
+    };
+    if (options.runWithPluginMetadataSnapshot) {
+      options.runWithPluginMetadataSnapshot({ config: cfg, workspaceDir }, noteForWorkspace);
+    } else {
+      noteForWorkspace();
     }
   }
   notePluginVersionDrift(options.pluginVersionDrift);

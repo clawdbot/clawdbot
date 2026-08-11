@@ -8,7 +8,7 @@ import {
   readShardTimings,
   resolveShardTimingKey,
   writeShardTimings,
-} from "../../scripts/lib/vitest-shard-timings.mjs";
+} from "../../scripts/lib/vitest-shard-timings.mts";
 
 const tempDirs: string[] = [];
 
@@ -18,7 +18,7 @@ afterEach(() => {
   }
 });
 
-describe("scripts/lib/vitest-shard-timings.mjs", () => {
+describe("scripts/lib/vitest-shard-timings.mts", () => {
   it("uses the config path as the timing key for whole-config runs", () => {
     expect(
       resolveShardTimingKey({

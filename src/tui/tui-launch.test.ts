@@ -164,20 +164,27 @@ describe("launchTuiCli", () => {
     expect(options.stdio).toBe("inherit");
   });
 
-  it("pins the child gateway URL and config auth source through env without adding url argv", async () => {
+  it("passes gateway connection options as TUI arguments without mutating env", async () => {
     const child = createChildProcess();
     spawnMock.mockImplementation((_cmd: string, _args: string[], _opts: SpawnOptions) => {
       queueMicrotask(() => child.emit("exit", 0, null));
       return child;
     });
 
-    await launchTuiCli(
-      { deliver: false },
-      { authSource: "config", gatewayUrl: "ws://127.0.0.1:18789" },
-    );
+    await launchTuiCli({
+      deliver: false,
+      url: "ws://127.0.0.1:18789",
+      token: "resolved-token",
+    });
 
-    const options = expectSpawned(["/repo/openclaw.mjs", "tui"]);
-    expect(options.env?.OPENCLAW_GATEWAY_URL).toBe("ws://127.0.0.1:18789");
-    expect(options.env?.OPENCLAW_TUI_SETUP_AUTH_SOURCE).toBe("config");
+    const options = expectSpawned([
+      "/repo/openclaw.mjs",
+      "tui",
+      "--url",
+      "ws://127.0.0.1:18789",
+      "--token",
+      "resolved-token",
+    ]);
+    expect(options.env).toBe(process.env);
   });
 });

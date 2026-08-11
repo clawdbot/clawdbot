@@ -48,7 +48,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry, SessionEntry } from "./types.js";
 import { mergeSessionEntry, resolveFreshSessionTotalTokens } from "./types.js";
 
 // Parent-session fork owner: decision, transcript copy, and child entry commit.
@@ -84,7 +84,7 @@ export async function forkSqliteSessionTranscriptFromParent(
   // in the source agent database while the child transcript must be owned by
   // the target agent's database. Two databases cannot share one transaction,
   // so read the parent branch first, then write the child under the target's
-  // exclusive session write lock.
+  // exclusive target-database writer queue.
   if (!params.parentEntry.sessionId) {
     return { status: "missing-parent" };
   }
@@ -218,15 +218,20 @@ export async function forkSqliteSessionEntryFromParentTarget(
         fork: fork.transcript,
         parentEntry: cloneSessionEntry(freshParent),
       });
-      const next = mergeSessionEntry(freshBase, {
+      const forkIdentityPatch: Partial<InternalSessionEntry> = {
         ...patch,
         forkSource: {
           sessionKey: parentTarget.canonicalKey,
           sessionId: freshParent.sessionId,
         },
         forkedFromParent: true,
+        lifecycleRunId: undefined,
         sessionId: fork.transcript.sessionId,
-      });
+        totalTokens: undefined,
+        totalTokensFresh: false,
+        totalTokensVersion: undefined,
+      };
+      const next = mergeSessionEntry(freshBase, forkIdentityPatch);
       previousIdentity = readSqliteSessionIdentitySnapshot(writeDatabase, sessionTarget.storeKeys);
       writeSessionEntry(writeDatabase, sessionTarget.canonicalKey, next, {
         previousEntry: freshBase,
@@ -260,7 +265,7 @@ export async function forkSqliteSessionEntryFromParentTarget(
       };
     }, toDatabaseOptions(resolved));
     emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
-    finalizeSqliteSessionEntryMaintenancePlansBestEffort(resolved, maintenancePlans);
+    await finalizeSqliteSessionEntryMaintenancePlansBestEffort(resolved, maintenancePlans);
     return result;
   });
 }
@@ -311,7 +316,7 @@ async function persistSqliteParentForkSkipPatch(params: {
     currentIdentity = readSqliteSessionIdentitySnapshot(database, params.sessionTarget.storeKeys);
   }, toDatabaseOptions(params.resolved));
   emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
-  finalizeSqliteSessionEntryMaintenancePlansBestEffort(params.resolved, maintenancePlans);
+  await finalizeSqliteSessionEntryMaintenancePlansBestEffort(params.resolved, maintenancePlans);
   return cloneSessionEntry(next);
 }
 

@@ -1,5 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
+import type {
+  ChannelOutboundTargetMode,
+  ChannelPlugin,
+} from "../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -63,7 +66,7 @@ export async function prepareCurrentRunDelivery(params: {
   if (opts.deliver !== true) {
     return undefined;
   }
-  const buildPlan = async (requestedChannel: string | undefined) =>
+  const buildPlan = async (requestedChannel: string | undefined, preparedPlugin?: ChannelPlugin) =>
     await resolveAgentDeliveryPlanWithSessionRoute({
       cfg,
       agentId: params.agentId,
@@ -78,6 +81,7 @@ export async function prepareCurrentRunDelivery(params: {
       turnSourceTo: opts.runContext?.currentChannelId ?? opts.to,
       turnSourceAccountId: opts.runContext?.accountId ?? opts.accountId,
       turnSourceThreadId: opts.runContext?.currentThreadTs ?? opts.threadId,
+      preparedPlugin,
     });
   let deliveryPlan = await buildPlan(opts.replyChannel ?? opts.channel);
   const explicitChannelHint = normalizeOptionalString(opts.replyChannel ?? opts.channel);
@@ -85,7 +89,7 @@ export async function prepareCurrentRunDelivery(params: {
     opts.threadId != null && opts.threadId !== "" ? opts.threadId : undefined;
   if (deliveryPlan.resolvedChannel === INTERNAL_MESSAGE_CHANNEL && !explicitChannelHint) {
     const selection = await resolveMessageChannelSelection({ cfg });
-    deliveryPlan = await buildPlan(selection.channel);
+    deliveryPlan = await buildPlan(selection.channel, selection.plugin);
   }
   if (deliveryPlan.targetResolutionError) {
     throw deliveryPlan.targetResolutionError;

@@ -1,8 +1,5 @@
 import fsp from "node:fs/promises";
-import type {
-  AgentHarnessAttemptParams,
-  SandboxContext,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   buildAgentHookContextChannelFields,
   isHostScopedAgentToolActive,
@@ -10,17 +7,26 @@ import {
   resolveSessionAgentIds,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readResolvedAttemptPath, readString, resolveModelRef } from "./attempt-config.js";
-import type { AttemptParamsLike, CopilotAttemptDeps } from "./attempt-types.js";
+import type {
+  AttemptParamsLike,
+  CopilotAttemptDeps,
+  CopilotAttemptParams,
+} from "./attempt-types.js";
+import { assertCopilotAttemptHostCapabilities } from "./attempt-types.js";
 import { createCopilotToolBridge } from "./tool-bridge.js";
 export function prepareCopilotAttemptContext(
-  params: AgentHarnessAttemptParams,
+  params: CopilotAttemptParams,
   deps: CopilotAttemptDeps,
 ) {
   const settledToolFinalization = deps.operation === "settled-tool-finalization";
+  if (!settledToolFinalization) {
+    assertCopilotAttemptHostCapabilities(params);
+  }
+  const { hostCapabilities: _hostCapabilities, ...capabilityFreeParams } = params;
   const input = (
     settledToolFinalization
       ? {
-          ...params,
+          ...capabilityFreeParams,
           disableTools: true,
           images: [],
           imageOrder: [],
@@ -108,11 +114,14 @@ export async function resolveCopilotAttemptSandbox(params: {
   sandboxSessionKey: string | undefined;
 }): Promise<{ sandbox: SandboxContext | null; effectiveWorkspaceDir: string }> {
   const resolveSandbox = params.deps.resolveSandboxContextOverride ?? defaultResolveSandboxContext;
-  const sandbox = await resolveSandbox({
-    config: params.input.config,
-    sessionKey: params.sandboxSessionKey,
-    workspaceDir: params.resolvedWorkspaceForSandbox,
-  });
+  const sandbox =
+    params.input.sandbox !== undefined
+      ? params.input.sandbox
+      : await resolveSandbox({
+          config: params.input.config,
+          sessionKey: params.sandboxSessionKey,
+          workspaceDir: params.resolvedWorkspaceForSandbox,
+        });
   const effectiveWorkspaceDir = sandbox?.enabled
     ? sandbox.workspaceAccess === "rw"
       ? params.resolvedWorkspaceForSandbox

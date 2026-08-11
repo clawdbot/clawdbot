@@ -22,10 +22,17 @@ type HookRunnerGlobalState = {
 const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
 
 export function getHookRunnerGlobalState(): HookRunnerGlobalState {
-  return resolveGlobalSingleton<HookRunnerGlobalState>(hookRunnerGlobalStateKey, () => ({
-    hookRunner: null,
-    registry: null,
-  }));
+  return resolveGlobalSingleton<HookRunnerGlobalState>(
+    hookRunnerGlobalStateKey,
+    () => ({
+      hookRunner: null,
+      registry: null,
+    }),
+    (state) => {
+      state.registry = null;
+    },
+    "plugin-registry",
+  );
 }
 
 function resolveRootHookRegistry(

@@ -45,7 +45,8 @@ export async function persistPendingFinalDeliveryMarker(
     params.payloads.length === 0 ||
     isSubagentSessionKey(params.sessionKey) ||
     !recoverableText ||
-    !hasSendableFinalPayload
+    !hasSendableFinalPayload ||
+    !params.deliveryContext
   ) {
     return {
       sessionEntry: params.sessionEntry,
@@ -75,7 +76,7 @@ export async function persistPendingFinalDeliveryMarker(
         kind: "replayable",
         text: recoverableText,
         createdAt: now,
-        ...(params.deliveryContext ? { context: params.deliveryContext } : {}),
+        context: params.deliveryContext,
       },
       updatedAt: now,
     },

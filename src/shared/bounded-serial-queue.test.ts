@@ -126,6 +126,22 @@ describe("BoundedSerialQueue", () => {
     }
   });
 
+  it("can require every task in the accepted prefix to succeed", async () => {
+    const failure = new Error("persistence failed");
+    const queue = new BoundedSerialQueue({ maxPendingCount: 1, maxPendingWeight: 1 });
+    const task = queue.enqueue(async () => {
+      throw failure;
+    });
+    const ordinaryFlush = queue.flush();
+    const strictFlush = queue.flush({ requireSuccess: true });
+
+    await expect(ordinaryFlush).resolves.toBeUndefined();
+    await expect(strictFlush).rejects.toBe(failure);
+    if (task.accepted) {
+      await expect(task.completion).rejects.toBe(failure);
+    }
+  });
+
   it("seals idempotently while preserving accepted work", async () => {
     const first = deferred();
     const queue = new BoundedSerialQueue({ maxPendingCount: 1, maxPendingWeight: 1 });

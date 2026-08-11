@@ -1,9 +1,20 @@
 // Shared fixtures for LINE auto-reply delivery tests.
-import { vi } from "vitest";
+import type { messagingApi } from "@line/bot-sdk";
+import { vi, type Mock } from "vitest";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineSendReceipt } from "./send-receipt.js";
 
 export type LineAutoReplyDeps = Parameters<typeof deliverLineAutoReply>[0]["deps"];
+
+type LineAutoReplyTestDeps = {
+  deps: LineAutoReplyDeps;
+  replyMessageLine: Mock<LineAutoReplyDeps["replyMessageLine"]>;
+  createQuickReplyItems: Mock<(labels: string[]) => { items: string[] }>;
+  buildMediaMessage: (
+    ...args: Parameters<LineAutoReplyDeps["buildMediaMessage"]>
+  ) => Promise<messagingApi.Message>;
+  pushMessagesLine: Mock<LineAutoReplyDeps["pushMessagesLine"]>;
+};
 
 export const LINE_TEST_CFG = { channels: { line: { accounts: { acc: {} } } } };
 
@@ -28,17 +39,15 @@ export const createImageMessage = (url: string) => ({
   previewImageUrl: url,
 });
 
-const createLocationMessage = (location: {
-  title: string;
-  address: string;
-  latitude: number;
-  longitude: number;
-}) => ({
-  type: "location" as const,
-  ...location,
-});
+const createLocationMessage: LineAutoReplyDeps["createLocationMessage"] = (location) =>
+  location.title.trim() && location.address.trim()
+    ? {
+        type: "location" as const,
+        ...location,
+      }
+    : null;
 
-export function createDeps(overrides?: Partial<LineAutoReplyDeps>) {
+export function createDeps(overrides?: Partial<LineAutoReplyDeps>): LineAutoReplyTestDeps {
   const replyMessageLine = vi.fn<LineAutoReplyDeps["replyMessageLine"]>(async () => ({}));
   const createQuickReplyItems = vi.fn((labels: string[]) => ({ items: labels }));
   const buildMediaMessage: LineAutoReplyDeps["buildMediaMessage"] = vi.fn(

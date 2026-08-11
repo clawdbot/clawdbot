@@ -143,4 +143,20 @@ describe("scripts/github/resolve-openclaw-ref.sh", () => {
     expect(result.stderr).toContain("Ref resolved ambiguously as both branch and tag: ambiguous");
     expect(result.stdout).toBe("");
   });
+
+  it("rejects a branch whose resolved SHA differs from expected_sha before emitting outputs", () => {
+    const expectedSha = "b".repeat(40);
+    const result = runResolver(remoteRepo, [
+      "--ref",
+      "release/test",
+      "--expected-sha",
+      expectedSha,
+    ]);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
+      `Ref release/test resolved to ${remoteSha}, expected ${expectedSha}.\n`,
+    );
+  });
 });

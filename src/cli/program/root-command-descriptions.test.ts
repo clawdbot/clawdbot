@@ -2,12 +2,26 @@
 // registered Commander commands. Keep those user-facing descriptions aligned.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cliCommandCatalog } from "../command-catalog.js";
+import { isReservedNonPluginCommandRoot } from "../command-registration-policy.js";
 import { collectShellCompletionCommandTree } from "../completion-command-tree.js";
 import { getCoreCliCommandNames, registerCoreCliByName } from "./command-registry-core.js";
 import { createProgramContext } from "./context.js";
 import { getCoreCliCommandDescriptors } from "./core-command-descriptors.js";
-import { registerSubCliByName } from "./register.subclis.js";
+import { registerSubCliByName, registerSubCliCommands } from "./register.subclis.js";
 import { getSubCliEntries } from "./subcli-descriptors.js";
+
+const RESERVED_CATALOG_ROOTS = {
+  tool: "reserved so plugin registration cannot claim this unregistered root",
+  tools: "reserved so plugin registration cannot claim this unregistered root",
+} as const;
+
+const PLUGIN_CATALOG_PATHS = {
+  "browser extension native-host": "registered and covered by the browser plugin",
+  memory: "registered and covered by the memory-core plugin",
+  "memory search": "registered and covered by the memory-core plugin",
+  "memory status": "registered and covered by the memory-core plugin",
+} as const;
 
 const JSON_NOT_APPLICABLE = {
   namespaces: {
@@ -15,6 +29,8 @@ const JSON_NOT_APPLICABLE = {
     commands: [
       "backup",
       "backup sqlite",
+      "database",
+      "database ownership",
       "message",
       "message thread",
       "message emoji",
@@ -70,6 +86,7 @@ const JSON_NOT_APPLICABLE = {
       "directory groups",
       "security",
       "secrets",
+      "secrets store",
       "models aliases",
       "models fallbacks",
       "models image-fallbacks",
@@ -85,6 +102,7 @@ const JSON_NOT_APPLICABLE = {
       "configure",
       "config",
       "acp client",
+      "gateway auth-token",
       "promos claim",
       "infer model auth login",
       "models auth add",
@@ -97,6 +115,7 @@ const JSON_NOT_APPLICABLE = {
       "mcp login",
       "attach",
       "tui",
+      "resume",
       "update wizard",
     ],
   },
@@ -134,6 +153,8 @@ const JSON_NOT_APPLICABLE = {
       "onboard recommendations refresh",
       "tasks notify",
       "tasks cancel",
+      "tasks retry",
+      "tasks dismiss",
       "tasks flow cancel",
       "models set",
       "models set-image",
@@ -178,6 +199,9 @@ const JSON_NOT_APPLICABLE = {
       "channels remove",
       "channels login",
       "channels logout",
+      "secrets store set",
+      "secrets store rm",
+      "secrets store import",
     ],
   },
   rawArtifacts: {
@@ -241,6 +265,16 @@ function supportsJsonOutput(path: string, command: Command): boolean {
   );
 }
 
+function collectRegisteredCommandPaths(...programs: Command[]): Set<string> {
+  return new Set(
+    programs.flatMap((program) =>
+      collectShellCompletionCommandTree(program).descendants.flatMap((context) =>
+        context.pathVariants.map((path) => path.join(" ")),
+      ),
+    ),
+  );
+}
+
 describe("root command descriptions", () => {
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_ENABLE_PRIVATE_QA_CLI", "");
@@ -282,6 +316,57 @@ describe("root command descriptions", () => {
 
     expect(missing, "catalog entries with no registered command or alias").toEqual([]);
     expect(mismatches, "root help vs registered command description drift").toEqual([]);
+  });
+
+  it("keeps startup policy catalog paths registered or explicitly reserved", async () => {
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
+    const program = await registerAllBuiltInCommands();
+
+    // Private QA is a lazy source-checkout command. Its root placeholder proves
+    // registration without importing the private build omitted from normal dist.
+    vi.stubEnv("OPENCLAW_ENABLE_PRIVATE_QA_CLI", "1");
+    const lazyProgram = new Command().name("openclaw");
+    registerSubCliCommands(lazyProgram, ["node", "openclaw", "--help"]);
+
+    const registeredPaths = collectRegisteredCommandPaths(program, lazyProgram);
+    const catalogPaths = new Set(cliCommandCatalog.map((entry) => entry.commandPath.join(" ")));
+    const reservedPaths = new Set(Object.keys(RESERVED_CATALOG_ROOTS));
+    const pluginPaths = new Set(Object.keys(PLUGIN_CATALOG_PATHS));
+
+    expect(
+      Object.entries({ ...RESERVED_CATALOG_ROOTS, ...PLUGIN_CATALOG_PATHS }).filter(
+        ([, reason]) => reason.trim().length === 0,
+      ),
+      "every catalog exception must document why core has no command",
+    ).toEqual([]);
+
+    const missing = [...catalogPaths].filter(
+      (path) => !registeredPaths.has(path) && !reservedPaths.has(path) && !pluginPaths.has(path),
+    );
+    expect(missing, "catalog entries with no registered command or reserved-root decision").toEqual(
+      [],
+    );
+
+    const staleReservedRoots = [...reservedPaths].filter(
+      (path) => !catalogPaths.has(path) || !isReservedNonPluginCommandRoot(path),
+    );
+    expect(
+      staleReservedRoots,
+      "reserved catalog roots must remain cataloged and blocked from plugin registration",
+    ).toEqual([]);
+
+    const stalePluginPaths = [...pluginPaths].filter(
+      (path) => !catalogPaths.has(path) || registeredPaths.has(path),
+    );
+    expect(stalePluginPaths, "plugin catalog paths must remain plugin-owned").toEqual([]);
+
+    const reservedRootsThatNowRegister = [...reservedPaths].filter((path) =>
+      registeredPaths.has(path),
+    );
+    expect(
+      reservedRootsThatNowRegister,
+      "registered commands must leave the reserved-root exception list",
+    ).toEqual([]);
   });
 
   it("classifies every built-in command as JSON output or explicitly not applicable", async () => {

@@ -5,13 +5,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QaSuiteInfraError } from "./errors.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import type { QaSuiteScenarioResult } from "./suite.js";
+import { throwQaSuiteCleanupErrors } from "./suite.js";
 import type {
   QaTestFileScenario,
   QaTestFileScenarioRunResult,
 } from "./test-file-scenario-runner.js";
 
-const { crablineRuntimeLoads, runQaFlowSuite, runQaTestFileScenarios } = vi.hoisted(() => ({
+const {
+  crablineRuntimeLoads,
+  prepareDockerE2eEnvironment,
+  runQaFlowSuite,
+  runQaTestFileScenarios,
+} = vi.hoisted(() => ({
   crablineRuntimeLoads: vi.fn(),
+  prepareDockerE2eEnvironment: vi.fn(),
   runQaFlowSuite: vi.fn(),
   runQaTestFileScenarios: vi.fn(),
 }));
@@ -31,7 +38,12 @@ vi.mock("./test-file-scenario-runner.js", async (importOriginal) => ({
   runQaTestFileScenarios,
 }));
 
-import { runQaSuite } from "./suite-launch.runtime.js";
+vi.mock("./test-file-scenario-docker-batch.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./test-file-scenario-docker-batch.js")>()),
+  prepareDockerE2eEnvironment,
+}));
+
+import { runQaSuite, runQaSuiteWithInfraRetry } from "./suite-launch.runtime.js";
 
 const tempRoots: string[] = [];
 
@@ -54,6 +66,14 @@ async function writeEvidence(pathLocal: string, writeFile = true) {
     await fs.writeFile(pathLocal, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
   }
   return evidence;
+}
+
+function createDeferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 function trackMaxActiveFlowRuns() {
@@ -104,6 +124,8 @@ describe("qa suite runtime launcher", () => {
   beforeEach(() => {
     runQaFlowSuite.mockReset();
     runQaTestFileScenarios.mockReset();
+    prepareDockerE2eEnvironment.mockReset();
+    prepareDockerE2eEnvironment.mockResolvedValue(undefined);
     runQaFlowSuite.mockImplementation(
       async (
         params:
@@ -126,6 +148,7 @@ describe("qa suite runtime launcher", () => {
             status: "pass",
             steps: [],
           })),
+          startedScenarioIds: scenarioIds,
           watchUrl: "http://127.0.0.1:43124",
         };
       },
@@ -246,6 +269,34 @@ describe("qa suite runtime launcher", () => {
       expect(stderrWrite.mock.calls.flat().join("")).toContain(
         "[qa-suite] infra retry 1/1: agent.wait failed",
       );
+    } finally {
+      stderrWrite.mockRestore();
+    }
+  });
+
+  it("retries a cleanup-only ECONNRESET through its preserved cause", async () => {
+    const cleanupError = Object.assign(new Error("cleanup socket reset"), {
+      code: "ECONNRESET",
+    });
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    let attempts = 0;
+
+    try {
+      const result = await runQaSuiteWithInfraRetry(async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throwQaSuiteCleanupErrors({
+            cleanupFailures: [{ phase: "lab stop", error: cleanupError }],
+            runFailed: false,
+            runError: undefined,
+          });
+        }
+        return "retried";
+      }, 1);
+
+      expect(result).toBe("retried");
+      expect(attempts).toBe(2);
+      expect(stderrWrite.mock.calls.flat().join("")).toContain("[qa-suite] infra retry 1/1:");
     } finally {
       stderrWrite.mockRestore();
     }
@@ -410,6 +461,15 @@ describe("qa suite runtime launcher", () => {
     expect(
       result.result.scenarios.find((scenario) => scenario.name === "thread-isolation [matrix]"),
     ).toMatchObject({ status: "fail" });
+    expect(result.observedCells).toEqual(
+      expect.arrayContaining([
+        { scenarioId: "channel-chat-baseline", executionKind: "flow", channel: null },
+        { scenarioId: "telegram-help-command", executionKind: "flow", channel: "telegram" },
+        { scenarioId: "matrix-restart-resume", executionKind: "flow", channel: "matrix" },
+        { scenarioId: "thread-isolation", executionKind: "flow", channel: "slack" },
+        { scenarioId: "thread-isolation", executionKind: "flow", channel: "matrix" },
+      ]),
+    );
   });
 
   it("uses one eligible channel outside profile execution", async () => {
@@ -660,6 +720,7 @@ describe("qa suite runtime launcher", () => {
     expect(evidence.entries).toMatchObject([
       { test: { id: "whatsapp-status-command" }, result: { status: "fail" } },
     ]);
+    expect(result.observedCells).toEqual([]);
     await expect(fs.access(result.result.reportPath)).resolves.toBeUndefined();
   });
 
@@ -1926,6 +1987,291 @@ describe("qa suite runtime launcher", () => {
     );
   });
 
+  it("settles flow and native work, then runs serial scripts before a bounded parallel tail", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-parallel-scripts-");
+    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
+    const defaultTestFileImplementation = runQaTestFileScenarios.getMockImplementation();
+    if (!defaultFlowImplementation || !defaultTestFileImplementation) {
+      throw new Error("expected default QA suite mock implementations");
+    }
+    const flow = createDeferred();
+    const native = createDeferred();
+    const serial = createDeferred();
+    const parallel = createDeferred();
+    const started: string[] = [];
+    const preparedEnv = Object.freeze({ OPENCLAW_CURRENT_PACKAGE_TGZ: "/tmp/candidate.tgz" });
+    const scriptEnvs: unknown[] = [];
+    const parallelScriptIds: string[] = [];
+    let activeParallelScripts = 0;
+    let maxActiveParallelScripts = 0;
+    runQaFlowSuite.mockImplementationOnce(async (params) => {
+      started.push("flow");
+      await flow.promise;
+      return await defaultFlowImplementation(params);
+    });
+    prepareDockerE2eEnvironment.mockImplementationOnce(async () => {
+      started.push("prep");
+      return preparedEnv;
+    });
+    runQaTestFileScenarios.mockImplementation(async (params) => {
+      const scenarioIds = params.scenarios.map((scenario: QaTestFileScenario) => scenario.id);
+      const kind = params.scenarios[0]?.execution.kind;
+      if (kind === "playwright") {
+        started.push("native");
+        await native.promise;
+      } else if (scenarioIds.includes("docker-npm-onboard-channel-agent")) {
+        scriptEnvs.push(params.env);
+        started.push("serial");
+        await serial.promise;
+      } else {
+        scriptEnvs.push(params.env);
+        parallelScriptIds.push(...scenarioIds);
+        activeParallelScripts += 1;
+        maxActiveParallelScripts = Math.max(maxActiveParallelScripts, activeParallelScripts);
+        try {
+          await parallel.promise;
+        } finally {
+          activeParallelScripts -= 1;
+        }
+      }
+      return await defaultTestFileImplementation(params);
+    });
+
+    const runPromise = runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/parallel-scripts",
+      concurrency: 8,
+      scenarioIds: [
+        "dm-chat-baseline",
+        "control-ui-chat-flow-playwright",
+        "docker-npm-onboard-channel-agent",
+        "remote-log-tailing",
+        "gateway-smoke",
+        "logging-file-boundary",
+        "diagnostic-events-boundary",
+      ],
+    });
+    await vi.waitFor(() => expect(started).toEqual(["flow", "native"]));
+
+    flow.resolve();
+    await Promise.resolve();
+    expect(started).toEqual(["flow", "native"]);
+
+    native.resolve();
+    await vi.waitFor(() => expect(started).toContain("serial"));
+    expect(started.slice(0, 4)).toEqual(["flow", "native", "prep", "serial"]);
+    expect(parallelScriptIds).toEqual([]);
+
+    serial.resolve();
+    await vi.waitFor(() => expect(parallelScriptIds).toHaveLength(3));
+    expect(maxActiveParallelScripts).toBe(3);
+    expect(parallelScriptIds).not.toContain("diagnostic-events-boundary");
+
+    parallel.resolve();
+    await runPromise;
+    expect(prepareDockerE2eEnvironment).toHaveBeenCalledTimes(1);
+    expect(scriptEnvs.every((env) => env === preparedEnv)).toBe(true);
+    expect(parallelScriptIds.slice(0, 3)).toEqual(
+      expect.arrayContaining(["remote-log-tailing", "gateway-smoke", "logging-file-boundary"]),
+    );
+    expect(parallelScriptIds[3]).toBe("diagnostic-events-boundary");
+    expect(maxActiveParallelScripts).toBe(3);
+  });
+
+  it("records Docker preparation failure without starting a script partition", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-docker-prep-failure-");
+    prepareDockerE2eEnvironment.mockRejectedValueOnce(new Error("candidate pack failed"));
+    const result = await runQaSuite({
+      repoRoot,
+      scenarioIds: ["docker-npm-onboard-channel-agent", "gateway-smoke"],
+    });
+
+    expect(runQaTestFileScenarios).not.toHaveBeenCalled();
+    expect(result.result.scenarios).toHaveLength(2);
+    expect(result.result.scenarios).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "fail",
+          details: expect.stringContaining("candidate pack failed"),
+        }),
+      ]),
+    );
+  });
+
+  it("reuses the prepared Docker env object when a script partition retries", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-docker-prep-retry-");
+    const preparedEnv = Object.freeze({ OPENCLAW_CURRENT_PACKAGE_TGZ: "/tmp/candidate.tgz" });
+    const defaultImplementation = runQaTestFileScenarios.getMockImplementation();
+    if (!defaultImplementation) {
+      throw new Error("expected default QA test-file mock implementation");
+    }
+    prepareDockerE2eEnvironment.mockResolvedValueOnce(preparedEnv);
+    runQaTestFileScenarios
+      .mockRejectedValueOnce(new QaSuiteInfraError("transport_ready_timeout", "retry"))
+      .mockImplementationOnce(defaultImplementation);
+
+    await runQaSuite({ repoRoot, scenarioIds: ["docker-npm-onboard-channel-agent"] });
+
+    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(2);
+    expect(runQaTestFileScenarios.mock.calls.map(([params]) => params.env)).toEqual([
+      preparedEnv,
+      preparedEnv,
+    ]);
+  });
+
+  it("skips Docker preparation after a fail-fast concurrent failure", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-docker-prep-fail-fast-");
+    runQaFlowSuite.mockRejectedValueOnce(new Error("flow failed"));
+    await runQaSuite({
+      repoRoot,
+      failFast: true,
+      scenarioIds: ["channel-chat-baseline", "docker-npm-onboard-channel-agent"],
+    });
+
+    expect(prepareDockerE2eEnvironment).not.toHaveBeenCalled();
+    expect(runQaTestFileScenarios).not.toHaveBeenCalled();
+  });
+
+  it("does not prepare a Docker candidate for ordinary scripts", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-no-docker-prep-");
+    await runQaSuite({ repoRoot, scenarioIds: ["gateway-smoke"] });
+
+    expect(prepareDockerE2eEnvironment).not.toHaveBeenCalled();
+    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps selected evidence order and successful siblings when a parallel script rejects", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-parallel-script-rejection-");
+    const defaultTestFileImplementation = runQaTestFileScenarios.getMockImplementation();
+    if (!defaultTestFileImplementation) {
+      throw new Error("expected default QA test-file mock implementation");
+    }
+    const first = createDeferred();
+    runQaTestFileScenarios.mockImplementation(async (params) => {
+      const scenario = params.scenarios[0] as QaTestFileScenario | undefined;
+      if (!scenario) {
+        throw new Error("expected one script scenario");
+      }
+      if (scenario.id === "gateway-smoke") {
+        throw new Error("audited producer rejected");
+      }
+      if (scenario.id === "remote-log-tailing") {
+        await first.promise;
+      }
+      const result = await defaultTestFileImplementation(params);
+      return {
+        ...result,
+        evidence: {
+          ...result.evidence,
+          entries: [
+            {
+              test: { kind: "qa-scenario", id: scenario.id, title: scenario.title },
+              coverage: [],
+              result: { status: "pass" as const },
+            },
+          ],
+        },
+      };
+    });
+
+    const runPromise = runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/parallel-script-rejection",
+      concurrency: 3,
+      scenarioIds: ["remote-log-tailing", "gateway-smoke", "logging-file-boundary"],
+    });
+    await vi.waitFor(() => expect(runQaTestFileScenarios).toHaveBeenCalledTimes(3));
+    first.resolve();
+    const result = await runPromise;
+
+    expect(result.executionKind).toBe("suite");
+    if (result.executionKind !== "suite") {
+      throw new Error("expected unified suite result");
+    }
+    const evidence = JSON.parse(await fs.readFile(result.result.evidencePath, "utf8")) as {
+      entries: Array<{
+        result: { failure?: { reason?: string }; status: string };
+        test: { id: string };
+      }>;
+    };
+    expect(evidence.entries.map((entry) => entry.test.id)).toEqual([
+      "remote-log-tailing",
+      "gateway-smoke",
+      "logging-file-boundary",
+    ]);
+    expect(evidence.entries[1]).toMatchObject({
+      result: {
+        failure: { reason: "suite partition failed: audited producer rejected" },
+        status: "fail",
+      },
+    });
+  });
+
+  it("serializes every fail-fast script and stops before post-failure work", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-fail-fast-scripts-");
+    const defaultTestFileImplementation = runQaTestFileScenarios.getMockImplementation();
+    if (!defaultTestFileImplementation) {
+      throw new Error("expected default QA test-file mock implementation");
+    }
+    const first = createDeferred();
+    const preparedEnv = Object.freeze({ OPENCLAW_CURRENT_PACKAGE_TGZ: "/tmp/candidate.tgz" });
+    const started: string[] = [];
+    let active = 0;
+    let maxActive = 0;
+    prepareDockerE2eEnvironment.mockResolvedValueOnce(preparedEnv);
+    runQaTestFileScenarios.mockImplementation(async (params) => {
+      const scenario = params.scenarios[0] as QaTestFileScenario | undefined;
+      if (!scenario) {
+        throw new Error("expected one script scenario");
+      }
+      started.push(scenario.id);
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      try {
+        if (scenario.id === "remote-log-tailing") {
+          await first.promise;
+        }
+        const result = await defaultTestFileImplementation(params);
+        if (scenario.id !== "docker-npm-onboard-channel-agent") {
+          return result;
+        }
+        return {
+          ...result,
+          results: result.results.map((scenarioResult: QaTestFileScenarioRunResult) =>
+            Object.assign({}, scenarioResult, {
+              status: "fail" as const,
+              failureMessage: "serial owner failed",
+            }),
+          ),
+        };
+      } finally {
+        active -= 1;
+      }
+    });
+
+    const runPromise = runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/fail-fast-scripts",
+      concurrency: 8,
+      failFast: true,
+      scenarioIds: ["remote-log-tailing", "docker-npm-onboard-channel-agent", "gateway-smoke"],
+    });
+    await vi.waitFor(() => expect(started).toEqual(["remote-log-tailing"]));
+    expect(maxActive).toBe(1);
+
+    first.resolve();
+    await runPromise;
+    expect(started).toEqual(["remote-log-tailing", "docker-npm-onboard-channel-agent"]);
+    expect(maxActive).toBe(1);
+    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(2);
+    expect(runQaTestFileScenarios.mock.calls.every(([params]) => params.env === preparedEnv)).toBe(
+      true,
+    );
+    expect(runQaTestFileScenarios).toHaveBeenLastCalledWith(
+      expect.objectContaining({ failFast: true }),
+    );
+  });
+
   it("keeps multiple isolated flow scenarios in separate serial partitions", async () => {
     const repoRoot = await makeTempRepo("qa-suite-serial-isolated-");
     await runQaSuite({
@@ -2223,7 +2569,7 @@ describe("qa suite runtime launcher", () => {
     ]);
     const evidence = JSON.parse(await fs.readFile(result.result.evidencePath, "utf8")) as {
       entries?: Array<{
-        execution?: { channel?: { id?: string } };
+        execution?: { channel?: { driver?: string; id?: string; live?: boolean } };
         result?: { status?: string };
         test?: { id?: string };
       }>;
@@ -2231,10 +2577,21 @@ describe("qa suite runtime launcher", () => {
     for (const scenarioId of ["whatsapp-status-command", "whatsapp-access-control-dm-open"]) {
       const blocked = evidence.entries?.find((entry) => entry.test?.id === scenarioId);
       expect(blocked).toMatchObject({
-        execution: { channel: { id: "whatsapp", driver: "live", live: true } },
+        execution: { channel: { id: "whatsapp", live: false } },
         result: { status: "blocked" },
       });
+      expect(blocked?.execution?.channel?.driver).toBeUndefined();
     }
+    expect(result.observedCells).not.toEqual(
+      expect.arrayContaining([
+        { scenarioId: "whatsapp-status-command", executionKind: "flow", channel: "whatsapp" },
+        {
+          scenarioId: "whatsapp-access-control-dm-open",
+          executionKind: "flow",
+          channel: "whatsapp",
+        },
+      ]),
+    );
   });
 
   it("omits later credential failures after the first failed flow scenario", async () => {

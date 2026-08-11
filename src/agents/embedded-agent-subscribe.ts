@@ -58,7 +58,11 @@ import {
   filterToolResultMediaUrls,
 } from "./embedded-agent-subscribe.tools.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
-import { stripDowngradedToolCallText, THINKING_TAG_SCAN_RE } from "./embedded-agent-utils.js";
+import {
+  createThinkingTagStreamState,
+  stripDowngradedToolCallText,
+  THINKING_TAG_SCAN_RE,
+} from "./embedded-agent-utils.js";
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
 import { hasGeneratedMediaCompletionEvent } from "./internal-event-contract.js";
 import type { AgentInternalEvent } from "./internal-events.js";
@@ -203,6 +207,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     acceptedSessionSpawns: [],
     toolMetaById: new Map(),
     toolSummaryById: new Set(),
+    liveEditDiffStateById: new Map(),
     itemActiveIds: new Set(),
     itemStartedCount: 0,
     itemCompletedCount: 0,
@@ -219,6 +224,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       canShowReasoning &&
       typeof params.onReasoningStream === "function",
     deltaBuffer: "",
+    thinkingTagStream: createThinkingTagStreamState(),
     blockBuffer: "",
     // Track if a streamed chunk opened a <think> block (stateful across chunks).
     blockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },
@@ -303,6 +309,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const pendingMessagingTexts = state.pendingMessagingTexts;
   const pendingMessagingTargets = state.pendingMessagingTargets;
   const pendingBlockReplyTasks = new Set<Promise<void>>();
+  const pendingPartialReplyTasks = new Set<Promise<void>>();
   const replyDirectiveAccumulator = createStreamingDirectiveAccumulator();
   const partialReplyDirectiveAccumulator = createStreamingDirectiveAccumulator();
   const shouldAllowSilentTurnText = (text: string | undefined) =>
@@ -328,11 +335,22 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       });
     }
     if (delivery.emitPartialReply && params.onPartialReply && state.shouldEmitPartialReplies) {
-      runBestEffortCallback({
-        label: "assistant partial reply",
-        log,
-        callback: () => params.onPartialReply?.(data),
-      });
+      try {
+        const maybeTask = params.onPartialReply(data);
+        if (isPromiseLike(maybeTask)) {
+          const task = Promise.resolve(maybeTask)
+            .then(() => undefined)
+            .catch((error: unknown) => {
+              log.warn(`assistant partial reply callback failed: ${String(error)}`);
+            });
+          pendingPartialReplyTasks.add(task);
+          void task.finally(() => {
+            pendingPartialReplyTasks.delete(task);
+          });
+        }
+      } catch (error) {
+        log.warn(`assistant partial reply callback failed: ${String(error)}`);
+      }
     }
   };
   const emitAssistantStreamData = (
@@ -451,6 +469,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
     state.deltaBuffer = "";
+    state.thinkingTagStream = createThinkingTagStreamState();
     state.blockBuffer = "";
     blockChunker?.reset();
     replyDirectiveAccumulator.reset();
@@ -833,8 +852,13 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         }),
     });
   };
-  const emitToolSummary = (toolName?: string, meta?: string) => {
-    const agg = formatToolAggregate(toolName, meta ? [meta] : undefined, {
+  const emitToolSummary = (
+    toolName: string | undefined,
+    meta: string | undefined,
+    commandBearing: boolean,
+  ) => {
+    const visibleMeta = params.verboseLevel === "full" || !commandBearing ? meta : undefined;
+    const agg = formatToolAggregate(toolName, visibleMeta ? [visibleMeta] : undefined, {
       markdown: useMarkdown,
     });
     emitToolResultMessage(toolName, agg);
@@ -1331,6 +1355,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     toolMetas.length = 0;
     toolMetaById.clear();
     toolSummaryById.clear();
+    state.liveEditDiffStateById.clear();
     state.itemActiveIds.clear();
     state.itemStartedCount = 0;
     state.itemCompletedCount = 0;
@@ -1441,6 +1466,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     // new un-resolvable promises during teardown.
     state.unsubscribed = true;
     cleanupRunToolStartData(params.runId);
+    state.liveEditDiffStateById.clear();
     // Reject pending compaction wait to unblock awaiting code.
     // Don't resolve, as that would incorrectly signal "compaction complete" when it's still in-flight.
     if (state.compactionRetryPromise) {
@@ -1579,7 +1605,16 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getCompactionCount: () => compactionCount,
     getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
     getAssistantTurnCount: () => state.assistantTurnCount,
-    waitForPendingEvents: () => state.pendingEventChain ?? Promise.resolve(),
+    waitForPendingEvents: async () => {
+      // Partial presentation stays concurrent with provider events, but terminal
+      // settlement must observe callbacks launched while the event chain drains.
+      while (state.pendingEventChain || pendingPartialReplyTasks.size > 0) {
+        await Promise.allSettled([
+          ...(state.pendingEventChain ? [state.pendingEventChain] : []),
+          ...pendingPartialReplyTasks,
+        ]);
+      }
+    },
     getItemLifecycle: () => ({
       startedCount: state.itemStartedCount,
       completedCount: state.itemCompletedCount,

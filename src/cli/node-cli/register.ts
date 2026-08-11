@@ -122,35 +122,20 @@ export function registerNodeCli(program: Command) {
       await runNodeDaemonInstall(opts);
     });
 
-  node
-    .command("uninstall")
-    .description("Uninstall the node host service (launchd/systemd/schtasks)")
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runNodeDaemonUninstall(opts);
-    });
-
-  node
-    .command("stop")
-    .description("Stop the node host service (launchd/systemd/schtasks)")
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runNodeDaemonStop(opts);
-    });
-
-  node
-    .command("start")
-    .description("Start the node host service (launchd/systemd/schtasks)")
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runNodeDaemonStart(opts);
-    });
-
-  node
-    .command("restart")
-    .description("Restart the node host service (launchd/systemd/schtasks)")
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runNodeDaemonRestart(opts);
-    });
+  for (const [name, action] of [
+    ["uninstall", runNodeDaemonUninstall],
+    ["stop", runNodeDaemonStop],
+    ["start", runNodeDaemonStart],
+    ["restart", runNodeDaemonRestart],
+  ] as const) {
+    node
+      .command(name)
+      .description(
+        `${name.charAt(0).toUpperCase()}${name.slice(1)} the node host service (launchd/systemd/schtasks)`,
+      )
+      .option("--json", "Output JSON", false)
+      .action(async (opts) => {
+        await action(opts);
+      });
+  }
 }

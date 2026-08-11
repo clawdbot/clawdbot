@@ -68,6 +68,13 @@ const WORKFLOW_CALL_ONLY_INPUTS = new Set([
   "package_source_sha",
   "package_sha256",
   "package_version",
+  "enable_prepublish_plugin_registry",
+  "prepublish_plugin_registry_artifact_name",
+  "prepublish_plugin_registry_artifact_id",
+  "prepublish_plugin_registry_artifact_digest",
+  "prepublish_plugin_registry_artifact_run_id",
+  "prepublish_plugin_registry_artifact_run_attempt",
+  "prepublish_plugin_registry_manifest_sha256",
   "shared_image_artifact_name",
   "shared_image_artifact_id",
   "shared_image_artifact_digest",
@@ -253,7 +260,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     ]);
   });
 
-  it("limits MiniMax Docker live-model coverage to the stable M2.7 pair", () => {
+  it("limits MiniMax Docker live-model coverage to the stable M3 pair", () => {
     const plan = createReleaseWorkflowMatrixPlan({
       includeLiveSuites: true,
       includeReleasePathSuites: true,
@@ -263,7 +270,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     expect(plan.liveModels.matrix.include).toContainEqual({
       provider_label: "MiniMax",
       providers: "minimax",
-      models: "minimax/MiniMax-M2.7,minimax-portal/MiniMax-M2.7",
+      models: "minimax/MiniMax-M3,minimax-portal/MiniMax-M3",
       max_models: "2",
       profiles: "stable full",
     });

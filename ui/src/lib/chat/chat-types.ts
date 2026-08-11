@@ -5,6 +5,14 @@
 import type { MediaKind } from "@openclaw/media-core/constants";
 import type { SenderIdentity } from "./sender-label.ts";
 
+export type BrowserAnnotationAttachment = {
+  modelContext: string;
+  title: string;
+  displayUrl: string;
+  markedRegionCount: number;
+  inspectedElement: boolean;
+};
+
 export type ChatAttachment = {
   id: string;
   dataUrl?: string;
@@ -12,14 +20,37 @@ export type ChatAttachment = {
   mimeType: string;
   fileName?: string;
   sizeBytes?: number;
+  /** UI-local context that must remain coupled to its annotated screenshot. */
+  browserAnnotation?: BrowserAnnotationAttachment;
 };
 
-export type ChatQueueSkillWorkshopRevision = { proposalId: string; agentId?: string };
+export type ChatComposerDraftRetry = {
+  expectedDraftRevision: number;
+  draftRevision: number;
+};
+
+export type ChatComposerMemoryFallback = {
+  message: string;
+  attachments: ChatAttachment[];
+  storageFailed: boolean;
+  draftRetry?: ChatComposerDraftRetry;
+  sequence: number;
+};
+
+export type ChatQueueSkillWorkshopRevision = {
+  proposalId: string;
+  agentId?: string;
+  /** Process-local owner; revision requests must never replay after reconnect. */
+  connectionClient?: object;
+  connectionEpoch?: number;
+};
 
 export type ChatQueueItem = {
   id: string;
   text: string;
   createdAt: number;
+  /** Operator-owned queue position; absent means "wherever arrival put it". */
+  orderKey?: number;
   kind?: "queued" | "steered";
   attachments?: ChatAttachment[];
   refreshSessions?: boolean;
@@ -31,6 +62,8 @@ export type ChatQueueItem = {
   sendAttempts?: number;
   sendError?: string;
   sendRunId?: string;
+  /** Immutable active run selected when this row first became a steer. */
+  steerTargetRunId?: string;
   sendState?:
     | "waiting-model"
     | "waiting-idle"
@@ -163,6 +196,8 @@ export type ToolCard = {
   outputText?: string;
   /** Structured tool result details (e.g. the edit tool's precomputed diff). */
   details?: unknown;
+  /** Monotonic edit counts while a live tool call is still receiving input. */
+  liveDiffStat?: { added: number; removed: number };
   isError?: boolean;
   /** True when the card comes from the live tool stream of the current run. */
   live?: boolean;

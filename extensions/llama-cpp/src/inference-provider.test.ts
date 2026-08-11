@@ -54,19 +54,17 @@ vi.mock("node-llama-cpp", () => ({
   },
 }));
 
-import { createLlamaCppStreamFn } from "./inference-provider.js";
+import { createLlamaCppInferenceRuntime } from "./inference-provider.js";
 
-const {
-  clearLlamaCppInferenceCacheForTests,
-  mapContextToLlamaChatHistory,
-  mapToolsToLlamaFunctions,
-} = (globalThis as Record<PropertyKey, unknown>)[
+type LlamaCppInferenceRuntime = ReturnType<typeof createLlamaCppInferenceRuntime>;
+let inferenceRuntime: LlamaCppInferenceRuntime;
+const testApi = (globalThis as Record<PropertyKey, unknown>)[
   Symbol.for("openclaw.llamaCppInferenceTestApi")
 ] as {
-  clearLlamaCppInferenceCacheForTests: () => Promise<void>;
-  mapContextToLlamaChatHistory: (context: Context) => unknown[];
-  mapToolsToLlamaFunctions: (context: Context) => Record<string, unknown> | undefined;
+  resetInferenceRuntimeCoordinator: () => void;
 };
+const NATIVE_CLEANUP_RECOVERY_MESSAGE =
+  "llama.cpp runtime stopped after native cleanup failed. Fully stop the managed Gateway service or foreground Gateway process, then start it again. An in-process restart cannot recover native resources.";
 
 const model: Model = {
   id: "test.gguf",
@@ -83,6 +81,22 @@ const model: Model = {
   params: { modelPath: "test.gguf" },
 };
 
+const weatherTool = {
+  name: "weather",
+  description: "Weather",
+  parameters: { type: "object" },
+} satisfies NonNullable<Context["tools"]>[number];
+const weatherToolWithCity = {
+  name: "weather",
+  description: "Get weather",
+  parameters: { type: "object", properties: { city: { type: "string" } } },
+} satisfies NonNullable<Context["tools"]>[number];
+const calendarTool = {
+  name: "calendar",
+  description: "Calendar",
+  parameters: { type: "object" },
+} satisfies NonNullable<Context["tools"]>[number];
+
 async function collectEvents(
   stream: AsyncIterable<AssistantMessageEvent>,
 ): Promise<AssistantMessageEvent[]> {
@@ -93,8 +107,53 @@ async function collectEvents(
   return events;
 }
 
-beforeEach(async () => {
-  await clearLlamaCppInferenceCacheForTests();
+type TestStreamParams = {
+  selectedModel?: Model;
+  prompt?: string;
+  tools?: Context["tools"];
+  options?: Parameters<ReturnType<LlamaCppInferenceRuntime["createStreamFn"]>>[2];
+};
+
+async function createTestStream(params: TestStreamParams = {}) {
+  return await inferenceRuntime.createStreamFn({})(
+    params.selectedModel ?? model,
+    {
+      messages: [{ role: "user", content: params.prompt ?? "Hi", timestamp: 1 }],
+      ...(params.tools ? { tools: params.tools } : {}),
+    },
+    params.options,
+  );
+}
+
+async function collectTestEvents(params: TestStreamParams = {}) {
+  return await collectEvents(await createTestStream(params));
+}
+
+function deferGeneration() {
+  let finishGeneration: (() => void) | undefined;
+  mocks.generateResponse.mockImplementationOnce(
+    async () =>
+      await new Promise((resolve) => {
+        finishGeneration = () =>
+          resolve({
+            response: "",
+            functionCalls: undefined,
+            metadata: { stopReason: "eogToken" },
+          });
+      }),
+  );
+  return () => finishGeneration?.();
+}
+
+function expectDisposeCalls(contextCount: number, modelCount: number, llamaCount: number) {
+  expect(mocks.contextDispose).toHaveBeenCalledTimes(contextCount);
+  expect(mocks.modelDispose).toHaveBeenCalledTimes(modelCount);
+  expect(mocks.llamaDispose).toHaveBeenCalledTimes(llamaCount);
+}
+
+beforeEach(() => {
+  testApi.resetInferenceRuntimeCoordinator();
+  inferenceRuntime = createLlamaCppInferenceRuntime();
   vi.clearAllMocks();
   mocks.generateResponse.mockResolvedValue({
     response: "",
@@ -104,99 +163,10 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await clearLlamaCppInferenceCacheForTests();
+  await inferenceRuntime.dispose().catch(() => undefined);
 });
 
 describe("llama.cpp inference provider", () => {
-  it("maps OpenClaw history and tool results into the model chat template history", () => {
-    const context = {
-      systemPrompt: "Be concise.",
-      messages: [
-        { role: "user" as const, content: "weather?", timestamp: 1 },
-        {
-          role: "assistant" as const,
-          api: "openai-completions",
-          provider: "test",
-          model: "test",
-          stopReason: "toolUse" as const,
-          usage: {
-            input: 1,
-            output: 1,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 2,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-          timestamp: 2,
-          content: [
-            { type: "text" as const, text: "Checking." },
-            {
-              type: "toolCall" as const,
-              id: "call-1",
-              name: "weather",
-              arguments: { city: "Berlin" },
-            },
-          ],
-        },
-        {
-          role: "toolResult" as const,
-          toolCallId: "call-1",
-          toolName: "weather",
-          content: [{ type: "text" as const, text: "Sunny" }],
-          isError: false,
-          timestamp: 3,
-        },
-        { role: "user" as const, content: "thanks", timestamp: 4 },
-      ],
-    };
-
-    expect(mapContextToLlamaChatHistory(context)).toEqual([
-      { type: "system", text: "Be concise." },
-      { type: "user", text: "weather?" },
-      {
-        type: "model",
-        response: [
-          "Checking.",
-          {
-            type: "functionCall",
-            name: "weather",
-            params: { city: "Berlin" },
-            result: "Sunny",
-          },
-        ],
-      },
-      { type: "user", text: "thanks" },
-    ]);
-  });
-
-  it("maps JSON-schema tools to native node-llama-cpp function definitions", () => {
-    expect(
-      mapToolsToLlamaFunctions({
-        messages: [],
-        tools: [
-          {
-            name: "weather",
-            description: "Get weather",
-            parameters: {
-              type: "object",
-              properties: { city: { type: "string" } },
-              required: ["city"],
-            },
-          },
-        ],
-      }),
-    ).toEqual({
-      weather: {
-        description: "Get weather",
-        params: {
-          type: "object",
-          properties: { city: { type: "string" } },
-          required: ["city"],
-        },
-      },
-    });
-  });
-
   it("streams text deltas and reports native token-meter usage", async () => {
     mocks.generateResponse.mockImplementationOnce(async (_history, options) => {
       options.onTextChunk("Hel");
@@ -207,13 +177,7 @@ describe("llama.cpp inference provider", () => {
         metadata: { stopReason: "eogToken" },
       };
     });
-    const stream = await createLlamaCppStreamFn({})(
-      model,
-      { messages: [{ role: "user", content: "Hi", timestamp: 1 }] },
-      { stop: ["END"] },
-    );
-
-    const events = await collectEvents(stream);
+    const events = await collectTestEvents({ prompt: "Hi", options: { stop: ["END"] } });
 
     expect(events.map((event) => event.type)).toEqual([
       "start",
@@ -260,15 +224,11 @@ describe("llama.cpp inference provider", () => {
       };
     });
 
-    const events = await collectEvents(
-      await createLlamaCppStreamFn({})(
-        { ...model, reasoning: true },
-        {
-          messages: [{ role: "user", content: "Why?", timestamp: 1 }],
-          tools: [{ name: "weather", description: "Weather", parameters: { type: "object" } }],
-        },
-      ),
-    );
+    const events = await collectTestEvents({
+      selectedModel: { ...model, reasoning: true },
+      prompt: "Why?",
+      tools: [weatherTool],
+    });
 
     expect(events.map((event) => event.type)).toEqual([
       "start",
@@ -324,15 +284,11 @@ describe("llama.cpp inference provider", () => {
       };
     });
 
-    const events = await collectEvents(
-      await createLlamaCppStreamFn({})(
-        { ...model, reasoning: true },
-        {
-          messages: [{ role: "user", content: "Weather?", timestamp: 1 }],
-          tools: [{ name: "weather", description: "Weather", parameters: { type: "object" } }],
-        },
-      ),
-    );
+    const events = await collectTestEvents({
+      selectedModel: { ...model, reasoning: true },
+      prompt: "Weather?",
+      tools: [weatherTool],
+    });
 
     expect(events.map((event) => event.type)).toEqual([
       "start",
@@ -384,12 +340,10 @@ describe("llama.cpp inference provider", () => {
       };
     });
 
-    const events = await collectEvents(
-      await createLlamaCppStreamFn({})(
-        { ...model, reasoning: true },
-        { messages: [{ role: "user", content: "Reason twice", timestamp: 1 }] },
-      ),
-    );
+    const events = await collectTestEvents({
+      selectedModel: { ...model, reasoning: true },
+      prompt: "Reason twice",
+    });
 
     expect(events.map((event) => event.type)).toEqual([
       "start",
@@ -432,13 +386,7 @@ describe("llama.cpp inference provider", () => {
       required: ["reply"],
       additionalProperties: false,
     };
-    const stream = await createLlamaCppStreamFn({})(
-      model,
-      { messages: [{ role: "user", content: "Hi", timestamp: 1 }] },
-      { responseFormat: schema },
-    );
-
-    await collectEvents(stream);
+    await collectTestEvents({ options: { responseFormat: schema } });
 
     expect(mocks.llama.createGrammarForJsonSchema).toHaveBeenCalledWith(schema);
     expect(mocks.generateResponse.mock.calls[0]?.[1]).toMatchObject({
@@ -454,31 +402,21 @@ describe("llama.cpp inference provider", () => {
       required: ["reply"],
       additionalProperties: false,
     };
-    const stream = await createLlamaCppStreamFn({})(
-      model,
-      { messages: [{ role: "user", content: "Hi", timestamp: 1 }] },
-      {
+    await collectTestEvents({
+      options: {
         responseFormat: {
           type: "json_schema",
           json_schema: { name: "planner", schema },
         },
       },
-    );
-
-    await collectEvents(stream);
+    });
 
     expect(mocks.llama.createGrammarForJsonSchema).toHaveBeenCalledWith(schema);
     expect(mocks.generateResponse.mock.calls[0]?.[1]).toMatchObject({ grammar: { schema } });
   });
 
   it("maps provider-shaped json_object response formats to the JSON grammar", async () => {
-    const stream = await createLlamaCppStreamFn({})(
-      model,
-      { messages: [{ role: "user", content: "Hi", timestamp: 1 }] },
-      { responseFormat: { type: "json_object" } },
-    );
-
-    await collectEvents(stream);
+    await collectTestEvents({ options: { responseFormat: { type: "json_object" } } });
 
     expect(mocks.llama.getGrammarFor).toHaveBeenCalledWith("json");
     expect(mocks.generateResponse.mock.calls[0]?.[1]).toMatchObject({
@@ -487,13 +425,7 @@ describe("llama.cpp inference provider", () => {
   });
 
   it("maps an empty JSON Schema to the generic JSON grammar", async () => {
-    const stream = await createLlamaCppStreamFn({})(
-      model,
-      { messages: [{ role: "user", content: "Hi", timestamp: 1 }] },
-      { responseFormat: {} },
-    );
-
-    await collectEvents(stream);
+    await collectTestEvents({ options: { responseFormat: {} } });
 
     expect(mocks.llama.getGrammarFor).toHaveBeenCalledWith("json");
     expect(mocks.generateResponse.mock.calls[0]?.[1]).toMatchObject({
@@ -502,13 +434,7 @@ describe("llama.cpp inference provider", () => {
   });
 
   it("keeps provider-shaped text response formats unconstrained", async () => {
-    const stream = await createLlamaCppStreamFn({})(
-      model,
-      { messages: [{ role: "user", content: "Hi", timestamp: 1 }] },
-      { responseFormat: { type: "text" } },
-    );
-
-    await collectEvents(stream);
+    await collectTestEvents({ options: { responseFormat: { type: "text" } } });
 
     expect(mocks.llama.getGrammarFor).not.toHaveBeenCalled();
     expect(mocks.llama.createGrammarForJsonSchema).not.toHaveBeenCalled();
@@ -521,18 +447,10 @@ describe("llama.cpp inference provider", () => {
       functionCalls: [{ functionName: "weather", params: { city: "Paris" }, raw: [] }],
       metadata: { stopReason: "functionCalls" },
     });
-    const stream = await createLlamaCppStreamFn({})(model, {
-      messages: [{ role: "user", content: "Weather?", timestamp: 1 }],
-      tools: [
-        {
-          name: "weather",
-          description: "Get weather",
-          parameters: { type: "object", properties: { city: { type: "string" } } },
-        },
-      ],
+    const events = await collectTestEvents({
+      prompt: "Weather?",
+      tools: [weatherToolWithCity],
     });
-
-    const events = await collectEvents(stream);
 
     expect(events.map((event) => event.type)).toEqual([
       "start",
@@ -607,14 +525,10 @@ describe("llama.cpp inference provider", () => {
       };
     });
 
-    const stream = await createLlamaCppStreamFn({})(model, {
-      messages: [{ role: "user", content: "Check both", timestamp: 1 }],
-      tools: [
-        { name: "weather", description: "Weather", parameters: { type: "object" } },
-        { name: "calendar", description: "Calendar", parameters: { type: "object" } },
-      ],
+    const events = await collectTestEvents({
+      prompt: "Check both",
+      tools: [weatherTool, calendarTool],
     });
-    const events = await collectEvents(stream);
 
     expect(events.map((event) => event.type)).toEqual([
       "start",
@@ -675,13 +589,24 @@ describe("llama.cpp inference provider", () => {
     }
   });
 
-  it("never completes or executes an interrupted native call at the token limit", async () => {
+  it.each([
+    [
+      "never completes or executes an interrupted native call at the token limit",
+      '{"city":',
+      false,
+    ],
+    [
+      "never completes a native call when its final argument reaches the token limit",
+      '{"city":"Paris"}',
+      true,
+    ],
+  ])("%s", async (_name, paramsChunk, done) => {
     mocks.generateResponse.mockImplementationOnce(async (_history, options) => {
       options.onFunctionCallParamsChunk({
         callIndex: 0,
         functionName: "weather",
-        paramsChunk: '{"city":',
-        done: false,
+        paramsChunk,
+        done,
       });
       return {
         response: "",
@@ -690,47 +615,7 @@ describe("llama.cpp inference provider", () => {
       };
     });
 
-    const events = await collectEvents(
-      await createLlamaCppStreamFn({})(model, {
-        messages: [{ role: "user", content: "Weather?", timestamp: 1 }],
-        tools: [{ name: "weather", description: "Weather", parameters: { type: "object" } }],
-      }),
-    );
-
-    expect(events.map((event) => event.type)).toEqual([
-      "start",
-      "toolcall_start",
-      "toolcall_delta",
-      "done",
-    ]);
-    expect(events.at(-1)).toMatchObject({
-      type: "done",
-      reason: "length",
-      message: { content: [], stopReason: "length" },
-    });
-  });
-
-  it("never completes a native call when its final argument reaches the token limit", async () => {
-    mocks.generateResponse.mockImplementationOnce(async (_history, options) => {
-      options.onFunctionCallParamsChunk({
-        callIndex: 0,
-        functionName: "weather",
-        paramsChunk: '{"city":"Paris"}',
-        done: true,
-      });
-      return {
-        response: "",
-        functionCalls: undefined,
-        metadata: { stopReason: "maxTokens" },
-      };
-    });
-
-    const events = await collectEvents(
-      await createLlamaCppStreamFn({})(model, {
-        messages: [{ role: "user", content: "Weather?", timestamp: 1 }],
-        tools: [{ name: "weather", description: "Weather", parameters: { type: "object" } }],
-      }),
-    );
+    const events = await collectTestEvents({ prompt: "Weather?", tools: [weatherTool] });
 
     expect(events.map((event) => event.type)).toEqual([
       "start",
@@ -766,15 +651,10 @@ describe("llama.cpp inference provider", () => {
       };
     });
 
-    const events = await collectEvents(
-      await createLlamaCppStreamFn({})(model, {
-        messages: [{ role: "user", content: "Check both", timestamp: 1 }],
-        tools: [
-          { name: "weather", description: "Weather", parameters: { type: "object" } },
-          { name: "calendar", description: "Calendar", parameters: { type: "object" } },
-        ],
-      }),
-    );
+    const events = await collectTestEvents({
+      prompt: "Check both",
+      tools: [weatherTool, calendarTool],
+    });
 
     expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(0);
     expect(events.at(-1)).toMatchObject({
@@ -807,18 +687,10 @@ describe("llama.cpp inference provider", () => {
       };
     });
 
-    const stream = await createLlamaCppStreamFn({})(model, {
-      messages: [{ role: "user", content: "Weather?", timestamp: 1 }],
-      tools: [
-        {
-          name: "weather",
-          description: "Get weather",
-          parameters: { type: "object", properties: { city: { type: "string" } } },
-        },
-      ],
+    const events = await collectTestEvents({
+      prompt: "Weather?",
+      tools: [weatherToolWithCity],
     });
-
-    const events = await collectEvents(stream);
 
     expect(events.map((event) => event.type)).toEqual([
       "start",
@@ -854,18 +726,10 @@ describe("llama.cpp inference provider", () => {
       };
     });
 
-    const stream = await createLlamaCppStreamFn({})(model, {
-      messages: [{ role: "user", content: "Weather?", timestamp: 1 }],
-      tools: [
-        {
-          name: "weather",
-          description: "Get weather",
-          parameters: { type: "object", properties: { city: { type: "string" } } },
-        },
-      ],
+    const events = await collectTestEvents({
+      prompt: "Weather?",
+      tools: [weatherToolWithCity],
     });
-
-    const events = await collectEvents(stream);
 
     expect(events.map((event) => event.type)).toEqual([
       "start",
@@ -882,19 +746,10 @@ describe("llama.cpp inference provider", () => {
   });
 
   it("lets tools win when responseFormat is also present", async () => {
-    const stream = await createLlamaCppStreamFn({})(
-      model,
-      {
-        messages: [{ role: "user", content: "Weather?", timestamp: 1 }],
-        tools: [
-          {
-            name: "weather",
-            description: "Get weather",
-            parameters: { type: "object", properties: { city: { type: "string" } } },
-          },
-        ],
-      },
-      {
+    await collectTestEvents({
+      prompt: "Weather?",
+      tools: [weatherToolWithCity],
+      options: {
         responseFormat: {
           type: "object",
           properties: { reply: { type: "string" } },
@@ -902,9 +757,7 @@ describe("llama.cpp inference provider", () => {
           additionalProperties: false,
         },
       },
-    );
-
-    await collectEvents(stream);
+    });
 
     expect(mocks.llama.createGrammarForJsonSchema).not.toHaveBeenCalled();
     expect(mocks.generateResponse.mock.calls[0]?.[1]).toMatchObject({
@@ -914,34 +767,199 @@ describe("llama.cpp inference provider", () => {
     expect(mocks.generateResponse.mock.calls[0]?.[1]).not.toHaveProperty("grammar");
   });
 
-  it("disposes the previous model and context when the model changes", async () => {
-    const streamFn = createLlamaCppStreamFn({});
-    await collectEvents(
-      await streamFn(model, { messages: [{ role: "user", content: "one", timestamp: 1 }] }),
-    );
-    await collectEvents(
-      await streamFn(
-        { ...model, id: "other.gguf", params: { modelPath: "other.gguf" } },
-        { messages: [{ role: "user", content: "two", timestamp: 2 }] },
-      ),
-    );
-
-    expect(mocks.contextDispose).toHaveBeenCalledTimes(1);
-    expect(mocks.modelDispose).toHaveBeenCalledTimes(1);
+  it("makes failed changed-model cleanup terminal", async () => {
+    const otherModel = { ...model, id: "other.gguf", params: { modelPath: "other.gguf" } };
+    await collectTestEvents({ prompt: "one" });
+    await collectTestEvents({ selectedModel: otherModel, prompt: "two" });
+    let rejectCleanup!: (error: Error) => void;
+    const cleanup = new Promise<void>((_resolve, reject) => {
+      rejectCleanup = reject;
+    });
+    mocks.contextDispose.mockImplementationOnce(async () => await cleanup);
+    const failedSwitch = await createTestStream({ prompt: "three" });
+    await vi.waitFor(() => expect(mocks.contextDispose).toHaveBeenCalledTimes(2));
+    const unavailable = await createTestStream({ selectedModel: otherModel, prompt: "four" });
+    const disposing = inferenceRuntime.dispose();
+    rejectCleanup(new Error("context cleanup failed"));
+    await expect(failedSwitch.result()).resolves.toMatchObject({
+      errorMessage: NATIVE_CLEANUP_RECOVERY_MESSAGE,
+    });
+    await expect(unavailable.result()).resolves.toMatchObject({
+      errorMessage: NATIVE_CLEANUP_RECOVERY_MESSAGE,
+    });
+    await expect(disposing).rejects.toThrow("context cleanup failed");
+    expectDisposeCalls(2, 1, 0);
     expect(mocks.llama.loadModel).toHaveBeenCalledTimes(2);
   });
 
+  it("records cleanup failure during partial model initialization", async () => {
+    mocks.model.createContext.mockRejectedValueOnce(new Error("context creation failed"));
+    mocks.modelDispose.mockRejectedValueOnce(new Error("model cleanup failed"));
+    const failedInitialization = await createTestStream();
+    await expect(failedInitialization.result()).resolves.toMatchObject({
+      errorMessage: NATIVE_CLEANUP_RECOVERY_MESSAGE,
+    });
+    await expect(inferenceRuntime.dispose()).rejects.toThrow("model cleanup failed");
+    expectDisposeCalls(0, 1, 0);
+  });
+
   it("reuses one context sequence across serialized requests for the same model", async () => {
-    const streamFn = createLlamaCppStreamFn({});
-    await collectEvents(
-      await streamFn(model, { messages: [{ role: "user", content: "one", timestamp: 1 }] }),
-    );
-    await collectEvents(
-      await streamFn(model, { messages: [{ role: "user", content: "two", timestamp: 2 }] }),
-    );
+    await collectTestEvents({ prompt: "one" });
+    await collectTestEvents({ prompt: "two" });
 
     expect(mocks.context.getSequence).toHaveBeenCalledTimes(1);
     expect(mocks.llama.loadModel).toHaveBeenCalledTimes(1);
+  });
+
+  it("disposes the context, model, and native runtime in ownership order", async () => {
+    await collectTestEvents();
+
+    await inferenceRuntime.dispose();
+
+    expectDisposeCalls(1, 1, 1);
+    expect(mocks.contextDispose.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.modelDispose.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(mocks.modelDispose.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.llamaDispose.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
+
+  it("blocks a published replacement until predecessor service stop finishes", async () => {
+    const retiringRuntime = inferenceRuntime;
+    await collectTestEvents();
+    let finishCleanup!: () => void;
+    mocks.contextDispose.mockImplementationOnce(
+      async () =>
+        await new Promise<void>((resolve) => {
+          finishCleanup = resolve;
+        }),
+    );
+    // Gateway publishes the replacement registry before stopping old services.
+    const disposing = retiringRuntime.dispose();
+    await vi.waitFor(() => expect(mocks.contextDispose).toHaveBeenCalledOnce());
+
+    const replacementRuntime = createLlamaCppInferenceRuntime();
+    const replacementEvents = collectEvents(
+      await replacementRuntime.createStreamFn({})(model, {
+        messages: [{ role: "user", content: "after reload", timestamp: 2 }],
+      }),
+    );
+    await Promise.resolve();
+    expect(mocks.llama.loadModel).toHaveBeenCalledOnce();
+
+    finishCleanup();
+    await disposing;
+    await expect(replacementEvents).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "done", reason: "stop" })]),
+    );
+    expect(mocks.llama.loadModel).toHaveBeenCalledTimes(2);
+    inferenceRuntime = replacementRuntime;
+  });
+
+  it("keeps a published replacement blocked when predecessor service stop fails", async () => {
+    const retiringRuntime = inferenceRuntime;
+    await collectTestEvents();
+    mocks.contextDispose.mockRejectedValueOnce(new Error("retiring cleanup failed"));
+
+    const replacementRuntime = createLlamaCppInferenceRuntime();
+    // Match reload ordering: replacement is reachable before old service stop settles.
+    const disposing = retiringRuntime.dispose();
+    const replacementEvents = collectEvents(
+      await replacementRuntime.createStreamFn({})(model, {
+        messages: [{ role: "user", content: "after failed reload", timestamp: 2 }],
+      }),
+    );
+
+    await expect(disposing).rejects.toThrow("retiring cleanup failed");
+    await expect(replacementEvents).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "error",
+          error: expect.objectContaining({
+            errorMessage: NATIVE_CLEANUP_RECOVERY_MESSAGE,
+          }),
+        }),
+      ]),
+    );
+    expect(mocks.llama.loadModel).toHaveBeenCalledOnce();
+    await expect(replacementRuntime.dispose()).resolves.toBeUndefined();
+    inferenceRuntime = replacementRuntime;
+  });
+
+  it("lets a superseded waiting replacement stop before its predecessor retires", async () => {
+    await collectTestEvents();
+    const waitingRuntime = createLlamaCppInferenceRuntime();
+    const waitingStream = await waitingRuntime.createStreamFn({})(model, {
+      messages: [{ role: "user", content: "superseded reload", timestamp: 2 }],
+    });
+    await Promise.resolve();
+
+    const disposingWaitingRuntime = waitingRuntime.dispose();
+
+    await expect(waitingStream.result()).resolves.toMatchObject({
+      stopReason: "error",
+      errorMessage: "llama.cpp runtime is stopping",
+    });
+    await expect(disposingWaitingRuntime).resolves.toBeUndefined();
+    expect(mocks.llama.loadModel).toHaveBeenCalledOnce();
+  });
+
+  it("waits for admitted inference before disposing the runtime", async () => {
+    const finishGeneration = deferGeneration();
+    const stream = await createTestStream();
+    await vi.waitFor(() => expect(mocks.generateResponse).toHaveBeenCalledOnce());
+
+    const disposing = inferenceRuntime.dispose();
+    await Promise.resolve();
+    expect(mocks.contextDispose).not.toHaveBeenCalled();
+
+    finishGeneration();
+    await stream.result();
+    await disposing;
+
+    expectDisposeCalls(1, 1, 1);
+  });
+
+  it("rejects new inference once runtime disposal begins", async () => {
+    const finishGeneration = deferGeneration();
+    const activeStream = await createTestStream();
+    await vi.waitFor(() => expect(mocks.generateResponse).toHaveBeenCalledOnce());
+
+    const disposing = inferenceRuntime.dispose();
+    const rejectedStream = await createTestStream({ prompt: "too late" });
+
+    await expect(rejectedStream.result()).resolves.toMatchObject({
+      stopReason: "error",
+      errorMessage: "llama.cpp runtime is stopping",
+    });
+    expect(mocks.generateResponse).toHaveBeenCalledOnce();
+
+    finishGeneration();
+    await activeStream.result();
+    await disposing;
+  });
+
+  it("shares concurrent runtime disposal and performs cleanup once", async () => {
+    await collectTestEvents();
+
+    const disposals = [inferenceRuntime.dispose(), inferenceRuntime.dispose()];
+    expect(disposals[1]).toBe(disposals[0]);
+    await Promise.all(disposals);
+    expectDisposeCalls(1, 1, 1);
+  });
+
+  it("keeps a failed native runtime cleanup terminal", async () => {
+    await collectTestEvents();
+    mocks.llamaDispose.mockRejectedValueOnce(new Error("llama cleanup failed"));
+    const firstDisposal = inferenceRuntime.dispose();
+    await expect(firstDisposal).rejects.toThrow("llama cleanup failed");
+    expectDisposeCalls(1, 1, 1);
+    const unavailable = await createTestStream({ prompt: "after failed stop" });
+    await expect(unavailable.result()).resolves.toMatchObject({
+      errorMessage: NATIVE_CLEANUP_RECOVERY_MESSAGE,
+    });
+    expect(inferenceRuntime.dispose()).toBe(firstDisposal);
   });
 
   it.each([
@@ -970,11 +988,7 @@ describe("llama.cpp inference provider", () => {
       expectedGpuFit: 2048,
     },
   ])("bounds native context and GPU allocation by $scenario", async (scenario) => {
-    await collectEvents(
-      await createLlamaCppStreamFn({})(scenario.model, {
-        messages: [{ role: "user", content: "Hi", timestamp: 1 }],
-      }),
-    );
+    await collectTestEvents({ selectedModel: scenario.model });
     expect(mocks.model.createContext).toHaveBeenCalledWith(
       expect.objectContaining({ contextSize: scenario.expectedContextSize }),
     );
@@ -986,12 +1000,9 @@ describe("llama.cpp inference provider", () => {
   });
 
   it("expands home-relative local model paths before resolving the file", async () => {
-    const stream = await createLlamaCppStreamFn({})(
-      { ...model, params: { modelPath: "~/Models/test.gguf" } },
-      { messages: [{ role: "user", content: "Hi", timestamp: 1 }] },
-    );
-
-    await collectEvents(stream);
+    await collectTestEvents({
+      selectedModel: { ...model, params: { modelPath: "~/Models/test.gguf" } },
+    });
 
     expect(mocks.resolveModelFile).toHaveBeenCalledWith(
       path.join(os.homedir(), "Models", "test.gguf"),
@@ -1004,9 +1015,7 @@ describe("llama.cpp inference provider", () => {
       options.onTextChunk("Partial");
       throw new Error("generation failed");
     });
-    const stream = await createLlamaCppStreamFn({})(model, {
-      messages: [{ role: "user", content: "Hi", timestamp: 1 }],
-    });
+    const stream = await createTestStream();
 
     await expect(stream.result()).resolves.toMatchObject({
       stopReason: "error",
@@ -1018,11 +1027,10 @@ describe("llama.cpp inference provider", () => {
   it("returns an aborted stream error when the signal is cancelled", async () => {
     const controller = new AbortController();
     controller.abort();
-    const stream = await createLlamaCppStreamFn({})(
-      model,
-      { messages: [{ role: "user", content: "stop", timestamp: 1 }] },
-      { signal: controller.signal },
-    );
+    const stream = await createTestStream({
+      prompt: "stop",
+      options: { signal: controller.signal },
+    });
 
     await expect(stream.result()).resolves.toMatchObject({
       stopReason: "aborted",
@@ -1037,9 +1045,7 @@ describe("llama.cpp inference provider", () => {
       functionCalls: undefined,
       metadata: { stopReason: "abort" },
     });
-    const stream = await createLlamaCppStreamFn({})(model, {
-      messages: [{ role: "user", content: "stop", timestamp: 1 }],
-    });
+    const stream = await createTestStream({ prompt: "stop" });
 
     await expect(stream.result()).resolves.toMatchObject({
       stopReason: "aborted",
@@ -1055,7 +1061,7 @@ describe("llama.cpp inference provider", () => {
           resolveFirst = resolve;
         }),
     );
-    const streamFn = createLlamaCppStreamFn({});
+    const streamFn = inferenceRuntime.createStreamFn({});
     const firstStream = await streamFn(model, {
       messages: [{ role: "user", content: "first", timestamp: 1 }],
     });

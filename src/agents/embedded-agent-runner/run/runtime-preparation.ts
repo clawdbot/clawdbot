@@ -1,6 +1,7 @@
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { isPluginMetadataSnapshotCompatible } from "../../../plugins/plugin-metadata-snapshot.js";
 import { resolveProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
+import { resolvePreparedRunAdmission } from "../../admitted-run-context.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { isProfileInCooldown } from "../../auth-profiles.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
@@ -488,7 +489,15 @@ export async function prepareEmbeddedRunRuntime(input: {
     prepared: true as const,
   };
 
+  const admittedRunContext = await resolvePreparedRunAdmission({
+    runId: params.runId,
+    runtimeKind: pluginHarnessOwnsTransport ? "plugin-harness" : "embedded",
+    admittedRunContext: params.admittedRunContext,
+    preparedRunAdmission: params.preparedRunAdmission,
+  });
+
   return {
+    admittedRunContext,
     provider,
     modelId,
     requestedModelId,

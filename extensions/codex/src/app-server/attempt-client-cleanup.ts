@@ -2,6 +2,7 @@
  * Best-effort cleanup helpers for Codex app-server startup attempts and turns.
  */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { unsubscribeCodexAppServerLiveThread } from "./client-runtime.js";
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
 import { getCodexAppServerTurnRouter } from "./turn-router.js";
@@ -76,6 +77,29 @@ export async function closeCodexStartupClientBestEffort(
   }
 }
 
+/** Retires an unsafe turn client without replacing an already-authoritative failure. */
+export async function retireUnsafeCodexTurnClientBestEffort(
+  client: CodexAppServerClient,
+  operation: string,
+): Promise<void> {
+  try {
+    await closeCodexStartupClientBestEffort(client);
+  } catch (error) {
+    embeddedAgentLog.debug("codex app-server unsafe turn client retirement failed", {
+      operation,
+      error,
+    });
+    try {
+      client.close();
+    } catch (closeError) {
+      embeddedAgentLog.debug("codex app-server unsafe turn client close failed", {
+        operation,
+        error: closeError,
+      });
+    }
+  }
+}
+
 /** Sends a bounded turn interrupt and waits for Codex to confirm terminal abort handling. */
 export async function interruptCodexTurnAndWaitBestEffort(
   client: CodexAppServerClient,
@@ -123,11 +147,7 @@ export async function unsubscribeCodexThreadBestEffort(
   },
 ): Promise<boolean> {
   try {
-    await client.request(
-      "thread/unsubscribe",
-      { threadId: params.threadId },
-      { timeoutMs: params.timeoutMs },
-    );
+    await unsubscribeCodexAppServerLiveThread(client, params.threadId, params.timeoutMs);
     return true;
   } catch (error) {
     embeddedAgentLog.debug("codex app-server thread unsubscribe cleanup failed", {

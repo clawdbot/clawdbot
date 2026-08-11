@@ -1,8 +1,8 @@
 import { SpanKind } from "@opentelemetry/api";
 import { GEN_AI_OPERATION_NAME_VALUE_INVOKE_AGENT } from "@opentelemetry/semantic-conventions/incubating";
+import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { DiagnosticEventPayload } from "../api.js";
 import { redactSensitiveText } from "../api.js";
-import { lowCardinalityAttr } from "./service-attributes.js";
 import {
   GEN_AI_LATEST_EXPERIMENTAL_OPT_IN,
   OTEL_SEMCONV_STABILITY_OPT_IN_ENV,
@@ -51,6 +51,10 @@ export function positiveFiniteNumber(value: number | undefined): number | undefi
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+function nonNegativeFiniteNumber(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 export function assignPositiveNumberAttr(
   attrs: Record<string, string | number | boolean>,
   key: string,
@@ -95,14 +99,17 @@ function modelCallPromptTokens(usage: {
   cacheRead?: number;
   cacheWrite?: number;
 }): number | undefined {
-  if (typeof usage.promptTokens === "number" && Number.isFinite(usage.promptTokens)) {
-    return usage.promptTokens;
+  const promptTokens = nonNegativeFiniteNumber(usage.promptTokens);
+  if (promptTokens !== undefined) {
+    return promptTokens;
   }
-  const input = usage.input ?? 0;
-  const cacheRead = usage.cacheRead ?? 0;
-  const cacheWrite = usage.cacheWrite ?? 0;
-  const total = input + cacheRead + cacheWrite;
-  return total > 0 ? total : undefined;
+  const input = nonNegativeFiniteNumber(usage.input);
+  const cacheRead = nonNegativeFiniteNumber(usage.cacheRead);
+  const cacheWrite = nonNegativeFiniteNumber(usage.cacheWrite);
+  if (input === undefined && cacheRead === undefined && cacheWrite === undefined) {
+    return undefined;
+  }
+  return (input ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
 }
 
 export function assignModelCallPromptStatsAttrs(
@@ -147,7 +154,10 @@ export function assignModelCallUsageAttrs(
     ["gen_ai.usage.cache_read.input_tokens", usage.cacheRead],
     ["gen_ai.usage.cache_creation.input_tokens", usage.cacheWrite],
   ] as const) {
-    assignPositiveNumberAttr(attrs, key, value);
+    const normalized = nonNegativeFiniteNumber(value);
+    if (normalized !== undefined) {
+      attrs[key] = normalized;
+    }
   }
 }
 
@@ -161,13 +171,13 @@ export function assignGenAiSpanIdentityAttrs(
   },
 ): void {
   if (emitLatestGenAiSemconv()) {
-    attrs["gen_ai.provider.name"] = lowCardinalityAttr(input.provider);
+    attrs["gen_ai.provider.name"] = normalizeDiagnosticValue(input.provider);
   } else {
-    attrs["gen_ai.system"] = lowCardinalityAttr(input.provider);
+    attrs["gen_ai.system"] = normalizeDiagnosticValue(input.provider);
   }
   if (input.model) {
     // Span attributes carry the full model id; only metric labels need bounded cardinality
-    // (the gen_ai metrics below still use lowCardinalityAttr). The low-cardinality allowlist
+    // (the gen_ai metrics below still use normalizeDiagnosticValue). The low-cardinality allowlist
     // regex rejects "/", so provider-qualified ids like "anthropic/claude-sonnet-4.6" collapse
     // to "unknown" on the SPAN — breaking model attribution in trace backends (e.g. Langfuse
     // reads gen_ai.request.model). Keep the redacted raw model on the span.
@@ -206,7 +216,7 @@ export function modelCallSpanName(evt: {
   const operationName = genAiOperationName(evt.api, evt.observationUnit);
   return operationName === GEN_AI_OPERATION_NAME_VALUE_INVOKE_AGENT
     ? operationName
-    : `${operationName} ${lowCardinalityAttr(evt.model)}`;
+    : `${operationName} ${normalizeDiagnosticValue(evt.model)}`;
 }
 
 export function modelCallSpanKind(): SpanKind | undefined {
@@ -220,7 +230,7 @@ export function addUpstreamRequestIdSpanEvent(
   if (!upstreamRequestIdHash) {
     return;
   }
-  const boundedHash = lowCardinalityAttr(upstreamRequestIdHash);
+  const boundedHash = normalizeDiagnosticValue(upstreamRequestIdHash);
   if (boundedHash === "unknown") {
     return;
   }

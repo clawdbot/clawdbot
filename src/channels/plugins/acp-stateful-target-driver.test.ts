@@ -21,7 +21,7 @@ vi.mock("../../acp/persistent-bindings.lifecycle.js", () => ({
   ensureConfiguredAcpBindingReady: vi.fn(),
   ensureConfiguredAcpBindingSession: vi.fn(),
 }));
-vi.mock("./acp-stateful-target-reset.runtime.js", () => ({
+vi.mock("../../gateway/session-reset-service.js", () => ({
   performGatewaySessionReset: resetMocks.performGatewaySessionReset,
 }));
 vi.mock("../../acp/runtime/session-meta.js", () => ({

@@ -2,12 +2,14 @@
 import fs from "node:fs/promises";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
+import type { classifyGatewayConnectFailure } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   createConfigIO,
   resolveConfigPath,
   resolveGatewayPort,
   resolveStateDir,
 } from "../../config/config.js";
+import { isDefaultInstallIdentity } from "../../config/paths.js";
 import type {
   OpenClawConfig,
   ConfigFileSnapshot,
@@ -22,6 +24,7 @@ import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { projectGatewayUrlForDiagnostics } from "../../gateway/connection-details.js";
 import { resolveAdvertisedControlUiLinks } from "../../gateway/control-ui-links.js";
 import { gatewaySecretInputPathCanWin } from "../../gateway/credentials-secret-inputs.js";
 import { trimToUndefined } from "../../gateway/credentials.js";
@@ -31,20 +34,19 @@ import {
   ALL_GATEWAY_SECRET_INPUT_PATHS,
   readGatewaySecretInputValue,
 } from "../../gateway/secret-input-paths.js";
+import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import {
   inspectBestEffortPrimaryTailnetIPv4,
   resolveBestEffortGatewayBindHostForDisplay,
 } from "../../infra/network-discovery-display.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
+import { formatPortDiagnostics } from "../../infra/ports-format.js";
 import {
-  formatPortDiagnostics,
   inspectPortConnections,
   inspectPortUsage,
   inspectPortUsages,
-  type PortConnection,
-  type PortListener,
-  type PortUsageStatus,
-} from "../../infra/ports.js";
+} from "../../infra/ports-inspect.js";
+import type { PortConnection, PortListener, PortUsageStatus } from "../../infra/ports-types.js";
 import {
   readGatewayRestartHandoffSync,
   type GatewayRestartHandoff,
@@ -113,6 +115,7 @@ type ResolvedGatewayStatus = {
   gateway: GatewayStatusSummary;
   daemonPort: number;
   cliPort: number;
+  probeUrl: string;
   probeUrlOverride: string | null;
 };
 
@@ -120,6 +123,8 @@ type CliStatusSummary = {
   version: string;
   entrypoint?: string;
 };
+
+type GatewayConnectFailureKind = ReturnType<typeof classifyGatewayConnectFailure>["kind"];
 
 const gatewayProbeAuthModuleLoader = createLazyImportLoader(
   () => import("../../gateway/probe-auth.js"),
@@ -290,6 +295,7 @@ export type DaemonStatus = {
     loaded: boolean;
     loadedText: string;
     notLoadedText: string;
+    targetRole?: "target" | "diagnostic-only";
     command?: {
       programArguments: string[];
       workingDirectory?: string;
@@ -340,6 +346,10 @@ export type DaemonStatus = {
     };
     version?: string | null;
     error?: string;
+    connectFailure?: {
+      kind: GatewayConnectFailureKind;
+      detailCode?: string;
+    };
     url?: string;
     authWarning?: string;
   };
@@ -358,7 +368,7 @@ export type DaemonStatus = {
 };
 
 function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: boolean) {
-  if (status !== "busy") {
+  if (status === undefined || status === "free") {
     return false;
   }
   if (rpcOk === true) {
@@ -442,6 +452,7 @@ async function resolveGatewayStatusSummary(params: {
   const tlsEnabled = params.daemonCfg.gateway?.tls?.enabled === true;
   const scheme = tlsEnabled ? "wss" : "ws";
   const probeUrl = probeUrlOverride ?? `${scheme}://${probeHost}:${daemonPort}`;
+  const diagnosticProbeUrl = projectGatewayUrlForDiagnostics(probeUrl);
   const controlUiLinks =
     params.daemonCfg.gateway?.controlUi?.enabled === false
       ? undefined
@@ -469,12 +480,13 @@ async function resolveGatewayStatusSummary(params: {
       ...(tlsEnabled ? { tlsEnabled } : {}),
       port: daemonPort,
       portSource,
-      probeUrl,
+      probeUrl: diagnosticProbeUrl,
       ...(controlUiLinks ? { controlUiLinks } : {}),
       ...(probeNote ? { probeNote } : {}),
     },
     daemonPort,
     cliPort: resolveGatewayPort(params.cliCfg, process.env),
+    probeUrl,
     probeUrlOverride,
   };
 }
@@ -585,6 +597,11 @@ export async function gatherDaemonStatus(
     timeoutMs,
   });
   const { command, env: serviceEnv, loaded, runtime } = serviceState;
+  // A non-default or externally supervised process does not own the host's
+  // native service. Keep that service visible, but do not let it retarget probes.
+  const useNativeServiceTargetContext =
+    isDefaultInstallIdentity(process.env) && !isGatewayExternallySupervised(process.env);
+  const targetServiceCommand = useNativeServiceTargetContext ? command : null;
   const restartHandoff = opts.deep ? readGatewayRestartHandoffSync(serviceEnv) : null;
   const configAudit: ServiceConfigAudit = command
     ? await loadServiceAuditModule().then(({ auditGatewayServiceConfig }) =>
@@ -601,14 +618,16 @@ export async function gatherDaemonStatus(
     cliConfigSummary,
     daemonConfigSummary,
     configMismatch,
-  } = await loadDaemonConfigContext(command?.environment, { deep: opts.deep });
-  const { gateway, daemonPort, cliPort, probeUrlOverride } = await resolveGatewayStatusSummary({
-    cliCfg,
-    daemonCfg,
-    mergedDaemonEnv,
-    commandProgramArguments: command?.programArguments,
-    rpcUrlOverride: opts.rpc.url,
-  });
+  } = await loadDaemonConfigContext(targetServiceCommand?.environment, { deep: opts.deep });
+  const { gateway, daemonPort, cliPort, probeUrl, probeUrlOverride } =
+    await resolveGatewayStatusSummary({
+      cliCfg,
+      daemonCfg,
+      mergedDaemonEnv,
+      commandProgramArguments: targetServiceCommand?.programArguments,
+      rpcUrlOverride: opts.rpc.url,
+    });
+  const serviceTargetsProbe = useNativeServiceTargetContext && !probeUrlOverride;
   const shouldInspectLocalGateway = daemonCfg.gateway?.mode !== "remote" && !probeUrlOverride;
   const windowsFirewall =
     opts.deep === true && shouldInspectLocalGateway
@@ -696,7 +715,7 @@ export async function gatherDaemonStatus(
   const rpc = opts.probe
     ? await loadDaemonProbeModule().then(({ probeGatewayStatus }) =>
         probeGatewayStatus({
-          url: gateway.probeUrl,
+          url: probeUrl,
           token: daemonProbeAuth?.token,
           password: daemonProbeAuth?.password,
           config: daemonCfg,
@@ -716,7 +735,7 @@ export async function gatherDaemonStatus(
     rpcAuthWarning = undefined;
   }
   const health =
-    opts.probe && loaded && rpc?.ok !== true
+    opts.probe && serviceTargetsProbe && loaded && rpc?.ok !== true
       ? await loadRestartHealthModule()
           .then(({ inspectGatewayRestart }) =>
             inspectGatewayRestart({
@@ -780,6 +799,7 @@ export async function gatherDaemonStatus(
       loaded,
       loadedText: service.loadedText,
       notLoadedText: service.notLoadedText,
+      targetRole: serviceTargetsProbe ? "target" : "diagnostic-only",
       command,
       runtime,
       configAudit,

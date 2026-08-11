@@ -26,6 +26,10 @@ import {
   type AgentRunTerminalOutcome,
 } from "./agent-run-terminal-outcome.js";
 import {
+  normalizeAgentRunTerminalReplySnapshot,
+  type AgentRunTerminalReplySnapshot,
+} from "./agent-run-terminal-reply.js";
+import {
   normalizeAgentRunTimeoutPhase,
   normalizeProviderStarted,
   type AgentRunTimeoutPhase,
@@ -66,6 +70,7 @@ export type AgentWaitResult = {
   pendingError?: boolean;
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
+  terminalReply?: AgentRunTerminalReplySnapshot;
 };
 
 /** Summary returned after waiting for a dynamic set of pending runs to drain. */
@@ -86,6 +91,7 @@ type RawAgentWaitResponse = {
   pendingError?: unknown;
   timeoutPhase?: unknown;
   providerStarted?: unknown;
+  terminalReply?: unknown;
 };
 
 function normalizeAgentWaitResult(
@@ -106,6 +112,7 @@ function normalizeAgentWaitResult(
     pendingError: wait?.pendingError === true ? true : undefined,
     timeoutPhase: normalizeAgentRunTimeoutPhase(wait?.timeoutPhase),
     providerStarted: normalizeProviderStarted(wait?.providerStarted),
+    terminalReply: normalizeAgentRunTerminalReplySnapshot(wait?.terminalReply),
   };
 }
 
@@ -140,7 +147,7 @@ export function isRecoverableAgentWaitError(error: string | undefined): boolean 
   if (!message) {
     return false;
   }
-  if (message.includes("gateway timeout")) {
+  if (message.includes("gateway timeout") || message.includes("gateway request timeout")) {
     return false;
   }
   return (
@@ -387,7 +394,10 @@ export async function waitForAgentRun(params: {
   } catch (err) {
     const error = formatErrorMessage(err);
     return {
-      status: error.includes("gateway timeout") ? "timeout" : "error",
+      status:
+        error.includes("gateway timeout") || error.includes("gateway request timeout")
+          ? "timeout"
+          : "error",
       error,
     };
   }

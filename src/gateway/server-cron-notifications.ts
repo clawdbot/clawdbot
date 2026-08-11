@@ -5,6 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveUserTimezone } from "../agents/date-time.js";
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { CronFailureDestinationConfig } from "../config/types.cron.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -15,6 +16,7 @@ import {
   sendCronAnnouncePayloadStrict,
   sendFailureNotificationAnnounce,
 } from "../cron/delivery.js";
+import { cronFailureDetailLines } from "../cron/failure-notification-text.js";
 import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
 import type { CronEvent } from "../cron/service.js";
 import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
@@ -24,7 +26,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { SsrFBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 
@@ -39,18 +41,14 @@ type CronAgentResolver = (requested?: string | null) => {
   cfg: OpenClawConfig;
 };
 
-type CronWebhookTarget = {
-  url: string;
-  source: "completionDestination";
-};
-
 type CronFailureAlertParams = {
   deps: CliDeps;
   logger: CronLogger;
   resolveCronAgent: CronAgentResolver;
   webhookToken?: unknown;
+  ssrfPolicy?: SsrFPolicy;
   job: CronJob;
-  text: string;
+  payload: ReplyPayload;
   runAtMs?: number;
   channel: CronMessageChannel;
   to?: string;
@@ -128,27 +126,20 @@ function redactCommandCronEventForExternalDelivery(evt: CronEvent, job?: CronJob
   return redacted;
 }
 
-/** Resolves detached completion-destination webhooks. */
-function resolveCronWebhookTargets(params: {
+function resolveCronCompletionWebhook(params: {
   delivery?: {
     mode?: string;
     to?: string;
     completionDestination?: { mode?: string; to?: string };
   };
-}): CronWebhookTarget[] {
-  const targets: CronWebhookTarget[] = [];
-  const mode = normalizeOptionalLowercaseString(params.delivery?.mode);
-  const completionMode = normalizeOptionalLowercaseString(
-    params.delivery?.completionDestination?.mode,
-  );
-  if (mode === "announce" && completionMode === "webhook") {
-    const url = normalizeHttpWebhookUrl(params.delivery?.completionDestination?.to);
-    if (url) {
-      targets.push({ url, source: "completionDestination" });
-    }
+}): string | undefined {
+  if (
+    normalizeOptionalLowercaseString(params.delivery?.mode) !== "announce" ||
+    normalizeOptionalLowercaseString(params.delivery?.completionDestination?.mode) !== "webhook"
+  ) {
+    return undefined;
   }
-
-  return targets;
+  return normalizeHttpWebhookUrl(params.delivery?.completionDestination?.to) ?? undefined;
 }
 
 function buildCronWebhookHeaders(webhookToken?: string): Record<string, string> {
@@ -213,6 +204,7 @@ async function postCronWebhookStrict(params: {
   webhookUrl: string;
   webhookToken?: string;
   payload: unknown;
+  ssrfPolicy?: SsrFPolicy;
   signal?: AbortSignal;
   deadlineAtMs?: number;
   onDeliveryAccepted?: () => void;
@@ -230,6 +222,7 @@ async function postCronWebhookStrict(params: {
   const result = await fetchWithSsrFGuard({
     url: params.webhookUrl,
     timeoutMs: requestTimeoutMs,
+    policy: params.ssrfPolicy,
     ...(params.signal ? { signal: params.signal } : {}),
     init: {
       method: "POST",
@@ -276,6 +269,7 @@ async function postCronWebhook(params: {
   webhookUrl: string;
   webhookToken?: string;
   payload: unknown;
+  ssrfPolicy?: SsrFPolicy;
   logContext: Record<string, unknown>;
   blockedLog: string;
   failedLog: string;
@@ -313,6 +307,7 @@ export async function sendGatewayCronWebhook(params: {
   abortSignal?: AbortSignal;
   deadlineAtMs?: number;
   webhookToken?: unknown;
+  ssrfPolicy?: SsrFPolicy;
   onDeliveryAccepted?: () => void;
 }): Promise<void> {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
@@ -330,6 +325,7 @@ export async function sendGatewayCronWebhook(params: {
       postCronWebhookStrict({
         webhookUrl,
         webhookToken: normalizeOptionalString(params.webhookToken),
+        ssrfPolicy: params.ssrfPolicy,
         payload: buildCronFinishedWebhookPayload(event),
         ...(params.abortSignal ? { signal: params.abortSignal } : {}),
         ...(params.deadlineAtMs !== undefined ? { deadlineAtMs: params.deadlineAtMs } : {}),
@@ -380,10 +376,11 @@ async function sendGatewayCronFailureAlertUnderAdmission(
       await postCronWebhook({
         webhookUrl,
         webhookToken,
+        ssrfPolicy: params.ssrfPolicy,
         payload: {
           jobId: params.job.id,
           jobName: params.job.name,
-          message: params.text,
+          message: params.payload.text ?? "",
           runAtMs: params.runAtMs,
         },
         logContext: { jobId: params.job.id },
@@ -419,7 +416,10 @@ async function sendGatewayCronFailureAlertUnderAdmission(
         threadId: params.threadId,
         sessionKey: resolveCronDeliverySessionKey(params.job),
       },
-      message: appendCronRunStarted(params.text, params.runAtMs, runtimeConfig),
+      payload: {
+        ...params.payload,
+        text: appendCronRunStarted(params.payload.text ?? "", params.runAtMs, runtimeConfig),
+      },
       abortSignal: abortController.signal,
     }),
     CRON_WEBHOOK_TIMEOUT_MS,
@@ -440,6 +440,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
   logger: CronLogger;
   resolveCronAgent: CronAgentResolver;
   webhookToken?: unknown;
+  ssrfPolicy?: SsrFPolicy;
   globalFailureDestination?: CronFailureDestinationConfig;
 }): void {
   const webhookToken = normalizeOptionalString(params.webhookToken);
@@ -448,7 +449,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
     params.job?.payload.kind === "script"
       ? normalizeOptionalString(redactedWebhookEvent.summary)
       : params.evt.summary;
-  const webhookTargets = resolveCronWebhookTargets({
+  const completionWebhookUrl = resolveCronCompletionWebhook({
     delivery:
       params.job?.delivery && typeof params.job.delivery.mode === "string"
         ? {
@@ -474,26 +475,23 @@ export function dispatchGatewayCronFinishedNotifications(params: {
 
   // Script notify is carried as the completion summary, so its absence uses
   // the same silent-summary suppression path as NO_REPLY output.
-  if (completionSummary || params.evt.status === "error") {
-    for (const webhookTarget of webhookTargets) {
-      const payload = buildCronFinishedWebhookPayload(redactedWebhookEvent);
-      // Completion notification fanout is best-effort; the cron service has
-      // already recorded the run result and must not wait on slow webhooks.
-      dispatchDetachedCronNotification({
-        jobId: params.evt.jobId,
-        logger: params.logger,
-        deliver: () =>
-          postCronWebhook({
-            webhookUrl: webhookTarget.url,
-            webhookToken,
-            payload,
-            logContext: { jobId: params.evt.jobId, source: webhookTarget.source },
-            blockedLog: "cron: webhook delivery blocked by SSRF guard",
-            failedLog: "cron: webhook delivery failed",
-            logger: params.logger,
-          }),
-      });
-    }
+  if (completionWebhookUrl && (completionSummary || params.evt.status === "error")) {
+    const payload = buildCronFinishedWebhookPayload(redactedWebhookEvent);
+    dispatchDetachedCronNotification({
+      jobId: params.evt.jobId,
+      logger: params.logger,
+      deliver: () =>
+        postCronWebhook({
+          webhookUrl: completionWebhookUrl,
+          webhookToken,
+          ssrfPolicy: params.ssrfPolicy,
+          payload,
+          logContext: { jobId: params.evt.jobId, source: "completionDestination" },
+          blockedLog: "cron: webhook delivery blocked by SSRF guard",
+          failedLog: "cron: webhook delivery failed",
+          logger: params.logger,
+        }),
+    });
   }
 
   dispatchCronFailureDestinationNotifications({
@@ -503,6 +501,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
     logger: params.logger,
     resolveCronAgent: params.resolveCronAgent,
     webhookToken,
+    ssrfPolicy: params.ssrfPolicy,
     globalFailureDestination: params.globalFailureDestination,
   });
 }
@@ -514,6 +513,7 @@ function dispatchCronFailureDestinationNotifications(params: {
   logger: CronLogger;
   resolveCronAgent: CronAgentResolver;
   webhookToken?: string;
+  ssrfPolicy?: SsrFPolicy;
   globalFailureDestination?: CronFailureDestinationConfig;
 }): void {
   if (params.evt.status !== "error" || !params.job || params.job.delivery?.bestEffort === true) {
@@ -538,6 +538,7 @@ function dispatchCronFailureDestinationNotifications(params: {
             postCronWebhook({
               webhookUrl,
               webhookToken: params.webhookToken,
+              ssrfPolicy: params.ssrfPolicy,
               payload: failurePayload,
               logContext: { jobId: params.evt.jobId },
               blockedLog: "cron: failure destination webhook blocked by SSRF guard",
@@ -557,56 +558,45 @@ function dispatchCronFailureDestinationNotifications(params: {
       return;
     }
 
-    if (failureDest.mode === "announce") {
-      const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(job.agentId);
-      dispatchDetachedCronNotification({
-        jobId: job.id,
-        logger: params.logger,
-        deliver: () =>
-          sendFailureNotificationAnnounce(
-            params.deps,
-            runtimeConfig,
-            agentId,
-            job.id,
-            {
-              channel: failureDest.channel,
-              to: failureDest.to,
-              accountId: failureDest.accountId,
-              sessionKey: deliverySessionKey,
-              // A configured failure route is already explicit; keep the cron run
-              // session only for context, not for reattaching the primary topic.
-              inheritSessionThread: false,
-            },
-            appendCronRunStarted(`⚠️ ${failurePayload.message}`, params.evt.runAtMs, runtimeConfig),
-          ),
-      });
+    if (failureDest.mode !== "announce") {
+      return;
     }
-    return;
   }
 
   const primaryPlan = resolveCronDeliveryPlan(job);
-  if (primaryPlan.mode !== "announce" || !primaryPlan.requested) {
-    return;
-  }
-
-  const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(job.agentId);
-  dispatchDetachedCronNotification({
-    jobId: job.id,
-    logger: params.logger,
-    deliver: () =>
-      sendFailureNotificationAnnounce(
-        params.deps,
-        runtimeConfig,
-        agentId,
-        job.id,
-        {
+  const announceTarget = failureDest
+    ? {
+        channel: failureDest.channel,
+        to: failureDest.to,
+        accountId: failureDest.accountId,
+        sessionKey: deliverySessionKey,
+        // Explicit failure routes keep run context without inheriting the primary topic.
+        inheritSessionThread: false,
+      }
+    : primaryPlan.mode === "announce" && primaryPlan.requested
+      ? {
           channel: primaryPlan.channel,
           to: primaryPlan.to,
           accountId: primaryPlan.accountId,
           threadId: primaryPlan.threadId,
           sessionKey: deliverySessionKey,
-        },
-        appendCronRunStarted(`⚠️ ${failurePayload.message}`, params.evt.runAtMs, runtimeConfig),
-      ),
+        }
+      : undefined;
+  if (!announceTarget) {
+    return;
+  }
+
+  const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(job.agentId);
+  const failureAlertText = [
+    `Automation "${job.name}" failed`,
+    ...cronFailureDetailLines(job.state.lastErrorReason),
+  ].join("\n");
+  dispatchDetachedCronNotification({
+    jobId: job.id,
+    logger: params.logger,
+    deliver: () =>
+      sendFailureNotificationAnnounce(params.deps, runtimeConfig, agentId, job.id, announceTarget, {
+        text: appendCronRunStarted(`⚠️ ${failureAlertText}`, params.evt.runAtMs, runtimeConfig),
+      }),
   });
 }

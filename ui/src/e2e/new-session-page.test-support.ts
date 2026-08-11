@@ -5,12 +5,31 @@ import { expect } from "vitest";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,
-  installMockGateway,
+  installMockGateway as installControlUiMockGateway,
+  type ControlUiMockGatewayScenario,
+  type MockGatewayControls,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-export { controlUiSessionPath, controlUiSessionUrl, installMockGateway };
+export { controlUiSessionPath, controlUiSessionUrl };
+
+const NEW_SESSION_FEATURE_METHODS = [
+  "chat.metadata",
+  "chat.startup",
+  "sessions.create",
+  "sessions.dispatch",
+] as const;
+
+export function installMockGateway(
+  page: Page,
+  scenario: ControlUiMockGatewayScenario = {},
+): Promise<MockGatewayControls> {
+  return installControlUiMockGateway(page, {
+    ...scenario,
+    featureMethods: scenario.featureMethods ?? [...NEW_SESSION_FEATURE_METHODS],
+  });
+}
 
 export const WORKSPACE = "/home/peter/openclaw";
 export const PICKED = "/home/peter/openclaw/packages";
@@ -38,6 +57,18 @@ export const reconnectProofArtifactDir = path.join(
   "control-ui-e2e",
   "initial-prompt-reconnect",
 );
+export const projectProofArtifactDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "project-registry",
+);
+
+export async function prepareProjectUiProof() {
+  if (captureUiProofEnabled) {
+    await mkdir(projectProofArtifactDir, { recursive: true });
+  }
+}
 export const ONE_PIXEL_PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
 export const SESSION_LIST_DEFAULTS = {
@@ -46,7 +77,9 @@ export const SESSION_LIST_DEFAULTS = {
   modelProvider: "openai",
 };
 
-export function pollLocatorText(locator: Locator) {
+type LocatorTextPoll = ReturnType<typeof expect.poll<Promise<string | null>>>;
+
+export function pollLocatorText(locator: Locator): LocatorTextPoll {
   return expect.poll(() => locator.textContent({ timeout: LOCATOR_TEXT_READ_TIMEOUT_MS }), {
     timeout: LOCATOR_TEXT_POLL_TIMEOUT_MS,
   });
@@ -81,6 +114,25 @@ export function createdSessionListResult(sessionKey: string) {
   };
 }
 
+export async function expectPendingCloudStartupBeforeRuntime(
+  page: Page,
+  gateway: MockGatewayControls,
+  sessionKey: string,
+) {
+  await waitForCommittedChatRoute(page);
+  expect(page.url()).toContain(controlUiSessionPath(sessionKey));
+  const startupStatus = page.locator('.chat-cloud-startup[role="status"]');
+  await expect.poll(() => startupStatus.count()).toBe(1);
+  await pollLocatorText(startupStatus).toContain("Starting…");
+  await expect
+    .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
+    .toBe(true);
+  expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
+  expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+  await captureUiProof(page, "02-cloud-startup-chunk-pending.png");
+  return startupStatus;
+}
+
 export async function captureUiProof(page: Page, fileName: string) {
   if (!captureUiProofEnabled) {
     return;
@@ -90,6 +142,18 @@ export async function captureUiProof(page: Page, fileName: string) {
     animations: "disabled",
     fullPage: true,
     path: path.join(uiProofArtifactDir, fileName),
+  });
+}
+
+export async function captureProjectUiProof(page: Page, fileName: string) {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  await mkdir(projectProofArtifactDir, { recursive: true });
+  await page.screenshot({
+    animations: "disabled",
+    fullPage: true,
+    path: path.join(projectProofArtifactDir, fileName),
   });
 }
 

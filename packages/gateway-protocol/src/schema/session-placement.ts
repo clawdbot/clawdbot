@@ -83,6 +83,8 @@ const TerminalSessionPlacementProperties = {
   workerBundleHash: Type.Optional(WorkerBundleHashSchema),
   ...SessionPlacementAckProperties,
   ...SessionPlacementConflictProperties,
+  terminalReason: Type.Optional(NonEmptyString),
+  terminalAtMs: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
 };
 
 function createUnownedSessionPlacementSchema<const State extends "local" | "requested">(

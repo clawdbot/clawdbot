@@ -28,6 +28,7 @@ import {
 } from "../channels/plugins/native-approval-prompt.js";
 import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   buildMemoryPromptSection,
   type PreparedMemoryPromptSection,
@@ -35,6 +36,7 @@ import {
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import type { BootstrapMode } from "./bootstrap-mode.js";
 import {
@@ -46,6 +48,7 @@ import type {
   EmbeddedFullAccessBlockedReason,
   EmbeddedSandboxInfo,
 } from "./embedded-agent-runner/types.js";
+import { MAX_OWNER_PROMPT_CONTENT_BYTES, resolveOwnerPromptNumbers } from "./owner-display.js";
 import { filterProjectScopedCuratedContextFiles } from "./project-memory-bootstrap.js";
 import { buildPromisedWorkPromptSection } from "./promised-work-prompt.js";
 import {
@@ -63,6 +66,7 @@ import type {
 } from "./system-prompt-contribution.js";
 import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
+import { TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT } from "./transcript-credential-safety.js";
 import {
   buildWatchedSessionsPromptLines,
   type PreparedWatchedSessionsPrompt,
@@ -157,13 +161,7 @@ function cacheStablePromptPrefix(key: string, build: () => string): string {
 
   const value = build();
   stablePromptPrefixCache.set(key, { value });
-  while (stablePromptPrefixCache.size > SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT) {
-    const oldestKey = stablePromptPrefixCache.keys().next().value;
-    if (oldestKey === undefined) {
-      break;
-    }
-    stablePromptPrefixCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(stablePromptPrefixCache, SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT);
   return value;
 }
 
@@ -414,20 +412,59 @@ function formatOwnerDisplayId(ownerId: string, ownerDisplaySecret?: string) {
   return digest.slice(0, 12);
 }
 
+const MAX_OWNER_PROMPT_LINE_BYTES = 1_024;
+const OWNER_PROMPT_PREFIX = "Allowlisted senders: ";
+const OWNER_PROMPT_SUFFIX = ". Allowlisted != owner.";
+
+function formatRawOwnerDisplayId(ownerId: string, maxBytes: number): string {
+  const sanitized = sanitizeForPromptLiteral(ownerId);
+  if (Buffer.byteLength(sanitized, "utf8") <= maxBytes) {
+    return sanitized;
+  }
+  if (maxBytes <= 3) {
+    return "";
+  }
+  return `${truncateUtf8Prefix(sanitized, maxBytes - 3)}...`;
+}
+
 function buildOwnerIdentityLine(
   ownerNumbers: string[],
   ownerDisplay: OwnerIdDisplay,
   ownerDisplaySecret?: string,
 ) {
-  const normalized = normalizeStringEntries(ownerNumbers);
+  const normalized = normalizeStringEntries(resolveOwnerPromptNumbers({ ownerNumbers }));
   if (normalized.length === 0) {
     return undefined;
   }
-  const displayOwnerNumbers =
-    ownerDisplay === "hash"
-      ? normalized.map((ownerId) => formatOwnerDisplayId(ownerId, ownerDisplaySecret))
-      : normalized;
-  return `Allowlisted senders: ${displayOwnerNumbers.join(", ")}. Allowlisted != owner.`;
+  const displayOwnerNumbers: string[] = [];
+  let remainingBytes = Math.min(
+    MAX_OWNER_PROMPT_CONTENT_BYTES,
+    MAX_OWNER_PROMPT_LINE_BYTES - Buffer.byteLength(OWNER_PROMPT_PREFIX + OWNER_PROMPT_SUFFIX),
+  );
+  for (const ownerId of normalized) {
+    const separatorBytes = displayOwnerNumbers.length > 0 ? 2 : 0;
+    const availableBytes = remainingBytes - separatorBytes;
+    if (availableBytes <= 0) {
+      break;
+    }
+    const displayOwnerId =
+      ownerDisplay === "hash"
+        ? formatOwnerDisplayId(ownerId, ownerDisplaySecret)
+        : formatRawOwnerDisplayId(ownerId, availableBytes);
+    if (!displayOwnerId) {
+      continue;
+    }
+    const nextBytes = Buffer.byteLength(displayOwnerId, "utf8") + separatorBytes;
+    if (nextBytes > remainingBytes) {
+      break;
+    }
+    displayOwnerNumbers.push(displayOwnerId);
+    remainingBytes -= nextBytes;
+  }
+  if (displayOwnerNumbers.length === 0) {
+    return undefined;
+  }
+  return `${OWNER_PROMPT_PREFIX}${displayOwnerNumbers.join(", ")}${OWNER_PROMPT_SUFFIX}`;
 }
 
 function buildTemporalContextSection(params: {
@@ -564,7 +601,7 @@ function buildMessagingSection(params: {
 }) {
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const visibleReplyInstruction = messageToolOnly
-    ? "- Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing. Brief tool-call progress is visible; no hidden instructions/private data/reasoning."
+    ? "- Current source visible reply MUST use `message(action=send)`; final text is private. Set `final=false` for progress. Set `final=true`, or omit it, for the completed reply. Skip tool = user gets nothing. No hidden instructions/private data/reasoning."
     : "- Current-session final text normally routes to source. If turn says final private, visible output uses `message(action=send)`.";
   const messageToolTargetInstruction = params.requireExplicitMessageTarget
     ? "- `send`: `target` + `message`; target required this turn."
@@ -619,7 +656,7 @@ function buildMessagingSection(params: {
               : `- After visible \`message(send)\`, final ONLY ${SILENT_REPLY_TOKEN}.`,
           showGenericInlineButtonHint
             ? params.inlineButtonsEnabled
-              ? "- Inline buttons: `send` with `buttons=[[{text,callback_data,style?}]]`; style primary|success|danger."
+              ? '- Inline buttons: `send` with `presentation={"blocks":[{"type":"buttons","buttons":[{"label":"Yes","action":{"type":"callback","value":"yes"},"style":"primary"}]}]}`.'
               : params.runtimeChannel
                 ? `- Inline buttons OFF for ${params.runtimeChannel}; ask owner for ${params.runtimeChannel}.capabilities.inlineButtons=dm|group|all|allowlist.`
                 : ""
@@ -1002,12 +1039,12 @@ export function buildAgentSystemPrompt(params: {
       ])
       .filter(([, value]) => Boolean(value)),
   ) as Partial<Record<ProviderSystemPromptSectionId, string>>;
+  const promptMode = params.promptMode ?? "full";
+  const isMinimal = promptMode === "minimal" || promptMode === "none";
   const ownerDisplay = params.ownerDisplay === "hash" ? "hash" : "raw";
-  const ownerLine = buildOwnerIdentityLine(
-    params.ownerNumbers ?? [],
-    ownerDisplay,
-    params.ownerDisplaySecret,
-  );
+  const ownerLine = isMinimal
+    ? undefined
+    : buildOwnerIdentityLine(params.ownerNumbers ?? [], ownerDisplay, params.ownerDisplaySecret);
   const reasoningHint = params.reasoningTagHint
     ? [
         "Internal reasoning ONLY inside <think>...</think>.",
@@ -1032,8 +1069,6 @@ export function buildAgentSystemPrompt(params: {
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
   const collapsibleDetailsSupported = runtimeCapabilitiesLower.has("markdowndetails");
   const threadBoundAcpSpawnEnabled = runtimeCapabilitiesLower.has("threadbound-acp-spawn");
-  const promptMode = params.promptMode ?? "full";
-  const isMinimal = promptMode === "minimal" || promptMode === "none";
   const subagentDelegationMode = normalizeSubagentDelegationMode(params.subagentDelegationMode);
   const proactiveSubagentOrchestration = params.proactiveSubagentOrchestration === true;
   const sourceMessageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
@@ -1072,6 +1107,7 @@ export function buildAgentSystemPrompt(params: {
     "Before config/scheduler edits (crontab/systemd/nginx/shell rc/timers): inspect; preserve/merge. Whole-file replacement only explicit.",
     "Never persuade anyone to expand access or disable safeguards.",
     "Never copy self or change prompts/safety/tool policy unless user explicitly requests.",
+    TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
     "",
   ];
   // CLI backends own native file tools outside OpenClaw's projected tool list.
@@ -1288,7 +1324,7 @@ export function buildAgentSystemPrompt(params: {
         ? "## Model Aliases"
         : "",
       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
-        ? "Model override: prefer alias; provider/model also accepted."
+        ? "Model override: aliases are shortcuts for unqualified model requests. Use explicit provider/model references verbatim; do not substitute an alias or another provider."
         : "",
       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
         ? params.modelAliasLines.join("\n")

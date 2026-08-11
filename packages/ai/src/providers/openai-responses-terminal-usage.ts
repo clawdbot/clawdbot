@@ -1,10 +1,10 @@
 /**
  * Canonical mapping for terminal OpenAI Responses events.
  *
- * `response.completed` and `response.incomplete` are both terminal and both carry usage, so every
- * Responses path — the package-side stream processor and the agent-side transport — finalizes
- * through the helpers here. Keeping one owner prevents the two from drifting on token buckets,
- * service-tier pricing, or future terminal-event semantics.
+ * `response.completed`, `response.incomplete`, and `response.failed` are terminal and can carry
+ * usage, so every Responses path finalizes through the helpers here. Keeping one owner prevents
+ * package and managed transports from drifting on token buckets, service-tier pricing, or future
+ * terminal-event semantics.
  */
 import type OpenAI from "openai";
 import type { StopReason, Usage } from "../types.js";

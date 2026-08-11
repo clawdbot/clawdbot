@@ -45,7 +45,7 @@ export type PairLoopGuardSnapshotEntry = {
 };
 
 type PairLoopGuardEntry = {
-  recentMs: number[];
+  recentEvents: Array<{ timestampMs: number; eventId?: string }>;
   windowMs: number;
   cooldownStartedAtMs: number;
   cooldownUntilMs: number;
@@ -63,6 +63,8 @@ export type PairLoopGuard = {
     senderId: string;
     /** Receiver id for this event; paired with senderId without direction. */
     receiverId: string;
+    /** Stable provider event identity used to avoid double-counting retries. */
+    eventId?: string;
     /** Resolved guard thresholds for the current channel/account. */
     settings: PairLoopGuardSettings;
     /** Optional test/runtime clock override in epoch milliseconds. */
@@ -178,13 +180,13 @@ function buildPairKey(params: {
   return [params.scopeId, params.conversationId, lhs, rhs].join(KEY_SEPARATOR);
 }
 
-function pruneRecentTimestamps(entry: PairLoopGuardEntry, nowMs: number, windowMs: number): void {
+function pruneRecentEvents(entry: PairLoopGuardEntry, nowMs: number, windowMs: number): void {
   const cutoff = nowMs - windowMs;
-  entry.recentMs = entry.recentMs.filter((timestampMs) => timestampMs > cutoff);
+  entry.recentEvents = entry.recentEvents.filter((event) => event.timestampMs > cutoff);
 }
 
 function countCurrentWindowEvents(entry: PairLoopGuardEntry, nowMs: number): number {
-  return entry.recentMs.filter((timestampMs) => timestampMs <= nowMs).length;
+  return entry.recentEvents.filter((event) => event.timestampMs <= nowMs).length;
 }
 
 /** Creates an in-memory pair-loop guard with bounded periodic pruning. */
@@ -199,8 +201,8 @@ export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): Pair
     }
     nextPruneAtMs = nowMs + pruneIntervalMs;
     for (const [key, entry] of tracked) {
-      pruneRecentTimestamps(entry, nowMs, entry.windowMs);
-      if (entry.recentMs.length === 0 && entry.cooldownUntilMs <= nowMs) {
+      pruneRecentEvents(entry, nowMs, entry.windowMs);
+      if (entry.recentEvents.length === 0 && entry.cooldownUntilMs <= nowMs) {
         tracked.delete(key);
       }
     }
@@ -211,6 +213,7 @@ export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): Pair
     conversationId: string;
     senderId: string;
     receiverId: string;
+    eventId?: string;
     settings: PairLoopGuardSettings;
     nowMs?: number;
   }): PairLoopGuardResult {
@@ -242,21 +245,33 @@ export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): Pair
     const key = buildPairKey(paramsLocal);
     let entry = tracked.get(key);
     if (!entry) {
-      entry = { recentMs: [], windowMs, cooldownStartedAtMs: 0, cooldownUntilMs: 0 };
+      entry = {
+        recentEvents: [],
+        windowMs,
+        cooldownStartedAtMs: 0,
+        cooldownUntilMs: 0,
+      };
       tracked.set(key, entry);
+    }
+    entry.windowMs = windowMs;
+    pruneRecentEvents(entry, nowMs, windowMs);
+    const eventId = paramsLocal.eventId?.trim();
+    if (eventId && entry.recentEvents.some((event) => event.eventId === eventId)) {
+      return { suppressed: false };
     }
     if (entry.cooldownStartedAtMs <= nowMs && entry.cooldownUntilMs > nowMs) {
       return { suppressed: true, cooldownUntilMs: entry.cooldownUntilMs };
     }
 
-    entry.windowMs = windowMs;
-    pruneRecentTimestamps(entry, nowMs, windowMs);
-    entry.recentMs.push(nowMs);
+    entry.recentEvents.push({
+      timestampMs: nowMs,
+      ...(eventId ? { eventId } : {}),
+    });
     if (countCurrentWindowEvents(entry, nowMs) > maxEventsPerWindow) {
       entry.cooldownStartedAtMs = nowMs;
       entry.cooldownUntilMs = nowMs + cooldownMs;
       // Keep only future records during cooldown; past events should not extend suppression.
-      entry.recentMs = entry.recentMs.filter((timestampMs) => timestampMs > nowMs);
+      entry.recentEvents = entry.recentEvents.filter((event) => event.timestampMs > nowMs);
       return { suppressed: true, cooldownUntilMs: entry.cooldownUntilMs };
     }
 
@@ -272,7 +287,7 @@ export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): Pair
     snapshot: () =>
       Array.from(tracked.entries()).map(([key, entry]) => ({
         key,
-        recentCount: entry.recentMs.length,
+        recentCount: entry.recentEvents.length,
         cooldownUntilMs: entry.cooldownUntilMs,
       })),
   };

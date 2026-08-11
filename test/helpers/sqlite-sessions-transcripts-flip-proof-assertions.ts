@@ -31,7 +31,7 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
         checkpoint.label === "after-startup-import" &&
         checkpoint.gatewayLogTail?.includes(
           "session: imported legacy session metadata/transcripts into SQLite",
-        ) === true &&
+        ) &&
         report.oldStateSessionKeys.every((key) =>
           checkpoint.sqlite.trackedEntries.some((entry) => entry.sessionKey === key),
         ) &&

@@ -8,7 +8,7 @@ import {
 
 const voiceSessionMocks = vi.hoisted(() => ({
   appendRelayVoiceTranscript: vi.fn(),
-  closeClientVoiceSession: vi.fn(),
+  closeRelayVoiceSessionRecord: vi.fn(),
   createOrResumeClientVoiceSession: vi.fn(),
 }));
 
@@ -50,7 +50,7 @@ function createRelaySession(): {
 describe("realtime relay voice transcript persistence", () => {
   beforeEach(() => {
     voiceSessionMocks.appendRelayVoiceTranscript.mockReset();
-    voiceSessionMocks.closeClientVoiceSession.mockReset().mockResolvedValue(undefined);
+    voiceSessionMocks.closeRelayVoiceSessionRecord.mockReset().mockResolvedValue(undefined);
     voiceSessionMocks.createOrResumeClientVoiceSession.mockReset();
   });
 
@@ -88,7 +88,7 @@ describe("realtime relay voice transcript persistence", () => {
     const close = session.voiceSessionClose;
     expect(close).toBeDefined();
     expect(closeRelayVoiceSession(session)).toBe(close);
-    expect(voiceSessionMocks.closeClientVoiceSession).not.toHaveBeenCalled();
+    expect(voiceSessionMocks.closeRelayVoiceSessionRecord).not.toHaveBeenCalled();
 
     firstAppend.resolve();
     await close;
@@ -104,8 +104,31 @@ describe("realtime relay voice transcript persistence", () => {
         ([params]) => (params as { text: string }).text.length === 8_000,
       ),
     ).toBe(true);
-    expect(voiceSessionMocks.closeClientVoiceSession).toHaveBeenCalledOnce();
+    expect(voiceSessionMocks.closeRelayVoiceSessionRecord).toHaveBeenCalledOnce();
     expect(enqueueRelayVoiceTranscript(session, "user", "too late")).toBe(false);
+  });
+
+  it("terminally closes the durable record after bounded transcript retries fail", async () => {
+    vi.useFakeTimers();
+    try {
+      voiceSessionMocks.appendRelayVoiceTranscript.mockRejectedValue(
+        new Error("transcript write failed"),
+      );
+      const { session } = createRelaySession();
+
+      expect(enqueueRelayVoiceTranscript(session, "user", "persist me")).toBe(true);
+      const close = closeRelayVoiceSession(session);
+      await vi.runAllTimersAsync();
+      await close;
+
+      expect(voiceSessionMocks.appendRelayVoiceTranscript).toHaveBeenCalledTimes(3);
+      expect(voiceSessionMocks.closeRelayVoiceSessionRecord).toHaveBeenCalledOnce();
+      expect(session.context.logGateway?.warn).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("realtime relay transcript append failed"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("normalizes the bounded pre-bind transcript buffer", () => {

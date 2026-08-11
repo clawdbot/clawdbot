@@ -21,6 +21,13 @@ import {
   resolveTelegramForumThreadId,
   resolveTelegramMessageForumFlagHint,
 } from "./bot/helpers.js";
+import {
+  getPreparedTelegramPollAnswer,
+  isEligibleTelegramPollAnswerUpdate,
+  prepareTelegramPollAnswerContext,
+  recordPreparedTelegramPollAnswer,
+  settleTelegramPollAnswerContext,
+} from "./poll-answer-context.js";
 import { hasTelegramQuestionCallbackPrefix } from "./question-callback-data.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import { normalizeTelegramStateAccountId } from "./state-account-id.js";
@@ -62,14 +69,26 @@ function telegramSpooledLaneKey(update: unknown, botInfo?: TelegramBotInfo): str
   });
 }
 
-function inspectTelegramSpooledUpdate(update: unknown, botInfo?: TelegramBotInfo) {
+function inspectTelegramSpooledUpdate(
+  update: unknown,
+  botInfo?: TelegramBotInfo,
+  claimedLaneKey?: string,
+) {
   const updateId = resolveTelegramUpdateId(update);
   if (updateId === null) {
     throw new TelegramIngressPayloadError("Telegram spooled update is missing numeric update_id.");
   }
+  const derivedLaneKey = telegramSpooledLaneKey(update, botInfo);
+  const preservePreIdentityControlLane =
+    botInfo !== undefined &&
+    claimedLaneKey?.endsWith(":control") === true &&
+    claimedLaneKey !== derivedLaneKey &&
+    claimedLaneKey === telegramSpooledLaneKey(update);
   return {
     eventId: telegramQueueEventId(updateId),
-    laneKey: telegramSpooledLaneKey(update, botInfo),
+    // Admission can precede getMe(). Preserve only the exact control lane that
+    // the same payload derived before identity became available.
+    laneKey: preservePreIdentityControlLane ? claimedLaneKey : derivedLaneKey,
   };
 }
 
@@ -256,7 +275,21 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
     TelegramSpooledUpdatePayload
   >({
     queue: params.queue,
-    inspect: (update) => inspectTelegramSpooledUpdate(update, params.botInfo),
+    inspect: (update, context) => {
+      if (
+        context.phase === "admission" &&
+        typeof update === "object" &&
+        update !== null &&
+        isEligibleTelegramPollAnswerUpdate(update)
+      ) {
+        prepareTelegramPollAnswerContext({ update, accountId: params.accountId });
+      }
+      return inspectTelegramSpooledUpdate(
+        update,
+        params.botInfo,
+        context.phase === "claim" ? context.claimedLaneKey : undefined,
+      );
+    },
     payload: {
       version: TELEGRAM_SPOOLED_UPDATE_PAYLOAD_VERSION,
       serialize: (update, { receivedAt }) => {
@@ -266,9 +299,25 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
             "Telegram spooled update is missing numeric update_id.",
           );
         }
-        return { version: TELEGRAM_SPOOLED_UPDATE_PAYLOAD_VERSION, updateId, receivedAt, update };
+        const preparedPollAnswer =
+          typeof update === "object" && update !== null
+            ? getPreparedTelegramPollAnswer(update)
+            : undefined;
+        return {
+          version: TELEGRAM_SPOOLED_UPDATE_PAYLOAD_VERSION,
+          updateId,
+          receivedAt,
+          update,
+          ...(preparedPollAnswer ? { preparedPollAnswer } : {}),
+        };
       },
-      deserialize: (payload) => payload.update,
+      deserialize: (payload) => {
+        const update = payload.update;
+        if (payload.preparedPollAnswer && typeof update === "object" && update !== null) {
+          recordPreparedTelegramPollAnswer(update, payload.preparedPollAnswer);
+        }
+        return update;
+      },
       encode: ({ body }) => body,
       decode: (payload) => ({ version: payload.version, body: payload }),
       createClaimError: (kind, claim) =>
@@ -285,7 +334,13 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
       try {
         const result = await runWithTelegramSpooledReplayUpdate(
           update as object,
-          async () => await params.dispatch(update, telegramLifecycle),
+          async () => {
+            await settleTelegramPollAnswerContext({
+              update: update as object,
+              accountId: params.accountId,
+            });
+            return await params.dispatch(update, telegramLifecycle);
+          },
           telegramLifecycle,
         );
         const outcome = result.value;

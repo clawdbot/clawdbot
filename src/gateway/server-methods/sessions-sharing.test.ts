@@ -332,7 +332,7 @@ describe("session sharing handlers", () => {
           client,
           context: {
             ...context(vi.fn()),
-            loadGatewayModelCatalog: async () => {
+            readPreparedGatewayModelCatalog: async () => {
               await patchSessionEntry({ agentId: "main", sessionKey }, () => ({
                 visibility: "draft",
               }));
@@ -408,7 +408,7 @@ describe("session sharing handlers", () => {
         client: identifiedClient("outsider@example.com"),
         context: {
           ...context(vi.fn()),
-          loadGatewayModelCatalog: async () => {
+          readPreparedGatewayModelCatalog: async () => {
             await patchSessionEntry({ agentId: "main", sessionKey: hiddenKey }, () => ({
               visibility: "draft",
             }));
@@ -719,7 +719,7 @@ describe("session sharing handlers", () => {
 
       await patchSessionEntry({ agentId: "main", sessionKey }, () => ({ visibility: "shared" }));
       const append = vi
-        .spyOn(SessionManager.prototype, "appendMessage")
+        .spyOn(SessionManager, "appendMessageToTranscript")
         .mockImplementationOnce(() => {
           throw new Error("audit unavailable");
         });
@@ -733,7 +733,7 @@ describe("session sharing handlers", () => {
 
       removeSessionMember({ agentId: "main", sessionKey }, "local-operator");
       const memberAppend = vi
-        .spyOn(SessionManager.prototype, "appendMessage")
+        .spyOn(SessionManager, "appendMessageToTranscript")
         .mockImplementationOnce(() => {
           throw new Error("audit unavailable");
         });

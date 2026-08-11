@@ -15,7 +15,7 @@ import {
   appendSqliteTranscriptEvent,
   appendSqliteTranscriptMessage,
   replaceSqliteTranscriptEvents,
-} from "./session-accessor.sqlite.js";
+} from "./session-accessor.sqlite-transcript-write.js";
 import { listSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
 import { searchSessionTranscripts } from "./session-transcript-search.js";
 

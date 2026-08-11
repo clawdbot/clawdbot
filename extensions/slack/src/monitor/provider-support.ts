@@ -1,5 +1,6 @@
 // Slack provider module implements model/runtime integration.
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { asOptionalRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackChannelResolution } from "../resolve-channels.js";
 import type { SlackUserResolution } from "../resolve-users.js";
@@ -40,6 +41,8 @@ type SlackSelfFilterArgs = {
   context?: {
     botId?: string;
     botUserId?: string;
+    teamId?: string;
+    enterpriseId?: string;
     isEnterpriseInstall?: boolean;
   };
   event?: unknown;
@@ -193,11 +196,26 @@ export function publishSlackConnectedStatus(
   if (!setStatus) {
     return;
   }
-  setStatus({
-    connected: true,
-    lastConnectedAt: Date.now(),
-    ...identityHealth,
-  });
+  const lastConnectedAt = Date.now();
+  setStatus(
+    identityHealth.lifecycle === "blocked"
+      ? channelBlockedPatch(identityHealth.lastError, { connected: true, lastConnectedAt })
+      : channelReadyPatch({ lastConnectedAt }),
+  );
+}
+
+export function publishSlackBlockedStatus(
+  setStatus: ((next: Record<string, unknown>) => void) | undefined,
+  error: unknown,
+) {
+  if (!setStatus) {
+    return;
+  }
+  setStatus(
+    channelBlockedPatch(formatUnknownError(error), {
+      connected: false,
+    }),
+  );
 }
 
 export function publishSlackDisconnectedStatus(
@@ -314,7 +332,7 @@ export function createSlackBoltApp(params: {
   clientOptions: Record<string, unknown>;
   dispatcher?: SlackSocketModeReceiverOptions["dispatcher"];
   wrapReceiver?: (receiver: SlackReceiver) => SlackReceiver;
-  onContextIdentity?: (identity: SlackContextIdentity) => void;
+  onContextIdentity?: (identity: SlackContextIdentity) => void | Promise<void>;
 }) {
   const socketModeLogger = createSlackSocketModeLogger();
   const socketModeReceiverOptions: SlackSocketModeReceiverOptions = {
@@ -358,7 +376,7 @@ export function createSlackBoltApp(params: {
     ...(appReceiver ? { receiver: appReceiver } : {}),
   });
   app.use(async (args) => {
-    params.onContextIdentity?.(args.context ?? {});
+    await params.onContextIdentity?.(args.context ?? {});
     if (shouldSkipOpenClawSlackSelfEvent(args)) {
       return;
     }

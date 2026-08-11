@@ -15,6 +15,18 @@ import {
 
 const suite = createSessionManagementE2eSuite();
 
+async function confirmDelete(page: import("playwright").Page, proofName?: string) {
+  const dialog = page.locator("openclaw-modal-dialog").last();
+  const nativeDialog = dialog.locator("wa-dialog").locator("dialog");
+  await expect
+    .poll(() => nativeDialog.evaluate((element) => getComputedStyle(element).opacity))
+    .toBe("1");
+  if (proofName) {
+    await captureUiProof(page, proofName);
+  }
+  await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+}
+
 suite.define(() => {
   it("deletes every archived thread exactly once when the paged roster reorders", async () => {
     const context = await suite.browser.newContext({
@@ -53,8 +65,8 @@ suite.define(() => {
           sessionsListResponse(archived, { totalCount: 3 }),
         ],
       });
-      page.once("dialog", (dialog) => void dialog.accept());
       await remove.click();
+      await confirmDelete(page, "styled-confirm-delete-archived.png");
 
       await expect
         .poll(async () =>
@@ -108,11 +120,11 @@ suite.define(() => {
       await expect.poll(() => page.locator(".data-table-bulk-bar").count()).toBe(0);
 
       await rowFor("Bravo").locator('input[type="checkbox"]').check();
-      page.once("dialog", (dialog) => void dialog.accept());
       await page
         .locator(".data-table-bulk-bar")
         .getByRole("button", { name: "Delete", exact: true })
         .click();
+      await confirmDelete(page);
       await gateway.waitForRequest("sessions.delete");
 
       await expect
@@ -147,6 +159,7 @@ suite.define(() => {
             "agent:main:research",
             "Research notes",
             Date.parse("2026-07-01T15:00:00.000Z"),
+            { hasActiveRun: true, status: "running" },
           ),
         ]),
         "sessions.patch": {},
@@ -162,12 +175,15 @@ suite.define(() => {
       await row.click({ button: "right" });
       const menuHost = page.locator("openclaw-session-menu");
       await menuHost
-        .getByRole("menuitem", { name: "Archive thread" })
+        .getByRole("menuitem", { name: "Archive session" })
         .waitFor({ state: "visible" });
       await page.keyboard.press("Escape");
 
-      await row.getByRole("button", { name: "Open thread menu" }).click();
-      await activateMenuItem(menuHost.getByRole("menuitem", { name: "Archive thread" }));
+      await row.getByRole("button", { name: "Open session menu" }).click();
+      const archiveItem = menuHost.getByRole("menuitem", { name: "Archive session" });
+      expect(await archiveItem.isDisabled()).toBe(false);
+      expect(await menuHost.getByRole("menuitem", { name: "Delete…" }).isDisabled()).toBe(true);
+      await activateMenuItem(archiveItem);
       const patch = await waitForPatch(
         gateway,
         (params) => params.key === "agent:main:research" && params.archived === true,
@@ -176,16 +192,18 @@ suite.define(() => {
         archived: true,
         key: "agent:main:research",
       });
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.abort")).toEqual([]);
+      expect(await gateway.getRequests("agent.wait")).toEqual([]);
     } finally {
       await context.close();
     }
   });
 
-  // Batch archiving used to force one canonical sessions.list per row, which is
-  // what made a multi-select stall. The whole selection must archive on one
-  // refresh and leave the sidebar settled with the rows gone.
+  // Batch archiving used to serialize one sessions.patch transaction per row.
+  // The whole selection now crosses the Gateway once and settles from one list.
 
-  it("archives a sidebar multi-select with one canonical list refresh", async () => {
+  it("archives a mixed active and idle sidebar multi-select in one RPC", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -199,11 +217,17 @@ suite.define(() => {
         "sessions.list": sessionsListResponse([
           sessionRow("agent:main:main", "Main", baseTime),
           sessionRow(batchKeys[0], "Batch A", baseTime - 1_000),
-          sessionRow(batchKeys[1], "Batch B", baseTime - 2_000),
+          sessionRow(batchKeys[1], "Batch B", baseTime - 2_000, {
+            hasActiveRun: true,
+            status: "running",
+          }),
           sessionRow(batchKeys[2], "Batch C", baseTime - 3_000),
         ]),
-        "sessions.patch": {},
+        "sessions.patchMany": {
+          outcomes: batchKeys.map((key) => ({ ok: true, key, agentId: "main" })),
+        },
       },
+      sessionArchiveFiltering: true,
       sessionKey: "agent:main:main",
     });
 
@@ -225,21 +249,33 @@ suite.define(() => {
       const batchMenu = page.locator("openclaw-session-menu");
       const archiveItem = batchMenu.getByRole("menuitem", { name: `Archive ${batchKeys.length}` });
       await archiveItem.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await archiveItem.isDisabled()).toBe(false);
+      expect(
+        await batchMenu.getByRole("menuitem", { name: `Delete ${batchKeys.length}…` }).isDisabled(),
+      ).toBe(true);
       await captureUiProof(page, "sidebar-multi-select-archive-menu.png");
-      await activateMenuItem(archiveItem);
+      await page.keyboard.press("A");
 
-      for (const key of batchKeys) {
-        await waitForPatch(gateway, (params) => params.key === key && params.archived === true);
-      }
-
-      const patches = await gateway.getRequests("sessions.patch");
-      expect(patches.map((request) => requireRecord(request.params).key)).toEqual([...batchKeys]);
-      // The whole selection costs one canonical refresh, not one per archived row.
+      const patchMany = await gateway.waitForRequest("sessions.patchMany");
+      const patchManyParams = requireRecord(patchMany.params);
+      expect(patchManyParams.patch).toEqual({ archived: true });
+      expect(
+        (patchManyParams.targets as Array<{ key: string }>).map((target) => target.key),
+      ).toEqual([...batchKeys]);
+      expect(await gateway.getRequests("sessions.patch")).toEqual([]);
+      expect(await gateway.getRequests("sessions.abort")).toEqual([]);
+      expect(await gateway.getRequests("agent.wait")).toEqual([]);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 10_000 })
         .toBe(listCountBeforeBatch + 1);
+      for (const key of batchKeys) {
+        await rowFor(key).waitFor({ state: "detached" });
+      }
+      await expect.poll(() => page.locator("[data-sidebar-session-error]").count()).toBe(0);
+      await expect
+        .poll(() => page.locator(".app-toast").textContent())
+        .toContain("Archived 3 sessions");
       await captureUiProof(page, "sidebar-multi-select-archive-settled.png");
-      // Hold past the batch so a late per-row refresh would still be caught.
       await page.waitForTimeout(500);
       expect((await gateway.getRequests("sessions.list")).length).toBe(listCountBeforeBatch + 1);
     } finally {
@@ -270,6 +306,9 @@ suite.define(() => {
           sessionRow("agent:main:main", "Main", baseTime),
           ...sessionRows,
         ]),
+        "sessions.patchMany": {
+          outcomes: batchRows.map((row) => ({ ok: true, key: row.key, agentId: "main" })),
+        },
         "sessions.patch": {},
       },
       sessionArchiveFiltering: true,
@@ -295,7 +334,9 @@ suite.define(() => {
       await rowFor(selected.key).waitFor({ state: "visible", timeout: 10_000 });
       await rowFor(selected.key).locator("a").first().click();
       await assertSelectedRoute();
-      await page.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+      await page
+        .locator('openclaw-chat-pane[aria-hidden="false"] .agent-chat__input textarea')
+        .waitFor({ state: "visible" });
 
       for (const row of batchRows) {
         await rowFor(row.key).click({ modifiers: ["Meta"] });
@@ -305,8 +346,8 @@ suite.define(() => {
       await activateMenuItem(
         batchMenu.getByRole("menuitem", { name: `Archive ${batchRows.length}` }),
       );
+      await gateway.waitForRequest("sessions.patchMany");
       for (const row of batchRows) {
-        await waitForPatch(gateway, (params) => params.key === row.key && params.archived === true);
         await gateway.emitGatewayEvent("sessions.changed", {
           ...row,
           archived: true,
@@ -321,10 +362,10 @@ suite.define(() => {
       });
       const selectedRow = rowFor(selected.key);
       await selectedRow.hover();
-      await selectedRow.getByRole("button", { name: "Open thread menu" }).click();
+      await selectedRow.getByRole("button", { name: "Open session menu" }).click();
       await activateMenuItem(
         page.locator("openclaw-session-menu").getByRole("menuitem", {
-          name: "Archive thread",
+          name: "Archive session",
         }),
       );
       await waitForPatch(
@@ -343,7 +384,9 @@ suite.define(() => {
       const archivedNotice = page.locator(".agent-chat__disabled-banner");
       await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => archivedNotice.textContent()).toContain("This session is archived.");
-      await expect.poll(() => page.locator(".agent-chat__input").count()).toBe(0);
+      await expect
+        .poll(() => page.locator(".chat-pane-cache__pane--visible .agent-chat__input").count())
+        .toBe(0);
 
       await archivedNotice.getByRole("button", { name: "Unarchive" }).click();
       await waitForPatch(
@@ -359,7 +402,9 @@ suite.define(() => {
 
       await assertSelectedRoute();
       await archivedNotice.waitFor({ state: "detached", timeout: 10_000 });
-      await page.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+      await page
+        .locator(".chat-pane-cache__pane--visible .agent-chat__input textarea")
+        .waitFor({ state: "visible" });
     } finally {
       await context.close();
     }
@@ -522,17 +567,16 @@ suite.define(() => {
       },
       sessionKey: "agent:main:main",
     });
-    page.on("dialog", (dialog) => void dialog.accept());
-
     try {
       await page.goto(`${suite.server.baseUrl}sessions?status=archived`);
       const row = page.locator(".session-data-row").filter({ hasText: "Research notes" });
       await row.waitFor({ state: "visible", timeout: 10_000 });
 
-      await row.getByRole("button", { name: "Open thread menu" }).click();
+      await row.getByRole("button", { name: "Open session menu" }).click();
       await activateMenuItem(
         page.locator("openclaw-session-menu").getByRole("menuitem", { name: "Delete…" }),
       );
+      await confirmDelete(page);
 
       const request = await gateway.waitForRequest("sessions.delete");
       expect(requireRecord(request.params)).toMatchObject({

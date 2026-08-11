@@ -1,9 +1,8 @@
 // Console logging helpers format and write messages to console streams.
 import util from "node:util";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
-import type { OpenClawConfig } from "../config/types.js";
 import { isVerbose } from "../global-state.js";
-import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
+import { readLoggingConfig } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { formatJsonConsoleLine } from "./json-console-line.js";
 import { type LogLevel, normalizeLogLevel } from "./levels.js";
@@ -20,14 +19,6 @@ type ConsoleSettings = {
   style: ConsoleStyle;
 };
 export type ConsoleLoggerSettings = ConsoleSettings;
-
-type ConsoleConfigLoader = () => OpenClawConfig["logging"] | undefined;
-const loadConfigFallbackDefault: ConsoleConfigLoader = () => undefined;
-let loadConfigFallback: ConsoleConfigLoader = loadConfigFallbackDefault;
-
-export function setConsoleConfigLoaderForTests(loader?: ConsoleConfigLoader): void {
-  loadConfigFallback = loader ?? loadConfigFallbackDefault;
-}
 
 function normalizeConsoleLevel(level?: string): LogLevel {
   if (isVerbose()) {
@@ -63,20 +54,7 @@ function resolveConsoleSettings(): ConsoleSettings {
     return { level: "silent", style: normalizeConsoleStyle(undefined) };
   }
 
-  let cfg: OpenClawConfig["logging"] | LoggerSettings | undefined =
-    (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
-  if (!cfg && !shouldSkipMutatingLoggingConfigRead()) {
-    if (loggingState.resolvingConsoleSettings) {
-      cfg = undefined;
-    } else {
-      loggingState.resolvingConsoleSettings = true;
-      try {
-        cfg = loadConfigFallback();
-      } finally {
-        loggingState.resolvingConsoleSettings = false;
-      }
-    }
-  }
+  const cfg = (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
   const level = envLevel ?? normalizeConsoleLevel(cfg?.consoleLevel);
   const style = normalizeConsoleStyle(cfg?.consoleStyle);
   return { level, style };

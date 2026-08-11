@@ -2,7 +2,7 @@ import { spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveNpmRunner } from "../../../scripts/npm-runner.mjs";
+import { resolveNpmRunner } from "../../../scripts/npm-runner.mts";
 import { createNodeEvalArgs } from "../../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 
@@ -128,7 +128,6 @@ const compatibility = {
       "reconcileOpenAICompletionsToolChoice",
       "findOpenAIStrictSchemaViolations",
       "normalizeOpenAIStrictCompatSchema",
-      "clearOpenAIToolSchemaCacheForTest",
       "normalizeStrictOpenAIJsonSchema",
       "normalizeOpenAIStrictToolParameters",
       "isStrictOpenAIJsonSchemaCompatible",
@@ -136,6 +135,7 @@ const compatibility = {
       "resolveOpenAIProjectedToolsStrictToolFlag",
       "stripUnsupportedSchemaKeywords",
       "projectRuntimeToolInputSchema",
+      "responsesPromptObserver",
     ],
     types: [
       "OpenAICompletionsOptions",
@@ -157,6 +157,7 @@ const compatibility = {
       "OpenAICompletionsToolChoice",
       "RuntimeToolInputSchemaJson",
       "RuntimeToolInputSchemaProjection",
+      "ResponsesPromptObservation",
     ],
   },
 } as const;
@@ -269,11 +270,8 @@ describe("@openclaw/ai packed package", () => {
     }
     const tempDir = tempDirs.make("openclaw-ai-consumer-");
 
-    await runCommand(
-      process.execPath,
-      ["scripts/tsdown-build.mjs", "--config", "tsdown.ai.config.ts"],
-      { cwd: repoRoot },
-    );
+    // The E2E global setup owns the exact-head build. Rebuilding this shared
+    // package here can delete modules beneath concurrently running Gateways.
     const pack = await runNpmCommand(
       ["pack", "--ignore-scripts", "--json", "--pack-destination", tempDir],
       packageRoot,

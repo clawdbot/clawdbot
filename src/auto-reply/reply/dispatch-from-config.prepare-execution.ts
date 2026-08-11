@@ -1,12 +1,9 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   isFastModeAutoProgressPayload,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import { type AgentPlanStep, formatPlanChecklistLines } from "../../channels/streaming.js";
-import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -16,12 +13,11 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { ChooseDispatchRouteReadyState } from "./dispatch-from-config.choose-route.js";
+import { hasAskUserPayload, hasExecApprovalPayload } from "./dispatch-from-config.payloads.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import { loadGetReplyFromConfigRuntime } from "./dispatch-from-config.runtime-loaders.js";
-import {
-  withFullRuntimeReplyConfig,
-  withPublishedRuntimeReplyConfig,
-} from "./get-reply-fast-path.js";
+import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
+import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
@@ -55,16 +51,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     );
   }
 
-  const toolStartStatusesSent = new Set<string>();
-  let toolStartStatusCount = 0;
   let didSendPlanStatusNotice = false;
-  const normalizeWorkingLabel = (label: string) => {
-    const collapsed = label.replace(/\s+/g, " ").trim();
-    if (collapsed.length <= 80) {
-      return collapsed;
-    }
-    return `${truncateUtf16Safe(collapsed, 77).trimEnd()}...`;
-  };
   const formatPlanUpdateText = (payload: { explanation?: string; steps?: AgentPlanStep[] }) => {
     const explanation = payload.explanation?.replace(/\s+/g, " ").trim();
     const steps = (payload.steps ?? [])
@@ -77,32 +64,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       }).join("\n");
     }
     return explanation || "Planning next steps.";
-  };
-  const maybeSendWorkingStatus = async (label: string): Promise<void> => {
-    if (shouldSuppressProgressDelivery()) {
-      return;
-    }
-    const normalizedLabel = normalizeWorkingLabel(label);
-    if (
-      !shouldEmitVerboseProgress() ||
-      !state.shouldSendToolStartStatuses ||
-      !normalizedLabel ||
-      toolStartStatusCount >= 2 ||
-      toolStartStatusesSent.has(normalizedLabel)
-    ) {
-      return;
-    }
-    toolStartStatusesSent.add(normalizedLabel);
-    toolStartStatusCount += 1;
-    const payload: ReplyPayload = {
-      text: `Working: ${normalizedLabel}`,
-    };
-    if (shouldRouteToOriginating) {
-      await sendPayloadAsync(payload, undefined, false);
-      return;
-    }
-    markInboundDedupeReplayUnsafe();
-    turnLedger.sendQueued("tool", payload);
   };
   const sendPlanUpdate = async (payload: {
     explanation?: string;
@@ -126,38 +87,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     }
     markInboundDedupeReplayUnsafe();
     turnLedger.sendQueued("tool", replyPayload);
-  };
-  const summarizeApprovalLabel = (payload: {
-    status?: string;
-    command?: string;
-    message?: string;
-  }) => {
-    if (payload.status === "pending") {
-      const command = normalizeOptionalString(payload.command);
-      if (command) {
-        return normalizeWorkingLabel(`awaiting approval: ${command}`);
-      }
-      return "awaiting approval";
-    }
-    if (payload.status === "unavailable") {
-      const message = normalizeOptionalString(payload.message);
-      if (message) {
-        return normalizeWorkingLabel(message);
-      }
-      return "approval unavailable";
-    }
-    return "";
-  };
-  const summarizePatchLabel = (payload: { summary?: string; title?: string }) => {
-    const summary = normalizeOptionalString(payload.summary);
-    if (summary) {
-      return normalizeWorkingLabel(summary);
-    }
-    const title = normalizeOptionalString(payload.title);
-    if (title) {
-      return normalizeWorkingLabel(title);
-    }
-    return "";
   };
   // Track accumulated block text for TTS generation after streaming completes.
   // When block streaming succeeds, there's no final reply, so we need to generate
@@ -193,16 +122,10 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     if (shouldSendToolSummaries()) {
       return payload;
     }
-    const execApproval =
-      payload.channelData &&
-      typeof payload.channelData === "object" &&
-      !Array.isArray(payload.channelData)
-        ? payload.channelData.execApproval
-        : undefined;
-    if (execApproval && typeof execApproval === "object" && !Array.isArray(execApproval)) {
+    if (hasExecApprovalPayload(payload)) {
       return payload;
     }
-    if (state.hasAskUserPayload(payload)) {
+    if (hasAskUserPayload(payload)) {
       return payload;
     }
     if (isFastModeAutoProgressPayload(payload)) {
@@ -264,25 +187,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   const onPatchSummaryFromReplyOptions = params.replyOptions?.onPatchSummary;
   const allowSuppressedSourceProgressCallbacks =
     params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed === true;
-  const isChannelOwnedToolResultProgressPayload = (payload: ReplyPayload) => {
-    const text = normalizeOptionalString(payload.text);
-    return Boolean(text?.startsWith("🛠️") || text?.startsWith("🔧"));
-  };
-  const shouldForwardToolResultProgressCallback = (
-    payload: ReplyPayload,
-    isFastModeAutoProgress: boolean,
-  ) => {
-    if (isFastModeAutoProgress) {
-      return shouldForwardProgressCallback({ forwardWhenSourceDeliverySuppressed: true });
-    }
-    if (
-      allowSuppressedSourceProgressCallbacks &&
-      isChannelOwnedToolResultProgressPayload(payload)
-    ) {
-      return shouldForwardProgressCallback({ forwardWhenSourceDeliverySuppressed: true });
-    }
-    return shouldSendToolSummaries() && shouldForwardProgressCallback();
-  };
   const shouldAllowQuietChannelOwnedProgressCallbacks = (options?: {
     allowWhenToolSummariesHidden?: boolean;
     requiresToolSummaryVisibility?: boolean;
@@ -332,7 +236,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       releaseStart: () => releaseStart?.(),
     };
   };
-  const wrapProgressCallback = <Args extends unknown[], Result extends false | void>(
+  const wrapProgressCallback = <Args extends unknown[], Result extends boolean | void>(
     callback: ((...args: Args) => Promise<Result> | Result) | undefined,
     options?: {
       allowWhenToolSummariesHidden?: boolean;
@@ -434,15 +338,18 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
         },
       })
     : undefined;
-  const canConsumeItemEvents = deliverStandaloneCommentaryProgress || canForwardItemEvents;
-  // Item-event presence gates CLI commentary classification downstream, so
-  // the handler exists exactly when verbose buffers it or a channel consumes it.
+  const canCaptureCliPreambleEvents =
+    Boolean(params.replyOptions?.onItemEvent) && shouldBridgeCliPreambleEvents(params.replyOptions);
+  const canConsumeItemEvents =
+    deliverStandaloneCommentaryProgress || canForwardItemEvents || canCaptureCliPreambleEvents;
+  // CLI runners classify preambles as item events only when this handler exists.
+  // Keep it for channel-owned capture even when delivery policy hides the event.
   const onItemEvent = canConsumeItemEvents
     ? async (payload: Parameters<NonNullable<GetReplyOptions["onItemEvent"]>>[0]) => {
         if (isDispatchOperationAborted()) {
           return;
         }
-        if (!forwardItemEvent) {
+        if (!forwardItemEvent && deliverStandaloneCommentaryProgress) {
           // The wrapped forwarder marks progress itself when present.
           markProgress();
         }
@@ -471,23 +378,15 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
         loadGetReplyFromConfigRuntime(),
       )
     ).getReplyFromConfig;
-  // Channel runtimes can outlive a config reload. Ordinary Gateway turns rebind to the
-  // committed model owner; an explicit per-turn projection stays exact to its caller config.
-  const publishedRuntimeReplyConfig = getRuntimeConfigSnapshot();
-  const runtimeReplyConfig = publishedRuntimeReplyConfig ?? cfg;
-  const replyConfig = params.configOverride
-    ? withFullRuntimeReplyConfig(
-        applyMergePatch(runtimeReplyConfig, params.configOverride) as OpenClawConfig,
-      )
-    : params.usePublishedModelRuntime || publishedRuntimeReplyConfig
-      ? withPublishedRuntimeReplyConfig(runtimeReplyConfig)
-      : withFullRuntimeReplyConfig(cfg);
+  const runtimeReplyConfig = state.preparedReplyDispatchRuntime?.config ?? cfg;
+  const replyConfig = withFullRuntimeReplyConfig(
+    params.configOverride
+      ? (applyMergePatch(runtimeReplyConfig, params.configOverride) as OpenClawConfig)
+      : runtimeReplyConfig,
+  );
   state.recordAgentDispatchStarted();
   const nextState = extendPreparedDispatchState(state, {
-    maybeSendWorkingStatus,
     sendPlanUpdate,
-    summarizeApprovalLabel,
-    summarizePatchLabel,
     cleanBlockTtsDirectiveText,
     resolveToolDeliveryPayload,
     typing,
@@ -500,7 +399,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     onPlanUpdateFromReplyOptions,
     onApprovalEventFromReplyOptions,
     onPatchSummaryFromReplyOptions,
-    shouldForwardToolResultProgressCallback,
     waitForPendingDirectBlockReplyDelivery,
     shouldForwardProgressCallback,
     preserveProgressCallbackStartOrder,

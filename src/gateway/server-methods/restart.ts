@@ -162,6 +162,8 @@ export const restartHandlers: GatewayRequestHandlers = {
     });
     respond(true, result);
   },
+  // Deprecated compatibility preview for shipped read-only clients. This is
+  // restart-specific information, not the atomic fence owned by suspend.prepare.
   "gateway.restart.preflight": async ({ respond }) => {
     respond(true, createSafeGatewayRestartPreflight());
   },

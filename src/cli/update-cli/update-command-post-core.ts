@@ -11,6 +11,11 @@ import {
   assertConfigWriteAllowedInCurrentMode,
   readConfigFileSnapshot,
 } from "../../config/config.js";
+import {
+  createPluginInstallRecordMap,
+  serializePluginInstallRecordMap,
+  setPluginInstallRecordMapEntry,
+} from "../../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
@@ -43,8 +48,9 @@ import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
 import {
   loadInstalledPluginIndexInstallRecords,
-  writePersistedInstalledPluginIndexInstallRecords,
+  writePersistedInstalledPluginIndexInstallRecordsWithLease,
 } from "../../plugins/installed-plugin-index-records.js";
+import { restorePersistedInstalledPluginIndexIfCurrent } from "../../plugins/installed-plugin-index-store.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -301,11 +307,12 @@ export async function writePostCorePluginUpdateResultFile(
   await writeJson(filePath, result, { trailingNewline: true });
 }
 
-async function writePostCorePluginInstallRecordsFile(
+/** @internal exported for focused handoff contract tests. */
+export async function writePostCorePluginInstallRecordsFile(
   filePath: string,
   records: Record<string, PluginInstallRecord>,
 ): Promise<void> {
-  await fs.writeFile(filePath, `${JSON.stringify(records)}\n`, "utf-8");
+  await fs.writeFile(filePath, `${serializePluginInstallRecordMap(records)}\n`, "utf-8");
 }
 
 export async function readPostCorePluginInstallRecordsFile(
@@ -338,7 +345,14 @@ export async function readPostCorePluginInstallRecordsFile(
       { cause: err },
     );
   }
-  return normalizePluginInstallRecordMap(parsed);
+  try {
+    return normalizePluginInstallRecordMap(parsed);
+  } catch (err) {
+    throw new Error(
+      `Invalid plugin install records in handoff file: ${filePath}. Run openclaw doctor to inspect and repair plugin installation state.`,
+      { cause: err },
+    );
+  }
 }
 
 async function execFileStdout(file: string, args: string[]): Promise<string | undefined> {
@@ -439,7 +453,8 @@ export function resolvePostCoreUpdateChildStdio(
   return platform === "win32" || jsonMode ? "pipe" : "inherit";
 }
 
-function preparePostCorePluginInstallRecordsForFreshProcess(params: {
+/** @internal exported for focused handoff contract tests. */
+export function preparePostCorePluginInstallRecordsForFreshProcess(params: {
   records: Record<string, PluginInstallRecord>;
   targetVersion: string | null;
 }): Record<string, PluginInstallRecord> {
@@ -451,18 +466,18 @@ function preparePostCorePluginInstallRecordsForFreshProcess(params: {
     return params.records;
   }
   let changed = false;
-  const next: Record<string, PluginInstallRecord> = {};
+  const next = createPluginInstallRecordMap<PluginInstallRecord>();
   for (const [pluginId, record] of Object.entries(params.records)) {
     const installedVersion = record.resolvedVersion ?? record.version;
     const comparison = installedVersion
       ? compareSemverStrings(installedVersion, params.targetVersion)
       : null;
     if (record.source !== "npm" || comparison === null || comparison <= 0) {
-      next[pluginId] = record;
+      setPluginInstallRecordMapEntry(next, pluginId, record);
       continue;
     }
     const { resolvedSpec: _resolvedSpec, resolvedVersion: _resolvedVersion, ...rest } = record;
-    next[pluginId] = rest;
+    setPluginInstallRecordMapEntry(next, pluginId, rest);
     changed = true;
   }
   return changed ? next : params.records;
@@ -513,10 +528,33 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
     records: params.pluginInstallRecords,
     targetVersion: postCoreHostVersion,
   });
+  let tentativePluginIndex:
+    | Awaited<ReturnType<typeof writePersistedInstalledPluginIndexInstallRecordsWithLease>>
+    | undefined;
+  const restoreTentativePluginIndex = async () => {
+    const tentative = tentativePluginIndex;
+    if (!tentative) {
+      return;
+    }
+    await withPluginLifecycleLease({}, async (lease) => {
+      await restorePersistedInstalledPluginIndexIfCurrent(tentative.previous, tentative.revision, {
+        lease,
+      });
+    });
+    tentativePluginIndex = undefined;
+  };
 
   try {
     if (pluginInstallRecords && pluginInstallRecords !== params.pluginInstallRecords) {
-      await writePersistedInstalledPluginIndexInstallRecords(pluginInstallRecords);
+      await withPluginLifecycleLease({}, async (lease) => {
+        tentativePluginIndex = await writePersistedInstalledPluginIndexInstallRecordsWithLease(
+          pluginInstallRecords,
+          {
+            ...(params.preUpdateConfig ? { config: params.preUpdateConfig.sourceConfig } : {}),
+            lease,
+          },
+        );
+      });
     }
     await writePostCorePluginInstallRecordsFile(installRecordsPath, pluginInstallRecords);
     await writePostCoreSourceConfigFile(sourceConfigPath, params.preUpdateConfig);
@@ -608,9 +646,19 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       if (pluginUpdate) {
         return { resumed: true, pluginUpdate };
       }
+      await restoreTentativePluginIndex();
       return { resumed: false, exitCode };
     }
     return { resumed: true, ...(pluginUpdate ? { pluginUpdate } : {}) };
+  } catch (error) {
+    try {
+      await restoreTentativePluginIndex();
+    } catch (rollbackError) {
+      throw new Error("Post-core update failed and could not restore the previous plugin index", {
+        cause: rollbackError,
+      });
+    }
+    throw error;
   } finally {
     await fs.rm(resultDir, { recursive: true, force: true }).catch(() => undefined);
   }

@@ -14,6 +14,7 @@ import {
   validateSessionsCatalogReadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { getPluginRegistryRuntime } from "../../plugins/registry-runtime-binding.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
@@ -31,6 +32,7 @@ import type { GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
 import { SessionCatalogListAdmission } from "./session-catalog-list-admission.js";
+import { catalogStartHandler } from "./session-catalog-terminal-start.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -409,7 +411,12 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       const catalogList = await Promise.all(
         selected.map(async (provider): Promise<SessionCatalog> => {
           const createTarget = resolveProviderCreateTarget(provider, resolvedAgent.agentId, config);
-          const createSession = createTarget.ok ? { model: createTarget.target.model } : undefined;
+          const createSession = createTarget.ok
+            ? {
+                model: createTarget.target.model,
+                ...(provider.startTerminalSession ? { startTerminal: true as const } : {}),
+              }
+            : undefined;
           const onHost = (host: SessionCatalog["hosts"][number]) => {
             const catalog = catalogResult(
               provider,
@@ -462,13 +469,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     // out-of-phase clients but expires before the UI's 5s fast follow, so changed rows surface there.
     // Expired and rejected work is removed; retaining it would mask provider recovery or new sessions.
     cache.set(listKey, entry);
-    while (cache.size > SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES) {
-      const oldest = cache.keys().next();
-      if (oldest.done) {
-        break;
-      }
-      cache.delete(oldest.value);
-    }
+    pruneMapToMaxSize(cache, SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES);
     try {
       const result = await operation;
       if (cache.get(listKey) === entry) {
@@ -593,6 +594,11 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
   },
 
+  "sessions.catalog.startTerminal": catalogStartHandler(
+    resolveSessionCatalogProvider,
+    resolveSessionCatalogCreateTarget,
+  ),
+
   "sessions.catalog.archive": async ({ params, respond }) => {
     if (
       !assertValidParams(
@@ -626,40 +632,3 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
   },
 };
-
-/** Fill the same list single-flight and provider caches used by the Gateway RPC. */
-export async function prewarmSessionCatalogList(params: {
-  config: OpenClawConfig;
-  agentId: string;
-  limitPerHost: number;
-}): Promise<void> {
-  const handler = sessionCatalogHandlers["sessions.catalog.list"];
-  if (!handler) {
-    throw new Error("sessions.catalog.list handler is unavailable");
-  }
-  let responded = false;
-  let responseError: string | undefined;
-  const respond: RespondFn = (ok, _payload, error) => {
-    responded = true;
-    if (!ok) {
-      responseError = error?.message || "sessions.catalog.list prewarm failed";
-    }
-  };
-  await handler({
-    params: {
-      agentId: params.agentId,
-      limitPerHost: params.limitPerHost,
-    },
-    client: null,
-    // A headless leader intentionally has no progress id or connection subscription.
-    // Concurrent clients still share its authoritative final result through the normal cache.
-    context: { getRuntimeConfig: () => params.config },
-    respond,
-  } as never);
-  if (!responded) {
-    throw new Error("sessions.catalog.list prewarm returned no result");
-  }
-  if (responseError) {
-    throw new Error(responseError);
-  }
-}

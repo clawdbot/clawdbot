@@ -16,10 +16,10 @@ import {
   readMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntry,
 } from "../dreaming-state.js";
-import {
-  normalizeShortTermPhaseSignalStore,
-  normalizeShortTermRecallStore,
-} from "../short-term-promotion.js";
+// Import from the defining modules, not the short-term-promotion barrel: the
+// barrel pulls memory-host-events/kysely, which doctor enumeration cold-loads.
+import { normalizeShortTermPhaseSignalStore } from "../short-term-promotion-store.js";
+import { normalizeShortTermRecallStore } from "../short-term-promotion-utils.js";
 
 type LegacyDreamingSource = {
   workspaceDir: string;

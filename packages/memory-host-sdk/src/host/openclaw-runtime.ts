@@ -86,14 +86,7 @@ export function readTranscriptContentRevisionSync(params: {
     stats.lastObservedMutationAtMs ?? "",
   ].join(":");
 }
-export type { SessionSendPolicyConfig } from "../../../../src/config/types.base.js";
-export type {
-  MemoryBackend,
-  MemoryCitationsMode,
-  MemoryQmdConfig,
-  MemoryQmdIndexPath,
-  MemoryQmdSearchMode,
-} from "../../../../src/config/types.memory.js";
+export type { MemoryCitationsMode } from "../../../../src/config/types.memory.js";
 export {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
@@ -170,8 +163,4 @@ export {
   shortenHomePath,
   truncateUtf16Safe,
 } from "../../../../src/utils.js";
-export {
-  materializeWindowsSpawnProgram,
-  resolveWindowsSpawnProgram,
-} from "../../../../src/plugin-sdk/windows-spawn.js";
 export { resolveGlobalSingleton } from "../../../../src/shared/global-singleton.js";

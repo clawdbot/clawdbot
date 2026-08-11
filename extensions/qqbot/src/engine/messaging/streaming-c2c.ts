@@ -464,17 +464,17 @@ export class StreamingController {
    * payload.text 是从头到尾的完整当前文本（每次回调都是全量）。
    * 核心逻辑：normalize → 更新 lastNormalizedFull → 从 sentIndex 开始 processMediaTags
    */
-  async onPartialReply(payload: { text?: string }): Promise<void> {
+  async onPartialReply(payload: { text?: string }): Promise<boolean> {
     if (this.isTerminalPhase) {
-      return;
+      return false;
     }
     if (!payload.text) {
-      return;
+      return false;
     }
 
     // ★ 互斥锁在入口检查：如果已被 deliver 锁定，直接跳过，无需排队
     if (!this.acquireCallbackLock("partial")) {
-      return;
+      return false;
     }
 
     // 将实际逻辑挂到 Promise 链尾部，保证串行执行
@@ -486,7 +486,8 @@ export class StreamingController {
         return this.handlePartialReply(payload);
       },
     );
-    return this.callbackChain;
+    await this.callbackChain;
+    return this.sentStreamChunkCount > 0 || this.streamMsgId !== null;
   }
 
   /** onPartialReply 的实际逻辑（由 callbackChain 保证串行调用） */

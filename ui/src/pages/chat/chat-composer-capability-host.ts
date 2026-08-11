@@ -1,4 +1,3 @@
-import { formatErrorMessage } from "@openclaw/normalization-core";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -18,7 +17,6 @@ import {
   buildToolsEffectiveRequestKey,
   loadToolsEffective,
 } from "../../lib/agents/tools-effective.ts";
-import { redactToolDetail } from "../../lib/browser-redact.ts";
 import {
   buildAddMcpServerPatch,
   MCP_SERVER_NAME_PATTERN,
@@ -26,7 +24,9 @@ import {
   patchMcpServers,
   summarizeMcpServers,
 } from "../../lib/config/mcp-servers.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
@@ -38,22 +38,8 @@ import { loadSkillStatusReport } from "../../lib/skills/index.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import type {
-  ChatComposerMenuSkill,
-  ChatComposerPlusMenuProps,
-} from "./components/chat-composer-plus-menu.ts";
-
-type CapabilityMenuProps = Omit<
-  ChatComposerPlusMenuProps,
-  | "attachments"
-  | "disabled"
-  | "open"
-  | "view"
-  | "toolOverrides"
-  | "onOpenChange"
-  | "onViewChange"
-  | "showCapabilities"
->;
+import type { ChatComposerMenuSkill } from "./components/chat-composer-plus-menu.ts";
+import type { CapabilityMenuProps } from "./components/chat-composer-types.ts";
 
 type ComposerMcpServerScope = "session" | "everywhere";
 
@@ -129,7 +115,7 @@ export class ChatComposerCapabilityHost {
     } catch (error) {
       return {
         ok: false,
-        error: formatErrorMessage(error, { redact: redactToolDetail }),
+        error: formatUiError(error),
         stage: "config",
       };
     }
@@ -145,7 +131,7 @@ export class ChatComposerCapabilityHost {
     } catch (error) {
       return {
         ok: false,
-        error: formatErrorMessage(error, { redact: redactToolDetail }),
+        error: formatUiError(error),
         stage: "session",
       };
     }
@@ -165,7 +151,7 @@ export class ChatComposerCapabilityHost {
     } catch (error) {
       return {
         ok: false,
-        error: formatErrorMessage(error, { redact: redactToolDetail }),
+        error: formatUiError(error),
         stage: "session",
       };
     }
@@ -300,8 +286,12 @@ export class ChatComposerCapabilityHost {
     if (!state.connected || !state.client) {
       return { ok: false, error: t("chat.composer.menu.offlineBlocked") };
     }
-    if (!readGatewayOperatorAccess(context.gateway.snapshot).canWrite) {
-      return { ok: false, error: t("chat.composer.menu.readOnlyBlocked") };
+    const access = readSessionMethodAccess(context.gateway.snapshot, {
+      method: "sessions.patch",
+      params: { key: state.sessionKey, toolOverrides: next },
+    });
+    if (!access.allowed) {
+      return { ok: false, error: access.reason };
     }
     const sessionKey = state.sessionKey;
     if (this.patchTokens.has(sessionKey)) {
@@ -405,7 +395,7 @@ export class ChatComposerCapabilityHost {
     } catch (error) {
       return {
         ok: false as const,
-        error: formatErrorMessage(error, { redact: redactToolDetail }),
+        error: formatUiError(error),
       };
     }
     if (!identityMatches()) {
@@ -595,12 +585,16 @@ export class ChatComposerCapabilityHost {
     const toolsEffectiveError =
       effectiveToolsKey !== null && this.effectiveToolsErrorKey === effectiveToolsKey;
     const capabilitiesReady = gatewayAvailable && session !== undefined && runtimeConfig !== null;
+    const toolPatchAccess = readSessionMethodAccess(context.gateway.snapshot, {
+      method: "sessions.patch",
+      params: { key: state.sessionKey, toolOverrides: null },
+    });
     const mutationBlockedReason = !gatewayAvailable
       ? t("chat.composer.menu.offlineBlocked")
       : !capabilitiesReady
         ? t("common.loading")
-        : !access.canWrite
-          ? t("chat.composer.menu.readOnlyBlocked")
+        : !toolPatchAccess.allowed
+          ? toolPatchAccess.reason
           : this.patchTokens.has(state.sessionKey)
             ? t("chat.composer.menu.savingBlocked")
             : null;

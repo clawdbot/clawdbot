@@ -16,8 +16,8 @@ import {
   type CommandGroupEntry,
 } from "./register-command-groups.js";
 import {
-  registerSubCliByName as registerSubCliByNameCore,
-  registerSubCliCommands as registerSubCliCommandsCore,
+  registerSubCliByNameCore,
+  registerSubCliCommandsCore,
   type SubCliRegistrationContext,
 } from "./register.subclis-core.js";
 import { getSubCliEntries as getSubCliEntryDescriptors } from "./subcli-descriptors.js";

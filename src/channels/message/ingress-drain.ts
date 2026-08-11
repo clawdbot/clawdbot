@@ -4,6 +4,7 @@
  * Owns claim recovery, per-lane serialization, adoption-time complete, retry /
  * dead-letter disposition, pre-adoption stall watchdog, and optional supersede.
  */
+import { sleepWithAbort } from "@openclaw/retry";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import {
   createIngressDrainOwnerId,
@@ -35,7 +36,6 @@ import {
   DEFAULT_INGRESS_RETRY_MAX_MS,
   resolveIngressFailureDisposition,
   resolveIngressRetryDelayMs,
-  sleepIngressRetryDelay,
   type IngressNonRetryableFailure,
   type IngressRetryPolicyConfig,
 } from "./ingress-retry-policy.js";
@@ -328,7 +328,7 @@ export function createChannelIngressDrain<
           log(`completion retry ${attempt} scheduled for event ${displayId}`);
         }
         // Abortable sleep: webhook stop aborts options.abortSignal mid-backoff.
-        await sleepIngressRetryDelay(delayMs, options.abortSignal);
+        await sleepWithAbort(delayMs, options.abortSignal, { ref: false });
       }
     }
   };
@@ -720,12 +720,16 @@ export function createChannelIngressDrain<
             !state.superseded
           );
         })
-        .map((claim) => resolveLaneKey(claim, options.deriveLaneKey)),
+        .map((claim) =>
+          resolveLaneKey(claim, options.deriveLaneKey, options.reconcileStoredLaneKey),
+        ),
     );
     const retryDelayedLaneKeys = new Set<string>();
     for (const event of pending) {
       if (resolveIngressRetryDelayMs(event, options.retryPolicy, now()) > 0) {
-        retryDelayedLaneKeys.add(resolveLaneKey(event, options.deriveLaneKey));
+        retryDelayedLaneKeys.add(
+          resolveLaneKey(event, options.deriveLaneKey, options.reconcileStoredLaneKey),
+        );
       }
     }
 
@@ -742,13 +746,13 @@ export function createChannelIngressDrain<
       if (shouldStop()) {
         break;
       }
-      const laneKey = resolveLaneKey(event, options.deriveLaneKey);
+      const laneKey = resolveLaneKey(event, options.deriveLaneKey, options.reconcileStoredLaneKey);
       if (await supersedeActiveIfNeeded(event, laneKey)) {
         blockedLaneKeys.delete(laneKey);
       }
     }
 
-    const candidateIds = pending.map((event) => event.id);
+    const candidateIds = new Set(pending.map((event) => event.id));
     let started = 0;
     while (started < startLimit) {
       if (shouldStop()) {
@@ -768,11 +772,18 @@ export function createChannelIngressDrain<
       if (!claimed) {
         break;
       }
+      // One snapshot row gets one attempt per pass. A released claim remains
+      // pending for the next pump instead of spinning through SQLite here.
+      candidateIds.delete(claimed.id);
       if (shouldStop()) {
         await queue.release(claimed, { recordAttempt: false });
         break;
       }
-      const laneKey = resolveLaneKey(claimed, options.deriveLaneKey);
+      const laneKey = resolveLaneKey(
+        claimed,
+        options.deriveLaneKey,
+        options.reconcileStoredLaneKey,
+      );
       const existing = laneOwnerByKey.get(laneKey);
       if (existing && existing.phase !== "settled") {
         if (await supersedeActiveIfNeeded(claimed, laneKey)) {

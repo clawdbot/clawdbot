@@ -1,5 +1,6 @@
-// Register status/health/session tests cover status-related command registration.
 import { Command } from "commander";
+// Register status/health/session tests cover status-related command registration.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerStatusHealthSessionsCommands } from "./register.status-health-sessions.js";
 
@@ -10,9 +11,9 @@ const mocks = vi.hoisted(() => ({
   sessionsCleanupCommand: vi.fn(),
   sessionsTailCommand: vi.fn(),
   sessionsCompactCommand: vi.fn(),
+  sessionsArchiveCommand: vi.fn(),
+  sessionsDeleteCommand: vi.fn(),
   exportTrajectoryCommand: vi.fn(),
-  commitmentsListCommand: vi.fn(),
-  commitmentsDismissCommand: vi.fn(),
   tasksListCommand: vi.fn(),
   tasksAuditCommand: vi.fn(),
   tasksMaintenanceCommand: vi.fn(),
@@ -36,9 +37,9 @@ const sessionsCommand = mocks.sessionsCommand;
 const sessionsCleanupCommand = mocks.sessionsCleanupCommand;
 const sessionsTailCommand = mocks.sessionsTailCommand;
 const sessionsCompactCommand = mocks.sessionsCompactCommand;
+const sessionsArchiveCommand = mocks.sessionsArchiveCommand;
+const sessionsDeleteCommand = mocks.sessionsDeleteCommand;
 const exportTrajectoryCommand = mocks.exportTrajectoryCommand;
-const commitmentsListCommand = mocks.commitmentsListCommand;
-const commitmentsDismissCommand = mocks.commitmentsDismissCommand;
 const tasksListCommand = mocks.tasksListCommand;
 const tasksAuditCommand = mocks.tasksAuditCommand;
 const tasksMaintenanceCommand = mocks.tasksMaintenanceCommand;
@@ -55,12 +56,7 @@ type MockCalls = {
   mock: { calls: unknown[][] };
 };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function expectCommandOptions(command: MockCalls, expected: Record<string, unknown>) {
   expect(command.mock.calls).toHaveLength(1);
@@ -101,13 +97,13 @@ vi.mock("../../commands/sessions-compact.js", () => ({
   sessionsCompactCommand: mocks.sessionsCompactCommand,
 }));
 
-vi.mock("../../commands/export-trajectory.js", () => ({
-  exportTrajectoryCommand: mocks.exportTrajectoryCommand,
+vi.mock("../../commands/sessions-lifecycle.js", () => ({
+  sessionsArchiveCommand: mocks.sessionsArchiveCommand,
+  sessionsDeleteCommand: mocks.sessionsDeleteCommand,
 }));
 
-vi.mock("../../commands/commitments.js", () => ({
-  commitmentsListCommand: mocks.commitmentsListCommand,
-  commitmentsDismissCommand: mocks.commitmentsDismissCommand,
+vi.mock("../../commands/export-trajectory.js", () => ({
+  exportTrajectoryCommand: mocks.exportTrajectoryCommand,
 }));
 
 vi.mock("../../commands/tasks.js", () => ({
@@ -149,9 +145,9 @@ describe("registerStatusHealthSessionsCommands", () => {
     sessionsCleanupCommand.mockResolvedValue(undefined);
     sessionsTailCommand.mockResolvedValue(undefined);
     sessionsCompactCommand.mockResolvedValue(undefined);
+    sessionsArchiveCommand.mockResolvedValue(undefined);
+    sessionsDeleteCommand.mockResolvedValue(undefined);
     exportTrajectoryCommand.mockResolvedValue(undefined);
-    commitmentsListCommand.mockResolvedValue(undefined);
-    commitmentsDismissCommand.mockResolvedValue(undefined);
     tasksListCommand.mockResolvedValue(undefined);
     tasksAuditCommand.mockResolvedValue(undefined);
     tasksMaintenanceCommand.mockResolvedValue(undefined);
@@ -346,6 +342,87 @@ describe("registerStatusHealthSessionsCommands", () => {
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--verbose"));
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(sessionsCompactCommand).not.toHaveBeenCalled();
+  });
+
+  it("forwards multi-key archive options and inherits parent sessions output options", async () => {
+    await runCli([
+      "sessions",
+      "--agent",
+      "work",
+      "--json",
+      "archive",
+      "agent:work:scratch-1",
+      "agent:work:scratch-2",
+      "--dry-run",
+      "--url",
+      "ws://gateway.test",
+      "--token",
+      "test-token",
+      "--password",
+      "test-password",
+      "--timeout",
+      "45000",
+    ]);
+
+    expectCommandOptions(sessionsArchiveCommand, {
+      keys: ["agent:work:scratch-1", "agent:work:scratch-2"],
+      agent: "work",
+      dryRun: true,
+      url: "ws://gateway.test",
+      token: "test-token",
+      password: "test-password",
+      timeout: "45000",
+      json: true,
+    });
+  });
+
+  it("forwards multi-key delete options and prefers the subcommand agent", async () => {
+    await runCli([
+      "sessions",
+      "--agent",
+      "main",
+      "delete",
+      "agent:work:scratch-1",
+      "agent:work:scratch-2",
+      "--agent",
+      "work",
+      "--yes",
+      "--json",
+    ]);
+
+    expectCommandOptions(sessionsDeleteCommand, {
+      keys: ["agent:work:scratch-1", "agent:work:scratch-2"],
+      agent: "work",
+      dryRun: false,
+      yes: true,
+      json: true,
+    });
+  });
+
+  it("rejects inherited session-list filters for lifecycle mutations", async () => {
+    await runCli([
+      "sessions",
+      "--store",
+      "/tmp/other-sessions.json",
+      "--all-agents",
+      "archive",
+      "agent:main:scratch-1",
+    ]);
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--store"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--all-agents"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(sessionsArchiveCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid lifecycle RPC timeouts", async () => {
+    await runCli(["sessions", "delete", "agent:main:scratch-1", "--timeout", "0", "--yes"]);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--timeout must be a positive integer (milliseconds).",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(sessionsDeleteCommand).not.toHaveBeenCalled();
   });
 
   it("forwards sessions list-side options", async () => {
@@ -597,25 +674,6 @@ describe("registerStatusHealthSessionsCommands", () => {
 
     expectCommandOptions(tasksCancelCommand, {
       lookup: "run-123",
-    });
-  });
-
-  it("runs commitments list with filters", async () => {
-    await runCli(["commitments", "--json", "--agent", "work", "--status", "snoozed"]);
-
-    expectCommandOptions(commitmentsListCommand, {
-      json: true,
-      agent: "work",
-      status: "snoozed",
-      all: false,
-    });
-  });
-
-  it("runs commitments dismiss with id forwarding", async () => {
-    await runCli(["commitments", "dismiss", "cm_1", "cm_2"]);
-
-    expectCommandOptions(commitmentsDismissCommand, {
-      ids: ["cm_1", "cm_2"],
     });
   });
 

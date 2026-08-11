@@ -17,7 +17,7 @@ import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { resolveSessionWorkStartError, type SessionEntry } from "../../config/sessions.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-accessor.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
+import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { readSessionMessageCountAsync } from "../session-transcript-readers.js";
 import {
@@ -28,7 +28,7 @@ import {
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { formatForLog } from "../ws-log.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
-import { handleChatSend } from "./chat-send-handler.js";
+import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { chatHandlers } from "./chat.js";
 import { resolveGatewayInflightRequest, type GatewayInflightResult } from "./inflight.js";
 import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
@@ -396,7 +396,7 @@ async function handleSessionSend(params: {
         isWebchatConnect: params.isWebchatConnect,
       };
       if (onAdmissionOwned) {
-        await handleChatSend(options, onAdmissionOwned);
+        await handleDirectExternalChatSend(options, onAdmissionOwned);
         return;
       }
       await expectDefined(chatHandlers["chat.send"], "chat.send handler")(options);

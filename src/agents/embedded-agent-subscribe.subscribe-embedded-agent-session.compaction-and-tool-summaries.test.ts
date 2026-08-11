@@ -141,9 +141,10 @@ describe("fenced output and compaction retries", () => {
     expect(subscription.isCompacting()).toBe(false);
   });
 
-  it("resets assistant usage to a zero snapshot after compaction without retry", () => {
-    // When compaction ends the active assistant message is synthetic, so usage
-    // should reset to a zero snapshot instead of carrying stale token totals.
+  it("resets assistant usage to a zero snapshot after a completed compaction without retry", () => {
+    // A completed compaction rewrites history, so the surviving assistant usage
+    // refers to the old context and must reset to a zero snapshot. Only a
+    // completed end does this; a failed/aborted end keeps live usage intact.
     const listeners: SessionEventHandler[] = [];
     const session = {
       messages: [
@@ -172,7 +173,7 @@ describe("fenced output and compaction retries", () => {
     });
 
     for (const listener of listeners) {
-      listener({ type: "compaction_end", willRetry: false });
+      listener({ type: "compaction_end", result: { kept: 1 }, aborted: false, willRetry: false });
     }
 
     const usage = (session.messages?.[0] as { usage?: unknown } | undefined)?.usage;
@@ -439,6 +440,32 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["exec", "server.exec"])(
+    "hides command metadata for %s unless full verbose mode is enabled",
+    async (toolName) => {
+      const onToolResult = vi.fn();
+      const toolHarness = createSubscribedSessionHarness({
+        runId: "run-exec-on",
+        verboseLevel: "on",
+        onToolResult,
+      });
+
+      toolHarness.emit({
+        type: "tool_execution_start",
+        toolName,
+        toolCallId: "tool-exec-on",
+        args: { command: "echo private-sentinel" },
+      });
+
+      await Promise.resolve();
+
+      const payload = toolResultPayloadAt(onToolResult, 0);
+      expect(payload?.text).toContain(toolName === "exec" ? "Exec" : "Server.exec");
+      expect(payload?.text).not.toContain("private-sentinel");
+    },
+  );
+
   it("includes browser action metadata in tool summaries", async () => {
     const onToolResult = vi.fn();
 

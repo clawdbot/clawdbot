@@ -100,6 +100,9 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
         return;
       }
 
+      if (channelManager.getAutostartSuppression() !== null) {
+        await channelManager.recoverAutostartSuppression();
+      }
       const snapshot = channelManager.getRuntimeSnapshot();
       const globalAutostartSuppression = channelManager.getAutostartSuppression();
 

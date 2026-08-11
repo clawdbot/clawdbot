@@ -6,7 +6,7 @@ import {
   replaceConfigFile,
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { parseClawHubPluginSpec } from "../infra/clawhub.js";
+import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
@@ -125,7 +125,7 @@ async function runPluginUninstallCommandUnlocked(
     return;
   }
   const { plugin, pluginId } = selection.value;
-  const channelIds = plugin?.status === "loaded" ? plugin.channelIds : undefined;
+  const channelIds = plugin?.channelIds;
   const initialPlan = planPluginUninstall({
     config: cfg,
     pluginId,

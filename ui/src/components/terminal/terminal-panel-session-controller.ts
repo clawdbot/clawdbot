@@ -8,11 +8,16 @@ import {
   type TerminalSessionInfo,
 } from "./terminal-connection.ts";
 import {
+  disposeTerminalController,
+  replaceTerminalControllerForReplay,
+} from "./terminal-controller-lifecycle.ts";
+import {
   forceTerminalRender,
   persistLiveTerminalSessions,
   shellBasename,
   TERMINAL_FONT_FAMILY,
   TERMINAL_OUTPUT_ENCODER,
+  type TerminalControllerFactory,
   type TerminalOperation,
   type TerminalPanelCatalogReference,
   type TerminalPanelSessionControllerHost,
@@ -281,11 +286,10 @@ export class TerminalPanelSessionController
       getColors: () => terminalDynamicColors(this.host.themeMode),
       reply: (data) => startupInput.onData(TERMINAL_OUTPUT_ENCODER.encode(data)),
     });
-    let controller: GhosttyTerminalController;
-    try {
-      controller = await this.host.createTerminalController({
-        parent: host,
-        readOnly: false,
+    const createController: TerminalControllerFactory = (parent, controllerOptions) =>
+      this.host.createTerminalController({
+        parent,
+        readOnly: controllerOptions?.readOnly ?? false,
         terminalOptions: {
           fontSize: 11,
           fontFamily: TERMINAL_FONT_FAMILY,
@@ -298,16 +302,15 @@ export class TerminalPanelSessionController
         onData: startupInput.onData,
         onResize: startupInput.onResize,
       });
+    let controller: GhosttyTerminalController;
+    try {
+      controller = await createController(host);
     } catch (error) {
       host.remove();
       throw error;
     }
     if (!this.isTerminalOperationCurrent(operation)) {
-      try {
-        controller.dispose();
-      } finally {
-        host.remove();
-      }
+      disposeTerminalController(controller, host);
       throw new Error("terminal operation cancelled");
     }
     const tab: TerminalPanelSessionTab = {
@@ -316,6 +319,7 @@ export class TerminalPanelSessionController
       gatewaySessionId: "",
       pendingInput: startupInput.buffer,
       defaultColorQueries,
+      createController,
       shellName: null,
       shell: "",
       agentId: null,
@@ -348,20 +352,36 @@ export class TerminalPanelSessionController
           }
         }
       },
-      // A replay is authoritative. Reset parser, screen, and scrollback so a
-      // gap cannot leave stale cells or a partial escape sequence behind.
-      onReplay: (data: string, newlyObservedFrom: number) => {
-        if (!tab.cancelled) {
-          // Suppress complete historical queries, then answer only the suffix
-          // recovered after a sequence gap. A split query may cross the seam.
-          tab.defaultColorQueries.primeFromReplay(data.slice(0, newlyObservedFrom));
-          tab.defaultColorQueries.observe(data.slice(newlyObservedFrom));
-          tab.controller.terminal.reset();
-          if (data) {
-            tab.controller.write(TERMINAL_OUTPUT_ENCODER.encode(data));
-            this.readiness.markReady(tab);
-          }
+      onReplay: (
+        data: string,
+        newlyObservedFrom: number,
+        mode: "initial" | "recovery",
+        isReplayCurrent: () => boolean,
+      ) => {
+        if (tab.cancelled) {
+          return undefined;
         }
+        // Suppress complete historical queries, then answer only the suffix
+        // recovered after a sequence gap. A split query may cross the seam.
+        tab.defaultColorQueries.primeFromReplay(data.slice(0, newlyObservedFrom));
+        tab.defaultColorQueries.observe(data.slice(newlyObservedFrom));
+        if (mode === "recovery") {
+          return replaceTerminalControllerForReplay({
+            target: tab,
+            createController: tab.createController,
+            replay: TERMINAL_OUTPUT_ENCODER.encode(data),
+            isCurrent: () => isReplayCurrent() && !tab.cancelled && this.tabs.includes(tab),
+          }).then((replaced) => {
+            if (replaced && data) {
+              this.readiness.markReady(tab);
+            }
+          });
+        }
+        if (data) {
+          tab.controller.write(TERMINAL_OUTPUT_ENCODER.encode(data));
+          this.readiness.markReady(tab);
+        }
+        return undefined;
       },
       onExit: (info: { reason?: string; exitCode: number | null; error?: string }) =>
         this.handleExit(tab.id, info),
@@ -649,15 +669,7 @@ export class TerminalPanelSessionController
 
   private disposeTab(tab: TerminalPanelSessionTab): void {
     this.readiness.stop(tab);
-    try {
-      tab.controller.dispose();
-    } catch {
-      // Best-effort teardown; a partially-initialized tab may throw.
-    } finally {
-      // DOM ownership is independent of controller cleanup; never strand a
-      // Ghostty canvas when dependency disposal fails partway through.
-      tab.host.remove();
-    }
+    disposeTerminalController(tab.controller, tab.host);
   }
 
   private disposeAllTabs(): void {

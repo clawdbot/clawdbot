@@ -105,7 +105,7 @@ vi.mock("../../infra/outbound/session-binding-service.js", () => ({
   getSessionBindingService: () => buildFocusSessionBindingService(),
 }));
 
-vi.mock("../../agents/subagent-capabilities.js", () => ({
+vi.mock("../../agents/subagents/spawn/subagent-capabilities.js", () => ({
   resolveStoredSubagentCapabilities: (sessionKey: string, options: unknown) =>
     hoisted.resolveStoredSubagentCapabilitiesMock(sessionKey, options),
 }));

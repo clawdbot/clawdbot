@@ -14,6 +14,7 @@ import {
   DEFAULT_OAUTH_WARN_MS,
   formatRemainingShort,
 } from "../../agents/auth-health.js";
+import { buildAuthProfileUnusableHint } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
 import {
   ensureAuthProfileStore,
@@ -75,10 +76,8 @@ import {
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
 import type { ProviderModelRouteCandidate } from "../../plugin-sdk/provider-model-types.js";
 import {
-  captureCurrentPluginMetadataSnapshotState,
   getCurrentPluginMetadataSnapshot,
-  restoreCurrentPluginMetadataSnapshotState,
-  setCurrentPluginMetadataSnapshot,
+  installTemporaryCurrentPluginMetadataSnapshot,
 } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -290,15 +289,12 @@ function installCommandPluginMetadataSnapshot(params: {
   if (current) {
     return () => {};
   }
-  const previousState = captureCurrentPluginMetadataSnapshotState();
-  setCurrentPluginMetadataSnapshot(params.snapshot, {
+  const lease = installTemporaryCurrentPluginMetadataSnapshot(params.snapshot, {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
-  return () => {
-    restoreCurrentPluginMetadataSnapshotState(previousState);
-  };
+  return lease.release;
 }
 
 function syntheticAuthCredential(
@@ -1227,6 +1223,9 @@ export async function modelsStatusCommand(
               concurrency: probeConcurrency,
               maxTokens: probeMaxTokens,
             },
+            // Direct CLI probes create hidden sessions in the canonical agent DB.
+            // Gateway RPC probes omit this because the Gateway already owns the lock.
+            stateOwnership: { mode: "exclusive" },
             onProgress: update,
           });
         },
@@ -1259,6 +1258,7 @@ export async function modelsStatusCommand(
         provider?: string;
         kind: "cooldown" | "disabled";
         reason?: string;
+        recoveryHint: string;
         until: number;
         remainingMs: number;
       }> = [];
@@ -1272,11 +1272,19 @@ export async function modelsStatusCommand(
           typeof stats?.disabledUntil === "number" && now < stats.disabledUntil
             ? "disabled"
             : "cooldown";
+        const reason = kind === "disabled" ? stats?.disabledReason : stats?.cooldownReason;
+        const provider = store.profiles[profileId]?.provider;
         out.push({
           profileId,
-          provider: store.profiles[profileId]?.provider,
+          provider,
           kind,
-          reason: stats?.disabledReason,
+          reason,
+          recoveryHint: buildAuthProfileUnusableHint({
+            kind,
+            reason,
+            provider: provider ?? profileId,
+            profileId,
+          }),
           until: unusableUntil,
           remainingMs: unusableUntil - now,
         });
@@ -1624,6 +1632,18 @@ export async function modelsStatusCommand(
           includeEnvVar: !requiresSubscription,
         });
         runtime.log(`- ${theme.heading(provider)} ${hint}`);
+      }
+    }
+
+    if (unusableProfiles.length > 0) {
+      runtime.log("");
+      runtime.log(colorize(rich, theme.heading, "Unavailable auth profiles"));
+      for (const profile of unusableProfiles) {
+        const reason = profile.reason ? `:${profile.reason}` : "";
+        const provider = profile.provider ? ` (${profile.provider})` : "";
+        runtime.log(
+          `- ${theme.heading(profile.profileId)}${provider} ${profile.kind}${reason} (${formatRemainingShort(profile.remainingMs)}) — ${profile.recoveryHint}`,
+        );
       }
     }
 

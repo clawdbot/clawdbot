@@ -7,6 +7,7 @@ import "../../components/file-preview-modal-registration.ts";
 import "../../components/modal-dialog.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import { formatRelativeTimestamp } from "../../lib/format.ts";
 import "../../styles/plugins.css";
 import "../../styles/skill-workshop.css";
 import {
@@ -88,6 +89,7 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
       ${renderSelfLearningError(props.selfLearning)}
       ${renderSkillWorkshopHistoryScan({
         state: props.historyScan,
+        canScan: props.access.canScanHistory,
         onScan: props.onHistoryScan,
       })}
       <div class="sw-view" data-mode=${props.mode}>
@@ -115,7 +117,8 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
 
 function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshopProposal) {
   const busy = props.actionBusy?.key === proposal.key && props.actionBusy.action === "revise";
-  const canSubmit = props.revisionDraft.trim().length > 0 && !props.actionBusy;
+  const canSubmit =
+    props.access.canRevise && props.revisionDraft.trim().length > 0 && !props.actionBusy;
   const verb =
     props.mode === "board" ? t("skillWorkshop.actions.revise") : t("skillWorkshop.actions.tweak");
 
@@ -152,7 +155,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
           autofocus
           placeholder=${t("skillWorkshop.revision.placeholder")}
           .value=${props.revisionDraft}
-          ?disabled=${Boolean(props.actionBusy)}
+          ?disabled=${!props.access.canRevise || Boolean(props.actionBusy)}
           @input=${(event: Event) =>
             props.onRevisionDraftChange((event.target as HTMLTextAreaElement).value ?? "")}
         ></textarea>
@@ -438,7 +441,7 @@ function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshop
     <div class="sw-action-bar" aria-busy=${busy ? "true" : "false"}>
       <button
         class="sw-btn ${busy === "evaluate" ? "is-busy" : ""}"
-        ?disabled=${disabled}
+        ?disabled=${disabled || !props.access.canEvaluate}
         @click=${() => props.onEvaluate(proposal.key)}
       >
         ${busy === "evaluate"
@@ -447,14 +450,14 @@ function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshop
       </button>
       <button
         class="sw-btn sw-btn--primary ${busy === "apply" ? "is-busy" : ""}"
-        ?disabled=${disabled}
+        ?disabled=${disabled || !props.access.canApply}
         @click=${() => props.onApply(proposal.key)}
       >
         ${busy === "apply" ? t("skillWorkshop.actions.applying") : t("skillWorkshop.actions.apply")}
       </button>
       <button
         class="sw-btn ${busy === "revise" ? "is-busy" : ""}"
-        ?disabled=${disabled}
+        ?disabled=${disabled || !props.access.canRevise}
         @click=${() => props.onRevise(proposal.key)}
       >
         ${busy === "revise"
@@ -463,7 +466,7 @@ function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshop
       </button>
       <button
         class="sw-btn sw-btn--ghost sw-btn--danger ${busy === "reject" ? "is-busy" : ""}"
-        ?disabled=${disabled}
+        ?disabled=${disabled || !props.access.canReject}
         @click=${() => props.onReject(proposal.key)}
       >
         ${busy === "reject"
@@ -591,7 +594,7 @@ function renderToday(
                   class="sw-today__big sw-today__big--evaluate ${busy === "evaluate"
                     ? "is-busy"
                     : ""}"
-                  ?disabled=${disabled}
+                  ?disabled=${disabled || !props.access.canEvaluate}
                   @click=${() => props.onEvaluate(hero.key)}
                 >
                   ${busy === "evaluate"
@@ -601,7 +604,7 @@ function renderToday(
                 </button>
                 <button
                   class="sw-today__big sw-today__big--primary ${busy === "apply" ? "is-busy" : ""}"
-                  ?disabled=${disabled}
+                  ?disabled=${disabled || !props.access.canApply}
                   @click=${() => props.onApply(hero.key)}
                 >
                   ${busy === "apply"
@@ -611,7 +614,7 @@ function renderToday(
                 </button>
                 <button
                   class="sw-today__big sw-today__big--tweak ${busy === "revise" ? "is-busy" : ""}"
-                  ?disabled=${disabled}
+                  ?disabled=${disabled || !props.access.canRevise}
                   @click=${() => props.onRevise(hero.key)}
                 >
                   ${busy === "revise"
@@ -621,7 +624,7 @@ function renderToday(
                 </button>
                 <button
                   class="sw-today__big sw-today__big--skip ${busy === "reject" ? "is-busy" : ""}"
-                  ?disabled=${disabled}
+                  ?disabled=${disabled || !props.access.canReject}
                   @click=${() => props.onReject(hero.key)}
                 >
                   ${busy === "reject"
@@ -1110,23 +1113,6 @@ function queueEmptyText(props: SkillWorkshopProps): string {
 }
 
 function formatRelative(ms: number): string {
-  const diff = Math.max(0, Date.now() - ms);
-  const sec = Math.floor(diff / 1000);
-  if (sec < 60) {
-    return t("skillWorkshop.relative.secondsAgo", { count: String(sec) });
-  }
-  const min = Math.floor(sec / 60);
-  if (min < 60) {
-    return t("skillWorkshop.relative.minutesAgo", { count: String(min) });
-  }
-  const hr = Math.floor(min / 60);
-  if (hr < 24) {
-    return t("skillWorkshop.relative.hoursAgo", { count: String(hr) });
-  }
-  const day = Math.floor(hr / 24);
-  if (day < 7) {
-    return t("skillWorkshop.relative.daysAgo", { count: String(day) });
-  }
-  return new Date(ms).toLocaleDateString();
+  return formatRelativeTimestamp(ms, { dateFallback: true });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

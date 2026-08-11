@@ -3,7 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagent-announce-handoff.js";
+import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagents/announce/subagent-announce-handoff.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -225,6 +225,7 @@ type DispatchGatewayMethodInProcessOptions = {
   internalDeliveryMediaUrls?: string[];
   internalDeliverySuppressText?: boolean;
   onAccepted?: (payload: unknown) => void;
+  onSignalAbort?: () => Promise<void> | void;
   pluginRuntimeOwnerId?: string;
   pluginSubagentRequester?: PluginSubagentRequesterContext;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
@@ -313,6 +314,7 @@ export async function dispatchGatewayMethodInProcessRaw(
       expectFinal: options?.expectFinal,
       isWebchatConnect,
       onAccepted: options?.onAccepted,
+      onSignalAbort: options?.onSignalAbort,
       requestIdPrefix: "plugin-subagent",
       timeoutMs: options?.timeoutMs,
       ...(options?.signal ? { signal: options.signal } : {}),

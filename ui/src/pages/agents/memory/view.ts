@@ -22,11 +22,9 @@ type DiaryEntry = {
   body: string;
 };
 
-type DiaryEntryNav = {
-  date: string;
-  body: string;
-  page: number;
-};
+type DiaryPanel =
+  | ReturnType<typeof html>
+  | { navigation: ReturnType<typeof html>; content: ReturnType<typeof html> };
 
 const DIARY_START_RE = /<!--\s*openclaw:dreaming:diary:start\s*-->/;
 const DIARY_END_RE = /<!--\s*openclaw:dreaming:diary:end\s*-->/;
@@ -87,11 +85,6 @@ function formatDiaryChipLabel(date: string): string {
   return `${value.getMonth() + 1}/${value.getDate()}`;
 }
 
-function buildDiaryNavigation(entries: DiaryEntry[]): DiaryEntryNav[] {
-  const reversed = [...entries].toReversed();
-  return reversed.map((entry, page) => Object.assign({}, entry, { page }));
-}
-
 type DreamingPhaseInfo = {
   enabled: boolean;
   cron: string;
@@ -99,6 +92,14 @@ type DreamingPhaseInfo = {
 };
 
 type DreamingProps = {
+  access: {
+    canOpenConfig: boolean;
+    canBackfillDiary: boolean;
+    canDedupeDreamDiary: boolean;
+    canResetDiary: boolean;
+    canResetGroundedShortTerm: boolean;
+    canRepairDreamingArtifacts: boolean;
+  };
   viewState: DreamingViewState;
   active: boolean;
   selectedAgentId: string;
@@ -812,8 +813,16 @@ function renderAdvancedSection(props: DreamingProps) {
         </div>
         <div class="dreams-advanced__actions">
           ${[
-            { label: t("dreaming.scene.dedupeDiary"), onClick: props.onDedupeDreamDiary },
-            { label: t("dreaming.scene.repairCache"), onClick: props.onRepairDreamingArtifacts },
+            {
+              label: t("dreaming.scene.dedupeDiary"),
+              onClick: props.onDedupeDreamDiary,
+              allowed: props.access.canDedupeDreamDiary,
+            },
+            {
+              label: t("dreaming.scene.repairCache"),
+              onClick: props.onRepairDreamingArtifacts,
+              allowed: props.access.canRepairDreamingArtifacts,
+            },
             {
               label: t(
                 props.dreamDiaryActionLoading
@@ -821,14 +830,23 @@ function renderAdvancedSection(props: DreamingProps) {
                   : "dreaming.scene.backfill",
               ),
               onClick: props.onBackfillDiary,
+              allowed: props.access.canBackfillDiary,
             },
-            { label: t("dreaming.scene.reset"), onClick: props.onResetDiary },
-            { label: t("dreaming.scene.clearGrounded"), onClick: props.onResetGroundedShortTerm },
+            {
+              label: t("dreaming.scene.reset"),
+              onClick: props.onResetDiary,
+              allowed: props.access.canResetDiary,
+            },
+            {
+              label: t("dreaming.scene.clearGrounded"),
+              onClick: props.onResetGroundedShortTerm,
+              allowed: props.access.canResetGroundedShortTerm,
+            },
           ].map(
-            ({ label, onClick }) => html`
+            ({ label, onClick, allowed }) => html`
               <button
                 class="btn btn--subtle btn--sm"
-                ?disabled=${props.modeSaving || props.dreamDiaryActionLoading}
+                ?disabled=${!allowed || props.modeSaving || props.dreamDiaryActionLoading}
                 @click=${() => onClick()}
               >
                 ${label}
@@ -872,7 +890,9 @@ function renderAdvancedSection(props: DreamingProps) {
           controls: html`
             <button
               class="btn btn--subtle btn--sm"
-              ?disabled=${props.modeSaving || props.dreamDiaryActionLoading}
+              ?disabled=${!props.access.canResetGroundedShortTerm ||
+              props.modeSaving ||
+              props.dreamDiaryActionLoading}
               @click=${() => props.onResetGroundedShortTerm()}
             >
               ${t("dreaming.scene.clearGrounded")}
@@ -1112,6 +1132,29 @@ function renderWikiInsightCard(props: DreamingProps, card: WikiInsightCard) {
   `;
 }
 
+function renderDiaryNavigation(props: DreamingProps, labels: string[], selectedPage: number) {
+  const state = props.viewState;
+  return html`
+    <div class="dreams-diary__daychips">
+      ${labels.map(
+        (label, index) => html`
+          <button
+            class="dreams-diary__day-chip ${index === selectedPage
+              ? "dreams-diary__day-chip--active"
+              : ""}"
+            @click=${() => {
+              setDiaryPage(state, index, labels.length);
+              props.onViewStateChange();
+            }}
+          >
+            ${label}
+          </button>
+        `,
+      )}
+    </div>
+  `;
+}
+
 function renderWikiClusterSection<
   Cluster extends { key: string; label: string; items: { pagePath: string }[] },
 >(
@@ -1127,7 +1170,7 @@ function renderWikiClusterSection<
     prose: (cluster: Cluster) => ReturnType<typeof html>;
     renderItem: (item: Cluster["items"][number]) => ReturnType<typeof html>;
   },
-) {
+): DiaryPanel {
   const { clusters } = params;
   if (clusters.length === 0) {
     return html`
@@ -1150,31 +1193,21 @@ function renderWikiClusterSection<
       ? "selected imported insight cluster"
       : "selected memory overview cluster",
   );
-  return html`
-    <div class="dreams-diary__daychips">
-      ${clusters.map(
-        (entry, index) => html`
-          <button
-            class="dreams-diary__day-chip ${index === clusterIndex
-              ? "dreams-diary__day-chip--active"
-              : ""}"
-            @click=${() => {
-              setDiaryPage(state, index, clusters.length);
-              props.onViewStateChange();
-            }}
-          >
-            ${entry.label}
-          </button>
-        `,
-      )}
-    </div>
-    <article class="dreams-diary__entry" key="${params.kind}-${cluster.key}">
-      <div class="dreams-diary__accent"></div>
-      <div class="dreams-diary__date">${params.date(cluster)}</div>
-      <div class="dreams-diary__prose">${params.prose(cluster)}</div>
-      <div class="dreams-diary__insights">${cluster.items.map(params.renderItem)}</div>
-    </article>
-  `;
+  return {
+    navigation: renderDiaryNavigation(
+      props,
+      clusters.map((entry) => entry.label),
+      clusterIndex,
+    ),
+    content: html`
+      <article class="dreams-diary__entry" key="${params.kind}-${cluster.key}">
+        <div class="dreams-diary__accent"></div>
+        <div class="dreams-diary__date">${params.date(cluster)}</div>
+        <div class="dreams-diary__prose">${params.prose(cluster)}</div>
+        <div class="dreams-diary__insights">${cluster.items.map(params.renderItem)}</div>
+      </article>
+    `,
+  };
 }
 
 function renderDiaryImportsSection(props: DreamingProps) {
@@ -1262,7 +1295,7 @@ function renderWikiOverviewSection(props: DreamingProps) {
   });
 }
 
-function renderDreamDiaryEntries(props: DreamingProps) {
+function renderDreamDiaryEntries(props: DreamingProps): DiaryPanel {
   const state = props.viewState;
   if (typeof props.dreamDiaryContent !== "string") {
     return html`
@@ -1289,41 +1322,31 @@ function renderDreamDiaryEntries(props: DreamingProps) {
     `;
   }
 
-  const reversed = buildDiaryNavigation(entries);
+  const reversed = entries.toReversed();
   const page = Math.max(0, Math.min(state.diaryPage, reversed.length - 1));
   const entry = expectDefined(reversed[page], "selected dreaming diary entry");
 
-  return html`
-    <div class="dreams-diary__daychips">
-      ${reversed.map(
-        (e) => html`
-          <button
-            class="dreams-diary__day-chip ${e.page === page
-              ? "dreams-diary__day-chip--active"
-              : ""}"
-            @click=${() => {
-              setDiaryPage(state, e.page, reversed.length);
-              props.onViewStateChange();
-            }}
-          >
-            ${formatDiaryChipLabel(e.date)}
-          </button>
-        `,
-      )}
-    </div>
-    <article class="dreams-diary__entry" key="${page}">
-      <div class="dreams-diary__accent"></div>
-      ${entry.date ? html`<time class="dreams-diary__date">${entry.date}</time>` : nothing}
-      <div class="dreams-diary__prose">
-        ${flattenDiaryBody(entry.body).map(
-          (para, i) =>
-            html`<p class="dreams-diary__para" style="animation-delay: ${0.3 + i * 0.15}s;">
-              ${unsafeHTML(toSanitizedMarkdownHtml(para))}
-            </p>`,
-        )}
-      </div>
-    </article>
-  `;
+  return {
+    navigation: renderDiaryNavigation(
+      props,
+      reversed.map((diaryEntry) => formatDiaryChipLabel(diaryEntry.date)),
+      page,
+    ),
+    content: html`
+      <article class="dreams-diary__entry" key="${page}">
+        <div class="dreams-diary__accent"></div>
+        ${entry.date ? html`<time class="dreams-diary__date">${entry.date}</time>` : nothing}
+        <div class="dreams-diary__prose">
+          ${flattenDiaryBody(entry.body).map(
+            (para, i) =>
+              html`<p class="dreams-diary__para" style="animation-delay: ${0.3 + i * 0.15}s;">
+                ${unsafeHTML(toSanitizedMarkdownHtml(para))}
+              </p>`,
+          )}
+        </div>
+      </article>
+    `,
+  };
 }
 
 // ── Diary section renderer ────────────────────────────────────────────
@@ -1346,6 +1369,15 @@ function renderDiarySection(props: DreamingProps) {
       </section>
     `;
   }
+
+  const diaryPanel =
+    activeDiarySubTab === "dreams"
+      ? renderDreamDiaryEntries(props)
+      : activeDiarySubTab === "insights"
+        ? renderDiaryImportsSection(props)
+        : renderWikiOverviewSection(props);
+  const diaryNavigation = "navigation" in diaryPanel ? diaryPanel.navigation : nothing;
+  const diaryContent = "content" in diaryPanel ? diaryPanel.content : diaryPanel;
 
   return html`
     <section class="dreams-diary">
@@ -1373,7 +1405,7 @@ function renderDiarySection(props: DreamingProps) {
           <button
             class="btn btn--subtle btn--sm"
             ?disabled=${memoryWikiUnavailable
-              ? false
+              ? !props.access.canOpenConfig
               : props.modeSaving ||
                 (activeDiarySubTab === "dreams"
                   ? props.dreamDiaryLoading
@@ -1409,6 +1441,7 @@ function renderDiarySection(props: DreamingProps) {
           </button>
         </div>
         ${renderDiarySubtabExplainer(activeDiarySubTab)}
+        ${memoryWikiUnavailable ? nothing : diaryNavigation}
       </div>
 
       <div
@@ -1431,17 +1464,17 @@ function renderDiarySection(props: DreamingProps) {
                   )}
                 </div>
                 <div class="dreams-diary__empty-actions">
-                  <button class="btn btn--subtle btn--sm" @click=${() => props.onOpenConfig()}>
+                  <button
+                    class="btn btn--subtle btn--sm"
+                    ?disabled=${!props.access.canOpenConfig}
+                    @click=${() => props.onOpenConfig()}
+                  >
                     ${t("dreaming.wiki.openConfig")}
                   </button>
                 </div>
               </div>
             `
-          : activeDiarySubTab === "dreams"
-            ? renderDreamDiaryEntries(props)
-            : activeDiarySubTab === "insights"
-              ? renderDiaryImportsSection(props)
-              : renderWikiOverviewSection(props)}
+          : diaryContent}
       </div>
       ${renderWikiPreviewOverlay(props)}
     </section>

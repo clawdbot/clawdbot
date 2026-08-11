@@ -15,6 +15,7 @@ import {
   ackComponentInteraction,
   ensureAgentComponentInteractionAllowed,
   parseAgentComponentData,
+  replyUnavailableComponentInteraction,
   resolveAgentComponentRoute,
   resolveInteractionContextWithDmAuth,
   type AgentComponentContext,
@@ -39,14 +40,7 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
   const parsed = parseAgentComponentData(params.data);
   if (!parsed) {
     logError(`${params.label}: failed to parse component data`);
-    try {
-      await params.interaction.reply({
-        content: params.invalidReply,
-        ephemeral: true,
-      });
-    } catch {
-      // Interaction may have expired
-    }
+    await replyUnavailableComponentInteraction(params.interaction, params.invalidReply);
     return;
   }
 
@@ -104,7 +98,9 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
 
   enqueueSystemEvent(eventText, {
     sessionKey: route.sessionKey,
-    contextKey: `${params.contextKeyPrefix}:${channelId}:${componentId}:${userId}`,
+    // The immutable interaction ID identifies one occurrence, preserving repeat clicks while
+    // deduplicating gateway replays of that same occurrence.
+    contextKey: `${params.contextKeyPrefix}:${channelId}:${componentId}:${userId}:${params.interaction.id}`,
   });
 
   await ackComponentInteraction({

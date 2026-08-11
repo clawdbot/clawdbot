@@ -8,6 +8,7 @@ import { resolveWorkspaceTemplateSearchDirs } from "../../agents/workspace-templ
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { handleReset } from "../../commands/onboard-helpers.js";
 import { createConfigIO, replaceConfigFile } from "../../config/config.js";
+import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
 
@@ -128,6 +129,9 @@ export async function ensureDevGatewayConfig(opts: { reset?: boolean }) {
       },
     },
     afterWrite: { mode: "auto" },
+    // An absent config resolves to the implicit legacy agent before this full
+    // replacement. Declare only that synthetic deletion; authored rosters stay protected.
+    writeOptions: { allowedAgentRosterRemovals: [LEGACY_IMPLICIT_AGENT_ID] },
   });
   await ensureDevWorkspace(workspace);
   defaultRuntime.log(`Dev config ready: ${shortenHomePath(configPath)}`);

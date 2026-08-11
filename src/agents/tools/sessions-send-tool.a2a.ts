@@ -4,10 +4,10 @@
  * Runs bounded ping-pong delivery, waits for target replies, and suppresses control-token messages.
  */
 import crypto from "node:crypto";
-import type { CallGatewayOptions } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { GatewayMessageChannel } from "../../utils/message-channel.js";
+import { splitMediaFromOutput } from "../../media/parse.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
   type AgentWaitResult,
@@ -18,6 +18,10 @@ import {
   waitForAgentRun,
 } from "../run-wait.js";
 import { runAgentStep } from "./agent-step.js";
+import {
+  callAgentToolGatewayRequest,
+  type AgentToolGatewayRequestCaller,
+} from "./in-process-gateway.js";
 import { resolveAnnounceTarget } from "./sessions-announce-target.js";
 import {
   type AnnounceTarget,
@@ -30,19 +34,6 @@ import {
 
 const log = createSubsystemLogger("agents/sessions-send");
 
-type GatewayCaller = <T = unknown>(opts: CallGatewayOptions) => Promise<T>;
-
-const defaultSessionsSendA2ADeps = {
-  callGateway: async <T = unknown>(opts: CallGatewayOptions): Promise<T> => {
-    const { callGateway } = await import("../../gateway/call.js");
-    return callGateway<T>(opts);
-  },
-};
-
-let sessionsSendA2ADeps: {
-  callGateway: GatewayCaller;
-} = defaultSessionsSendA2ADeps;
-
 function isDeliveryFailureWait(wait: AgentWaitResult): boolean {
   return (
     (wait.status === "error" && !isRecoverableAgentWaitError(wait.error)) ||
@@ -52,19 +43,29 @@ function isDeliveryFailureWait(wait: AgentWaitResult): boolean {
 
 async function deliverAnnounceReply(params: {
   announceTarget: AnnounceTarget;
+  callGateway: AgentToolGatewayRequestCaller;
   message: string;
   runContextId: string;
+  targetSessionKey: string;
 }) {
-  const message = params.message.trim();
-  if (!message) {
+  // Gateway chooses media roots before its later outbound directive parse, so
+  // project the media and its producing agent at the announcement boundary.
+  const { text: message, mediaUrls, audioAsVoice } = splitMediaFromOutput(params.message.trim());
+  if (!message && !mediaUrls?.length) {
     return;
   }
+  const mediaAgentId = mediaUrls?.length
+    ? parseAgentSessionKey(params.targetSessionKey)?.agentId
+    : undefined;
   try {
-    await sessionsSendA2ADeps.callGateway({
+    await params.callGateway({
       method: "send",
       params: {
         to: params.announceTarget.to,
         message,
+        ...(mediaUrls?.length ? { mediaUrls } : {}),
+        ...(mediaAgentId ? { agentId: mediaAgentId } : {}),
+        ...(audioAsVoice ? { asVoice: true } : {}),
         channel: params.announceTarget.channel,
         accountId: params.announceTarget.accountId,
         threadId: params.announceTarget.threadId,
@@ -83,19 +84,21 @@ async function deliverAnnounceReply(params: {
 }
 
 export async function runSessionsSendA2AFlow(params: {
+  callGateway?: AgentToolGatewayRequestCaller;
   targetSessionKey: string;
   displayKey: string;
   message: string;
   announceTimeoutMs: number;
   maxPingPongTurns: number;
   requesterSessionKey?: string;
-  requesterChannel?: GatewayMessageChannel;
+  requesterChannel?: string;
   baseline?: AssistantReplySnapshot;
   roundOneReply?: string;
   waitRunId?: string;
   notifyRequesterOnWaitFailure?: boolean;
 }) {
   const runContextId = params.waitRunId ?? "unknown";
+  const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
   try {
     let primaryReply = params.roundOneReply;
     let latestReply = params.roundOneReply;
@@ -103,13 +106,13 @@ export async function runSessionsSendA2AFlow(params: {
       const wait = await waitForAgentRun({
         runId: params.waitRunId,
         timeoutMs: Math.min(params.announceTimeoutMs, 60_000),
-        callGateway: sessionsSendA2ADeps.callGateway,
+        callGateway: gatewayCall,
       });
       if (wait.status === "ok") {
         const latestSnapshot = await readLatestAssistantReplySnapshot({
           sessionKey: params.targetSessionKey,
           stopAtTranscriptArtifact: true,
-          callGateway: sessionsSendA2ADeps.callGateway,
+          callGateway: gatewayCall,
         });
         primaryReply = hasUpdatedAssistantReplySnapshot(latestSnapshot, params.baseline)
           ? latestSnapshot.text
@@ -134,6 +137,7 @@ export async function runSessionsSendA2AFlow(params: {
             lane: resolveNestedAgentLaneForSession(params.requesterSessionKey),
             sourceSessionKey: params.targetSessionKey,
             sourceTool: "sessions_send",
+            callGateway: gatewayCall,
           });
         }
         return;
@@ -149,6 +153,7 @@ export async function runSessionsSendA2AFlow(params: {
     const announceTarget = await resolveAnnounceTarget({
       sessionKey: params.targetSessionKey,
       displayKey: params.displayKey,
+      callGateway: gatewayCall,
     });
     const targetChannel = announceTarget?.channel ?? "unknown";
 
@@ -166,8 +171,10 @@ export async function runSessionsSendA2AFlow(params: {
       }
       await deliverAnnounceReply({
         announceTarget,
+        callGateway: gatewayCall,
         message: latestReply,
         runContextId,
+        targetSessionKey: params.targetSessionKey,
       });
       return;
     }
@@ -205,6 +212,7 @@ export async function runSessionsSendA2AFlow(params: {
           sourceChannel:
             nextSessionKey === params.requesterSessionKey ? params.requesterChannel : targetChannel,
           sourceTool: "sessions_send",
+          callGateway: gatewayCall,
         });
         if (!replyText || isReplySkip(replyText) || isNonDeliverableSessionsReply(replyText)) {
           break;
@@ -236,6 +244,7 @@ export async function runSessionsSendA2AFlow(params: {
       sourceSessionKey: params.requesterSessionKey,
       sourceChannel: params.requesterChannel,
       sourceTool: "sessions_send",
+      callGateway: gatewayCall,
     });
     if (
       announceTarget &&
@@ -246,8 +255,10 @@ export async function runSessionsSendA2AFlow(params: {
     ) {
       await deliverAnnounceReply({
         announceTarget,
+        callGateway: gatewayCall,
         message: announceReply,
         runContextId,
+        targetSessionKey: params.targetSessionKey,
       });
     }
   } catch (err) {
@@ -256,21 +267,4 @@ export async function runSessionsSendA2AFlow(params: {
       error: formatErrorMessage(err),
     });
   }
-}
-
-const testing = {
-  setDepsForTest(overrides?: Partial<{ callGateway: GatewayCaller }>) {
-    sessionsSendA2ADeps = overrides
-      ? {
-          ...defaultSessionsSendA2ADeps,
-          ...overrides,
-        }
-      : defaultSessionsSendA2ADeps;
-  },
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionsSendA2ATestApi")] = {
-    testing,
-  };
 }

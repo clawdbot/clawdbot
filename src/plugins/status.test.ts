@@ -378,7 +378,11 @@ function expectBundleInspectState(
   params: {
     bundleCapabilities: readonly string[];
     shape: string;
-    mcpServers?: readonly { name: string; hasStdioTransport: boolean }[];
+    mcpServers?: readonly {
+      name: string;
+      hasStdioTransport: boolean;
+      unsupported?: boolean;
+    }[];
   },
 ) {
   expect(inspect.bundleCapabilities).toEqual(params.bundleCapabilities);
@@ -488,6 +492,30 @@ describe("plugin status reports", () => {
 
     expect(mockInput(loadPluginMetadataRegistrySnapshotMock).loadModules).toBe(false);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("reuses a supplied metadata snapshot for scoped diagnostics", () => {
+    const metadataSnapshot = loadPluginMetadataSnapshotMock({
+      index: createInstalledPluginIndexSnapshot([]),
+    });
+    loadPluginMetadataSnapshotMock.mockClear();
+
+    buildPluginDiagnosticsReport({
+      config: {},
+      workspaceDir: "/workspace",
+      onlyPluginIds: ["demo"],
+      metadataSnapshot: metadataSnapshot as never,
+    });
+
+    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
+    expect(mockInput(loadOpenClawPluginsMock)).toMatchObject({
+      manifestRegistry: metadataSnapshot.manifestRegistry,
+      installRecords: {},
+      onlyPluginIds: ["demo"],
+      workspaceDir: "/workspace",
+      loadModules: true,
+    });
   });
 
   it("loads plugin status from the auto-enabled config snapshot", () => {
@@ -1036,12 +1064,22 @@ describe("plugin status reports", () => {
         rootDir: "/tmp/native-mcp",
         mcpServers: {
           app: { transport: "stdio", command: "node", args: ["./mcp-server.js"] },
+          remote: { type: "http", url: "https://example.test/mcp" },
+          incomplete: { transport: "streamable-http" },
+          invalidScheme: { transport: "streamable-http", url: "ftp://example.test/mcp" },
+          invalidTransport: { transport: "http", url: "https://example.test/mcp" },
         },
       }),
       expectedId: "native-mcp",
       expectedBundleCapabilities: [],
       expectedShape: "non-capability",
-      expectedMcpServers: [{ name: "app", hasStdioTransport: true }],
+      expectedMcpServers: [
+        { name: "app", hasStdioTransport: true },
+        { name: "remote", hasStdioTransport: false },
+        { name: "incomplete", hasStdioTransport: false, unsupported: true },
+        { name: "invalidScheme", hasStdioTransport: false, unsupported: true },
+        { name: "invalidTransport", hasStdioTransport: false, unsupported: true },
+      ],
     },
   ])(
     "$name",

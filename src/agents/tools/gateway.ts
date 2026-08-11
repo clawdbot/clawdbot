@@ -32,6 +32,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPositiveIntegerParam, readStringParam } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import { getGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 
 /** Optional gateway connection overrides accepted by agent tools. */
 export type GatewayCallOptions = {
@@ -214,6 +215,8 @@ const APPROVAL_RUNTIME_METHODS = new Set<string>([
 ]);
 
 const AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
+  "exec.approval.request",
+  "plugin.approval.request",
   "wake",
   "cron.list",
   "cron.get",
@@ -290,7 +293,7 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
   method: string;
   callParams: unknown;
   opts: GatewayCallOptions;
-  target: GatewayOverrideTarget;
+  approvalRuntimeToken: string | undefined;
 }): DeviceIdentity | undefined {
   const isApprovalRuntimeMethod = APPROVAL_RUNTIME_METHODS.has(params.method);
   const isNodeApprovalReplay = isApprovalReplayNodeSystemRun(params.method, params.callParams);
@@ -298,6 +301,14 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
     return undefined;
   }
   if (isApprovalRuntimeMethod && trimToUndefined(params.opts.gatewayUrl) !== undefined) {
+    return undefined;
+  }
+  if (params.approvalRuntimeToken !== undefined) {
+    // The approval-runtime token already proves this is the local approval bridge, and
+    // the gateway grants record visibility from it. Sending the shared device identity
+    // too would put the connect back under that device's paired role/scope baseline,
+    // so an operator paired before operator.approvals existed can never reach the
+    // prompt that would re-pair it. Same rule as the operator approvals client.
     return undefined;
   }
   try {
@@ -321,9 +332,6 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
         ].join(" "),
         { cause: error },
       );
-    }
-    if (params.target === "local") {
-      return undefined;
     }
     throw new Error(
       [
@@ -365,8 +373,22 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
     }
     throw new Error("agent gateway calls require the trusted local gateway context");
   }
+  if (identity.signedAgentRuntimeIdentityToken) {
+    return identity.signedAgentRuntimeIdentityToken;
+  }
+  if (!identity.operationalRunInstance) {
+    if (optionalLocalIdentity && !params.required) {
+      return undefined;
+    }
+    throw new Error("trusted operational run instance required for this gateway call");
+  }
   try {
-    return await mintAgentRuntimeIdentityToken(identity);
+    const sessionSpawnContext = getGatewaySessionSpawnContext();
+    return await mintAgentRuntimeIdentityToken({
+      ...identity,
+      operationalRunInstance: identity.operationalRunInstance,
+      ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
+    });
   } catch (error) {
     if (optionalLocalIdentity && !params.required) {
       return undefined;
@@ -431,6 +453,12 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
     // process owns the durable receipt and sends no source authority over RPC.
     return undefined;
   }
+  if (!identity.operationalRunInstance) {
+    if (terminalSourceReply) {
+      throw new Error("terminal source reply requires a trusted operational run instance");
+    }
+    return undefined;
+  }
   const resolvedMessageActionContext = terminalSourceReply
     ? {
         ...messageActionContext,
@@ -444,6 +472,7 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
       };
   return await mintAgentRuntimeIdentityToken({
     ...identity,
+    operationalRunInstance: identity.operationalRunInstance,
     messageActionContext: resolvedMessageActionContext,
   });
 }
@@ -531,7 +560,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     method,
     callParams,
     opts,
-    target: gateway.target,
+    approvalRuntimeToken,
   });
   const callOptions = {
     url: gateway.url,

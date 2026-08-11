@@ -11,7 +11,6 @@ export type SessionPatch = {
   label?: string | null;
   category?: string | null;
   boardFace?: "chat" | "dashboard";
-  icon?: string | null;
   model?: string | null;
   thinkingLevel?: string | null;
   fastMode?: FastMode | null;
@@ -25,6 +24,10 @@ export type SessionPatch = {
 
 export type SessionPatchOptions = {
   agentId?: string;
+  /** Let a caller with stricter lifecycle ownership publish the resolved model value. */
+  deferModelOverride?: boolean;
+  /** Keep optimistic model state bound to the UI owner that initiated the patch. */
+  ownsModelOverride?: () => boolean;
   /** Capture the current connection now, but dispatch only after this tail settles. */
   waitFor?: Promise<unknown>;
   /**

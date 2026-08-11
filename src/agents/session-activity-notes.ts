@@ -3,8 +3,16 @@ import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../auto-reply/heartbeat.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { normalizeAgentPlanSteps } from "../channels/streaming.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { redactToolPayloadText } from "../logging/redact.js";
-import { buildAgentRunTerminalOutcome } from "./agent-run-terminal-outcome.js";
+import {
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  classifyAgentRunTerminalOutcome,
+} from "./agent-run-terminal-outcome.js";
+import {
+  normalizeAgentRunTerminalReplySnapshot,
+  type AgentRunTerminalReplySnapshot,
+} from "./agent-run-terminal-reply.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -17,8 +25,12 @@ export type SessionActivityNoteState = {
   noteBytes: number;
   itemStatuses: Map<string, string>;
   assistantBuffer: string;
+  assistantRawBuffer: string;
+  assistantBufferDirty: boolean;
+  lastAssistantBufferAt: number;
   lastAssistantNote?: string;
   planProgress?: { completed: number; total: number };
+  terminalReply?: AgentRunTerminalReplySnapshot;
 };
 
 const MAX_NOTES = 40;
@@ -26,10 +38,20 @@ const MAX_NOTE_BYTES = 8 * 1024;
 const DEFAULT_NOTE_MAX_CHARS = 360;
 const ASSISTANT_NOTE_MAX_CHARS = 240;
 const ASSISTANT_BUFFER_MAX_CHARS = 4096;
+const ASSISTANT_BUFFER_THROTTLE_MS = 150;
 const MAX_ITEM_STATUSES = 160;
 
 export function createSessionActivityNoteState(): SessionActivityNoteState {
-  return { noteSequence: 0, notes: [], noteBytes: 0, itemStatuses: new Map(), assistantBuffer: "" };
+  return {
+    noteSequence: 0,
+    notes: [],
+    noteBytes: 0,
+    itemStatuses: new Map(),
+    assistantBuffer: "",
+    assistantRawBuffer: "",
+    assistantBufferDirty: false,
+    lastAssistantBufferAt: 0,
+  };
 }
 
 // Preserve an unmatched BEGIN while truncating so a later END can still strip the private block.
@@ -47,6 +69,18 @@ function assembleAssistantBuffer(value: string, maxChars: number): string {
     maxChars,
   );
   return `${head}${INTERNAL_RUNTIME_CONTEXT_BEGIN}${body}`;
+}
+
+function syncAssistantBuffer(state: SessionActivityNoteState, at = Date.now()): void {
+  if (!state.assistantBufferDirty) {
+    return;
+  }
+  state.assistantBuffer = assembleAssistantBuffer(
+    state.assistantRawBuffer,
+    ASSISTANT_BUFFER_MAX_CHARS,
+  );
+  state.assistantBufferDirty = false;
+  state.lastAssistantBufferAt = at;
 }
 
 function keepUtf16SafeTail(value: string, maxChars: number): string {
@@ -139,13 +173,7 @@ function rememberItemStatus(
   }
   state.itemStatuses.delete(itemId);
   state.itemStatuses.set(itemId, status);
-  while (state.itemStatuses.size > limit) {
-    const oldest = state.itemStatuses.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    state.itemStatuses.delete(oldest);
-  }
+  pruneMapToMaxSize(state.itemStatuses, limit);
   return true;
 }
 
@@ -153,6 +181,8 @@ export function flushSessionActivityAssistantNote(
   state: SessionActivityNoteState,
   noteMaxChars: number = DEFAULT_NOTE_MAX_CHARS,
 ): void {
+  // Consumers force the latest cumulative snapshot; periodic assembly only keeps live state warm.
+  syncAssistantBuffer(state);
   // Redact assembled prose so split secrets match and raw fragments do not count as notes.
   if (!state.assistantBuffer || state.assistantBuffer.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN)) {
     return;
@@ -186,6 +216,11 @@ export function noteSessionActivityEvent(
         const health = terminalHealthFor(event);
         const error = readString(data.error);
         addActivityNote(state, error ? `Run ${health}: ${error}` : `Run ${health}`, noteMaxChars);
+        const terminalReply = normalizeAgentRunTerminalReplySnapshot(data.terminalReply);
+        state.terminalReply = terminalReply;
+        if (terminalReply?.disposition === "visible") {
+          addActivityNote(state, `Assistant: ${terminalReply.text}`, noteMaxChars);
+        }
       }
       return;
     }
@@ -253,12 +288,26 @@ export function noteSessionActivityEvent(
       const full = readString(data.text);
       const delta = readString(data.delta);
       if (full) {
-        state.assistantBuffer = assembleAssistantBuffer(full, ASSISTANT_BUFFER_MAX_CHARS);
+        state.assistantRawBuffer = full;
       } else if (delta) {
+        // Delta-only producers never expose an unbounded cumulative string. Keep their historical
+        // bounded assembly path; its scan cost is capped independently of turn length.
+        syncAssistantBuffer(state, event.ts);
         state.assistantBuffer = assembleAssistantBuffer(
           state.assistantBuffer + delta,
           ASSISTANT_BUFFER_MAX_CHARS,
         );
+        state.assistantRawBuffer = state.assistantBuffer;
+        state.lastAssistantBufferAt = event.ts;
+        return;
+      } else {
+        return;
+      }
+      // Runtime-context markers can straddle the retained tail, so only the full raw snapshot can
+      // be normalized safely. Bound that scan while preserving exact output at every consumer.
+      state.assistantBufferDirty = true;
+      if (event.ts - state.lastAssistantBufferAt >= ASSISTANT_BUFFER_THROTTLE_MS) {
+        syncAssistantBuffer(state, event.ts);
       }
       return;
     }
@@ -288,15 +337,9 @@ export function readFiniteNumber(value: unknown): number | undefined {
 
 export function terminalHealthFor(event: AgentEventPayload): "done" | "failed" {
   const phase = event.data.phase;
-  const outcome = buildAgentRunTerminalOutcome({
-    status: phase === "end" ? "ok" : "error",
-    error: event.data.error,
-    stopReason: event.data.stopReason,
-    livenessState: event.data.livenessState,
-    timeoutPhase: event.data.timeoutPhase,
-    providerStarted: event.data.providerStarted,
-    startedAt: event.data.startedAt,
-    endedAt: event.data.endedAt,
+  const outcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
+    phase: phase === "end" ? "end" : "error",
+    data: event.data,
   });
-  return outcome.reason === "completed" ? "done" : "failed";
+  return classifyAgentRunTerminalOutcome(outcome) === "success" ? "done" : "failed";
 }

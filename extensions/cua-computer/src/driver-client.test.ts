@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   shutdown: vi.fn(async () => {}),
 }));
 
-vi.mock("@trycua/cua-driver", () => ({
+const sdk = {
   CaptureScope: { Desktop: "desktop" },
   ClickButton: { Left: 0, Right: 1, Middle: 2 },
   CuaDriver: { create: mocks.create, createConfigured: mocks.createConfigured },
@@ -21,7 +21,7 @@ vi.mock("@trycua/cua-driver", () => ({
   ScrollDirection: { Up: 0, Down: 1, Left: 2, Right: 3 },
   SessionPermissionMode: { Unrestricted: "unrestricted" },
   createTrustedSession: mocks.createTrustedSession,
-}));
+};
 
 import { createCuaDriver } from "./driver-client.js";
 
@@ -49,8 +49,9 @@ describe("CUA Driver direct session", () => {
   });
 
   it("uses configured creation and one fixed trusted OpenClaw session", async () => {
-    const driver = createCuaDriver();
+    const driver = createCuaDriver({ loadSdk: () => sdk as never });
 
+    expect(driver.isAvailable()).toBe(true);
     expect(mocks.create).not.toHaveBeenCalled();
     expect(mocks.createConfigured).toHaveBeenCalledWith({
       claudeCodeCompatibility: false,
@@ -73,10 +74,10 @@ describe("CUA Driver direct session", () => {
   });
 
   it("starts the fixed desktop capture session once before using driver tools", async () => {
-    const driver = createCuaDriver();
-    const sessionOptions = mocks.createTrustedSession.mock.calls[0]?.[1];
+    const driver = createCuaDriver({ loadSdk: () => sdk as never });
 
     await Promise.all([driver.getDesktopState(), driver.getDesktopState()]);
+    const sessionOptions = mocks.createTrustedSession.mock.calls[0]?.[1];
 
     expect(mocks.startSession).toHaveBeenCalledOnce();
     expect(mocks.startSession).toHaveBeenCalledWith(
@@ -90,5 +91,68 @@ describe("CUA Driver direct session", () => {
 
     await driver.dispose();
     expect(mocks.endSession).toHaveBeenCalledWith({ session: sessionOptions.publicSession });
+  });
+
+  it("keeps a missing native desktop library behind command availability", async () => {
+    const loadSdk = vi.fn(() => {
+      throw new Error("libX11.so.6: cannot open shared object file");
+    });
+    const driver = createCuaDriver({ loadSdk });
+
+    expect(loadSdk).not.toHaveBeenCalled();
+    expect(driver.isAvailable()).toBe(false);
+    expect(loadSdk).toHaveBeenCalledOnce();
+    await expect(driver.getScreenSize()).rejects.toThrow(
+      "COMPUTER_DRIVER_UNAVAILABLE: failed to load CUA Driver SDK: libX11.so.6",
+    );
+
+    driver.resetAvailabilityCache();
+    expect(driver.isAvailable()).toBe(false);
+    expect(loadSdk).toHaveBeenCalledTimes(2);
+    await driver.dispose();
+  });
+
+  it("loads an ESM driver asynchronously and exposes it on a later availability probe", async () => {
+    let resolveSdk: ((value: typeof sdk) => void) | undefined;
+    const sdkPromise = new Promise<typeof sdk>((resolve) => {
+      resolveSdk = resolve;
+    });
+    const loadSdk = vi.fn(() => sdkPromise as never);
+    const driver = createCuaDriver({ loadSdk });
+
+    expect(driver.isAvailable()).toBe(false);
+    expect(loadSdk).toHaveBeenCalledOnce();
+
+    resolveSdk?.(sdk);
+    await vi.waitFor(() => expect(driver.isAvailable()).toBe(true));
+    await driver.getDesktopState();
+
+    expect(loadSdk).toHaveBeenCalledOnce();
+    expect(mocks.createConfigured).toHaveBeenCalledOnce();
+    expect(mocks.getDesktopState).toHaveBeenCalledOnce();
+    await driver.dispose();
+  });
+
+  it("retries an asynchronous ESM import failure after the availability cache resets", async () => {
+    let attempt = 0;
+    const loadSdk = vi.fn(() => {
+      attempt += 1;
+      return attempt === 1
+        ? Promise.reject(new Error("native module is temporarily unavailable"))
+        : Promise.resolve(sdk as never);
+    });
+    const driver = createCuaDriver({ loadSdk });
+
+    expect(driver.isAvailable()).toBe(false);
+    await expect(driver.getDesktopState()).rejects.toThrow(
+      "COMPUTER_DRIVER_UNAVAILABLE: failed to load CUA Driver SDK: native module is temporarily unavailable",
+    );
+
+    driver.resetAvailabilityCache();
+    expect(driver.isAvailable()).toBe(false);
+    await vi.waitFor(() => expect(driver.isAvailable()).toBe(true));
+
+    expect(loadSdk).toHaveBeenCalledTimes(2);
+    await driver.dispose();
   });
 });

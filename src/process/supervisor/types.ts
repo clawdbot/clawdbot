@@ -30,6 +30,7 @@ export type RunExit = {
   reason: TerminationReason;
   exitCode: number | null;
   exitSignal: NodeJS.Signals | number | null;
+  oomScoreWrapperSelected?: boolean;
   durationMs: number;
   stdout: string;
   stderr: string;
@@ -66,6 +67,7 @@ export type SpawnSecretInput = {
 export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
   pid?: number;
   stdin?: ManagedRunStdin;
+  oomScoreWrapperSelected?: boolean;
   onStdout: (listener: (chunk: string) => void) => void;
   onStderr: (listener: (chunk: string) => void) => void;
   wait: () => Promise<{ code: number | null; signal: WaitSignal }>;

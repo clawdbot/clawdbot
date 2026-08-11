@@ -21,6 +21,7 @@ type ChannelHealthSnapshot = {
   mode?: string;
   ingressUnavailable?: true;
   lifecycle?: "starting" | "ready" | "recovering" | "blocked" | "stopped";
+  healthState?: string;
   terminalDisconnect?: boolean;
 };
 
@@ -48,6 +49,17 @@ export type ChannelHealthPolicy = {
   staleEventThresholdMs: number;
   channelConnectGraceMs: number;
 };
+
+/** Keep channel-authored terminal detail above the shared unhealthy projection. */
+export function resolveChannelHealthState(
+  snapshot: ChannelHealthSnapshot,
+  policy: ChannelHealthPolicy,
+): string | undefined {
+  const evaluation = evaluateChannelHealth(snapshot, policy);
+  return !evaluation.healthy && !(snapshot.lifecycle === "blocked" && snapshot.healthState)
+    ? evaluation.reason
+    : snapshot.healthState;
+}
 
 type ChannelRestartReason =
   | "gave-up"

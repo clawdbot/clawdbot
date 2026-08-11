@@ -1,4 +1,5 @@
 /** Plugin node-host bridge for loading plugin registry commands and dispatching node capabilities. */
+import { asOptionalRecord as normalizeRecord } from "@openclaw/normalization-core/record-coerce";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
@@ -112,12 +113,6 @@ export function watchRegisteredNodeHostCommandAvailability(
 
 function normalizeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function normalizeRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function isProviderSafeToolName(value: string): boolean {

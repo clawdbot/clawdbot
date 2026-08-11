@@ -16,6 +16,7 @@ import { buildRuntimeCompatibleMcpToolInventory } from "../../agents/tools-effec
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { toErrorObject } from "../../infra/errors.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { logDebug, logWarn } from "../../logger.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { sessionDeliveryOrigin } from "../../utils/delivery-context.shared.js";
@@ -130,16 +131,6 @@ function buildToolsEffectiveCacheKey(params: {
   });
 }
 
-function trimToolsEffectiveCache(): void {
-  while (toolsEffectiveCache.size > TOOLS_EFFECTIVE_CACHE_LIMIT) {
-    const oldest = toolsEffectiveCache.keys().next().value;
-    if (typeof oldest !== "string") {
-      return;
-    }
-    toolsEffectiveCache.delete(oldest);
-  }
-}
-
 function buildMcpConfigSummaryCacheKey(params: {
   context: TrustedToolsEffectiveContext;
   workspaceDir: string;
@@ -151,16 +142,6 @@ function buildMcpConfigSummaryCacheKey(params: {
     workspaceDir: params.workspaceDir,
     toolOverrides: params.context.toolOverrides,
   });
-}
-
-function trimMcpConfigSummaryCache(): void {
-  while (mcpConfigSummaryCache.size > MCP_CONFIG_SUMMARY_CACHE_LIMIT) {
-    const oldest = mcpConfigSummaryCache.keys().next().value;
-    if (typeof oldest !== "string") {
-      return;
-    }
-    mcpConfigSummaryCache.delete(oldest);
-  }
 }
 
 function resolveCachedSessionMcpConfigSummary(params: {
@@ -178,14 +159,14 @@ function resolveCachedSessionMcpConfigSummary(params: {
     ...(params.context.toolOverrides ? { toolOverrides: params.context.toolOverrides } : {}),
   });
   mcpConfigSummaryCache.set(key, summary);
-  trimMcpConfigSummaryCache();
+  pruneMapToMaxSize(mcpConfigSummaryCache, MCP_CONFIG_SUMMARY_CACHE_LIMIT);
   return summary;
 }
 
 function cacheToolsEffectiveResult(key: string, value: BaseToolsEffectiveResolution): void {
   toolsEffectiveCache.delete(key);
   toolsEffectiveCache.set(key, { value, createdAtMs: nowForToolsEffectiveCache() });
-  trimToolsEffectiveCache();
+  pruneMapToMaxSize(toolsEffectiveCache, TOOLS_EFFECTIVE_CACHE_LIMIT);
 }
 
 // Base inventory resolution is pure CPU work, but it can still fan through

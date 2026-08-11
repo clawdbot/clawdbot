@@ -17,7 +17,6 @@ import type {
   TuiSessionList,
   TuiSessionCreateOptions,
 } from "../tui/tui-backend.js";
-import { runTui as defaultRunTui } from "../tui/tui.js";
 import { SYSTEM_AGENT_ID } from "./agent-id.js";
 import type { SystemAgentAssistantPlanner } from "./assistant.js";
 import {
@@ -42,7 +41,7 @@ import {
   type SystemAgentVerifiedInferenceBinding,
 } from "./verified-inference.js";
 
-type RunTui = typeof defaultRunTui;
+type RunTui = typeof import("../tui/tui.js").runTui;
 
 export type SystemAgentTuiOptions = {
   yes?: boolean;
@@ -470,7 +469,6 @@ async function runSetupHandoff(
     await writeWizardConfigFile(result.nextConfig, {
       allowConfigSizeDrop: false,
       baseHash: snapshot.hash,
-      migrationBaseConfig: baseConfig,
       afterWrite: GATEWAY_SETUP_AFTER_WRITE,
     });
     runtime.log("Done — gateway settings saved. Run `openclaw gateway restart` to apply them.");
@@ -508,7 +506,6 @@ async function runSetupHandoff(
     await writeWizardConfigFile(searchSetup.config, {
       allowConfigSizeDrop: false,
       baseHash: snapshot.hash,
-      migrationBaseConfig: baseConfig,
     });
     return;
   }
@@ -545,6 +542,7 @@ export async function runSystemAgentTui(
       welcome = (
         await buildOnboardingWelcome({
           engine,
+          localRecovery: true,
           ...(boundOpts.setupWorkspace ? { workspace: boundOpts.setupWorkspace } : {}),
         })
       ).text;
@@ -556,7 +554,7 @@ export async function runSystemAgentTui(
     // an agent handoff uses the normal repair-oriented startup message.
     welcomeVariant = undefined;
     const backend = new SystemAgentTuiBackend(boundOpts, welcome, engine, route);
-    const runTui = boundOpts.runTui ?? defaultRunTui;
+    const runTui = boundOpts.runTui ?? (await import("../tui/tui.js")).runTui;
     try {
       await runTui({
         local: true,

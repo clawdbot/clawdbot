@@ -165,6 +165,42 @@ describe("transcript events", () => {
     });
   });
 
+  it("omits provider replay only from the shallow public message projection", () => {
+    const publicListener = vi.fn();
+    const internalListener = vi.fn();
+    cleanup.push(onSessionTranscriptUpdate(publicListener));
+    cleanup.push(onInternalSessionTranscriptUpdate(internalListener));
+    const content = [{ type: "text", text: "visible" }];
+    const metadata = { nested: true };
+    const providerReplay = { type: "opaque", data: "private" };
+    const message = {
+      role: "assistant",
+      content,
+      metadata,
+      providerReplay,
+    };
+
+    emitSessionTranscriptUpdate({
+      target: {
+        agentId: "main",
+        sessionId: "sess-1",
+        sessionKey: "agent:main:main",
+      },
+      message,
+      messageId: "msg-1",
+    });
+
+    const publicUpdate = publicListener.mock.calls[0]?.[0];
+    const internalUpdate = internalListener.mock.calls[0]?.[0];
+    expect(publicUpdate?.message).toEqual({ role: "assistant", content, metadata });
+    expect(publicUpdate?.message).not.toBe(message);
+    expect(publicUpdate?.message.content).toBe(content);
+    expect(publicUpdate?.message.metadata).toBe(metadata);
+    expect(internalUpdate?.message).toBe(message);
+    expect(internalUpdate?.message.providerReplay).toBe(providerReplay);
+    expect(message.providerReplay).toBe(providerReplay);
+  });
+
   it("discards blank lifecycle ownership without changing legacy events", () => {
     const listener = vi.fn();
     cleanup.push(onInternalSessionTranscriptUpdate(listener));

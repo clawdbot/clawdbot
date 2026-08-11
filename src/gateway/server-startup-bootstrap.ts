@@ -9,7 +9,6 @@ import {
 } from "../config/config-env-vars.js";
 import { assertGatewayConfigEnvSelectionUnchanged } from "../config/gateway-env-selection.js";
 import {
-  getRuntimeConfig,
   getRuntimeConfigSourceSnapshot,
   readConfigFileSnapshot,
   setAppliedRuntimeConfigSnapshot,
@@ -34,13 +33,15 @@ import { isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
 import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { startDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { completePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { assertOpenClawStateWriteAllowed } from "../state/openclaw-state-ownership.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import { listCoreGatewayMethodNames } from "./methods/core-descriptors.js";
 import {
@@ -79,6 +80,10 @@ export async function prepareGatewayServerBootstrap(input: {
   const { port, opts, log, logSecrets, loadWorkerEnvironmentStartupModule } = input;
   const formatRuntimeGatewayAuthTokenWarning = input.formatRuntimeGatewayAuthTokenWarning;
   normalizeStateDirEnv(process.env);
+  assertOpenClawStateWriteAllowed({
+    databasePath: resolveOpenClawStateSqlitePath(process.env),
+    env: process.env,
+  });
   const [
     {
       OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
@@ -338,12 +343,6 @@ export async function prepareGatewayServerBootstrap(input: {
     : resolvedStartupAuthOverride;
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
   setDiagnosticsEnabledForProcess(diagnosticsEnabled);
-  if (diagnosticsEnabled) {
-    startDiagnosticHeartbeat(undefined, {
-      getConfig: getRuntimeConfig,
-      startupGraceMs: 60_000,
-    });
-  }
   setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(cfgAtStart) });
   const activeTaskCount = { get: () => 0 };
   setPreRestartDeferralCheck(
@@ -501,6 +500,7 @@ export async function prepareGatewayServerBootstrap(input: {
     defaultWorkspaceDir,
     startupPluginIds,
     pluginManifestRecords,
+    pluginMetadataSnapshot,
     pluginLookUpTable,
     baseMethods,
     ambientAutostartSuppressedChannelIds,
@@ -513,7 +513,13 @@ export async function prepareGatewayServerBootstrap(input: {
     sourceConfig: startupLastGoodSnapshot.sourceConfig,
   });
   const coreGatewayMethodNames = listCoreGatewayMethodNames();
-  setCurrentPluginMetadataSnapshot(pluginLookUpTable, {
+  const currentPluginMetadataSnapshot = completePluginMetadataSnapshot({
+    snapshot: pluginMetadataSnapshot,
+    config: startupActivationSourceConfig,
+    env: process.env,
+    workspaceDir: defaultWorkspaceDir,
+  });
+  setCurrentPluginMetadataSnapshot(currentPluginMetadataSnapshot, {
     config: startupActivationSourceConfig,
     compatibleConfigs: [startupRuntimeConfig, cfgAtStart, gatewayPluginConfigAtStart],
     env: process.env,
@@ -566,6 +572,7 @@ export async function prepareGatewayServerBootstrap(input: {
     defaultWorkspaceDir,
     startupPluginIds,
     pluginManifestRecords,
+    pluginMetadataSnapshot,
     pluginLookUpTable,
     baseMethods,
     ambientAutostartSuppressedChannelIds,

@@ -1,5 +1,9 @@
 // Doctor cron repair orchestration for legacy stores, run logs, payloads, and warnings.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../../../packages/terminal-core/src/note.js";
+import { resolveStaticSessionMcpServerNames } from "../../../agents/agent-bundle-mcp-runtime-config.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../../agents/agent-scope.js";
+import { resolveCodexMcpToolOverridesForAgent } from "../../../agents/cli-runner/bundle-mcp-codex.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { loadCronQuarantinedJobs, resolveCronJobsStorePath } from "../../../cron/store.js";
@@ -17,6 +21,7 @@ import {
 } from "./legacy-repair.js";
 import {
   formatLegacyIssuePreview,
+  formatIncompleteInheritedAuthorityAdvisory,
   formatScheduledToolPolicyAdvisory,
   formatUnresolvedCommandPromptAdvisory,
   formatUnresolvedShellPromptAdvisory,
@@ -83,6 +88,44 @@ function countChronicallyFailingCronJobs(jobs: Array<Record<string, unknown>>): 
       consecutiveErrors >= CHRONIC_FAILURE_MIN_CONSECUTIVE_ERRORS
     );
   }).length;
+}
+
+type AutoDisabledCronJob = {
+  id: string;
+  name: string;
+  reason: "consecutive-failures" | "schedule-errors";
+  consecutiveErrors: number;
+};
+
+function collectAutoDisabledCronJobs(jobs: Array<Record<string, unknown>>): AutoDisabledCronJob[] {
+  const autoDisabledJobs: AutoDisabledCronJob[] = [];
+  for (const job of jobs) {
+    if (job.enabled !== false || typeof job.id !== "string") {
+      continue;
+    }
+    const state = job.state;
+    if (!isRecord(state)) {
+      continue;
+    }
+    const autoDisabled = state.autoDisabled;
+    if (!isRecord(autoDisabled)) {
+      continue;
+    }
+    if (
+      (autoDisabled.reason !== "consecutive-failures" &&
+        autoDisabled.reason !== "schedule-errors") ||
+      typeof autoDisabled.consecutiveErrors !== "number"
+    ) {
+      continue;
+    }
+    autoDisabledJobs.push({
+      id: job.id,
+      name: typeof job.name === "string" && job.name.trim() ? job.name.trim() : job.id,
+      reason: autoDisabled.reason,
+      consecutiveErrors: autoDisabled.consecutiveErrors,
+    });
+  }
+  return autoDisabledJobs;
 }
 
 const LEGACY_CRON_STORE_CHECK_ID = "core/doctor/legacy-cron-store";
@@ -408,6 +451,20 @@ export async function maybeRepairLegacyCronStore(params: {
     );
   }
 
+  const autoDisabledJobs = collectAutoDisabledCronJobs(rawJobs);
+  if (autoDisabledJobs.length > 0) {
+    note(
+      [
+        `${pluralize(autoDisabledJobs.length, "automation")} ${autoDisabledJobs.length === 1 ? "is" : "are"} auto-disabled after repeated failures.`,
+        ...autoDisabledJobs.map(
+          (job) =>
+            `- ${job.name} (${job.id}): recorded reason \`${job.reason}\` after ${job.consecutiveErrors} consecutive errors. Fix the cause, then re-enable with ${formatCliCommand(`openclaw automations enable ${job.id}`)}.`,
+        ),
+      ].join("\n"),
+      "Cron",
+    );
+  }
+
   const normalized = normalizeStoredCronJobs(rawJobs);
   const notifyCount = rawJobs.filter((job) => job.notify === true).length;
   const dreamingStaleCount = countStaleDreamingJobs(rawJobs);
@@ -431,6 +488,52 @@ export async function maybeRepairLegacyCronStore(params: {
   });
   if (scheduledToolPolicyAdvisory) {
     note(scheduledToolPolicyAdvisory, "Cron");
+  }
+  const staticMcpByAgentWorkspace = new Map<string, boolean>();
+  const incompleteInheritedAuthorityAdvisory = formatIncompleteInheritedAuthorityAdvisory(
+    rawJobs
+      .filter((job) => {
+        const payload = isRecord(job.payload) ? job.payload : undefined;
+        const provenance = isRecord(job.toolsAllowProvenance)
+          ? job.toolsAllowProvenance
+          : undefined;
+        if (
+          payload?.toolsAllowIsDefault !== true ||
+          (provenance?.version === 1 && provenance.source === "final-executable-surface")
+        ) {
+          return false;
+        }
+        const agentId =
+          typeof job.agentId === "string" && job.agentId.trim()
+            ? job.agentId.trim()
+            : resolveDefaultAgentId(params.cfg);
+        const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
+        const cacheKey = `${agentId}\0${workspaceDir}`;
+        let hasStaticMcp = staticMcpByAgentWorkspace.get(cacheKey);
+        if (hasStaticMcp === undefined) {
+          hasStaticMcp =
+            resolveStaticSessionMcpServerNames({
+              workspaceDir,
+              cfg: params.cfg,
+              toolOverrides: resolveCodexMcpToolOverridesForAgent(params.cfg, {
+                agentId,
+                toolOverrides: undefined,
+              }),
+            }).length > 0;
+          staticMcpByAgentWorkspace.set(cacheKey, hasStaticMcp);
+        }
+        return hasStaticMcp;
+      })
+      .map((job) =>
+        typeof job.name === "string" && job.name.trim()
+          ? job.name.trim()
+          : typeof job.id === "string"
+            ? job.id
+            : "unknown automation",
+      ),
+  );
+  if (incompleteInheritedAuthorityAdvisory) {
+    note(incompleteInheritedAuthorityAdvisory, "Cron");
   }
   const previewLines = formatLegacyIssuePreview(normalized.issues);
   if (legacyStoreDetected) {
