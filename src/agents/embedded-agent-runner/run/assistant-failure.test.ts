@@ -129,7 +129,7 @@ describe("handleEmbeddedAssistantFailure", () => {
     fixture.input.model = modelId;
     fixture.input.activeErrorContext = { provider, model: modelId };
     fixture.input.authProfileId = undefined;
-    fixture.input.providerOwner = "openrouter";
+    fixture.input.providerOwner = { id: "openrouter", label: "OpenRouter", auth: [] };
     fixture.input.resolveAuthProfileFailureReason = vi.fn((reason) =>
       reason === "billing" ? "billing" : null,
     );

@@ -48,6 +48,7 @@ import {
   classifyLegacyProviderSpecificError,
   classifyProviderPluginError,
   looksLikeProviderContextOverflowCandidate,
+  type PreparedProviderFailoverOwner,
 } from "./provider-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./signal.js";
 export {
@@ -282,7 +283,10 @@ function mergeMessageAndDetailClassification(
     : messageClassification;
 }
 
-export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassification | null {
+export function classifyFailoverSignal(
+  signal: FailoverSignal,
+  opts?: { providerPlugin?: PreparedProviderFailoverOwner },
+): FailoverClassification | null {
   const inferredStatus = inferSignalStatus(signal);
   const explicitStatus =
     typeof signal.status === "number" && Number.isFinite(signal.status) ? signal.status : undefined;
@@ -324,6 +328,7 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
         status: providerHookStatus,
         code: signal.code,
         errorType: signal.errorType,
+        providerPlugin: opts?.providerPlugin,
       })
     : null;
   const tlsCertificateError = inspectTlsCertificateError(signal);
@@ -422,13 +427,16 @@ function isCliSessionExpiredErrorMessage(raw: string): boolean {
 
 export function classifyFailoverReason(
   raw: string,
-  opts?: { provider?: string },
+  opts?: { provider?: string; providerPlugin?: PreparedProviderFailoverOwner },
 ): FailoverReason | null {
   return failoverReasonFromClassification(
-    classifyFailoverSignal({
-      message: raw,
-      provider: opts?.provider,
-    }),
+    classifyFailoverSignal(
+      {
+        message: raw,
+        provider: opts?.provider,
+      },
+      opts,
+    ),
   );
 }
 
