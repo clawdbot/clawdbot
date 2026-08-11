@@ -163,11 +163,6 @@
     "wrapper": "src/plugin-sdk/session-transcript-hit.ts"
   },
   {
-    "name": "loadGatewayTlsRuntime",
-    "wrapped": "src/infra/tls/gateway.ts",
-    "wrapper": "src/gateway/server/tls.ts"
-  },
-  {
     "name": "loadPluginManifestRegistry",
     "wrapped": "src/plugins/manifest-registry.ts",
     "wrapper": "src/config/doc-baseline.runtime.ts"
