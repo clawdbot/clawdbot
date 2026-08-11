@@ -707,6 +707,13 @@ export async function tryDispatchAcpReplyCore(params: {
       auditTerminalOutcome = "blocked";
       throw agentPolicyError;
     }
+    // Resolve turn attachments before media understanding so marker rendering
+    // suppresses exactly the image indexes ACP will deliver with the turn.
+    const resolvedTurnAttachments = await resolveAgentTurnAttachments({
+      ctx: params.ctx,
+      cfg: params.cfg,
+      includeAttachmentIndexes: true,
+    });
     let extractedFileImages = params.extractedFileImages ?? [];
     if (hasInboundMediaForUnderstanding(params.ctx) && !params.ctx.MediaUnderstanding?.length) {
       try {
@@ -714,6 +721,7 @@ export async function tryDispatchAcpReplyCore(params: {
         const mediaResult = await applyMediaUnderstanding({
           ctx: params.ctx,
           cfg: params.cfg,
+          deliveredImageIndexes: new Set(resolvedTurnAttachments.attachmentIndexes ?? []),
           agentId: acpAgentId,
           agentDir: resolveAgentDir(params.cfg, acpAgentId),
           workspaceDir: resolveAgentWorkspaceDir(params.cfg, acpAgentId),
@@ -729,11 +737,6 @@ export async function tryDispatchAcpReplyCore(params: {
     }
 
     const promptText = resolveAcpPromptText(params.ctx);
-    const resolvedTurnAttachments = await resolveAgentTurnAttachments({
-      ctx: params.ctx,
-      cfg: params.cfg,
-      includeAttachmentIndexes: true,
-    });
     const mediaAttachments = resolvedTurnAttachments.attachments;
     const inlineAttachments = resolveInlineAgentImageAttachments(params.images);
     const extractedAttachments = resolveInlineAgentImageAttachments(

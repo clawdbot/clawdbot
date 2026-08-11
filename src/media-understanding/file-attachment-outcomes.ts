@@ -53,10 +53,6 @@ function wrapUntrustedAttachmentContent(content: string): string {
   return wrapExternalContent(content, { source: "unknown", includeWarning: false });
 }
 
-// Cap cumulative skip markers so a burst of rejected attachments cannot grow
-// model-visible context without bound; overflow collapses into one summary line.
-export const MAX_SKIPPED_FILE_MARKERS = 5;
-
 const SKIPPED_FILE_OUTCOME_KINDS = new Set<FileAttachmentOutcome["kind"]>([
   "unsupported-format",
   "policy-rejected",
@@ -66,12 +62,6 @@ const SKIPPED_FILE_OUTCOME_KINDS = new Set<FileAttachmentOutcome["kind"]>([
 
 export function isSkippedFileOutcome(outcome: FileAttachmentOutcome): boolean {
   return SKIPPED_FILE_OUTCOME_KINDS.has(outcome.kind);
-}
-
-// Reason-neutral on purpose: overflow can mix unsupported, policy-rejected,
-// unreadable, and url-disabled kinds; naming one reason would misdirect recovery.
-export function renderSkippedFileOverflowSummary(count: number): string {
-  return `[${count} more attachment${count === 1 ? "" : "s"} skipped]`;
 }
 
 export function renderFileAttachmentOutcome(outcome: FileAttachmentOutcome): string | null {
