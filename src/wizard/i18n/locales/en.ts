@@ -1,3 +1,5 @@
+import { catalogFamily } from "../catalog-family.js";
+import authoringCatalog from "../catalogs/en.json" with { type: "json" };
 // English wizard translations provide default onboarding copy.
 import type { WizardTranslationMap } from "../types.js";
 
@@ -110,14 +112,8 @@ export const en = {
       serveHint: "Private HTTPS for your tailnet (devices on Tailscale)",
       warningTitle: "Tailscale Warning",
     },
-    completion: {
-      cacheFailed: "Failed to generate completion cache. Run `{command}` later.",
-      enable: "Enable {shell} shell completion for {cli}?",
-      installed: "Shell completion installed. {reloadHint}",
-      reloadPowerShell: "Restart your shell or run: {command}",
-      reloadShell: "Restart your shell or run: source {profile}",
-      title: "Shell completion",
-    },
+    completion: catalogFamily(authoringCatalog.messages, "wizard.completion"),
+    postInstallMigration: catalogFamily(authoringCatalog.messages, "wizard.postInstallMigration"),
     migration: {
       apply: "Apply this migration now?",
       appliedTitle: "Migration applied",
@@ -186,7 +182,7 @@ export const en = {
       downloadFromClawHub: "Download from ClawHub ({spec})",
       downloadFromNpm: "Download from npm ({spec})",
       enableFailed: "Cannot enable {plugin}: {reason}.",
-      fieldsCount: "{count} field{plural}",
+      fieldsCount: "{count, plural, one {{count} field} other {{count} fields}}",
       installFailed: "Failed to install {spec}: {error}",
       installFailedShort: "Install failed: {plugin}",
       installPluginPrompt: "Install {plugin} plugin?",
@@ -235,7 +231,7 @@ export const en = {
       keptExistingDefault: "Kept existing default model {current}; {selected} is available.",
       loadsProviderCatalogs: "loads provider catalogs",
       loadingModels: "Loading available models",
-      modelCount: "{count} model{plural}",
+      modelCount: "{count, plural, one {{count} model} other {{count} models}}",
       providerSetupUnavailable: "Provider setup requires agent and runtime context.",
       providerSetupUnavailableTitle: "Provider setup unavailable",
       removeProviderModels: "Remove these provider models from the /model picker?",

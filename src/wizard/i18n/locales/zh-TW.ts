@@ -1,3 +1,6 @@
+import { catalogFamily, optionalCatalogFamily } from "../catalog-family.js";
+import sourceCatalog from "../catalogs/en.json" with { type: "json" };
+import authoringCatalog from "../catalogs/generated/zh-TW.json" with { type: "json" };
 // Traditional Chinese wizard translations provide localized onboarding copy.
 import type { WizardTranslationMap } from "../types.js";
 
@@ -109,14 +112,15 @@ export const zh_TW = {
       serveHint: "面向你的 tailnet 裝置提供私有 HTTPS",
       warningTitle: "Tailscale 警告",
     },
-    completion: {
-      cacheFailed: "產生 completion 快取失敗。稍後執行 `{command}`。",
-      enable: "為 {cli} 啟用 {shell} shell completion？",
-      installed: "Shell completion 已安裝。{reloadHint}",
-      reloadPowerShell: "重新啟動 shell 或執行：{command}",
-      reloadShell: "重新啟動 shell 或執行：source {profile}",
-      title: "Shell completion",
-    },
+    completion: catalogFamily(authoringCatalog.messages, "wizard.completion"),
+    postInstallMigration: optionalCatalogFamily(
+      authoringCatalog.messages,
+      "wizard.postInstallMigration",
+      {
+        sourceMessages: sourceCatalog.messages,
+        translatedSourceMessages: authoringCatalog.sourceMessages,
+      },
+    ),
     migration: {
       apply: "現在套用這次遷移？",
       appliedTitle: "遷移已套用",
@@ -185,7 +189,7 @@ export const zh_TW = {
       downloadFromClawHub: "從 ClawHub 下載（{spec}）",
       downloadFromNpm: "從 npm 下載（{spec}）",
       enableFailed: "無法啟用 {plugin}：{reason}。",
-      fieldsCount: "{count} 個欄位",
+      fieldsCount: "{count, plural, other {{count} 個欄位}}",
       installFailed: "安裝 {spec} 失敗：{error}",
       installFailedShort: "安裝失敗：{plugin}",
       installPluginPrompt: "安裝 {plugin} 插件？",
@@ -233,7 +237,7 @@ export const zh_TW = {
       keptExistingDefault: "已保留目前預設模型 {current}；{selected} 可用。",
       loadsProviderCatalogs: "載入 provider 模型目錄",
       loadingModels: "正在載入可用模型",
-      modelCount: "{count} 個模型",
+      modelCount: "{count, plural, other {{count} 個模型}}",
       providerSetupUnavailable: "Provider 設定需要 agent 和執行環境上下文。",
       providerSetupUnavailableTitle: "Provider 設定不可用",
       removeProviderModels: "從 /model 選擇器中移除這些 provider 模型？",

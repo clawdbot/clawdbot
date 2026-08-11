@@ -1,0 +1,4 @@
+interface:
+  display_name: "Localize OpenClaw"
+  short_description: "Safely add and update product-owned translations"
+  default_prompt: "Use $localize-openclaw to add or update localized product copy safely."

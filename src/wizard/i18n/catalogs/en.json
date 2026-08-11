@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "area": "wizard-core",
+  "messages": {
+    "wizard.completion.cacheFailed": "Failed to generate completion cache. Run `{command}` later.",
+    "wizard.completion.enable": "Enable {shell} shell completion for {cli}?",
+    "wizard.completion.installed": "Shell completion installed. {reloadHint}",
+    "wizard.completion.reloadPowerShell": "Restart your shell or run: {command}",
+    "wizard.completion.reloadShell": "Restart your shell or run: source {profile}",
+    "wizard.completion.title": "Shell completion",
+    "wizard.postInstallMigration.confirm": "Migrate {label} into this agent now?",
+    "wizard.postInstallMigration.confirmWithSource": "Migrate {label} at {source} into this agent now?",
+    "wizard.postInstallMigration.failed": "{label} migration failed: {reason}. Re-run with {command} to inspect.",
+    "wizard.postInstallMigration.hint": "Detected {label}. Preview migration with {command}.",
+    "wizard.postInstallMigration.hintWithSource": "Detected {label} at {source}. Preview migration with {command}.",
+    "wizard.postInstallMigration.promptSkipped": "Skipping {label} migration prompt: {reason}"
+  }
+}
