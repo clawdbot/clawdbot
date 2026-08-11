@@ -183,7 +183,7 @@ function createSessionsModuleMock() {
           }
         : null;
     },
-    resolveStorePath: resolveMockStorePath,
+    resolveSessionStorePathCore: resolveMockStorePath,
   };
 }
 

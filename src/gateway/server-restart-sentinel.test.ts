@@ -230,7 +230,7 @@ vi.mock("../config/sessions/transcript.js", () => ({
 
 vi.mock("../config/sessions.js", () => ({
   resolveMainSessionKeyFromConfig: mocks.resolveMainSessionKeyFromConfig,
-  resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+  resolveSessionStorePathCore: vi.fn(() => "/tmp/sessions.json"),
 }));
 
 vi.mock("../config/sessions/thread-info.js", () => ({

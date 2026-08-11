@@ -77,7 +77,7 @@ export interface FindToolOptions {
 
 function formatFindCall(
   args: { pattern: string; path?: string; limit?: number } | undefined,
-  theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+  theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
 ): string {
   const pattern = str(args?.pattern);
   const rawPath = str(args?.path);
@@ -101,7 +101,7 @@ function formatFindResult(
     details?: FindToolDetails;
   },
   options: ToolRenderResultOptions,
-  theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+  theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
   showImages: boolean,
 ): string {
   const resultLimit = result.details?.resultLimitReached;
