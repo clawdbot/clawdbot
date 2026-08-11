@@ -21,15 +21,15 @@ import {
   evictArchivedSessionLineage,
   fetchChildSessionRows,
   fetchSessionLineage,
+  preserveActiveSessionLineageRows,
   publishActiveSessionLineage,
 } from "./app-sidebar-child-session-data.ts";
 import { SessionCatalogLiveState } from "./app-sidebar-session-catalog-live.ts";
 import { bindAdoptedCatalogSession } from "./app-sidebar-session-catalogs.ts";
-import {
-  resolveSidebarSessionsScrollState,
-  type SidebarSessionMutationScope,
-  type SidebarSessionStatusFilter,
-  type SidebarSessionsScrollState,
+import type {
+  SidebarSessionMutationScope,
+  SidebarSessionStatusFilter,
+  SidebarSessionsScrollState,
 } from "./app-sidebar-session-types.ts";
 import { createPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refresh-status.ts";
 import {
@@ -49,6 +49,7 @@ import {
   subscribeFilteredSidebarSessions,
   subscribeSessionDataGatewayEvents,
 } from "./session-data-controller-events.ts";
+import { SessionDataScrollController } from "./session-data-scroll-controller.ts";
 
 /** Gateway-backed session-list and external-catalog data ownership. */
 export class SessionDataController implements ReactiveController, SessionCatalogDataOwner {
@@ -65,7 +66,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   loadingChildSessionKeys: ReadonlySet<string> = new Set();
   activeSessionLineageRoot: GatewaySessionRow | null = null;
   activeSessionLineageSelectedRow: GatewaySessionRow | null = null;
-  sessionsScrollState: SidebarSessionsScrollState = "none";
   sessionMutationError: string | null = null;
   presencePayload: PresencePayload | undefined;
   presenceInstanceId?: string;
@@ -97,9 +97,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   private gatewayConnected = false;
   // Bind mutation completions to one epoch so stale failures cannot cross reconnects.
   private sessionMutationEpoch = 0;
-  private sessionsScrollElement: HTMLElement | null = null;
-  private sessionsScrollResizeObserver: ResizeObserver | null = null;
-  private sessionsScrollStateFrame: number | null = null;
+  private readonly scroll = new SessionDataScrollController(() => this.notify());
   private approvalBadgeQueue: ApplicationContext<RouteId>["overlays"]["snapshot"]["approvalQueue"] =
     [];
   private approvalBadges: ApprovalBadgeSnapshot = deriveApprovalBadgeSnapshot([]);
@@ -183,7 +181,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   hostUpdated(): void {
     this.synchronizeSessionScope();
-    this.syncSessionsScrollObserver();
+    this.scroll.synchronize(this.host);
     this.updateSessionCatalogData(true);
   }
 
@@ -196,13 +194,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.gatewayClient = null;
     this.gatewayConnected = false;
     this.retireSessionCatalogData();
-    this.sessionsScrollResizeObserver?.disconnect();
-    this.sessionsScrollResizeObserver = null;
-    this.sessionsScrollElement = null;
-    if (this.sessionsScrollStateFrame !== null) {
-      cancelAnimationFrame(this.sessionsScrollStateFrame);
-      this.sessionsScrollStateFrame = null;
-    }
+    this.scroll.dispose();
     if (this.activeSessionLineageRetryTimer) {
       globalThis.clearTimeout(this.activeSessionLineageRetryTimer);
       this.activeSessionLineageRetryTimer = null;
@@ -358,64 +350,30 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     return loadMoreSessionCatalogData(this, catalogId);
   }
 
-  private syncSessionsScrollObserver(): void {
-    const element = this.host.querySelector(".sidebar-shell__body") as HTMLElement | null;
-    if (element !== this.sessionsScrollElement) {
-      this.sessionsScrollResizeObserver?.disconnect();
-      this.sessionsScrollElement = element;
-      this.sessionsScrollResizeObserver = null;
-      if (element && typeof ResizeObserver === "function") {
-        this.sessionsScrollResizeObserver = new ResizeObserver(() =>
-          this.updateSessionsScrollState(element),
-        );
-        this.sessionsScrollResizeObserver.observe(element);
-      }
-    }
-    if (element) {
-      this.scheduleSessionsScrollStateSync();
-    }
-  }
-
-  // One rAF-coalesced scroll read rides paint layout instead of flushing every update.
-  private scheduleSessionsScrollStateSync(): void {
-    if (this.sessionsScrollStateFrame !== null) {
-      return;
-    }
-    this.sessionsScrollStateFrame = requestAnimationFrame(() => {
-      this.sessionsScrollStateFrame = null;
-      const element = this.sessionsScrollElement;
-      if (element?.isConnected) {
-        this.updateSessionsScrollState(element);
-      }
-    });
+  get sessionsScrollState(): SidebarSessionsScrollState {
+    return this.scroll.state;
   }
 
   updateSessionsScrollState(element: HTMLElement): void {
-    const nextState = resolveSidebarSessionsScrollState(element);
-    if (nextState !== this.sessionsScrollState) {
-      this.sessionsScrollState = nextState;
-      this.notify();
-    }
+    this.scroll.update(element);
   }
 
   private resetChildSessionState(options: { preserveActiveLineage?: boolean } = {}): void {
-    const activeSessionLineageRoot = options.preserveActiveLineage
-      ? this.activeSessionLineageRoot
-      : null;
-    const activeSessionLineageRouteKey = options.preserveActiveLineage
-      ? this.activeSessionLineageRouteKey
-      : null;
-    const activeSessionLineageSelectedRow = options.preserveActiveLineage
-      ? this.activeSessionLineageSelectedRow
-      : null;
     this.childSessionGeneration += 1;
-    this.childSessionRowsByParent = {};
+    this.childSessionRowsByParent = options.preserveActiveLineage
+      ? preserveActiveSessionLineageRows(
+          this.activeSessionLineageRouteKey,
+          this.childSessionRowsByParent,
+        )
+      : {};
     this.loadedChildSessionKeys = new Set();
     this.failedChildSessionKeys = new Set();
     this.loadingChildSessionKeys = new Set();
-    this.activeSessionLineageRoot = activeSessionLineageRoot;
-    this.activeSessionLineageSelectedRow = activeSessionLineageSelectedRow;
-    this.activeSessionLineageRouteKey = activeSessionLineageRouteKey;
+    if (options.preserveActiveLineage !== true) {
+      this.activeSessionLineageRoot = null;
+      this.activeSessionLineageSelectedRow = null;
+      this.activeSessionLineageRouteKey = null;
+    }
     this.activeSessionLineageLoaded = false;
     this.activeSessionLineageRequestToken = null;
     if (this.activeSessionLineageRetryTimer) {

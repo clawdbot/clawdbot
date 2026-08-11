@@ -94,12 +94,37 @@ function mergeChildSessionRows(
   return merged;
 }
 
+/** Retain only the routed ancestry while a canonical refresh invalidates other child snapshots. */
+export function preserveActiveSessionLineageRows(
+  sessionKey: string | null,
+  rowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>,
+): Readonly<Record<string, readonly GatewaySessionRow[]>> {
+  const preserved: Record<string, readonly GatewaySessionRow[]> = {};
+  let childKey = sessionKey?.trim();
+  const visited = new Set<string>();
+  while (childKey && !visited.has(childKey)) {
+    visited.add(childKey);
+    const parent = Object.entries(rowsByParent).find(([, rows]) =>
+      rows.some((row) => areUiSessionKeysEquivalent(row.key, childKey)),
+    );
+    if (!parent) {
+      break;
+    }
+    preserved[parent[0]] = parent[1];
+    childKey = parent[0];
+  }
+  return preserved;
+}
+
 export function publishActiveSessionLineage(
   owner: {
     activeSessionLineageRoot: GatewaySessionRow | null;
     activeSessionLineageSelectedRow: GatewaySessionRow | null;
     childSessionRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
-    context?: { sessions: Pick<SessionCapability, "reconcile"> };
+    context?: {
+      gateway?: { snapshot: { sessionKey?: string | null } };
+      sessions: Pick<SessionCapability, "reconcile">;
+    };
     sessionsResult: SessionsListResult | null;
   },
   sessionKey: string,
@@ -162,7 +187,7 @@ export function evictArchivedSessionLineage(
   if (!sessionKey) {
     return;
   }
-  const routedSessionKey = owner.context?.gateway.snapshot.sessionKey?.trim();
+  const routedSessionKey = owner.context?.gateway?.snapshot.sessionKey?.trim();
   if (routedSessionKey && areUiSessionKeysEquivalent(routedSessionKey, sessionKey)) {
     // Sidebar lineage can momentarily retarget while the archived route remains
     // selected. The routed descriptor still owns pane/header presentation and

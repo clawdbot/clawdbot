@@ -575,7 +575,7 @@ describe("refreshChat", () => {
       scheduleScroll: false,
     });
 
-    expect(host.selectedChatSessionArchived).toBe(true);
+    expect(asChatPageHost(host).selectedChatSessionArchived).toBe(true);
     expect(host.sessions.state.result?.sessions).toEqual([
       expect.objectContaining({
         key,

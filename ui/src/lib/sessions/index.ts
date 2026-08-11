@@ -257,11 +257,46 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     );
   };
 
+  const reconcileChangedOptions = (
+    payload: unknown,
+    options?: SessionReconcileOptions,
+  ): SessionReconcileOptions | undefined => {
+    const eventInfo = readSessionChangedEvent(payload);
+    const selectedSessionKey = gateway.snapshot.sessionKey?.trim();
+    const archivesSelectedSession =
+      eventInfo?.archived === true &&
+      Boolean(
+        selectedSessionKey &&
+        uiSessionEventMatches(
+          {
+            assistantAgentId: gateway.snapshot.assistantAgentId,
+            hello: gateway.snapshot.hello,
+            sessionKey: selectedSessionKey,
+          },
+          eventInfo.key,
+          eventInfo.agentId,
+        ),
+      );
+    if (!archivesSelectedSession) {
+      return options;
+    }
+    // The capability owns the shared roster, so every event consumer must
+    // preserve the routed archive regardless of subscriber delivery order.
+    return {
+      ...options,
+      archivedFilter: "all",
+    };
+  };
+
   const reconcileChanged = (
     payload: unknown,
     options?: SessionReconcileOptions,
   ): SessionChangedResult => {
-    const base = reconcileSessionChanged(state.result, payload, options);
+    const base = reconcileSessionChanged(
+      state.result,
+      payload,
+      reconcileChangedOptions(payload, options),
+    );
     const result = decorateRows(base.result);
     const reconciled =
       result === base.result
@@ -368,28 +403,11 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       publish({ ...state, result: decoratedResult });
     }
     const eventInfo = readSessionChangedEvent(event.payload);
-    const selectedSessionKey = gateway.snapshot.sessionKey?.trim();
-    const archivesSelectedSession =
-      eventInfo?.archived === true &&
-      Boolean(
-        selectedSessionKey &&
-        uiSessionEventMatches(
-          {
-            assistantAgentId: gateway.snapshot.assistantAgentId,
-            hello: gateway.snapshot.hello,
-            sessionKey: selectedSessionKey,
-          },
-          eventInfo.key,
-          eventInfo.agentId,
-        ),
-      );
-    const reconciled = reconcileSessionChanged(state.result, event.payload, {
+    const reconcileOptions = reconcileChangedOptions(event.payload, {
       resultAgentId: state.agentId,
-      // The active roster normally removes archived rows immediately. Keep the
-      // currently routed row until navigation changes so its title and other
-      // presentation metadata remain stable throughout the archive transition.
-      archivedFilter: archivesSelectedSession ? "all" : roster.lastOptions().archivedFilter,
+      archivedFilter: roster.lastOptions().archivedFilter,
     });
+    const reconciled = reconcileSessionChanged(state.result, event.payload, reconcileOptions);
     const eventReason = (event.payload as { reason?: unknown } | null)?.reason;
     const payloadAgentId = (event.payload as { agentId?: unknown } | null)?.agentId;
     if (eventReason === "groups") {

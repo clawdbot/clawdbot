@@ -385,21 +385,20 @@ suite.define(() => {
           subtree: true,
         });
         recordTitle();
-        (window as Window & { __archiveTitleHistory?: string[] }).__archiveTitleHistory =
-          titleHistory;
+        (window as Window & { archiveTitleHistory?: string[] }).archiveTitleHistory = titleHistory;
         (
           window as Window & {
-            __archivePaneTitleHistory?: string[];
-            __archiveDocumentTitleHistory?: string[];
+            archivePaneTitleHistory?: string[];
+            archiveDocumentTitleHistory?: string[];
           }
-        ).__archivePaneTitleHistory = paneTitleHistory;
+        ).archivePaneTitleHistory = paneTitleHistory;
         (
           window as Window & {
-            __archivePaneTitleHistory?: string[];
-            __archiveDocumentTitleHistory?: string[];
-            __archiveSessionStateHistory?: typeof sessionStateHistory;
+            archivePaneTitleHistory?: string[];
+            archiveDocumentTitleHistory?: string[];
+            archiveSessionStateHistory?: typeof sessionStateHistory;
           }
-        ).__archiveDocumentTitleHistory = documentTitleHistory;
+        ).archiveDocumentTitleHistory = documentTitleHistory;
         const shell = document.querySelector("openclaw-app-shell") as HTMLElement & {
           runtime?: {
             context?: {
@@ -425,9 +424,9 @@ suite.define(() => {
         });
         (
           window as Window & {
-            __archiveSessionStateHistory?: typeof sessionStateHistory;
+            archiveSessionStateHistory?: typeof sessionStateHistory;
           }
-        ).__archiveSessionStateHistory = sessionStateHistory;
+        ).archiveSessionStateHistory = sessionStateHistory;
       }, selected.key);
 
       for (const row of batchRows) {
@@ -477,21 +476,20 @@ suite.define(() => {
       await expect.poll(() => selectedRow.textContent()).toContain("Archive refresh 2");
       expect(
         await page.evaluate(
-          () =>
-            (window as Window & { __archiveTitleHistory?: string[] }).__archiveTitleHistory ?? [],
+          () => (window as Window & { archiveTitleHistory?: string[] }).archiveTitleHistory ?? [],
         ),
       ).toEqual(["Archive refresh 2"]);
       const sessionStateHistory = await page.evaluate(
         () =>
           (
             window as Window & {
-              __archiveSessionStateHistory?: Array<{
+              archiveSessionStateHistory?: Array<{
                 gatewaySessionKey?: string;
                 loading?: boolean;
                 selectedTitle?: string;
               }>;
             }
-          ).__archiveSessionStateHistory ?? [],
+          ).archiveSessionStateHistory ?? [],
       );
       const missingTitleSnapshot = sessionStateHistory.find(
         (snapshot) => snapshot.selectedTitle !== "Archive refresh 2",
@@ -504,9 +502,9 @@ suite.define(() => {
           () =>
             (
               window as Window & {
-                __archivePaneTitleHistory?: string[];
+                archivePaneTitleHistory?: string[];
               }
-            ).__archivePaneTitleHistory ?? [],
+            ).archivePaneTitleHistory ?? [],
         ),
       ).toEqual(["Archive refresh 2"]);
       expect(
@@ -514,9 +512,9 @@ suite.define(() => {
           () =>
             (
               window as Window & {
-                __archiveDocumentTitleHistory?: string[];
+                archiveDocumentTitleHistory?: string[];
               }
-            ).__archiveDocumentTitleHistory ?? [],
+            ).archiveDocumentTitleHistory ?? [],
         ),
       ).not.toContain("New session — OpenClaw");
       const archivedNotice = page.locator(".agent-chat__disabled-banner");
@@ -526,6 +524,9 @@ suite.define(() => {
         .poll(() => page.locator(".chat-pane-cache__pane--visible .agent-chat__input").count())
         .toBe(0);
 
+      const archiveToast = page.locator("openclaw-toast-host .app-toast");
+      await expect.poll(() => archiveToast.textContent()).toContain("Session archived");
+      await archiveToast.getByRole("button", { name: "Dismiss" }).click();
       await archivedNotice.getByRole("button", { name: "Unarchive" }).click();
       await waitForPatch(
         gateway,

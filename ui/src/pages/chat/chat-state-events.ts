@@ -134,18 +134,10 @@ function globalSessionEventMatchesChat(
 
 function reconcileSessionEvent(state: ChatPageHost, payload: unknown): SessionChangedResult {
   const selectedAgentId = resolveChatAgentId(state);
-  const event = readSessionChangedEvent(payload);
-  const archivesSelectedSession =
-    event?.archived === true &&
-    globalSessionEventMatchesChat(state, event) &&
-    sessionMessageMatchesChat(state, event);
   const reconciled = state.sessions.reconcileChanged(payload, {
     resultAgentId: state.sessionsResultAgentId ?? selectedAgentId,
     selectedGlobalAgentId: selectedAgentId,
-    // The chat remains routed to an archived session until navigation changes.
-    // Keep that row in the shared projection so its title cannot disappear
-    // between the archive event and the following history/lineage refresh.
-    archivedFilter: archivesSelectedSession ? "all" : state.sessionsArchivedFilter,
+    archivedFilter: state.sessionsArchivedFilter,
   });
   if (reconciled.applied) {
     state.sessionsResult = state.sessions.state.result;
