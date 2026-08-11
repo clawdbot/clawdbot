@@ -243,26 +243,22 @@ export async function applyWorkspaceSkillMutation(
     file: PreparedWorkspaceSkillFileMutation,
     overwrite: boolean,
   ) => Promise<void> = writeWorkspaceSkillFile,
-  abortSignal?: AbortSignal,
 ): Promise<void> {
   const written: PreparedWorkspaceSkillFileMutation[] = [];
+  const writtenSupportPaths: string[] = [];
   try {
     for (const file of mutation.supportFiles) {
-      abortSignal?.throwIfAborted();
       await writePreparedWorkspaceFile(file, mutation.mode === "update", writeFile);
       written.push(file);
-      abortSignal?.throwIfAborted();
+      writtenSupportPaths.push(file.path);
     }
-    abortSignal?.throwIfAborted();
     await writePreparedWorkspaceFile(mutation.skillFile, mutation.mode === "update", writeFile);
-    written.push(mutation.skillFile);
-    abortSignal?.throwIfAborted();
   } catch (error) {
     try {
-      await restorePreparedWorkspaceFiles(orderWorkspaceSkillRestorationFiles(mutation, written));
+      await restorePreparedWorkspaceFiles(written.toReversed());
     } catch (restoreError) {
       const failure = new Error(
-        `Skill write failed and restoration of ${written.length} committed file(s) failed.`,
+        `Skill write failed and ${writtenSupportPaths.length} support file restoration(s) failed.`,
         { cause: error },
       );
       Object.assign(failure, { restoreError });
@@ -275,22 +271,13 @@ export async function applyWorkspaceSkillMutation(
 export async function restoreWorkspaceSkillMutation(
   mutation: PreparedWorkspaceSkillMutation,
 ): Promise<void> {
-  await restorePreparedWorkspaceFiles(
-    orderWorkspaceSkillRestorationFiles(mutation, [...mutation.supportFiles, mutation.skillFile]),
-  );
-}
-
-function orderWorkspaceSkillRestorationFiles(
-  mutation: PreparedWorkspaceSkillMutation,
-  written: readonly PreparedWorkspaceSkillFileMutation[],
-): PreparedWorkspaceSkillFileMutation[] {
-  const skillWasWritten = written.includes(mutation.skillFile);
-  const supportFiles = written.filter((file) => file !== mutation.skillFile).toReversed();
   // SKILL.md is the activation marker: restore support first for updates, but
   // remove it first for failed creates so a partial new skill is not discoverable.
-  return mutation.mode === "create" && skillWasWritten
-    ? [mutation.skillFile, ...supportFiles]
-    : [...supportFiles, ...(skillWasWritten ? [mutation.skillFile] : [])];
+  const files =
+    mutation.mode === "create"
+      ? [mutation.skillFile, ...mutation.supportFiles.toReversed()]
+      : [...mutation.supportFiles.toReversed(), mutation.skillFile];
+  await restorePreparedWorkspaceFiles(files);
 }
 
 export async function isWorkspaceSkillMutationApplied(
