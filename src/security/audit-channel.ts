@@ -95,7 +95,7 @@ function formatChannelAccountNote(params: {
 }
 
 /** Collect channel-specific security findings across active channel plugins/accounts. */
-export async function collectChannelSecurityFindings(params: {
+export async function collectChannelSecurityFindingsCore(params: {
   cfg: OpenClawConfig;
   sourceConfig?: OpenClawConfig;
   plugins: ChannelPlugin[];

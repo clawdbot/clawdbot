@@ -38,7 +38,7 @@ vi.mock("../session-utils.js", async (importOriginal) => {
 vi.mock("../../agents/tools/sessions-send-tool.js", () => ({
   createSessionsSendTool: (options: unknown) => ({
     execute: async (toolCallId: string, args: unknown) => {
-      delivered({ args, options, toolCallId });
+      await delivered({ args, options, toolCallId });
       return {
         content: [{ type: "text", text: "sent" }],
         details: { status: "ok" },
@@ -350,6 +350,36 @@ describe("worker session tool topology", () => {
     expect(replay.resultJson).toBe(first.resultJson);
   });
 
+  it("coalesces concurrent spawn retries into one cloud child", async () => {
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    const create = gatewayCreate.getMockImplementation();
+    if (!create) {
+      throw new Error("missing session creation fixture");
+    }
+    let finishCreate: (() => void) | undefined;
+    gatewayCreate.mockImplementation(async (request) => {
+      await new Promise<void>((resolve) => {
+        finishCreate = resolve;
+      });
+      return await create(request);
+    });
+    const request = {
+      identity,
+      toolName: "sessions_spawn" as const,
+      request: { toolCallId: "concurrent-spawn", task: "start one child" },
+    };
+
+    const retries = Array.from({ length: 32 }, () => execute(request));
+    await vi.waitFor(() => expect(gatewayCreate).toHaveBeenCalledOnce());
+    finishCreate?.();
+    const results = await Promise.all(retries);
+
+    expect(new Set(results.map((result) => result.resultJson))).toHaveLength(1);
+    expect(gatewayCreate).toHaveBeenCalledOnce();
+    expect(dispatchChild).toHaveBeenCalledOnce();
+    expect(gatewayRequest).toHaveBeenCalledOnce();
+  });
+
   it("recovers a committed child when session creation loses its response", async () => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
     gatewayCreate.mockImplementationOnce(
@@ -653,6 +683,29 @@ describe("worker session tool topology", () => {
     expect(firstKey).toMatch(/^worker-session-send:/u);
     expect(secondKey).toMatch(/^worker-session-send:/u);
     expect(secondKey).not.toBe(firstKey);
+  });
+
+  it("coalesces concurrent retries into one message effect", async () => {
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    setEntry(TARGET.sessionKey, TARGET.sessionId, {
+      sessionKey: SOURCE.sessionKey,
+      sessionId: SOURCE.sessionId,
+    });
+    let finishDelivery: (() => void) | undefined;
+    delivered.mockImplementation(
+      async () =>
+        await new Promise<void>((resolve) => {
+          finishDelivery = resolve;
+        }),
+    );
+
+    const retries = Array.from({ length: 32 }, () => send("concurrent-retry"));
+    await vi.waitFor(() => expect(delivered).toHaveBeenCalledOnce());
+    finishDelivery?.();
+    const results = await Promise.all(retries);
+
+    expect(new Set(results.map((result) => result.resultJson))).toHaveLength(1);
+    expect(delivered).toHaveBeenCalledOnce();
   });
 
   it("replays a completed send after the target incarnation changes", async () => {

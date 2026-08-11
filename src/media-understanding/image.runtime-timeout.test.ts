@@ -107,7 +107,7 @@ vi.mock("../agents/models-config.js", async () => ({
 
 vi.mock("../agents/model-auth.js", () => ({
   applySecretRefHeaderSentinels: (model: unknown) => model,
-  getApiKeyForModel: getApiKeyForModelMock,
+  getApiKeyForModelCore: getApiKeyForModelMock,
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
   [REQUIRE_API_KEY_FIELD]: requireApiKeyMock,
 }));

@@ -6,7 +6,7 @@ import {
 import { createAbortError } from "../../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { diagnosticLogger as diag } from "../../logging/diagnostic-runtime.js";
-import { createDeferred } from "../../shared/deferred.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "./reply-dispatcher.types.js";
 import * as replyRunSettle from "./reply-run-finalization-lease.js";
 import {
@@ -94,7 +94,7 @@ export function createReplyOperation(params: {
   let retainFailureUntilComplete = false;
   let terminalRecovery = false;
   let acceptedSteeredInboundAudio = false;
-  const ownerSettlement = createDeferred();
+  const ownerSettlement = createDeferredCore();
   let ownerSettled = false;
   const settleOwner = () => {
     if (ownerSettled) {
