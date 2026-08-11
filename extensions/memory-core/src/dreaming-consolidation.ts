@@ -625,7 +625,6 @@ async function runConsolidationGroup(params: {
       ),
       ...(params.model ? { model: params.model } : {}),
       extraSystemPrompt: CONSOLIDATION_SYSTEM_PROMPT,
-      // Apply configured subagent concurrency across all dreaming sessions.
       lane: "subagent",
       lightContext: true,
       deliver: false,

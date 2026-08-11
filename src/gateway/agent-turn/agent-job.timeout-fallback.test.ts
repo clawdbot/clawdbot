@@ -161,12 +161,25 @@ describe("waitForAgentJob timeout fallback", () => {
     await expect(waitForAgentJobExecution({ runId, timeoutMs: 0 })).resolves.toBeNull();
   });
 
-  it("bounds positive execution waits for unknown runs", async () => {
+  it("returns immediately for unknown execution waits", async () => {
     const runId = `run-execution-wait-unknown-${runSequence++}`;
-    const waitPromise = waitForAgentJobExecution({ runId, timeoutMs: 5 });
 
-    await vi.advanceTimersByTimeAsync(5);
-    await expect(waitPromise).resolves.toBeNull();
+    await expect(waitForAgentJobExecution({ runId, timeoutMs: 5 })).resolves.toBeNull();
+  });
+
+  it("does not treat provisional reservations as queued execution", async () => {
+    const runId = `run-execution-wait-reserved-${runSequence++}`;
+    setGatewayDedupeEntry({
+      dedupe: new Map<string, DedupeEntry>(),
+      key: `agent:${runId}`,
+      entry: {
+        ts: Date.now(),
+        ok: true,
+        payload: { runId, status: "accepted", reservationId: "reservation-1" },
+      },
+    });
+
+    await expect(waitForAgentJobExecution({ runId, timeoutMs: 60_000 })).resolves.toBeNull();
   });
 
   it("keeps restart cancellation as an error instead of a hard timeout", async () => {

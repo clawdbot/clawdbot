@@ -511,7 +511,10 @@ export function setGatewayDedupeEntry(params: {
   }
   if (incomingObservation.state === "active") {
     beginAgentJob(key.runId);
-    if (key.source === "agent" && !Number.isFinite(agentRunStarts.get(key.runId))) {
+    if (
+      key.source === "agent" &&
+      typeof asOptionalRecord(params.entry.payload)?.reservationId !== "string"
+    ) {
       agentRunStarts.set(key.runId, AGENT_RUN_QUEUED_AT);
     }
     return;
@@ -601,17 +604,13 @@ function publicSnapshot(snapshot: AgentRunObservation): AgentJobTerminalSnapshot
   };
 }
 
-type AgentJobWaitParams = {
+export async function waitForAgentJob(params: {
   runId: string;
   timeoutMs: number;
   ignoreCachedSnapshot?: boolean;
   source?: "chat";
-};
-
-async function waitForAgentJobState(
-  params: AgentJobWaitParams,
-  timeoutScope: "caller" | "execution",
-): Promise<AgentJobTerminalSnapshot | null> {
+  executionScoped?: boolean;
+}): Promise<AgentJobTerminalSnapshot | null> {
   ensureAgentRunListener();
   const afterVersion = params.ignoreCachedSnapshot ? agentJobState.version : -1;
   const cached = getAgentRunSnapshot({
@@ -665,19 +664,24 @@ async function waitForAgentJobState(
       finish(null);
     };
     const armTimeout = () => {
-      if (timeoutHandle || settled) {
+      if (settled) {
         return;
       }
-      const observedStart =
-        timeoutScope === "execution" ? agentRunStarts.get(params.runId) : Date.now();
-      if (timeoutScope === "execution" && observedStart === AGENT_RUN_QUEUED_AT) {
+      const observedStart = params.executionScoped ? agentRunStarts.get(params.runId) : Date.now();
+      if (params.executionScoped && observedStart === AGENT_RUN_QUEUED_AT) {
+        return;
+      }
+      if (params.executionScoped && observedStart === undefined) {
+        finish(null);
+        return;
+      }
+      if (timeoutHandle) {
         return;
       }
       const startedAt = observedStart ?? Date.now();
-      const delayMs =
-        timeoutScope === "execution"
-          ? Math.max(0, startedAt + params.timeoutMs - Date.now())
-          : params.timeoutMs;
+      const delayMs = params.executionScoped
+        ? Math.max(0, startedAt + params.timeoutMs - Date.now())
+        : params.timeoutMs;
       timeoutHandle = setSafeTimeout(onTimeout, delayMs);
       timeoutHandle.unref?.();
     };
@@ -702,12 +706,10 @@ async function waitForAgentJobState(
   });
 }
 
-export function waitForAgentJob(params: AgentJobWaitParams) {
-  return waitForAgentJobState(params, "caller");
-}
-
-export function waitForAgentJobExecution(params: Pick<AgentJobWaitParams, "runId" | "timeoutMs">) {
-  return waitForAgentJobState(params, "execution");
+export function waitForAgentJobExecution(
+  params: Pick<Parameters<typeof waitForAgentJob>[0], "runId" | "timeoutMs">,
+) {
+  return waitForAgentJob({ ...params, executionScoped: true });
 }
 
 ensureAgentRunListener();

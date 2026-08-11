@@ -22,6 +22,7 @@ import { resolvePluginSubagentCompletionRequester } from "../plugins/runtime/sub
 import type { PluginRuntime, RuntimeGatewayRequestOptions } from "../plugins/runtime/types.js";
 import type { PluginLogger, PluginOrigin } from "../plugins/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { waitForAgentJobExecution } from "./agent-turn/agent-job.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import { normalizeOperatorScopeList, type OperatorScope } from "./operator-scopes.js";
@@ -307,10 +308,7 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       return { runId, ...(runtime ? { runtime } : {}) };
     },
     async waitForRun(params) {
-      const timeoutMs =
-        typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-          ? Math.max(0, Math.floor(params.timeoutMs))
-          : 30_000;
+      const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
       const payload = await waitForAgentJobExecution({ runId: params.runId, timeoutMs });
       const status = payload?.status ?? "timeout";
       return {
