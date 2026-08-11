@@ -16,6 +16,7 @@ import type {
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
@@ -26,7 +27,6 @@ import {
   resolveImplicitMessageActionTarget,
 } from "./message-action-normalization.js";
 import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
-import { readBooleanParam } from "./message-action-params.js";
 import { actionRequiresTarget } from "./message-action-spec.js";
 import { enforceCrossContextPolicy } from "./outbound-policy.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";

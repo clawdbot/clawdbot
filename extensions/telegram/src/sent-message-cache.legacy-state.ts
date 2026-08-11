@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
+import { resolveSessionStorePathCore } from "openclaw/plugin-sdk/session-store-paths";
 
 export const TTL_MS = 24 * 60 * 60 * 1000;
 export const TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE = "telegram.sent-messages";
@@ -34,7 +34,7 @@ export function resolveSentMessageScopeKey(cfg?: SentMessageConfig, agentId?: st
   // This 24-hour cache follows the current agent owner. Do not revive a prior owner's
   // transient bucket when the configured default changes.
   return sentMessageScopeKeyForStorePath(
-    resolveStorePath(cfg?.session?.store, {
+    resolveSessionStorePathCore(cfg?.session?.store, {
       agentId: resolveSentMessageAgentId(cfg, agentId),
     }),
   );
@@ -48,7 +48,7 @@ export function sentMessageEntryKey(scopeKey: string, chatId: string, messageId:
 }
 
 function resolveSentMessageStorePath(cfg?: SentMessageConfig, agentId?: string): string {
-  return `${resolveStorePath(cfg?.session?.store, {
+  return `${resolveSessionStorePathCore(cfg?.session?.store, {
     agentId: resolveSentMessageAgentId(cfg, agentId),
   })}.telegram-sent-messages.json`;
 }

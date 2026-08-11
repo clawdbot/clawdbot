@@ -31,7 +31,7 @@ const hasMeaningfulChannelConfig = vi.hoisted(() =>
     );
   }),
 );
-const loadPluginManifestRegistry = vi.hoisted(() => vi.fn());
+const loadPluginManifestRegistryCore = vi.hoisted(() => vi.fn());
 const loadPluginManifestRegistryForInstalledIndex = vi.hoisted(() => vi.fn());
 const loadPluginManifestRegistryForPluginRegistry = vi.hoisted(() => vi.fn());
 const loadPluginRegistrySnapshot = vi.hoisted(() => vi.fn());
@@ -349,7 +349,7 @@ function createInstalledPluginRecordFixture(
 }
 
 function createInstalledPluginIndexFixture(
-  registry: PluginManifestRegistry = loadPluginManifestRegistry(),
+  registry: PluginManifestRegistry = loadPluginManifestRegistryCore(),
 ): InstalledPluginIndex {
   return {
     version: 1,
@@ -368,7 +368,7 @@ function filterManifestRegistryForInstalledIndex(params: {
   pluginIds?: readonly string[];
   includeDisabled?: boolean;
 }): PluginManifestRegistry {
-  const registry = loadPluginManifestRegistry() as PluginManifestRegistry;
+  const registry = loadPluginManifestRegistryCore() as PluginManifestRegistry;
   const pluginIdSet = params.pluginIds?.length ? new Set(params.pluginIds) : null;
   return {
     ...registry,
@@ -388,10 +388,10 @@ function useManifestRegistryFixture(
   registry: PluginManifestRegistry = createManifestRegistryFixture(),
 ) {
   const index = createInstalledPluginIndexFixture(registry);
-  loadPluginManifestRegistry.mockReset().mockReturnValue(registry);
+  loadPluginManifestRegistryCore.mockReset().mockReturnValue(registry);
   loadPluginManifestRegistryForPluginRegistry
     .mockReset()
-    .mockImplementation(() => loadPluginManifestRegistry());
+    .mockImplementation(() => loadPluginManifestRegistryCore());
   loadPluginRegistrySnapshot.mockReset().mockReturnValue(index);
   return { registry, index };
 }
@@ -403,7 +403,7 @@ function expectStartupPluginIds(params: {
   workerProviderIds?: readonly string[];
   expected: readonly string[];
 }) {
-  const manifestRegistry = loadPluginManifestRegistry() as PluginManifestRegistry;
+  const manifestRegistry = loadPluginManifestRegistryCore() as PluginManifestRegistry;
   expect(
     resolveGatewayStartupPluginIdsFromRegistry({
       config: params.config,
@@ -520,7 +520,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
       .mockImplementation(filterManifestRegistryForInstalledIndex);
     loadPluginManifestRegistryForPluginRegistry
       .mockReset()
-      .mockImplementation(() => loadPluginManifestRegistry());
+      .mockImplementation(() => loadPluginManifestRegistryCore());
   });
 
   it.each([

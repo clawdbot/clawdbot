@@ -5,11 +5,11 @@
  */
 import {
   buildShouldSuppressBuiltInModelCore,
-  shouldSuppressBuiltInModel as shouldSuppressBuiltInModelImpl,
+  shouldSuppressBuiltInModelCore as shouldSuppressBuiltInModelImpl,
 } from "./model-suppression.js";
 
 type ShouldSuppressBuiltInModel =
-  typeof import("./model-suppression.js").shouldSuppressBuiltInModel;
+  typeof import("./model-suppression.js").shouldSuppressBuiltInModelCore;
 type BuildShouldSuppressBuiltInModel =
   typeof import("./model-suppression.js").buildShouldSuppressBuiltInModelCore;
 

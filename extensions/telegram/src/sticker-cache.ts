@@ -1,5 +1,5 @@
 // Telegram plugin module implements sticker cache behavior.
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveApiKeyForProviderCore } from "openclaw/plugin-sdk/agent-runtime";
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import {
   findModelInCatalog,
@@ -90,7 +90,7 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
 
   const hasProviderKey = async (provider: string) => {
     try {
-      await resolveApiKeyForProvider({ provider, cfg, agentDir });
+      await resolveApiKeyForProviderCore({ provider, cfg, agentDir });
       return true;
     } catch {
       return false;

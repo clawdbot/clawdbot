@@ -16,7 +16,7 @@ import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-con
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import { resolveProviderConfigApiOwnerHint } from "./provider-config-owner.js";
 import { matchesProviderPluginRef } from "./provider-registry-shared.js";
-import { isPluginProvidersLoadInFlight, resolvePluginProviders } from "./providers.runtime.js";
+import { isPluginProvidersLoadInFlight, resolvePluginProvidersCore } from "./providers.runtime.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
   getActivePluginRegistryWorkspaceDirFromState,
@@ -219,7 +219,7 @@ export function resolveProviderPluginsForHooks(params: {
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
-  return resolvePluginProviders({
+  return resolvePluginProvidersCore({
     ...params,
     workspaceDir,
     env,

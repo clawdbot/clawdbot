@@ -1,6 +1,6 @@
 // Video Generation Providers.Live.Test.Ts tests cover video generation providers plugin behavior.
 import {
-  resolveApiKeyForProvider,
+  resolveApiKeyForProviderCore,
   resolveDefaultAgentDir,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -428,7 +428,7 @@ async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<voi
   });
   let authLabel;
   try {
-    const auth = await resolveApiKeyForProvider({
+    const auth = await resolveApiKeyForProviderCore({
       provider: testCase.providerId,
       cfg,
       agentDir,

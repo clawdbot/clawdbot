@@ -5,7 +5,7 @@ import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { fileExists } from "openclaw/plugin-sdk/security-runtime";
-import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
+import { resolveSessionStorePathCore } from "openclaw/plugin-sdk/session-store-paths";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listTelegramAccountIds, resolveDefaultTelegramAccountId } from "./account-selection.js";
 import {
@@ -67,7 +67,7 @@ function resolveAgentSessionStorePath(params: {
   env: NodeJS.ProcessEnv;
   agentId: string;
 }): string {
-  return resolveStorePath(params.cfg.session?.store, {
+  return resolveSessionStorePathCore(params.cfg.session?.store, {
     env: params.env,
     agentId: params.agentId,
   });
@@ -79,7 +79,9 @@ function resolveMigrationStateDir(params: { env: NodeJS.ProcessEnv; stateDir?: s
     path.dirname(
       path.dirname(
         path.dirname(
-          path.dirname(resolveStorePath(undefined, { env: params.env, agentId: "main" })),
+          path.dirname(
+            resolveSessionStorePathCore(undefined, { env: params.env, agentId: "main" }),
+          ),
         ),
       ),
     )
@@ -428,7 +430,7 @@ function detectTelegramTopicNameCacheLegacyStateMigration(params: {
   stateDir?: string;
 }): ChannelLegacyStateMigrationPlan[] {
   const accountSources = listTelegramAccountIds(params.cfg).map((accountId) => {
-    const storePath = resolveStorePath(params.cfg.session?.store, {
+    const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
       env: params.env,
       agentId: accountId,
     });
@@ -439,7 +441,7 @@ function detectTelegramTopicNameCacheLegacyStateMigration(params: {
     agentId: resolveDefaultAgentId(params.cfg),
   });
   const legacyMainStorePath = resolveAgentSessionStorePath({ ...params, agentId: "main" });
-  const defaultAccountStorePath = resolveStorePath(params.cfg.session?.store, {
+  const defaultAccountStorePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     env: params.env,
     agentId: resolveDefaultTelegramAccountId(params.cfg),
   });

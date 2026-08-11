@@ -78,7 +78,7 @@ vi.mock("../plugins/providers.js", () => ({
 }));
 
 vi.mock("../plugins/setup-registry.js", () => ({
-  resolvePluginSetupProvider: () => undefined,
+  resolvePluginSetupProviderCore: () => undefined,
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => {

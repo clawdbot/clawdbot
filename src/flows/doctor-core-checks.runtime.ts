@@ -620,12 +620,12 @@ export async function collectProviderCatalogProjectionFindings(
   cfg: OpenClawConfig,
 ): Promise<readonly HealthFinding[]> {
   const { runProviderStaticCatalog } = await import("../plugins/provider-discovery.js");
-  const { resolvePluginProviders } = await import("../plugins/providers.runtime.js");
+  const { resolvePluginProvidersCore } = await import("../plugins/providers.runtime.js");
   const env = process.env;
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
-  let providers: Awaited<ReturnType<typeof resolvePluginProviders>>;
+  let providers: Awaited<ReturnType<typeof resolvePluginProvidersCore>>;
   try {
-    providers = resolvePluginProviders({
+    providers = resolvePluginProvidersCore({
       config: cfg,
       workspaceDir,
       env,

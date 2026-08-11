@@ -1,7 +1,7 @@
 // Registry contract tests cover plugin contract registry contents and lookup behavior.
 import { describe, expect, it } from "vitest";
 import { uniqueSortedStrings } from "../../plugin-sdk/test-helpers/string-utils.js";
-import { loadPluginManifestRegistry, type PluginManifestRecord } from "../manifest-registry.js";
+import { loadPluginManifestRegistryCore, type PluginManifestRecord } from "../manifest-registry.js";
 import { resolveManifestContractPluginIds } from "../plugin-registry.js";
 import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "./inventory/bundled-capability-metadata.js";
 import { pluginRegistrationContractRegistry, providerContractLoadError } from "./registry.js";
@@ -60,7 +60,7 @@ describe("plugin contract registry", () => {
     const snapshotPluginIds = new Set(
       BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map((entry) => entry.pluginId),
     );
-    return loadPluginManifestRegistry({})
+    return loadPluginManifestRegistryCore({})
       .plugins.filter((plugin) => snapshotPluginIds.has(plugin.id) && predicate(plugin))
       .map((plugin) => plugin.id)
       .toSorted((left, right) => left.localeCompare(right));
@@ -140,7 +140,7 @@ describe("plugin contract registry", () => {
   });
 
   it("keeps video-only provider auth choices out of text onboarding", () => {
-    const registry = loadPluginManifestRegistry({});
+    const registry = loadPluginManifestRegistryCore({});
 
     for (const pluginId of ["alibaba", "runway"]) {
       const plugin = registry.plugins.find(
@@ -170,7 +170,7 @@ describe("plugin contract registry", () => {
   });
 
   it("exposes the GitHub Copilot non-interactive onboarding token flag from manifest metadata", () => {
-    const registry = loadPluginManifestRegistry({});
+    const registry = loadPluginManifestRegistryCore({});
     const plugin = registry.plugins.find(
       (entry) => entry.origin === "bundled" && entry.id === "github-copilot",
     );
