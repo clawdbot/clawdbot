@@ -229,6 +229,18 @@ describe("evaluateRuntimeEligibility", () => {
     expect(result).toBe(true);
   });
 
+  it("bypasses OS requirements when always=true", () => {
+    const result = evaluateRuntimeEligibility({
+      always: true,
+      os: ["definitely-not-a-runtime-platform"],
+      remotePlatforms: [],
+      hasBin: () => true,
+      hasEnv: () => true,
+      isConfigPathTruthy: () => true,
+    });
+    expect(result).toBe(true);
+  });
+
   it("evaluates runtime requirements when always is false", () => {
     const result = evaluateRuntimeEligibility({
       requires: {
