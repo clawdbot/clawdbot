@@ -317,14 +317,11 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
   });
   const alternateHarnessDefault =
     harnessDefaultVisibleReplies === "message_tool" ? "automatic" : "message_tool";
-  const alternateSourceReplyDeliveryMode =
-    harnessDefaultVisibleReplies === undefined
-      ? sourceReplyPolicy.sourceReplyDeliveryMode
-      : resolveSourceReplyVisibilityPolicy({
-          ...sourceReplyPolicyParams,
-          requested: params.replyOptions?.sourceReplyDeliveryMode,
-          defaultVisibleReplies: alternateHarnessDefault,
-        }).sourceReplyDeliveryMode;
+  const alternateSourceReplyDeliveryMode = resolveSourceReplyVisibilityPolicy({
+    ...sourceReplyPolicyParams,
+    requested: params.replyOptions?.sourceReplyDeliveryMode,
+    defaultVisibleReplies: alternateHarnessDefault,
+  }).sourceReplyDeliveryMode;
   const sourceReplyDeliveryModeOrigin =
     alternateSourceReplyDeliveryMode === sourceReplyPolicy.sourceReplyDeliveryMode
       ? "stable_policy"

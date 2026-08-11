@@ -62,6 +62,17 @@ describe("prepared harness source delivery", () => {
       expectedFinals: 0,
     },
     {
+      name: "lets implicit built-in automatic ownership yield to a prepared tool owner",
+      failsCliPrimary: false,
+      preliminaryVisibleReplies: undefined,
+      preparedVisibleReplies: "message_tool" as const,
+      expectedTransitions: ["message_tool_only"],
+      expectedDeliveries: 0,
+      expectedPartials: 0,
+      expectedBlocks: 0,
+      expectedFinals: 0,
+    },
+    {
       name: "keeps prepared tool ownership after a failed CLI primary",
       failsCliPrimary: true,
       preliminaryVisibleReplies: "automatic" as const,
@@ -129,25 +140,27 @@ describe("prepared harness source delivery", () => {
       },
     );
 
-    // Dispatch initially sees the CLI-owned default. The actual embedded run's
-    // hook-selected route is prepared by the OpenClaw-owned harness instead.
-    registerAgentHarness({
-      id: "preliminary-owner",
-      label: "Preliminary owner",
-      deliveryDefaults: { visibleReplies: testCase.preliminaryVisibleReplies },
-      supports: ({ modelProvider }) =>
-        testCase.preparedVisibleReplies === "automatic" && modelProvider?.preparedAuth
-          ? { supported: false, reason: "raw route only" }
-          : { supported: true, priority: 100 },
-      runAttempt: vi.fn(async () => ({}) as never),
-    });
+    // Dispatch sees only the preliminary harness. The actual embedded run's
+    // hook-selected route is prepared by the final harness instead.
+    if (testCase.preliminaryVisibleReplies !== undefined) {
+      registerAgentHarness({
+        id: "preliminary-owner",
+        label: "Preliminary owner",
+        deliveryDefaults: { visibleReplies: testCase.preliminaryVisibleReplies },
+        supports: ({ modelProvider }) =>
+          testCase.preparedVisibleReplies === "automatic" && modelProvider?.preparedAuth
+            ? { supported: false, reason: "raw route only" }
+            : { supported: true, priority: 100 },
+        runAttempt: vi.fn(async () => ({}) as never),
+      });
+    }
     if (testCase.preparedVisibleReplies === "message_tool") {
       registerPreparedAgentHarness({
         id: "codex",
         label: "Prepared tool owner",
         deliveryDefaults: { visibleReplies: "message_tool" },
-        supports: ({ provider }) =>
-          provider === "openai"
+        supports: ({ provider, modelProvider }) =>
+          provider === "openai" && modelProvider?.preparedAuth
             ? { supported: true, priority: 200 }
             : { supported: false, reason: "prepared OpenAI route only" },
         runAttempt: vi.fn(async (attemptParams) => {
@@ -162,7 +175,9 @@ describe("prepared harness source delivery", () => {
     sessionStoreMocks.currentEntry = {
       sessionId: "session",
       updatedAt: 0,
-      agentHarnessId: "preliminary-owner",
+      ...(testCase.preliminaryVisibleReplies === undefined
+        ? {}
+        : { agentHarnessId: "preliminary-owner" }),
       sendPolicy: "allow",
     };
     setNoAbort();
