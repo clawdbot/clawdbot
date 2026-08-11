@@ -530,7 +530,7 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
 // RFC §4.4 stale-TTL enforcement at TaskFlow release. This dispatcher owns
 // startup recovery; the live reply path has its own delivery-queue owner.
 // Gating here stops a crash-orphaned row from materializing an expired snapshot
-// at a later compaction (karmaterminal/openclaw#1198).
+// at a later compaction.
 describe("dispatchStagedPostCompactionDelegates stale TTL", () => {
   const STALE_SECRET_TASK = "STALE_TASK_SENTINEL_1198";
   const STALE_SECRET_ATTACHMENT = "STALE_ATTACHMENT_SENTINEL_1198";

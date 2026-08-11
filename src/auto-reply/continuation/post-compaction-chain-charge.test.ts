@@ -1,7 +1,6 @@
 // "RFC §" references herein cite docs/design/continue-work-signal-v2.md (Agent Self-Elected Turn Continuation / CONTINUE_WORK).
 /**
- * Real-store proof for the accepted post-compaction chain-charge marker
- * (karmaterminal/openclaw#1198).
+ * Real-store proof for the accepted post-compaction chain-charge marker.
  *
  * The queued-delivery suites inject this operation, so these tests run it
  * against the TaskFlow-backed delegate store to pin the two facts delivery

@@ -766,8 +766,8 @@ describe("continue_work end-of-turn finalization park + cross-turn coalesce", ()
     });
   });
 
-  it("folds Cael-style active body plus +20/+21/+22 delayed rows instead of sequential later turns", async () => {
-    const sessionKey = "agent:main:cael-active-overlap";
+  it("folds an active body plus +20/+21/+22 delayed rows instead of sequential later turns", async () => {
+    const sessionKey = "agent:main:active-overlap";
     mockSessionStore[sessionKey] = { sessionKey };
     for (const [index, delaySeconds] of [20, 21, 22].entries()) {
       enqueuePendingWork({

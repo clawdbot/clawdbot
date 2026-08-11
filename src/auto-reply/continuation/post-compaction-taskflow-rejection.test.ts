@@ -1,7 +1,7 @@
 // "RFC §" references herein cite docs/design/continue-work-signal-v2.md (Agent Self-Elected Turn Continuation / CONTINUE_WORK).
 /**
  * Real-store proof that a released post-compaction row can still be terminalized
- * at queued-delivery time (karmaterminal/openclaw#1198).
+ * at queued-delivery time.
  *
  * `dispatchPostCompactionDelegates` enqueues the delivery and only then calls
  * `finalizeStagedPostCompactionDelegates`, so by the time the queue drains, the

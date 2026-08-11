@@ -1,6 +1,6 @@
 // "RFC §" references herein cite docs/design/continue-work-signal-v2.md (Agent Self-Elected Turn Continuation / CONTINUE_WORK).
 /**
- * Queued post-compaction delivery lifecycle regressions (karmaterminal/openclaw#1198).
+ * Queued post-compaction delivery lifecycle regressions.
  *
  * Two contracts live here because they share the same delivery entry point:
  *
@@ -204,7 +204,7 @@ afterEach(() => {
 });
 
 describe("post-compaction delivery: continuation depth follows accepted children", () => {
-  it("consumes zero chain budget when a pre-acceptance failure retries (karmaterminal/openclaw#1198)", async () => {
+  it("consumes zero chain budget when a pre-acceptance failure retries", async () => {
     await withTempDir({ prefix: "openclaw-post-compaction-delivery-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");
       await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: Date.now() } });
@@ -404,7 +404,7 @@ describe("post-compaction delivery: continuation depth follows accepted children
       // The child the first attempt accepted is keyed off the QUEUE ENTRY ID,
       // because that is what the spawn passes as `continuationDelegateFlowId`.
       // The replay guard must derive it the same way or this retry duplicates
-      // the child (karmaterminal/openclaw#1198).
+      // the child.
       mockRegistryState.acceptedChildSessionKeys.add(
         deriveTestContinuationChildSessionKey("main", "queue-sourceless"),
       );

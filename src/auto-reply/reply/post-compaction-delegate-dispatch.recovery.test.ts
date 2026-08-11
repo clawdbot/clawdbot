@@ -447,7 +447,7 @@ describe("post-compaction delegate dispatch extraction", () => {
     });
   });
 
-  it("does not re-spawn an accepted child when the post-acceptance chain persist fails (karmaterminal/openclaw#1198)", async () => {
+  it("does not re-spawn an accepted child when the post-acceptance chain persist fails", async () => {
     await withTempDir({ prefix: "openclaw-post-compaction-persist-fail-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");
       await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: 1 } });

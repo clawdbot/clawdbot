@@ -348,8 +348,7 @@ function resolveQueuedPostCompactionTraceparent(
  * the source row BEFORE this session-entry patch and returns that same hop on
  * every later call, so a replayed delivery re-persists the identical count rather
  * than advancing depth again. Charging here rather than before the spawn is what
- * keeps a retry that never reached an accepted child at zero continuation budget
- * (karmaterminal/openclaw#1198).
+ * keeps a retry that never reached an accepted child at zero continuation budget.
  */
 async function commitAcceptedPostCompactionChainCharge(params: {
   deps: PostCompactionDelegateDeliveryDeps;
@@ -711,7 +710,7 @@ export async function deliverQueuedPostCompactionDelegate(
   // Charge the chain only now that a child is actually accepted. Everything
   // above this line — artifact policy, spawn fence, attachment materialization,
   // spawn rejection — leaves the persisted depth untouched, so a retry after any
-  // of those failures still has its full budget (karmaterminal/openclaw#1198).
+  // of those failures still has its full budget.
   const { expectedRevision: acceptedRevision } = await commitAcceptedPostCompactionChainCharge({
     deps,
     entry: params.entry,

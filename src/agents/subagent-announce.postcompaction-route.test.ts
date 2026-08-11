@@ -151,7 +151,7 @@ describe("announce-path post-compaction routing", () => {
     // The :995 fix: post-compaction routes to staging...
     expect(stageMock).toHaveBeenCalledTimes(1);
     // ...under the REQUESTER (parent) session key — NOT the leaf's childSessionKey.
-    // This is the documented semantic-timing limitation (Emeric/Ronan byte): the
+    // This is the documented semantic-timing limitation: the
     // announce path catches the bracket on the LEAF's COMPLETION, when the leaf
     // is already terminating, so the lifeboat can only stage under the parent's
     // session (consumed at the PARENT's next compaction, not the leaf's own).

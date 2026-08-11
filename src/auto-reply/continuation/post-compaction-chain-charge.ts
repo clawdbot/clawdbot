@@ -6,8 +6,7 @@
  * actually accepted, so every pre-acceptance failure (attachment materialization,
  * spawn fence, spawn rejection) leaves the budget untouched and the entry
  * retryable. This module owns the durable marker that makes that charge
- * idempotent across crash, restart, and queue replay
- * (karmaterminal/openclaw#1198).
+ * idempotent across crash, restart, and queue replay.
  */
 
 import {
