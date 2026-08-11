@@ -379,6 +379,7 @@ export const en: TranslationMap = {
       impact:
         "Running sessions are interrupted and this Control UI disconnects until the Gateway is back.",
       versions: "Installed {installed} · Available {available}",
+      versionsBehind: "Installed {installed} · {available}",
       action: "Update and restart",
       macAction: "Update Mac app and restart",
     },
@@ -389,6 +390,13 @@ export const en: TranslationMap = {
     },
     sidebar: {
       campaignTarget: "{status} · {target}",
+      updating: "Updating Gateway…",
+    },
+    dialog: {
+      installing: "Installing the update on the Gateway. It restarts once the install finishes.",
+      restarting: "The Gateway is restarting. This page disconnects and reconnects on its own.",
+      notStarted:
+        "The update request went unanswered. Try again, or run `openclaw update` in the terminal.",
     },
     channel: {
       stable: "Stable",
@@ -478,13 +486,18 @@ export const en: TranslationMap = {
       managedServiceHandoffAlreadyRunning:
         "Another managed update is already running. Wait for it to complete, then refresh update status.",
       doctorFailed: "Doctor repair failed. Run `openclaw doctor --non-interactive` and retry.",
+      managedServiceHandoffFailed:
+        "The update helper stopped before finishing. Run `openclaw update` in the terminal to see why.",
+      managedServiceHandoffSpawnFailed:
+        "The Gateway could not start the update helper. Run `openclaw update` in the terminal instead.",
+      managedServiceHandoffParentTimeout:
+        "The Gateway stayed up too long for the update helper. Start the update again, or run `openclaw update`.",
       default: "See the gateway logs for the exact failure and retry once the cause is fixed.",
     },
-    postRestart: {
-      restartUnhealthy:
-        "The replacement process never became healthy and the previous process stayed up.",
-      default: "Check the gateway logs for the replacement failure.",
-    },
+    failedAtStep: "The update failed at {step}: {cause}.",
+    succeededVersion: "Gateway updated to v{version}.",
+    succeededCommit: "Gateway updated · now on {sha}.",
+    succeeded: "Gateway updated and restarted.",
   },
   devices: {
     pairing: {

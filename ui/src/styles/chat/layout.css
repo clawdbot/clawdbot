@@ -1548,12 +1548,13 @@ openclaw-chat-video-player {
 .chat-reply-context-menu {
   position: fixed;
   z-index: 9999;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 4px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
   min-width: 160px;
+  animation: menu-in 140ms var(--ease-out);
 }
 
 .chat-reply-context-menu button {
@@ -1565,13 +1566,14 @@ openclaw-chat-video-player {
   border: none;
   background: none;
   color: var(--text);
-  border-radius: 6px;
+  min-height: var(--menu-item-height);
+  border-radius: var(--menu-item-radius);
   text-align: left;
 }
 
 .chat-reply-context-menu button:hover,
 .chat-reply-context-menu button:focus-visible {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  background: var(--bg-hover);
   outline: none;
 }
 
@@ -1580,11 +1582,11 @@ openclaw-chat-video-player {
   z-index: 9999;
   display: flex;
   gap: 2px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 3px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
   animation: fade-in 0.12s var(--ease-out);
 }
 
@@ -1596,14 +1598,15 @@ openclaw-chat-video-player {
   border: none;
   background: none;
   color: var(--text);
-  border-radius: 6px;
+  min-height: var(--menu-item-height);
+  border-radius: var(--menu-item-radius);
   font-size: 12px;
   white-space: nowrap;
 }
 
 .chat-selection-popup button:hover,
 .chat-selection-popup button:focus-visible {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  background: var(--bg-hover);
   outline: none;
 }
 
@@ -2704,11 +2707,11 @@ openclaw-chat-video-player {
 
 .agent-chat__attach-menu::part(menu) {
   width: 152px;
-  padding: 5px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
 }
 
 .agent-chat__attach-menu-option {
@@ -3789,13 +3792,13 @@ openclaw-chat-video-player {
   right: 0;
   max-height: 320px;
   overflow-y: auto;
-  background: var(--popover);
+  background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
+  border-radius: var(--menu-radius);
+  box-shadow: var(--shadow-md);
   z-index: 30;
   margin-bottom: 4px;
-  padding: 6px;
+  padding: var(--menu-padding);
   scrollbar-width: thin;
 }
 

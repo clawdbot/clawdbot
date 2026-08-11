@@ -872,35 +872,54 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         </body></html>`,
       );
 
-      const styles = await page.evaluate(() => {
-        const dropdown = document.querySelector<HTMLElement>(".chat-pane__gateway-menu")!;
-        const menu = dropdown.shadowRoot!.querySelector<HTMLElement>('[part="menu"]')!;
-        const item = dropdown.querySelector<HTMLElement>(".chat-pane__gateway-menu-item")!;
-        const menuStyle = getComputedStyle(menu);
-        const itemStyle = getComputedStyle(item);
-        return {
-          menu: {
-            borderRadius: menuStyle.borderRadius,
-            padding: menuStyle.padding,
-          },
-          item: {
-            borderRadius: itemStyle.borderRadius,
-            fontSize: itemStyle.fontSize,
-            minHeight: itemStyle.minHeight,
-            padding: itemStyle.padding,
-          },
-        };
-      });
+      const readGatewayMenuStyles = () =>
+        page.evaluate(() => {
+          const dropdown = document.querySelector<HTMLElement>(".chat-pane__gateway-menu")!;
+          const menu = dropdown.shadowRoot!.querySelector<HTMLElement>('[part="menu"]')!;
+          const item = dropdown.querySelector<HTMLElement>(".chat-pane__gateway-menu-item")!;
+          const menuStyle = getComputedStyle(menu);
+          const itemStyle = getComputedStyle(item);
+          return {
+            menu: {
+              borderRadius: menuStyle.borderRadius,
+              padding: menuStyle.padding,
+            },
+            item: {
+              borderRadius: itemStyle.borderRadius,
+              fontSize: itemStyle.fontSize,
+              minHeight: itemStyle.minHeight,
+              padding: itemStyle.padding,
+            },
+          };
+        });
+
+      const styles = await readGatewayMenuStyles();
 
       expect(styles).toEqual({
-        menu: { borderRadius: "8px", padding: "6px" },
+        menu: { borderRadius: "10px", padding: "4px" },
         item: {
-          borderRadius: "8px",
+          borderRadius: "6px",
           fontSize: "13px",
-          minHeight: "30px",
+          minHeight: "28px",
           padding: "0px 8px",
         },
       });
+
+      const session = await page.context().newCDPSession(page);
+      try {
+        await session.send("Emulation.setTouchEmulationEnabled", {
+          enabled: true,
+          maxTouchPoints: 1,
+        });
+        await session.send("Emulation.setEmulatedMedia", {
+          media: "screen",
+          features: [{ name: "pointer", value: "coarse" }],
+        });
+        expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
+        expect((await readGatewayMenuStyles()).item.minHeight).toBe("44px");
+      } finally {
+        await session.detach();
+      }
     } finally {
       await closeBrowserPage(page);
     }

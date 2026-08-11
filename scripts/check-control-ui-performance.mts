@@ -28,9 +28,9 @@ const CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES = 1024;
 const controlUiPerformanceBudgets = {
   startupJsRequests: 18,
   startupCssRequests: 1,
-  // 320 KiB maintainer-approved 2026-08 after the chat header project lead-in;
-  // CI measured 326657 B, one byte above the prior 319 KiB cap.
-  startupJsGzipBytes: 320 * KIB,
+  // 350 KiB maintainer-approved by Vyctor 2026-08-11 for #121686;
+  // #121734 left main 6 B below the prior 319 KiB hard ceiling.
+  startupJsGzipBytes: 350 * KIB,
   // 45 KiB CSS ceilings maintainer-approved 2026-07 alongside the interleaved
   // sidebar zone styling; headroom over the ~36.5 KiB post-diet baseline.
   startupCssGzipBytes: 45 * KIB,

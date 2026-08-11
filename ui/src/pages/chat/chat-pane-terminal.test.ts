@@ -66,16 +66,20 @@ describe("chat pane terminal action", () => {
     }
   });
 
-  it("renders the desktop launcher only when available and opens the panel", () => {
+  it("renders the desktop controls only for cloud sessions and opens the panel", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const session = {
+    const localSession = {
       key: state.sessionKey,
       kind: "direct",
       updatedAt: 0,
     } satisfies GatewaySessionRow;
+    const cloudSession = {
+      ...localSession,
+      placement: { state: "active" } as GatewaySessionRow["placement"],
+    } satisfies GatewaySessionRow;
     const container = document.createElement("div");
-    const renderHeader = () =>
+    const renderHeader = (session: GatewaySessionRow) => {
       render(
         pane.renderPaneHeader(
           createSessionWorkspaceProps(state),
@@ -87,27 +91,39 @@ describe("chat pane terminal action", () => {
         ),
         container,
       );
+    };
+    const panelActionIds = () =>
+      container
+        .querySelector<HTMLElement & { panelActions: Array<{ id: string }> }>(
+          "openclaw-chat-header-session-menu",
+        )
+        ?.panelActions.map((action) => action.id) ?? [];
     const snapshot = pane.context.gateway.snapshot;
     snapshot.hello = desktopHello([], ["operator.admin"]);
-    renderHeader();
+    renderHeader(cloudSession);
     expect(container.querySelector('[aria-label="Toggle desktop panel"]')).toBeNull();
 
     snapshot.hello = desktopHello(["worker.desktop.observe"], ["operator.admin"]);
+    renderHeader(localSession);
+    expect(container.querySelector('[aria-label="Toggle desktop panel"]')).toBeNull();
+    expect(panelActionIds()).not.toContain("desktop");
+
     const events: CustomEvent<DesktopPanelToggleDetail>[] = [];
     const listener = (event: Event) => events.push(event as CustomEvent<DesktopPanelToggleDetail>);
     window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, listener);
     try {
-      renderHeader();
+      renderHeader(cloudSession);
       const button = container.querySelector<HTMLButtonElement>(
         '[aria-label="Toggle desktop panel"]',
       );
       expect(button).not.toBeNull();
+      expect(panelActionIds()).toContain("desktop");
       button?.click();
       expect(events).toHaveLength(1);
       expect(events[0]?.detail).toEqual({ open: true });
 
       snapshot.hello = desktopHello(["worker.desktop.observe"], ["operator.read"]);
-      renderHeader();
+      renderHeader(cloudSession);
       expect(container.querySelector('[aria-label="Toggle desktop panel"]')).toBeNull();
     } finally {
       window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, listener);
