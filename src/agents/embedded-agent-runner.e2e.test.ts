@@ -127,8 +127,8 @@ const installRunEmbeddedMocks = () => {
     );
     return {
       ...actual,
-      log: {
-        ...actual.log,
+      embeddedAgentLog: {
+        ...actual.embeddedAgentLog,
         warn: (...args: unknown[]) => loggerWarnMock(...args),
       },
     };
