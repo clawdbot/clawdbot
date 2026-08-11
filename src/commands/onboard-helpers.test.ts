@@ -25,18 +25,11 @@ import {
   resolveControlUiLinks,
   resolveLocalControlUiProbeLinks,
   summarizeExistingConfig,
-  testing,
   validateGatewayPasswordInput,
   waitForGatewayReachable,
 } from "./onboard-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-describe("onboard error summaries", () => {
-  it("keeps the bounded first line UTF-16 well-formed", () => {
-    expect(testing.summarizeError(`${"x".repeat(118)}🚀tail\nignored`)).toBe(`${"x".repeat(118)}…`);
-  });
-});
 
 describe("printWizardHeader", () => {
   const withColumns = async (columns: number | undefined, run: () => Promise<void>) => {
@@ -697,6 +690,14 @@ describe("probeGatewayReachable", () => {
       ok: false,
       detail: "connect failed: timeout",
     });
+  });
+
+  it("bounds thrown probe errors without splitting UTF-16", async () => {
+    const detail = `${"x".repeat(118)}…`;
+    const params = { url: "ws://127.0.0.1:18789" };
+    mocks.probeGateway.mockRejectedValue(new Error(`${"x".repeat(118)}🚀tail\nignored`));
+    expect(await probeGatewayReachable(params)).toEqual({ ok: false, detail });
+    expect(await probeGatewayConfiguredModel(params)).toEqual({ kind: "unreachable", detail });
   });
 
   it("forwards a configured TLS fingerprint to the gateway probe", async () => {
