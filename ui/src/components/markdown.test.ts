@@ -241,6 +241,11 @@ describe("toSanitizedMarkdownHtml", () => {
 
   describe("code blocks", () => {
     const blockArt = "  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  ";
+    const jsonBlock = (lineCount: number) => {
+      const values = Array.from({ length: lineCount - 2 }, (_, index) => `  ${index},`);
+      values[values.length - 1] = values.at(-1)?.slice(0, -1) ?? "";
+      return `\`\`\`json\n[\n${values.join("\n")}\n]\n\`\`\``;
+    };
 
     it("renders raw block art as a whitespace-preserving code block", () => {
       const html = toSanitizedMarkdownHtml(blockArt);
@@ -343,15 +348,28 @@ PY
       );
     });
 
-    it("highlights collapsed JSON code blocks", () => {
-      const html = toSanitizedMarkdownHtml('```json\n{"ok": true}\n```');
+    it("keeps short JSON code blocks visible and highlighted", () => {
+      const html = toSanitizedMarkdownHtml(jsonBlock(6));
       const fragment = htmlFragment(html);
-      const details = fragment.querySelector("details.json-collapse");
-      const code = details?.querySelector("pre code");
+      const code = fragment.querySelector(".code-block-wrapper pre code");
 
-      expect(details?.querySelector("summary")?.textContent).toBe("JSON · 2 lines");
-      expect(code?.textContent).toBe('{"ok": true}\n');
+      expect(fragment.querySelector("details.json-collapse")).toBeNull();
+      expect(code?.textContent?.split("\n")).toHaveLength(7);
       expect(code?.innerHTML).toContain("hljs-");
+    });
+
+    it("collapses JSON only above 40 lines and uses one copyable header", () => {
+      const atLimit = htmlFragment(toSanitizedMarkdownHtml(jsonBlock(40)));
+      const overLimit = htmlFragment(toSanitizedMarkdownHtml(jsonBlock(41)));
+      const details = overLimit.querySelector("details.json-collapse");
+      const summary = details?.querySelector("summary");
+
+      expect(atLimit.querySelector("details.json-collapse")).toBeNull();
+      expect(summary?.textContent).toContain("JSON · 41 lines");
+      expect(summary?.querySelector(".code-block-copy")).toBeInstanceOf(HTMLButtonElement);
+      expect(details?.querySelectorAll(".code-block-header")).toHaveLength(1);
+      expect(summary?.classList.contains("code-block-header")).toBe(true);
+      expect(details?.querySelector("pre code")?.innerHTML).toContain("hljs-");
     });
 
     it("localizes collapsed JSON line counts", async () => {
@@ -364,8 +382,8 @@ PY
       });
       await i18n.setLocale("pt-BR");
       try {
-        const fragment = htmlFragment(toSanitizedMarkdownHtml('```json\n{"ok": true}\n```'));
-        expect(fragment.querySelector("summary")?.textContent).toBe("JSON · 2 linhas");
+        const fragment = htmlFragment(toSanitizedMarkdownHtml(jsonBlock(41)));
+        expect(fragment.querySelector("summary")?.textContent).toContain("JSON · 41 linhas");
       } finally {
         await i18n.setLocale("en");
       }
