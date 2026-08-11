@@ -1,3 +1,5 @@
+import { asPositiveFiniteNumber as normalizePairingQrExpiresAtMs } from "@openclaw/normalization-core/number-coercion";
+import { readNonBlankString as normalizeTtsSupplementSpokenText } from "@openclaw/normalization-core/string-coerce";
 import type { OutboundLocation } from "../channels/location.js";
 /** Reply payload contracts and metadata helpers shared by dispatch and channel renderers. */
 import type { ReplyToMode } from "../config/types.base.js";
@@ -108,10 +110,6 @@ function normalizePairingQrSetupCode(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-function normalizePairingQrExpiresAtMs(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
-
 export function readPairingQrReplyChannelData(
   payload: Pick<ReplyPayload, "channelData">,
 ): PairingQrReplyChannelData | undefined {
@@ -155,10 +153,6 @@ export function appendReplyMediaFailureWarning(text: string | undefined): string
     return text;
   }
   return `${text}\n${REPLY_MEDIA_FAILURE_WARNING}`;
-}
-
-function normalizeTtsSupplementSpokenText(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 function hasReplyPayloadMedia(payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrls">): boolean {

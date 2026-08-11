@@ -1,4 +1,7 @@
-import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  asPositiveFiniteNumber,
+  resolvePositiveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
@@ -65,7 +68,7 @@ function resolveBoolean(value: unknown, fallback: boolean): boolean {
 }
 
 function resolvePositiveNumber(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+  return asPositiveFiniteNumber(value) ?? fallback;
 }
 
 function resolveTimer(value: unknown, fallback: number): number {

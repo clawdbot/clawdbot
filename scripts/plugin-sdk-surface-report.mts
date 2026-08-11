@@ -266,7 +266,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: add the account-aware native approval request selector.
       // +3: add canonical coercion exports while retaining the shipped asString compatibility name.
       // +17: continuation delegate/announce surface retained through this back-merge.
-      4883,
+      // +2: add high-use coercion primitives while retaining shipped object-record exports.
+      4885,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -332,7 +333,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: add the account-aware native approval request selector.
       // +3: add canonical coercion exports while retaining the shipped asString compatibility name.
       // +5: continuation callable surface retained through this back-merge.
-      2927,
+      // +2: add high-use callable coercion primitives while retaining shipped object-record exports.
+      2929,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -361,7 +363,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: candidate continuation names one more re-export explicitly.
       // -1: upstream's infra-runtime excludes the internal system-event receipt API.
       // +1: upstream's runtime-doctor barrel re-exports runtime-doctor-migrations.
-      79,
+      // -1: infra-runtime excludes the internal system-event receipt API.
+      // -2: text-runtime names record and string coercion compatibility exports explicitly.
+      77,
       env,
     ),
   };

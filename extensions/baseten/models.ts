@@ -178,10 +178,7 @@ function projectLiveModel(
 
   const hasLiveFeatures = Array.isArray(row.supported_features);
   const features = new Set(readStringArray(row.supported_features));
-  const pricing =
-    row.pricing && typeof row.pricing === "object" && !Array.isArray(row.pricing)
-      ? (row.pricing as Record<string, unknown>)
-      : {};
+  const pricing = asNonArrayRecord(row.pricing);
   const inputPrice = readPerTokenPrice(pricing.prompt);
   const outputPrice = readPerTokenPrice(pricing.completion);
   const cacheReadPrice = readPerTokenPrice(pricing.input_cache_read);
@@ -259,3 +256,4 @@ export function resolveBasetenDynamicModel(modelId: string) {
     compat: buildBasetenModelCompat(id),
   };
 }
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";

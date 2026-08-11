@@ -17,6 +17,7 @@ import {
   createBoundedResponseTooLargeError,
   readBoundedResponseText,
 } from "../lib/bounded-response.mjs";
+import { toErrorObject as coerceKitchenSinkError } from "../lib/error-format.mts";
 import {
   resolveWindowsPowerShellPath,
   resolveWindowsSystem32Path,
@@ -331,7 +332,11 @@ async function findAvailableLoopbackPort(options: { createServer?: typeof net.cr
   return await new Promise<number>((resolve, reject) => {
     const fail = (error: unknown) => {
       server.close?.(() => {});
-      reject(toLintErrorObject(error, "Unable to reserve Kitchen Sink RPC loopback port"));
+      const reservationError: Error = coerceKitchenSinkError(
+        error,
+        "Unable to reserve Kitchen Sink RPC loopback port",
+      );
+      reject(reservationError);
     };
     server.once("error", fail);
     server.listen(0, "127.0.0.1", () => {
@@ -340,7 +345,11 @@ async function findAvailableLoopbackPort(options: { createServer?: typeof net.cr
       const port = typeof address === "object" && address ? address.port : 0;
       server.close((error) => {
         if (error) {
-          reject(toLintErrorObject(error, "Unable to close Kitchen Sink RPC loopback port"));
+          const closeError: Error = coerceKitchenSinkError(
+            error,
+            "Unable to close Kitchen Sink RPC loopback port",
+          );
+          reject(closeError);
           return;
         }
         if (!Number.isSafeInteger(port) || port <= 0) {
@@ -582,9 +591,8 @@ export function runCommand(
       clearTimeout(forceKillTimer);
       forceKillAt = undefined;
       releaseCommandChild(child);
-      void stopResourceSampling().finally(() =>
-        reject(toLintErrorObject(error, "Command failed before exit")),
-      );
+      const commandError: Error = coerceKitchenSinkError(error, "Command failed before exit");
+      void stopResourceSampling().finally(() => reject(commandError));
     });
     child.on("close", (status, signal) => {
       clearTimeout(timer);
@@ -1182,7 +1190,7 @@ async function retryRpcCall(method: string, params: unknown, options: RpcCallOpt
       await delay(500);
     }
   }
-  throw toLintErrorObject(
+  throw coerceKitchenSinkError(
     lastError ?? new Error(`gateway RPC ${method} timed out before retry`),
     "Non-Error thrown",
   );
@@ -1297,7 +1305,7 @@ export async function fetchJson(url: string | URL, options: FetchJsonOptions = {
       }
     }
   }
-  throw toLintErrorObject(lastError ?? new Error(`fetch ${url} failed`), "Non-Error thrown");
+  throw coerceKitchenSinkError(lastError ?? new Error(`fetch ${url} failed`), "Non-Error thrown");
 }
 
 function getExternalAbortReason(signal: AbortSignal) {
@@ -2996,18 +3004,4 @@ function isGatewayChild(value: unknown): value is GatewayChild {
 
 async function settlePendingSample(pending: Promise<unknown> | null) {
   await pending?.catch(() => {});
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string) {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

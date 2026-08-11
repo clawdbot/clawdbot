@@ -1,4 +1,5 @@
 import path from "node:path";
+import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   isSessionTranscriptProjectionUnavailableError,
   readRecentSessionTranscriptMessageEvents,
@@ -96,10 +97,7 @@ function archivedTranscriptReader(target: ResolvedTranscriptReadTarget): Archive
 }
 
 function readTranscriptRecordTimestampMs(event: Record<string, unknown>): number | undefined {
-  const raw = event.timestamp;
-  const timestampMs =
-    typeof raw === "string" ? Date.parse(raw) : typeof raw === "number" ? raw : Number.NaN;
-  return Number.isFinite(timestampMs) ? timestampMs : undefined;
+  return parseDateFirstTimestampMs(event.timestamp);
 }
 
 function extractMessageRecord(

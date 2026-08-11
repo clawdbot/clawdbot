@@ -32,6 +32,7 @@ import {
   type TranslationBatchItem,
   type TranslationMap,
 } from "./lib/control-ui-i18n-sync-plan.ts";
+import { toErrorObject as toLintErrorObject } from "./lib/error-format.mts";
 import { sleep } from "./lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
@@ -1347,18 +1348,4 @@ if (isCliEntrypoint()) {
     console.error(formatErrorMessage(error));
     process.exit(1);
   });
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }
