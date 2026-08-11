@@ -627,7 +627,9 @@ describe("config schema", () => {
     const defaultsHint = res.uiHints["agents.defaults.heartbeat.target"];
     const entryHint = res.uiHints["agents.entries.*.heartbeat.target"];
     expect(defaultsHint?.help).toContain("imessage");
+    expect(defaultsHint?.help).toContain("owner");
     expect(defaultsHint?.help).toContain("last");
+    expect(defaultsHint?.placeholder).toBe("owner");
     expect(entryHint?.help).toContain("imessage");
   });
 

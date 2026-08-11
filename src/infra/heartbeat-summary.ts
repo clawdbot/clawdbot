@@ -31,7 +31,7 @@ export type HeartbeatSummary = {
   ackMaxChars: number;
 };
 
-const DEFAULT_HEARTBEAT_TARGET = "last";
+const DEFAULT_HEARTBEAT_TARGET = "owner";
 
 function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
   const list = listAgentEntries(cfg);

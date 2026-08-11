@@ -26,10 +26,7 @@ function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
 function resolveHeartbeatConfig(cfg: OpenClawConfig, agentId: string): HeartbeatConfig | undefined {
   const defaults = cfg.agents?.defaults?.heartbeat;
   const overrides = resolveAgentConfig(cfg, agentId)?.heartbeat;
-  if (!defaults && !overrides) {
-    return overrides;
-  }
-  return { ...defaults, ...overrides };
+  return defaults || overrides ? { ...defaults, ...overrides } : undefined;
 }
 
 function listHeartbeatDoctorAgents(cfg: OpenClawConfig) {
@@ -132,15 +129,20 @@ export function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): strin
     if (entry) {
       continue;
     }
-    const missingRouteOutcome =
-      deliveryWithoutSession.reason === "no-route"
+    const ownerTarget = target === undefined || target === "owner";
+    const missingRouteOutcome = ownerTarget
+      ? `  Heartbeats will skip with reason="no-route" until a configured owner resolves to a direct message.`
+      : deliveryWithoutSession.reason === "no-route"
         ? `  Heartbeats will skip with reason="no-route" until that session has a delivery route.`
         : `  Heartbeats will run but resolve delivery to channel="none"/reason="no-target", so replies are dropped.`;
+    const fix = ownerTarget
+      ? `  Fix: set commands.ownerAllowFrom or a channel allowFrom to a direct-message owner, set heartbeat.target="none", or choose an explicit heartbeat target.`
+      : `  Fix: point heartbeat.session at a session the agent actually owns, set heartbeat.target="none" to suppress delivery, or remove the heartbeat.session field to fall back to the agent main session.`;
     warnings.push(
       [
         `- Agent ${agentId} heartbeat.session pins ${configuredSession} (resolved to ${canonicalSession}) but that session has no entry in ${storePath}.`,
         missingRouteOutcome,
-        `  Fix: point heartbeat.session at a session the agent actually owns, set heartbeat.target="none" to suppress delivery, or remove the heartbeat.session field to fall back to the agent main session.`,
+        fix,
       ].join("\n"),
     );
   }

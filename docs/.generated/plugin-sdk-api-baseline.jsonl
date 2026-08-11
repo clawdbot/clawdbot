@@ -3,7 +3,7 @@
 {"contentHash":"0d6827cdd7180482c49dc67aacc2b512e587d3453536081c15d3febaea2f1492","entrypoint":"account-id","importSpecifier":"openclaw/plugin-sdk/account-id"}
 {"contentHash":"0b4930a77ab3e63bed21a9651a23fb7130f623baf6ce153166cb80a965b0a004","entrypoint":"account-resolution","importSpecifier":"openclaw/plugin-sdk/account-resolution"}
 {"contentHash":"0349da0a93dadbdcff03ae8064b5066c5f2e1c28ee298bfa9ab3f1f8563300eb","entrypoint":"agent-config-primitives","importSpecifier":"openclaw/plugin-sdk/agent-config-primitives"}
-{"contentHash":"7e2e8945aa02f546702f6a1cc52bc08f706ca1dd60271e2071539616ddde059b","entrypoint":"agent-harness","importSpecifier":"openclaw/plugin-sdk/agent-harness"}
+{"contentHash":"d43847cf3d37bc2b33190fcd10fd19a25f1222c95cfce7147d9dd6322a2b3824","entrypoint":"agent-harness","importSpecifier":"openclaw/plugin-sdk/agent-harness"}
 {"contentHash":"ba218daae9e9b13d9662cc0219e5f33cde746d40d47f11ddffd02ded844cdb65","entrypoint":"agent-harness-runtime","importSpecifier":"openclaw/plugin-sdk/agent-harness-runtime"}
 {"contentHash":"4387e74b1261f632a0e140276c0f8cbbbe848a11f7ad287325538ebbee3b09da","entrypoint":"agent-media-payload","importSpecifier":"openclaw/plugin-sdk/agent-media-payload"}
 {"contentHash":"f3cfd8ad91131bc11553b0b2f89f14b015da745bf92f2d2b841a3bfc0a6011f1","entrypoint":"agent-runtime","importSpecifier":"openclaw/plugin-sdk/agent-runtime"}
@@ -104,7 +104,7 @@
 {"contentHash":"9b2aac6fc2c9ce90225e79675e8268b631f36b46491d44eb35647d02df1fee6d","entrypoint":"plugin-entry","importSpecifier":"openclaw/plugin-sdk/plugin-entry"}
 {"contentHash":"d7402f42f4c265b3ad1114df5c7b3bb6516eb2cf93f0be64633be8a9a32a3ab9","entrypoint":"plugin-runtime","importSpecifier":"openclaw/plugin-sdk/plugin-runtime"}
 {"contentHash":"d5d21f2a0883eac72d6642d93306c36e2de0f3851286eb3edbe3a2d9d6122dcc","entrypoint":"provider-auth","importSpecifier":"openclaw/plugin-sdk/provider-auth"}
-{"contentHash":"df44537e5435d3e00802ac8cc871857ece5382036b10366731e6fc9c7af404ed","entrypoint":"provider-catalog-runtime","importSpecifier":"openclaw/plugin-sdk/provider-catalog-runtime"}
+{"contentHash":"ceb5f55d9448ca085d746e1c42bc2bdec7712582e96ff9b067cffa6527462255","entrypoint":"provider-catalog-runtime","importSpecifier":"openclaw/plugin-sdk/provider-catalog-runtime"}
 {"contentHash":"aee2a235e7218ed4ba36e80e0a6d67ceb3b5de448f25ebc10d6f70552dc35b8a","entrypoint":"proxy-capture","importSpecifier":"openclaw/plugin-sdk/proxy-capture"}
 {"contentHash":"55bc0be5ce1d700d8b671efccb69ec14a3c942535c2f77d3ed7ca87809dc1ad9","entrypoint":"question-gateway-runtime","importSpecifier":"openclaw/plugin-sdk/question-gateway-runtime"}
 {"contentHash":"5263836c817c9391fd5a0efdda50552330dd01e4d6bc9cb4ebba58627c48f098","entrypoint":"reply-chunking","importSpecifier":"openclaw/plugin-sdk/reply-chunking"}
