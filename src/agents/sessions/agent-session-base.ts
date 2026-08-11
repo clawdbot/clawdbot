@@ -15,7 +15,6 @@ import type {
   AgentSessionEventListener,
   AgentSessionWriteSettlementRunner,
 } from "./agent-session-types.js";
-import { extractTextContent } from "./agent-session-utils.js";
 import { formatNoApiKeyFoundMessage } from "./auth-guidance.js";
 import {
   type ExtensionCommandContextActions,
@@ -39,6 +38,10 @@ import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import type { ModelRegistry } from "./model-registry.js";
 import type { PromptTemplate } from "./prompt-templates.js";
+import {
+  registerQueuedUserMessageRetirement,
+  retireQueuedUserMessage,
+} from "./queued-user-message-retirement.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import type { SessionManager } from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
@@ -71,9 +74,9 @@ export abstract class AgentSessionBase {
   private eventListeners: AgentSessionEventListener[] = [];
 
   /** Tracks pending steering messages for UI display. Removed when delivered. */
-  protected steeringMessages: string[] = [];
+  protected steeringMessages: Array<{ text: string }> = [];
   /** Tracks pending follow-up messages for UI display. Removed when delivered. */
-  protected followUpMessages: string[] = [];
+  protected followUpMessages: Array<{ text: string }> = [];
   /** Messages queued to be included with the next user prompt as context ("asides"). */
   protected pendingNextTurnMessages: CustomMessage[] = [];
 
@@ -305,9 +308,32 @@ export abstract class AgentSessionBase {
   protected emitQueueUpdate(): void {
     this.emit({
       type: "queue_update",
-      steering: [...this.steeringMessages],
-      followUp: [...this.followUpMessages],
+      steering: this.steeringMessages.map((entry) => entry.text),
+      followUp: this.followUpMessages.map((entry) => entry.text),
     });
+  }
+
+  protected trackQueuedUserMessage(
+    message: AgentMessage,
+    owner: "steering" | "followUp",
+    text: string,
+  ): void {
+    const queue = owner === "steering" ? this.steeringMessages : this.followUpMessages;
+    const entry = { text };
+    queue.push(entry);
+    registerQueuedUserMessageRetirement(message, () => {
+      if (queue !== this.steeringMessages && queue !== this.followUpMessages) {
+        return false;
+      }
+      const queueIndex = queue.indexOf(entry);
+      if (queueIndex === -1) {
+        return false;
+      }
+      queue.splice(queueIndex, 1);
+      this.emitQueueUpdate();
+      return true;
+    });
+    this.emitQueueUpdate();
   }
 
   // Track last assistant message for auto-compaction check
@@ -339,26 +365,10 @@ export abstract class AgentSessionBase {
       this.lastAssistantEntryId = undefined;
     }
 
-    // When a user message starts, check if it's from either queue and remove it BEFORE emitting
-    // This ensures the UI sees the updated queue state
+    // Retire the exact queued display entry before publishing message_start.
     if (event.type === "message_start" && event.message.role === "user") {
       this.overflowRecoveryAttempted = false;
-      const messageText = extractTextContent(event.message.content);
-      if (messageText) {
-        // Check steering queue first
-        const steeringIndex = this.steeringMessages.indexOf(messageText);
-        if (steeringIndex !== -1) {
-          this.steeringMessages.splice(steeringIndex, 1);
-          this.emitQueueUpdate();
-        } else {
-          // Check follow-up queue
-          const followUpIndex = this.followUpMessages.indexOf(messageText);
-          if (followUpIndex !== -1) {
-            this.followUpMessages.splice(followUpIndex, 1);
-            this.emitQueueUpdate();
-          }
-        }
-      }
+      retireQueuedUserMessage(event.message);
     }
 
     // Emit to extensions first
