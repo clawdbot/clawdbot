@@ -17,15 +17,16 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getBoundDeviceBootstrapProfile,
   redeemDeviceBootstrapTokenProfile,
-  restoreDeviceBootstrapToken,
-  revokeDeviceBootstrapToken,
   verifyDeviceBootstrapToken,
 } from "../infra/device-bootstrap.js";
 import {
   deriveDeviceIdFromPublicKey,
   normalizeDevicePublicKeyBase64Url,
 } from "../infra/device-identity.js";
-import { captureAuthenticatedNodePairingState } from "../infra/device-pairing-node-state.js";
+import {
+  captureAuthenticatedNodePairingState,
+  isPairedDeviceNodeBindingCurrent,
+} from "../infra/device-pairing-node-state.js";
 import {
   approveNodePairing,
   beginNodePairingConnect,
@@ -51,7 +52,12 @@ import {
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
 import { hasForwardedRequestHeaders } from "./auth.js";
-import { settleSetupCompletion } from "./device-pair-setup-completion.js";
+import {
+  broadcastSetupHandoffCompletion,
+  consumeSetupHandoff,
+  restoreSetupHandoff,
+  type SetupHandoff,
+} from "./device-pair-setup-completion.js";
 import {
   readJsonBodyOrError,
   sendInvalidRequest,
@@ -751,9 +757,6 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         });
       }
 
-      let revokedBootstrapTokenRecord:
-        | Awaited<ReturnType<typeof revokeDeviceBootstrapToken>>["record"]
-        | undefined;
       if (closed || responseLifecycle.isAborted()) {
         return;
       }
@@ -768,38 +771,19 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
           sendUnauthorized(res);
           return;
         }
-        const revoked = await revokeDeviceBootstrapToken({
-          token: bootstrapToken,
-          baseDir: options.pairingBaseDir,
-        });
-        if (!revoked.removed || !revoked.record) {
-          sendUnauthorized(res);
-          return;
-        }
-        revokedBootstrapTokenRecord = revoked.record;
       }
 
       // Device lifecycle mutations run asynchronously after marking current sessions.
       // Reverify after every pairing await, then publish without another yield so a
       // concurrent revoke either fails admission or sees this registered transport.
       let finalTokenVerification: Awaited<ReturnType<typeof verifyDeviceToken>>;
-      try {
-        finalTokenVerification = await verifyDeviceToken({
-          deviceId: derivedDeviceId,
-          token: issuedDeviceToken,
-          role: "node",
-          scopes: [],
-          baseDir: options.pairingBaseDir,
-        });
-      } catch (error) {
-        if (revokedBootstrapTokenRecord) {
-          await restoreDeviceBootstrapToken({
-            record: revokedBootstrapTokenRecord,
-            baseDir: options.pairingBaseDir,
-          });
-        }
-        throw error;
-      }
+      finalTokenVerification = await verifyDeviceToken({
+        deviceId: derivedDeviceId,
+        token: issuedDeviceToken,
+        role: "node",
+        scopes: [],
+        baseDir: options.pairingBaseDir,
+      });
       if (!finalTokenVerification.ok) {
         sendUnauthorized(res);
         return;
@@ -816,13 +800,39 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         return;
       }
       if (closed || responseLifecycle.isAborted()) {
-        if (revokedBootstrapTokenRecord) {
-          await restoreDeviceBootstrapToken({
-            record: revokedBootstrapTokenRecord,
+        return;
+      }
+
+      let bootstrapHandoff: SetupHandoff | undefined;
+      if (bootstrapToken) {
+        const consumed = await consumeSetupHandoff({
+          token: bootstrapToken,
+          deviceId: derivedDeviceId,
+          baseDir: options.pairingBaseDir,
+          ts: now(),
+        });
+        if (!consumed) {
+          sendUnauthorized(res);
+          return;
+        }
+        bootstrapHandoff = consumed;
+        if (
+          !isPairedDeviceNodeBindingCurrent(
+            derivedDeviceId,
+            {
+              identity: nodePairingState.identity.key,
+              generation: nodePairingGeneration.key,
+            },
+            options.pairingBaseDir,
+          )
+        ) {
+          await restoreSetupHandoff({
+            handoff: bootstrapHandoff,
             baseDir: options.pairingBaseDir,
           });
+          sendUnauthorized(res);
+          return;
         }
-        return;
       }
 
       const registeredConnect = connect as ConnectParams & {
@@ -887,25 +897,22 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         const responseCompleted = await responseLifecycle.completed;
         if (!responseCompleted) {
           closeSession(session, "connect response aborted");
-          if (revokedBootstrapTokenRecord) {
-            await restoreDeviceBootstrapToken({
-              record: revokedBootstrapTokenRecord,
+          if (bootstrapHandoff) {
+            await restoreSetupHandoff({
+              handoff: bootstrapHandoff,
               baseDir: options.pairingBaseDir,
             });
           }
           return;
         }
-        if (revokedBootstrapTokenRecord) {
+        if (bootstrapHandoff) {
           try {
-            await settleSetupCompletion({
-              record: revokedBootstrapTokenRecord,
-              deviceId: session.nodeId,
+            broadcastSetupHandoffCompletion({
+              handoff: bootstrapHandoff,
               broadcast: options.broadcast,
-              baseDir: options.pairingBaseDir,
-              ts: now(),
             });
           } catch (error) {
-            options.onError?.("watch node setup completion settle failed", error);
+            options.onError?.("watch node setup completion broadcast failed", error);
           }
         }
         options.rateLimiter?.reset(clientKey, AUTH_RATE_LIMIT_SCOPE_WATCH_CHALLENGE);
@@ -945,9 +952,9 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         if (session) {
           closeSession(session, "connect failed");
         }
-        if (revokedBootstrapTokenRecord) {
-          await restoreDeviceBootstrapToken({
-            record: revokedBootstrapTokenRecord,
+        if (bootstrapHandoff) {
+          await restoreSetupHandoff({
+            handoff: bootstrapHandoff,
             baseDir: options.pairingBaseDir,
           });
         }

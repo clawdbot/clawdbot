@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readDevicePairSetupCompletion } from "../infra/device-bootstrap.js";
-import { persistDevicePairingStoreState } from "../infra/device-pairing-store.js";
-import type { DeviceBootstrapTokenRecord, PairedDevice } from "../infra/device-pairing.types.js";
+import {
+  loadDeviceBootstrapTokenRecords,
+  persistDeviceBootstrapTokenRecords,
+  persistDevicePairingStoreState,
+} from "../infra/device-pairing-store.js";
+import type { PairedDevice } from "../infra/device-pairing.types.js";
 import {
   FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -9,7 +13,11 @@ import {
 } from "../shared/device-bootstrap-profile.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
-import { settleSetupCompletion } from "./device-pair-setup-completion.js";
+import {
+  broadcastSetupHandoffCompletion,
+  consumeSetupHandoff,
+  restoreSetupHandoff,
+} from "./device-pair-setup-completion.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -41,24 +49,29 @@ describe("device pair setup completion", () => {
       baseDir,
       "paired",
     );
-    const record: DeviceBootstrapTokenRecord = {
-      token: "bootstrap-secret",
-      setupId: "setup-exact",
-      ts: 1,
-      profile,
-      issuedAtMs: 1,
-    };
+    persistDeviceBootstrapTokenRecords(
+      {
+        "bootstrap-secret": {
+          token: "bootstrap-secret",
+          setupId: "setup-exact",
+          ts: 1,
+          deviceId: paired.deviceId,
+          profile,
+          issuedAtMs: 1,
+        },
+      },
+      baseDir,
+    );
     const broadcast = vi.fn();
 
-    await expect(
-      settleSetupCompletion({
-        record,
-        deviceId: paired.deviceId,
-        broadcast,
-        baseDir,
-        ts: 3,
-      }),
-    ).resolves.toBeUndefined();
+    const handoff = await consumeSetupHandoff({
+      token: "bootstrap-secret",
+      deviceId: paired.deviceId,
+      baseDir,
+      ts: 3,
+    });
+    expect(handoff).not.toBeNull();
+    broadcastSetupHandoffCompletion({ handoff: handoff!, broadcast });
     expect(broadcast).toHaveBeenCalledWith(
       "device.pair.setup.completed",
       {
@@ -93,19 +106,27 @@ describe("device pair setup completion", () => {
     ]);
     const { broadcast } = createGatewayBroadcaster({ clients });
 
-    await settleSetupCompletion({
-      record: {
-        token: "bootstrap-secret",
-        setupId: "setup-dropped",
-        ts: 1,
-        profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-        issuedAtMs: 1,
+    persistDeviceBootstrapTokenRecords(
+      {
+        "bootstrap-secret": {
+          token: "bootstrap-secret",
+          setupId: "setup-dropped",
+          ts: 1,
+          deviceId: "device-123",
+          profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+          issuedAtMs: 1,
+        },
       },
+      baseDir,
+    );
+    const handoff = await consumeSetupHandoff({
+      token: "bootstrap-secret",
       deviceId: "device-123",
-      broadcast,
       baseDir,
       ts: 3,
     });
+    expect(handoff).not.toBeNull();
+    broadcastSetupHandoffCompletion({ handoff: handoff!, broadcast });
 
     expect(slowSocket.send).not.toHaveBeenCalled();
     expect(slowSocket.close).not.toHaveBeenCalled();
@@ -125,35 +146,87 @@ describe("device pair setup completion", () => {
       throw new Error("socket fanout failed");
     });
 
-    await expect(
-      settleSetupCompletion({
-        record: {
+    persistDeviceBootstrapTokenRecords(
+      {
+        "bootstrap-secret": {
           token: "bootstrap-secret",
           setupId: "setup-broadcast-fail",
           ts: 1,
+          deviceId: "device-123",
           profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
           issuedAtMs: 1,
         },
-        deviceId: "device-123",
-        broadcast,
-        baseDir,
-        ts: 4,
-      }),
-    ).rejects.toThrow("socket fanout failed");
+      },
+      baseDir,
+    );
+    const handoff = await consumeSetupHandoff({
+      token: "bootstrap-secret",
+      deviceId: "device-123",
+      baseDir,
+      ts: 4,
+    });
+    expect(() => broadcastSetupHandoffCompletion({ handoff: handoff!, broadcast })).toThrow(
+      "socket fanout failed",
+    );
     await expect(
       readDevicePairSetupCompletion({ baseDir, setupId: "setup-broadcast-fail" }),
     ).resolves.toMatchObject({ setupId: "setup-broadcast-fail", access: "limited" });
   });
 
   it("ignores generic bootstrap records without setup correlation", async () => {
+    const baseDir = await tempDirs.make("openclaw-setup-completion-generic-");
+    persistDeviceBootstrapTokenRecords(
+      {
+        generic: {
+          token: "generic",
+          ts: 1,
+          deviceId: "device-123",
+          issuedAtMs: 1,
+        },
+      },
+      baseDir,
+    );
     const broadcast = vi.fn();
-    await expect(
-      settleSetupCompletion({
-        record: { token: "generic", ts: 1, issuedAtMs: 1 },
-        deviceId: "device-123",
-        broadcast,
-      }),
-    ).resolves.toBeUndefined();
+    const handoff = await consumeSetupHandoff({
+      token: "generic",
+      deviceId: "device-123",
+      baseDir,
+    });
+    expect(handoff).toMatchObject({ record: { token: "generic" } });
+    broadcastSetupHandoffCompletion({ handoff: handoff!, broadcast });
     expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it("restores the exact credential and removes completion after delivery failure", async () => {
+    const baseDir = await tempDirs.make("openclaw-setup-completion-restore-");
+    persistDeviceBootstrapTokenRecords(
+      {
+        "bootstrap-secret": {
+          token: "bootstrap-secret",
+          setupId: "setup-restore",
+          ts: 1,
+          deviceId: "device-123",
+          profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+          issuedAtMs: 1,
+        },
+      },
+      baseDir,
+    );
+    const handoff = await consumeSetupHandoff({
+      token: "bootstrap-secret",
+      deviceId: "device-123",
+      baseDir,
+      ts: 5,
+    });
+    expect(handoff).not.toBeNull();
+
+    await restoreSetupHandoff({ handoff: handoff!, baseDir });
+
+    expect(loadDeviceBootstrapTokenRecords(baseDir)["bootstrap-secret"]).toMatchObject({
+      setupId: "setup-restore",
+    });
+    await expect(
+      readDevicePairSetupCompletion({ baseDir, setupId: "setup-restore" }),
+    ).resolves.toBeNull();
   });
 });

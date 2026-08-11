@@ -18,12 +18,12 @@ import {
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   clearDeviceBootstrapTokens,
+  consumeDeviceBootstrapTokenWithSetupCompletion,
   getBoundDeviceBootstrapProfile,
   getDeviceBootstrapTokenProfile,
   issueDeviceBootstrapToken,
   issueDevicePairSetupBootstrapToken,
   readDevicePairSetupCompletion,
-  recordDevicePairSetupCompletion,
   redeemDeviceBootstrapTokenProfile,
   restoreDeviceBootstrapToken,
   revokeDeviceBootstrapToken,
@@ -127,28 +127,25 @@ describe("device bootstrap tokens", () => {
     expect(loadDeviceBootstrapTokenRecords(baseDir)[issued.token]?.profile).toEqual(profile);
   });
 
-  it("recovers the recorded completion after the setup record is revoked", async () => {
+  it("records completion while consuming the setup credential", async () => {
     const baseDir = await createTempDir();
     const issued = await issueDevicePairSetupBootstrapToken({
       baseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
     });
-    await recordDevicePairSetupCompletion({
-      baseDir,
-      setupId: issued.setupId,
+    await verifyBootstrapToken(baseDir, issued.token);
+    await consumeDeviceBootstrapTokenWithSetupCompletion({
+      token: issued.token,
       deviceId: "device-123",
-      deviceName: "Studio watch",
-      access: "node",
       completedAtMs: 1_000,
+      baseDir,
     });
-    await revokeDeviceBootstrapToken({ baseDir, token: issued.token });
 
     await expect(
       readDevicePairSetupCompletion({ baseDir, setupId: issued.setupId }),
     ).resolves.toMatchObject({
       setupId: issued.setupId,
       deviceId: "device-123",
-      deviceName: "Studio watch",
       access: "node",
       completedAtMs: 1_000,
     });
@@ -162,23 +159,26 @@ describe("device bootstrap tokens", () => {
   // the state schema refusing to open.
   it("creates the completion table on first use in an existing state database", async () => {
     const baseDir = await createTempDir();
-    await issueDeviceBootstrapToken({ baseDir });
+    const issued = await issueDevicePairSetupBootstrapToken({
+      baseDir,
+      profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    });
+    await verifyBootstrapToken(baseDir, issued.token);
     const { db } = openOpenClawStateDatabase({
       env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
     });
     db.exec("DROP TABLE IF EXISTS device_pair_setup_completions");
 
-    await recordDevicePairSetupCompletion({
-      baseDir,
-      setupId: "setup-first-use",
+    await consumeDeviceBootstrapTokenWithSetupCompletion({
+      token: issued.token,
       deviceId: "device-123",
-      access: "full",
       completedAtMs: Date.now(),
+      baseDir,
     });
 
     await expect(
-      readDevicePairSetupCompletion({ baseDir, setupId: "setup-first-use" }),
-    ).resolves.toMatchObject({ setupId: "setup-first-use", access: "full" });
+      readDevicePairSetupCompletion({ baseDir, setupId: issued.setupId }),
+    ).resolves.toMatchObject({ setupId: issued.setupId, access: "node" });
   });
 
   // Retention outlives the credential's own 10-minute TTL, so a client that
@@ -192,15 +192,19 @@ describe("device bootstrap tokens", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date(recordedAtMs));
-      await recordDevicePairSetupCompletion({
+      const issued = await issueDevicePairSetupBootstrapToken({
         baseDir,
-        setupId: "setup-retained",
+        profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      });
+      await verifyBootstrapToken(baseDir, issued.token);
+      await consumeDeviceBootstrapTokenWithSetupCompletion({
+        token: issued.token,
         deviceId: "device-123",
-        access: "limited",
         completedAtMs: recordedAtMs,
+        baseDir,
       });
       vi.setSystemTime(new Date(recordedAtMs + elapsedMs));
-      const found = await readDevicePairSetupCompletion({ baseDir, setupId: "setup-retained" });
+      const found = await readDevicePairSetupCompletion({ baseDir, setupId: issued.setupId });
       expect(found === null).toBe(!expectFound);
     } finally {
       vi.useRealTimers();

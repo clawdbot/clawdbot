@@ -6,7 +6,10 @@
 // cross-process last-writer-wins per store) while WAL + busy_timeout make
 // concurrent gateway/CLI access safe at the statement level.
 import type { DatabaseSync } from "node:sqlite";
-import type { PairingSetupAccess } from "../shared/device-bootstrap-profile.js";
+import {
+  resolvePairingSetupAccess,
+  type PairingSetupAccess,
+} from "../shared/device-bootstrap-profile.js";
 import { ensureDevicePairSetupCompletionSchema } from "../state/openclaw-state-db-schema-additive.js";
 import type {
   DB as OpenClawStateKyselyDatabase,
@@ -531,6 +534,113 @@ export function persistDeviceBootstrapTokenRecords(
   }, resolveDevicePairingStateDbOptions(baseDir));
 }
 
+/** Consume one bound bootstrap credential and record its setup outcome atomically. */
+export function consumeDeviceBootstrapTokenWithSetupCompletion(params: {
+  token: string;
+  deviceId: string;
+  completedAtMs: number;
+  retentionNowMs: number;
+  retainUntilMs: number;
+  baseDir?: string;
+}): { record: DeviceBootstrapTokenRecord; completion?: DevicePairSetupCompletionRecord } | null {
+  const token = params.token.trim();
+  const deviceId = params.deviceId.trim();
+  if (!token || !deviceId) {
+    return null;
+  }
+  return runOpenClawStateWriteTransaction(({ db }) => {
+    ensureDevicePairSetupCompletionSchema(db);
+    const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+    const tokenRow = executeSqliteQueryTakeFirstSync(
+      db,
+      kysely.selectFrom("device_bootstrap_tokens").selectAll().where("token_key", "=", token),
+    );
+    if (!tokenRow || tokenRow.token !== token || tokenRow.device_id?.trim() !== deviceId) {
+      return null;
+    }
+    const record = fromBootstrapRow(tokenRow);
+    const paired = record.setupId
+      ? executeSqliteQueryTakeFirstSync(
+          db,
+          kysely
+            .selectFrom("device_pairing_paired")
+            .select(["display_name", "operator_label"])
+            .where("device_id", "=", deviceId),
+        )
+      : undefined;
+    const deviceName = paired?.operator_label ?? paired?.display_name ?? undefined;
+    const completion: DevicePairSetupCompletionRecord | undefined = record.setupId
+      ? {
+          setupId: record.setupId,
+          deviceId,
+          ...(deviceName ? { deviceName } : {}),
+          access: resolvePairingSetupAccess(record.profile),
+          completedAtMs: params.completedAtMs,
+          retainUntilMs: params.retainUntilMs,
+        }
+      : undefined;
+
+    executeSqliteQuerySync(
+      db,
+      kysely.deleteFrom("device_bootstrap_tokens").where("token_key", "=", tokenRow.token_key),
+    );
+    if (completion) {
+      executeSqliteQuerySync(
+        db,
+        kysely
+          .deleteFrom("device_pair_setup_completions")
+          .where((eb) =>
+            eb.or([
+              eb("retain_until_ms", "<=", params.retentionNowMs),
+              eb("setup_id", "=", completion.setupId),
+            ]),
+          ),
+      );
+      executeSqliteQuerySync(
+        db,
+        kysely.insertInto("device_pair_setup_completions").values({
+          setup_id: completion.setupId,
+          device_id: completion.deviceId,
+          device_name: completion.deviceName ?? null,
+          access: completion.access,
+          completed_at_ms: completion.completedAtMs,
+          retain_until_ms: completion.retainUntilMs,
+        }),
+      );
+    }
+    return { record, ...(completion ? { completion } : {}) };
+  }, resolveDevicePairingStateDbOptions(params.baseDir));
+}
+
+/** Restore an undelivered credential and remove only its exact setup outcome atomically. */
+export function restoreConsumedDeviceBootstrapToken(params: {
+  record: DeviceBootstrapTokenRecord;
+  completion?: DevicePairSetupCompletionRecord;
+  baseDir?: string;
+}): void {
+  runOpenClawStateWriteTransaction(({ db }) => {
+    ensureDevicePairSetupCompletionSchema(db);
+    const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+    if (params.completion) {
+      executeSqliteQuerySync(
+        db,
+        kysely
+          .deleteFrom("device_pair_setup_completions")
+          .where("setup_id", "=", params.completion.setupId)
+          .where("device_id", "=", params.completion.deviceId)
+          .where("completed_at_ms", "=", params.completion.completedAtMs),
+      );
+    }
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .insertInto("device_bootstrap_tokens")
+        .values(toBootstrapRow(params.record.token, params.record))
+        .onConflict((oc) => oc.column("token_key").doNothing()),
+    );
+  }, resolveDevicePairingStateDbOptions(params.baseDir));
+}
+
 /** Read one setup-completion record, ignoring any record past its retention horizon. */
 export function loadDevicePairSetupCompletionRecord(
   setupId: string,
@@ -558,37 +668,4 @@ export function loadDevicePairSetupCompletionRecord(
         retainUntilMs: row.retain_until_ms,
       }
     : null;
-}
-
-/** Persist one setup-completion record and drop every record past retention. */
-export function saveDevicePairSetupCompletionRecord(
-  record: DevicePairSetupCompletionRecord,
-  nowMs: number,
-  baseDir?: string,
-): void {
-  runOpenClawStateWriteTransaction(({ db }) => {
-    ensureDevicePairSetupCompletionSchema(db);
-    const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
-    // Retention prune and replace share one statement so a re-settled setup id
-    // cannot collide with its own primary key.
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .deleteFrom("device_pair_setup_completions")
-        .where((eb) =>
-          eb.or([eb("retain_until_ms", "<=", nowMs), eb("setup_id", "=", record.setupId)]),
-        ),
-    );
-    executeSqliteQuerySync(
-      db,
-      kysely.insertInto("device_pair_setup_completions").values({
-        setup_id: record.setupId,
-        device_id: record.deviceId,
-        device_name: record.deviceName ?? null,
-        access: record.access,
-        completed_at_ms: record.completedAtMs,
-        retain_until_ms: record.retainUntilMs,
-      }),
-    );
-  }, resolveDevicePairingStateDbOptions(baseDir));
 }

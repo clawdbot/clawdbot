@@ -23,6 +23,7 @@ import {
   signDevicePayload,
 } from "../infra/device-identity.js";
 import { listNodePairing } from "../infra/device-pairing-node.js";
+import { loadDevicePairSetupCompletionRecord } from "../infra/device-pairing-store.js";
 import {
   approveDevicePairing,
   getPairedDevice,
@@ -117,6 +118,7 @@ async function startRuntime(
     abortConnectResponse?: boolean;
     config?: OpenClawConfig;
     now?: () => number;
+    onConnectResponseStart?: () => void;
     onPollReady?: (response: ServerResponse) => void;
   },
 ) {
@@ -150,6 +152,13 @@ async function startRuntime(
   });
   const server = createServer((req, res) => {
     const isConnect = req.url === "/api/nodes/watch/connect";
+    if (isConnect && options?.onConnectResponseStart) {
+      const end = res.end.bind(res);
+      res.end = ((...args: Parameters<typeof res.end>) => {
+        options.onConnectResponseStart?.();
+        return end(...args);
+      }) as typeof res.end;
+    }
     if (isConnect && options?.abortConnectResponse) {
       res.end = (() => {
         res.destroy();
@@ -733,6 +742,40 @@ describe("watch node HTTP transport", () => {
     } finally {
       completedLimiter.dispose();
     }
+  });
+
+  it("persists setup status before handing off the successful connect response", async () => {
+    let fixtureBaseDir = "";
+    let setupId = "";
+    let completionAtHandoff: ReturnType<typeof loadDevicePairSetupCompletionRecord> = null;
+    const fixture = await createWatchNodeFixture("openclaw-watch-node-setup-order-", {
+      onConnectResponseStart: () => {
+        completionAtHandoff = loadDevicePairSetupCompletionRecord(
+          setupId,
+          Date.now(),
+          fixtureBaseDir,
+        );
+      },
+    });
+    fixtureBaseDir = fixture.baseDir;
+    setupId = fixture.issued.setupId;
+
+    const response = await connectWatchNode({
+      baseUrl: fixture.baseUrl,
+      identity: fixture.identity,
+      bootstrapToken: fixture.issued.token,
+    });
+    expect(response.status).toBe(200);
+    await readJson(response);
+    await fixture.connectHandled;
+
+    expect(completionAtHandoff).toMatchObject({
+      setupId: fixture.issued.setupId,
+      deviceId: fixture.identity.deviceId,
+      deviceName: "Test Watch",
+      access: "node",
+    });
+    fixture.runtime.close();
   });
 
   it("bootstraps, registers, polls an invoke, and accepts its result", async () => {

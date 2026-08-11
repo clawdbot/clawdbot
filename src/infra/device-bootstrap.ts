@@ -19,10 +19,11 @@ import {
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { normalizeDevicePublicKeyBase64Url } from "./device-identity.js";
 import {
+  consumeDeviceBootstrapTokenWithSetupCompletion as consumeBootstrapTokenWithSetupCompletion,
   loadDeviceBootstrapTokenRecords,
   loadDevicePairSetupCompletionRecord,
   persistDeviceBootstrapTokenRecords as persistState,
-  saveDevicePairSetupCompletionRecord,
+  restoreConsumedDeviceBootstrapToken as restoreConsumedBootstrapToken,
 } from "./device-pairing-store.js";
 import type {
   DeviceBootstrapTokenRecord,
@@ -257,31 +258,33 @@ export async function issueDevicePairSetupBootstrapToken(params: {
  * operator. Retention outlives the credential so a client waiting to its expiry
  * can always reconcile.
  */
-export async function recordDevicePairSetupCompletion(params: {
-  setupId: string;
+export async function consumeDeviceBootstrapTokenWithSetupCompletion(params: {
+  token: string;
   deviceId: string;
-  deviceName?: string;
-  access: PairingSetupAccess;
   completedAtMs: number;
+  baseDir?: string;
+}) {
+  return await withLock(async () => {
+    const nowMs = Date.now();
+    return consumeBootstrapTokenWithSetupCompletion({
+      token: params.token,
+      deviceId: params.deviceId,
+      completedAtMs: params.completedAtMs,
+      // Retention follows the store clock rather than an injected event time.
+      retentionNowMs: nowMs,
+      retainUntilMs: nowMs + DEVICE_PAIR_SETUP_COMPLETION_RETENTION_MS,
+      ...(params.baseDir ? { baseDir: params.baseDir } : {}),
+    });
+  });
+}
+
+export async function restoreConsumedDeviceBootstrapToken(params: {
+  record: DeviceBootstrapTokenRecord;
+  completion?: DevicePairSetupCompletionRecord;
   baseDir?: string;
 }): Promise<void> {
   return await withLock(async () => {
-    // Retention runs on the store's own clock, never the event timestamp a
-    // caller supplies, so an injected or skewed `completedAtMs` cannot make a
-    // fresh completion unreadable.
-    const nowMs = Date.now();
-    saveDevicePairSetupCompletionRecord(
-      {
-        setupId: params.setupId,
-        deviceId: params.deviceId,
-        ...(params.deviceName ? { deviceName: params.deviceName } : {}),
-        access: params.access,
-        completedAtMs: params.completedAtMs,
-        retainUntilMs: nowMs + DEVICE_PAIR_SETUP_COMPLETION_RETENTION_MS,
-      },
-      nowMs,
-      params.baseDir,
-    );
+    restoreConsumedBootstrapToken(params);
   });
 }
 

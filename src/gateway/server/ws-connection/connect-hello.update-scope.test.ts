@@ -9,21 +9,20 @@ const {
   listControlUiPluginTabsMock,
   listControlUiPluginWidgetKindsMock,
   redeemDeviceBootstrapTokenProfileMock,
-  restoreDeviceBootstrapTokenMock,
-  revokeDeviceBootstrapTokenMock,
-  settleSetupCompletionMock,
+  broadcastSetupHandoffCompletionMock,
+  consumeSetupHandoffMock,
+  restoreSetupHandoffMock,
 } = vi.hoisted(() => ({
   emitGatewayAuthSecurityEventMock: vi.fn(),
   listControlUiPluginTabsMock: vi.fn((_scopes: readonly string[]) => []),
   listControlUiPluginWidgetKindsMock: vi.fn((_scopes: readonly string[]) => []),
-  settleSetupCompletionMock: vi.fn(async () => undefined),
+  broadcastSetupHandoffCompletionMock: vi.fn(),
   redeemDeviceBootstrapTokenProfileMock: vi.fn(async () => ({
     recorded: true,
     fullyRedeemed: true,
   })),
-  restoreDeviceBootstrapTokenMock: vi.fn(async () => undefined),
-  revokeDeviceBootstrapTokenMock: vi.fn(async () => ({
-    removed: true,
+  restoreSetupHandoffMock: vi.fn(async () => undefined),
+  consumeSetupHandoffMock: vi.fn(async () => ({
     record: {
       token: "bootstrap-secret",
       setupId: "setup-failed-send",
@@ -73,12 +72,12 @@ const {
 
 vi.mock("../../../infra/device-bootstrap.js", () => ({
   redeemDeviceBootstrapTokenProfile: redeemDeviceBootstrapTokenProfileMock,
-  restoreDeviceBootstrapToken: restoreDeviceBootstrapTokenMock,
-  revokeDeviceBootstrapToken: revokeDeviceBootstrapTokenMock,
 }));
 
 vi.mock("../../device-pair-setup-completion.js", () => ({
-  settleSetupCompletion: settleSetupCompletionMock,
+  broadcastSetupHandoffCompletion: broadcastSetupHandoffCompletionMock,
+  consumeSetupHandoff: consumeSetupHandoffMock,
+  restoreSetupHandoff: restoreSetupHandoffMock,
 }));
 
 vi.mock("../health-state.js", () => ({
@@ -295,11 +294,16 @@ describe("sendGatewayHello update detail scope", () => {
 
     await sendGatewayHello(context as never, state as never, {});
 
-    expect(revokeDeviceBootstrapTokenMock).toHaveBeenCalledWith({ token: "bootstrap-secret" });
-    expect(restoreDeviceBootstrapTokenMock).toHaveBeenCalledWith({
-      record: expect.objectContaining({ setupId: "setup-failed-send" }),
+    expect(consumeSetupHandoffMock).toHaveBeenCalledWith({
+      token: "bootstrap-secret",
+      deviceId: "device-123",
     });
-    expect(settleSetupCompletionMock).not.toHaveBeenCalled();
+    expect(restoreSetupHandoffMock).toHaveBeenCalledWith({
+      handoff: expect.objectContaining({
+        record: expect.objectContaining({ setupId: "setup-failed-send" }),
+      }),
+    });
+    expect(broadcastSetupHandoffCompletionMock).not.toHaveBeenCalled();
     expect(context.handler.close).toHaveBeenCalled();
   });
 });

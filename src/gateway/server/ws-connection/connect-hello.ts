@@ -4,11 +4,7 @@ import {
   PROTOCOL_VERSION,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { sha256Base64Url } from "../../../infra/crypto-digest.js";
-import {
-  redeemDeviceBootstrapTokenProfile,
-  revokeDeviceBootstrapToken,
-  restoreDeviceBootstrapToken,
-} from "../../../infra/device-bootstrap.js";
+import { redeemDeviceBootstrapTokenProfile } from "../../../infra/device-bootstrap.js";
 import {
   finalizeNodePairingCleanupClaim,
   recordPairedNodeConnection,
@@ -20,7 +16,12 @@ import {
   listControlUiPluginTabs,
   listControlUiPluginWidgetKinds,
 } from "../../control-ui-plugin-tabs.js";
-import { settleSetupCompletion } from "../../device-pair-setup-completion.js";
+import {
+  broadcastSetupHandoffCompletion,
+  consumeSetupHandoff,
+  restoreSetupHandoff,
+  type SetupHandoff,
+} from "../../device-pair-setup-completion.js";
 import { canReadDetailedUpdateMetadata } from "../../events.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
@@ -160,9 +161,7 @@ export async function sendGatewayHello(
   };
   advanceHandshakePhase("hello_payload_prepared");
 
-  let revokedBootstrapTokenRecord:
-    | Awaited<ReturnType<typeof revokeDeviceBootstrapToken>>["record"]
-    | undefined;
+  let bootstrapHandoff: SetupHandoff | undefined;
   if (authMethod === "bootstrap-token" && bootstrapTokenCandidate && device) {
     try {
       if (handoffBootstrapProfile || issuedBootstrapProfile) {
@@ -172,30 +171,35 @@ export async function sendGatewayHello(
           scopes,
         });
         if (handoffBootstrapProfile || redemption.fullyRedeemed) {
-          const revoked = await revokeDeviceBootstrapToken({
+          const consumed = await consumeSetupHandoff({
             token: bootstrapTokenCandidate,
+            deviceId: device.id,
           });
-          if (!revoked.removed) {
-            logGateway.warn(
-              `bootstrap token revoke skipped after profile redemption device=${device.id}`,
-            );
-          } else {
-            revokedBootstrapTokenRecord = revoked.record;
+          if (!consumed) {
+            await releasePendingNodePairingCleanup();
+            setCloseCause("bootstrap-token-consume-failed");
+            close();
+            return;
           }
+          bootstrapHandoff = consumed;
         }
       }
     } catch (err) {
       logGateway.warn(
         `bootstrap token post-connect bookkeeping failed device=${device.id}: ${formatForLog(err)}`,
       );
+      await releasePendingNodePairingCleanup();
+      setCloseCause("bootstrap-token-consume-failed", { error: formatForLog(err) });
+      close();
+      return;
     }
   }
   try {
     await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
   } catch (err) {
-    if (revokedBootstrapTokenRecord) {
+    if (bootstrapHandoff) {
       try {
-        await restoreDeviceBootstrapToken({ record: revokedBootstrapTokenRecord });
+        await restoreSetupHandoff({ handoff: bootstrapHandoff });
       } catch (restoreErr) {
         logGateway.warn(
           `bootstrap token restore after hello-send failure failed device=${device?.id ?? "unknown"}: ${formatForLog(restoreErr)}`,
@@ -207,15 +211,16 @@ export async function sendGatewayHello(
     close();
     return;
   }
-  if (revokedBootstrapTokenRecord && device) {
+  if (bootstrapHandoff) {
     try {
-      await settleSetupCompletion({
-        record: revokedBootstrapTokenRecord,
-        deviceId: device.id,
+      broadcastSetupHandoffCompletion({
+        handoff: bootstrapHandoff,
         broadcast: buildRequestContext().broadcast,
       });
     } catch (err) {
-      logGateway.warn(`setup completion settle failed device=${device.id}: ${formatForLog(err)}`);
+      logGateway.warn(
+        `setup completion broadcast failed device=${device.id}: ${formatForLog(err)}`,
+      );
     }
   }
   let authProvided = authMethod;

@@ -43,9 +43,10 @@ export async function resolveCurrentPairedDeviceNodeBinding(
 export function isPairedDeviceNodeBindingCurrent(
   nodeId: string,
   expected: PairedDeviceNodeBinding,
+  baseDir?: string,
 ): boolean {
   const current = toPairedDeviceNodeBinding(
-    resolveNodePairingState(loadPairedDevicePairingStoreRecord(nodeId)),
+    resolveNodePairingState(loadPairedDevicePairingStoreRecord(nodeId, baseDir)),
   );
   return Boolean(
     current &&
