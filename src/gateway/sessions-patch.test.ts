@@ -364,7 +364,7 @@ describe("gateway sessions patch", () => {
     const archived = expectPatchOk(
       await runPatch({
         store: mainStoreEntry({ pinnedAt: 10 }),
-        patch: { key: MAIN_SESSION_KEY, archived: true },
+        patch: { key: MAIN_SESSION_KEY, archived: true, expectedSessionId: "sess" },
         archivedBy,
       }),
     );
@@ -375,7 +375,7 @@ describe("gateway sessions patch", () => {
     const idempotent = expectPatchOk(
       await runPatch({
         store: mainStoreEntry({ archivedAt: archived.archivedAt, archivedBy }),
-        patch: { key: MAIN_SESSION_KEY, archived: true },
+        patch: { key: MAIN_SESSION_KEY, archived: true, expectedSessionId: "sess" },
         archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
       }),
     );
@@ -385,18 +385,47 @@ describe("gateway sessions patch", () => {
     const restored = expectPatchOk(
       await runPatch({
         store: mainStoreEntry({ archivedAt: archived.archivedAt, archivedBy }),
-        patch: { key: MAIN_SESSION_KEY, archived: false },
+        patch: { key: MAIN_SESSION_KEY, archived: false, expectedSessionId: "sess" },
       }),
     );
     expect(restored.archivedAt).toBeUndefined();
     expect(restored.archivedBy).toBeUndefined();
   });
 
+  test.each([
+    { action: "archive", archived: true, sessionId: undefined },
+    { action: "archive", archived: true, sessionId: "" },
+    { action: "restore", archived: false, sessionId: undefined },
+    { action: "restore", archived: false, sessionId: "" },
+  ])("rejects $action for a provisional session identity", async ({ archived, sessionId }) => {
+    const entry = { sessionId, updatedAt: 1 } as SessionEntry;
+    const store = { [MAIN_SESSION_KEY]: entry };
+
+    expectPatchError(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, archived },
+      }),
+      `session not found: ${MAIN_SESSION_KEY}`,
+    );
+    expect(store[MAIN_SESSION_KEY]).toBe(entry);
+  });
+
+  test("requires the caller-observed durable identity for lifecycle patches", async () => {
+    expectPatchError(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: { key: MAIN_SESSION_KEY, archived: true },
+      }),
+      "expectedSessionId required for session lifecycle patch",
+    );
+  });
+
   test("does not fabricate archive attribution without an actor", async () => {
     const archived = expectPatchOk(
       await runPatch({
         store: mainStoreEntry({}),
-        patch: { key: MAIN_SESSION_KEY, archived: true },
+        patch: { key: MAIN_SESSION_KEY, archived: true, expectedSessionId: "sess" },
       }),
     );
 

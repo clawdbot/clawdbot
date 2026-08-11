@@ -978,6 +978,7 @@ test("sessions.changed mutation events include session management metadata", asy
 
   const archived = await invokeSessionsPatch({
     key: "discord:group:dev",
+    expectedSessionId: "sess-dev",
     archived: true,
   });
   expectChangedBroadcast(archived.broadcastToConnIds, {
@@ -994,6 +995,7 @@ test("sessions.changed mutation events include session management metadata", asy
 
   const restored = await invokeSessionsPatch({
     key: "discord:group:dev",
+    expectedSessionId: "sess-dev",
     archived: false,
   });
   expectChangedBroadcast(restored.broadcastToConnIds, {

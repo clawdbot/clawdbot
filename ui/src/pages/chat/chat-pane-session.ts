@@ -195,7 +195,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     });
   }
 
-  protected async restoreArchivedSession(sessionKey: string) {
+  protected async restoreArchivedSession(sessionKey: string, expectedSessionId: string) {
     const scope = this.captureConnectionScope();
     if (!scope || scope.state.sessionKey !== sessionKey) {
       return;
@@ -214,7 +214,11 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     let failure: string | null = null;
     try {
       // The patch can resolve falsy on failure; the capability error explains it.
-      const patched = await scope.sessions.patch(sessionKey, { archived: false }, { agentId });
+      const patched = await scope.sessions.patch(
+        sessionKey,
+        { archived: false },
+        { agentId, expectedSessionId },
+      );
       if (!patched) {
         failure = scope.sessions.state.error;
       }

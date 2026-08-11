@@ -232,6 +232,7 @@ internal data class ChatActiveRunPresentation(
 data class ChatSessionEntry(
   val key: String,
   val updatedAtMs: Long?,
+  val sessionId: String? = null,
   val ownerAgentId: String? = null,
   val classification: String? = null,
   val accountId: String? = null,

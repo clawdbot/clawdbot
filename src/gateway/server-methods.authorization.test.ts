@@ -401,6 +401,7 @@ describe("sessions.patchMany orchestration", () => {
           key: "agent:main:batch-1",
           error: {
             code: "INVALID_REQUEST",
+            details: { reason: "session-changed" },
             message: "Session agent:main:batch-1 changed before patch. Retry.",
           },
         },
@@ -839,6 +840,7 @@ describe("sessions.patchMany orchestration", () => {
         params: {
           targets: [0, 1, 2].map((index) => ({
             key: `agent:main:archive-auth-${index}`,
+            expectedSessionId: `session-archive-auth-${index}`,
           })),
           patch: { archived: true },
         },

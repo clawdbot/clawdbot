@@ -395,7 +395,12 @@ internal fun SessionsScreen(
               },
               onSetArchived = { archived ->
                 coroutineScope.launch {
-                  viewModel.patchChatSession(key = session.key, ownerAgentId = session.ownerAgentId, archived = archived)
+                  viewModel.patchChatSession(
+                    key = session.key,
+                    ownerAgentId = session.ownerAgentId,
+                    expectedSessionId = session.sessionId,
+                    archived = archived,
+                  )
                 }
               },
               onDelete = { deleteSessionTarget = session.toActionTarget(activeGatewayStableId) },
@@ -590,6 +595,7 @@ private fun SessionRow(
 ) {
   var menuExpanded by remember { mutableStateOf(false) }
   var groupMenuVisible by remember { mutableStateOf(false) }
+  val canChangeArchived = !session.sessionId.isNullOrBlank()
 
   Surface(color = Color.Transparent, contentColor = ClawTheme.colors.text) {
     Box {
@@ -677,9 +683,11 @@ private fun SessionRow(
         },
       ) {
         if (archived) {
-          SessionMenuItem(nativeString("Unarchive")) {
-            menuExpanded = false
-            onSetArchived(false)
+          if (canChangeArchived) {
+            SessionMenuItem(nativeString("Unarchive")) {
+              menuExpanded = false
+              onSetArchived(false)
+            }
           }
           SessionMenuItem(nativeString("Delete…")) {
             menuExpanded = false
@@ -724,9 +732,11 @@ private fun SessionRow(
             onFork()
           }
           SessionMenuItem(nativeString("Move to group")) { groupMenuVisible = true }
-          SessionMenuItem(nativeString("Archive")) {
-            menuExpanded = false
-            onSetArchived(true)
+          if (canChangeArchived) {
+            SessionMenuItem(nativeString("Archive")) {
+              menuExpanded = false
+              onSetArchived(true)
+            }
           }
           // Delete is archive-gated: the bounded operator session lacks
           // operator.admin, and the gateway only grants write-scope deletes
