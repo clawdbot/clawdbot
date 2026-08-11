@@ -56,6 +56,8 @@ type EmbeddedRunContextWindowInfo = {
   source: "model" | "modelsConfig" | "agentContextTokens" | "default";
 };
 
+export type EmbeddedRunFastModeParam = boolean | (() => boolean | undefined);
+
 type EmbeddedRunAttemptOperation = "attempt" | "settled-tool-finalization";
 
 type EmbeddedRunAttemptToolTerminalObservation = {
@@ -125,6 +127,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   modelId: string;
   /** Operator-requested or initial model id before any fallback resolution. */
   requestedModelId?: string | null;
+  /** True when this attempt is running after a model fallback decision. */
+  fallbackActive?: boolean;
   /** Concrete fallback reason that selected this attempt, when known. */
   fallbackReason?: string | null;
   /** Whether this attempt may start or redirect work to another agent/task. */
@@ -168,10 +172,11 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   toolAuthProfileStore?: AuthProfileStore;
   modelRegistry: ModelRegistry;
   thinkLevel: ThinkLevel;
-  fastMode?: boolean | (() => boolean | undefined);
+  fastMode?: EmbeddedRunFastModeParam;
   /** True when this attempt is running the auto fast-mode policy. */
   fastModeAuto?: boolean;
   beforeAgentFinalizeRevisionAttempts?: number;
+  maxBeforeAgentFinalizeRevisions?: number;
 };
 
 export type EmbeddedRunAttemptResult = {

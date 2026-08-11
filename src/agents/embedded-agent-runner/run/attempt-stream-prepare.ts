@@ -50,7 +50,6 @@ import {
   resolveFinalAssistantVisibleText,
   resolveReportedModelRef,
 } from "./helpers.js";
-import { MAX_BEFORE_AGENT_FINALIZE_REVISIONS } from "./terminal-retry-state.js";
 import { notifyToolActivity } from "./tool-activity-heartbeat.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -150,13 +149,15 @@ export function prepareEmbeddedAttemptStream(input: {
           model: attempt.modelId,
           assistant: lastAssistant,
         });
+        const maxRevisionAttempts = attempt.maxBeforeAgentFinalizeRevisions ?? 0;
         if (
-          (attempt.beforeAgentFinalizeRevisionAttempts ?? 0) >= MAX_BEFORE_AGENT_FINALIZE_REVISIONS
+          maxRevisionAttempts > 0 &&
+          (attempt.beforeAgentFinalizeRevisionAttempts ?? 0) >= maxRevisionAttempts
         ) {
           log.warn(
             `before_agent_finalize revision limit reached; finalizing ` +
               `runId=${attempt.runId} sessionId=${attempt.sessionId} ` +
-              `attempts=${attempt.beforeAgentFinalizeRevisionAttempts ?? 0}/${MAX_BEFORE_AGENT_FINALIZE_REVISIONS}`,
+              `attempts=${attempt.beforeAgentFinalizeRevisionAttempts ?? 0}/${maxRevisionAttempts}`,
           );
           return;
         }

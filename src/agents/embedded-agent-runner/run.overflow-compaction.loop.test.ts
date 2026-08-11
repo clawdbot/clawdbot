@@ -79,6 +79,7 @@ function makeDispatchInput(
       provider: "openai",
       modelId: "gpt-5.6-luna",
       requestedModelId: "gpt-5.6-luna",
+      fallbackActive: false,
       fallbackReason: null,
       agentHarnessId: "codex",
       runtimePlan: {},
@@ -124,6 +125,7 @@ function makeDispatchInput(
     bootstrapPromptWarningSignaturesSeen: [],
     suppressNextUserMessagePersistence: false,
     beforeAgentFinalizeRevisionAttempts: 0,
+    maxBeforeAgentFinalizeRevisions: 1,
   } as unknown as Parameters<typeof dispatchEmbeddedRunAttempt>[0];
 }
 

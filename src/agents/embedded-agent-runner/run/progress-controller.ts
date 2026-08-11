@@ -12,6 +12,7 @@ import {
 } from "../../fast-mode.js";
 import { log } from "../logger.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
+import type { EmbeddedRunFastModeParam } from "./types.js";
 
 export function createEmbeddedRunProgressController(params: {
   attempt: RunEmbeddedAgentParams;
@@ -122,7 +123,7 @@ export function createEmbeddedRunProgressController(params: {
     });
     return resolved.mode === undefined ? undefined : resolved.enabled;
   };
-  const resolveAttemptFastModeParam = (): boolean | (() => boolean | undefined) | undefined => {
+  const resolveAttemptFastModeParam = (): EmbeddedRunFastModeParam | undefined => {
     if (params.attempt.fastMode === "auto") {
       return resolveAttemptFastMode;
     }
