@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, expect, vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.js";
 import type {
   WorkerDesktopEndpoint,
@@ -20,7 +20,6 @@ import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
 import { createWorkerEnvironmentService, type WorkerEnvironmentService } from "./service.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
-import type { WorkerTunnelManager } from "./tunnel.js";
 
 export function waitForFast<T>(
   callback: () => T | Promise<T>,

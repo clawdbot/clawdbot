@@ -1,13 +1,13 @@
-import {
-  type WorkerConnectParams,
-  type WorkerLiveEventParams,
-  type WorkerProtocolCloseReason,
-  type WorkerSessionsSendParams,
-  type WorkerSessionsSpawnParams,
-  type WorkerSessionToolResult,
-  type WorkerTranscriptCommitErrorReason,
-  type WorkerTranscriptCommitParams,
-  type WorkerTranscriptCommitResult,
+import type {
+  WorkerConnectParams,
+  WorkerLiveEventParams,
+  WorkerProtocolCloseReason,
+  WorkerSessionsSendParams,
+  WorkerSessionsSpawnParams,
+  WorkerSessionToolResult,
+  WorkerTranscriptCommitErrorReason,
+  WorkerTranscriptCommitParams,
+  WorkerTranscriptCommitResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   WorkerInferenceCancelParams,

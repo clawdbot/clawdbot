@@ -1,11 +1,11 @@
-import {
-  type WorkerAdmissionHandshake,
-  type WorkerSessionsSendParams,
-  type WorkerSessionsSpawnParams,
-  type WorkerSessionToolResult,
-  type WorkerTranscriptCommitErrorReason,
-  type WorkerTranscriptCommitParams,
-  type WorkerTranscriptCommitResult,
+import type {
+  WorkerAdmissionHandshake,
+  WorkerSessionsSendParams,
+  WorkerSessionsSpawnParams,
+  WorkerSessionToolResult,
+  WorkerTranscriptCommitErrorReason,
+  WorkerTranscriptCommitParams,
+  WorkerTranscriptCommitResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { onSessionIdentityMutation } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.js";
@@ -21,7 +21,7 @@ import type {
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import type { WorkerConnectionIdentity } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
-import { createWorkerCredentialBroker, type WorkerCredentialBroker } from "./credential-broker.js";
+import { createWorkerCredentialBroker } from "./credential-broker.js";
 import { createWorkerEnvironmentAccess } from "./environment-access.js";
 import {
   registerWorkerInferenceSessionDrain,
@@ -142,7 +142,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const inferenceWithDrain = inference as typeof inference & {
     beginSessionDrain(sessionId: string): WorkerInferenceSessionDrain;
   };
-  let credentialBroker!: WorkerCredentialBroker;
   let reconcileInFlight: Promise<void> | undefined;
   let interval: ReturnType<typeof setInterval> | undefined;
   let unsubscribeSessionIdentityMutation: (() => void) | undefined;
@@ -237,7 +236,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     });
   };
 
-  credentialBroker = createWorkerCredentialBroker({
+  const credentialBroker = createWorkerCredentialBroker({
     store,
     prepareInstallation: options.prepareInstallation,
     tunnelManager: options.tunnelManager,

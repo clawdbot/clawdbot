@@ -3,9 +3,6 @@ import { hashWorkerCredential } from "./credential.js";
 import * as support from "./service.test-support.js";
 
 type WorkerEnvironmentServiceOptions = support.WorkerEnvironmentServiceOptions;
-import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
-import type { WorkerTunnelManager } from "./tunnel.js";
-import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();

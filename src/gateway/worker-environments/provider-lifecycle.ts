@@ -531,10 +531,6 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     }
   };
 
-  const create = async (profileId: string, idempotencyKey: string) => {
-    return await createWithProfile(profileId, idempotencyKey);
-  };
-
   const createWithProfile = async (
     profileId: string,
     idempotencyKey: string,
