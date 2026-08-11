@@ -281,6 +281,12 @@ export type SubagentRunRecord = {
   attachmentsSandboxSessionKey?: string;
   attachmentsSandboxAgentId?: string;
   attachmentsSandboxWorkspaceDir?: string;
+  /** Frozen runtime identity that owns bridge-staged attachment bytes. */
+  attachmentsSandboxIdentity?: {
+    backendId: string;
+    runtimeId: string;
+    configLabel: string;
+  };
   /** Exact container path used for bridge-owned attachment cleanup. */
   attachmentsSandboxDir?: string;
   retainAttachmentsOnKeep?: boolean;

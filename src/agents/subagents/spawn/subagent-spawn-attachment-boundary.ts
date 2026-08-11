@@ -7,6 +7,11 @@ export type SubagentAttachmentStagingBoundary = {
   workspaceDir?: string;
   sandboxFsBridge?: SandboxFsBridge;
   sandboxWorkspaceDir?: string;
+  sandboxIdentity?: {
+    backendId: string;
+    runtimeId: string;
+    configLabel: string;
+  };
 };
 
 export async function resolveSubagentAttachmentStagingBoundary(params: {
@@ -29,10 +34,19 @@ export async function resolveSubagentAttachmentStagingBoundary(params: {
   if (sandbox.backend?.capabilities?.workspaceMutationVisibility === "shared-host") {
     return { workspaceDir };
   }
+  const configLabel = sandbox.backend?.configLabel?.trim();
+  if (!configLabel) {
+    throw new Error("child sandbox backend does not expose a durable runtime identity");
+  }
   return {
     workspaceDir,
     sandboxFsBridge: deps.createSandboxWorkspaceIngressFsBridge(sandbox),
     sandboxWorkspaceDir: sandbox.agentWorkspaceDir ?? workspaceDir,
+    sandboxIdentity: {
+      backendId: sandbox.backendId,
+      runtimeId: sandbox.runtimeId,
+      configLabel,
+    },
   };
 }
 

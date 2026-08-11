@@ -281,7 +281,19 @@ describe("safeRemoveAttachmentsDir", () => {
     const remove = vi.fn(async () => {
       await fs.rm(attachmentsDir, { recursive: true, force: true });
     });
-    const resolveSandbox = vi.fn(async () => ({ fsBridge: { remove } }) as never);
+    const sandboxIdentity = {
+      backendId: "ssh",
+      runtimeId: "runtime-main",
+      configLabel: "worker@example.test",
+    };
+    const resolveSandbox = vi.fn(
+      async () =>
+        ({
+          ...sandboxIdentity,
+          backend: { configLabel: sandboxIdentity.configLabel },
+          fsBridge: { remove },
+        }) as never,
+    );
     const createIngress = vi.fn((sandbox: { fsBridge: unknown }) => sandbox.fsBridge) as never;
     try {
       await expect(
@@ -292,6 +304,7 @@ describe("safeRemoveAttachmentsDir", () => {
             attachmentsSandboxSessionKey: "agent:main:main",
             attachmentsSandboxAgentId: "main",
             attachmentsSandboxWorkspaceDir: sandboxWorkspaceDir,
+            attachmentsSandboxIdentity: sandboxIdentity,
             attachmentsSandboxDir: sandboxAttachmentsDir,
           }),
           {
@@ -312,6 +325,49 @@ describe("safeRemoveAttachmentsDir", () => {
       });
     } finally {
       await fs.rm(sandboxWorkspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("retains cleanup ownership when the sandbox runtime identity changed", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachments-runtime-"));
+    const attachmentsDir = path.join(rootDir, ".openclaw", "attachments", ATTACHMENT_ID);
+    await fs.mkdir(attachmentsDir, { recursive: true });
+    const remove = vi.fn(async () => undefined);
+    try {
+      await expect(
+        safeRemoveAttachmentsDir(
+          createRunEntry({
+            attachmentsDir,
+            attachmentsRootDir: rootDir,
+            attachmentsSandboxSessionKey: "agent:main:main",
+            attachmentsSandboxAgentId: "main",
+            attachmentsSandboxWorkspaceDir: rootDir,
+            attachmentsSandboxIdentity: {
+              backendId: "ssh",
+              runtimeId: "runtime-main",
+              configLabel: "old-target@example.test",
+            },
+            attachmentsSandboxDir: `/workspace/.openclaw/attachments/${ATTACHMENT_ID}`,
+          }),
+          {
+            config: {},
+            resolveSandbox: vi.fn(
+              async () =>
+                ({
+                  backendId: "ssh",
+                  runtimeId: "runtime-main",
+                  backend: { configLabel: "new-target@example.test" },
+                  fsBridge: { remove },
+                }) as never,
+            ),
+            createIngress: vi.fn((sandbox: { fsBridge: unknown }) => sandbox.fsBridge) as never,
+          },
+        ),
+      ).resolves.toBe(false);
+      expect(remove).not.toHaveBeenCalled();
+      await expect(fs.access(attachmentsDir)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
     }
   });
 

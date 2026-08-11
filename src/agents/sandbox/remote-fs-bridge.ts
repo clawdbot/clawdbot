@@ -302,7 +302,6 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
         params.force === false ? "0" : "1",
       ],
       signal: params.signal,
-      allowFailure: params.force !== false,
     });
   }
 

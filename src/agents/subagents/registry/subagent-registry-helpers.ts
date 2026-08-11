@@ -201,7 +201,11 @@ export async function safeRemoveAttachmentsDir(
   }
   let sandboxFsBridge;
   if (entry.attachmentsSandboxSessionKey) {
-    if (!entry.attachmentsSandboxWorkspaceDir || !entry.attachmentsSandboxDir) {
+    if (
+      !entry.attachmentsSandboxWorkspaceDir ||
+      !entry.attachmentsSandboxDir ||
+      !entry.attachmentsSandboxIdentity
+    ) {
       return false;
     }
     try {
@@ -211,6 +215,15 @@ export async function safeRemoveAttachmentsDir(
         sessionKey: entry.attachmentsSandboxSessionKey,
         workspaceDir: entry.attachmentsSandboxWorkspaceDir,
       });
+      const identity = entry.attachmentsSandboxIdentity;
+      if (
+        !sandbox ||
+        sandbox.backendId !== identity.backendId ||
+        sandbox.runtimeId !== identity.runtimeId ||
+        sandbox.backend?.configLabel?.trim() !== identity.configLabel
+      ) {
+        return false;
+      }
       sandboxFsBridge = sandbox
         ? (options?.createIngress ?? createSandboxWorkspaceIngressFsBridge)(sandbox)
         : undefined;

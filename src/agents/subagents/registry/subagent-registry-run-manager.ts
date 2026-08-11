@@ -252,6 +252,7 @@ export type RegisterSubagentRunParams = {
   attachmentsSandboxSessionKey?: string;
   attachmentsSandboxAgentId?: string;
   attachmentsSandboxWorkspaceDir?: string;
+  attachmentsSandboxIdentity?: SubagentRunRecord["attachmentsSandboxIdentity"];
   attachmentsSandboxDir?: string;
   retainAttachmentsOnKeep?: boolean;
   collect?: boolean;
@@ -1266,6 +1267,7 @@ export function createSubagentRunManager(params: {
       attachmentsSandboxSessionKey: registerParams.attachmentsSandboxSessionKey,
       attachmentsSandboxAgentId: registerParams.attachmentsSandboxAgentId,
       attachmentsSandboxWorkspaceDir: registerParams.attachmentsSandboxWorkspaceDir,
+      attachmentsSandboxIdentity: registerParams.attachmentsSandboxIdentity,
       attachmentsSandboxDir: registerParams.attachmentsSandboxDir,
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
     });

@@ -346,6 +346,9 @@ export async function spawnSubagentDirect(
       launchPlan = createLaunchPlan(childSystemPrompt);
       const registration = buildRegistration(childIdem, launchPlan, true, true);
       registerSubagentRun(registration);
+      // Registry ownership replaces the anonymous concurrency reservation
+      // before potentially slow bridge writes begin.
+      admissionReservation?.release();
       attachmentCleanupOwnerClaimed = true;
     };
 
@@ -414,6 +417,7 @@ export async function spawnSubagentDirect(
         attachmentsSandboxWorkspaceDir: attachmentBoundary.sandboxFsBridge
           ? attachmentBoundary.sandboxWorkspaceDir
           : undefined,
+        attachmentsSandboxIdentity: attachmentBoundary.sandboxIdentity,
         attachmentsSandboxDir: attachmentBoundary.sandboxFsBridge
           ? attachmentSandboxDir
           : undefined,
@@ -453,7 +457,7 @@ export async function spawnSubagentDirect(
           settleFailedQueuedSubagentLaunch(childIdem, materializedAttachments.error),
         );
         const cleanupResult = await cleanupFailedSpawn(true);
-        if (cleanupResult.attachmentsRemoved) {
+        if (cleanupResult.attachmentsRemoved && cleanupResult.sessionDeleted) {
           await releaseSubagentRun(childIdem);
         }
       } else {
@@ -577,7 +581,8 @@ export async function spawnSubagentDirect(
           attachmentCleanupOwnerClaimed,
           emitLifecycleHooks,
         );
-        if (attachmentCleanupOwnerClaimed && cleanupResult.attachmentsRemoved) {
+        const cleanupComplete = cleanupResult.attachmentsRemoved && cleanupResult.sessionDeleted;
+        if (attachmentCleanupOwnerClaimed && cleanupComplete) {
           await releaseSubagentRun(childIdem);
         }
       },

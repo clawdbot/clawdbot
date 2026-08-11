@@ -20,10 +20,14 @@ export async function terminateOrRetryFailedAcceptedSubagentLaunch(params: {
     return true;
   }
   // The durable owner lets the tool return while exact termination retries.
-  // Only then may rollback release context state used by the accepted child.
+  // One detached attempt accelerates cleanup without holding root admission
+  // forever; the durable sweeper remains the retry owner after that attempt.
   void runWithGatewayIndependentRootWorkContinuation(async () => {
-    await terminateAcceptedSubagentRun(termination);
-    if (await rollbackPreparedContextEngine(contextEnginePreparation)) {
+    const terminated = await terminateAcceptedSubagentRun({
+      ...termination,
+      shouldRetry: () => false,
+    });
+    if (terminated && (await rollbackPreparedContextEngine(contextEnginePreparation))) {
       completeFailedLaunchContextEngineCleanup(cleanupOwnerRunId);
     }
     scheduleSubagentRegistrySweep({ delayMs: 0 });

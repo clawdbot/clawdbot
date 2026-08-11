@@ -1,5 +1,6 @@
 // Remote filesystem bridge tests cover SSH-style sandbox file operations using
 // the pinned mutation helper and remote stat/path guards.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -78,6 +79,42 @@ function createWorkspaceReadBridge(workspaceDir: string) {
 }
 
 describe("remote sandbox fs bridge", () => {
+  it.runIf(process.platform !== "win32")(
+    "rejects a failed forced removal instead of reporting cleanup success",
+    async () => {
+      await withTempDir("openclaw-remote-fs-remove-", async (workspaceDir) => {
+        const target = path.join(workspaceDir, "attachments");
+        await fs.mkdir(target);
+        const { runtime } = createLocalRemoteRuntime({
+          remoteWorkspaceDir: workspaceDir,
+          remoteAgentWorkspaceDir: workspaceDir,
+          spawn: (file, args, stdin) =>
+            file === "python3" && args.at(2) === "remove"
+              ? {
+                  stdout: Buffer.alloc(0),
+                  stderr: Buffer.from("permission denied"),
+                  status: 13,
+                  signal: null,
+                }
+              : spawnSync(file, args, {
+                  input: stdin,
+                  encoding: "buffer",
+                  stdio: ["pipe", "pipe", "pipe"],
+                }),
+        });
+        const bridge = createRemoteShellSandboxFsBridge({
+          sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+          runtime,
+        });
+
+        await expect(
+          bridge.remove({ filePath: target, recursive: true, force: true }),
+        ).rejects.toThrow("permission denied");
+        await expect(fs.access(target)).resolves.toBeUndefined();
+      });
+    },
+  );
+
   it("preserves an authoritative create collision when stdin closes with EPIPE", async () => {
     const pipeError = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
     const { runtime } = createLocalRemoteRuntime({

@@ -4,7 +4,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../../config/sessions/lifecycle.js";
+import {
+  getActiveGatewayRootWorkCount,
+  resetGatewayWorkAdmission,
+} from "../../../process/gateway-work-admission.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
+import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import {
   createSubagentSpawnTestConfig,
   loadSubagentSpawnModuleForTest,
@@ -63,6 +69,13 @@ describe("spawnSubagentDirect filename validation", () => {
   };
 
   const validContent = Buffer.from("hello").toString("base64");
+
+  const runtimeLocalSandbox = (fsBridge: unknown) => ({
+    backendId: "ssh",
+    runtimeId: "runtime-main",
+    backend: { configLabel: "worker@example.test" },
+    fsBridge,
+  });
 
   async function spawnWithName(name: string) {
     const { spawnSubagentDirect } = subagentSpawnModule;
@@ -203,6 +216,7 @@ describe("spawnSubagentDirect filename validation", () => {
       },
     });
     const bridgeCalls: string[] = [];
+    let concurrentReservationAccepted = false;
     const bridge = {
       resolvePath: ({ filePath }: { filePath: string }) => ({
         hostPath: filePath,
@@ -211,6 +225,15 @@ describe("spawnSubagentDirect filename validation", () => {
       }),
       mkdirp: async ({ filePath, mode }: { filePath: string; mode?: number }) => {
         bridgeCalls.push(`mkdir:${mode?.toString(8)}`);
+        const probe = reserveChildAdmissionSlot({
+          controllerSessionKey: ctx.agentSessionKey,
+          resolveAdmission: (pendingChildren) =>
+            pendingChildren === 0 ? ({ ok: true } as const) : ({ ok: false } as const),
+        });
+        concurrentReservationAccepted = probe.ok;
+        if (probe.ok) {
+          probe.release();
+        }
         await fs.promises.mkdir(filePath, { recursive: true, mode });
       },
       createFileExclusive: async ({
@@ -243,7 +266,7 @@ describe("spawnSubagentDirect filename validation", () => {
       updateSessionStoreMock,
       workspaceDir: workspaceDirOverride,
       resolveSandboxRuntimeStatus: () => ({ sandboxed: true, agentId: "main" }) as never,
-      resolveSandboxContext: async () => ({ fsBridge: bridge }),
+      resolveSandboxContext: async () => runtimeLocalSandbox(bridge),
       registerSubagentRunMock,
     });
 
@@ -257,6 +280,7 @@ describe("spawnSubagentDirect filename validation", () => {
 
     expect(result.status).toBe("accepted");
     expect(bridgeCalls.indexOf("claim")).toBeLessThan(bridgeCalls.indexOf("mkdir:700"));
+    expect(concurrentReservationAccepted).toBe(true);
     expect(bridgeCalls).toContain("mkdir:700");
     expect(bridgeCalls).toContain("create:file.txt");
     expect(bridgeCalls).toContain("create:.manifest.json");
@@ -266,6 +290,11 @@ describe("spawnSubagentDirect filename validation", () => {
         attachmentsSandboxSessionKey: expect.stringContaining(":subagent:"),
         attachmentsSandboxAgentId: "main",
         attachmentsSandboxWorkspaceDir: workspaceDirOverride,
+        attachmentsSandboxIdentity: {
+          backendId: "ssh",
+          runtimeId: "runtime-main",
+          configLabel: "worker@example.test",
+        },
         attachmentsSandboxDir: expect.stringContaining("/.openclaw/attachments/"),
         launchCleanupPending: true,
         launchCleanupSessionIdentity: {
@@ -319,7 +348,7 @@ describe("spawnSubagentDirect filename validation", () => {
         await fs.promises.rm(filePath, { recursive: true, force: true });
       },
     };
-    const resolveSandboxContext = vi.fn(async () => ({ fsBridge: bridge }));
+    const resolveSandboxContext = vi.fn(async () => runtimeLocalSandbox(bridge));
     const registerSubagentRunMock = vi.fn();
     const sandboxedSpawnModule = await loadSubagentSpawnModuleForTest({
       callGatewayMock,
@@ -412,7 +441,7 @@ describe("spawnSubagentDirect filename validation", () => {
         await fs.promises.rm(filePath, { recursive: true, force: true });
       },
     };
-    const resolveSandboxContext = vi.fn(async () => ({ fsBridge: bridge }));
+    const resolveSandboxContext = vi.fn(async () => runtimeLocalSandbox(bridge));
     const sandboxedSpawnModule = await loadSubagentSpawnModuleForTest({
       callGatewayMock,
       getRuntimeConfig: () => configOverride,
@@ -492,7 +521,7 @@ describe("spawnSubagentDirect filename validation", () => {
         await fs.promises.rm(filePath, { recursive: true, force: true });
       },
     };
-    const resolveSandboxContext = vi.fn(async () => ({ fsBridge: bridge }));
+    const resolveSandboxContext = vi.fn(async () => runtimeLocalSandbox(bridge));
     const sandboxedSpawnModule = await loadSubagentSpawnModuleForTest({
       callGatewayMock,
       getRuntimeConfig: () => configOverride,
@@ -574,7 +603,7 @@ describe("spawnSubagentDirect filename validation", () => {
           await fs.promises.rm(filePath, { recursive: true, force: true });
         },
       };
-      const resolveSandboxContext = vi.fn(async () => ({ fsBridge: bridge }));
+      const resolveSandboxContext = vi.fn(async () => runtimeLocalSandbox(bridge));
       const sandboxedSpawnModule = await loadSubagentSpawnModuleForTest({
         callGatewayMock,
         getRuntimeConfig: () => configOverride,
@@ -649,7 +678,7 @@ describe("spawnSubagentDirect filename validation", () => {
           await fs.promises.rm(filePath, { recursive: true, force: true });
         },
       };
-      const resolveSandboxContext = vi.fn(async () => ({ fsBridge: bridge }));
+      const resolveSandboxContext = vi.fn(async () => runtimeLocalSandbox(bridge));
       const sandboxedSpawnModule = await loadSubagentSpawnModuleForTest({
         callGatewayMock,
         getRuntimeConfig: () => configOverride,
@@ -759,7 +788,7 @@ describe("spawnSubagentDirect filename validation", () => {
       workspaceDir: workspaceDirOverride,
       resolveSandboxRuntimeStatus: () => ({ sandboxed: true, agentId: "main" }) as never,
       resolveSandboxContext: async () => ({
-        fsBridge: bridge,
+        ...runtimeLocalSandbox(bridge),
         workspaceDir: workspaceDirOverride,
         agentWorkspaceDir: workspaceDirOverride,
       }),
@@ -822,7 +851,7 @@ describe("spawnSubagentDirect filename validation", () => {
       workspaceDir: workspaceDirOverride,
       resolveSandboxRuntimeStatus: () => ({ sandboxed: true, agentId: "main" }) as never,
       resolveSandboxContext: async () => ({
-        fsBridge: bridge,
+        ...runtimeLocalSandbox(bridge),
         workspaceDir: workspaceDirOverride,
         agentWorkspaceDir: workspaceDirOverride,
       }),
@@ -847,6 +876,79 @@ describe("spawnSubagentDirect filename validation", () => {
       expect.objectContaining({ queued: true, attachmentsDir: expect.any(String) }),
     );
     expect(settleFailedQueuedSubagentLaunchMock).toHaveBeenCalledTimes(1);
+    expect(releaseSubagentRunMock).not.toHaveBeenCalled();
+  });
+
+  it("retains the provisional owner when its frozen session was replaced", async () => {
+    configOverride = createSubagentSpawnTestConfig(workspaceDirOverride, {
+      agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "rw" } } },
+    });
+    let createCount = 0;
+    const bridge = {
+      resolvePath: ({ filePath }: { filePath: string }) => ({
+        relativePath: "",
+        containerPath: filePath,
+      }),
+      mkdirp: async ({ filePath }: { filePath: string }) => {
+        await fs.promises.mkdir(filePath, { recursive: true, mode: 0o700 });
+      },
+      createFileExclusive: async ({
+        filePath,
+        data,
+      }: {
+        filePath: string;
+        data: Buffer | string;
+      }) => {
+        createCount += 1;
+        if (createCount === 2) {
+          throw new Error("second write failed");
+        }
+        await fs.promises.writeFile(filePath, data, { flag: "wx", mode: 0o600 });
+        return "created" as const;
+      },
+      remove: async ({ filePath }: { filePath: string }) => {
+        await fs.promises.rm(filePath, { recursive: true, force: true });
+      },
+    };
+    const lifecycleChanged = Object.assign(new Error("session changed"), {
+      name: "GatewayClientRequestError",
+      gatewayCode: "INVALID_REQUEST",
+      details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON },
+    });
+    const gateway = vi.fn(async (request: unknown) => {
+      if ((request as { method?: string }).method === "sessions.delete") {
+        throw lifecycleChanged;
+      }
+      return { ok: true };
+    });
+    const releaseSubagentRunMock = vi.fn(async () => undefined);
+    const module = await loadSubagentSpawnModuleForTest({
+      callGatewayMock: gateway,
+      getRuntimeConfig: () => configOverride,
+      updateSessionStoreMock,
+      workspaceDir: workspaceDirOverride,
+      resolveSandboxRuntimeStatus: () => ({ sandboxed: true, agentId: "main" }) as never,
+      resolveSandboxContext: async () => ({
+        ...runtimeLocalSandbox(bridge),
+        workspaceDir: workspaceDirOverride,
+        agentWorkspaceDir: workspaceDirOverride,
+      }),
+      settleFailedQueuedSubagentLaunchMock: vi.fn(() => true),
+      releaseSubagentRunMock,
+    });
+
+    const result = await module.spawnSubagentDirect(
+      {
+        task: "test",
+        attachments: [
+          { name: "one.txt", content: validContent, encoding: "base64" },
+          { name: "two.txt", content: validContent, encoding: "base64" },
+        ],
+      },
+      ctx,
+    );
+
+    expect(result).toMatchObject({ status: "error", error: "second write failed" });
     expect(releaseSubagentRunMock).not.toHaveBeenCalled();
   });
 
@@ -966,6 +1068,53 @@ describe("spawnSubagentDirect filename validation", () => {
         "sweep-scheduled",
       ]);
     });
+  });
+
+  it("releases detached root work after a bounded accepted-child cleanup retry", async () => {
+    resetGatewayWorkAdmission();
+    const gateway = vi.fn(async (request: unknown) => {
+      if ((request as { method?: string }).method === "agent") {
+        return { runId: "accepted-child-run" };
+      }
+      throw new Error("gateway unavailable");
+    });
+    const rollback = vi.fn(async () => undefined);
+    const scheduleSweep = vi.fn();
+    const module = await loadSubagentSpawnModuleForTest({
+      callGatewayMock: gateway,
+      getRuntimeConfig: () => configOverride,
+      updateSessionStoreMock,
+      workspaceDir: workspaceDirOverride,
+      startQueuedSubagentRunMock: vi.fn(() => {
+        throw new Error("activation persistence failed");
+      }),
+      settleFailedQueuedSubagentLaunchMock: vi.fn(() => true),
+      resolveContextEngineMock: async () => ({
+        prepareSubagentSpawn: async () => ({ rollback }),
+      }),
+      scheduleSubagentRegistrySweepMock: scheduleSweep,
+    });
+
+    const result = await module.spawnSubagentDirect(
+      {
+        task: "test",
+        attachments: [{ name: "file.txt", content: validContent, encoding: "base64" }],
+      },
+      ctx,
+    );
+
+    expect(result).toMatchObject({ status: "error", runId: "accepted-child-run" });
+    await vi.waitFor(() => {
+      expect(scheduleSweep).toHaveBeenCalledWith({ delayMs: 0 });
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    });
+    expect(rollback).not.toHaveBeenCalled();
+    expect(
+      gateway.mock.calls.filter(
+        ([request]) => (request as { method?: string }).method === "chat.abort",
+      ),
+    ).toHaveLength(2);
+    resetGatewayWorkAdmission();
   });
 
   it.runIf(process.platform !== "win32").each(["metadata", "attachments"] as const)(
