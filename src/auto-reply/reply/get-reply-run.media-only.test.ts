@@ -66,7 +66,7 @@ vi.mock("../../config/sessions/group.js", () => ({
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
-  resolveSessionFilePath: vi.fn().mockReturnValue("/tmp/session.jsonl"),
+  resolveSessionFilePathCore: vi.fn().mockReturnValue("/tmp/session.jsonl"),
   resolveSessionFilePathOptions: vi.fn().mockReturnValue({}),
 }));
 

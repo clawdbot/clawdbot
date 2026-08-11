@@ -27,7 +27,7 @@ vi.mock("../config/sessions.js", async () => {
     await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
   return {
     ...actual,
-    resolveStorePath: resolveStorePathMock,
+    resolveSessionStorePathCore: resolveStorePathMock,
   };
 });
 

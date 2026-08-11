@@ -11,7 +11,7 @@ import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
   resolveMainSessionKey,
-  resolveStorePath,
+  resolveSessionStorePathCore,
 } from "../config/sessions.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { buildAgentPeerSessionKey } from "../routing/session-key.js";
@@ -27,7 +27,7 @@ import {
   type HeartbeatDeps,
   isHeartbeatEnabledForAgent,
   resolveHeartbeatIntervalMs,
-  resolveHeartbeatPrompt,
+  resolveConfiguredHeartbeatPrompt,
   resolveHeartbeatSummaryForAgent,
   runHeartbeatOnce,
 } from "./heartbeat-runner.js";
@@ -419,7 +419,7 @@ describe("resolveHeartbeatIntervalMs", () => {
   });
 });
 
-describe("resolveHeartbeatPrompt", () => {
+describe("resolveConfiguredHeartbeatPrompt", () => {
   it.each([
     { name: "default prompt", cfg: {} as OpenClawConfig, expected: HEARTBEAT_PROMPT },
     {
@@ -430,7 +430,7 @@ describe("resolveHeartbeatPrompt", () => {
       expected: "ping",
     },
   ])("uses $name", ({ cfg, expected }) => {
-    expect(resolveHeartbeatPrompt(cfg)).toBe(expected);
+    expect(resolveConfiguredHeartbeatPrompt(cfg)).toBe(expected);
   });
 });
 
@@ -1168,7 +1168,7 @@ describe("runHeartbeatOnce", () => {
         session: { store: storeTemplate },
       };
       const sessionKey = resolveAgentMainSessionKey({ cfg, agentId });
-      const storePath = resolveStorePath(storeTemplate, { agentId });
+      const storePath = resolveSessionStorePathCore(storeTemplate, { agentId });
       const sessionsDir = path.dirname(storePath);
       const sessionId = "sid-ops";
       const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
@@ -1656,7 +1656,7 @@ describe("runHeartbeatOnce", () => {
       };
       const sessionKey = resolveMainSessionKey(cfg);
       const agentId = resolveAgentIdFromSessionKey(sessionKey);
-      const storePath = resolveStorePath(storeTemplate, { agentId });
+      const storePath = resolveSessionStorePathCore(storeTemplate, { agentId });
       await seedWhatsAppSession(storePath, sessionKey);
 
       replySpy.mockResolvedValue({ text: "Hello from heartbeat" });

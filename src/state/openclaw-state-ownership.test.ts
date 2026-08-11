@@ -9,7 +9,7 @@ import {
 } from "../config/io.health-state.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
-import { sha256HexPrefix } from "../infra/crypto-digest.js";
+import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { requireNodeSqlite, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { withEnv } from "../test-utils/env.js";
 import { withOpenClawStateStartupMigrationCheckpointDatabase } from "./openclaw-state-db-startup-checkpoint.js";
@@ -93,7 +93,7 @@ function resolveExpectedOwnershipCoordinatorPath(databasePath: string): string {
   const stateDir = resolveOpenClawStateDirForDatabasePath(canonicalDatabasePath);
   return path.join(
     resolveGatewayLockDir(stateDir),
-    `state-ownership.${sha256HexPrefix(canonicalDatabasePath, 8)}.lock.sqlite`,
+    `state-ownership.${sha256HexPrefixCore(canonicalDatabasePath, 8)}.lock.sqlite`,
   );
 }
 

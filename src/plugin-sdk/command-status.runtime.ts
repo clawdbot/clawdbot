@@ -35,7 +35,7 @@ export type ResolveDirectStatusReplyForSessionParams = {
  * Unauthorized requesters may see the session exists, but configured reasoning
  * state is masked so private agent/session defaults are not leaked.
  */
-export async function resolveDirectStatusReplyForSession(
+export async function resolveDirectStatusReplyForSessionCore(
   params: ResolveDirectStatusReplyForSessionParams,
 ): Promise<ReplyPayload | undefined> {
   const requestedSessionKey = params.sessionKey.trim();

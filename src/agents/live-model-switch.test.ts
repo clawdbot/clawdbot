@@ -40,7 +40,7 @@ vi.mock("../config/sessions/session-accessor.js", () => {
 });
 
 vi.mock("../config/sessions/paths.js", () => ({
-  resolveStorePath: (...args: unknown[]) => state.resolveStorePathMock(...args),
+  resolveSessionStorePathCore: (...args: unknown[]) => state.resolveStorePathMock(...args),
 }));
 
 let mod: typeof import("./live-model-switch.js");

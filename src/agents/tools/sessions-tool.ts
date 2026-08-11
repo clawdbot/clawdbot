@@ -5,7 +5,7 @@ import type { SessionsPatchResult } from "../../../packages/gateway-protocol/src
 import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayTransportError } from "../../gateway/call.js";
@@ -379,7 +379,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       if (patch.archived === true && key === requesterKey && key !== "global") {
         const agentId = resolveAgentIdFromSessionKey(key, resolveDefaultAgentId(cfg));
         if (key !== resolveAgentMainSessionKey({ cfg, agentId })) {
-          const storePath = resolveStorePath(cfg.session?.store, { agentId });
+          const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
           const currentEntry = loadSessionEntry({ agentId, sessionKey: key, storePath });
           const released = getCurrentSessionWorkAdmissionRelease({
             scope: storePath,

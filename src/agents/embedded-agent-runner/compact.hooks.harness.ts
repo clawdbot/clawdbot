@@ -77,7 +77,7 @@ export const sessionCompactImpl = vi.fn(async () => ({
 }));
 export const sessionManualCompactionMock = vi.fn();
 export const sessionAutomaticCompactionMock = vi.fn();
-export const triggerInternalHook: Mock<(event?: unknown) => void> = vi.fn();
+export const triggerInternalHookMock: Mock<(event?: unknown) => void> = vi.fn();
 const sanitizeSessionHistoryMock = vi.fn(
   async (params: { messages: unknown[] }) => params.messages,
 );
@@ -615,7 +615,7 @@ export function resetCompactHooksHarnessMocks(): void {
     details: { ok: true },
   });
 
-  triggerInternalHook.mockReset();
+  triggerInternalHookMock.mockReset();
   resetCompactSessionStateMocks();
   createOpenClawCodingToolsMock.mockReset();
   createOpenClawCodingToolsMock.mockReturnValue([]);
@@ -717,7 +717,7 @@ export async function loadCompactHooksHarness(): Promise<{
     );
     return {
       ...actual,
-      triggerInternalHook,
+      triggerInternalHook: triggerInternalHookMock,
     };
   });
 

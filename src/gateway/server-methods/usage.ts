@@ -11,7 +11,7 @@ import {
 import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -156,7 +156,7 @@ function resolveSessionUsageTarget(
     : resolveExistingUsageSessionFile({
         agentId,
         sessionId,
-        sessionFile: resolveSessionFilePath(
+        sessionFile: resolveSessionFilePathCore(
           sessionId,
           undefined,
           resolveSessionFilePathOptions({ storePath, agentId }),

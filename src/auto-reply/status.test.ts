@@ -5,7 +5,7 @@ import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { getContextWindowCaches, providerContextTokenCacheKey } from "../agents/context-cache.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessageSync,
   replaceSessionEntrySync,
@@ -1843,7 +1843,7 @@ describe("buildStatusMessage", () => {
       agentId: params.agentId,
       sessionId: params.sessionId,
       sessionKey: `agent:${params.agentId}:main`,
-      storePath: resolveStorePath(undefined, { agentId: params.agentId }),
+      storePath: resolveSessionStorePathCore(undefined, { agentId: params.agentId }),
     };
     replaceSessionEntrySync(scope, { sessionId: params.sessionId, updatedAt: Date.now() });
     appendTranscriptMessageSync(scope, {
@@ -2076,7 +2076,7 @@ describe("buildStatusMessage", () => {
             agentId: "main",
             sessionId,
             sessionKey: "agent:main:main",
-            storePath: resolveStorePath(undefined, { agentId: "main" }),
+            storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
           },
           {
             message: {

@@ -28,7 +28,7 @@ async function setupReefConversation() {
   const sessionKey = "agent:main:reef:direct:peer-agent";
   const sessionId = "reef-session";
   const cfg = { session: { store: storePath } } as OpenClawConfig;
-  await sessionAccessor.upsertSessionEntry(
+  await sessionAccessor.upsertSessionEntryCore(
     { agentId: "main", sessionKey, storePath },
     {
       sessionId,
@@ -476,7 +476,7 @@ describe("conversation turn capture", () => {
     const sessionKey = "agent:main:discord:channel:ops-room:thread:user-context";
     const sessionId = "discord-thread-session";
     const cfg = { session: { store: storePath } } as OpenClawConfig;
-    await sessionAccessor.upsertSessionEntry(
+    await sessionAccessor.upsertSessionEntryCore(
       { ...scope, sessionKey },
       {
         sessionId,

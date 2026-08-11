@@ -28,7 +28,7 @@ import {
   writeLaunchAgentPlist,
 } from "./launchd-service-files.js";
 import { assertNoSystemLaunchDaemonOwnership } from "./launchd-system.js";
-import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
+import { formatLine, normalizeWindowsPathSeparators, writeFormattedLines } from "./output.js";
 import { resolveDaemonHomeDir } from "./paths.js";
 import type {
   GatewayServiceEnv,
@@ -59,7 +59,7 @@ export async function uninstallLaunchAgent({
     return;
   }
 
-  const home = toPosixPath(resolveDaemonHomeDir(env));
+  const home = normalizeWindowsPathSeparators(resolveDaemonHomeDir(env));
   const trashDir = path.posix.join(home, ".Trash");
   const dest = path.join(trashDir, `${label}.plist`);
   try {

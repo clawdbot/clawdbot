@@ -21,7 +21,7 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
       loadConfig: () => testConfig,
     }));
     vi.doMock("../config/sessions/paths.js", () => ({
-      resolveStorePath: () => "/tmp/sessions.json",
+      resolveSessionStorePathCore: () => "/tmp/sessions.json",
     }));
     vi.doMock("../config/sessions/session-accessor.js", () => ({
       listSessionEntriesCore: () => [],

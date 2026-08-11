@@ -20,7 +20,7 @@ import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import {
   resolveSessionTranscriptRuntimeTarget,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -236,7 +236,7 @@ class ComposedGatewayHarness {
     );
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     const storePath = path.join(sessionsDir, "sessions.json");
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey: SESSION_KEY, storePath },
       { sessionId: SESSION_ID, updatedAt: 1 },
     );

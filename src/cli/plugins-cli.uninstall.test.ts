@@ -19,13 +19,13 @@ import {
   refreshPluginRegistryMock,
   replaceConfigFileMock,
   resetPluginsCliTestState,
-  restorePersistedInstalledPluginIndexIfCurrent,
+  restorePersistedInstalledPluginIndexIfCurrentMock,
   runPluginsCommand,
   runtimeErrors,
   pluginsCliRuntimeLogs,
   setInstalledPluginIndexInstallRecords,
-  writeConfigFile,
-  writePersistedInstalledPluginIndexInstallRecordsWithLease,
+  configWriteMock,
+  writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
 } from "./plugins-cli-test-helpers.js";
 
 const CLI_STATE_ROOT = "/tmp/openclaw-state";
@@ -63,7 +63,7 @@ function expectRuntimeLogIncludes(fragment: string) {
 }
 
 function expectInstallRecordsWrittenWithLease(records: unknown, config: unknown) {
-  expect(writePersistedInstalledPluginIndexInstallRecordsWithLease).toHaveBeenCalledWith(
+  expect(writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock).toHaveBeenCalledWith(
     records,
     expect.objectContaining({
       config,
@@ -122,7 +122,7 @@ describe("plugins cli uninstall", () => {
 
     expect(planPluginUninstallMock).not.toHaveBeenCalled();
     expect(applyPluginUninstallDirectoryRemovalMock).not.toHaveBeenCalled();
-    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(configWriteMock).not.toHaveBeenCalled();
   });
 
   it("shows uninstall dry-run preview without mutating config or acquiring write mode", async () => {
@@ -157,7 +157,7 @@ describe("plugins cli uninstall", () => {
     expect(buildPluginSnapshotReportMock).toHaveBeenCalledTimes(1);
     expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
     expect(planPluginUninstallMock).toHaveBeenCalledTimes(1);
-    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(configWriteMock).not.toHaveBeenCalled();
     expect(refreshPluginRegistryMock).not.toHaveBeenCalled();
     expectRuntimeLogIncludes("Dry run, no changes made.");
     expectRuntimeLogIncludes("context engine slot");
@@ -198,7 +198,7 @@ describe("plugins cli uninstall", () => {
     expect(promptYesNoMock).not.toHaveBeenCalled();
     expectLatestUninstallPlanParams({ pluginId: "alpha", deleteFiles: false });
     expectInstallRecordsWrittenWithLease({}, { plugins: { entries: {} } });
-    expect(writeConfigFile).toHaveBeenCalledWith({
+    expect(configWriteMock).toHaveBeenCalledWith({
       plugins: {
         entries: {},
       },
@@ -308,8 +308,8 @@ describe("plugins cli uninstall", () => {
     expect(planPluginUninstallMock).not.toHaveBeenCalled();
     expect(promptYesNoMock).not.toHaveBeenCalled();
     expect(applyPluginUninstallDirectoryRemovalMock).not.toHaveBeenCalled();
-    expect(writePersistedInstalledPluginIndexInstallRecordsWithLease).not.toHaveBeenCalled();
-    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock).not.toHaveBeenCalled();
+    expect(configWriteMock).not.toHaveBeenCalled();
     expect(refreshPluginRegistryMock).not.toHaveBeenCalled();
   });
 
@@ -401,8 +401,8 @@ describe("plugins cli uninstall", () => {
     expect(runtimeErrors).toContain(
       "Error: plugins uninstall requires confirmation input. Re-run in an interactive TTY or pass --force.",
     );
-    expect(writePersistedInstalledPluginIndexInstallRecordsWithLease).not.toHaveBeenCalled();
-    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock).not.toHaveBeenCalled();
+    expect(configWriteMock).not.toHaveBeenCalled();
     expect(refreshPluginRegistryMock).not.toHaveBeenCalled();
     expect(applyPluginUninstallDirectoryRemovalMock).not.toHaveBeenCalled();
   });
@@ -449,7 +449,7 @@ describe("plugins cli uninstall", () => {
     ).rejects.toThrow("config changed");
 
     expectInstallRecordsWrittenWithLease({}, { plugins: { entries: {} } });
-    expect(restorePersistedInstalledPluginIndexIfCurrent).toHaveBeenCalledWith(
+    expect(restorePersistedInstalledPluginIndexIfCurrentMock).toHaveBeenCalledWith(
       previousPersistedIndex,
       expect.any(Number),
       expect.objectContaining({
@@ -498,15 +498,15 @@ describe("plugins cli uninstall", () => {
 
     await runPluginsCommand(["plugins", "uninstall", "alpha", "--force"]);
 
-    const configWriteOrder = writeConfigFile.mock.invocationCallOrder[0] ?? 0;
+    const configWriteOrder = configWriteMock.mock.invocationCallOrder[0] ?? 0;
     const deleteOrder =
       applyPluginUninstallDirectoryRemovalMock.mock.invocationCallOrder[0] ??
       Number.MAX_SAFE_INTEGER;
     const finalConfigWriteOrder =
-      writeConfigFile.mock.invocationCallOrder[1] ?? Number.MAX_SAFE_INTEGER;
+      configWriteMock.mock.invocationCallOrder[1] ?? Number.MAX_SAFE_INTEGER;
     const refreshOrder =
       refreshPluginRegistryMock.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
-    expect(writeConfigFile).toHaveBeenCalledTimes(2);
+    expect(configWriteMock).toHaveBeenCalledTimes(2);
     expect(applyPluginUninstallDirectoryRemovalMock).toHaveBeenCalledTimes(1);
     expect(refreshPluginRegistryMock).toHaveBeenCalledTimes(1);
     expect(deleteOrder).toBeGreaterThan(configWriteOrder);
@@ -552,7 +552,7 @@ describe("plugins cli uninstall", () => {
       "remains disabled and tracked",
     );
 
-    expect(writeConfigFile).toHaveBeenCalledWith({
+    expect(configWriteMock).toHaveBeenCalledWith({
       plugins: {
         entries: {
           alpha: { enabled: false },
@@ -560,7 +560,7 @@ describe("plugins cli uninstall", () => {
         installs: installRecords,
       },
     });
-    expect(writePersistedInstalledPluginIndexInstallRecordsWithLease).not.toHaveBeenCalled();
+    expect(writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock).not.toHaveBeenCalled();
     expect(refreshPluginRegistryMock).not.toHaveBeenCalled();
   });
 
@@ -595,7 +595,7 @@ describe("plugins cli uninstall", () => {
     await runPluginsCommand(["plugins", "uninstall", "alpha", "--force"]);
 
     expectLatestUninstallPlanParams({ pluginId: "alpha", deleteFiles: true });
-    expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
+    expect(configWriteMock).toHaveBeenCalledWith(nextConfig);
     expect(pluginsCliRuntimeLogs.at(-2)).toContain('Uninstalled plugin "alpha"');
   });
 
@@ -621,7 +621,7 @@ describe("plugins cli uninstall", () => {
     await runPluginsCommand(["plugins", "uninstall", "alpha", "--force"]);
 
     expectLatestUninstallPlanParams({ pluginId: "alpha", deleteFiles: true });
-    expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
+    expect(configWriteMock).toHaveBeenCalledWith(nextConfig);
     expect(refreshPluginRegistryMock).toHaveBeenCalledWith({
       config: nextConfig,
       installRecords: {},
@@ -697,7 +697,7 @@ describe("plugins cli uninstall", () => {
         ),
       }),
     );
-    expect(writeConfigFile).toHaveBeenCalledWith(
+    expect(configWriteMock).toHaveBeenCalledWith(
       expect.objectContaining({
         channels: Object.fromEntries(
           Object.entries(channels).filter(([channelId]) => !channelIds.includes(channelId)),
@@ -757,7 +757,7 @@ describe("plugins cli uninstall", () => {
       deleteFiles: false,
     });
     expectInstallRecordsWrittenWithLease({}, nextConfig);
-    expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
+    expect(configWriteMock).toHaveBeenCalledWith(nextConfig);
     expectRuntimeLogIncludes("channel config (channels.alpha)");
     expect(pluginsCliRuntimeLogs.at(-2)).toContain('Uninstalled plugin "alpha"');
   });

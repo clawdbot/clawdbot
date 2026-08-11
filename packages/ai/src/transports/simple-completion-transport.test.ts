@@ -1,5 +1,5 @@
 import { createAssistantMessageEventStream } from "@openclaw/llm-core";
-import type { Api, Model, StreamFn } from "@openclaw/llm-core";
+import type { Api, AssistantMessageEventStreamContract, Model, StreamFn } from "@openclaw/llm-core";
 // Simple completion transport tests cover provider-specific stream alias
 // selection before the generic completion helper invokes the LLM layer.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,7 +17,7 @@ const prepareTransportAwareSimpleModel = vi.fn();
 const resolveTransportAwareSimpleApi = vi.fn();
 const prepareGoogleSimpleCompletionModel = vi.fn((_registry: unknown, model: unknown) => model);
 const inheritManagedTransport = vi.fn((_source: Model, target: Model) => target);
-const pluginStreamFn = vi.fn(() => "plugin-stream-result" as never);
+const pluginStreamFn = vi.fn(() => createAssistantMessageEventStream());
 const TEST_SECRET = "ollama-provider-secret";
 const TEST_SECRET_SENTINEL = "test-secret-sentinel";
 const initialHost = getAiTransportHost();
@@ -33,6 +33,21 @@ vi.mock("./provider-transport-stream.js", () => ({
 let prepareModelForSimpleCompletionImpl: typeof import("./simple-completion-transport.js").prepareModelForSimpleCompletion;
 let apiRegistry: ApiRegistry;
 const SIMPLE_COMPLETION_SOURCE_ID = "test:simple-completion-transport";
+
+function requireSynchronousStream(
+  stream: ReturnType<StreamFn>,
+): AssistantMessageEventStreamContract {
+  if (
+    stream instanceof Promise ||
+    !("push" in stream) ||
+    !("end" in stream) ||
+    typeof stream.push !== "function" ||
+    typeof stream.end !== "function"
+  ) {
+    throw new Error("Expected synchronous assistant event stream");
+  }
+  return stream as AssistantMessageEventStreamContract;
+}
 
 function prepareModelForSimpleCompletion(
   params: Omit<
@@ -286,6 +301,74 @@ describe("prepareModelForSimpleCompletion", () => {
     const registeredStream = ensureCustomApiRegistered.mock.calls.at(-1)?.[2] as StreamFn;
     await registeredStream(result, { messages: [] }, {});
     expect(pluginStreamFn).toHaveBeenCalledOnce();
+  });
+
+  it("carries the source API into wrappers after provider stream projection", () => {
+    const builtInStream = vi.fn(() => createAssistantMessageEventStream());
+    apiRegistry.registerApiProvider(
+      {
+        api: "openai-responses",
+        stream: builtInStream,
+        streamSimple: builtInStream,
+      },
+      SIMPLE_COMPLETION_SOURCE_ID,
+    );
+    const model: Model<"openai-responses"> = {
+      id: "muse-spark-1.2",
+      name: "Muse Spark 1.2",
+      api: "openai-responses",
+      provider: "meta",
+      baseUrl: "https://api.meta.ai/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 1.25, output: 4.25, cacheRead: 0.15, cacheWrite: 0 },
+      contextWindow: 1_048_576,
+      maxTokens: 131_072,
+    };
+    resolveProviderStreamFn.mockReturnValueOnce(undefined);
+    createTransportAwareStreamFnForModel.mockReturnValueOnce(pluginStreamFn);
+    wrapProviderSimpleCompletionStreamFn.mockImplementationOnce(({ context }) => context.streamFn);
+    ensureCustomApiRegistered.mockImplementation(
+      (registry: ApiRegistry, api: Api, streamFn: StreamFn) => {
+        if (registry.getApiProvider(api)) {
+          return false;
+        }
+        registry.registerApiProvider({
+          api,
+          stream: (runtimeModel, context, options) =>
+            requireSynchronousStream(streamFn(runtimeModel, context, options)),
+          streamSimple: (runtimeModel, context, options) =>
+            requireSynchronousStream(streamFn(runtimeModel, context, options)),
+        });
+        return true;
+      },
+    );
+
+    const result = prepareModelForSimpleCompletion({ model });
+    const dispatchApi =
+      "openclaw-provider-stream:meta:muse-spark-1.2:openai-responses:https%3A%2F%2Fapi.meta.ai%2Fv1";
+
+    expect(wrapProviderSimpleCompletionStreamFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          model: expect.objectContaining({ api: dispatchApi }),
+          sourceApi: "openai-responses",
+        }),
+      }),
+    );
+    expect(result.api).toMatch(/^openclaw-provider-simple:/);
+    const finalStreamFn = apiRegistry.getApiProvider(result.api)?.streamSimple;
+    if (!finalStreamFn) {
+      throw new Error("Expected projected simple completion stream");
+    }
+
+    void finalStreamFn(result, { messages: [] }, {});
+
+    expect(pluginStreamFn).toHaveBeenCalledWith(
+      expect.objectContaining({ api: dispatchApi }),
+      { messages: [] },
+      {},
+    );
   });
 
   it("uses a custom api alias for Anthropic Vertex simple completions", () => {

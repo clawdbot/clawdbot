@@ -51,15 +51,15 @@ export const toolsEffectiveGlobalAgentRuntimeMocks = {
   ),
 };
 
-export const resolveEffectiveToolInventory =
-  toolsEffectiveGlobalAgentRuntimeMocks.resolveEffectiveToolInventory;
-export const resolveEffectiveToolInventoryRuntimeModelContextAsync =
-  toolsEffectiveGlobalAgentRuntimeMocks.resolveEffectiveToolInventoryRuntimeModelContextAsync;
-export const resolveSessionMcpConfigSummary = vi.fn(() => ({
-  fingerprint: "mcp:0",
-  serverNames: [] as string[],
-}));
 export const toolsEffectiveRuntimeMockModule = {
+  resolveEffectiveToolInventory:
+    toolsEffectiveGlobalAgentRuntimeMocks.resolveEffectiveToolInventory,
+  resolveEffectiveToolInventoryRuntimeModelContextAsync:
+    toolsEffectiveGlobalAgentRuntimeMocks.resolveEffectiveToolInventoryRuntimeModelContextAsync,
+  resolveSessionMcpConfigSummary: vi.fn(() => ({
+    fingerprint: "mcp:0",
+    serverNames: [] as string[],
+  })),
   buildBundleMcpToolsFromCatalog: vi.fn(() => []),
   applyFinalEffectiveToolPolicy: vi.fn(
     (params: { bundledTools: unknown[] }) => params.bundledTools,

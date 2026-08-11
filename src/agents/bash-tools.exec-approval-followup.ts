@@ -8,7 +8,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { getGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
@@ -154,7 +154,7 @@ function isExecApprovalFollowupDirectDeliveryStale(params: {
     return false;
   }
   try {
-    const storePath = resolveStorePath(normalizeOptionalString(params.sessionStore), {
+    const storePath = resolveSessionStorePathCore(normalizeOptionalString(params.sessionStore), {
       agentId: resolveAgentIdFromSessionKey(sessionKey),
     });
     const resolvedSessionId = normalizeOptionalString(

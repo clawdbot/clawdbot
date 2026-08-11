@@ -8,7 +8,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createTelegramCallbackMessageActions } from "./bot-handlers.callback-actions.runtime.js";
+import { createTelegramCallbackMessageActions } from "./bot-handlers.callback-actions.js";
 import { asTelegramClientFetch } from "./client-fetch.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { setTelegramRuntime } from "./runtime.js";

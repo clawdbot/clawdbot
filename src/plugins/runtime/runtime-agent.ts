@@ -17,7 +17,7 @@ import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import { normalizeThinkLevel, resolveThinkingProfile } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
   listSessionEntriesCore as listAccessorSessionEntries,
@@ -39,7 +39,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
-import { resolveSessionCatalogCreateTarget } from "./runtime-agent-session-catalog.js";
+import { resolveAgentCatalogCreateTarget } from "./runtime-agent-session-catalog.js";
 import { resolveRuntimeThinkingCatalog } from "./runtime-agent-thinking.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import type { PluginRuntime } from "./types.js";
@@ -581,7 +581,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     resolveAgentDir,
     resolveAgentWorkspaceDir,
     resolveAgentIdentity,
-    resolveSessionCatalogCreateTarget,
+    resolveSessionCatalogCreateTarget: resolveAgentCatalogCreateTarget,
     resolveThinkingDefault,
     normalizeThinkingLevel: normalizeThinkLevel,
     resolveThinkingPolicy: (params) => {
@@ -625,7 +625,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     () => (agentRuntime as PluginRuntime["agent"]).runEmbeddedAgent,
   );
   defineCachedValue(agentRuntime, "session", () => ({
-    resolveStorePath,
+    resolveStorePath: resolveSessionStorePathCore,
     createSessionEntry,
     getSessionEntry,
     listSessionEntries,

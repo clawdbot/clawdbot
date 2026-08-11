@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
-import { resolveStorePath, type SessionEntry } from "../config/sessions.js";
+import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -89,7 +89,7 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
       const cfg: OpenClawConfig = {
         agents: { list: [{ id: "main", default: true }, { id: "work" }] },
       };
-      const workStorePath = resolveStorePath(cfg.session?.store, { agentId: "work" });
+      const workStorePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "work" });
       await seedSessionStore(workStorePath, {
         "agent:work:target": {
           sessionId: "sess-shared",
@@ -132,14 +132,14 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
         agents: { list: [{ id: "main", default: true }, { id: "work" }] },
       };
       const updatedAt = freshUpdatedAt();
-      await seedSessionStore(resolveStorePath(cfg.session?.store, { agentId: "main" }), {
+      await seedSessionStore(resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }), {
         "main-target": {
           sessionId: "sess-shared",
           label: "shared-label",
           updatedAt,
         },
       });
-      await seedSessionStore(resolveStorePath(cfg.session?.store, { agentId: "work" }), {
+      await seedSessionStore(resolveSessionStorePathCore(cfg.session?.store, { agentId: "work" }), {
         "work-target": {
           sessionId: "sess-shared",
           label: "shared-label",
@@ -185,7 +185,7 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
         session: { mainKey: "main", store: undefined },
         agents: { list: [{ id: "ops", default: true }] },
       } satisfies OpenClawConfig;
-      await seedSessionStore(resolveStorePath(cfg.session?.store, { agentId: "main" }), {
+      await seedSessionStore(resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }), {
         "agent:main:guildchat:direct:u1": {
           sessionId: "sess-stale-main",
           label: "stale-main",
@@ -213,7 +213,9 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
       const cfg: OpenClawConfig = {
         agents: { list: [{ id: "ops", default: true }] },
       };
-      const staleMainStorePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
+      const staleMainStorePath = resolveSessionStorePathCore(cfg.session?.store, {
+        agentId: "main",
+      });
       await seedSessionStore(staleMainStorePath, {
         "agent:main:main": {
           sessionId: "sess-discovered-main",
@@ -256,7 +258,9 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
         agents: { list: [{ id: "main", default: true }] },
       };
       const acpKey = "agent:claude:acp:11111111-1111-4111-8111-111111111111";
-      const claudeStorePath = resolveStorePath(cfg.session?.store, { agentId: "claude" });
+      const claudeStorePath = resolveSessionStorePathCore(cfg.session?.store, {
+        agentId: "claude",
+      });
       await seedSessionStore(claudeStorePath, {
         [acpKey]: {
           sessionId: "sess-acp-harness",
@@ -307,7 +311,9 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
       };
       const acpKey = "agent:claude:acp:44444444-4444-4444-8444-444444444444";
       const legacyAcpKey = "agent:CLAUDE:acp:44444444-4444-4444-8444-444444444444";
-      const claudeStorePath = resolveStorePath(cfg.session?.store, { agentId: "claude" });
+      const claudeStorePath = resolveSessionStorePathCore(cfg.session?.store, {
+        agentId: "claude",
+      });
       await seedSessionStore(claudeStorePath, {
         [acpKey]: {
           sessionId: "sess-acp-harness-partial",
@@ -350,7 +356,9 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
         agents: { list: [{ id: "main", default: true }] },
       };
       const acpBridgeKey = "agent:deleted-agent:acp:bridge-session-without-runtime-meta";
-      const deletedStorePath = resolveStorePath(cfg.session?.store, { agentId: "deleted-agent" });
+      const deletedStorePath = resolveSessionStorePathCore(cfg.session?.store, {
+        agentId: "deleted-agent",
+      });
       await seedSessionStore(deletedStorePath, {
         [acpBridgeKey]: {
           sessionId: "sess-acp-bridge-deleted",
@@ -395,7 +403,9 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
         agents: { list: [{ id: "main", default: true }] },
       };
       const acpBindingKey = "agent:deleted-agent:acp:binding:discord:default:feedface";
-      const deletedStorePath = resolveStorePath(cfg.session?.store, { agentId: "deleted-agent" });
+      const deletedStorePath = resolveSessionStorePathCore(cfg.session?.store, {
+        agentId: "deleted-agent",
+      });
       await seedSessionStore(deletedStorePath, {
         [acpBindingKey]: {
           sessionId: "sess-acp-binding-deleted",
@@ -439,14 +449,18 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
       const cfg: OpenClawConfig = {
         agents: { list: [{ id: "ops", default: true }] },
       };
-      const liveDefaultStorePath = resolveStorePath(cfg.session?.store, { agentId: "ops" });
+      const liveDefaultStorePath = resolveSessionStorePathCore(cfg.session?.store, {
+        agentId: "ops",
+      });
       await seedSessionStore(liveDefaultStorePath, {
         "agent:ops:main": {
           sessionId: "sess-live-default",
           updatedAt: freshUpdatedAt(),
         },
       });
-      const staleMainStorePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
+      const staleMainStorePath = resolveSessionStorePathCore(cfg.session?.store, {
+        agentId: "main",
+      });
       await seedSessionStore(staleMainStorePath, {
         "agent:main:main": {
           sessionId: "sess-deleted-main",

@@ -11,7 +11,7 @@ import {
   callNodesGatewayCli,
   nodesCallOpts,
   parseOptionalNodePositiveInteger,
-  resolveNodeId,
+  resolveCliNodeId,
 } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
@@ -52,7 +52,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
             );
           }
           const params = parseNodeInvokeParams(opts.params);
-          const nodeId = await resolveNodeId(opts, nodeQuery);
+          const nodeId = await resolveCliNodeId(opts, nodeQuery);
           const timeoutMs = parseOptionalNodePositiveInteger(
             opts.invokeTimeout,
             "--invoke-timeout",

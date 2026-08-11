@@ -8,7 +8,6 @@ import { getOptionalSlackRuntime } from "./runtime.js";
  * Used to auto-respond in threads without requiring @mention after the first reply.
  */
 
-const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MAX_ENTRIES = 5000;
 const PERSISTENT_MAX_ENTRIES = 1000;
 const PERSISTENT_NAMESPACE = "slack.thread-participation";
@@ -25,7 +24,8 @@ type SlackThreadParticipationRecord = {
 const SLACK_THREAD_PARTICIPATION_KEY = Symbol.for("openclaw.slackThreadParticipation");
 const threadParticipation = createPersistentDedupeCache<SlackThreadParticipationRecord>({
   globalKey: SLACK_THREAD_PARTICIPATION_KEY,
-  ttlMs: TTL_MS,
+  // Participation remains valid until bounded oldest-entry eviction removes it.
+  ttlMs: 0,
   maxSize: MAX_ENTRIES,
   persistent: {
     namespace: PERSISTENT_NAMESPACE,
@@ -37,8 +37,6 @@ const threadParticipation = createPersistentDedupeCache<SlackThreadParticipation
       "thread-participation-state",
       "Slack persistent thread participation state failed",
     ),
-    // Restoring participation must not extend its original mention-bypass window.
-    readTimestamp: ({ repliedAt }) => repliedAt,
   },
 });
 

@@ -231,7 +231,6 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
         id: "changes",
         label: t("chat.sessionDiff.show"),
         icon: icons.fileDiff,
-        disabledReason: sessionWorkspace.diffNotGit ? t("chat.sessionDiff.notGit") : undefined,
         onActivate: sessionWorkspace.onOpenDiff,
       });
     }

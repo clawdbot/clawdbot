@@ -19,7 +19,7 @@ vi.mock("../../config/sessions/session-accessor.js", () => ({
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
-  resolveStorePath: (_store?: string, params?: { agentId?: string }) =>
+  resolveSessionStorePathCore: (_store?: string, params?: { agentId?: string }) =>
     `/stores/${params?.agentId ?? "main"}.json`,
 }));
 

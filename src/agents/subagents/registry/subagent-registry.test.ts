@@ -238,7 +238,7 @@ vi.mock("../../../config/config.js", () => {
 vi.mock("../../../config/sessions.js", () => ({
   loadSessionStore: mocks.loadSessionStore,
   resolveAgentIdFromSessionKey: mocks.resolveAgentIdFromSessionKey,
-  resolveStorePath: mocks.resolveStorePath,
+  resolveSessionStorePathCore: mocks.resolveStorePath,
   updateSessionStore: mocks.updateSessionStore,
 }));
 

@@ -10,7 +10,7 @@ import { getCoreSecretTargetRegistry } from "./target-registry-data.js";
 import {
   discoverConfigSecretTargetsByIds,
   resolveConfigSecretTargetByPath,
-  resolveSecretPlanTargetByPath,
+  resolveSecretPlanTargetByPathCore,
 } from "./target-registry.js";
 
 describe("secret target registry", () => {
@@ -62,11 +62,11 @@ describe("secret target registry", () => {
   });
 
   it("resolves plan targets by owning config document", () => {
-    const configTarget = resolveSecretPlanTargetByPath({
+    const configTarget = resolveSecretPlanTargetByPathCore({
       configFile: "openclaw.json",
       pathSegments: ["models", "providers", "openai", "apiKey"],
     });
-    const authProfileTarget = resolveSecretPlanTargetByPath({
+    const authProfileTarget = resolveSecretPlanTargetByPathCore({
       configFile: "auth-profiles.json",
       pathSegments: ["profiles", "openai:default", "key"],
     });

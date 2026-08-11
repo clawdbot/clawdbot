@@ -4,7 +4,7 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import { deriveDurableFinalDeliveryRequirementsForBatch } from "../../channels/message/capabilities.js";
 import {
-  sendDurableMessageBatch,
+  sendDurableMessageBatchCore,
   serializeDurableMessagePayloadOutcomes,
   type SerializedDurableMessagePayloadOutcome,
 } from "../../channels/message/runtime.js";
@@ -389,7 +389,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
         silent: params.silent,
       });
     }
-    const send = await sendDurableMessageBatch({
+    const send = await sendDurableMessageBatchCore({
       cfg,
       channel: outboundChannel,
       to: resolvedTarget.to,

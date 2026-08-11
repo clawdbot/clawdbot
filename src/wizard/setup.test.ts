@@ -1016,6 +1016,99 @@ describe("runSetupWizard", () => {
     expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(remoteToken));
   });
 
+  it("uses the configured remote password for the setup reachability probe", async () => {
+    const remotePassword = "remote-password"; // pragma: allowlist secret
+    readConfigFileSnapshot.mockResolvedValueOnce(
+      configSnapshot({
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://gateway.example.test",
+            password: remotePassword,
+          },
+        },
+      }),
+    );
+
+    await runSetupWizard(
+      { acceptRisk: true, flow: "advanced", mode: "remote" },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    expect(probeGatewayReachable).toHaveBeenCalledWith({
+      url: "wss://gateway.example.test",
+      token: undefined,
+      password: remotePassword,
+    });
+  });
+
+  it("keeps a configured remote token authoritative over an environment password", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce(
+      configSnapshot({
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://gateway.example.test",
+            token: { source: "env", provider: "default", id: "REMOTE_SECRET_TOKEN" },
+          },
+        },
+        secrets: { providers: { default: { source: "env" } } },
+      }),
+    );
+    vi.stubEnv("REMOTE_SECRET_TOKEN", "resolved-remote-token");
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "env-password"); // pragma: allowlist secret
+
+    try {
+      await runSetupWizard(
+        { acceptRisk: true, flow: "advanced", mode: "remote" },
+        createRuntime(),
+        buildWizardPrompter({}),
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    expect(probeGatewayReachable).toHaveBeenCalledWith({
+      url: "wss://gateway.example.test",
+      token: "resolved-remote-token",
+    });
+  });
+
+  it("uses an ambient gateway token as the shared remote fallback", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce(
+      configSnapshot({
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://gateway.example.test",
+          },
+        },
+      }),
+    );
+    const previousToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "ambient-token"; // pragma: allowlist secret
+
+    try {
+      await runSetupWizard(
+        { acceptRisk: true, flow: "advanced", mode: "remote" },
+        createRuntime(),
+        buildWizardPrompter({}),
+      );
+    } finally {
+      if (previousToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
+      }
+    }
+
+    expect(probeGatewayReachable).toHaveBeenCalledWith({
+      url: "wss://gateway.example.test",
+      token: "ambient-token",
+    });
+  });
+
   it("does not reuse stored remote credentials for an overridden URL", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",
@@ -1038,17 +1131,22 @@ describe("runSetupWizard", () => {
       warnings: [],
       legacyIssues: [],
     });
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "ambient-password"); // pragma: allowlist secret
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "advanced",
-        mode: "remote",
-        remoteUrl: "wss://flag.example.com:18789",
-      },
-      createRuntime(),
-      buildWizardPrompter({}),
-    );
+    try {
+      await runSetupWizard(
+        {
+          acceptRisk: true,
+          flow: "advanced",
+          mode: "remote",
+          remoteUrl: "wss://flag.example.com:18789",
+        },
+        createRuntime(),
+        buildWizardPrompter({}),
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
 
     expect(probeGatewayReachable).toHaveBeenCalledWith({
       url: "wss://flag.example.com:18789",

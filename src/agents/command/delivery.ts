@@ -23,7 +23,7 @@ import {
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
 import { createChannelReplyTransform } from "../../channels/message/reply-transform.js";
 import {
-  sendDurableMessageBatch,
+  sendDurableMessageBatchCore,
   serializeDurableMessagePayloadOutcomes,
   type SerializedDurableMessagePayloadOutcome,
 } from "../../channels/message/runtime.js";
@@ -60,7 +60,7 @@ import { isAgentRunRestartAbortReason } from "../run-termination.js";
 import type { AgentCommandOpts } from "./types.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
-type DurableSendResult = Awaited<ReturnType<typeof sendDurableMessageBatch>>;
+type DurableSendResult = Awaited<ReturnType<typeof sendDurableMessageBatchCore>>;
 
 function createRestartOnlyAbortSignal(source: AbortSignal | undefined): {
   signal?: AbortSignal;
@@ -949,7 +949,7 @@ export async function deliverAgentCommandResult(
       const restartAbort = createRestartOnlyAbortSignal(opts.abortSignal);
       let send: DurableSendResult;
       try {
-        send = await sendDurableMessageBatch({
+        send = await sendDurableMessageBatchCore({
           cfg,
           channel: deliveryChannel,
           to: deliveryTarget,
