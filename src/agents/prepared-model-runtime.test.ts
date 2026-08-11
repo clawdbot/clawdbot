@@ -122,7 +122,6 @@ describe("prepared model runtime snapshots", () => {
     // in-scope owner, proving the untouched owner avoided catalog/runtime construction.
     expect(buildCounts).toEqual([2, 1]);
     const retained = getPreparedModelRuntimeSnapshot({ ...freeInput, config: scopedConfig });
-    // eslint-disable-next-line no-console
     console.log(
       `[scoped-refresh-trace] fullRefreshAgentCount=${buildCounts[0]} scopedRefreshAgentCount=${buildCounts[1]} ` +
         `| in-scope rebuilt="pro" (snapshot=pro) | out-of-scope retained="free" (snapshot=${retained?.agentId}, observesAcceptedConfig=${retained?.config === scopedConfig})`,
