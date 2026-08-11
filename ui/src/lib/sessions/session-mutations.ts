@@ -30,6 +30,8 @@ import {
 /** The Gateway's single pin fact: `pinned` is a projection of `pinnedAt`. */
 type SessionPinFields = { pinned: boolean; pinnedAt: number | undefined };
 
+type ConfirmedArchiveState = Pick<GatewaySessionRow, "archivedAt" | "archivedBy" | "sessionId">;
+
 type SessionMutationsHost = {
   connection: SessionConnectionOwner;
   readState: () => SessionState;
@@ -50,6 +52,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     string,
     { token: symbol; previous: SessionPinFields; next: SessionPinFields }
   >();
+  const confirmedArchives = new Map<string, ConfirmedArchiveState>();
   const preparedWorkSessionKeys = new Set<string>();
 
   const setModelOverride = (key: string, value: string | null | undefined) => {
@@ -301,9 +304,18 @@ export function createSessionMutations(host: SessionMutationsHost) {
         return null;
       }
       if (archivedPresentationRow) {
+        const archivedAt = result.entry?.archivedAt ?? Date.now();
+        confirmedArchives.set(normalizedKey, {
+          archivedAt,
+          ...(archivedPresentationRow.archivedBy
+            ? { archivedBy: archivedPresentationRow.archivedBy }
+            : {}),
+          ...(archivedPresentationRow.sessionId
+            ? { sessionId: archivedPresentationRow.sessionId }
+            : {}),
+        });
         const state = host.readState();
         if (state.result) {
-          const archivedAt = result.entry?.archivedAt ?? Date.now();
           const archivedRow = {
             ...archivedPresentationRow,
             archived: true,
@@ -324,6 +336,8 @@ export function createSessionMutations(host: SessionMutationsHost) {
             result: { ...state.result, count: sessions.length, sessions },
           });
         }
+      } else if (patchParams.archived === false) {
+        confirmedArchives.delete(normalizedKey);
       }
       confirmPinPatch();
       if (!options.deferListRefresh) {
@@ -361,6 +375,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
         return { deleted: false };
       }
       host.retirePullRequestSummary(key);
+      confirmedArchives.delete(key.trim());
       preparedWorkSessionKeys.delete(key.trim());
       host.publish({ ...host.readState(), deletedSessions: [{ key, agentId: options.agentId }] });
       setModelOverride(key, undefined);
@@ -410,6 +425,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     if (deleted.length > 0 && host.connection.isCurrent(scope)) {
       for (const key of deleted) {
         host.retirePullRequestSummary(key);
+        confirmedArchives.delete(key.trim());
         preparedWorkSessionKeys.delete(key.trim());
       }
       host.publish({
@@ -476,6 +492,58 @@ export function createSessionMutations(host: SessionMutationsHost) {
       });
       return changed ? { ...result, sessions } : result;
     },
+    applyConfirmedArchives(result: SessionsListResult | null): SessionsListResult | null {
+      if (!result || confirmedArchives.size === 0) {
+        return result;
+      }
+      let changed = false;
+      const sessions = result.sessions.map((row) => {
+        const archive = confirmedArchives.get(row.key);
+        if (
+          !archive ||
+          row.archived === true ||
+          (archive.sessionId && row.sessionId && archive.sessionId !== row.sessionId)
+        ) {
+          return row;
+        }
+        changed = true;
+        return {
+          ...row,
+          archived: true,
+          ...(archive.archivedAt !== undefined ? { archivedAt: archive.archivedAt } : {}),
+          ...(archive.archivedBy ? { archivedBy: archive.archivedBy } : {}),
+        };
+      });
+      return changed ? { ...result, sessions } : result;
+    },
+    observeArchiveState(key: string, archived: boolean | null, row?: GatewaySessionRow): void {
+      const normalizedKey = key.trim();
+      if (!normalizedKey || archived === null) {
+        return;
+      }
+      if (!archived) {
+        confirmedArchives.delete(normalizedKey);
+        return;
+      }
+      const previous = confirmedArchives.get(normalizedKey);
+      confirmedArchives.set(normalizedKey, {
+        ...(row?.archivedAt !== undefined
+          ? { archivedAt: row.archivedAt }
+          : previous?.archivedAt !== undefined
+            ? { archivedAt: previous.archivedAt }
+            : {}),
+        ...(row?.archivedBy
+          ? { archivedBy: row.archivedBy }
+          : previous?.archivedBy
+            ? { archivedBy: previous.archivedBy }
+            : {}),
+        ...(row?.sessionId
+          ? { sessionId: row.sessionId }
+          : previous?.sessionId
+            ? { sessionId: previous.sessionId }
+            : {}),
+      });
+    },
     reset,
     retireModelOverride,
     setModelOverride,
@@ -493,6 +561,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       // rehydrates wholesale; only the model-override side map outlives that
       // replacement, so it is the one that needs an explicit rollback below.
       pendingPinPatches.clear();
+      confirmedArchives.clear();
       preparedWorkSessionKeys.clear();
       const state = host.readState();
       if (Object.keys(state.modelOverrides).length > 0) {
@@ -502,6 +571,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     dispose() {
       pendingModelPatches.clear();
       pendingPinPatches.clear();
+      confirmedArchives.clear();
       preparedWorkSessionKeys.clear();
     },
   };

@@ -18,7 +18,7 @@ function buildResult(sessions: SessionsListResult["sessions"]): SessionsListResu
 }
 
 describe("preserveRosterPresentationMetadata", () => {
-  it("preserves a newer archive over an older active-list row", () => {
+  it("does not infer archive state from row timestamps", () => {
     const key = "agent:main:dashboard:archived";
 
     expect(
@@ -33,25 +33,7 @@ describe("preserveRosterPresentationMetadata", () => {
           archivedAt: 20,
         },
       ),
-    ).toMatchObject({ archived: true, archivedAt: 20 });
-  });
-
-  it("accepts an unarchive row newer than the prior archive", () => {
-    const key = "agent:main:dashboard:archived";
-
-    expect(
-      preserveRosterPresentationMetadata(
-        { key, kind: "direct", sessionId: "s1", updatedAt: 30, archived: false },
-        {
-          key,
-          kind: "direct",
-          sessionId: "s1",
-          updatedAt: 20,
-          archived: true,
-          archivedAt: 20,
-        },
-      ).archived,
-    ).toBe(false);
+    ).toEqual({ key, kind: "direct", sessionId: "s1", updatedAt: 10, archived: false });
   });
 });
 

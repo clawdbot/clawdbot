@@ -158,28 +158,15 @@ export function preserveRosterPresentationMetadata(
     incoming.sessionId && existing.sessionId
       ? incoming.sessionId === existing.sessionId
       : incoming.key === existing.key;
-  const preserveArchive =
-    sameSessionWindow &&
-    existing.archived === true &&
-    incoming.archived !== true &&
-    typeof existing.archivedAt === "number" &&
-    (typeof incoming.updatedAt !== "number" || incoming.updatedAt < existing.archivedAt);
   const preservePresentation =
+    sameSessionWindow &&
     Boolean(incoming.sessionId) &&
-    incoming.sessionId === existing.sessionId &&
     (incoming.derivedTitle === undefined || incoming.lastMessagePreview === undefined);
-  if (!preserveArchive && !preservePresentation) {
+  if (!preservePresentation) {
     return incoming;
   }
   return {
     ...incoming,
-    ...(preserveArchive
-      ? {
-          archived: true,
-          archivedAt: existing.archivedAt,
-          ...(existing.archivedBy ? { archivedBy: existing.archivedBy } : {}),
-        }
-      : {}),
     ...(preservePresentation &&
     incoming.derivedTitle === undefined &&
     existing.derivedTitle !== undefined
