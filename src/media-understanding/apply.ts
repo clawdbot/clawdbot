@@ -32,15 +32,18 @@ import type { ExtractedFileImage } from "./extracted-file-images.js";
 import {
   type FileAttachmentOutcome,
   isSkippedFileOutcome,
-  MAX_SKIPPED_FILE_MARKERS,
   renderFileAttachmentOutcome,
-  renderSkippedFileOverflowSummary,
   sanitizeMimeType,
 } from "./file-attachment-outcomes.js";
 import {
   type FileExtractionLimits,
   resolveFileExtractionLimits,
 } from "./file-extraction-limits.js";
+import {
+  MAX_SKIPPED_FILE_MARKERS,
+  renderMediaAttachmentDisposition,
+  renderSkippedFileOverflowSummary,
+} from "./media-attachment-outcomes.js";
 import { resolveConcurrency } from "./resolve.js";
 import {
   buildProviderRegistry,
@@ -183,6 +186,8 @@ type ClassifiedFileAttachment = {
   filename?: string;
   mimeType?: string;
 };
+
+type AttachmentContextBlock = { text: string; consumesMarkerBudget: boolean };
 
 // URL attachments may carry signed query credentials; only the pathname
 // basename is safe to surface as a model-visible display name.
@@ -350,10 +355,8 @@ async function extractFileContext(params: {
   if (!attachments || attachments.length === 0) {
     return { blocks: [], images: [] };
   }
-  const blocks: string[] = [];
+  const blocks: AttachmentContextBlock[] = [];
   const images: ExtractedFileImage[] = [];
-  let skippedMarkers = 0;
-  let skippedOverflow = 0;
   for (const attachment of attachments) {
     if (!attachment) {
       continue;
@@ -377,26 +380,72 @@ async function extractFileContext(params: {
     if (blockText === null) {
       continue;
     }
-    if (isSkippedFileOutcome(outcome)) {
-      if (skippedMarkers >= MAX_SKIPPED_FILE_MARKERS) {
-        skippedOverflow += 1;
-        continue;
-      }
-      skippedMarkers += 1;
-    }
-    blocks.push(
-      renderFileContextBlock({
+    blocks.push({
+      text: renderFileContextBlock({
         filename,
         fallbackName: `file-${attachment.index + 1}`,
         mimeType,
         content: blockText,
       }),
-    );
-  }
-  if (skippedOverflow > 0) {
-    blocks.push(renderSkippedFileOverflowSummary(skippedOverflow));
+      consumesMarkerBudget: isSkippedFileOutcome(outcome),
+    });
   }
   return { blocks, images };
+}
+
+function renderMediaAttachmentMarkers(params: {
+  attachments: MediaAttachment[];
+  decisions: MediaUnderstandingDecision[];
+  outputs: MediaUnderstandingOutput[];
+  deliveredImageIndexes?: ReadonlySet<number>;
+}): AttachmentContextBlock[] {
+  const handledIndexes = new Set(params.outputs.map((output) => output.attachmentIndex));
+  const decisions = new Map(params.decisions.map((decision) => [decision.capability, decision]));
+  return params.attachments.flatMap((attachment) => {
+    const capability = resolveAttachmentKind(attachment);
+    if (capability !== "image" && capability !== "audio" && capability !== "video") {
+      return [];
+    }
+    // The ACP caller resolved these exact indexes into native turn attachments;
+    // a marker would falsely claim non-delivery. Unresolved images keep theirs.
+    if (capability === "image" && params.deliveredImageIndexes?.has(attachment.index)) {
+      return [];
+    }
+    const decision = decisions.get(capability);
+    if (!decision || handledIndexes.has(attachment.index)) {
+      return [];
+    }
+    const disposition = decision.attachmentDispositions?.[attachment.index];
+    // Vision-capable model → the reply runtime hydrates images natively; an
+    // absence-of-processing marker would contradict what the model sees.
+    // Recorded per-attachment failures stay visible — they are authoritative
+    // regardless of native delivery. Partial/failed native hydration remains
+    // unexplainable at this frozen-prompt stage (#122101).
+    if (
+      capability === "image" &&
+      decision.nativeVisionActive !== false &&
+      disposition?.kind !== "failed"
+    ) {
+      return [];
+    }
+    const text = disposition ? renderMediaAttachmentDisposition(capability, disposition) : null;
+    return text ? [{ text, consumesMarkerBudget: true }] : [];
+  });
+}
+
+function applyAttachmentMarkerBudget(blocks: AttachmentContextBlock[]): string[] {
+  const rendered: string[] = [];
+  let markers = 0;
+  let overflow = 0;
+  for (const block of blocks) {
+    if (block.consumesMarkerBudget && markers >= MAX_SKIPPED_FILE_MARKERS) {
+      overflow += 1;
+      continue;
+    }
+    markers += Number(block.consumesMarkerBudget);
+    rendered.push(block.text);
+  }
+  return overflow > 0 ? [...rendered, renderSkippedFileOverflowSummary(overflow)] : rendered;
 }
 
 export async function applyMediaUnderstanding(params: {
@@ -409,6 +458,8 @@ export async function applyMediaUnderstanding(params: {
   activeModel?: ActiveMediaModel;
   /** Preserve native-harness ownership of image, video, and file inputs while applying STT. */
   processingMode?: "audio-only";
+  /** Attachment indexes the caller (ACP) has already resolved into native turn attachments. */
+  deliveredImageIndexes?: ReadonlySet<number>;
 }): Promise<ApplyMediaUnderstandingResult> {
   const { ctx, cfg } = params;
   const commandCandidates = [ctx.CommandBody, ctx.RawBody, ctx.Body];
@@ -451,9 +502,6 @@ export async function applyMediaUnderstanding(params: {
     const outputs: MediaUnderstandingOutput[] = [];
     const decisions: MediaUnderstandingDecision[] = [];
     for (const entry of results) {
-      if (!entry) {
-        continue;
-      }
       for (const output of entry.outputs) {
         outputs.push(output);
       }
@@ -567,13 +615,23 @@ export async function applyMediaUnderstanding(params: {
             skipAttachmentIndexes:
               audioAttachmentIndexes.size > 0 ? audioAttachmentIndexes : undefined,
           });
-    if (fileContext.blocks.length > 0) {
-      ctx.Body = appendFileBlocks(ctx.Body, fileContext.blocks);
+    const mediaMarkers =
+      params.processingMode === "audio-only"
+        ? []
+        : renderMediaAttachmentMarkers({
+            attachments,
+            decisions,
+            outputs,
+            deliveredImageIndexes: params.deliveredImageIndexes,
+          });
+    const contextBlocks = applyAttachmentMarkerBudget([...fileContext.blocks, ...mediaMarkers]);
+    if (contextBlocks.length > 0) {
+      ctx.Body = appendFileBlocks(ctx.Body, contextBlocks);
     }
-    if (outputs.length > 0 || fileContext.blocks.length > 0) {
+    if (outputs.length > 0 || contextBlocks.length > 0) {
       finalizeInboundContext(ctx, {
         forceBodyForAgent: true,
-        forceBodyForCommands: outputs.length > 0 || fileContext.blocks.length > 0,
+        forceBodyForCommands: true,
       });
     }
 

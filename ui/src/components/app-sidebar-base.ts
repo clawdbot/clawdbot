@@ -11,6 +11,8 @@ import {
 } from "../app/context.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import type { ThemeMode } from "../app/theme.ts";
+import type { UpdateProgress } from "../app/update-confirmation.ts";
+import type { ApplicationStatusBanner } from "../app/update-overlay-helpers.ts";
 import { readSessionMethodAccess, type SessionMethodAccess } from "../lib/session-method-access.ts";
 import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
 import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
@@ -50,7 +52,11 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) updateAvailable: UpdateAvailable | null = null;
   @property({ attribute: false }) updateSchedule: UpdateScheduleState | null = null;
   @property({ attribute: false }) heldUpdateCampaignId: string | null = null;
-  @property({ attribute: false }) updateRunning = false;
+  @property({ attribute: false }) updateBusy = false;
+  @property({ attribute: false }) updateStatusBanner: ApplicationStatusBanner | null = null;
+  @property({ attribute: false }) watchUpdateProgress:
+    | ((listener: (progress: UpdateProgress) => void) => () => void)
+    | undefined = undefined;
   @property({ attribute: false }) canUpdate = false;
   @property({ attribute: false }) canHoldUpdate = false;
   @property({ attribute: false }) onUpdate: () => void = () => undefined;

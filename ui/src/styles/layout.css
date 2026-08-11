@@ -1245,6 +1245,50 @@ html.openclaw-native-macos
   cursor: wait;
 }
 
+/* The install outlives the request that started it, so the card keeps moving
+   for the whole wait instead of reading as a dead disabled button. */
+.sidebar-update-card__action--busy .sidebar-update-card__icon svg {
+  animation: sidebar-update-card-spin 1s linear infinite;
+}
+
+@keyframes sidebar-update-card-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-update-card__action--busy .sidebar-update-card__icon svg {
+    animation: none;
+  }
+}
+
+/* The update outcome belongs beside the control that started it, not over the
+   top of the shell where it covers unrelated chrome. While the update dialog is
+   open it owns the report, so the ambient copy would only duplicate it. */
+body.update-dialog-open .sidebar-update-card__status {
+  display: none;
+}
+
+.sidebar-update-card__status {
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.sidebar-update-card__status--danger {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.sidebar-update-card__status--warn {
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--border));
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+}
+
 .sidebar-update-card__action--undismissable {
   padding-right: 8px;
 }

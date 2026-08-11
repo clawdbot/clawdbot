@@ -44,10 +44,25 @@ type MediaUnderstandingAttachmentDecision = {
   chosen?: MediaUnderstandingModelDecision;
 };
 
+export type MediaAttachmentDisposition =
+  | { kind: "handled" }
+  | { kind: "handed-to-native-vision" }
+  | { kind: "not-selected" }
+  | { kind: "capability-disabled" }
+  | { kind: "no-model" }
+  | { kind: "scope-denied" }
+  | { kind: "failed"; reason?: string };
+
 export type MediaUnderstandingDecision = {
   capability: MediaUnderstandingCapability;
   outcome: MediaUnderstandingDecisionOutcome;
   attachments: MediaUnderstandingAttachmentDecision[];
+  // Optional on the shipped SDK contract: plugins pass FinalizedMsgContext into
+  // inbound-reply dispatch and may hold legacy decision literals. Core producers
+  // (runner, apply-capability, runtime) always populate it; absence renders no
+  // markers rather than breaking plugin compilation.
+  attachmentDispositions?: Record<number, MediaAttachmentDisposition>;
+  nativeVisionActive?: boolean;
 };
 
 type MediaUnderstandingProviderRequestAuthOverride =
