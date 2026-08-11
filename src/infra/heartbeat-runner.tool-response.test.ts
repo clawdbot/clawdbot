@@ -887,10 +887,21 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       const inspectedEvents = peekSystemEventEntries(sessionKey);
       replySpy.mockImplementation(async (_ctx, options) => {
         setAgentTurnStatus(options, "failed");
-        return {
-          text: "Private heartbeat reasoning.",
-          mediaUrl: "https://example.test/private.png",
-        };
+        return [
+          {
+            ...createHeartbeatToolResponsePayload({
+              outcome: "progress",
+              notify: true,
+              summary: "Public tool summary.",
+              notificationText: "Public tool notification.",
+            }),
+            mediaUrl: "https://example.test/public.png",
+          },
+          {
+            text: "Private heartbeat reasoning.",
+            mediaUrl: "https://example.test/private.png",
+          },
+        ];
       });
       const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
 

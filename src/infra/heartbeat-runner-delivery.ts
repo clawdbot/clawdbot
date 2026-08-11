@@ -142,7 +142,7 @@ export function classifyHeartbeatAgentOutcome(params: {
   }
   const hasStructuredReplyContent =
     !shouldSuppressSourceReply &&
-    !heartbeatToolResponse &&
+    (!heartbeatToolResponse || agentRunFailed) &&
     replyPayload !== undefined &&
     hasOutboundReplyContent({
       ...replyPayload,
@@ -164,7 +164,7 @@ export function classifyHeartbeatAgentOutcome(params: {
             previewText: heartbeatToolResponse?.summary || heartbeatTerminalToolFailure.toolName,
           }
         : {}),
-      replyPayload,
+      replyPayload: shouldSuppressSourceReply ? undefined : replyPayload,
       normalized,
       shouldSkipMain,
     } as const;
