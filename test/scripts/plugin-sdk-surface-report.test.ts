@@ -188,7 +188,7 @@ describe("plugin SDK surface report", () => {
     });
 
     expect(evaluatePluginSdkSurfaceReport(surfaceReport, lowBudgetConfig)).toContain(
-      "public deprecated exports in core 2 > 1",
+      "public deprecated exports in core 3 > 1",
     );
     expect(
       evaluatePluginSdkSurfaceReport(surfaceReport, highBudgetConfig).some((error) =>

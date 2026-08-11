@@ -25,17 +25,15 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./subagents/registry/subagent-registry-read.js", async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  ...async () => {
-    const { listAncestorSessionKeysFromRuns } =
-      await import("./subagents/registry/subagent-registry-queries.js");
-    return {
-      listAncestorSessionKeys: (sessionKey: string) =>
-        listAncestorSessionKeysFromRuns(registryRuns, sessionKey),
-    };
-  },
-}));
+vi.mock("./subagents/registry/subagent-registry-read.js", async (importOriginal) => {
+  const { listAncestorSessionKeysFromRuns } =
+    await import("./subagents/registry/subagent-registry-queries.js");
+  return {
+    ...(await importOriginal<Record<string, unknown>>()),
+    listAncestorSessionKeys: (sessionKey: string) =>
+      listAncestorSessionKeysFromRuns(registryRuns, sessionKey),
+  };
+});
 
 const { prepareDelegateArtifactPolicy } = await import("./delegate-artifact-policy.js");
 const { finalizeDelegateArtifacts, publishDelegateArtifactCandidates } =
