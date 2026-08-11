@@ -32,6 +32,7 @@ import type { DedupeEntry } from "../server-shared.js";
 
 const AGENT_RUN_CACHE_TTL_MS = 10 * 60_000;
 const AGENT_RUN_CACHE_MAX_ENTRIES = 5_000;
+const AGENT_RUN_QUEUED_AT = Number.POSITIVE_INFINITY;
 
 type AgentJobTerminalSnapshot = {
   status: "ok" | "error" | "timeout";
@@ -246,8 +247,8 @@ function beginAgentJob(runId: string, startedAt?: number) {
   agentJobs.delete(runId);
   if (startedAt !== undefined) {
     agentRunStarts.set(runId, startedAt);
-    // Execution-scoped waiters stay dormant while queued. Lifecycle start owns
-    // their budget, so wake them here to arm against the authoritative timestamp.
+    // Lifecycle start owns execution-scoped budgets, so wake dormant waiters
+    // here to arm against the authoritative timestamp.
     notifyAgentRunWaiters(runId);
   }
 }
@@ -305,8 +306,13 @@ function createSnapshotFromLifecycleEvent(params: {
   data?: Record<string, unknown>;
 }): AgentRunObservation {
   const { runId, phase, data } = params;
+  const recordedStart = agentRunStarts.get(runId);
   const startedAt =
-    typeof data?.startedAt === "number" ? data.startedAt : agentRunStarts.get(runId);
+    typeof data?.startedAt === "number"
+      ? data.startedAt
+      : Number.isFinite(recordedStart)
+        ? recordedStart
+        : undefined;
   const endedAt = typeof data?.endedAt === "number" ? data.endedAt : undefined;
   const terminalOutcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
     phase,
@@ -505,9 +511,15 @@ export function setGatewayDedupeEntry(params: {
   }
   if (incomingObservation.state === "active") {
     beginAgentJob(key.runId);
+    if (key.source === "agent" && !Number.isFinite(agentRunStarts.get(key.runId))) {
+      agentRunStarts.set(key.runId, AGENT_RUN_QUEUED_AT);
+    }
     return;
   }
   if (incomingObservation.state === "terminal") {
+    if (key.source === "agent") {
+      agentRunStarts.delete(key.runId);
+    }
     recordAgentRunSnapshot({
       ...incomingObservation.snapshot,
       runId: key.runId,
@@ -610,7 +622,7 @@ async function waitForAgentJobState(
   if (cached) {
     return publicSnapshot(cached);
   }
-  if (timeoutScope === "caller" && params.timeoutMs <= 0) {
+  if (params.timeoutMs <= 0) {
     return null;
   }
 
@@ -656,11 +668,12 @@ async function waitForAgentJobState(
       if (timeoutHandle || settled) {
         return;
       }
-      const startedAt =
+      const observedStart =
         timeoutScope === "execution" ? agentRunStarts.get(params.runId) : Date.now();
-      if (startedAt === undefined) {
+      if (timeoutScope === "execution" && observedStart === AGENT_RUN_QUEUED_AT) {
         return;
       }
+      const startedAt = observedStart ?? Date.now();
       const delayMs =
         timeoutScope === "execution"
           ? Math.max(0, startedAt + params.timeoutMs - Date.now())
@@ -689,17 +702,12 @@ async function waitForAgentJobState(
   });
 }
 
-export async function waitForAgentJob(
-  params: AgentJobWaitParams,
-): Promise<AgentJobTerminalSnapshot | null> {
-  return await waitForAgentJobState(params, "caller");
+export function waitForAgentJob(params: AgentJobWaitParams) {
+  return waitForAgentJobState(params, "caller");
 }
 
-export async function waitForAgentJobExecution(params: {
-  runId: string;
-  timeoutMs: number;
-}): Promise<AgentJobTerminalSnapshot | null> {
-  return await waitForAgentJobState(params, "execution");
+export function waitForAgentJobExecution(params: Pick<AgentJobWaitParams, "runId" | "timeoutMs">) {
+  return waitForAgentJobState(params, "execution");
 }
 
 ensureAgentRunListener();

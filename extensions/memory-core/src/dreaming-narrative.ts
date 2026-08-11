@@ -246,10 +246,7 @@ async function startNarrativeRunOrFallback(params: {
       message: params.message,
       ...(params.model ? { model: params.model } : {}),
       extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
-      // Narratives share the global `subagent` command lane (core's
-      // `CommandLane.Subagent`) so `agents.defaults.subagents.maxConcurrent`
-      // bounds every dreaming run together; a per-session lane would let each
-      // session run in parallel and exhaust local-model KV cache (#95746).
+      // Apply configured subagent concurrency across all dreaming sessions.
       lane: "subagent",
       lightContext: true,
       deliver: false,

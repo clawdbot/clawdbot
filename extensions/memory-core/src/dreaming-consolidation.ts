@@ -625,9 +625,7 @@ async function runConsolidationGroup(params: {
       ),
       ...(params.model ? { model: params.model } : {}),
       extraSystemPrompt: CONSOLIDATION_SYSTEM_PROMPT,
-      // Consolidation shares the global `subagent` command lane (core's
-      // `CommandLane.Subagent`) so `agents.defaults.subagents.maxConcurrent`
-      // bounds dreaming subagent runs; per-session lanes bypass that limit.
+      // Apply configured subagent concurrency across all dreaming sessions.
       lane: "subagent",
       lightContext: true,
       deliver: false,

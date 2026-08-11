@@ -7,7 +7,9 @@ import {
   setCommandLaneConcurrency,
 } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
+import { setGatewayDedupeEntry } from "./agent-turn/agent-job.js";
 import { createGatewaySubagentRuntime } from "./server-plugins.js";
+import type { DedupeEntry } from "./server-shared.js";
 
 function createGate() {
   let release = () => {};
@@ -45,6 +47,11 @@ describe("plugin subagent shared lane", () => {
     const runPhase = async (phase: "narrative" | "consolidation") => {
       const runId = `dreaming-${phase}`;
       trace.push(`enqueue ${phase}`);
+      setGatewayDedupeEntry({
+        dedupe: new Map<string, DedupeEntry>(),
+        key: `agent:${runId}`,
+        entry: { ts: Date.now(), ok: true, payload: { runId, status: "in_flight" } },
+      });
       const queued = enqueueCommandInLane(CommandLane.Subagent, async () => {
         trace.push(`dequeue ${phase}`, `start ${phase}`);
         emitAgentEvent({

@@ -3,7 +3,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { waitForAgentJob, waitForAgentJobExecution } from "./agent-job.js";
+import type { DedupeEntry } from "../server-shared.js";
+import { setGatewayDedupeEntry, waitForAgentJob, waitForAgentJobExecution } from "./agent-job.js";
 
 const HARD_TIMEOUT_PHASES = ["preflight", "provider", "post_turn"] as const;
 const NON_HARD_TIMEOUTS = [
@@ -14,6 +15,14 @@ const NON_HARD_TIMEOUTS = [
 ] as const;
 
 let runSequence = 0;
+
+function registerQueuedRun(runId: string): void {
+  setGatewayDedupeEntry({
+    dedupe: new Map<string, DedupeEntry>(),
+    key: `agent:${runId}`,
+    entry: { ts: Date.now(), ok: true, payload: { runId, status: "in_flight" } },
+  });
+}
 
 async function resolveOuterTimeoutRace(
   data: Readonly<Record<string, unknown>>,
@@ -77,6 +86,7 @@ describe("waitForAgentJob timeout fallback", () => {
 
   it("does not spend execution timeout while a run is queued", async () => {
     const runId = `run-execution-wait-queued-${runSequence++}`;
+    registerQueuedRun(runId);
     const waitPromise = waitForAgentJobExecution({ runId, timeoutMs: 60_000 });
     let settled = false;
     void waitPromise.then(() => {
@@ -98,6 +108,7 @@ describe("waitForAgentJob timeout fallback", () => {
   it("starts the execution timeout from lifecycle startedAt", async () => {
     const runId = `run-execution-wait-started-${runSequence++}`;
     vi.setSystemTime(10_000);
+    registerQueuedRun(runId);
     const waitPromise = waitForAgentJobExecution({ runId, timeoutMs: 60_000 });
     let settled = false;
     void waitPromise.then(() => {
@@ -120,6 +131,7 @@ describe("waitForAgentJob timeout fallback", () => {
 
   it("resolves a queued restart cancellation from the terminal registry", async () => {
     const runId = `run-execution-wait-cancelled-${runSequence++}`;
+    registerQueuedRun(runId);
     const waitPromise = waitForAgentJobExecution({ runId, timeoutMs: 60_000 });
 
     await vi.advanceTimersByTimeAsync(60_001);
@@ -140,6 +152,21 @@ describe("waitForAgentJob timeout fallback", () => {
       stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
       error: "Restart interrupted the queued run",
     });
+  });
+
+  it("keeps zero-time execution waits as nonblocking polls", async () => {
+    const runId = `run-execution-wait-poll-${runSequence++}`;
+    registerQueuedRun(runId);
+
+    await expect(waitForAgentJobExecution({ runId, timeoutMs: 0 })).resolves.toBeNull();
+  });
+
+  it("bounds positive execution waits for unknown runs", async () => {
+    const runId = `run-execution-wait-unknown-${runSequence++}`;
+    const waitPromise = waitForAgentJobExecution({ runId, timeoutMs: 5 });
+
+    await vi.advanceTimersByTimeAsync(5);
+    await expect(waitPromise).resolves.toBeNull();
   });
 
   it("keeps restart cancellation as an error instead of a hard timeout", async () => {
