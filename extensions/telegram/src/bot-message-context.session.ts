@@ -334,13 +334,33 @@ export async function buildTelegramInboundContextPayload(params: {
       senderAllowed,
     }).include;
   };
-  const includeReplyTarget = replyTarget
-    ? shouldIncludeGroupSupplementalContext({
+  // Single owner for reply-target visibility so every buffered message in a
+  // debounce batch is gated identically to the lone-message case. Without one
+  // owner, only the synthetic (first) message's reply/quote survived the merge.
+  const resolveVisibleReplyTarget = (
+    target: TelegramReplyTarget | null,
+  ): TelegramReplyTarget | null => {
+    if (
+      !target ||
+      !shouldIncludeGroupSupplementalContext({
         kind: "quote",
-        senderId: replyTarget.senderId,
-        senderUsername: replyTarget.senderUsername,
+        senderId: target.senderId,
+        senderUsername: target.senderUsername,
       })
-    : false;
+    ) {
+      return null;
+    }
+    const forwardedFrom =
+      target.forwardedFrom &&
+      shouldIncludeGroupSupplementalContext({
+        kind: "forwarded",
+        senderId: target.forwardedFrom.fromId,
+        senderUsername: target.forwardedFrom.fromUsername,
+      })
+        ? target.forwardedFrom
+        : undefined;
+    return { ...target, forwardedFrom };
+  };
   const includeForwardOrigin = forwardOrigin
     ? shouldIncludeGroupSupplementalContext({
         kind: "forwarded",
@@ -348,28 +368,34 @@ export async function buildTelegramInboundContextPayload(params: {
         senderUsername: forwardOrigin.fromUsername,
       })
     : false;
-  const visibleReplyForwardedFrom =
-    includeReplyTarget && replyTarget?.forwardedFrom
-      ? shouldIncludeGroupSupplementalContext({
-          kind: "forwarded",
-          senderId: replyTarget.forwardedFrom.fromId,
-          senderUsername: replyTarget.forwardedFrom.fromUsername,
-        })
-        ? replyTarget.forwardedFrom
-        : undefined
-      : undefined;
-  const visibleReplyTarget: TelegramReplyTarget | null =
-    includeReplyTarget && replyTarget
-      ? {
-          ...replyTarget,
-          forwardedFrom: visibleReplyForwardedFrom,
-        }
-      : null;
+  const visibleReplyTarget = resolveVisibleReplyTarget(replyTarget);
   const visibleReplyTargetEntry = visibleReplyTarget
     ? replyTargetToChainEntry(visibleReplyTarget)
     : undefined;
-  const rawReplyChain =
-    replyChain.length > 0 ? replyChain : visibleReplyTargetEntry ? [visibleReplyTargetEntry] : [];
+  // Copied, not aliased: the batch append below must not mutate the caller's
+  // resolved reply chain.
+  const rawReplyChain = [
+    ...(replyChain.length > 0
+      ? replyChain
+      : visibleReplyTargetEntry
+        ? [visibleReplyTargetEntry]
+        : []),
+  ];
+  // A batch carries one reply target per buffered message, but the synthetic
+  // message inherits only the first one. Append the targets the merge dropped,
+  // keyed by id so a re-quoted source is not listed twice.
+  const seenReplyMessageIds = new Set(rawReplyChain.map((entry) => entry.messageId));
+  for (const debouncedMessage of hasMultiMessageDebounceBatch
+    ? (options?.inboundDebounceMessages ?? [])
+    : []) {
+    const visible = resolveVisibleReplyTarget(describeReplyTarget(debouncedMessage));
+    const entry = visible ? replyTargetToChainEntry(visible) : undefined;
+    if (entry?.messageId === undefined || seenReplyMessageIds.has(entry.messageId)) {
+      continue;
+    }
+    seenReplyMessageIds.add(entry.messageId);
+    rawReplyChain.push(entry);
+  }
   const visibleReplyChain = rawReplyChain.flatMap((entry) => {
     const selectedReplyEntry =
       entry.messageId === visibleReplyTargetEntry?.messageId ? visibleReplyTargetEntry : undefined;
