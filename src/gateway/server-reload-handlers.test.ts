@@ -1225,6 +1225,20 @@ describe("gateway hot reload model state", () => {
     });
   });
 
+  it("scopes the refresh for a whole new agent entry (no leaf suffix)", async () => {
+    const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { applyHotReload } = createReloadHandlersForTest(logReload);
+    const nextConfig = {} as OpenClawConfig;
+
+    await applyHotReload(buildGatewayReloadPlan(["agents.entries.agentD"]), nextConfig);
+
+    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
+      allowGatewaySubagentBinding: true,
+      catalogMode: "static",
+      agentIds: new Set(["agentd"]),
+    });
+  });
+
   it("treats machine-managed metadata paths as scope-neutral", async () => {
     const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const { applyHotReload } = createReloadHandlersForTest(logReload);
