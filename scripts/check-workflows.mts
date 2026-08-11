@@ -73,7 +73,7 @@ async function main() {
   if (await commandExists("actionlint")) {
     await run("actionlint", workflows);
   } else if (await commandExists("go", ["version"])) {
-    await run("go", ["run", `github.com/rhysd/actionlint/cmd/actionlint@v${ACTIONLINT_VERSION}`], {
+    await run("go", ["run", `github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_REVISION}`], {
       timeoutMs: BOOTSTRAP_COMMAND_TIMEOUT_MS,
     });
   } else if (
@@ -84,7 +84,7 @@ async function main() {
     await runPreCommitHook("actionlint", workflows);
   } else {
     console.error(
-      `[check-workflows] missing workflow linter: install actionlint, Go ${ACTIONLINT_VERSION} fallback support, or pre-commit.`,
+      `[check-workflows] missing workflow linter: install actionlint, Go for actionlint@${ACTIONLINT_REVISION}, or pre-commit.`,
     );
     process.exit(1);
   }
@@ -164,7 +164,7 @@ function exitWithFailure(failure: NonNullable<Awaited<ReturnType<typeof runCheck
   process.exit(failure.status);
 }
 
-async function runPreCommitFromTempVenv(hook: string, hookArgs: string[]): Promise<boolean> {
+async function runPreCommitFromTempVenv(hookArgs: string[]): Promise<boolean> {
   if (!(await commandExists("python3", ["--version"]))) {
     return false;
   }
@@ -226,7 +226,7 @@ async function runPreCommitHook(hook: string, files: string[]): Promise<void> {
     });
     return;
   }
-  if (await runPreCommitFromTempVenv(hook, hookArgs)) {
+  if (await runPreCommitFromTempVenv(hookArgs)) {
     return;
   }
 

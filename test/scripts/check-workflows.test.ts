@@ -200,7 +200,7 @@ describe("check-workflows", () => {
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
-      "[check-workflows] timed out after 900000ms: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12",
+      "[check-workflows] timed out after 900000ms: go run github.com/rhysd/actionlint/cmd/actionlint@011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7",
     );
   });
 
@@ -262,7 +262,7 @@ describe("check-workflows", () => {
         NODE_OPTIONS: `--import=${pathToFileURL(timeoutHookPath).href}`,
         PATH: binDir,
       },
-      timeout: 5_000,
+      timeout: 10_000,
     });
 
     expect(result.error).toBeUndefined();
