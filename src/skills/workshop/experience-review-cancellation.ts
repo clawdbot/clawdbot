@@ -1,33 +1,52 @@
 type SkillExperienceReviewCanceller = (sessionKey: string) => boolean;
 
 function createSkillExperienceReviewCancellationState(maxPendingStops = 32) {
-  const stoppedSessions = new Set<string>();
+  const stoppedRuns = new Set<string>();
   let cancelReview: SkillExperienceReviewCanceller | undefined;
+
+  const stoppedRunKey = (sessionKey: string, runId: string) => JSON.stringify([sessionKey, runId]);
 
   return {
     register(canceller: SkillExperienceReviewCanceller): void {
       cancelReview = canceller;
     },
-    cancel(sessionKey: string, suppressNextTerminal: boolean): boolean {
+    cancel(sessionKey: string, stoppedRunId?: string): boolean {
       const normalizedSessionKey = sessionKey.trim();
       if (!normalizedSessionKey) {
         return false;
       }
-      if (suppressNextTerminal) {
-        if (!stoppedSessions.has(normalizedSessionKey) && stoppedSessions.size >= maxPendingStops) {
-          const oldestSessionKey = stoppedSessions.values().next().value;
-          if (oldestSessionKey !== undefined) {
-            stoppedSessions.delete(oldestSessionKey);
+      const normalizedRunId = stoppedRunId?.trim();
+      if (normalizedRunId) {
+        const key = stoppedRunKey(normalizedSessionKey, normalizedRunId);
+        if (!stoppedRuns.has(key) && stoppedRuns.size >= maxPendingStops) {
+          const oldestRun = stoppedRuns.values().next().value;
+          if (oldestRun !== undefined) {
+            stoppedRuns.delete(oldestRun);
           }
         }
-        stoppedSessions.add(normalizedSessionKey);
+        stoppedRuns.add(key);
       }
       return cancelReview?.(normalizedSessionKey) ?? false;
     },
-    consumeStoppedTerminal(sessionKey: string | undefined, success: boolean): boolean {
+    discardStoppedTerminal(sessionKey: string, runId: string): void {
+      const normalizedSessionKey = sessionKey.trim();
+      const normalizedRunId = runId.trim();
+      if (normalizedSessionKey && normalizedRunId) {
+        stoppedRuns.delete(stoppedRunKey(normalizedSessionKey, normalizedRunId));
+      }
+    },
+    consumeStoppedTerminal(
+      sessionKey: string | undefined,
+      runId: string | undefined,
+      success: boolean,
+    ): boolean {
       const normalizedSessionKey = sessionKey?.trim();
+      const normalizedRunId = runId?.trim();
       return Boolean(
-        normalizedSessionKey && !success && stoppedSessions.delete(normalizedSessionKey),
+        normalizedSessionKey &&
+        normalizedRunId &&
+        !success &&
+        stoppedRuns.delete(stoppedRunKey(normalizedSessionKey, normalizedRunId)),
       );
     },
   };

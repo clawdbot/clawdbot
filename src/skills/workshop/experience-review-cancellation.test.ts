@@ -6,34 +6,42 @@ describe("skill experience review cancellation state", () => {
     const cancelReview = vi.fn(() => true);
     state.register(cancelReview);
 
-    expect(state.cancel(" agent:main:main ", true)).toBe(true);
+    expect(state.cancel(" agent:main:main ", " run-stopped ")).toBe(true);
     expect(cancelReview).toHaveBeenCalledWith("agent:main:main");
-    expect(state.consumeStoppedTerminal("agent:main:main", true)).toBe(false);
-    expect(state.consumeStoppedTerminal("agent:main:main", false)).toBe(true);
-    expect(state.consumeStoppedTerminal("agent:main:main", false)).toBe(false);
+    expect(state.consumeStoppedTerminal("agent:main:main", "run-stopped", true)).toBe(false);
+    expect(state.consumeStoppedTerminal("agent:main:main", "run-stopped", false)).toBe(true);
+    expect(state.consumeStoppedTerminal("agent:main:main", "run-stopped", false)).toBe(false);
   });
 
-  it("does not suppress a later failure when the foreground abort did not succeed", () => {
+  it("does not let another run consume the stopped run terminal marker", () => {
     state.register(() => false);
 
-    expect(state.cancel("agent:main:no-active-run", false)).toBe(false);
-    expect(state.consumeStoppedTerminal("agent:main:no-active-run", false)).toBe(false);
+    expect(state.cancel("agent:main:shared", "run-stopped")).toBe(false);
+    expect(state.consumeStoppedTerminal("agent:main:shared", "run-other", false)).toBe(false);
+    expect(state.consumeStoppedTerminal("agent:main:shared", "run-stopped", false)).toBe(true);
+  });
+
+  it("discards the reserved terminal when the foreground abort is rejected", () => {
+    state.register(() => false);
+
+    state.cancel("agent:main:finalizing", "run-finalizing");
+    state.discardStoppedTerminal("agent:main:finalizing", "run-finalizing");
+    expect(state.consumeStoppedTerminal("agent:main:finalizing", "run-finalizing", false)).toBe(
+      false,
+    );
   });
 
   it("bounds stop markers that never receive a terminal event", () => {
     state.register(() => false);
-    const sessionKeys = Array.from(
-      { length: 33 },
-      (_, index) => `agent:main:unreported-stop-${index}`,
-    );
+    const runIds = Array.from({ length: 33 }, (_, index) => `unreported-stop-${index}`);
 
-    for (const sessionKey of sessionKeys) {
-      state.cancel(sessionKey, true);
+    for (const runId of runIds) {
+      state.cancel("agent:main:bounded", runId);
     }
 
-    expect(state.consumeStoppedTerminal(sessionKeys[0], false)).toBe(false);
-    for (const sessionKey of sessionKeys.slice(1)) {
-      expect(state.consumeStoppedTerminal(sessionKey, false)).toBe(true);
+    expect(state.consumeStoppedTerminal("agent:main:bounded", runIds[0], false)).toBe(false);
+    for (const runId of runIds.slice(1)) {
+      expect(state.consumeStoppedTerminal("agent:main:bounded", runId, false)).toBe(true);
     }
   });
 });

@@ -8,6 +8,7 @@ import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-reg
 import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
 import { diagnosticLogger } from "../../logging/diagnostic.js";
+import { resolveActiveEmbeddedRunId } from "./active-run-id.js";
 import {
   abortAndDrainEmbeddedAgentRun,
   clearActiveEmbeddedRun,
@@ -98,6 +99,21 @@ describe("embedded-agent runner run lifecycle", () => {
       await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();
     }
+  });
+
+  it("resolves exact run identities for embedded and reply-backed sessions", () => {
+    const embeddedHandle = createRunHandle({ runId: "run-embedded" });
+    setActiveEmbeddedRun("session-embedded", embeddedHandle, "agent:main:embedded");
+    expect(resolveActiveEmbeddedRunId("agent:main:embedded")).toBe("run-embedded");
+    clearActiveEmbeddedRun("session-embedded", embeddedHandle);
+
+    const replyOperation = createReplyOperation({
+      sessionKey: "agent:main:reply",
+      sessionId: "session-reply",
+      resetTriggered: false,
+    });
+    replyOperation.attachBackend({ kind: "embedded", runId: "run-reply", cancel: () => {} });
+    expect(resolveActiveEmbeddedRunId("agent:main:reply")).toBe("run-reply");
   });
 
   it("clamps oversized embedded run wait timers", async () => {

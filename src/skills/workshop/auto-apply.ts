@@ -6,10 +6,12 @@ import type { SkillProposalApplyResult } from "./types.js";
 const log = createSubsystemLogger("skills/workshop");
 
 type AutoApplyDeps = {
-  apply: typeof applySkillProposal;
+  apply: (
+    input: Parameters<typeof applySkillProposal>[0] & { abortSignal?: AbortSignal },
+  ) => ReturnType<typeof applySkillProposal>;
 };
 
-const defaultDeps: AutoApplyDeps = { apply: applySkillProposal };
+const defaultDeps: AutoApplyDeps = { apply: (input) => applySkillProposal(input) };
 
 /** Applies one capture through the normal Workshop service without retrying failures. */
 export async function autoApplySkillProposal(
@@ -20,6 +22,7 @@ export async function autoApplySkillProposal(
     env?: NodeJS.ProcessEnv;
     proposalId: string;
     skillName: string;
+    abortSignal?: AbortSignal;
   },
   deps: AutoApplyDeps = defaultDeps,
 ): Promise<SkillProposalApplyResult | undefined> {
@@ -33,6 +36,7 @@ export async function autoApplySkillProposal(
       ...(params.env ? { env: params.env } : {}),
       proposalId: params.proposalId,
       reason: "Autonomous self-learning capture",
+      ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
     });
     log.info(`auto-applied skill ${params.skillName} from proposal ${params.proposalId}`);
     return applied;

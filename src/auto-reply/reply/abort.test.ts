@@ -56,7 +56,7 @@ const commandQueueMocks = vi.hoisted(() => ({
 }));
 
 const experienceReviewMocks = vi.hoisted(() => ({
-  cancel: vi.fn(() => false),
+  cancel: vi.fn((_sessionKey?: string, _runId?: string) => false),
 }));
 
 vi.mock("../../process/command-queue.js", () => commandQueueMocks);
@@ -127,6 +127,7 @@ const runtimeAbortMocks = vi.hoisted(() => ({
   abortEmbeddedAgentRun: vi.fn<
     (sessionId: string | undefined, opts?: AbortEmbeddedAgentRunOptions) => boolean
   >(() => true),
+  resolveActiveEmbeddedRunId: vi.fn(() => undefined as string | undefined),
   resolveActiveEmbeddedRunSessionId: vi.fn(() => undefined as string | undefined),
 }));
 
@@ -347,6 +348,7 @@ describe("abort detection", () => {
           cancelSession: acpManagerMocks.cancelSession,
         }) as never) as never,
       abortEmbeddedAgentRun: runtimeAbortMocks.abortEmbeddedAgentRun,
+      resolveActiveEmbeddedRunId: runtimeAbortMocks.resolveActiveEmbeddedRunId,
       resolveActiveEmbeddedRunSessionId: runtimeAbortMocks.resolveActiveEmbeddedRunSessionId,
       getLatestSubagentRunByChildSessionKey:
         subagentRegistryDeps.getLatestSubagentRunByChildSessionKey,
@@ -375,6 +377,7 @@ describe("abort detection", () => {
     acpManagerMocks.resolveSession.mockReset().mockReturnValue({ kind: "none" });
     acpManagerMocks.cancelSession.mockReset().mockResolvedValue(undefined);
     runtimeAbortMocks.abortEmbeddedAgentRun.mockReset().mockReturnValue(true);
+    runtimeAbortMocks.resolveActiveEmbeddedRunId.mockReset().mockReturnValue(undefined);
     runtimeAbortMocks.resolveActiveEmbeddedRunSessionId.mockReset().mockReturnValue(undefined);
     subagentRegistryMocks.getLatestSubagentRunByChildSessionKey.mockReset().mockReturnValue(null);
   });
@@ -565,6 +568,7 @@ describe("abort detection", () => {
       ownerAllowFrom: ["telegram:123"],
     };
     runtimeAbortMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(activeSessionId);
+    runtimeAbortMocks.resolveActiveEmbeddedRunId.mockReturnValue("run-active");
     enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
     expect(getFollowupQueueDepth(sessionKey)).toBe(1);
 
@@ -580,9 +584,37 @@ describe("abort detection", () => {
     expect(result.handled).toBe(true);
     expect(runtimeAbortMocks.resolveActiveEmbeddedRunSessionId).toHaveBeenCalledWith(sessionKey);
     expect(runtimeAbortMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(activeSessionId);
-    expect(experienceReviewMocks.cancel.mock.calls).toEqual([[sessionKey, true]]);
+    expect(experienceReviewMocks.cancel.mock.calls).toEqual([[sessionKey, "run-active"]]);
     expect(getFollowupQueueDepth(sessionKey)).toBe(0);
     expectSessionLaneCleared(sessionKey);
+  });
+
+  it("reserves the exact terminal before backend abort can finalize synchronously", async () => {
+    const sessionKey = "telegram:synchronous-terminal";
+    const activeSessionId = "session-synchronous-terminal";
+    const { cfg } = await createAbortConfig({
+      sessionIdsByKey: { [sessionKey]: activeSessionId },
+    });
+    const order: string[] = [];
+    runtimeAbortMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(activeSessionId);
+    runtimeAbortMocks.resolveActiveEmbeddedRunId.mockReturnValue("run-synchronous-terminal");
+    experienceReviewMocks.cancel.mockImplementationOnce((_key, runId) => {
+      order.push(`reserved:${String(runId)}`);
+      return false;
+    });
+    runtimeAbortMocks.abortEmbeddedAgentRun.mockImplementationOnce(() => {
+      order.push("backend-abort");
+      return true;
+    });
+
+    await runStopCommand({
+      cfg,
+      sessionKey,
+      from: sessionKey,
+      to: sessionKey,
+    });
+
+    expect(order).toEqual(["reserved:run-synchronous-terminal", "backend-abort"]);
   });
 
   it("fast-abort clears queued followups and session lane", async () => {
@@ -960,7 +992,7 @@ describe("abort detection", () => {
       sessionKey: acpSessionKey,
       reason: "fast-abort",
     });
-    expect(experienceReviewMocks.cancel).toHaveBeenCalledWith(sourceSessionKey, true);
+    expect(experienceReviewMocks.cancel).toHaveBeenCalledWith(sourceSessionKey, undefined);
   });
 
   it("does not report /stop success after the active backend freezes its outcome", async () => {
@@ -1004,7 +1036,7 @@ describe("abort detection", () => {
     expect(cancel).not.toHaveBeenCalled();
     expect(markSessionAbortTarget).not.toHaveBeenCalled();
     expect(getAbortMemory(sessionKey)).toBeUndefined();
-    expect(experienceReviewMocks.cancel.mock.calls).toEqual([[sessionKey, false]]);
+    expect(experienceReviewMocks.cancel.mock.calls).toEqual([[sessionKey, undefined]]);
     expect(formatAbortReplyText(undefined, result.rejectionReason)).toBe(
       "Agent reply is already finalizing and can no longer be aborted.",
     );

@@ -51,4 +51,24 @@ describe("autoApplySkillProposal", () => {
       },
     );
   });
+
+  it("passes reviewer cancellation through to the proposal apply owner", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-auto-apply-signal-");
+    const abortController = new AbortController();
+    const apply = vi.fn().mockRejectedValue(new Error("cancelled before apply"));
+
+    await autoApplySkillProposal(
+      {
+        workspaceDir,
+        proposalId: "proposal-cancelled",
+        skillName: "cancelled-capture",
+        abortSignal: abortController.signal,
+      },
+      { apply },
+    );
+
+    expect(apply).toHaveBeenCalledWith(
+      expect.objectContaining({ abortSignal: abortController.signal }),
+    );
+  });
 });

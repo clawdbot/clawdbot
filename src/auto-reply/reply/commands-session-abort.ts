@@ -10,7 +10,6 @@ import {
 } from "./abort-cutoff.js";
 import {
   abortSessionRunTargetWithOutcome,
-  cancelExperienceReviewForAbortOutcome,
   formatAbortReplyText,
   isAbortTrigger,
   setAbortMemory,
@@ -94,9 +93,6 @@ async function applyAbortTarget(params: {
     key: abortTarget.key,
     sessionId: abortTarget.sessionId,
   });
-  if (abortTarget.key) {
-    cancelExperienceReviewForAbortOutcome(abortTarget.key, abortOutcome.aborted);
-  }
   if (abortOutcome.active && !abortOutcome.aborted) {
     return abortOutcome;
   }

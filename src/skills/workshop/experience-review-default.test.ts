@@ -18,20 +18,25 @@ describe("default skill experience review cancellation", () => {
     vi.clearAllMocks();
   });
 
-  it("cancels existing work and consumes the stopped run terminal event", () => {
+  it("suppresses only the stopped run when another terminal arrives first", () => {
     const sessionKey = "agent:main:stopped-default-review";
-    skillExperienceReviewCancellation.cancel(sessionKey, true);
+    skillExperienceReviewCancellation.cancel(sessionKey, "run-stopped");
 
     expect(schedulerMocks.cancel).toHaveBeenCalledWith(sessionKey);
 
-    const params = {
+    const otherRun = {
       event: { success: false, messages: [] },
-      ctx: { sessionKey },
+      ctx: { sessionKey, runId: "run-other" },
     } as Parameters<typeof scheduleSkillExperienceReview>[0];
-    scheduleSkillExperienceReview(params);
-    expect(schedulerMocks.schedule).not.toHaveBeenCalled();
+    scheduleSkillExperienceReview(otherRun);
+    expect(schedulerMocks.schedule).toHaveBeenCalledWith(otherRun);
 
-    scheduleSkillExperienceReview(params);
-    expect(schedulerMocks.schedule).toHaveBeenCalledWith(params);
+    schedulerMocks.schedule.mockClear();
+    const stoppedRun = {
+      event: { success: false, messages: [] },
+      ctx: { sessionKey, runId: "run-stopped" },
+    } as Parameters<typeof scheduleSkillExperienceReview>[0];
+    scheduleSkillExperienceReview(stoppedRun);
+    expect(schedulerMocks.schedule).not.toHaveBeenCalled();
   });
 });

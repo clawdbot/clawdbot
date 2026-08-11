@@ -31,6 +31,7 @@ export function scheduleSkillExperienceReview(params: SkillExperienceReviewParam
   if (
     skillExperienceReviewCancellation.consumeStoppedTerminal(
       params.ctx.sessionKey,
+      params.ctx.runId,
       params.event.success,
     )
   ) {

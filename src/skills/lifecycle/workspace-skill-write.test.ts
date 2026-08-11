@@ -98,6 +98,48 @@ describe("workspace skill mutations", () => {
     await expect(isWorkspaceSkillMutationRestored(mutation)).resolves.toBe(true);
   });
 
+  it("restores a write that finishes after cancellation reaches the mutation boundary", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-workspace-skill-cancelled-write-");
+    const skillDir = path.join(workspaceDir, "skills", "cancelled-write");
+    const skillFile = path.join(skillDir, "SKILL.md");
+    const mutation = await prepareWorkspaceSkillMutation({
+      workspaceDir,
+      skillDir,
+      skillFile,
+      content: "# Cancelled Write\n",
+      mode: "create",
+      symlinkPolicy,
+    });
+    const abortController = new AbortController();
+    let releaseWrite!: () => void;
+    const writeReleased = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    let writeCommitted!: () => void;
+    const committed = new Promise<void>((resolve) => {
+      writeCommitted = resolve;
+    });
+
+    const applying = applyWorkspaceSkillMutation(
+      mutation,
+      async (file) => {
+        const targetPath = path.join(file.rootDir, file.relativePath);
+        await fs.mkdir(path.dirname(targetPath), { recursive: true });
+        await fs.writeFile(targetPath, file.content, "utf8");
+        writeCommitted();
+        await writeReleased;
+      },
+      abortController.signal,
+    );
+    await committed;
+    abortController.abort(new Error("stopped by user"));
+    releaseWrite();
+
+    await expect(applying).rejects.toThrow("stopped by user");
+    await expect(fs.access(skillFile)).rejects.toThrow();
+    await expect(isWorkspaceSkillMutationRestored(mutation)).resolves.toBe(true);
+  });
+
   it("restores an update when the SKILL.md write commits and then rejects", async () => {
     const workspaceDir = await tempDirs.make("openclaw-workspace-skill-main-commit-failure-");
     const skillDir = path.join(workspaceDir, "skills", "partial-main");

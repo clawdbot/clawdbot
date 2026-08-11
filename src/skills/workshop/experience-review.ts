@@ -703,6 +703,7 @@ async function runSkillExperienceReviewInner(
       config: currentConfig,
       proposalId,
       skillName: proposal.record.target.skillName,
+      ...(deps.abortSignal ? { abortSignal: deps.abortSignal } : {}),
     });
   }
 }
