@@ -12,12 +12,16 @@ import {
 import { Command } from "commander";
 import { buildBundleMcpToolsFromCatalog } from "../agents/agent-bundle-mcp-materialize.js";
 import { createSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
+import {
+  setConfiguredMcpServer,
+  unsetConfiguredMcpServer,
+  updateConfiguredMcpServer,
+  updateConfiguredMcpServerTools,
+} from "../agents/mcp-config-mutation.js";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
 import { readMcpOAuthStoreReadOnly } from "../agents/mcp-oauth-store.js";
 import {
   clearMcpOAuthCredentials,
-  clearMcpOAuthRequesters,
-  clearMcpOAuthServer,
   completeMcpOAuthAuthorization,
   countMcpOAuthPrincipals,
   readMcpOAuthCredentialsStatus,
@@ -26,13 +30,7 @@ import {
 } from "../agents/mcp-oauth.js";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { parseConfigValue } from "../auto-reply/reply/config-value.js";
-import {
-  listConfiguredMcpServers,
-  setConfiguredMcpServer,
-  unsetConfiguredMcpServer,
-  updateConfiguredMcpServer,
-  updateConfiguredMcpServerTools,
-} from "../config/mcp-config.js";
+import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -118,51 +116,6 @@ function parseOAuthConfig(opts: {
       : {}),
   };
   return Object.keys(oauth).length > 0 ? oauth : undefined;
-}
-
-async function clearMcpOAuthCredentialsForConfiguredServer(
-  name: string,
-  server: unknown,
-): Promise<void> {
-  const resolved = resolveMcpTransportConfig(name, server);
-  if (resolved?.kind === "http") {
-    await clearMcpOAuthServer(operatorMcpOAuthIdentity(name, resolved.url));
-  }
-}
-
-function hasOAuthAuth(server: unknown): boolean {
-  return (
-    typeof server === "object" && server !== null && "auth" in server && server.auth === "oauth"
-  );
-}
-
-function hasRequesterOAuthIdentity(server: unknown): boolean {
-  return hasOAuthAuth(server) && asRecord(asRecord(server)?.oauth)?.identity === "per-requester";
-}
-
-async function clearStaleMcpOAuthCredentialsForReplacement(params: {
-  name: string;
-  previous: unknown;
-  next: unknown;
-}): Promise<void> {
-  // Replacing an OAuth HTTP server should not leave credentials bound to the old URL.
-  if (!hasOAuthAuth(params.previous)) {
-    return;
-  }
-  const previousResolved = resolveMcpTransportConfig(params.name, params.previous);
-  if (previousResolved?.kind !== "http") {
-    return;
-  }
-  const nextResolved = hasOAuthAuth(params.next)
-    ? resolveMcpTransportConfig(params.name, params.next)
-    : undefined;
-  if (nextResolved?.kind === "http" && nextResolved.url === previousResolved.url) {
-    if (hasRequesterOAuthIdentity(params.previous) && !hasRequesterOAuthIdentity(params.next)) {
-      await clearMcpOAuthRequesters(operatorMcpOAuthIdentity(params.name, previousResolved.url));
-    }
-    return;
-  }
-  await clearMcpOAuthServer(operatorMcpOAuthIdentity(params.name, previousResolved.url));
 }
 
 function setOptionalField(target: Record<string, unknown>, key: string, value: unknown): void {
@@ -1097,7 +1050,6 @@ export function registerMcpCli(program: Command) {
         if (!loaded.ok) {
           fail(loaded.error);
         }
-        const current = loaded.mcpServers[name];
         const shouldProbe =
           opts.probe !== false && server.enabled !== false && server.auth !== "oauth";
         if (shouldProbe) {
@@ -1111,11 +1063,6 @@ export function registerMcpCli(program: Command) {
         if (!result.ok) {
           fail(result.error);
         }
-        await clearStaleMcpOAuthCredentialsForReplacement({
-          name,
-          previous: current,
-          next: server,
-        });
         defaultRuntime.log(`Saved MCP server "${name}" to ${result.path}.`);
         if (server.auth === "oauth") {
           defaultRuntime.log(
@@ -1135,20 +1082,10 @@ export function registerMcpCli(program: Command) {
       if (parsed.error) {
         fail(parsed.error);
       }
-      const loaded = await listConfiguredMcpServers();
-      if (!loaded.ok) {
-        fail(loaded.error);
-      }
-      const current = loaded.mcpServers[name];
       const result = await setConfiguredMcpServer({ name, server: parsed.value });
       if (!result.ok) {
         fail(result.error);
       }
-      await clearStaleMcpOAuthCredentialsForReplacement({
-        name,
-        previous: current,
-        next: parsed.value,
-      });
       defaultRuntime.log(`Saved MCP server "${name}" to ${result.path}.`);
     });
 
@@ -1246,7 +1183,6 @@ export function registerMcpCli(program: Command) {
           );
         }
         const next = { ...current };
-        const clearOAuthCredentials = opts.clearAuth;
         if (opts.enable) {
           delete next.enabled;
         }
@@ -1340,9 +1276,6 @@ export function registerMcpCli(program: Command) {
           if (!result.ok) {
             fail(result.error);
           }
-          if (clearOAuthCredentials) {
-            await clearMcpOAuthCredentialsForConfiguredServer(name, current);
-          }
           defaultRuntime.log(`Removed disabled MCP override for "${name}" in ${result.path}.`);
           return;
         }
@@ -1357,9 +1290,6 @@ export function registerMcpCli(program: Command) {
           fail(
             `No MCP server named "${name}" in ${result.path}. Run ${formatCliCommand("openclaw mcp list")} to see configured servers.`,
           );
-        }
-        if (clearOAuthCredentials) {
-          await clearMcpOAuthCredentialsForConfiguredServer(name, current);
         }
         defaultRuntime.log(`Updated MCP server "${name}" in ${result.path}.`);
       },
@@ -1501,11 +1431,6 @@ export function registerMcpCli(program: Command) {
     .description("Remove one OpenClaw-managed MCP server")
     .argument("<name>", "MCP server name")
     .action(async (name: string) => {
-      const loaded = await listConfiguredMcpServers();
-      if (!loaded.ok) {
-        fail(loaded.error);
-      }
-      const current = loaded.mcpServers[name];
       const result = await unsetConfiguredMcpServer({ name });
       if (!result.ok) {
         fail(result.error);
@@ -1514,9 +1439,6 @@ export function registerMcpCli(program: Command) {
         fail(
           `No MCP server named "${name}" in ${result.path}. Run ${formatCliCommand("openclaw mcp list")} to see configured servers.`,
         );
-      }
-      if (current) {
-        await clearMcpOAuthCredentialsForConfiguredServer(name, current);
       }
       defaultRuntime.log(`Removed MCP server "${name}" from ${result.path}.`);
     });

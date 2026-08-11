@@ -557,7 +557,7 @@ export type GatewayConfig = {
   bind?: GatewayBindMode;
   /** Custom IPv4 address for bind="custom" mode. IPv6-only BYOH requires an IPv4 sidecar or proxy. */
   customBindHost?: string;
-  /** Externally reachable HTTP(S) origin for Gateway callback routes. */
+  /** Externally reachable HTTPS origin for Gateway callback routes; HTTP only on loopback. */
   publicOrigin?: string;
   controlUi?: GatewayControlUiConfig;
   cliAgents?: GatewayCliAgentsConfig;

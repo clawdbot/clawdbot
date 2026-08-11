@@ -363,12 +363,20 @@ export function writeMcpOAuthPendingAuthorization(
   assertOwnedInTransaction?: (database: DatabaseSync) => void,
 ): void {
   runPendingWrite((database) => {
-    deletePendingForStore(database, storeKey, assertOwnedInTransaction);
+    const now = Date.now();
+    assertOwnedInTransaction?.(database);
+    executeSqliteQuerySync(
+      database,
+      getNodeSqliteKysely<McpOAuthDatabase>(database)
+        .deleteFrom("mcp_oauth_pending_authorizations")
+        .where("create_time", "<=", now - MCP_OAUTH_PENDING_STATE_TTL_MS),
+    );
+    deletePendingForStore(database, storeKey);
     executeSqliteQuerySync(
       database,
       getNodeSqliteKysely<McpOAuthDatabase>(database)
         .insertInto("mcp_oauth_pending_authorizations")
-        .values({ state, store_key: storeKey, create_time: Date.now() }),
+        .values({ state, store_key: storeKey, create_time: now }),
     );
   });
 }

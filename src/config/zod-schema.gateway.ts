@@ -28,6 +28,15 @@ const OperatorScopeSchema = z.enum([
   TALK_SCOPE,
   TALK_SECRETS_SCOPE,
 ]);
+const GATEWAY_HTTP_LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+function validateGatewayPublicOrigin(value: string): boolean {
+  if (!validateHttpOrigin(value)) {
+    return false;
+  }
+  const url = new URL(value);
+  return url.protocol === "https:" || GATEWAY_HTTP_LOOPBACK_HOSTS.has(url.hostname);
+}
 
 export const GatewayConfigSchema = z
   .strictObject({
@@ -47,8 +56,8 @@ export const GatewayConfigSchema = z
       .string()
       .url()
       .refine(
-        validateHttpOrigin,
-        "gateway.publicOrigin must be an HTTP(S) origin without a path, query, or credentials",
+        validateGatewayPublicOrigin,
+        "gateway.publicOrigin must be a bare HTTPS origin; HTTP is allowed only for localhost, 127.0.0.1, or [::1]",
       )
       .optional(),
     controlUi: z

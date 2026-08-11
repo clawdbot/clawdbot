@@ -97,10 +97,17 @@ describe("MCP OAuth pending authorization store", () => {
 
       // A copied sign-in link dies after the pending-state TTL, even unclaimed.
       insertPending.run("expired-state", "expired-store", Date.now() - 11 * 60 * 1000);
+      insertPending.run("fresh-foreign-state", "fresh-foreign-store", Date.now());
       expect(readMcpOAuthPendingAuthorization("expired-state")).toBeUndefined();
       expect(consumeOAuthState("expired-store", "expired-state")).toBe(false);
 
       writeMcpOAuthPendingAuthorization("server-r-requester-a", "requester-a-state");
+      expect(
+        database
+          .prepare("SELECT state FROM mcp_oauth_pending_authorizations WHERE state = ?")
+          .get("expired-state"),
+      ).toBeUndefined();
+      expect(readMcpOAuthPendingAuthorization("fresh-foreign-state")).toBe("fresh-foreign-store");
       writeMcpOAuthPendingAuthorization("server-r-requester-b", "requester-b-state");
       writeMcpOAuthPendingAuthorization("other-r-requester", "other-state");
       deleteMcpOAuthPendingAuthorizationsByPrefix("server-r-");

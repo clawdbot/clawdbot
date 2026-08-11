@@ -37,7 +37,6 @@ export const mockLog = mocks.runtime.log;
 export const mockError = mocks.runtime.error;
 export const serveOpenClawChannelMcp = mocks.serveOpenClawChannelMcp;
 export const clearMcpOAuthCredentials = mocks.clearMcpOAuthCredentials;
-export const clearMcpOAuthServer = mocks.clearMcpOAuthServer;
 export const completeMcpOAuthAuthorization = mocks.completeMcpOAuthAuthorization;
 export const readMcpOAuthCredentialsStatus = mocks.readMcpOAuthCredentialsStatus;
 export const countMcpOAuthPrincipals = mocks.countMcpOAuthPrincipals;

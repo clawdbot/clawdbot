@@ -505,12 +505,14 @@ describe("config schema", () => {
     ).toBe(false);
   });
 
-  it("accepts only a bare HTTP(S) Gateway public origin", () => {
+  it("requires a bare HTTPS Gateway public origin except on loopback", () => {
     for (const publicOrigin of [
       "https://gateway.example.com",
       "https://gateway.example.com:443",
       "http://localhost:80",
       "http://localhost:18789/",
+      "http://127.0.0.1:18789",
+      "http://[::1]:18789",
     ]) {
       expect(OpenClawSchema.safeParse({ gateway: { publicOrigin } }).success).toBe(true);
     }
@@ -521,6 +523,7 @@ describe("config schema", () => {
       "https://gateway.example.com/path",
       "https://gateway.example.com?query=1",
       "https://gateway.example.com/#fragment",
+      "http://gateway.example.com",
       userinfoOrigin.href,
       "data:text/html,hello",
     ]) {
