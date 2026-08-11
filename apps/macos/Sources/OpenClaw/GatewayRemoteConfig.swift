@@ -46,14 +46,14 @@ enum GatewayRemoteConfig {
 
     static func resolveTransport(
         root: [String: Any],
-        legacySSHTarget: String? = nil) -> AppState.RemoteTransport
+        defaults: UserDefaults = .standard) -> AppState.RemoteTransport
     {
-        self.resolveTransportResolution(root: root, legacySSHTarget: legacySSHTarget).transport
+        self.resolveTransportResolution(root: root, defaults: defaults).transport
     }
 
     static func resolveTransportResolution(
         root: [String: Any],
-        legacySSHTarget: String? = nil) -> TransportResolution
+        defaults: UserDefaults = .standard) -> TransportResolution
     {
         let explicit = self.resolveExplicitTransport(root: root)
         switch explicit {
@@ -78,7 +78,7 @@ enum GatewayRemoteConfig {
             return TransportResolution(transport: .direct, source: .inferredRemoteURL, directURL: url)
         }
 
-        if let legacySSHTarget,
+        if let legacySSHTarget = defaults.string(forKey: remoteTargetKey),
            !legacySSHTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         {
             return TransportResolution(transport: .ssh, source: .legacySSH, directURL: nil)

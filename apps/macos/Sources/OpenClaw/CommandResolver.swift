@@ -550,7 +550,7 @@ enum CommandResolver {
             : self.sanitizedTarget(defaults.string(forKey: remoteTargetKey) ?? "")
         let transport = GatewayRemoteConfig.resolveTransport(
             root: root,
-            legacySSHTarget: hasConfiguredTarget ? nil : target)
+            defaults: defaults)
         let hasConfiguredIdentity = remote?.keys.contains("sshIdentity") == true
         let configuredIdentity = (remote?["sshIdentity"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

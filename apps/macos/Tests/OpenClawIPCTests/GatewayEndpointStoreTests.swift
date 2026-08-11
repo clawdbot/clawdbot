@@ -1087,9 +1087,13 @@ extension GatewayEndpointStoreTests {
     }
 
     @Test func `legacy stored SSH target keeps SSH transport without a config route`() {
+        let suiteName = "GatewayEndpointStoreTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set("user@gateway.example", forKey: remoteTargetKey)
         let resolution = GatewayRemoteConfig.resolveTransportResolution(
             root: ["gateway": ["mode": "remote"]],
-            legacySSHTarget: "user@gateway.example")
+            defaults: defaults)
 
         #expect(resolution.transport == .ssh)
         #expect(resolution.source == .legacySSH)
