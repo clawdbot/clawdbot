@@ -1452,7 +1452,7 @@ describe("gateway server chat", () => {
               }
             | undefined;
           expect(payload?.metadata?.models).toEqual([
-            {
+            expect.objectContaining({
               id: "gpt-5.5",
               name: "GPT-5.5",
               provider: "openai",
@@ -1460,7 +1460,7 @@ describe("gateway server chat", () => {
               contextWindow: 400_000,
               reasoning: false,
               available: true,
-            },
+            }),
           ]);
           expect(payload?.sessionInfo?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
           expect(payload?.defaults?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);

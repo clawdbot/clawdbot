@@ -26,7 +26,7 @@ type ChatModelSelectStateInput = {
   sessionsResult: SessionsListResult | null;
 };
 
-export type ChatModelSelectOption = {
+type ChatModelSelectOption = {
   value: string;
   label: string;
 };

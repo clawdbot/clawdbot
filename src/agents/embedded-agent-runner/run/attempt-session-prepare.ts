@@ -4,6 +4,10 @@
  */
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
+import {
+  attachRuntimePromptMediaFacts,
+  readPersistedMediaFacts,
+} from "../../../media/media-facts.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../../agent-project-settings.js";
@@ -446,12 +450,20 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
         latestPersistedUserMessage = message;
         latestRuntimeUserMessage = runtimeMessage;
         if (runtimeMessage) {
+          const media = readPersistedMediaFacts(message);
+          if (media?.length) {
+            attachRuntimePromptMediaFacts(runtimeMessage, media);
+          }
           userTranscriptContextRegistry.record(runtimeMessage, message);
         }
         attempt.onUserMessagePersisted?.(message);
       },
-      onUserMessagePersistenceSuppressed: (_message, runtimeMessage) => {
+      onUserMessagePersistenceSuppressed: (message, runtimeMessage) => {
         latestRuntimeUserMessage = runtimeMessage;
+        const media = runtimeMessage ? readPersistedMediaFacts(message) : undefined;
+        if (runtimeMessage && media?.length) {
+          attachRuntimePromptMediaFacts(runtimeMessage, media);
+        }
       },
       onUserMessageBlocked: () => {
         attempt.userTurnTranscriptRecorder?.markBlocked();

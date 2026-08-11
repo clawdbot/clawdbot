@@ -230,6 +230,100 @@ suite.define(() => {
     });
   });
 
+  it("keeps the effort label, slider stop, and create payload aligned after a model switch", async () => {
+    await withNewSessionPage(DESKTOP_CONTEXT, async (page) => {
+      const levels = (ids: string[]) => ids.map((id) => ({ id, label: id }));
+      const kimiLevels = levels([
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra",
+      ]);
+      const gateway = await installMockGateway(page, {
+        agentModel: "kimi/k3",
+        models: [
+          {
+            id: "k3",
+            name: "Kimi K3",
+            provider: "kimi",
+            reasoning: true,
+            thinkingLevels: kimiLevels,
+            thinkingDefault: "high",
+          },
+          {
+            id: "gpt-5.6-sol",
+            name: "GPT 5.6 Sol",
+            provider: "openai",
+            reasoning: true,
+            thinkingLevels: levels(["off", "minimal", "low", "medium", "high", "xhigh", "max"]),
+            thinkingDefault: "medium",
+          },
+        ],
+        methodResponses: {
+          "agents.list": {
+            ...mainAgentList(),
+            agents: [
+              {
+                id: "main",
+                name: "Main",
+                identity: { name: "Main" },
+                model: { primary: "kimi/k3" },
+                thinkingLevels: kimiLevels,
+                thinkingDefault: "high",
+              },
+            ],
+          },
+          "sessions.create": { key: "agent:main:thinking-model-switch", runStarted: true },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}new`);
+
+      const effortSelect = page.locator('[data-chat-thinking-select="true"]');
+      await effortSelect.click();
+      const thinkingSlider = page.locator('[data-chat-thinking-slider="true"]');
+      await thinkingSlider.evaluate((element) => {
+        const input = element as HTMLInputElement;
+        input.value = "5";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("xhigh");
+
+      const modelSelect = page.locator('[data-chat-model-select="true"]');
+      await modelSelect.click();
+      await page.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').click();
+      await effortSelect.click();
+
+      await expect
+        .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
+        .toBe("off,minimal,low,medium,high,xhigh,max");
+      await expect.poll(() => thinkingSlider.inputValue()).toBe("5");
+      expect(await thinkingSlider.getAttribute("max")).toBe("6");
+      expect(await thinkingSlider.getAttribute("aria-valuetext")).toBe("Extra high");
+      expect(
+        Number.parseFloat(
+          await thinkingSlider.evaluate((element) =>
+            (element as HTMLElement).style.getPropertyValue("--reasoning-fill"),
+          ),
+        ),
+      ).toBeCloseTo(83.33, 1);
+
+      await effortSelect.click();
+      await page.locator(".new-session-page__message").fill("keep the selected effort");
+      await page.getByRole("button", { name: "Start session" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        message: "keep the selected effort",
+        model: "openai/gpt-5.6-sol",
+        thinkingLevel: "xhigh",
+      });
+    });
+  });
+
   it("restores valid preferences and repairs a worktree rejected by workspace metadata", async () => {
     await withNewSessionPage(DESKTOP_CONTEXT, async (page) => {
       const gateway = await installMockGateway(page, {

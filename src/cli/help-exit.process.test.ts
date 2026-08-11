@@ -278,6 +278,42 @@ describe("CLI help process exit", () => {
       expect(stdout).toContain(`Usage: openclaw ${usageCommand} [options] [command]`);
     },
   );
+
+  it.concurrent.each([
+    { args: ["acp", "--help"], usage: "Usage: openclaw acp [options] [command]" },
+    { args: ["acp", "client", "--help"], usage: "Usage: openclaw acp client [options]" },
+  ])("renders in-process ACP help for $args", async ({ args, usage }) => {
+    let stdout = "";
+    let stderr = "";
+    let actionStarted = false;
+    const program = new Command()
+      .name("openclaw")
+      .exitOverride()
+      .configureOutput({
+        writeOut: (value) => {
+          stdout += value;
+        },
+        writeErr: (value) => {
+          stderr += value;
+        },
+      });
+    program.hook("preAction", () => {
+      actionStarted = true;
+    });
+    const argv = ["node", "openclaw", ...args];
+
+    const registered = await registerSubCliByName(program, "acp", argv);
+    const parseResult = await program
+      .parseAsync(argv.slice(2), { from: "user" })
+      .catch((cause: unknown) => cause);
+
+    expect(registered).toBe(true);
+    expect(parseResult).toBeInstanceOf(CommanderError);
+    expect(parseResult).toMatchObject({ code: "commander.helpDisplayed", exitCode: 0 });
+    expect(stderr).toBe("");
+    expect(stdout.split(/\r?\n/u).find((line) => line.startsWith("Usage:"))).toBe(usage);
+    expect(actionStarted).toBe(false);
+  });
 });
 
 describe("JSON console style process output", () => {

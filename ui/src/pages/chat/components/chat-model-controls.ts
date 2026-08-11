@@ -142,10 +142,6 @@ function formatPickerModelLabel(label: string): string {
   return match?.[1] ?? label;
 }
 
-function formatPickerThinkingLabel(label: string): string {
-  return label.replace(/^Inherited:\s*/u, "");
-}
-
 export function renderChatModelControls(props: ChatModelControlsProps) {
   const {
     currentOverride,
@@ -245,11 +241,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
           currentOverride || pickerDefaultLabel,
           props.modelCatalog,
         ));
-  const committedThinkingLabel =
-    thinking.currentOverride === ""
-      ? thinking.defaultLabel
-      : (thinking.options.find((entry) => entry.value === thinking.currentOverride)?.label ??
-        thinking.currentOverride);
   const managedCatalog = props.modelCatalogState ?? {
     hasSnapshot: !props.modelsLoading,
     status: props.modelsLoading ? ("loading" as const) : ("ready" as const),
@@ -281,7 +272,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     commonDisabled ||
     effortMutationDisabled ||
     !managedCatalog.hasSnapshot ||
-    (thinking.options.length === 0 && thinking.currentOverride === "");
+    (thinking.options.length === 0 && thinking.selection.source === "default");
   const showFastMode = props.showFastMode !== false;
   const effortDisabled =
     commonDisabled ||
@@ -313,13 +304,10 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
           ...fastMode,
           disabled: fastMode.disabled || commonDisabled || effortMutationDisabled,
         },
-        selectedThinkingValue: thinking.currentOverride,
         sessionKey: props.sessionKey,
         showFastMode,
-        thinkingDefaultValue: thinking.defaultValue,
         thinkingDisabled,
-        thinkingOptions: [{ value: "", label: thinking.defaultLabel }, ...thinking.options],
-        triggerThinkingLabel: formatPickerThinkingLabel(committedThinkingLabel),
+        thinking,
         onFastModeSelect: async (next, targetSessionKey) =>
           props.onFastModeSelect?.(next, targetSessionKey),
         onRequestUpdate: props.onRequestUpdate,

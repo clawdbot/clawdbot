@@ -10,6 +10,18 @@ type DestroyableArchiveStream = (NodeJS.ReadableStream | AsyncIterable<Uint8Arra
   destroy(error?: Error): unknown;
 };
 
+type BackupTarEntryProgressStream = {
+  flowing: boolean;
+  on(event: "data", listener: (chunk: Buffer | string) => void): unknown;
+  pause(): unknown;
+};
+
+type BackupArchiveProgress = {
+  bytes?: number;
+  entryPath?: string;
+  phase: "entry" | "output" | "raw" | "traversal";
+};
+
 export type BackupArchiveCleanupReceipt = {
   archivePath: string;
   identity?: Stats;
@@ -18,6 +30,21 @@ export type BackupArchiveCleanupReceipt = {
 export type PreparedBackupArchive = BackupArchiveCleanupReceipt & {
   identity: Stats;
 };
+
+export function observeBackupTarEntryProgress(
+  entry: BackupTarEntryProgressStream,
+  reportProgress: (bytes: number) => void,
+): void {
+  const wasFlowing = entry.flowing;
+  entry.on("data", (chunk) => {
+    reportProgress(typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length);
+  });
+  if (!wasFlowing) {
+    // node-tar calls onWriteEntry before emitting the header. Adding a Minipass
+    // data listener starts flow, so pause until Pack attaches its own consumer.
+    entry.pause();
+  }
+}
 
 // OpenClaw's one-user trust model treats hostile same-UID pathname rewrites as
 // trusted host mutation. Keep the check and unlink synchronous so cooperative
@@ -42,7 +69,9 @@ export function removePreparedBackupArchive(prepared: PreparedBackupArchive): bo
 
 export async function writeArchiveStreamToFile(params: {
   archivePath: string;
-  createArchiveStream: (reportProgress: () => void) => DestroyableArchiveStream;
+  createArchiveStream: (
+    reportProgress: (progress?: BackupArchiveProgress) => void,
+  ) => DestroyableArchiveStream;
   idleTimeoutMs?: number;
   onPartialArchive?: (receipt: BackupArchiveCleanupReceipt) => void;
 }): Promise<PreparedBackupArchive> {
@@ -55,19 +84,39 @@ export async function writeArchiveStreamToFile(params: {
   let openedIdentity: Stats | undefined;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let idleTimeoutError: Error | undefined;
+  let lastEntryPath: string | undefined;
+  let lastProgress: BackupArchiveProgress | undefined;
+  let outputBytes = 0;
+  let producerBytes = 0;
   let settled = false;
-  const armIdleTimer = () => {
+  const reportProgress = (progress?: BackupArchiveProgress) => {
     // A destroyed producer may finish an in-flight filesystem callback later;
-    // never let that callback retain the process after cleanup has completed.
+    // do not let that callback rearm the watchdog after cleanup has completed.
     if (settled) {
       return;
+    }
+    if (progress) {
+      lastProgress = progress;
+      if (progress.entryPath) {
+        lastEntryPath = progress.entryPath;
+      }
+      if (progress.bytes) {
+        if (progress.phase === "output") {
+          outputBytes += progress.bytes;
+        } else if (progress.phase === "raw") {
+          producerBytes += progress.bytes;
+        }
+      }
     }
     if (idleTimer) {
       clearTimeout(idleTimer);
     }
     idleTimer = setTimeout(() => {
+      const entrySuffix = lastEntryPath
+        ? `, entry=${JSON.stringify(lastEntryPath.slice(-512))}`
+        : "";
       idleTimeoutError = new Error(
-        `Backup archive write stalled: no progress observed for ${idleTimeoutMs}ms`,
+        `Backup archive write stalled: no progress observed for ${idleTimeoutMs}ms (phase=${lastProgress?.phase ?? "starting"}${entrySuffix}, rawBytes=${producerBytes}, outputBytes=${outputBytes})`,
       );
       archiveStream?.destroy(idleTimeoutError);
       controller.abort(idleTimeoutError);
@@ -75,7 +124,7 @@ export async function writeArchiveStreamToFile(params: {
   };
   const progress = new Transform({
     transform(chunk, _encoding, callback) {
-      armIdleTimer();
+      reportProgress({ phase: "output", bytes: chunk.length });
       callback(null, chunk);
     },
   });
@@ -93,11 +142,11 @@ export async function writeArchiveStreamToFile(params: {
     }
   });
   try {
-    archiveStream = params.createArchiveStream(armIdleTimer);
+    archiveStream = params.createArchiveStream(reportProgress);
     const pipelinePromise = pipeline(archiveStream, progress, archiveWriteStream, {
       signal: controller.signal,
     });
-    armIdleTimer();
+    reportProgress();
     await pipelinePromise;
     const currentIdentity = await fs.lstat(params.archivePath);
     if (

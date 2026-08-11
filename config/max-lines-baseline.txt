@@ -373,15 +373,11 @@ src/agents/embedded-agent-runner/extra-params.ts
 src/agents/embedded-agent-runner/model.provider-runtime.test-support.ts
 src/agents/embedded-agent-runner/model.test.ts
 src/agents/embedded-agent-runner/replay-history.ts
-src/agents/embedded-agent-runner/run.incomplete-turn.test.ts
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts
 src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts
 src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts
 src/agents/embedded-agent-runner/run/attempt.test.ts
 src/agents/embedded-agent-runner/run/attempt.tool-call-argument-repair.ts
-src/agents/embedded-agent-runner/run/attempt.tool-call-normalization.test.ts
-src/agents/embedded-agent-runner/run/attempt.tool-call-normalization.ts
-src/agents/embedded-agent-runner/run/incomplete-turn.ts
 src/agents/embedded-agent-runner/runs.ts
 src/agents/embedded-agent-runner/thinking.test.ts
 src/agents/embedded-agent-runner/tool-result-context-guard.test.ts

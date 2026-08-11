@@ -20,9 +20,9 @@ import { shouldRunLlmOutputHooksForAttempt } from "./attempt-run-decisions.js";
 import {
   buildAttemptReplayMetadata,
   hasAttemptTerminalState,
-  resolveSilentToolResultReplyPayload,
-  shouldTreatEmptyAssistantReplyAsSilent,
-} from "./incomplete-turn.js";
+} from "./attempt-terminal-evidence.js";
+import { shouldTreatEmptyAssistantReplyAsSilent } from "./incomplete-turn-recovery.js";
+import { resolveSilentToolResultReplyPayload } from "./incomplete-turn-resolution.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,

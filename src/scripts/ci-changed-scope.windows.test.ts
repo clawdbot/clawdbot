@@ -126,6 +126,11 @@ describe("detectChangedScope Windows routing", () => {
 
   it("routes web and Teams file URL handling to Windows", () => {
     for (const fileUrlPath of [
+      "src/agents/tools/media-tool-file-url.windows.test.ts",
+      "src/agents/tools/media-tool-shared.test.ts",
+      "src/agents/tools/media-tool-shared.ts",
+      "src/agents/tools/pdf-tool.test.ts",
+      "src/agents/tools/pdf-tool.ts",
       "src/media/local-media-path.ts",
       "src/media/local-media-path.windows.test.ts",
       "src/media/local-roots.ts",
