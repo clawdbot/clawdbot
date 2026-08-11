@@ -52,18 +52,19 @@ public enum ShareGatewayRelaySettings {
         guard let data = self.defaults.data(forKey: self.relayConfigKey) else { return nil }
         guard let config = try? JSONDecoder().decode(ShareGatewayRelayConfig.self, from: data) else { return nil }
         if config.token != nil || config.password != nil {
-            // Legacy defaults held the full config. Commit the scrub only after
-            // Keychain persistence succeeds so a transient failure remains retryable.
-            self.migrateLegacyConfigIfOwner(
+            return self.resolveLegacyConfig(
                 config,
                 isAppExtension: self.isAppExtension,
-                commit: { config in
-                    self.commitConfig(
+                migrate: { config in
+                    _ = self.commitConfig(
                         config,
                         saveCredentials: self.saveCredentials,
                         saveMetadata: self.saveMetadata)
+                },
+                discard: {
+                    self.defaults.removeObject(forKey: self.relayConfigKey)
+                    self.saveLastEvent("Share unavailable after upgrade: open OpenClaw to reconnect securely.")
                 })
-            return config
         }
         // Keep relay identity in the Keychain bundle with its secrets. A partial
         // route update must never bind one gateway's credentials to another.
@@ -150,15 +151,20 @@ public enum ShareGatewayRelaySettings {
         return true
     }
 
-    static func migrateLegacyConfigIfOwner(
+    static func resolveLegacyConfig(
         _ config: ShareGatewayRelayConfig,
         isAppExtension: Bool,
-        commit: (ShareGatewayRelayConfig) -> Bool)
+        migrate: (ShareGatewayRelayConfig) -> Void,
+        discard: () -> Void) -> ShareGatewayRelayConfig?
     {
-        // The NSExtension bundle key identifies the read-only extension process.
-        // Only the host may migrate, so a stale extension cannot replace a newer route.
-        guard !isAppExtension else { return }
-        _ = commit(config)
+        // Only the host may create shared credentials. An extension-first upgrade
+        // must scrub and reject legacy auth instead of racing a newer host route.
+        guard !isAppExtension else {
+            discard()
+            return nil
+        }
+        migrate(config)
+        return config
     }
 
     private static func loadCredentials() -> ShareGatewayRelayConfig? {

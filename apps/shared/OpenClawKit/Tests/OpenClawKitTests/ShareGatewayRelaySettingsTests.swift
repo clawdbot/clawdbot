@@ -33,40 +33,35 @@ struct ShareGatewayRelaySettingsTests {
         #expect(metadataWrites == 1)
     }
 
-    @Test func `stale extension migration cannot replace newer host route`() {
-        let newerHostConfig = ShareGatewayRelayConfig(
-            gatewayURLString: "wss://newer.example.com",
-            gatewayStableID: "manual|newer.example.com|443",
-            token: "newer-token",
-            password: nil,
-            sessionKey: "main")
-        var persisted = newerHostConfig
-        var commits = 0
+    @Test func `extension-first upgrade discards and rejects legacy credentials`() {
+        var migrations = 0
+        var discards = 0
 
-        ShareGatewayRelaySettings.migrateLegacyConfigIfOwner(
+        let resolved = ShareGatewayRelaySettings.resolveLegacyConfig(
             self.config,
             isAppExtension: true,
-            commit: { staleConfig in
-                commits += 1
-                persisted = staleConfig
-                return true
-            })
+            migrate: { _ in migrations += 1 },
+            discard: { discards += 1 })
 
-        #expect(commits == 0)
-        #expect(persisted == newerHostConfig)
+        #expect(resolved == nil)
+        #expect(migrations == 0)
+        #expect(discards == 1)
     }
 
     @Test func `host app owns legacy migration`() {
         var migrated: ShareGatewayRelayConfig?
+        var discards = 0
 
-        ShareGatewayRelaySettings.migrateLegacyConfigIfOwner(
+        let resolved = ShareGatewayRelaySettings.resolveLegacyConfig(
             self.config,
             isAppExtension: false,
-            commit: { config in
+            migrate: { config in
                 migrated = config
-                return true
-            })
+            },
+            discard: { discards += 1 })
 
+        #expect(resolved == self.config)
         #expect(migrated == self.config)
+        #expect(discards == 0)
     }
 }
