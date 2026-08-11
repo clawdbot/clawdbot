@@ -36,13 +36,30 @@ import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-que
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
-import { sanitizeTextContent, extractAssistantText } from "./tools/sessions-helpers.js";
+import {
+  sanitizeTextContent,
+  extractAssistantText,
+  hasAssistantToolCalls,
+} from "./tools/sessions-helpers.js";
 
 const FAST_TEST_MODE = process.env.OPENCLAW_TEST_FAST === "1";
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
 const FAST_TEST_REPLY_CHANGE_WAIT_MS = 20;
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 60_000;
 const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
+const ANNOUNCE_DEDUP_MAX_SIZE = 500;
+
+const deliveredAnnounceIds = new Set<string>();
+
+function markAnnounceDelivered(announceId: string): void {
+  if (deliveredAnnounceIds.size >= ANNOUNCE_DEDUP_MAX_SIZE) {
+    const first = deliveredAnnounceIds.values().next().value;
+    if (first !== undefined) {
+      deliveredAnnounceIds.delete(first);
+    }
+  }
+  deliveredAnnounceIds.add(announceId);
+}
 
 type ToolResultMessage = {
   role?: unknown;
@@ -205,6 +222,7 @@ async function readLatestSubagentOutput(sessionKey: string): Promise<string | un
     const latestAssistant = await readLatestAssistantReply({
       sessionKey,
       limit: 50,
+      skipToolUseTurns: true,
     });
     if (latestAssistant?.trim()) {
       return latestAssistant;
@@ -219,6 +237,14 @@ async function readLatestSubagentOutput(sessionKey: string): Promise<string | un
   const messages = Array.isArray(history?.messages) ? history.messages : [];
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const msg = messages[i];
+    if (
+      msg &&
+      typeof msg === "object" &&
+      (msg as { role?: unknown }).role === "assistant" &&
+      hasAssistantToolCalls(msg)
+    ) {
+      continue;
+    }
     const text = extractSubagentOutputText(msg);
     if (text) {
       return text;
@@ -996,6 +1022,13 @@ export async function runSubagentAnnounceFlow(params: {
   signal?: AbortSignal;
   bestEffortDeliver?: boolean;
 }): Promise<boolean> {
+  const earlyAnnounceId = buildAnnounceIdFromChildRun({
+    childSessionKey: params.childSessionKey,
+    childRunId: params.childRunId,
+  });
+  if (deliveredAnnounceIds.has(earlyAnnounceId)) {
+    return true;
+  }
   let didAnnounce = false;
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
   let shouldDeleteChildSession = params.cleanup === "delete";
@@ -1259,6 +1292,9 @@ export async function runSubagentAnnounceFlow(params: {
       signal: params.signal,
     });
     didAnnounce = delivery.delivered;
+    if (delivery.delivered) {
+      markAnnounceDelivered(earlyAnnounceId);
+    }
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
       defaultRuntime.error?.(
         `Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,

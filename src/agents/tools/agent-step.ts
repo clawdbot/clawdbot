@@ -2,11 +2,16 @@ import crypto from "node:crypto";
 import { callGateway } from "../../gateway/call.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
-import { extractAssistantText, stripToolMessages } from "./sessions-helpers.js";
+import {
+  extractAssistantText,
+  hasAssistantToolCalls,
+  stripToolMessages,
+} from "./sessions-helpers.js";
 
 export async function readLatestAssistantReply(params: {
   sessionKey: string;
   limit?: number;
+  skipToolUseTurns?: boolean;
 }): Promise<string | undefined> {
   const history = await callGateway<{ messages: Array<unknown> }>({
     method: "chat.history",
@@ -19,6 +24,9 @@ export async function readLatestAssistantReply(params: {
       continue;
     }
     if ((candidate as { role?: unknown }).role !== "assistant") {
+      continue;
+    }
+    if (params.skipToolUseTurns && hasAssistantToolCalls(candidate)) {
       continue;
     }
     const text = extractAssistantText(candidate);

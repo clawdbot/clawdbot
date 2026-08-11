@@ -133,6 +133,39 @@ export function stripToolMessages(messages: unknown[]): unknown[] {
   });
 }
 
+const TOOL_CALL_BLOCK_TYPES = new Set([
+  "toolCall",
+  "tool_use",
+  "toolUse",
+  "functionCall",
+  "function_call",
+]);
+
+export function hasAssistantToolCalls(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (
+        block &&
+        typeof block === "object" &&
+        TOOL_CALL_BLOCK_TYPES.has((block as { type?: string }).type ?? "")
+      ) {
+        return true;
+      }
+    }
+  }
+  const toolCalls =
+    (message as { toolCalls?: unknown }).toolCalls ??
+    (message as { tool_calls?: unknown }).tool_calls;
+  if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+    return true;
+  }
+  return false;
+}
+
 /**
  * Sanitize text content to strip tool call markers and thinking tags.
  * This ensures user-facing text doesn't leak internal tool representations.

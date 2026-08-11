@@ -1360,7 +1360,7 @@ describe("subagent announce formatting", () => {
 
     await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
-      childRunId: "run-child",
+      childRunId: "run-child-sibling-advisory",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       ...defaultOutcomeAnnounce,
@@ -1648,5 +1648,61 @@ describe("subagent announce formatting", () => {
       expect(call?.params?.deliver, testCase.name).toBe(testCase.expectedDeliver);
       expect(call?.params?.channel, testCase.name).toBe(testCase.expectedChannel);
     }
+  });
+
+  it("skips tool-use assistant turns in the fallback chat.history path", async () => {
+    readLatestAssistantReplyMock.mockResolvedValue(undefined);
+    chatHistoryMock.mockResolvedValue({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "actual terminal output" }],
+        },
+        {
+          role: "assistant",
+          stopReason: "toolUse",
+          content: [
+            { type: "text", text: "Let me look into that." },
+            { type: "toolCall", id: "call-read", name: "read", arguments: {} },
+          ],
+        },
+        {
+          role: "toolResult",
+          content: [],
+        },
+      ],
+    });
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:toolskip",
+      childRunId: "run-toolskip",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+    });
+
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    const msg = call?.params?.message as string;
+    expect(msg).toContain("actual terminal output");
+    expect(msg).not.toContain("Let me look into that.");
+  });
+
+  it("does not duplicate announcements for the same child run", async () => {
+    const sharedParams = {
+      childSessionKey: "agent:main:subagent:dedup",
+      childRunId: "run-dedup-test",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+    };
+
+    const first = await runSubagentAnnounceFlow(sharedParams);
+    expect(first).toBe(true);
+    expect(agentSpy).toHaveBeenCalledOnce();
+
+    agentSpy.mockClear();
+    const second = await runSubagentAnnounceFlow(sharedParams);
+    expect(second).toBe(true);
+    expect(agentSpy).not.toHaveBeenCalled();
   });
 });
