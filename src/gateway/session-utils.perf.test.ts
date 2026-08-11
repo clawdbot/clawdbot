@@ -23,6 +23,12 @@ import { resolveGatewaySessionThinkingProjectionInternal } from "./session-utils
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { listSessionsFromStore, listSessionsFromStoreAsync } from "./session-utils.js";
 
+// Runtime selection is outside these cache, metadata, and transcript batching
+// contracts. Keep its cold plugin/provider discovery off this focused file.
+vi.mock("../agents/harness/policy.js", () => ({
+  resolveAgentHarnessPolicy: () => ({ runtime: "openclaw", runtimeSource: "implicit" }),
+}));
+
 /**
  * Regression smoke for the per-list rowContext resolver cache. The bug we are
  * guarding against is O(rows) scaling of deterministic resolvers whose results
