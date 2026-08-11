@@ -36,7 +36,6 @@ import { resolveActionDeliveryTargetAlias } from "../../infra/outbound/message-a
 import { shouldApplyCrossContextMarker } from "../../infra/outbound/outbound-policy.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
-import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";

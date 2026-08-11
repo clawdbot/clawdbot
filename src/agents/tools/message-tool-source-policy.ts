@@ -7,6 +7,7 @@ import { Type, type TObject } from "typebox";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
+import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import type { AgentRuntimeMessageActionContext } from "../../gateway/message-action-turn-capability.js";
 import { sourceDeliveryTargetsMatch } from "../../infra/outbound/source-delivery-plan.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
