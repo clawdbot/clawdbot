@@ -44,13 +44,17 @@ const APPLE_SWIFT_CONFIG_RE = /^config\/(?:swiftformat|swiftlint\.yml)$/;
 const APPLE_SHARED_CONTRACT_FIXTURE_RE =
   /^test\/fixtures\/(?:device-identity-coordinator|talk-config)-contract\.json$/;
 const MACOS_NATIVE_RE =
-  /^(apps\/macos\/|apps\/macos-mlx-tts\/|apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/)/;
+  /^(apps\/macos\/|apps\/macos-mlx-tts\/|apps\/shared\/|apps\/swabble\/|Swabble\/)/;
 const MACOS_SCRIPT_SCOPE_RE =
   /^(?:scripts\/(?:check-swift-tools|codesign-mac-app|create-dmg|format-swift|install-swift-tools|install-xcodegen|lint-swift|notarize-mac-artifact|package-mac-app|package-mac-dist)\.sh|scripts\/lib\/(?:plistbuddy|swift-toolchain)\.sh|test\/scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts)$/;
 const WORKSPACE_RSYNC_RECEIVER_SCOPE_RE =
   /^src\/(?:worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$/;
 const IOS_BUILD_RE =
-  /^(apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|scripts\/(?:ios-(?:configure-signing|team-id|write-version-xcconfig)\.sh|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|scripts\/lib\/(?:ios-version\.ts|release-version\.mjs|version-script-args\.ts)$)/;
+  /^(apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|scripts\/(?:ios-(?:configure-signing|screenshots|team-id|write-version-xcconfig)\.sh|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|scripts\/lib\/(?:ios-fastlane\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$)/;
+const IOS_SCREENSHOT_APP_SCOPE_RE =
+  /^(?:apps\/ios\/|apps\/shared\/OpenClawKit\/|apps\/swabble\/|Swabble\/)/;
+const IOS_SCREENSHOT_SCRIPT_SCOPE_RE =
+  /^scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|^scripts\/(?:ios-(?:configure-signing|screenshots|team-id|write-version-xcconfig)\.sh|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|^scripts\/lib\/(?:ios-fastlane\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$/;
 const ANDROID_NATIVE_RE = /^(apps\/android\/|apps\/shared\/)/;
 const NODE_SCOPE_RE =
   /^(src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|\.github\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.oxlintrc\.json$|\.oxfmtrc\.jsonc$)/;
@@ -243,6 +247,26 @@ export function detectChangedScope(changedPaths) {
     runControlUiI18n,
     runUiTests,
   };
+}
+
+/**
+ * Release screenshot capture is a conservative pipeline-integrity gate. App,
+ * linked Swift, and capture-tool changes must prove the real release lane.
+ * @param {string[] | null} changedPaths
+ * @returns {boolean}
+ */
+export function shouldRunIosScreenshots(changedPaths) {
+  if (!Array.isArray(changedPaths)) {
+    return true;
+  }
+  return changedPaths.some((rawPath) => {
+    const { path } = getChangedPathFacts(rawPath);
+    return (
+      IOS_SCREENSHOT_APP_SCOPE_RE.test(path) ||
+      IOS_SCREENSHOT_SCRIPT_SCOPE_RE.test(path) ||
+      APPLE_SWIFT_CONFIG_RE.test(path)
+    );
+  });
 }
 
 /**
@@ -589,6 +613,11 @@ export function writeGitHubOutput(
   appendFileSync(outputPath, `run_node=${scope.runNode}\n`, "utf8");
   appendFileSync(outputPath, `run_macos=${scope.runMacos}\n`, "utf8");
   appendFileSync(outputPath, `run_ios_build=${scope.runIosBuild}\n`, "utf8");
+  appendFileSync(
+    outputPath,
+    `run_ios_screenshots=${shouldRunIosScreenshots(changedPaths)}\n`,
+    "utf8",
+  );
   appendFileSync(outputPath, `run_android=${scope.runAndroid}\n`, "utf8");
   appendFileSync(outputPath, `run_windows=${scope.runWindows}\n`, "utf8");
   appendFileSync(outputPath, `run_skills_python=${scope.runSkillsPython}\n`, "utf8");
