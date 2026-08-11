@@ -550,6 +550,7 @@ function requiredChecksSatisfied(checkRuns, headSha, requiredCheckPolicy) {
  * @param {NormalizedFinding[]} params.findings
  * @param {boolean} params.headStable
  * @param {boolean} params.prContentStable
+ * @param {boolean} [params.evidenceStable]
  * @param {boolean} params.hasExactHeadClawSweeperPass
  * @param {boolean} params.hasFreshExactHeadClawSweeperPass
  * @param {string | null} [params.latestExactHeadClawSweeperPassAt]
@@ -559,6 +560,7 @@ export function decidePrConvergence({
   findings,
   headStable,
   prContentStable,
+  evidenceStable = true,
   hasExactHeadClawSweeperPass,
   hasFreshExactHeadClawSweeperPass,
   latestExactHeadClawSweeperPassAt = null,
@@ -579,6 +581,13 @@ export function decidePrConvergence({
       decision: CONVERGENCE_DECISIONS.UNKNOWN,
       reason: "PR title or description changed between the initial and final audit reads.",
       nextAction: "Re-run the convergence audit after the PR content stabilizes.",
+    };
+  }
+  if (!evidenceStable) {
+    return {
+      decision: CONVERGENCE_DECISIONS.UNKNOWN,
+      reason: "GitHub evidence changed between consecutive validation reads.",
+      nextAction: "Re-run the convergence audit after the evidence bundle stabilizes.",
     };
   }
   if (evidence.errors.length > 0) {
@@ -741,6 +750,66 @@ function formatProviderFailureReason(error) {
 }
 
 /**
+ * @param {unknown} value
+ * @returns {unknown}
+ */
+function canonicalizeEvidenceSnapshot(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => canonicalizeEvidenceSnapshot(item))
+      .toSorted((left, right) =>
+        compareStrings(JSON.stringify(left) ?? "", JSON.stringify(right) ?? ""),
+      );
+  }
+  if (value && typeof value === "object") {
+    const record = /** @type {Record<string, unknown>} */ (value);
+    return Object.fromEntries(
+      Object.keys(record)
+        .toSorted(compareStrings)
+        .map((key) => [key, canonicalizeEvidenceSnapshot(record[key])]),
+    );
+  }
+  return value;
+}
+
+/**
+ * @param {unknown} value
+ */
+function evidenceSnapshotFingerprint(value) {
+  return JSON.stringify(canonicalizeEvidenceSnapshot(value));
+}
+
+/**
+ * @param {object} params
+ * @param {string} params.repo
+ * @param {number} params.pr
+ * @param {string} params.headSha
+ * @param {PrConvergenceProvider} params.provider
+ */
+async function collectEvidenceSnapshot({ repo, pr, headSha, provider }) {
+  const [
+    formalReviewsResult,
+    inlineReviewCommentsResult,
+    issueCommentsResult,
+    requestedReviewersResult,
+    checkRunsResult,
+  ] = await Promise.all([
+    provider.fetchFormalReviews({ repo, pr }),
+    provider.fetchInlineReviewComments({ repo, pr }),
+    provider.fetchIssueComments({ repo, pr }),
+    provider.fetchRequestedReviewers({ repo, pr }),
+    provider.fetchCheckRuns({ repo, pr, headSha }),
+  ]);
+  return {
+    formalReviewsResult,
+    inlineReviewCommentsResult,
+    issueCommentsResult,
+    requestedReviewersResult,
+    checkRunsResult,
+  };
+}
+
+/**
  * @param {object} params
  * @param {string} params.repo
  * @param {number} params.pr
@@ -843,20 +912,28 @@ export async function auditPrConvergence({ repo, pr, provider }) {
   let requestedReviewersResult;
   let checkRunsResult;
   let finalPull;
+  let initialEvidenceSnapshot;
+  let validatedEvidenceSnapshot;
   try {
-    [
+    initialEvidenceSnapshot = await collectEvidenceSnapshot({
+      repo,
+      pr,
+      headSha: initialHeadSha,
+      provider,
+    });
+    validatedEvidenceSnapshot = await collectEvidenceSnapshot({
+      repo,
+      pr,
+      headSha: initialHeadSha,
+      provider,
+    });
+    ({
       formalReviewsResult,
       inlineReviewCommentsResult,
       issueCommentsResult,
       requestedReviewersResult,
       checkRunsResult,
-    ] = await Promise.all([
-      provider.fetchFormalReviews({ repo, pr }),
-      provider.fetchInlineReviewComments({ repo, pr }),
-      provider.fetchIssueComments({ repo, pr }),
-      provider.fetchRequestedReviewers({ repo, pr }),
-      provider.fetchCheckRuns({ repo, pr, headSha: initialHeadSha }),
-    ]);
+    } = validatedEvidenceSnapshot);
     finalPull = await provider.fetchPullRequest({ repo, pr });
   } catch (error) {
     return buildProviderFailureAuditResult({
@@ -874,6 +951,9 @@ export async function auditPrConvergence({ repo, pr, provider }) {
   const initialPrLastEditedAt = normalizeNullableTimestamp(initialPull?.last_edited_at);
   const finalPrLastEditedAt = normalizeNullableTimestamp(finalPull?.last_edited_at);
   const prContentStable = finalPrLastEditedAt === initialPrLastEditedAt;
+  const evidenceStable =
+    evidenceSnapshotFingerprint(initialEvidenceSnapshot) ===
+    evidenceSnapshotFingerprint(validatedEvidenceSnapshot);
   const prUrl =
     finalPull?.html_url ?? initialPull?.html_url ?? `https://github.com/${repo}/pull/${pr}`;
 
@@ -1015,6 +1095,7 @@ export async function auditPrConvergence({ repo, pr, provider }) {
     findings,
     headStable,
     prContentStable,
+    evidenceStable,
     hasExactHeadClawSweeperPass,
     hasFreshExactHeadClawSweeperPass,
     latestExactHeadClawSweeperPassAt,

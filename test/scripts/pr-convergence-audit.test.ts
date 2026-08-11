@@ -495,6 +495,44 @@ describe("pr-convergence-audit", () => {
     expect(result.reason).toContain("head changed");
   });
 
+  it("fails closed when mutable evidence changes between validation reads", async () => {
+    const passBody = `<!-- clawsweeper-verdict:pass item=${pr} sha=${headSha} confidence=high -->`;
+    const blockerBody = [
+      "P1: A blocker arrived after the first evidence snapshot.",
+      `<!-- clawsweeper-verdict:block item=${pr} sha=${headSha} confidence=high -->`,
+    ].join("\n");
+    const { provider } = createProvider({
+      issueComments: [clawsweeperComment({ id: 9502, body: passBody })],
+    });
+    const fetchIssueComments = provider.fetchIssueComments.bind(provider);
+    let issueCommentReads = 0;
+    provider.fetchIssueComments = async () => {
+      issueCommentReads += 1;
+      const result = await fetchIssueComments();
+      if (issueCommentReads === 1) {
+        return result;
+      }
+      return {
+        ...result,
+        items: [
+          ...result.items,
+          clawsweeperComment({
+            id: 9503,
+            body: blockerBody,
+            createdAt: "2026-07-26T09:01:00Z",
+          }),
+        ],
+      };
+    };
+
+    const result = await auditPrConvergence({ repo, pr, provider });
+
+    expect(issueCommentReads).toBe(2);
+    expect(result.decision).toBe(CONVERGENCE_DECISIONS.UNKNOWN);
+    expect(result.reason).toContain("evidence changed");
+    expect(result.nextAction).toContain("stabilizes");
+  });
+
   it("never yields READY from formal review state alone", () => {
     const evidence = {
       repo,

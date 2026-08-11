@@ -31,6 +31,12 @@ The audit normalizes a complete evidence bundle for one PR:
 - requested reviewers
 - check runs for the exact head
 
+The audit collects these mutable surfaces twice and compares canonicalized
+snapshots. Any difference fails closed to `UNKNOWN`; decisions use the second,
+validated snapshot. A `READY` result describes that point-in-time snapshot and
+does not promise that later comments, reviews, or check transitions cannot
+change the result.
+
 Each normalized item preserves:
 
 - source surface
@@ -90,6 +96,7 @@ Fail closed to `UNKNOWN` when evidence is incomplete or unsafe to trust:
 - stale blocking evidence for an older head
 - the PR head changes between the initial and final reads
 - the PR title or description changes between the initial and final reads
+- any mutable evidence surface changes between consecutive validation reads
 - the latest trusted exact-head pass does not verifiably postdate the latest PR title or
   description edit
 
@@ -107,6 +114,7 @@ Formal review state alone can never produce `READY`.
 Use `READY` only when all of the following are true:
 
 - evidence coverage is complete for every required surface
+- two consecutive complete evidence snapshots match
 - the PR head is stable across the audit
 - required checks for the exact head are satisfied
 - there are zero unresolved current-head blockers
