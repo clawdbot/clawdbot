@@ -13,7 +13,7 @@ import type {
   AgentCommandIngressOpts,
   AgentCommandOpts,
 } from "./command/types.js";
-import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
+import { commitMainSessionRecovery } from "./main-session-recovery/main-session-recovery-store.js";
 
 export type AgentCommandAdmissionIngress = ExecutionIdentityAdmissionFacts["ingress"];
 
