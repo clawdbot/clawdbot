@@ -113,6 +113,7 @@ import type { CronToolOptions } from "./tools/cron-tool.types.js";
 import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
+const MEMORY_ISOLATION_READ_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 
 function applyModelProviderToolPolicy(
   toolsInput: AnyAgentTool[],
@@ -919,10 +920,11 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       !options?.swarmCollector ||
       (tool.name !== "ask_user" && tool.name !== "sessions_send" && tool.name !== "sessions_yield"),
   );
-  // P1C has no authorized mutation or execution path. Apply this after every contributor and
-  // policy layer so a future core, plugin, or ring-zero tool cannot reopen a durable-write bypass.
+  // P1C admits only selected-plugin reads. Generic filesystem reads would let a model bypass the
+  // broker's subject and receipt checks, while every other contributor could reopen an egress or
+  // mutation path if this final surface gate moved earlier.
   const surfaceTools = memoryIsolationCutover
-    ? authorizedTools.filter((tool) => tool.name === "read")
+    ? authorizedTools.filter((tool) => MEMORY_ISOLATION_READ_TOOL_NAMES.has(tool.name))
     : authorizedTools;
   if (
     swarmStructuredOutputTool &&

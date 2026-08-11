@@ -30,6 +30,7 @@ import {
 } from "./agent-tools.read.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import { createMemoryFileMutationGuard } from "./memory-file-mutation-guard.js";
+import { createOpenClawTools } from "./openclaw-tools.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
 import {
@@ -90,7 +91,7 @@ async function expectExecCwdResolvesTo(
 }
 
 describe("workspace path resolution", () => {
-  it("exposes only read for an enforced read-only memory agent", async () => {
+  it("exposes only selected authorized memory tools for an enforced read-only memory agent", async () => {
     await withTempDir("openclaw-memory-cutover-state-", async (stateDir) => {
       const originalStateDir = process.env.OPENCLAW_STATE_DIR;
       process.env.OPENCLAW_STATE_DIR = stateDir;
@@ -107,8 +108,12 @@ describe("workspace path resolution", () => {
           .run();
         resetMemoryIsolationCutoverForTest();
 
+        vi.mocked(createOpenClawTools).mockImplementationOnce(() =>
+          ["read", "memory_search", "memory_get", "exec"].map((name) => ({ name }) as never),
+        );
         expect(createOpenClawCodingTools({ agentId: "main" }).map((tool) => tool.name)).toEqual([
-          "read",
+          "memory_search",
+          "memory_get",
         ]);
       } finally {
         closeOpenClawAgentDatabasesForTest();

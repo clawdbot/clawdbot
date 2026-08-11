@@ -951,7 +951,7 @@ describe("worker runtime", () => {
     ]);
   });
 
-  it("keeps an enforced agent's worker tool surface read-only after state isolation", async () => {
+  it("keeps an enforced agent's worker tool surface free of raw filesystem tools after state isolation", async () => {
     const memoryStateDir = await mkdtemp(path.join(tmpdir(), "openclaw-worker-memory-state-"));
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = memoryStateDir;
@@ -974,9 +974,7 @@ describe("worker runtime", () => {
       await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
 
       expect(browserRuntimeMocks.createWorkerBrowserToolRuntime).not.toHaveBeenCalled();
-      expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual([
-        "read",
-      ]);
+      expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual([]);
     } finally {
       resetMemoryIsolationCutoverForTest();
       closeOpenClawAgentDatabasesForTest();
