@@ -9,7 +9,17 @@ import {
   resolvePnpmSpawnCall,
   resolveSpawnCall,
   shouldUseCmdExeForCommand,
-} from "../../scripts/ui.js";
+} from "../../scripts/ui.mts";
+// writeFileSync creates the file before its content lands, so an existence
+// poll can observe an empty file on loaded runners; wait for bytes instead.
+function readNonEmpty(file: string): string | null {
+  try {
+    const content = fs.readFileSync(file, "utf8");
+    return content.length > 0 ? content : null;
+  } catch {
+    return null;
+  }
+}
 
 async function waitFor(predicate: () => boolean, label: string, timeoutMs = 3_000): Promise<void> {
   const startedAt = Date.now();
@@ -244,7 +254,7 @@ describe("scripts/ui windows spawn behavior", () => {
       });
 
       try {
-        await waitFor(() => fs.existsSync(readyFile), "UI runner readiness");
+        await waitFor(() => readNonEmpty(readyFile) !== null, "UI runner readiness");
         expect(fs.readFileSync(readyFile, "utf8")).toBe("install");
         wrapper.kill(signal);
 
@@ -293,7 +303,10 @@ describe("scripts/ui windows spawn behavior", () => {
       });
 
       try {
-        await waitFor(() => fs.existsSync(descendantPidFile), "UI runner descendant readiness");
+        await waitFor(
+          () => readNonEmpty(descendantPidFile) !== null,
+          "UI runner descendant readiness",
+        );
         descendantPid = Number(fs.readFileSync(descendantPidFile, "utf8"));
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 25);

@@ -3,7 +3,6 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -15,11 +14,11 @@ import type {
 } from "../plugins/types.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import type { NodeSession } from "./node-registry.js";
+import { runApprovalRequestDeliveries } from "./server-methods/approval-request-delivery.js";
 import {
   bindApprovalRequesterMetadata,
   buildRequestedApprovalEvent,
   handlePendingApprovalRequest,
-  isApprovalRecordVisibleToClient,
 } from "./server-methods/approval-shared.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 
@@ -100,6 +99,12 @@ function createApprovalRuntime(params: {
       const timeoutMs = resolvePluginApprovalTimeoutMs(input.timeoutMs);
       const turnSource = resolveNodeInvokeTurnSourceFields(params.turnSource);
       const callerIdentity = params.client?.internal?.agentRuntimeIdentity;
+      if (
+        callerIdentity &&
+        params.context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) !== true
+      ) {
+        throw new Error("agent runtime approval authority is no longer active");
+      }
       const request: PluginApprovalRequestPayload = {
         pluginId: params.pluginId,
         title: truncateUtf16Safe(input.title, 80),
@@ -109,12 +114,19 @@ function createApprovalRuntime(params: {
         toolCallId: normalizeOptionalString(input.toolCallId) ?? null,
         agentId: callerIdentity?.agentId ?? normalizeOptionalString(input.agentId) ?? null,
         sessionKey: callerIdentity?.sessionKey ?? normalizeOptionalString(input.sessionKey) ?? null,
+        runId: callerIdentity?.operationalRunInstance.runId ?? null,
         turnSourceChannel: turnSource.turnSourceChannel,
         turnSourceTo: turnSource.turnSourceTo,
         turnSourceAccountId: turnSource.turnSourceAccountId,
         turnSourceThreadId: turnSource.turnSourceThreadId,
       };
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
+      if (callerIdentity) {
+        record.agentRuntimeDelegatedAuthority = callerIdentity.delegatedAuthority;
+        if (callerIdentity.executionIdentity) {
+          record.executionIdentityToken = callerIdentity.executionIdentity;
+        }
+      }
       bindApprovalRequesterMetadata({ record, client: params.client });
       const respond: RespondFn = () => {};
       // Register directly: persistence and presentation-validation failures
@@ -123,6 +135,10 @@ function createApprovalRuntime(params: {
       // this runtime-internal caller.
       const decisionPromise = manager.register(record, timeoutMs);
       const requestEvent = buildRequestedApprovalEvent(record);
+      const forwardRequest = params.context.forwardPluginApprovalRequest;
+      const iosPushRequest = params.context.pluginApprovalIosPushDelivery?.handleRequested?.bind(
+        params.context.pluginApprovalIosPushDelivery,
+      );
       await handlePendingApprovalRequest({
         manager,
         record,
@@ -134,55 +150,23 @@ function createApprovalRuntime(params: {
         requestEvent,
         twoPhase: false,
         approvalKind: "plugin",
-        deliverRequest: () => {
-          const deliveryTasks: Array<Promise<boolean>> = [];
-          const forward = params.context.forwardPluginApprovalRequest;
-          if (forward) {
-            deliveryTasks.push(
-              forward(requestEvent).catch((err: unknown) => {
-                params.context.logGateway?.error?.(
-                  `plugin approvals: forward node policy request failed: ${String(err)}`,
-                );
-                return false;
-              }),
-            );
-          }
-          const iosPushDelivery = params.context.pluginApprovalIosPushDelivery;
-          if (iosPushDelivery?.handleRequested) {
-            deliveryTasks.push(
-              iosPushDelivery
-                .handleRequested(requestEvent, {
-                  isTargetVisible: (target) =>
-                    isApprovalRecordVisibleToClient({
-                      record,
-                      client: {
-                        connect: {
-                          client: { id: GATEWAY_CLIENT_IDS.IOS_APP },
-                          device: { id: target.deviceId },
-                          scopes: [...target.scopes],
-                        },
-                      } as GatewayClient,
-                    }),
-                })
-                .catch((err: unknown) => {
-                  params.context.logGateway?.error?.(
-                    `plugin approvals: iOS push node policy request failed: ${String(err)}`,
-                  );
-                  return false;
-                }),
-            );
-          }
-          if (deliveryTasks.length === 0) {
-            return false;
-          }
-          return (async () => {
-            let delivered = false;
-            for (const task of deliveryTasks) {
-              delivered = (await task) || delivered;
-            }
-            return delivered;
-          })();
-        },
+        deliverRequest: () =>
+          runApprovalRequestDeliveries({
+            context: params.context,
+            record,
+            forward: forwardRequest
+              ? [
+                  () => forwardRequest(requestEvent),
+                  "plugin approvals: forward node policy request failed",
+                ]
+              : undefined,
+            iosPush: iosPushRequest
+              ? [
+                  (isTargetVisible) => iosPushRequest(requestEvent, { isTargetVisible }),
+                  "plugin approvals: iOS push node policy request failed",
+                ]
+              : undefined,
+          }),
         afterDecision: async (decision) => {
           if (decision === null) {
             await params.context.pluginApprovalIosPushDelivery?.handleExpired?.(requestEvent);
@@ -190,7 +174,7 @@ function createApprovalRuntime(params: {
         },
         afterDecisionErrorLabel: "plugin approvals: iOS push node policy expire failed",
       });
-      const decision = await decisionPromise;
+      let decision = manager.projectDecisionIfActive(record.id, await decisionPromise);
       // This return hands execution authority to the plugin policy. Claim a
       // one-shot decision here so observation or retry cannot replay it.
       if (
@@ -199,6 +183,7 @@ function createApprovalRuntime(params: {
       ) {
         return { id: record.id, decision: null };
       }
+      decision = manager.projectDecisionIfActive(record.id, decision);
       return { id: record.id, decision };
     },
   };
@@ -218,7 +203,12 @@ export async function applyPluginNodeInvokePolicy(params: {
     threadId?: unknown;
   };
   timeoutMs?: number;
+  signal?: AbortSignal;
+  resolveRemainingTimeoutMs?: () => number | undefined;
+  onNodeCommandDispatched?: () => void;
   idempotencyKey?: string;
+  isInvocationCurrent?: () => boolean | Promise<boolean>;
+  isApprovalAuthorityActive?: () => boolean;
 }): Promise<OpenClawPluginNodeInvokePolicyResult | null> {
   const registry = getActivePluginGatewayNodePolicyRegistry();
   // Route metadata is authority-bearing: only a signed agent-runtime caller may nominate it.
@@ -245,14 +235,44 @@ export async function applyPluginNodeInvokePolicy(params: {
   const invokeNode: OpenClawPluginNodeInvokePolicyContext["invokeNode"] = async (
     override = {},
   ): Promise<OpenClawPluginNodeInvokeTransportResult> => {
+    const callerIdentity = params.client?.internal?.agentRuntimeIdentity;
+    if (
+      callerIdentity &&
+      params.context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) !== true
+    ) {
+      return {
+        ok: false,
+        code: "APPROVAL_AUTHORITY_CLOSED",
+        message: "agent runtime approval authority closed before node dispatch",
+      };
+    }
     // Policies invoke the real node through this narrowed transport wrapper so
     // they can retry/override params without getting direct registry access.
-    const currentNode = params.context.nodeRegistry.get(params.nodeSession.nodeId);
+    if (params.isInvocationCurrent && !(await params.isInvocationCurrent())) {
+      return {
+        ok: false,
+        code: "PAIRING_CHANGED",
+        message: "node pairing changed before dispatch",
+      };
+    }
+    const currentNode = params.nodeSession.pairingGeneration
+      ? params.context.nodeRegistry.getForPairingGeneration(
+          params.nodeSession.nodeId,
+          params.nodeSession.pairingGeneration,
+        )
+      : params.context.nodeRegistry.get(params.nodeSession.nodeId);
     if (!currentNode || currentNode.connId !== params.nodeSession.connId) {
       return {
         ok: false,
         code: "ROUTE_CHANGED",
         message: "node connection changed before dispatch",
+      };
+    }
+    if (currentNode.client.invalidated === true) {
+      return {
+        ok: false,
+        code: "PAIRING_CHANGED",
+        message: "node pairing changed before dispatch",
       };
     }
     const currentConfig = params.context.getRuntimeConfig();
@@ -273,16 +293,61 @@ export async function applyPluginNodeInvokePolicy(params: {
         details: { command: params.command, reason: allowed.reason },
       };
     }
-    // Once the registry owns the request, any failure is ambiguous to callers:
-    // the node may have acted before the response was lost or rejected.
-    nodeCommandDispatched = true;
+    const remainingTimeoutMs = params.resolveRemainingTimeoutMs?.();
+    if (remainingTimeoutMs === 0 && params.timeoutMs !== 0) {
+      return {
+        ok: false,
+        code: "TIMEOUT",
+        message: "node invoke timed out",
+      };
+    }
+    const requestedTimeoutMs = override.timeoutMs ?? params.timeoutMs;
+    const timeoutMs =
+      typeof remainingTimeoutMs === "number" && remainingTimeoutMs > 0
+        ? typeof requestedTimeoutMs === "number" && requestedTimeoutMs > 0
+          ? Math.min(requestedTimeoutMs, remainingTimeoutMs)
+          : remainingTimeoutMs
+        : requestedTimeoutMs;
+    // Pairing and policy checks above may await. Revalidate the exact runtime
+    // capability at the final transport handoff so closure wins that race.
+    if (
+      callerIdentity &&
+      params.context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) !== true
+    ) {
+      return {
+        ok: false,
+        code: "APPROVAL_AUTHORITY_CLOSED",
+        message: "agent runtime approval authority closed before node dispatch",
+      };
+    }
+    if (params.isApprovalAuthorityActive?.() === false) {
+      return {
+        ok: false,
+        code: "APPROVAL_AUTHORITY_CLOSED",
+        message: "approved runtime authority closed before node dispatch",
+      };
+    }
     const res = await params.context.nodeRegistry.invoke({
       nodeId: params.nodeSession.nodeId,
       expectedConnId: params.nodeSession.connId,
+      ...(params.nodeSession.pairingGeneration
+        ? { expectedPairingGeneration: params.nodeSession.pairingGeneration }
+        : {}),
       command: params.command,
       params: override.params ?? params.params,
-      timeoutMs: override.timeoutMs ?? params.timeoutMs,
+      timeoutMs,
+      ...(params.signal ? { signal: params.signal } : {}),
       idempotencyKey: override.idempotencyKey ?? params.idempotencyKey,
+      isDispatchAuthorized: () =>
+        (!callerIdentity ||
+          params.context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) === true) &&
+        params.isApprovalAuthorityActive?.() !== false,
+      onDispatchReady: () => {
+        // Only the registry knows that the transport send succeeded. Preserve
+        // pre-send failures as retry-safe while making later failures ambiguous.
+        nodeCommandDispatched = true;
+        params.onNodeCommandDispatched?.();
+      },
     });
     if (!res.ok) {
       return {

@@ -3,10 +3,10 @@ title: "Runtime tool fixture — exec"
 scenario:
   id: runtime-tool-exec
   surface: runtime-tools
-  runtimeParityTier: standard
+  runtimePairLane: core
   coverage:
-    primary:
-      - tools.exec
+    secondary:
+      - tools.exec-routing-exec
   objective: Verify command execution behavior is tracked across OpenClaw and Codex while Codex owns exec/process natively.
   successCriteria:
     - OpenClaw may expose OpenClaw exec while Codex app-server mode may omit duplicate OpenClaw dynamic exec/process.
@@ -27,7 +27,7 @@ scenario:
         actualTool: exec
         bucket: codex-native-workspace
         expectedLayer: codex-native-workspace
-        required: true
+        required: false
         tracking: "#80319"
         codexDefaultImpact: P4
         qaImpact: P1

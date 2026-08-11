@@ -43,6 +43,10 @@ struct VoiceWakeSettings: View {
         MicRefreshSupport.voiceWakeBinding(for: self.state)
     }
 
+    private var selectedLocaleSupportsOnDeviceRecognition: Bool {
+        SpeechRecognitionRequestPolicy.supportsPassiveVoiceWake(localeID: self.state.voiceWakeLocaleID)
+    }
+
     private var voiceSummaryPanel: some View {
         let enabled = voiceWakeSupported && self.state.swabbleEnabled
         let pushToTalk = voiceWakeSupported && self.state.voicePushToTalkEnabled
@@ -158,10 +162,14 @@ struct VoiceWakeSettings: View {
                     SettingsCardGroup("Activation") {
                         SettingsCardToggleRow(
                             title: "Enable Voice Wake",
-                            subtitle: """
-                            Listen for a wake phrase before running voice commands. Recognition runs fully on-device.
-                            """,
+                            subtitle: self.selectedLocaleSupportsOnDeviceRecognition
+                                ? """
+                                Listen for a wake phrase before running voice commands. \
+                                Wake-phrase recognition stays on this Mac.
+                                """
+                                : "On-device recognition is unavailable for the selected language on this Mac.",
                             binding: self.voiceWakeBinding)
+                            .disabled(!self.selectedLocaleSupportsOnDeviceRecognition && !self.state.swabbleEnabled)
 
                         SettingsCardToggleRow(
                             title: "Trigger Talk Mode",
@@ -457,7 +465,7 @@ struct VoiceWakeSettings: View {
     }
 
     private func chimeRow(
-        title: String,
+        title: SettingsTextValue,
         selection: Binding<VoiceWakeChime>,
         showsDivider: Bool = true) -> some View
     {
@@ -589,6 +597,18 @@ struct VoiceWakeSettings: View {
                 .frame(width: self.controlWidth)
             }
 
+            if !self.selectedLocaleSupportsOnDeviceRecognition {
+                Text("""
+                Voice Wake needs on-device recognition for its selected language. \
+                Push-to-talk and Talk Mode remain available.
+                """)
+                .font(.footnote)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 10)
+            }
+
             SettingsCardRow(
                 title: "Additional languages",
                 subtitle: self.additionalLanguagesSubtitle,
@@ -611,7 +631,7 @@ struct VoiceWakeSettings: View {
         }
     }
 
-    private var additionalLanguagesSubtitle: String {
+    private var additionalLanguagesSubtitle: SettingsTextValue {
         if self.state.voiceWakeAdditionalLocaleIDs.isEmpty {
             return "None configured."
         }
@@ -857,7 +877,9 @@ private struct AdditionalLanguageRow: View {
 
     var body: some View {
         SettingsCardRow(
-            title: "Language \(self.index + 2)",
+            title: .verbatim(String(
+                format: String(localized: "Language %lld"),
+                self.index + 2)),
             subtitle: "Fallback recognition language.",
             showsDivider: self.showsDivider)
         {
@@ -913,38 +935,6 @@ struct VoiceWakeSettings_Previews: PreviewProvider {
     static var previews: some View {
         VoiceWakeSettings(state: .preview, isActive: true)
             .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
-    }
-}
-
-@MainActor
-extension VoiceWakeSettings {
-    static func exerciseForTesting() {
-        let state = AppState(preview: true)
-        state.swabbleEnabled = true
-        state.voicePushToTalkEnabled = true
-        state.swabbleTriggerWords = ["Claude", "Hey"]
-
-        let view = VoiceWakeSettings(state: state, isActive: true)
-        view.availableMics = [AudioInputDevice(uid: "mic-1", name: "Built-in")]
-        view.availableLocales = [Locale(identifier: "en_US")]
-        view.meterLevel = 0.42
-        view.meterError = "No input"
-        view.testState = .detected("ok")
-        view.isTesting = true
-        view.triggerEntries = [TriggerEntry(id: UUID(), value: "Claude")]
-
-        _ = view.body
-        _ = view.localePicker
-        _ = view.micPicker
-        _ = view.levelMeter
-        _ = view.triggerTable
-        _ = view.chimeSection
-        _ = view.unsupportedVoiceWakePanel
-
-        view.addWord()
-        if let entryId = view.triggerEntries.first?.id {
-            view.removeWord(id: entryId)
-        }
     }
 }
 #endif

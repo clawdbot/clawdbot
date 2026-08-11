@@ -59,7 +59,11 @@ describe("terminal PTY teardown", () => {
     const { handle, pty } = await spawnFakePty();
     handle.kill("SIGHUP");
     expect(mocks.signalProcessTree).not.toHaveBeenCalled();
-    expect(pty.kill).toHaveBeenCalledWith("SIGHUP");
+    if (process.platform === "win32") {
+      expect(pty.kill).toHaveBeenCalledWith();
+    } else {
+      expect(pty.kill).toHaveBeenCalledWith("SIGHUP");
+    }
   });
 
   it("tolerates an already-exited process", async () => {
@@ -130,20 +134,54 @@ describe("terminal PTY invocation", () => {
     );
   });
 
-  it.each([".cmd", ".bat"])("wraps Windows %s shims through ComSpec", async (extension) => {
+  it("canonicalizes a case-insensitive Windows TERM key", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    mocks.spawn.mockReturnValueOnce(fakePty());
+
+    await spawnTerminalPty({
+      file: "powershell.exe",
+      args: [],
+      env: { Term: "screen-256color" },
+      cols: 80,
+      rows: 24,
+    });
+
+    expect(mocks.spawn).toHaveBeenCalledWith(
+      "powershell.exe",
+      [],
+      expect.objectContaining({
+        name: "screen-256color",
+        env: { TERM: "screen-256color" },
+      }),
+    );
+  });
+
+  it.each([
+    [".cmd", { ComSpec: "C:\\Windows\\System32\\cmd.exe" }, "C:\\Windows\\System32\\cmd.exe"],
+    [".bat", { COMSPEC: "C:\\Windows\\System32\\cmd.exe" }, "C:\\Windows\\System32\\cmd.exe"],
+    [".cmd", { cOmSpEc: "C:\\tools\\custom-cmd.exe" }, "C:\\tools\\custom-cmd.exe"],
+    [
+      ".bat",
+      {
+        ComSpec: "C:\\Windows\\System32\\ambient-cmd.exe",
+        COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+      },
+      "C:\\Windows\\System32\\cmd.exe",
+    ],
+  ])("wraps Windows %s shims through ComSpec", async (extension, env, expectedComSpec) => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     mocks.spawn.mockReturnValueOnce(fakePty());
 
     await spawnTerminalPty({
       file: `C:\\Program Files\\Codex\\codex${extension}`,
       args: ["resume", "thread title"],
-      env: { ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+      env,
       cols: 80,
       rows: 24,
     });
 
     expect(mocks.spawn).toHaveBeenCalledWith(
-      "C:\\Windows\\System32\\cmd.exe",
+      expectedComSpec,
       ["/d", "/s", "/c", `""C:\\Program Files\\Codex\\codex${extension}" resume "thread title""`],
       expect.objectContaining({ cols: 80, rows: 24 }),
     );

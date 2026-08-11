@@ -1,5 +1,6 @@
 /** Best-effort shared-state registry for adopted upstream sessions. */
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJson } from "@openclaw/normalization-core";
 import type { Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
@@ -18,7 +19,7 @@ type SessionUpstreamDatabase = Pick<
 >;
 type SessionUpstreamLinkRow = Selectable<OpenClawStateKyselyDatabase["session_upstream_links"]>;
 
-type SessionUpstreamLink = {
+export type SessionUpstreamLink = {
   sessionKey: string;
   agentId: string;
   catalogId: string;
@@ -42,11 +43,7 @@ function parseJson(value: string | null): SessionUpstreamJsonValue | null {
   if (value === null) {
     return null;
   }
-  try {
-    return JSON.parse(value) as SessionUpstreamJsonValue;
-  } catch {
-    return null;
-  }
+  return (safeParseJson(value) as SessionUpstreamJsonValue | undefined) ?? null;
 }
 
 function rowToSessionUpstreamLink(row: SessionUpstreamLinkRow): SessionUpstreamLink {
@@ -79,7 +76,7 @@ export function upsertSessionUpstreamLink(
     marker: SessionUpstreamJsonValue;
   },
   options: OpenClawStateDatabaseOptions & { now?: number } = {},
-): void {
+): boolean {
   const now = options.now ?? Date.now();
   try {
     runOpenClawStateWriteTransaction(({ db }) => {
@@ -141,8 +138,10 @@ export function upsertSessionUpstreamLink(
           ),
       );
     }, options);
+    return true;
   } catch (error) {
     log.warn(`failed to upsert session upstream link: ${String(error)}`);
+    return false;
   }
 }
 

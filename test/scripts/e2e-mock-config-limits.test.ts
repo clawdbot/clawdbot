@@ -19,6 +19,7 @@ const scrubbedEnvKeys = [
   "FIXTURE_PORT",
   "MOCK_PORT",
   "MOCK_REQUEST_LOG",
+  "MOCK_RESPONSE_CHUNK_DELAY_MS",
   "MOCK_TLS_CERT",
   "MOCK_TLS_KEY",
   "OPENCLAW_CONFIG_RELOAD_LOG_MAX_READ_BYTES",
@@ -156,6 +157,135 @@ describe("mock OpenAI response markers", () => {
         expect(response.status).toBe(200);
         expect(body.output?.[0]?.content?.[0]?.text).toBe(marker);
       }
+    });
+  });
+
+  it("can split a deterministic response across delayed streaming deltas", async () => {
+    await withMockServer(
+      mockOpenAiPath,
+      {
+        MOCK_RESPONSE_CHUNK_DELAY_MS: "80",
+        SUCCESS_MARKER: "First streamed preview remains visible before the follow-up edit arrives.",
+      },
+      async (baseUrl) => {
+        const startedAt = Date.now();
+        const response = await fetch(`${baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ input: "return the configured marker", stream: true }),
+        });
+        const body = await response.text();
+
+        expect(response.status).toBe(200);
+        expect(body.match(/response\.output_text\.delta/gu)).toHaveLength(2);
+        expect(Date.now() - startedAt).toBeGreaterThanOrEqual(60);
+      },
+    );
+  });
+
+  it("drives the MCP App fixture tool before returning the visible marker", async () => {
+    await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
+      const first = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          input: [{ content: "mcp app conformance qa check", role: "user" }],
+          stream: false,
+          tools: [{ name: "fixture__show", parameters: { type: "object" }, type: "function" }],
+        }),
+      });
+      const firstBody = await first.json();
+      expect(firstBody.output?.[0]).toMatchObject({
+        arguments: "{}",
+        name: "fixture__show",
+        type: "function_call",
+      });
+
+      const second = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          input: [
+            { content: "mcp app conformance qa check", role: "user" },
+            { output: "initial-result", type: "function_call_output" },
+          ],
+          stream: false,
+        }),
+      });
+      const secondBody = await second.json();
+      expect(secondBody.output?.[0]?.content?.[0]?.text).toBe("MCP_APP_CONFORMANCE_READY");
+    });
+  });
+
+  it("drives the Agent Plugins bundle tool and validates its environment output", async () => {
+    await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
+      const missingTool = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          input: [{ content: "agent plugin bundle qa check", role: "user" }],
+          stream: false,
+        }),
+      });
+      const missingToolBody = await missingTool.json();
+      expect(missingToolBody.output?.[0]?.content?.[0]?.text).toBe(
+        "AGENT_BUNDLE_MCP_FAIL tool-not-declared",
+      );
+
+      const first = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          input: [{ content: "agent plugin bundle qa check", role: "user" }],
+          stream: false,
+          tools: [
+            {
+              name: "weather-probe__weather_probe",
+              parameters: { type: "object" },
+              type: "function",
+            },
+          ],
+        }),
+      });
+      const firstBody = await first.json();
+      expect(firstBody.output?.[0]).toMatchObject({
+        arguments: "{}",
+        name: "weather-probe__weather_probe",
+        type: "function_call",
+      });
+
+      const second = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          input: [
+            { content: "agent plugin bundle qa check", role: "user" },
+            {
+              output: "probe ok; PLUGIN_ROOT=/tmp/plugin; PLUGIN_DATA=/tmp/plugin-data",
+              type: "function_call_output",
+            },
+          ],
+          stream: false,
+        }),
+      });
+      const secondBody = await second.json();
+      expect(secondBody.output?.[0]?.content?.[0]?.text).toBe("AGENT_BUNDLE_MCP_OK");
+
+      const unexpectedOutput = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          input: [
+            { content: "agent plugin bundle qa check", role: "user" },
+            { output: "probe failed", type: "function_call_output" },
+          ],
+          stream: false,
+        }),
+      });
+      const unexpectedOutputBody = await unexpectedOutput.json();
+      expect(unexpectedOutputBody.output?.[0]?.content?.[0]?.text).toBe(
+        "AGENT_BUNDLE_MCP_FAIL unexpected-tool-output",
+      );
     });
   });
 });

@@ -1,6 +1,4 @@
 // Session memory transcript helpers persist compact session transcript excerpts.
-import fs from "node:fs/promises";
-import path from "node:path";
 import { sanitizeModelSpecialTokens } from "../../../security/external-content.js";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
@@ -14,8 +12,17 @@ const SESSION_MEMORY_DROP_BLOCK_RE = new RegExp(
 );
 const SESSION_MEMORY_ROLE_DIRECTIVE_BLOCK_RE = /<(system|assistant|user)\b[^>]*>[\s\S]*?<\/\1>/gi;
 const SESSION_MEMORY_ROLE_DIRECTIVE_TAG_RE = /<\/?(?:system|assistant|user)\b[^>]*>/gi;
-const SESSION_MEMORY_MEDIA_PLACEHOLDER_RE = /(^|\n)\s*<media:[^>]+>(?:\s*\([^)]*\))?\s*/gi;
 const SESSION_MEMORY_TRAILING_NO_REPLY_RE = /(?:^|\n)\s*NO_REPLY\s*$/i;
+const SESSION_MEMORY_JSON_LINE_SEPARATOR_RE = /[\u0085\u2028\u2029]/gu;
+
+function quoteSessionMemoryText(text: string): string {
+  // One JSON string per role record keeps message text from forging later
+  // records while preserving every character for memory readers.
+  return JSON.stringify(text).replace(
+    SESSION_MEMORY_JSON_LINE_SEPARATOR_RE,
+    (separator) => `\\u${separator.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
 
 function isNoReplyMarker(text: string): boolean {
   const trimmed = text.trim();
@@ -30,7 +37,6 @@ function sanitizeSessionMemoryTranscriptText(text: string): string | null {
     .replace(SESSION_MEMORY_DROP_BLOCK_RE, "")
     .replace(SESSION_MEMORY_ROLE_DIRECTIVE_BLOCK_RE, "")
     .replace(SESSION_MEMORY_ROLE_DIRECTIVE_TAG_RE, "")
-    .replace(SESSION_MEMORY_MEDIA_PLACEHOLDER_RE, "$1")
     .replace(SESSION_MEMORY_TRAILING_NO_REPLY_RE, "")
     .trim();
 
@@ -99,11 +105,7 @@ function renderSessionMemoryMessage(entry: unknown): RenderedSessionMemoryMessag
   };
 }
 
-/** Renders recent user/assistant transcript events into session memory text. */
-export function getRecentSessionContentFromEvents(
-  events: readonly unknown[],
-  messageCount = 15,
-): string | null {
+function renderSessionMemoryLines(events: readonly unknown[]): string[] {
   const allMessages: string[] = [];
   let lastAssistantText: string | undefined;
   for (const event of events) {
@@ -125,158 +127,28 @@ export function getRecentSessionContentFromEvents(
     if (rendered.isDeliveryMirror && rendered.text === lastAssistantText) {
       continue;
     }
-    allMessages.push(`${rendered.role}: ${rendered.text}`);
+    allMessages.push(`${rendered.role}: ${quoteSessionMemoryText(rendered.text)}`);
     if (rendered.role === "assistant") {
       lastAssistantText = rendered.text;
     }
   }
-  return allMessages.slice(-messageCount).join("\n");
+  return allMessages;
 }
 
-async function getRecentSessionContent(
-  sessionFilePath: string,
-  messageCount = 15,
-): Promise<string | null> {
-  try {
-    const content = await fs.readFile(sessionFilePath, "utf-8");
-    const lines = content.trim().split("\n");
+/** Counts transcript events that remain after session-memory filtering and deduplication. */
+export function countSessionMemoryMessages(events: readonly unknown[]): number {
+  return renderSessionMemoryLines(events).length;
+}
 
-    return getRecentSessionContentFromEvents(
-      lines.flatMap((line) => {
-        try {
-          return [JSON.parse(line) as unknown];
-        } catch {
-          return [];
-        }
-      }),
-      messageCount,
-    );
-  } catch {
+/** Renders recent user/assistant transcript events into session memory text. */
+export function getRecentSessionContentFromEvents(
+  events: readonly unknown[],
+  messageCount = 15,
+): string | null {
+  const limit = Number.isFinite(messageCount) ? Math.max(0, Math.floor(messageCount)) : 0;
+  if (limit === 0) {
     return null;
   }
-}
-
-export async function getRecentSessionContentWithResetFallback(
-  sessionFilePath: string,
-  messageCount = 15,
-): Promise<string | null> {
-  const primary = await getRecentSessionContent(sessionFilePath, messageCount);
-  if (primary) {
-    return primary;
-  }
-
-  try {
-    const dir = path.dirname(sessionFilePath);
-    const base = path.basename(sessionFilePath);
-    const resetPrefix = `${base}.reset.`;
-    const files = await fs.readdir(dir);
-    const resetCandidates = files.filter((name) => name.startsWith(resetPrefix)).toSorted();
-
-    if (resetCandidates.length === 0) {
-      return primary;
-    }
-
-    const latestReset = resetCandidates.at(-1);
-    if (latestReset === undefined) {
-      return primary;
-    }
-    const latestResetPath = path.join(dir, latestReset);
-    return (await getRecentSessionContent(latestResetPath, messageCount)) || primary;
-  } catch {
-    return primary;
-  }
-}
-
-function stripResetSuffix(fileName: string): string {
-  const resetIndex = fileName.indexOf(".reset.");
-  return resetIndex === -1 ? fileName : fileName.slice(0, resetIndex);
-}
-
-export async function findPreviousSessionFile(params: {
-  sessionsDir: string;
-  currentSessionFile?: string;
-  sessionId?: string;
-}): Promise<string | undefined> {
-  try {
-    const files = await fs.readdir(params.sessionsDir);
-    const fileSet = new Set(files);
-
-    const currentBaseName = params.currentSessionFile
-      ? path.basename(params.currentSessionFile)
-      : undefined;
-    const baseFromReset = currentBaseName ? stripResetSuffix(currentBaseName) : undefined;
-    if (baseFromReset && fileSet.has(baseFromReset)) {
-      return path.join(params.sessionsDir, baseFromReset);
-    }
-    if (currentBaseName?.includes(".reset.") && fileSet.has(currentBaseName)) {
-      return path.join(params.sessionsDir, currentBaseName);
-    }
-
-    const trimmedSessionId = params.sessionId?.trim();
-    if (trimmedSessionId) {
-      const canonicalFile = `${trimmedSessionId}.jsonl`;
-      if (fileSet.has(canonicalFile)) {
-        return path.join(params.sessionsDir, canonicalFile);
-      }
-
-      const canonicalResetVariants = files
-        .filter((name) => name.startsWith(`${canonicalFile}.reset.`))
-        .toSorted()
-        .toReversed();
-      const [canonicalResetVariant] = canonicalResetVariants;
-      if (canonicalResetVariant !== undefined) {
-        return path.join(params.sessionsDir, canonicalResetVariant);
-      }
-
-      const topicVariants = files
-        .filter(
-          (name) =>
-            name.startsWith(`${trimmedSessionId}-topic-`) &&
-            name.endsWith(".jsonl") &&
-            !name.includes(".reset."),
-        )
-        .toSorted()
-        .toReversed();
-      const [topicVariant] = topicVariants;
-      if (topicVariant !== undefined) {
-        return path.join(params.sessionsDir, topicVariant);
-      }
-
-      const topicResetVariants = files
-        .filter(
-          (name) => name.startsWith(`${trimmedSessionId}-topic-`) && name.includes(".jsonl.reset."),
-        )
-        .toSorted()
-        .toReversed();
-      const [topicResetVariant] = topicResetVariants;
-      if (topicResetVariant !== undefined) {
-        return path.join(params.sessionsDir, topicResetVariant);
-      }
-    }
-
-    if (!params.currentSessionFile) {
-      return undefined;
-    }
-
-    const nonResetJsonl = files
-      .filter((name) => name.endsWith(".jsonl") && !name.includes(".reset."))
-      .toSorted()
-      .toReversed();
-    const [nonResetFile] = nonResetJsonl;
-    if (nonResetFile !== undefined) {
-      return path.join(params.sessionsDir, nonResetFile);
-    }
-
-    const resetJsonl = files
-      .filter((name) => name.includes(".jsonl.reset."))
-      .toSorted()
-      .toReversed();
-    const [resetFile] = resetJsonl;
-    if (resetFile !== undefined) {
-      return path.join(params.sessionsDir, resetFile);
-    }
-  } catch {
-    // Ignore directory read errors.
-  }
-  return undefined;
+  const allMessages = renderSessionMemoryLines(events);
+  return allMessages.slice(-limit).join("\n") || null;
 }

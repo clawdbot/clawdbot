@@ -44,7 +44,7 @@ const mockSendMessage = vi.spyOn(clientModule, "sendMessage").mockResolvedValue(
 const mockSendFileUrl = vi.spyOn(clientModule, "sendFileUrl").mockResolvedValue(true);
 const registerSynologyWebhookRouteMock = vi
   .spyOn(gatewayRuntimeModule, "registerSynologyWebhookRoute")
-  .mockImplementation(() => vi.fn());
+  .mockImplementation(async () => vi.fn(async () => undefined));
 
 vi.mock("./webhook-handler.js", () => ({
   createWebhookHandler: vi.fn(() => vi.fn()),
@@ -62,7 +62,7 @@ describe("createSynologyChatPlugin", () => {
     registerSynologyWebhookRouteMock.mockClear();
     mockSendMessage.mockResolvedValue(true);
     mockSendFileUrl.mockResolvedValue(true);
-    registerSynologyWebhookRouteMock.mockImplementation(() => vi.fn());
+    registerSynologyWebhookRouteMock.mockImplementation(async () => vi.fn(async () => undefined));
   });
 
   afterEach(() => {
@@ -143,6 +143,30 @@ describe("createSynologyChatPlugin", () => {
       expect(plugin.capabilities.chatTypes).toEqual(["direct"]);
       expect(plugin.capabilities.media).toBe(true);
       expect(plugin.capabilities.threads).toBe(false);
+    });
+  });
+
+  it("projects lifecycle through the computed status adapter", async () => {
+    const cfg = {
+      channels: {
+        "synology-chat": {
+          token: "test-token",
+          incomingUrl: "https://nas/incoming",
+        },
+      },
+    };
+    const account = synologyChatPlugin.config.resolveAccount(cfg, "default");
+
+    const snapshot = await synologyChatPlugin.status?.buildAccountSnapshot?.({
+      account,
+      cfg,
+      runtime: { accountId: "default", lifecycle: "ready" },
+    });
+
+    expect(snapshot).toMatchObject({
+      accountId: "default",
+      configured: true,
+      lifecycle: "ready",
     });
   });
 
@@ -452,6 +476,13 @@ describe("createSynologyChatPlugin", () => {
   });
 
   describe("outbound", () => {
+    it("declares bounded Markdown chunking for gateway text delivery", () => {
+      const plugin = synologyChatPlugin;
+      expect(plugin.outbound.chunkerMode).toBe("markdown");
+      expect(plugin.outbound.textChunkLimit).toBe(2_000);
+      expect(plugin.outbound.chunker("x".repeat(2_001), 2_000)).toEqual(["x".repeat(2_000), "x"]);
+    });
+
     it("declares message adapter durable text and media with receipt proofs", async () => {
       const plugin = synologyChatPlugin;
       const cfg = {
@@ -475,8 +506,9 @@ describe("createSynologyChatPlugin", () => {
               text: "hello",
               to: "user1",
             });
-            expect(result?.receipt.parts[0]?.kind).toBe("text");
-            expect(result?.receipt.platformMessageIds).toHaveLength(1);
+            expect(result?.messageId).toBe("");
+            expect(result?.receipt.platformMessageIds).toHaveLength(0);
+            expect(result?.receipt.parts).toHaveLength(0);
           },
           media: async () => {
             const result = await plugin.message.send?.media?.({
@@ -485,8 +517,9 @@ describe("createSynologyChatPlugin", () => {
               mediaUrl: "https://example.com/img.png",
               to: "user1",
             });
-            expect(result?.receipt.parts[0]?.kind).toBe("media");
-            expect(result?.receipt.platformMessageIds).toHaveLength(1);
+            expect(result?.messageId).toBe("");
+            expect(result?.receipt.platformMessageIds).toHaveLength(0);
+            expect(result?.receipt.parts).toHaveLength(0);
           },
           messageSendingHooks: () => {
             expect(plugin.message.durableFinal?.capabilities?.messageSendingHooks).toBe(true);
@@ -517,8 +550,9 @@ describe("createSynologyChatPlugin", () => {
       ).rejects.toThrow("not configured");
     });
 
-    it("sendText returns OutboundDeliveryResult on success", async () => {
+    it("sendText returns an honest empty-id result on success", async () => {
       const plugin = synologyChatPlugin;
+      const malformedLink = `[${"\\".repeat(32)}`;
       const result = await plugin.outbound.sendText({
         cfg: {
           channels: {
@@ -530,14 +564,54 @@ describe("createSynologyChatPlugin", () => {
             },
           },
         },
-        text: "hello",
+        text: `**Read** [the docs](https://example.com/a_(b)) [titled](https://example.com "Documentation") \`[literal](https://example.com)\` \\[escaped](https://example.com) [x > y](https://example.com) [bad](<https://example.com) [bad title](https://example.com "oops') ![logo](https://example.com/logo.png) ${malformedLink}`,
         to: "user1",
       });
       expect(result.channel).toBe("synology-chat");
       expect(result.chatId).toBe("user1");
-      expect(result.messageId).toMatch(/^sc-\d+$/);
-      expect(result.receipt.primaryPlatformMessageId).toBe(result.messageId);
-      expect(result.receipt.parts[0]?.kind).toBe("text");
+      expect(result.messageId).toBe("");
+      expect(result.receipt.primaryPlatformMessageId).toBeUndefined();
+      expect(result.receipt.platformMessageIds).toHaveLength(0);
+      expect(result.receipt.parts).toHaveLength(0);
+      expect(result.receipt.threadId).toBe("user1");
+      expect(mockSendMessage).toHaveBeenLastCalledWith(
+        "https://nas/incoming",
+        `**Read** <https://example.com/a_(b)|the docs> <https://example.com|titled> \`[literal](https://example.com)\` \\[escaped](https://example.com) [x > y](https://example.com) [bad](<https://example.com) [bad title](https://example.com "oops') ![logo](https://example.com/logo.png) ${malformedLink}`,
+        "user1",
+        true,
+      );
+    });
+
+    it("sendMedia returns an honest empty-id result on success", async () => {
+      const plugin = synologyChatPlugin;
+      const result = await plugin.outbound.sendMedia({
+        cfg: {
+          channels: {
+            "synology-chat": {
+              enabled: true,
+              token: "t",
+              incomingUrl: "https://nas/incoming",
+              allowInsecureSsl: true,
+            },
+          },
+        },
+        mediaUrl: "https://example.com/img.png",
+        to: "user1",
+      });
+
+      expect(result.channel).toBe("synology-chat");
+      expect(result.chatId).toBe("user1");
+      expect(result.messageId).toBe("");
+      expect(result.receipt.primaryPlatformMessageId).toBeUndefined();
+      expect(result.receipt.platformMessageIds).toHaveLength(0);
+      expect(result.receipt.parts).toHaveLength(0);
+      expect(result.receipt.threadId).toBe("user1");
+      expect(mockSendFileUrl).toHaveBeenLastCalledWith(
+        "https://nas/incoming",
+        "https://example.com/img.png",
+        "user1",
+        true,
+      );
     });
 
     it("sendMedia throws when missing incomingUrl", async () => {
@@ -589,6 +663,7 @@ describe("createSynologyChatPlugin", () => {
           accountId: "default",
           log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
           abortSignal: abortController.signal,
+          setStatus: vi.fn(),
         },
       };
     }
@@ -623,6 +698,7 @@ describe("createSynologyChatPlugin", () => {
           accountId: "alerts",
           log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
           abortSignal: abortController.signal,
+          setStatus: vi.fn(),
         },
       };
     }
@@ -655,7 +731,51 @@ describe("createSynologyChatPlugin", () => {
     }
 
     it("startAccount returns pending promise for disabled account", async () => {
-      await expectPendingStartAccount({ enabled: false });
+      const { ctx, abortController } = makeStartAccountCtx({ enabled: false });
+      const result = synologyChatPlugin.gateway.startAccount(ctx);
+      await Promise.resolve();
+      expect(ctx.setStatus).toHaveBeenCalledWith({
+        accountId: "default",
+        running: true,
+        lifecycle: "blocked",
+        terminalDisconnect: true,
+        lastError: "Synology Chat account failed startup validation",
+      });
+      await expectPendingStartAccountPromise(result, abortController);
+    });
+
+    it("publishes ready after route registration and stopped after abort cleanup", async () => {
+      const cleanup = vi.fn(async () => undefined);
+      registerSynologyWebhookRouteMock.mockResolvedValueOnce(cleanup);
+      const { ctx, abortController } = makeStartAccountCtx({
+        enabled: true,
+        token: "t",
+        incomingUrl: "https://nas/incoming",
+        dmPolicy: "allowlist",
+        allowedUserIds: ["123"],
+      });
+
+      const result = synologyChatPlugin.gateway.startAccount(ctx);
+      await vi.waitFor(() => expect(registerSynologyWebhookRouteMock).toHaveBeenCalledOnce());
+      expect(ctx.setStatus).toHaveBeenCalledWith({
+        accountId: "default",
+        running: true,
+        connected: true,
+        lifecycle: "ready",
+        lastConnectedAt: expect.any(Number),
+        lastError: null,
+        terminalDisconnect: undefined,
+      });
+
+      abortController.abort();
+      await result;
+      expect(cleanup).toHaveBeenCalledOnce();
+      expect(ctx.setStatus).toHaveBeenLastCalledWith({
+        accountId: "default",
+        running: false,
+        connected: false,
+        lifecycle: "stopped",
+      });
     });
 
     it("startAccount returns pending promise for account without token", async () => {
@@ -731,10 +851,10 @@ describe("createSynologyChatPlugin", () => {
     });
 
     it("re-registers same account/path through the route registrar", async () => {
-      const unregisterFirst = vi.fn();
-      const unregisterSecond = vi.fn();
+      const unregisterFirst = vi.fn(async () => undefined);
+      const unregisterSecond = vi.fn(async () => undefined);
       const registerMock = registerSynologyWebhookRouteMock;
-      registerMock.mockReturnValueOnce(unregisterFirst).mockReturnValueOnce(unregisterSecond);
+      registerMock.mockResolvedValueOnce(unregisterFirst).mockResolvedValueOnce(unregisterSecond);
 
       const plugin = synologyChatPlugin;
       const abortFirst = new AbortController();

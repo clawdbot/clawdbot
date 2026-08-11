@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readRemoteMediaBufferSpy, telegramBotDepsForTest } from "./bot.media.e2e-harness.js";
+import { readRemoteMediaBufferSpy, telegramBotDepsForTest } from "./bot.media.e2e.test-harness.js";
 import {
   TELEGRAM_TEST_TIMINGS,
   cacheStickerSpy,
@@ -164,12 +164,9 @@ describe("telegram stickers", () => {
   );
 
   it(
-    "skips animated and video sticker formats that cannot be downloaded",
+    "rejects animated and video sticker downloads before fetching bytes",
     async () => {
       const proxyFetch = vi.fn();
-      const { handler, replySpy, runtimeError } = await createBotHandlerWithOptions({
-        proxyFetch: proxyFetch as unknown as typeof fetch,
-      });
 
       for (const scenario of [
         {
@@ -203,25 +200,32 @@ describe("telegram stickers", () => {
           },
         },
       ]) {
-        replySpy.mockClear();
-        runtimeError.mockClear();
         proxyFetch.mockClear();
+        const getFile = vi.fn(async () => ({ file_path: scenario.filePath }));
 
-        await handler({
-          message: {
-            message_id: scenario.messageId,
-            chat: { id: 1234, type: "private" },
-            from: { id: 777, is_bot: false, first_name: "Ada" },
-            sticker: scenario.sticker,
-            date: 1736380800,
-          },
-          me: { username: "openclaw_bot" },
-          getFile: async () => ({ file_path: scenario.filePath }),
+        const media = await resolveMedia({
+          maxBytes: 2 * 1024 * 1024,
+          token: "tok",
+          transport: {
+            close: async () => {},
+            fetch: proxyFetch as unknown as typeof fetch,
+            sourceFetch: proxyFetch as unknown as typeof fetch,
+          } satisfies TelegramTransport,
+          ctx: {
+            message: {
+              message_id: scenario.messageId,
+              chat: { id: 1234, type: "private" },
+              from: { id: 777, is_bot: false, first_name: "Ada" },
+              sticker: scenario.sticker,
+              date: 1736380800,
+            },
+            getFile,
+          } as unknown as TelegramContext,
         });
 
+        expect(media).toBeNull();
+        expect(getFile).not.toHaveBeenCalled();
         expect(proxyFetch).not.toHaveBeenCalled();
-        expect(replySpy).not.toHaveBeenCalled();
-        expect(runtimeError).not.toHaveBeenCalled();
       }
     },
     STICKER_TEST_TIMEOUT_MS,
@@ -264,14 +268,13 @@ describe("telegram local Bot API media", () => {
       expect(media).toMatchObject({
         path: "/tmp/telegram-media",
         contentType: "application/zip",
-        placeholder: "<media:document>",
+        kind: "document",
       });
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }
   });
 });
-
 describe("telegram text fragments", () => {
   afterEach(() => {
     vi.clearAllTimers();

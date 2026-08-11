@@ -76,12 +76,17 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   it("keeps media directives while sanitizing streamed assistant text", () => {
     const payloads = buildPayloads({
       assistantTexts: ["</mm:think>MEDIA:/tmp/reply-image.png\nAttached image"],
+      assistantMessageIndex: 1,
     });
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe("Attached image");
     expect(payloads[0]?.mediaUrl).toBe("/tmp/reply-image.png");
     expect(payloads[0]?.mediaUrls).toEqual(["/tmp/reply-image.png"]);
+    expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
+      assistantMessageIndex: 1,
+      assistantTranscriptMediaUrls: ["/tmp/reply-image.png"],
+    });
   });
 
   it("falls back to final-answer assistant text when streamed text is unavailable", () => {
@@ -119,11 +124,13 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Already persisted."],
       assistantTranscriptOwned: true,
+      assistantTranscriptIdempotencyKey: "runtime-owned-assistant",
     });
 
     expect(payloads).toHaveLength(1);
     expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
       assistantTranscriptOwned: true,
+      assistantTranscriptIdempotencyKey: "runtime-owned-assistant",
     });
   });
 
@@ -589,13 +596,13 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("surfaces exec tool errors for cron sessions even when verbose mode is off", () => {
+  it("keeps timed-out cron exec failures compact when verbose mode is off", () => {
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "exec",
         timedOut: true,
         error:
-          "Command timed out after 1800 seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300).",
+          "Command timed out after 1800 seconds. The command was terminated, but external side effects may already have completed. Verify the resulting state before retrying. Do not automatically rerun non-idempotent commands. Use a higher timeout only when the command is known to be safe to retry.",
       },
       sessionKey: "agent:main:cron:job-1",
       verboseLevel: "off",
@@ -603,12 +610,12 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
     expectSingleToolErrorPayload(payloads, {
       title: "Exec",
-      detail:
-        "Command timed out after 1800 seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300).",
+      absentDetail:
+        "Command timed out after 1800 seconds. The command was terminated, but external side effects may already have completed. Verify the resulting state before retrying. Do not automatically rerun non-idempotent commands. Use a higher timeout only when the command is known to be safe to retry.",
     });
   });
 
-  it("surfaces timed-out exec tool errors for cron-triggered custom session keys", () => {
+  it("keeps timed-out cron-trigger exec failures compact", () => {
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "exec",
@@ -622,11 +629,11 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
     expectSingleToolErrorPayload(payloads, {
       title: "Exec",
-      detail: "Command timed out after 1800 seconds.",
+      absentDetail: "Command timed out after 1800 seconds.",
     });
   });
 
-  it("surfaces heartbeat exec tool output details when the task run fails", () => {
+  it("keeps heartbeat exec commands and paths private without full verbosity", () => {
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "exec",
@@ -639,8 +646,8 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
 
     expectSingleToolErrorPayload(payloads, {
-      title: "show last 20 lines",
-      detail: "No such file or directory",
+      title: "Exec",
+      absentDetail: "/home/user/.openclaw/workspace/memory/2026-06-04.md",
     });
   });
 

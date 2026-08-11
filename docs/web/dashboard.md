@@ -33,17 +33,29 @@ The Control UI is an **admin surface** (chat, config, exec approvals). Do not ex
 
 ## Fast path (recommended)
 
-- After onboarding, the CLI auto-opens the dashboard and prints a clean (non-tokenized) link.
-- Re-open anytime: `openclaw dashboard` (copies the link, opens a browser if possible, prints an SSH hint if headless).
-- If clipboard and browser delivery both fail, `openclaw dashboard` still prints the clean URL and tells you to append your token (from `OPENCLAW_GATEWAY_TOKEN` or `gateway.auth.token`) as the URL fragment key `token`; it never prints the token value in logs.
+- After onboarding, the CLI auto-opens the dashboard and prints a clean link.
+- Re-open or repair a browser anytime: `openclaw dashboard`. It copies/opens a single-use pairing link
+  that grants administrator access to that exact signed browser, including recovery from a previously
+  limited credential, without granting blanket remote auto-approval.
+- If clipboard and browser delivery both fail, `openclaw dashboard` either gives a safe manual-token
+  hint or tells you to run `openclaw dashboard --json` and open its short-lived `browserUrl`; it never
+  prints the shared token value in interactive logs.
 - If the UI prompts for shared-secret auth, paste the configured token or password into Control UI settings.
 
 ## Auth basics (local vs remote)
 
 - **Localhost**: open `http://127.0.0.1:18789/`.
 - **Gateway TLS**: when `gateway.tls.enabled: true`, dashboard/status links use `https://` and Control UI WebSocket links use `wss://`.
-- **Shared-secret token source**: `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`). `openclaw dashboard` can pass it via URL fragment for one-time bootstrap; the Control UI keeps it in sessionStorage for the current tab and selected gateway URL, not localStorage.
-- If `gateway.auth.token` is SecretRef-managed, `openclaw dashboard` prints/copies/opens a non-tokenized URL by design, to avoid exposing externally managed tokens in shell logs, clipboard history, or browser-launch arguments. If the ref is unresolved in your current shell, it still prints the non-tokenized URL plus actionable auth setup guidance.
+- **Shared-secret token source**: `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`). Manual token entry
+  is kept in sessionStorage for the current tab and selected gateway URL, not localStorage.
+- **Host-authorized browser handoff**: `openclaw dashboard` issues a short-lived, single-use bootstrap
+  instead of putting the shared Gateway token in the browser launch URL. The bootstrap is bound to
+  that browser's signed device identity and exchanged for a durable administrator credential. A
+  different browser profile cannot redeem the same handoff or inherit the resulting access.
+- **Missing-config runtime token**: if startup says it generated a runtime token, that token is ephemeral and cannot be recovered. Loopback still requires auth. Run `openclaw doctor --generate-gateway-token`, restart the Gateway, then run `openclaw gateway auth-token --show` in an interactive terminal and paste the output into Control UI settings.
+- If `gateway.auth.token` is SecretRef-managed, the interactive dashboard handoff still works because
+  it carries only the short-lived browser bootstrap; the external shared token is not placed in
+  terminal output, clipboard history, or browser-launch arguments.
 - **Shared-secret password**: use the configured `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`). The dashboard does not persist passwords across reloads.
 - **Identity-bearing modes**: Tailscale Serve satisfies Control UI/WebSocket auth via identity headers when `gateway.auth.allowTailscale: true`; a non-loopback identity-aware reverse proxy satisfies `gateway.auth.mode: "trusted-proxy"`. Neither needs a pasted shared secret for the WebSocket.
 - **Not localhost**: use Tailscale Serve, a non-loopback shared-secret bind, a non-loopback identity-aware reverse proxy with `gateway.auth.mode: "trusted-proxy"`, or an SSH tunnel. HTTP APIs still use shared-secret auth unless you intentionally run private-ingress `gateway.auth.mode: "none"` or trusted-proxy HTTP auth. See [Web surfaces](/web).
@@ -59,7 +71,9 @@ Requirements:
 - Run `/dashboard` in a DM with the bot. Group invocations only tell you to open the command in DM and do not include a button.
 - Docker installs: Serve/Funnel modes require the gateway to bind loopback next to `tailscaled`, which bridge networking with published ports cannot satisfy. Run the gateway container with `network_mode: host` and mount the host `tailscaled` socket (`/var/run/tailscale`) plus the `tailscale` CLI into the container.
 
-The Mini App performs a one-time owner handoff and redirects to Control UI with a short-lived bootstrap token. It does not expose a shared gateway token in the URL.
+The Mini App performs a bounded one-time dashboard handoff and redirects to Control UI with a
+short-lived bootstrap token. It does not expose a shared gateway token in the URL, and it does not
+receive the administrator grant reserved for handoffs issued directly by the Gateway host.
 
 Non-goals for v1:
 
@@ -73,16 +87,16 @@ Non-goals for v1:
 - Confirm the gateway is reachable: local `openclaw status`; remote, SSH tunnel `ssh -N -L 18789:127.0.0.1:18789 user@gateway-host` then open `http://127.0.0.1:18789/`.
 - For `AUTH_TOKEN_MISMATCH`, clients may do one trusted retry with a cached device token when the gateway returns retry hints; that retry reuses the token's cached approved scopes (explicit `deviceToken`/`scopes` callers keep their requested scope set). If auth still fails after that retry, resolve token drift manually.
 - For `AUTH_SCOPE_MISMATCH`, the device token was recognized but does not carry the requested scopes; re-pair or approve the new scope set instead of rotating the shared gateway token.
-- Outside that retry path, connect auth precedence is: explicit shared token/password, then explicit `deviceToken`, then stored device token, then bootstrap token.
+- Outside that retry path, the Control UI prefers a pending bootstrap token so a fresh host-issued handoff can create or upgrade the browser credential. Without a pending bootstrap, explicit shared token/password take precedence over the stored device token.
 - On the async Tailscale Serve path, failed attempts for the same `{scope, ip}` are serialized before the failed-auth limiter records them, so a second concurrent bad retry can already show `retry later`.
 - For token drift repair steps, see [Token drift recovery checklist](/cli/devices#token-drift-recovery-checklist).
 - Retrieve or supply the shared secret from the gateway host:
-  - Token: `openclaw config get gateway.auth.token`
+  - Token: run `openclaw gateway auth-token --show` in an interactive terminal on the Gateway host
   - Password: resolve the configured `gateway.auth.password` or `OPENCLAW_GATEWAY_PASSWORD`
-  - SecretRef-managed token: resolve the external secret provider, or export `OPENCLAW_GATEWAY_TOKEN` in this shell and rerun `openclaw dashboard`
-  - No shared secret configured: `openclaw doctor --generate-gateway-token`
+  - SecretRef-managed token: run `openclaw gateway auth-token --show`; if resolution fails, repair the external secret provider and rerun it
+  - Runtime token generated because no shared secret was configured: run `openclaw doctor --generate-gateway-token`, restart the Gateway, then use the configured token
 - In the dashboard settings, paste the token or password into the auth field, then connect.
-- The UI language picker lives in **Settings -> General -> Language**, not under Appearance.
+- The UI language picker lives in **Settings → Appearance → Language**.
 
 ## Related
 

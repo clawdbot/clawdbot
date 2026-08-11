@@ -1,8 +1,5 @@
 [
   "channel-lifecycle",
-  "channel-runtime",
-  "compat",
-  "config-types",
   "infra-runtime",
   "text-runtime"
 ]

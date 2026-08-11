@@ -1,10 +1,13 @@
 // Feishu plugin module implements monitor.comment notice handler behavior.
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { handleFeishuCommentEvent } from "./comment-handler.js";
-import { claimUnprocessedFeishuMessage, type FeishuMessageProcessingClaim } from "./dedup.js";
+import {
+  buildFeishuFlushIngressLifecycle,
+  FeishuIngressPermanentError,
+  type FeishuIngressLifecycle,
+} from "./feishu-ingress.js";
 import { parseFeishuDriveCommentNoticeEventPayload } from "./monitor.comment.js";
 import { botOpenIds } from "./monitor.state.js";
-import { isFeishuRetryableSyntheticEventError } from "./monitor.synthetic-error.js";
 import { createSequentialQueue } from "./sequential-queue.js";
 
 function buildCommentNoticeQueueKey(event: {
@@ -25,6 +28,7 @@ export function createFeishuDriveCommentNoticeHandler(params: {
   fireAndForget?: boolean;
   getBotOpenId?: (accountId: string) => string | undefined;
   abortSignal?: AbortSignal;
+  resolveIngressLifecycle?: (data: unknown) => FeishuIngressLifecycle | undefined;
 }): (data: unknown) => Promise<void> {
   const { cfg, accountId, runtime, fireAndForget, abortSignal } = params;
   const log = runtime?.log ?? console.log;
@@ -41,62 +45,58 @@ export function createFeishuDriveCommentNoticeHandler(params: {
     }
   };
 
-  return async (data: unknown) => {
-    await runFeishuHandler(async () => {
-      const event = parseFeishuDriveCommentNoticeEventPayload(data);
-      if (!event) {
-        error(`feishu[${accountId}]: ignoring malformed drive comment notice payload`);
+  const handleNotice = async (
+    data: unknown,
+    turnAdoptionLifecycle?: FeishuIngressLifecycle,
+  ): Promise<void> => {
+    const event = parseFeishuDriveCommentNoticeEventPayload(data);
+    if (!event) {
+      if (turnAdoptionLifecycle) {
+        throw new FeishuIngressPermanentError(
+          "invalid-event",
+          "Feishu durable comment event payload is malformed.",
+        );
+      }
+      error(`feishu[${accountId}]: ignoring malformed drive comment notice payload`);
+      return;
+    }
+    log(
+      `feishu[${accountId}]: received drive comment notice ` +
+        `event=${event.event_id ?? "unknown"} ` +
+        `type=${event.notice_meta?.notice_type ?? "unknown"} ` +
+        `file=${event.notice_meta?.file_type ?? "unknown"}:${event.notice_meta?.file_token ?? "unknown"} ` +
+        `comment=${event.comment_id ?? "unknown"} ` +
+        `reply=${event.reply_id ?? "none"} ` +
+        `from=${event.notice_meta?.from_user_id?.open_id ?? "unknown"} ` +
+        `mentioned=${event.is_mentioned === true ? "yes" : "no"}`,
+    );
+    await enqueue(buildCommentNoticeQueueKey(event), async () => {
+      if (turnAdoptionLifecycle?.abortSignal.aborted) {
+        await turnAdoptionLifecycle.onAbandoned();
         return;
       }
-      const eventId = event.event_id?.trim();
-      const syntheticMessageId = eventId ? `drive-comment:${eventId}` : undefined;
-      let processingClaim: FeishuMessageProcessingClaim | undefined;
-      if (syntheticMessageId) {
-        const claim = await claimUnprocessedFeishuMessage({
-          messageId: syntheticMessageId,
-          namespace: accountId,
-          log,
-        });
-        if (claim.kind === "duplicate") {
-          log(`feishu[${accountId}]: dropping duplicate comment event ${syntheticMessageId}`);
-          return;
-        }
-        if (claim.kind === "inflight") {
-          log(`feishu[${accountId}]: dropping in-flight comment event ${syntheticMessageId}`);
-          return;
-        }
-        processingClaim = claim.kind === "claimed" ? claim.handle : undefined;
-      }
-      log(
-        `feishu[${accountId}]: received drive comment notice ` +
-          `event=${event.event_id ?? "unknown"} ` +
-          `type=${event.notice_meta?.notice_type ?? "unknown"} ` +
-          `file=${event.notice_meta?.file_type ?? "unknown"}:${event.notice_meta?.file_token ?? "unknown"} ` +
-          `comment=${event.comment_id ?? "unknown"} ` +
-          `reply=${event.reply_id ?? "none"} ` +
-          `from=${event.notice_meta?.from_user_id?.open_id ?? "unknown"} ` +
-          `mentioned=${event.is_mentioned === true ? "yes" : "no"}`,
-      );
-      try {
-        await enqueue(buildCommentNoticeQueueKey(event), async () => {
-          await handleFeishuCommentEvent({
-            cfg,
-            accountId,
-            event,
-            botOpenId: getBotOpenId(accountId),
-            runtime,
-            abortSignal,
-          });
-        });
-        await processingClaim?.commit();
-      } catch (err) {
-        if (isFeishuRetryableSyntheticEventError(err)) {
-          processingClaim?.release({ error: err });
-        } else {
-          await processingClaim?.commit();
-        }
-        throw err;
-      }
+      await handleFeishuCommentEvent({
+        cfg,
+        accountId,
+        event,
+        botOpenId: getBotOpenId(accountId),
+        runtime,
+        abortSignal,
+        turnAdoptionLifecycle,
+      });
     });
+  };
+
+  return async (data: unknown) => {
+    const ingressLifecycle = params.resolveIngressLifecycle?.(data);
+    if (!ingressLifecycle) {
+      await runFeishuHandler(async () => await handleNotice(data));
+      return;
+    }
+    const { lifecycle, settle } = buildFeishuFlushIngressLifecycle([
+      { lifecycle: ingressLifecycle },
+    ]);
+    await handleNotice(data, lifecycle);
+    await settle();
   };
 }

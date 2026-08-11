@@ -1,11 +1,16 @@
 import fs from "node:fs";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { describeRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
+import { isBundleCapabilitySupported } from "./bundle-capability-support.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import {
   resolveEffectiveEnableState,
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "./config-state.js";
+import {
+  PluginDashboardDeclarationError,
+  registerPluginDashboardCapabilities,
+} from "./dashboard-capabilities.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginCandidate } from "./discovery.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
@@ -15,12 +20,13 @@ import {
   formatBundledChannelWrongLoaderError,
   type PluginModuleLoader,
   resolvePluginModuleExport,
-  runPluginRegisterSync,
+  runPluginRegisterSyncInRegistry,
 } from "./loader-module-runtime.js";
 import {
   formatAutoEnabledActivationReason,
   formatMissingPluginRegisterError,
   markPluginActivationDisabled,
+  recordPluginConfiguredUnavailable,
   recordPluginError,
 } from "./loader-records.js";
 import { resolvePluginRegistrationPlan } from "./loader-registration-plan.js";
@@ -43,12 +49,17 @@ import {
 } from "./manifest-owner-policy.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { withProfile } from "./plugin-load-profile.js";
-import { createPluginRegistrationTransaction } from "./plugin-registration-transaction.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import {
   resolveCanonicalDistRuntimeSource,
   resolvePluginRuntimeArtifact,
 } from "./plugin-runtime-artifact-resolution.js";
 import type { createPluginRegistry, PluginRecord } from "./registry.js";
+import {
+  clearActiveDegradedPlugin,
+  degradedPluginMatchesRoot,
+  findActiveDegradedPlugin,
+} from "./runtime-degraded-state.js";
 import { recordImportedPluginId } from "./runtime.js";
 import { hasKind, kindsEqual } from "./slots.js";
 import type { OpenClawPluginModule, PluginLogger } from "./types.js";
@@ -78,6 +89,7 @@ export function loadRuntimePluginCandidate(params: {
   const { candidate, manifestRecord, context, state } = params;
   const { registry } = params.registryBuilder;
   const pluginId = manifestRecord.id;
+  const policyId = normalizePluginPolicyId(pluginId);
   // Manifest filtering scopes diagnostics; this final guard also blocks imports
   // and registration outside the requested snapshot.
   if (
@@ -135,7 +147,7 @@ export function loadRuntimePluginCandidate(params: {
         enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
         activationSource: context.activationSource,
       });
-  const entry = context.normalized.entries[pluginId];
+  const entry = context.normalized.entries[policyId];
   const record = createManifestPluginRecord({
     candidate,
     manifestRecord,
@@ -143,6 +155,26 @@ export function loadRuntimePluginCandidate(params: {
     activationState,
   });
   applyPluginManifestRecordDetails(record, manifestRecord);
+  const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
+  const degradedPluginForId = findActiveDegradedPlugin(pluginId);
+  const degradedPlugin =
+    degradedPluginForId && degradedPluginMatchesRoot(degradedPluginForId, pluginRoot)
+      ? degradedPluginForId
+      : undefined;
+  const clearMismatchedQuarantineAfterLoad =
+    enableState.enabled && Boolean(degradedPluginForId) && !degradedPlugin;
+  if (enableState.enabled && degradedPlugin) {
+    // Startup verification owns this boot-stable quarantine. Return before
+    // artifact resolution so no top-level plugin code can execute this boot.
+    recordPluginConfiguredUnavailable({
+      registry,
+      record,
+      seenIds: state.seenIds,
+      origin: candidate.origin,
+      degradedPlugin,
+    });
+    return;
+  }
   const localSetupBasePolicyBlock = resolveManifestOwnerBasePolicyBlock({
     plugin: { id: pluginId },
     normalizedConfig: context.normalized,
@@ -184,7 +216,6 @@ export function loadRuntimePluginCandidate(params: {
     return;
   }
 
-  const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
   const runtimeCandidateEntry = resolvePluginRuntimeArtifact({
     pluginId,
     entryKind: "runtime",
@@ -193,6 +224,7 @@ export function loadRuntimePluginCandidate(params: {
     origin: candidate.origin,
     preferBuiltPluginArtifacts: context.preferBuiltPluginArtifacts,
     packageManifest: candidate.packageManifest,
+    registry,
   });
   const runtimeSetupEntry = manifestRecord.setupSource
     ? resolvePluginRuntimeArtifact({
@@ -203,6 +235,7 @@ export function loadRuntimePluginCandidate(params: {
         origin: candidate.origin,
         preferBuiltPluginArtifacts: context.preferBuiltPluginArtifacts,
         packageManifest: candidate.packageManifest,
+        registry,
       })
     : undefined;
   const scopedSetupOnlyChannelPluginRequested =
@@ -227,10 +260,7 @@ export function loadRuntimePluginCandidate(params: {
     manifestRecord,
     cfg: context.cfg,
     env: context.env,
-    preferSetupRuntimeForChannelPlugins: context.forceFullRuntimeForChannelPlugins
-      ? false
-      : context.preferSetupRuntimeForChannelPlugins,
-    forceFullRuntimeForChannelPlugins: context.forceFullRuntimeForChannelPlugins,
+    channelPluginLoadIntent: context.channelPluginLoadIntent,
     toolDiscovery: params.options.toolDiscovery === true,
   });
   if (!registrationPlan) {
@@ -341,7 +371,14 @@ export function loadRuntimePluginCandidate(params: {
     skipLexicalRootCheck: true,
   });
   if (!opened.ok) {
-    pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
+    pushPluginLoadError(
+      describeRootFileOpenFailure({
+        failure: opened,
+        subject: "plugin entry path",
+        boundaryLabel: "plugin root",
+        filePath: moduleLoadSource,
+      }),
+    );
     return;
   }
   const safeSource = opened.path;
@@ -397,8 +434,6 @@ export function loadRuntimePluginCandidate(params: {
       registryBuilder: params.registryBuilder,
       cfg: context.cfg,
       entry,
-      env: context.env,
-      preferSetupRuntimeForChannelPlugins: context.preferSetupRuntimeForChannelPlugins,
       seenIds: state.seenIds,
       candidateOrigin: candidate.origin,
       logger: params.logger,
@@ -489,24 +524,28 @@ export function loadRuntimePluginCandidate(params: {
     hookPolicy: entry?.hooks,
     registrationMode: registrationPlan.mode,
   });
-  const transaction = createPluginRegistrationTransaction({
-    registry,
-    rollbackGlobalSideEffects: () =>
-      params.registryBuilder.rollbackPluginGlobalSideEffects(record.id),
-  });
   const beforeRegister = performance.now();
   let registerFailed = false;
   try {
     withProfile(
       { pluginId: record.id, source: record.source },
       `${registrationPlan.mode}:register`,
-      () => runPluginRegisterSync(register, api),
+      () => runPluginRegisterSyncInRegistry(register, api, registry, record.id),
     );
+    // Dashboard entries stay inside the same registry snapshot as their RPC handlers.
+    // Non-activating snapshots are private until cached activation; rollback restores both.
+    if (registrationPlan.runRuntimeCapabilityPolicy) {
+      registerPluginDashboardCapabilities({ record, registry });
+    }
     registry.plugins.push(record);
     state.seenIds.set(pluginId, candidate.origin);
-    transaction.commit({ activate: context.shouldActivate });
+    if (clearMismatchedQuarantineAfterLoad) {
+      // Plugin ids can intentionally shadow an installed source via load.paths.
+      // Clear stale install state only after the selected override registers.
+      clearActiveDegradedPlugin(pluginId);
+    }
   } catch (error) {
-    transaction.rollback();
+    params.registryBuilder.rollbackPluginGlobalSideEffects(record.id, record);
     recordPluginError({
       logger: params.logger,
       registry,
@@ -518,6 +557,9 @@ export function loadRuntimePluginCandidate(params: {
       error,
       logPrefix: `[plugins] ${record.id} failed during register from ${record.source}: `,
       diagnosticMessagePrefix: "plugin failed during register: ",
+      ...(error instanceof PluginDashboardDeclarationError
+        ? { diagnosticCode: "dashboard-declaration-invalid" }
+        : {}),
     });
     registerFailed = true;
   } finally {
@@ -536,20 +578,8 @@ function recordBundleDiagnostics(params: {
 }): void {
   const unsupportedCapabilities = (params.record.bundleCapabilities ?? []).filter(
     (capability) =>
-      capability !== "skills" &&
-      capability !== "mcpServers" &&
-      capability !== "settings" &&
-      !(
-        (capability === "commands" ||
-          capability === "agents" ||
-          capability === "outputStyles" ||
-          capability === "lspServers") &&
-        (params.record.bundleFormat === "claude" || params.record.bundleFormat === "cursor")
-      ) &&
-      !(
-        capability === "hooks" &&
-        (params.record.bundleFormat === "codex" || params.record.bundleFormat === "claude")
-      ),
+      !params.record.bundleFormat ||
+      !isBundleCapabilitySupported(params.record.bundleFormat, capability),
   );
   for (const capability of unsupportedCapabilities) {
     params.registry.diagnostics.push({
@@ -585,7 +615,7 @@ function recordBundleDiagnostics(params: {
         source: params.record.source,
         message:
           "bundle MCP servers use unsupported transports or incomplete configs " +
-          `(stdio only today): ${runtimeSupport.unsupportedServerNames.join(", ")}`,
+          `(${runtimeSupport.unsupportedServerNames.join(", ")})`,
       });
     }
   }

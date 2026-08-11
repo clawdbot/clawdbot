@@ -171,8 +171,10 @@ describe("debug proxy runtime", () => {
           Cookie: "sid=session-token",
           "x-api-key": "provider-key",
           "content-type": "application/json",
+          "X-Routing-Target": "staging-private-route",
           "x-safe": "visible",
         },
+        meta: { sensitiveRequestHeaderNames: ["x-routing-target"] },
         response: new Response("{}", {
           status: 200,
           headers: {
@@ -195,6 +197,7 @@ describe("debug proxy runtime", () => {
       Cookie: "[REDACTED]",
       "x-api-key": "[REDACTED]",
       "content-type": "application/json",
+      "X-Routing-Target": "[REDACTED]",
       "x-safe": "visible",
     });
     const response = events.find((event) => event.kind === "response");
@@ -405,6 +408,82 @@ describe("debug proxy runtime", () => {
     expect(events.some((event) => event.kind === "error")).toBe(false);
   });
 
+  it("gives up on a stalled response body and lets the caller's cancellation settle", async () => {
+    vi.useFakeTimers();
+    try {
+      initializeDebugProxyCapture("test", settings, deps);
+      // Headers plus one chunk, then the remote stops without EOF. clone() tees
+      // the body, and a tee branch cancels only once both branches cancel or the
+      // source ends — so a capture read with no idle bound holds the caller's
+      // branch open for as long as the remote stays silent.
+      const upstream = new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("partial"));
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+      // Capture clones internally, exactly as the patched fetch does, so the
+      // caller keeps the branch this response already holds. Cloning here first
+      // would leave a third, unread branch that no one ever cancels.
+      captureHttpExchange(
+        { url: "https://api.example.com/stalls", method: "GET", response: upstream },
+        settings,
+        deps,
+      );
+
+      let cancellationSettled = false;
+      void upstream.body
+        ?.cancel()
+        .catch(() => undefined)
+        .finally(() => {
+          cancellationSettled = true;
+        });
+
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(cancellationSettled).toBe(false);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.waitFor(() => expect(cancellationSettled).toBe(true));
+
+      const response = events.find((event) => event.kind === "response");
+      expect(response?.status).toBe(200);
+      expect(JSON.parse(String(response?.metaJson))).toMatchObject({ bodyCapture: "stalled" });
+      expect(response).not.toHaveProperty("dataText");
+      expect(events.some((event) => event.kind === "error")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+      finalizeDebugProxyCapture(settings, deps);
+    }
+  });
+
+  it("records a failing response stream as an error rather than a stall", async () => {
+    initializeDebugProxyCapture("test", settings, deps);
+    // A reset mid-body is the exchange failing, not the capture deciding to stop:
+    // it has to stay distinguishable from the idle deadline.
+    const upstream = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("partial"));
+          controller.error(new Error("socket hang up"));
+        },
+      }),
+      { status: 200 },
+    );
+
+    captureHttpExchange(
+      { url: "https://api.example.com/resets", method: "GET", response: upstream },
+      settings,
+      deps,
+    );
+    await waitForResponseSettled();
+    finalizeDebugProxyCapture(settings, deps);
+
+    const errorEvent = events.find((event) => event.kind === "error");
+    expect(errorEvent?.errorText).toContain("socket hang up");
+    expect(events.some((event) => event.kind === "response")).toBe(false);
+  });
+
   it("skips capturing decimal Content-Length values above the safe integer range", async () => {
     initializeDebugProxyCapture("test", settings, deps);
     captureHttpExchange(
@@ -549,40 +628,28 @@ describe("debug proxy runtime", () => {
     expect(events.some((event) => event.kind === "error")).toBe(false);
   });
 
-  it.each([undefined, "invalid", "1"])(
-    "fails closed on a streamless Response-like body with content-length %s",
-    async (contentLength) => {
-      initializeDebugProxyCapture("test", settings, deps);
-      const headers = new Headers(
-        contentLength === undefined ? undefined : { "content-length": contentLength },
-      );
-      const arrayBuffer = vi.fn(async () => new Uint8Array(32 * ONE_MIB).buffer);
-      captureHttpExchange(
-        {
-          url: "https://api.example.test/streamless",
-          method: "GET",
-          response: {
-            status: 200,
-            headers,
-            arrayBuffer,
-            clone: () => ({ body: null, headers, arrayBuffer }),
-          } as unknown as Response,
-        },
-        settings,
-        deps,
-      );
-      await waitForResponseSettled();
-      finalizeDebugProxyCapture(settings, deps);
+  it("captures a clone-only Response-like readable body", async () => {
+    initializeDebugProxyCapture("test", settings, deps);
+    const headers = new Headers({ "content-type": "text/plain" });
+    const clone = vi.fn(() => new Response("captured", { headers }));
+    captureHttpExchange(
+      {
+        url: "https://api.example.test/clone-only",
+        method: "GET",
+        response: { status: 200, headers, clone } as unknown as Response,
+      },
+      settings,
+      deps,
+    );
+    await waitForResponseSettled();
+    finalizeDebugProxyCapture(settings, deps);
 
-      const response = events.find((event) => event.kind === "response");
-      expect(JSON.parse(String(response?.metaJson))).toMatchObject({
-        bodyCapture: "unavailable",
-      });
-      expect(response).not.toHaveProperty("dataText");
-      expect(arrayBuffer).not.toHaveBeenCalled();
-      expect(events.some((event) => event.kind === "error")).toBe(false);
-    },
-  );
+    const response = events.find((event) => event.kind === "response");
+    expect(clone).toHaveBeenCalledOnce();
+    expect(response?.dataText).toBe("captured");
+    expect(response?.metaJson).toBeUndefined();
+    expect(events.some((event) => event.kind === "error")).toBe(false);
+  });
 
   it("records metadata-only for non-cloneable Response-like objects", async () => {
     initializeDebugProxyCapture("test", settings, deps);

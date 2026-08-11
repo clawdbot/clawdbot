@@ -2,7 +2,7 @@
  * Resolves why an auth profile failed during provider auth selection.
  */
 import type { AuthProfileFailureReason } from "../../auth-profiles/types.js";
-import type { FailoverReason } from "../../embedded-agent-helpers/types.js";
+import type { FailoverReason } from "../../failover/signal.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 
 /**
@@ -33,6 +33,7 @@ export function resolveAuthProfileFailureReason(params: {
       (params.failoverReason === "overloaded" ||
         (params.failoverReason === "rate_limit" && params.transientRateLimit === true))) ||
     params.failoverReason === "server_error" ||
+    params.failoverReason === "tls_certificate" ||
     params.failoverReason === "empty_response" ||
     params.failoverReason === "context_overflow" ||
     params.failoverReason === "format"

@@ -17,11 +17,7 @@ import {
 } from "../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../auto-reply/commands-registry.js";
 import { settleReplyDispatcher, withReplyDispatcher } from "../../auto-reply/dispatch.js";
-import {
-  formatAgentEnvelope,
-  formatInboundEnvelope,
-  resolveEnvelopeFormatOptions,
-} from "../../auto-reply/envelope.js";
+import { formatAgentEnvelope, resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -53,11 +49,12 @@ import {
 } from "../../channels/plugins/conversation-bindings.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import { recordInboundSession } from "../../channels/session.js";
+import { runPreparedChannelTurn } from "../../channels/turn/execution.js";
 import {
-  dispatchChannelInboundReply,
-  runChannelInboundEvent,
-  runPreparedInboundReply,
-} from "../../channels/turn/kernel.js";
+  dispatchAssembledChannelTurn,
+  dispatchRoutedChannelTurn,
+} from "../../channels/turn/lifecycle.js";
+import { runChannelTurn } from "../../channels/turn/run-channel-turn.js";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
@@ -71,12 +68,7 @@ import {
   updateSessionLastRoute,
 } from "../../config/sessions/session-accessor.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
-import {
-  fetchRemoteMedia,
-  readRemoteMediaBuffer,
-  saveRemoteMedia,
-  saveResponseMedia,
-} from "../../media/fetch.js";
+import { readRemoteMediaBuffer, saveRemoteMedia, saveResponseMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
@@ -122,8 +114,6 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       settleReplyDispatcher,
       finalizeInboundContext,
       formatAgentEnvelope,
-      /** @deprecated Prefer `BodyForAgent` + structured user-context blocks (do not build plaintext envelopes for prompts). */
-      formatInboundEnvelope,
       resolveEnvelopeFormatOptions,
     },
     routing: {
@@ -154,7 +144,7 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     },
     media: {
       readRemoteMediaBuffer,
-      fetchRemoteMedia,
+      fetchRemoteMedia: readRemoteMediaBuffer,
       saveRemoteMedia,
       saveResponseMedia,
       saveMediaBuffer,
@@ -196,9 +186,10 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     },
     inbound: {
       buildContext: buildChannelInboundEventContext,
-      run: runChannelInboundEvent,
-      runPreparedReply: runPreparedInboundReply,
-      dispatchReply: dispatchChannelInboundReply,
+      run: runChannelTurn,
+      runPreparedReply: runPreparedChannelTurn,
+      dispatch: dispatchRoutedChannelTurn,
+      dispatchReply: dispatchAssembledChannelTurn,
     },
     threadBindings: {
       setIdleTimeoutBySessionKey: ({ channelId, targetSessionKey, accountId, idleTimeoutMs }) =>

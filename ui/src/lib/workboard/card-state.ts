@@ -1,13 +1,46 @@
+import { normalizeNullableString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type {
   WorkboardCard,
   WorkboardDependencyState,
   WorkboardMetadata,
   WorkboardStaleState,
+  WorkboardStatus,
   WorkboardUiState,
 } from "./types.ts";
 
+export { normalizeString };
+
 const WORKBOARD_STALE_SESSION_MS = 30 * 60 * 1000;
+
+export function isActiveWorkboardCard(card: WorkboardCard): boolean {
+  return !card.metadata?.archivedAt;
+}
+
+export function nextWorkboardCardPosition(
+  cards: readonly WorkboardCard[],
+  card: WorkboardCard,
+  status: WorkboardStatus,
+): number {
+  const boardId = card.metadata?.automation?.boardId?.trim() || "default";
+  const positions = cards
+    .filter(
+      (candidate) =>
+        candidate.id !== card.id &&
+        candidate.status === status &&
+        (candidate.metadata?.automation?.boardId?.trim() || "default") === boardId,
+    )
+    .map((candidate) => candidate.position);
+  // Archived cards still own their persisted positions in the canonical store.
+  return Math.max(0, ...positions) + 1000;
+}
+
+export function selectedWorkboardBoardParams(
+  state: Pick<WorkboardUiState, "boards" | "boardFilter">,
+): { boardId?: string } {
+  const boardId = state.boards.find((board) => board.id === state.boardFilter)?.id;
+  return boardId ? { boardId } : {};
+}
 
 export function replaceCard(state: WorkboardUiState, card: WorkboardCard) {
   const next = state.cards.filter((existing) => existing.id !== card.id);
@@ -148,8 +181,4 @@ export function workboardCardSessionKey(card: WorkboardCard): string | undefined
 
 export function workboardCardRunId(card: WorkboardCard): string | undefined {
   return card.runId ?? card.execution?.runId;
-}
-
-export function normalizeString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
 }

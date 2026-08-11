@@ -6,7 +6,7 @@ import type {
 } from "../channels/message/runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
-type ChannelInboundKernelModule = typeof import("../channels/turn/kernel.js");
+type ChannelDurableDeliveryModule = typeof import("../channels/turn/durable-delivery.js");
 // Share one lazy import across SDK helper calls so plugin barrels do not eagerly pull
 // message runtime internals into registration/discovery-only paths.
 const loadChannelMessageRuntimeModule = createLazyRuntimeModule(
@@ -15,10 +15,29 @@ const loadChannelMessageRuntimeModule = createLazyRuntimeModule(
 
 export type { DurableMessageBatchSendResult } from "../channels/message/runtime.js";
 export {
+  isRecentOutboundMessageIdentity,
+  recordOutboundMessageIdentity,
+} from "../channels/message/outbound-echo.js";
+export type { OutboundMessageIdentity } from "../channels/message/outbound-echo.js";
+export {
+  bindIngressLifecycleToReplyOptions,
+  CHANNEL_INGRESS_RETENTION_DEFAULTS,
+  createChannelIngressError,
+  createChannelIngressDrain,
+  createChannelIngressMonitor,
   createReplyPrefixContext,
   createReplyPrefixOptions,
   createTypingCallbacks,
   createChannelReplyPipeline as createChannelMessageReplyPipeline,
+  // Narrow drain seam by maintainer decision (#108924): factory, lifecycle binding,
+  // tuning constants, and processPidFromOwnerId (telegram transport display). All other
+  // claim/retry/adoption internals stay core-owned; test helpers live on the
+  // private-local plugin-state-test-runtime subpath.
+  DEFAULT_INGRESS_ADOPTION_STALL_MS,
+  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+  DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
+  INGRESS_CLAIM_PROCESS_ID,
+  processPidFromOwnerId,
   resolveChannelSourceReplyDeliveryMode as resolveChannelMessageSourceReplyDeliveryMode,
 } from "../channels/message/index.js";
 // Bare interval/stop orchestration for channels that own their typing renewal
@@ -136,6 +155,9 @@ export type {
   ChannelMessageSendTextContext,
   ChannelMessageUnknownSendContext,
   ChannelMessageUnknownSendReconciliationResult,
+  ChannelIngressDrain,
+  ChannelIngressMonitorDeliveryResult,
+  ChannelIngressMonitorLifecycle,
   ChannelIngressQueue,
   ChannelIngressQueueClaim,
   ChannelIngressQueueClaimRef,
@@ -149,10 +171,10 @@ export type {
   MessageReceiptSourceResult,
 } from "../channels/message/index.js";
 
-/** Lazily forwards inbound reply delivery through the channel turn kernel. */
-export const deliverInboundReplyWithMessageSendContext: ChannelInboundKernelModule["deliverInboundReplyWithMessageSendContext"] =
+/** Lazily forwards inbound reply delivery through the channel turn durable-delivery module. */
+export const deliverInboundReplyWithMessageSendContext: ChannelDurableDeliveryModule["deliverInboundReplyWithMessageSendContext"] =
   async (...args) => {
-    const mod = await import("../channels/turn/kernel.js");
+    const mod = await import("../channels/turn/durable-delivery.js");
     return await mod.deliverInboundReplyWithMessageSendContext(...args);
   };
 

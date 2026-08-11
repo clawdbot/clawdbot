@@ -1,14 +1,22 @@
 // Handles native slash commands before full get-reply pipeline execution.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {
+  resolveModelRefFromString,
   resolveThinkingDefaultWithRuntimeCatalog,
   type ModelAliasIndex,
 } from "../../agents/model-selection.js";
+import { loadPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
+import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
+import { recordSessionCreated } from "../../sessions/session-state-events.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
-import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import {
+  sessionDeliveryChannel,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.shared.js";
+import { isInternalMessageChannel, normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
   isAuthorizedTextSlashCommandTurn,
   isNativeCommandTurn,
@@ -16,7 +24,7 @@ import {
 } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { markCommandReplyForDelivery, type ReplyPayload } from "../reply-payload.js";
-import type { MsgContext } from "../templating.js";
+import type { FinalizedRuntimeMsgContext as MsgContext } from "../templating.js";
 import { normalizeThinkLevel, type ThinkLevel } from "../thinking.js";
 import {
   takeCommandSessionMetadataChangesFromTargets,
@@ -60,9 +68,7 @@ function resolveNativeSlashCommandName(ctx: MsgContext): string | undefined {
   if (!isNativeCommandTurn(commandTurn) && !isAuthorizedTextSlashCommandTurn(commandTurn)) {
     return undefined;
   }
-  const commandText = stripStructuralPrefixes(
-    ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "",
-  ).trim();
+  const commandText = stripStructuralPrefixes(ctx.commandText ?? "").trim();
   const match = commandText.match(/^\/([^\s:]+)(?::|\s|$)/);
   return normalizeOptionalString(match?.[1])?.toLowerCase();
 }
@@ -97,14 +103,24 @@ function shouldRunInternalTextSlashCommandFastPath(
 
 async function resolveNativeSlashDefaultThinkingLevel(params: {
   cfg: OpenClawConfig;
+  agentId: string;
   provider: string;
   model: string;
+  agentDir: string;
+  workspaceDir: string;
 }): Promise<ThinkLevel> {
   return resolveThinkingDefaultWithRuntimeCatalog({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
-    loadModelCatalog: () => loadModelCatalog({ config: params.cfg }),
+    loadRuntimeCatalog: () =>
+      loadPreparedModelCatalog({
+        config: params.cfg,
+        agentId: params.agentId,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        readOnly: true,
+      }),
   });
 }
 
@@ -159,6 +175,13 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
       };
     }
     const persistedInitialEntry = persistence.entry;
+    if (creatingSession) {
+      recordSessionCreated({
+        sessionKey: sessionState.sessionKey,
+        agentId: params.agentId,
+        entry: persistedInitialEntry,
+      });
+    }
     // Commit the synthesized activity/channel touch before commands or directives
     // capture their own mutation baseline.
     sessionState.sessionEntry = persistedInitialEntry;
@@ -178,16 +201,74 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   if (command.commandBodyNormalized === "/status") {
     const targetSessionEntry =
       sessionState.sessionStore[sessionState.sessionKey] ?? sessionState.sessionEntry;
+    const canApplyChannelModel =
+      params.cfg.channels?.modelByChannel &&
+      !isModelSelectionLocked(targetSessionEntry) &&
+      !normalizeOptionalString(targetSessionEntry?.modelOverride) &&
+      !normalizeOptionalString(targetSessionEntry?.providerOverride) &&
+      params.provider === params.defaultProvider &&
+      params.model === params.defaultModel;
+    const deliveryChannel = normalizeMessageChannel(sessionDeliveryChannel(targetSessionEntry));
+    // Shared sessions can retain another channel's peer; never let that stale
+    // identity outrank the authorized current command's live sender.
+    const deliveryOrigin =
+      deliveryChannel && deliveryChannel === normalizeMessageChannel(command.channel)
+        ? sessionDeliveryOrigin(targetSessionEntry)
+        : undefined;
+    const channelModelOverride = canApplyChannelModel
+      ? resolveChannelModelOverride({
+          cfg: params.cfg,
+          channel: command.channel,
+          groupId: targetSessionEntry?.groupId,
+          groupChatType: targetSessionEntry?.chatType ?? params.ctx.ChatType,
+          groupChannel: targetSessionEntry?.groupChannel ?? params.ctx.GroupChannel,
+          groupSubject: targetSessionEntry?.subject ?? params.ctx.GroupSubject,
+          parentSessionKey:
+            params.ctx.ModelParentSessionKey ??
+            params.ctx.ParentSessionKey ??
+            targetSessionEntry?.parentSessionKey,
+          directUserIds: [
+            deliveryOrigin?.nativeDirectUserId,
+            deliveryOrigin?.from,
+            deliveryOrigin?.to,
+            params.ctx.OriginatingTo,
+            params.ctx.From,
+            params.ctx.SenderId,
+          ],
+        })
+      : null;
+    const resolvedChannelModel = channelModelOverride
+      ? resolveModelRefFromString({
+          raw: channelModelOverride.model,
+          defaultProvider: params.defaultProvider,
+          aliasIndex: params.aliasIndex,
+        })
+      : null;
+    // Native status returns before normal channel routing; select once before
+    // preparing model-bound thinking, runtime, auth, context, or fast-mode facts.
+    const statusProvider = resolvedChannelModel?.ref.provider ?? params.provider;
+    const statusModel = resolvedChannelModel?.ref.model ?? params.model;
     let resolvedDefaultThinkingLevel: ThinkLevel | undefined;
     const resolveDefaultThinkingLevel = async () => {
       resolvedDefaultThinkingLevel ??= await resolveNativeSlashDefaultThinkingLevel({
         cfg: params.cfg,
-        provider: params.provider,
-        model: params.model,
+        agentId: params.agentId,
+        provider: statusProvider,
+        model: statusModel,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
       });
       return resolvedDefaultThinkingLevel;
     };
     const resolvedThinkLevel = normalizeThinkLevel(targetSessionEntry?.thinkingLevel);
+    // This fast path has no model-state owner; prepare side-effect-free catalog facts directly.
+    const thinkingCatalog = await loadPreparedModelCatalog({
+      config: params.cfg,
+      agentId: params.agentId,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+      readOnly: true,
+    });
     const { buildStatusReply } = await loadStatusCommandRuntime();
     return {
       handled: true,
@@ -200,9 +281,10 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
           parentSessionKey: targetSessionEntry?.parentSessionKey ?? params.ctx.ParentSessionKey,
           sessionScope: sessionState.sessionScope,
           storePath: sessionState.storePath,
-          provider: params.provider,
-          model: params.model,
+          provider: statusProvider,
+          model: statusModel,
           workspaceDir: params.workspaceDir,
+          thinkingCatalog,
           resolvedThinkLevel,
           resolvedVerboseLevel: "off",
           resolvedReasoningLevel: "off",
@@ -229,44 +311,51 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     return loadedSkillCommands;
   };
 
-  const commandResult = await (
-    await loadCommandsRuntime()
-  ).handleCommands({
-    ctx: sessionState.sessionCtx,
-    rootCtx: params.ctx,
-    cfg: params.cfg,
-    command,
-    agentId: params.agentId,
-    agentDir: params.agentDir,
-    directives: clearInlineDirectives(sessionState.triggerBodyNormalized),
-    elevated: {
-      enabled: false,
-      allowed: false,
-      failures: [],
-    },
-    sessionEntry: sessionState.sessionEntry,
-    previousSessionEntry: sessionState.previousSessionEntry,
-    sessionStore: sessionState.sessionStore,
-    sessionKey: sessionState.sessionKey,
-    storePath: sessionState.storePath,
-    sessionScope: sessionState.sessionScope,
-    workspaceDir: params.workspaceDir,
-    opts: params.opts,
-    defaultGroupActivation: () => "always",
-    resolvedThinkLevel: undefined,
-    resolvedVerboseLevel: "off",
-    resolvedReasoningLevel: "off",
-    resolvedElevatedLevel: "off",
-    blockReplyChunking: undefined,
-    resolvedBlockStreamingBreak: "text_end",
-    resolveDefaultThinkingLevel: async () => undefined,
-    provider: params.provider,
-    model: params.model,
-    contextTokens: params.agentCfg?.contextTokens ?? 0,
-    isGroup: sessionState.isGroup,
-    loadSkillCommands: loadNativeSkillCommands,
-    typing: params.typing,
-  });
+  // Compact needs the canonical model owner before consuming a provider-specific transcript.
+  const compactNeedsModelSelection =
+    command.isAuthorizedSender &&
+    (command.commandBodyNormalized === "/compact" ||
+      command.commandBodyNormalized.startsWith("/compact "));
+  const commandResult = compactNeedsModelSelection
+    ? { shouldContinue: true, reply: undefined }
+    : await (
+        await loadCommandsRuntime()
+      ).handleCommands({
+        ctx: sessionState.sessionCtx,
+        rootCtx: params.ctx,
+        cfg: params.cfg,
+        command,
+        agentId: params.agentId,
+        agentDir: params.agentDir,
+        directives: clearInlineDirectives(sessionState.triggerBodyNormalized),
+        elevated: {
+          enabled: false,
+          allowed: false,
+          failures: [],
+        },
+        sessionEntry: sessionState.sessionEntry,
+        previousSessionEntry: sessionState.previousSessionEntry,
+        sessionStore: sessionState.sessionStore,
+        sessionKey: sessionState.sessionKey,
+        storePath: sessionState.storePath,
+        sessionScope: sessionState.sessionScope,
+        workspaceDir: params.workspaceDir,
+        opts: params.opts,
+        defaultGroupActivation: () => "always",
+        resolvedThinkLevel: undefined,
+        resolvedVerboseLevel: "off",
+        resolvedReasoningLevel: "off",
+        resolvedElevatedLevel: "off",
+        blockReplyChunking: undefined,
+        resolvedBlockStreamingBreak: "text_end",
+        resolveDefaultThinkingLevel: async () => undefined,
+        provider: params.provider,
+        model: params.model,
+        contextTokens: params.agentCfg?.contextTokens ?? 0,
+        isGroup: sessionState.isGroup,
+        loadSkillCommands: loadNativeSkillCommands,
+        typing: params.typing,
+      });
   const commandSessionMetadataChanges = takeCommandSessionMetadataChangesFromTargets([
     sessionState.sessionCtx,
     params.ctx,
@@ -311,9 +400,17 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     skillFilter: params.skillFilter,
   });
   if (directiveResult.kind === "reply") {
-    params.typing.cleanup();
+    // The canonical directive owner already finalizes typing for every terminal reply.
     return { handled: true, reply: markCommandReplyForDelivery(directiveResult.reply) };
   }
+
+  const shouldPrepareStatusThinkingCatalog =
+    directiveResult.result.inlineStatusRequested ||
+    directiveResult.result.directives.hasStatusDirective ||
+    directiveResult.result.command.commandBodyNormalized.trim() === "/status";
+  const thinkingCatalog = shouldPrepareStatusThinkingCatalog
+    ? await directiveResult.result.modelState.resolveThinkingCatalog()
+    : undefined;
 
   const inlineActionResult = await handleInlineActions({
     ctx: params.ctx,
@@ -345,6 +442,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     elevatedAllowed: directiveResult.result.elevatedAllowed,
     elevatedFailures: directiveResult.result.elevatedFailures,
     defaultActivation: () => directiveResult.result.defaultActivation,
+    thinkingCatalog,
     resolvedThinkLevel: directiveResult.result.resolvedThinkLevel,
     resolvedVerboseLevel: directiveResult.result.resolvedVerboseLevel,
     resolvedReasoningLevel: directiveResult.result.resolvedReasoningLevel,

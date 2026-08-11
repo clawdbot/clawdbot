@@ -130,7 +130,10 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
       !resolved ||
       !ref ||
       typeof ref !== "object" ||
-      (ref.source !== "env" && ref.source !== "file" && ref.source !== "exec") ||
+      (ref.source !== "env" &&
+        ref.source !== "file" &&
+        ref.source !== "exec" &&
+        ref.source !== "store") ||
       typeof ref.provider !== "string" ||
       ref.provider.trim().length === 0 ||
       typeof ref.id !== "string" ||
@@ -186,6 +189,8 @@ export function normalizeSecretsPlanOptions(
   return {
     scrubEnv: options?.scrubEnv ?? true,
     scrubAuthProfilesForProviderTargets: options?.scrubAuthProfilesForProviderTargets ?? true,
-    scrubLegacyAuthJson: options?.scrubLegacyAuthJson ?? true,
+    // Deprecated plan input retained for protocol compatibility. Doctor owns
+    // legacy auth.json migration; secrets apply never reads or rewrites it.
+    scrubLegacyAuthJson: false,
   };
 }

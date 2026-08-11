@@ -286,6 +286,53 @@ describe("worker transcript commit client", () => {
       messages: [messages[1]],
     });
   });
+
+  it("commits a terminal assistant message with replay near the frame ceiling", async () => {
+    const harness = connectionHarness();
+    harness.requestTranscriptCommit.mockResolvedValueOnce({
+      type: "res",
+      id: "commit-response",
+      ok: true,
+      payload: { entryIds: ["entry-1"], newLeafId: "leaf-1" },
+    });
+    const client = new WorkerTranscriptCommitClient(harness.connection, {
+      runEpoch: 3,
+      baseLeafId: null,
+    });
+    const message: WorkerTranscriptMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "done" }],
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      providerReplay: {
+        v: 1,
+        type: "openai-responses-compaction",
+        data: "x".repeat(60 * 1024),
+        provider: "openai",
+        api: "openai-responses",
+        model: "gpt-5.6-sol",
+      },
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 2,
+    };
+
+    await expect(client.commit([message])).resolves.toEqual({
+      entryIds: ["entry-1"],
+      newLeafId: "leaf-1",
+    });
+    expect(harness.requestTranscriptCommit).toHaveBeenCalledWith(
+      expect.objectContaining({ messages: [message] }),
+    );
+  });
 });
 
 describe("worker live-event client", () => {
@@ -477,7 +524,10 @@ describe("worker inference proxy client", () => {
     const onStreamGap = vi.fn();
     const terminal = doneOutcome();
 
-    const request = structuredClone(INFERENCE_REQUEST);
+    const request = {
+      ...structuredClone(INFERENCE_REQUEST),
+      modelRef: { ...INFERENCE_REQUEST.modelRef },
+    };
     const outcome = client.start(request, { onEvent, onStreamGap });
     request.modelRef.model = "caller-mutation";
     await vi.waitFor(() => expect(harness.requestInferenceStart).toHaveBeenCalledOnce());

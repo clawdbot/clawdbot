@@ -133,6 +133,7 @@ describe("createBundleMcpToolRuntime", () => {
       "demo__hidden_tool",
       "demo__model_tool",
     ]);
+    expect(getPluginToolMeta(runtime.appTools![0]!)?.mcp?.codexApproval).toEqual({ mode: "auto" });
     expect(
       applyEmbeddedAttemptToolsAllow(runtime.appTools ?? [], ["demo__model_tool"], {
         toolMeta: (tool) => getPluginToolMeta(tool),
@@ -157,6 +158,7 @@ describe("createBundleMcpToolRuntime", () => {
         _meta: { "ui/state": { selected: true } },
       },
     });
+    sessionRuntime.sessionKey = "agent:main:main";
     sessionRuntime.mcpAppsEnabled = true;
     sessionRuntime.readResource = async () => ({
       contents: [
@@ -183,6 +185,7 @@ describe("createBundleMcpToolRuntime", () => {
           toolName: "show",
           uiResourceUri: "ui://demo/app",
           toolCallId: "call-1",
+          originSessionKey: "agent:main:main",
           resultMetaState: "unavailable",
         },
       },
@@ -306,6 +309,47 @@ describe("createBundleMcpToolRuntime", () => {
         content: "pong",
       },
     });
+  });
+
+  it("preserves non-text MCP content alongside structuredContent without duplicating mirrored text", async () => {
+    const structuredContent = { description: "captured screenshot" };
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        result: {
+          content: [
+            { type: "text", text: "captured screenshot" },
+            { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+            {
+              type: "resource_link",
+              uri: "https://example.com/report",
+              name: "report",
+              title: "Report",
+            },
+            { type: "resource", resource: { uri: "memo://one", text: "memo body" } },
+            { type: "audio", data: "AAAA", mimeType: "audio/mpeg" },
+          ],
+          structuredContent,
+        },
+      }),
+    });
+
+    const result = await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
+      "call-bundle-probe",
+      {},
+      undefined,
+      undefined,
+    );
+
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: `structuredContent:\n${JSON.stringify(structuredContent, null, 2)}`,
+      },
+      { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+      { type: "text", text: "[Report] https://example.com/report" },
+      { type: "text", text: "memo body" },
+      { type: "text", text: "[audio audio/mpeg]" },
+    ]);
   });
 
   it("coerces non-text/image MCP tool-result blocks to text (resource_link/resource/audio)", async () => {
@@ -557,6 +601,68 @@ describe("createBundleMcpToolRuntime", () => {
         undefined,
       ),
     ).rejects.toThrow("bundle-mcp catalog projection cannot execute tools");
+  });
+
+  it("projects session-denied tools only for read-only inventory", () => {
+    const catalog = {
+      version: 1,
+      generatedAt: 0,
+      servers: {
+        knowledge: {
+          serverName: "knowledge",
+          safeServerName: "knowledge",
+          launchSummary: "knowledge",
+          toolCount: 0,
+          resources: { listChanged: false },
+          deniedToolNames: ["resources_read"],
+        },
+      },
+      tools: [
+        {
+          serverName: "knowledge",
+          safeServerName: "knowledge",
+          toolName: "alpha?",
+          inputSchema: { type: "object", properties: {} },
+          fallbackDescription: "Enabled knowledge tool",
+        },
+      ],
+      sessionDeniedTools: [
+        {
+          serverName: "knowledge",
+          safeServerName: "knowledge",
+          toolName: "alpha!",
+          inputSchema: { type: "object", properties: {} },
+          fallbackDescription: "Denied knowledge tool",
+          deniedBySession: true,
+        },
+      ],
+    } satisfies Parameters<typeof buildBundleMcpToolsFromCatalog>[0]["catalog"];
+
+    expect(buildBundleMcpToolsFromCatalog({ catalog }).map((tool) => tool.name)).toEqual([
+      "knowledge__alpha-",
+      "knowledge__resources_list",
+    ]);
+    const inventoryTools = buildBundleMcpToolsFromCatalog({
+      catalog,
+      includeSessionDenied: true,
+    });
+    expect(inventoryTools.map((tool) => tool.name)).toEqual([
+      "knowledge__alpha-",
+      "knowledge__alpha--2",
+      "knowledge__resources_list",
+      "knowledge__resources_read",
+    ]);
+    expect(
+      inventoryTools.map((tool) => ({
+        name: tool.name,
+        deniedBySession: getPluginToolMeta(tool)?.mcp?.deniedBySession,
+      })),
+    ).toEqual([
+      { name: "knowledge__alpha-", deniedBySession: undefined },
+      { name: "knowledge__alpha--2", deniedBySession: true },
+      { name: "knowledge__resources_list", deniedBySession: undefined },
+      { name: "knowledge__resources_read", deniedBySession: true },
+    ]);
   });
 
   it("materializes configured MCP tools through the session runtime boundary", async () => {

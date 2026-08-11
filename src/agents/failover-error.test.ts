@@ -3,7 +3,8 @@
  * Exercises raw error coercion, remediation hints, timeout/auth/billing/rate-limit cases.
  */
 import { describe, expect, it } from "vitest";
-import { classifyFailoverSignal } from "./embedded-agent-helpers/errors.js";
+import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
+import { GatewayDrainingError } from "../process/gateway-work-admission.js";
 import {
   buildFailoverRemediationHint,
   buildProviderReauthCommand,
@@ -11,6 +12,7 @@ import {
   describeFailoverError,
   FailoverError,
   findCliMaxTurnsError,
+  findCliTimeoutError,
   isNonProviderRuntimeCoordinationError,
   isSignalTimeoutReason,
   isTimeoutError,
@@ -18,7 +20,8 @@ import {
   resolveFailoverStatus,
   resolveModelFallbackError,
 } from "./failover-error.js";
-import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
+import { classifyFailoverSignal } from "./failover/classify.js";
+import { AgentHarnessSessionSupersededError } from "./harness/errors.js";
 
 // OpenAI 429 example shape: https://help.openai.com/en/articles/5955604-how-can-i-solve-429-too-many-requests-errors
 const OPENAI_RATE_LIMIT_MESSAGE =
@@ -73,6 +76,23 @@ describe("failover-error", () => {
     );
 
     expect(findCliMaxTurnsError(aggregate)).toBe(maxTurns);
+  });
+
+  it("finds structured CLI timeout context through aggregate wrappers", () => {
+    const timeout = new FailoverError("CLI exceeded timeout", {
+      reason: "timeout",
+      code: "cli_overall_timeout",
+      cliTimeout: {
+        mode: "overall",
+        timeoutSeconds: 600,
+        observedActivity: true,
+        activeToolCount: 0,
+        backgroundTaskCount: 1,
+      },
+    });
+    const aggregate = new AggregateError([{ cause: timeout }], "CLI turn failed");
+
+    expect(findCliTimeoutError(aggregate)).toBe(timeout);
   });
 
   it("infers failover reason from HTTP status", () => {
@@ -214,6 +234,33 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 523 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 524 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 529 })).toBe("overloaded");
+  });
+
+  it("classifies certificate failures separately from timeouts", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        code: "ERR_TLS_CERT_ALTNAME_INVALID",
+        message: "Hostname/IP does not match certificate's altnames",
+      }),
+    ).toBe("tls_certificate");
+    expect(
+      resolveFailoverReasonFromError(
+        new TypeError("fetch failed", {
+          cause: {
+            code: "CERT_HAS_EXPIRED",
+            message: "certificate has expired",
+          },
+        }),
+      ),
+    ).toBe("tls_certificate");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        code: "CERT_HAS_EXPIRED",
+        message: "certificate field rejected",
+      }),
+    ).toBe("format");
+    expect(resolveFailoverStatus("tls_certificate")).toBe(502);
   });
 
   it("stops on cyclic cause chains", () => {
@@ -375,6 +422,20 @@ describe("failover-error", () => {
     ).toBe("model_not_found");
   });
 
+  it("does not classify OpenRouter image-input no-endpoints 404s as model_not_found", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 404,
+        message: "No endpoints found that support image input",
+      }),
+    ).toBe("format");
+    expect(
+      resolveFailoverReasonFromError(
+        new Error("HTTP 404: No endpoints found that support image input"),
+      ),
+    ).toBe("format");
+  });
+
   it("classifies JSON-wrapped OpenRouter stealth-model 404s as model_not_found", () => {
     expect(
       resolveFailoverReasonFromError({
@@ -464,87 +525,6 @@ describe("failover-error", () => {
         message: '{"error":{"message":"The model is overloaded. Please try later"}}',
       }),
     ).toBe("overloaded");
-  });
-
-  it("does not classify session lock wait errors as model timeout failover", () => {
-    const sessionLockError = new SessionWriteLockTimeoutError({
-      timeoutMs: 10_000,
-      owner: "pid=37121",
-      lockPath: "/tmp/openclaw/session.jsonl.lock",
-    });
-    expect(resolveFailoverReasonFromError(sessionLockError)).toBeNull();
-    expect(isTimeoutError(sessionLockError)).toBe(false);
-
-    const wrappedLockError = Object.assign(new Error("operation timed out"), {
-      name: "AbortError",
-      cause: sessionLockError,
-    });
-    expect(resolveFailoverReasonFromError(wrappedLockError)).toBeNull();
-    expect(isTimeoutError(wrappedLockError)).toBe(false);
-
-    const abortWrappedLockError = Object.assign(new Error("request was aborted"), {
-      name: "AbortError",
-      cause: sessionLockError,
-    });
-    expect(resolveFailoverReasonFromError(abortWrappedLockError)).toBeNull();
-    expect(isTimeoutError(abortWrappedLockError)).toBe(false);
-  });
-
-  it("keeps explicit provider failover metadata authoritative over nested session lock text", () => {
-    expect(
-      resolveFailoverReasonFromError({
-        status: 429,
-        code: "RESOURCE_EXHAUSTED",
-        message: "upstream quota pressure",
-        cause: new SessionWriteLockTimeoutError({
-          timeoutMs: 10_000,
-          owner: "pid=37121",
-          lockPath: "/tmp/openclaw/session.jsonl.lock",
-        }),
-      }),
-    ).toBe("rate_limit");
-  });
-
-  it("keeps inferred HTTP failover metadata authoritative over nested session lock text", () => {
-    expect(
-      resolveFailoverReasonFromError({
-        message: "HTTP 429: upstream quota pressure",
-        cause: new SessionWriteLockTimeoutError({
-          timeoutMs: 10_000,
-          owner: "pid=37121",
-          lockPath: "/tmp/openclaw/session.jsonl.lock",
-        }),
-      }),
-    ).toBe("rate_limit");
-  });
-
-  it("does not treat generic abort codes as explicit failover metadata over nested session lock text", () => {
-    expect(
-      resolveFailoverReasonFromError({
-        name: "AbortError",
-        code: "ABORT_ERR",
-        message: "The operation was aborted",
-        cause: new SessionWriteLockTimeoutError({
-          timeoutMs: 10_000,
-          owner: "pid=37121",
-          lockPath: "/tmp/openclaw/session.jsonl.lock",
-        }),
-      }),
-    ).toBeNull();
-  });
-
-  it("does not let cause-based failover classification bypass wrapper session lock suppression", () => {
-    expect(
-      resolveFailoverReasonFromError({
-        message: "wrapper",
-        reason: new SessionWriteLockTimeoutError({
-          timeoutMs: 10_000,
-          owner: "pid=37121",
-          lockPath: "/tmp/openclaw/session.jsonl.lock",
-        }),
-        cause: new Error("operation timed out"),
-      }),
-    ).toBeNull();
   });
 
   it("classifies bare shared model runtime stream wrapper as timeout regardless of provider (#71620)", () => {
@@ -925,6 +905,7 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ code: "ENETRESET" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ code: "ENETUNREACH" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ code: "EPIPE" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "ERR_STREAM_PREMATURE_CLOSE" })).toBe("timeout");
   });
 
   it("infers rate-limit and overload from symbolic error codes", () => {
@@ -933,20 +914,26 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ code: "OVERLOADED_ERROR" })).toBe("overloaded");
   });
 
-  it("infers timeout from abort/error stop-reason messages", () => {
+  it("infers timeout from abort/network stop-reason messages", () => {
     expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: abort" })).toBe(
       "timeout",
     );
-    expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: error" })).toBe(
-      "timeout",
-    );
     expect(resolveFailoverReasonFromError({ message: "stop reason: abort" })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ message: "stop reason: error" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "reason: abort" })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ message: "reason: error" })).toBe("timeout");
     expect(
       resolveFailoverReasonFromError({ message: "Unhandled stop reason: network_error" }),
     ).toBe("timeout");
+  });
+
+  it("infers server_error from bare error finish/stop reasons (#109218)", () => {
+    expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: error" })).toBe(
+      "server_error",
+    );
+    expect(resolveFailoverReasonFromError({ message: "stop reason: error" })).toBe("server_error");
+    expect(resolveFailoverReasonFromError({ message: "reason: error" })).toBe("server_error");
+    expect(resolveFailoverReasonFromError({ message: "Provider finish_reason: error" })).toBe(
+      "server_error",
+    );
   });
 
   it("infers timeout from connection/network error messages", () => {
@@ -957,6 +944,28 @@ describe("failover-error", () => {
     ).toBe("rate_limit");
     expect(resolveFailoverReasonFromError({ message: "Connection error." })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "fetch failed" })).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        message: "stream disconnected before completion: response.completed was not received",
+      }),
+    ).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        message:
+          "Premature close of server response while trying to fetch https://api.example.test",
+      }),
+    ).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "Premature close" })).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        message: "stream disconnected while copying a local archive",
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        message: "worker reported a premature close while compressing logs",
+      }),
+    ).toBeNull();
     expect(resolveFailoverReasonFromError({ message: "Network error: ECONNREFUSED" })).toBe(
       "timeout",
     );
@@ -1320,34 +1329,52 @@ describe("failover-error", () => {
   });
 
   describe("isNonProviderRuntimeCoordinationError", () => {
-    const makeSessionLockError = () =>
-      new SessionWriteLockTimeoutError({
-        timeoutMs: 10_000,
-        owner: "pid=37121",
-        lockPath: "/tmp/openclaw/session.jsonl.lock",
-      });
-    const makeEmbeddedTakeoverError = () => {
-      const err = new Error(
-        "session file changed while embedded prompt lock was released: /tmp/openclaw/session.jsonl",
-      );
-      err.name = "EmbeddedAttemptSessionTakeoverError";
+    const makeWriterClaimReboundError = () => {
+      const err = new Error("session writer claim changed before transcript persistence");
+      err.name = "SessionTranscriptWriterClaimReboundError";
       return err;
     };
 
-    it("returns true for direct session write-lock timeout errors", () => {
-      expect(isNonProviderRuntimeCoordinationError(makeSessionLockError())).toBe(true);
+    it("returns true for transcript writer claim rebound errors", () => {
+      expect(isNonProviderRuntimeCoordinationError(makeWriterClaimReboundError())).toBe(true);
     });
 
-    it("returns true for direct embedded attempt session takeover errors", () => {
-      expect(isNonProviderRuntimeCoordinationError(makeEmbeddedTakeoverError())).toBe(true);
+    it("returns true for harness session generation ownership loss", () => {
+      expect(
+        isNonProviderRuntimeCoordinationError(
+          new AgentHarnessSessionSupersededError("session generation superseded"),
+        ),
+      ).toBe(true);
+    });
+
+    it("returns true for stale gateway lifecycle ownership loss", () => {
+      const staleLifecycle = createAgentRunStaleLifecycleError();
+      expect(isNonProviderRuntimeCoordinationError(staleLifecycle)).toBe(true);
+      expect(
+        isNonProviderRuntimeCoordinationError(new Error("wrapper", { cause: staleLifecycle })),
+      ).toBe(true);
+      const abortWrapper = new Error("request was aborted", { cause: staleLifecycle });
+      abortWrapper.name = "AbortError";
+      expect(isNonProviderRuntimeCoordinationError(abortWrapper)).toBe(true);
+    });
+
+    it("returns true for direct and nested gateway drain admission failures", () => {
+      const draining = new GatewayDrainingError();
+      const causeWrapper = new Error("session send failed", { cause: draining });
+      const aggregateWrapper = new AggregateError(
+        [new Error("cleanup failed"), { error: draining }],
+        "agent run failed",
+      );
+
+      for (const error of [draining, causeWrapper, aggregateWrapper]) {
+        expect(isNonProviderRuntimeCoordinationError(error)).toBe(true);
+        expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
+      }
     });
 
     it("returns true when the coordination error is nested via cause", () => {
-      const wrapped = new Error("wrapper", { cause: makeSessionLockError() });
-      expect(isNonProviderRuntimeCoordinationError(wrapped)).toBe(true);
-
-      const wrappedTakeover = new Error("wrapper", { cause: makeEmbeddedTakeoverError() });
-      expect(isNonProviderRuntimeCoordinationError(wrappedTakeover)).toBe(true);
+      const wrappedRebound = new Error("wrapper", { cause: makeWriterClaimReboundError() });
+      expect(isNonProviderRuntimeCoordinationError(wrappedRebound)).toBe(true);
     });
 
     it("returns true for Codex missing tool-result local execution failures", () => {
@@ -1372,17 +1399,16 @@ describe("failover-error", () => {
       );
       expect(
         isNonProviderRuntimeCoordinationError({
-          status: 429,
-          code: "RESOURCE_EXHAUSTED",
-          message: "upstream quota pressure",
-          cause: makeSessionLockError(),
+          status: 503,
+          message: "upstream overloaded",
+          cause: { result: { reason: "missing_tool_result" } },
         }),
       ).toBe(false);
       expect(
         isNonProviderRuntimeCoordinationError({
           status: 503,
           message: "upstream overloaded",
-          cause: { result: { reason: "missing_tool_result" } },
+          cause: createAgentRunStaleLifecycleError(),
         }),
       ).toBe(false);
       expect(isNonProviderRuntimeCoordinationError(null)).toBe(false);
@@ -1398,63 +1424,12 @@ describe("failover-error", () => {
       ).toBe(false);
     });
 
-    it("returns false when takeover wrapper holds a classifiable provider timeout in promptError", () => {
-      // Simulates EmbeddedAttemptPromptErrorWithCleanupTakeoverError: name matches
-      // EmbeddedAttemptSessionTakeoverError, but the real cause is in .promptError.
-      const timeoutPromptErr = Object.assign(new Error("request timed out"), {
-        name: "TimeoutError",
-      });
-      const wrapper = Object.assign(new Error("request timed out"), {
-        name: "EmbeddedAttemptSessionTakeoverError",
-        promptError: timeoutPromptErr,
-      });
-      expect(isNonProviderRuntimeCoordinationError(wrapper)).toBe(false);
-    });
-
-    it("returns false when takeover wrapper holds rate_limit in promptError", () => {
-      const rateLimitPromptErr = {
-        status: 429,
-        code: "RATE_LIMITED",
-        message: "too many requests",
-      };
-      const wrapper = Object.assign(new Error("cleanup takeover"), {
-        name: "EmbeddedAttemptSessionTakeoverError",
-        promptError: rateLimitPromptErr,
-      });
-      expect(isNonProviderRuntimeCoordinationError(wrapper)).toBe(false);
-      const resolution = resolveModelFallbackError(wrapper);
-      expect(resolution).toMatchObject({
-        kind: "failover",
-        error: {
-          message: "too many requests",
-          reason: "rate_limit",
-          status: 429,
-          code: "RATE_LIMITED",
-        },
-      });
-      expect(resolution.error).toHaveProperty("cause", wrapper);
-    });
-
-    it("returns true when takeover wrapper holds an unclassifiable promptError", () => {
-      const unknownPromptErr = { weirdField: "something unknown" };
-      const wrapper = Object.assign(new Error("unknown"), {
-        name: "EmbeddedAttemptSessionTakeoverError",
-        promptError: unknownPromptErr,
-      });
-      expect(isNonProviderRuntimeCoordinationError(wrapper)).toBe(true);
-    });
-
-    it("returns true for pure takeover error without promptError (regression)", () => {
-      const pureTakeover = Object.assign(
-        new Error("session file changed while embedded prompt lock was released"),
-        { name: "EmbeddedAttemptSessionTakeoverError" },
-      );
-      expect(isNonProviderRuntimeCoordinationError(pureTakeover)).toBe(true);
+    it("keeps provider-looking rebound wrappers in the coordination path", () => {
+      const rebound = makeWriterClaimReboundError();
+      expect(isNonProviderRuntimeCoordinationError(rebound)).toBe(true);
       expect(
         isNonProviderRuntimeCoordinationError(
-          Object.assign(new Error("provider rejected request: rate limit"), {
-            name: "EmbeddedAttemptSessionTakeoverError",
-          }),
+          new Error("provider rejected request: rate limit", { cause: rebound }),
         ),
       ).toBe(true);
     });
@@ -1473,14 +1448,14 @@ describe("buildFailoverRemediationHint", () => {
     );
   });
 
-  it("returns a hint for auth_permanent as well", () => {
+  it("routes Gemini CLI auth failures to supported recovery paths", () => {
     const err = new FailoverError("revoked", {
       reason: "auth_permanent",
       provider: "google-gemini-cli",
       model: "gemini-3.1-pro-preview",
     });
     expect(buildFailoverRemediationHint(err)).toBe(
-      "Re-authenticate with: openclaw models auth login --provider 'google-gemini-cli' --force",
+      "Authenticate in Gemini CLI directly, or configure a supported Google API key with: openclaw configure",
     );
   });
 

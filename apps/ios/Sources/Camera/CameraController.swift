@@ -37,13 +37,15 @@ actor CameraController {
         }
     }
 
-    func snap(params: OpenClawCameraSnapParams) async throws -> (
+    func snap(
+        params: OpenClawCameraSnapParams,
+        defaultFacing: OpenClawCameraFacing = .front) async throws -> (
         format: String,
         base64: String,
         width: Int,
         height: Int)
     {
-        let facing = params.facing ?? .front
+        let facing = Self.resolveFacing(params.facing, defaultFacing: defaultFacing)
         let format = params.format ?? .jpg
         // Default to a reasonable max width to keep gateway payload sizes manageable.
         // If you need the full-res photo, explicitly request a larger maxWidth.
@@ -102,13 +104,15 @@ actor CameraController {
             height: res.heightPx)
     }
 
-    func clip(params: OpenClawCameraClipParams) async throws -> (
+    func clip(
+        params: OpenClawCameraClipParams,
+        defaultFacing: OpenClawCameraFacing = .front) async throws -> (
         format: String,
         base64: String,
         durationMs: Int,
         hasAudio: Bool)
     {
-        let facing = params.facing ?? .front
+        let facing = Self.resolveFacing(params.facing, defaultFacing: defaultFacing)
         let durationMs = Self.clampDurationMs(params.durationMs)
         let includeAudio = params.includeAudio ?? true
         let format = params.format ?? .mp4
@@ -245,6 +249,13 @@ actor CameraController {
         let v = ms ?? 3000
         // Keep clips short by default; avoid huge base64 payloads on the gateway.
         return min(60000, max(250, v))
+    }
+
+    nonisolated static func resolveFacing(
+        _ explicitFacing: OpenClawCameraFacing?,
+        defaultFacing: OpenClawCameraFacing) -> OpenClawCameraFacing
+    {
+        explicitFacing ?? defaultFacing
     }
 
     private nonisolated static func exportToMP4(inputURL: URL, outputURL: URL) async throws {

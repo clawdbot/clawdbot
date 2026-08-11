@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveStorePath } from "../config/sessions/paths.js";
+import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
 
 describe("describeHeartbeatSessionTargetIssues", () => {
@@ -15,6 +17,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
   });
 
   afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -69,10 +72,21 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     const cfg = cfgWithSession("agent:ops:main");
     writeStore(cfg, {
       "agent:ops:work": {
-        sessionId: "agent:ops:work",
+        sessionId: "work-session",
         updatedAt: Date.now(),
       },
     });
+
+    expect(describeHeartbeatSessionTargetIssues(cfg)).toEqual([]);
+  });
+
+  it("recognizes a SQLite-resident heartbeat target", async () => {
+    const cfg = cfgWithSession("slack:channel:c123");
+    const storePath = resolveStorePath(cfg.session?.store, { agentId: "ops" });
+    await upsertSessionEntry(
+      { agentId: "ops", sessionKey: "agent:ops:slack:channel:c123", storePath },
+      { sessionId: "sqlite-heartbeat-target", updatedAt: Date.now() },
+    );
 
     expect(describeHeartbeatSessionTargetIssues(cfg)).toEqual([]);
   });
@@ -86,6 +100,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("resolved to agent:ops:slack:channel:c123");
     expect(warnings[0]).toContain('reason="no-target"');
+    expect(warnings[0]).toContain("Heartbeats will run");
   });
 
   it("does not warn when an explicit heartbeat recipient does not need session history", () => {
@@ -139,10 +154,10 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     expect(warnings[0]).toContain("resolved to agent:ops:slack:channel:c123");
   });
 
-  it("does not warn when target is omitted because runtime defaults to none", () => {
+  it("warns when the default last target has no configured session route", () => {
     const cfg = cfgWithSession("slack:channel:c123", null);
     writeStore(cfg, {});
 
-    expect(describeHeartbeatSessionTargetIssues(cfg)).toEqual([]);
+    expect(describeHeartbeatSessionTargetIssues(cfg)[0]).toContain('reason="no-route"');
   });
 });

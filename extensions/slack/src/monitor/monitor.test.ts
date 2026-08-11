@@ -197,6 +197,7 @@ const baseParams = () => ({
   runtime: {} as RuntimeEnv,
   botUserId: "B1",
   botId: "B1",
+  identityHealth: { lifecycle: "ready" as const, lastError: null },
   teamId: "T1",
   apiAppId: "A1",
   historyLimit: 0,
@@ -226,8 +227,6 @@ const baseParams = () => ({
   mediaMaxBytes: 1,
   threadHistoryScope: "thread" as const,
   threadInheritParent: false,
-  threadRequireExplicitMention: false,
-  removeAckAfterReply: false,
 });
 
 function createListedChannelsContext(groupPolicy: "open" | "allowlist") {

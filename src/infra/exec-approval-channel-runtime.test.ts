@@ -1,7 +1,7 @@
 // Covers gateway-backed approval channel runtime behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewayClient } from "../gateway/client.js";
-import { createDeferred } from "../test-utils/deferred.js";
 import { withGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalRuntime } from "./approval-gateway-runtime.types.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
@@ -416,7 +416,7 @@ describe("createExecApprovalChannelRuntime", () => {
     const runtime = createExecApprovalChannelRuntime({
       label: "test/exec-approvals",
       clientDisplayName: "Test Exec Approvals",
-      cfg: { gateway: { handshakeTimeoutMs: 30_000 } } as never,
+      cfg: {},
       isConfigured: () => true,
       shouldHandle: () => true,
       deliverRequested: async () => [],
@@ -429,7 +429,7 @@ describe("createExecApprovalChannelRuntime", () => {
 
     expect(mockGatewayClientStarts).not.toHaveBeenCalled();
     expect(mockGatewayClientStops).toHaveBeenCalledTimes(1);
-    expectStartGatewayClientCall(30_000);
+    expectStartGatewayClientCall();
   });
 
   it("can retry start after gateway client creation fails", async () => {

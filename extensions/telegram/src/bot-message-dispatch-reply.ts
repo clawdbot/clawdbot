@@ -1,24 +1,31 @@
-import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 // Telegram plugin module owns buffered reply payload delivery decisions.
+import {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   isFastModeAutoProgressPayload,
   isReplyPayloadNonTerminalToolErrorWarning,
   resolveSendableOutboundReplyParts,
+  type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramDeliveryController } from "./bot-message-dispatch-delivery.js";
 import type { TelegramDraftController } from "./bot-message-dispatch-draft.js";
-import type { TelegramReplyFenceController } from "./bot-message-dispatch-fence.js";
 import type { TelegramProgressController } from "./bot-message-dispatch-progress.js";
 import { deduplicateBlockSentMedia } from "./bot-message-dispatch.media-dedup.js";
 import type { TelegramDispatchTurnState } from "./bot-message-dispatch.types.js";
 import type { TelegramStreamMode } from "./bot/types.js";
-import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "./button-types.js";
+import {
+  resolveTelegramInlineButtons,
+  resolveTelegramQuestionOptionIndices,
+  type TelegramInlineButtons,
+} from "./button-types.js";
 import {
   buildTelegramErrorScopeKey,
   isSilentErrorPolicy,
@@ -37,17 +44,44 @@ type Skip = NonNullable<DispatcherOptions["onSkip"]>;
 type ErrorCallback = NonNullable<DispatcherOptions["onError"]>;
 type Cancel = NonNullable<DispatcherOptions["onBeforeDeliverCancelled"]>;
 
+type TelegramReplyDeliveryResult = {
+  visibleReplySent: boolean;
+  suppression?: { reason: "no_visible_result" };
+  finalization?: Promise<{ visibleReplySent: boolean }>;
+};
+
+function toTelegramReplyDeliveryResult(
+  visibleReplySent: boolean,
+  finalization?: Promise<{ visibleReplySent: boolean }>,
+): TelegramReplyDeliveryResult {
+  if (finalization) {
+    return { visibleReplySent, finalization };
+  }
+  return visibleReplySent
+    ? { visibleReplySent: true }
+    : { visibleReplySent: false, suppression: { reason: "no_visible_result" } };
+}
+
+function toTelegramVisiblePartialDeliveryError(error: unknown): unknown {
+  return isChannelPartialDeliveryError(error)
+    ? error
+    : createChannelPartialDeliveryError(error, { visibleReplySent: true });
+}
+
 function resolvePayloadTelegramInlineButtons(
   payload: ReplyPayload,
 ): TelegramInlineButtons | undefined {
   const telegramData = payload.channelData?.telegram as
     | { buttons?: TelegramInlineButtons }
     | undefined;
-  return resolveTelegramInlineButtons({
-    buttons: telegramData?.buttons,
-    presentation: normalizeMessagePresentation(payload.presentation),
-    interactive: payload.interactive,
-  });
+  return resolveTelegramInlineButtons(
+    {
+      buttons: telegramData?.buttons,
+      presentation: normalizeMessagePresentation(payload.presentation),
+      interactive: payload.interactive,
+    },
+    { questionOptionIndices: resolveTelegramQuestionOptionIndices(payload) },
+  );
 }
 
 function hasExecApprovalPayload(payload: ReplyPayload): boolean {
@@ -59,7 +93,7 @@ export function createTelegramReplyDelivery(params: {
   context: TelegramMessageContext;
   delivery: TelegramDeliveryController;
   draft: TelegramDraftController;
-  fence: Pick<TelegramReplyFenceController, "generation" | "isSuperseded">;
+  fence: { generation: () => number; isSuperseded: () => boolean };
   progress: TelegramProgressController;
   runtime: RuntimeEnv;
   state: TelegramDispatchTurnState;
@@ -67,23 +101,79 @@ export function createTelegramReplyDelivery(params: {
   telegramCfg: TelegramAccountConfig;
 }) {
   const reasoningStepState = createTelegramReasoningStepState();
+  let bufferedFinalSettlement:
+    | {
+        promise: Promise<{ visibleReplySent: boolean }>;
+        visibleReplySent: boolean;
+        onPlatformSendDispatch?: () => Promise<void>;
+        bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
+        resolve: (result: { visibleReplySent: boolean }) => void;
+        reject: (error: unknown) => void;
+      }
+    | undefined;
   const sentBlockMediaUrls = new Set<string>();
   params.draft.setReasoningStepCallbacks({
     noteHint: () => reasoningStepState.noteReasoningHint(),
     noteDelivered: () => reasoningStepState.noteReasoningDelivered(),
   });
 
-  const flushBufferedFinalAnswer = async () => {
+  const settleBufferedFinalAsNotVisible = () => {
+    if (bufferedFinalSettlement) {
+      bufferedFinalSettlement.resolve({
+        visibleReplySent: bufferedFinalSettlement.visibleReplySent,
+      });
+    }
+    bufferedFinalSettlement = undefined;
+  };
+  const resetReasoningStepState = () => {
+    settleBufferedFinalAsNotVisible();
+    reasoningStepState.resetForNextStep();
+  };
+  const flushBufferedFinalAnswer = async (currentPayloadVisible = false): Promise<void> => {
+    const settlement = bufferedFinalSettlement;
     const buffered = reasoningStepState.takeBufferedFinalAnswer(params.fence.generation());
     if (!buffered) {
+      // A stale fence can discard the buffered text after another segment became visible.
+      // Preserve that partial visibility so core does not reconcile an actual send away.
+      settlement?.resolve({ visibleReplySent: settlement.visibleReplySent });
+      bufferedFinalSettlement = undefined;
+      resetReasoningStepState();
       return;
     }
-    await params.delivery.deliverFinalAnswerText(
-      buffered.payload,
-      buffered.text,
-      resolvePayloadTelegramInlineButtons(buffered.payload),
-    );
-    reasoningStepState.resetForNextStep();
+    bufferedFinalSettlement = undefined;
+    try {
+      const result = await params.delivery.deliverFinalAnswerText(
+        buffered.payload,
+        buffered.text,
+        resolvePayloadTelegramInlineButtons(buffered.payload),
+        settlement?.onPlatformSendDispatch,
+        settlement?.bindPendingFinalDelivery,
+      );
+      if (settlement) {
+        settlement.resolve({
+          visibleReplySent: settlement.visibleReplySent || result.kind !== "skipped",
+        });
+      }
+      resetReasoningStepState();
+    } catch (error: unknown) {
+      if (settlement) {
+        settlement.reject(
+          settlement.visibleReplySent ? toTelegramVisiblePartialDeliveryError(error) : error,
+        );
+      }
+      throw currentPayloadVisible ? toTelegramVisiblePartialDeliveryError(error) : error;
+    }
+  };
+  const settleTerminalNoVisibleDelivery = async (
+    info: Parameters<NonNullable<Deliver>>[1],
+    options?: { abandonBufferedFinal?: boolean },
+  ): Promise<TelegramReplyDeliveryResult> => {
+    if (options?.abandonBufferedFinal) {
+      resetReasoningStepState();
+    } else if (info.kind === "final") {
+      await flushBufferedFinalAnswer();
+    }
+    return toTelegramReplyDeliveryResult(false);
   };
   const trackBlockMedia = (delivered: boolean, kind: string, payload: ReplyPayload) => {
     if (delivered && kind === "block" && payload.mediaUrls?.length) {
@@ -93,20 +183,23 @@ export function createTelegramReplyDelivery(params: {
     }
   };
 
-  const deliver: Deliver = async (payload, info) => {
+  const deliver = (async (
+    payload: Parameters<Deliver>[0],
+    info: Parameters<Deliver>[1],
+  ): Promise<TelegramReplyDeliveryResult> => {
     if (params.fence.isSuperseded()) {
-      return;
+      return await settleTerminalNoVisibleDelivery(info, { abandonBufferedFinal: true });
     }
     const normalizedPayload = params.delivery.normalizeDeliveryPayload(payload);
     if (!normalizedPayload) {
-      return;
+      return await settleTerminalNoVisibleDelivery(info);
     }
     const deduped =
       info.kind === "final"
         ? deduplicateBlockSentMedia(normalizedPayload, sentBlockMediaUrls)
         : normalizedPayload;
     if (!deduped) {
-      return;
+      return await settleTerminalNoVisibleDelivery(info);
     }
     const effectivePayload = deduped;
     if (
@@ -117,7 +210,7 @@ export function createTelegramReplyDelivery(params: {
       })
     ) {
       params.state.queuedFinal = true;
-      return;
+      return await settleTerminalNoVisibleDelivery(info);
     }
     const telegramButtons = resolvePayloadTelegramInlineButtons(effectivePayload);
     const lanePayload =
@@ -152,13 +245,14 @@ export function createTelegramReplyDelivery(params: {
       !reply.hasMedia &&
       !hasExecApprovalPayload(effectivePayload)
     ) {
-      return;
+      return await settleTerminalNoVisibleDelivery(info);
     }
     if (payload.isError === true) {
       params.state.hadErrorReplyFailureOrSkip = true;
     }
 
     let blockDelivered = false;
+    let finalization: Promise<{ visibleReplySent: boolean }> | undefined;
     const hasAnswerSegment = segments.some((segment) => segment.lane === "answer");
     if (info.kind === "block" && !hasAnswerSegment) {
       params.draft.dropQueuedAnswerBlockRotation(effectivePayload, info.assistantMessageIndex);
@@ -169,6 +263,23 @@ export function createTelegramReplyDelivery(params: {
         info.kind === "final" &&
         reasoningStepState.shouldBufferFinalAnswer()
       ) {
+        let resolveFinalization!: (result: { visibleReplySent: boolean }) => void;
+        let rejectFinalization!: (error: unknown) => void;
+        finalization = new Promise((resolve, reject) => {
+          resolveFinalization = resolve;
+          rejectFinalization = reject;
+        });
+        // The coordinator admits only one buffered answer. Settle defensively before replacing
+        // its paired promise so an unexpected rebuffer can never orphan turn finalization.
+        settleBufferedFinalAsNotVisible();
+        bufferedFinalSettlement = {
+          promise: finalization,
+          visibleReplySent: blockDelivered,
+          onPlatformSendDispatch: info.onPlatformSendDispatch,
+          bindPendingFinalDelivery: info.bindPendingFinalDelivery,
+          resolve: resolveFinalization,
+          reject: rejectFinalization,
+        };
         reasoningStepState.bufferFinalAnswer({
           payload: effectivePayload,
           text: segment.update.text,
@@ -231,10 +342,17 @@ export function createTelegramReplyDelivery(params: {
         !params.draft.isAnswerToolProgressOnly() &&
         !ownedByQueuedRotation &&
         segment.update.text.trimEnd() === params.draft.answerLane.lastPartialText.trimEnd();
+      const isDurableProgressCommentary =
+        params.streamMode === "progress" &&
+        info.kind === "block" &&
+        effectivePayload.isCommentary === true;
+      // CLI finals exclude separately classified commentary. Send that block outside
+      // the disposable progress stream or its collapse summary erases the text.
       const suppressProgressAnswerBlock =
         params.streamMode === "progress" &&
         info.kind === "block" &&
         segment.lane === "answer" &&
+        !isDurableProgressCommentary &&
         !reply.hasMedia &&
         !hasExecApprovalPayload(effectivePayload) &&
         telegramButtons === undefined;
@@ -269,6 +387,8 @@ export function createTelegramReplyDelivery(params: {
               effectivePayload,
               segment.update.text,
               telegramButtons,
+              info.onPlatformSendDispatch,
+              info.bindPendingFinalDelivery,
             )
           : await params.delivery.deliverLaneText({
               laneName: segment.lane,
@@ -276,6 +396,9 @@ export function createTelegramReplyDelivery(params: {
               payload: lanePayload,
               infoKind: info.kind,
               buttons: telegramButtons,
+              allowStream: !isDurableProgressCommentary,
+              onPlatformSendDispatch: info.onPlatformSendDispatch,
+              bindPendingFinalDelivery: info.bindPendingFinalDelivery,
             });
       if (
         segment.lane === "answer" &&
@@ -295,67 +418,72 @@ export function createTelegramReplyDelivery(params: {
       if (segment.lane === "reasoning") {
         if (result.kind !== "skipped") {
           reasoningStepState.noteReasoningDelivered();
-          await flushBufferedFinalAnswer();
+          if (finalization && bufferedFinalSettlement) {
+            bufferedFinalSettlement.visibleReplySent ||= blockDelivered;
+          }
+          await flushBufferedFinalAnswer(blockDelivered);
         }
       } else if (info.kind === "final") {
-        reasoningStepState.resetForNextStep();
+        resetReasoningStepState();
       }
     }
     if (segments.length > 0) {
+      if (finalization && bufferedFinalSettlement) {
+        bufferedFinalSettlement.visibleReplySent ||= blockDelivered;
+      }
       trackBlockMedia(blockDelivered, info.kind, effectivePayload);
-      return;
+      return toTelegramReplyDeliveryResult(blockDelivered, finalization);
     }
 
     if (split.suppressedReasoningOnly) {
       let delivered = false;
+      if (info.kind === "final") {
+        await params.draft.rotateAnswerLaneAfterToolProgress();
+        await params.draft.answerLane.stream?.stop();
+        await params.draft.reasoningLane.stream?.stop();
+        await flushBufferedFinalAnswer();
+      }
       if (reply.hasMedia) {
-        if (info.kind === "final") {
-          await params.draft.rotateAnswerLaneAfterToolProgress();
-          await params.draft.answerLane.stream?.stop();
-          await params.draft.reasoningLane.stream?.stop();
-          reasoningStepState.resetForNextStep();
-        }
         const payloadWithoutReasoning =
           typeof effectivePayload.text === "string"
             ? { ...effectivePayload, text: "" }
             : effectivePayload;
         delivered = await params.delivery.sendPayload(payloadWithoutReasoning, {
           durable: info.kind === "final",
+          onPlatformSendDispatch: info.onPlatformSendDispatch,
+          bindPendingFinalDelivery: info.bindPendingFinalDelivery,
         });
       }
       if (info.kind === "final" && delivered) {
         params.progress.markFinalDelivered();
       }
-      if (info.kind === "final") {
-        await flushBufferedFinalAnswer();
-      }
       trackBlockMedia(delivered, info.kind, effectivePayload);
-      return;
+      return toTelegramReplyDeliveryResult(delivered);
     }
 
     if (info.kind === "final") {
       await params.draft.rotateAnswerLaneAfterToolProgress();
       await params.draft.answerLane.stream?.stop();
       await params.draft.reasoningLane.stream?.stop();
-      reasoningStepState.resetForNextStep();
+      await flushBufferedFinalAnswer();
     }
     if (!reply.hasMedia && reply.text.length === 0) {
       if (info.kind === "final") {
         await flushBufferedFinalAnswer();
       }
-      return;
+      return toTelegramReplyDeliveryResult(false);
     }
     const delivered = await params.delivery.sendPayload(effectivePayload, {
       durable: info.kind === "final",
+      onPlatformSendDispatch: info.onPlatformSendDispatch,
+      bindPendingFinalDelivery: info.bindPendingFinalDelivery,
     });
     if (info.kind === "final" && delivered) {
       params.progress.markFinalDelivered();
     }
-    if (info.kind === "final") {
-      await flushBufferedFinalAnswer();
-    }
     trackBlockMedia(delivered, info.kind, effectivePayload);
-  };
+    return toTelegramReplyDeliveryResult(delivered);
+  }) satisfies Deliver;
 
   const onSkip: Skip = (payload, info) => {
     if (info.kind === "block") {
@@ -410,7 +538,7 @@ export function createTelegramReplyDelivery(params: {
     },
     onError,
     onSkip,
-    reasoningStepState,
+    reasoningStepState: { ...reasoningStepState, resetForNextStep: resetReasoningStepState },
   };
 }
 

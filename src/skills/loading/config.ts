@@ -8,6 +8,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import type { SkillConfig } from "../../config/types.skills.js";
 import {
+  findActiveDegradedSecretOwner,
+  listActiveDegradedSecretOwners,
+} from "../../secrets/runtime-degraded-state.js";
+import {
   evaluateRuntimeEligibility,
   hasBinary,
   isConfigPathTruthyWithDefaults,
@@ -55,6 +59,21 @@ export function resolveSkillConfig(
     return undefined;
   }
   return entry;
+}
+
+/** Returns whether cold startup isolated this exact skill's configured secret. */
+export function isSkillSecretOwnerUnavailable(skillKey: string): boolean {
+  return Boolean(findActiveDegradedSecretOwner("capability", `skill:${skillKey}`));
+}
+
+/** Returns whether cold startup isolated any configured skill secret. */
+export function hasUnavailableSkillSecretOwners(): boolean {
+  return listActiveDegradedSecretOwners().some(
+    (owner) =>
+      owner.degradationState !== "stale" &&
+      owner.ownerKind === "capability" &&
+      owner.ownerId.startsWith("skill:"),
+  );
 }
 
 export function isSkillEnvRequirementSatisfied(params: {
@@ -113,6 +132,9 @@ export function shouldIncludeSkill(params: {
   const skillConfig = resolveSkillConfig(config, skillKey);
 
   if (skillConfig?.enabled === false) {
+    return false;
+  }
+  if (isSkillSecretOwnerUnavailable(skillKey)) {
     return false;
   }
   if (!isBundledSkillAllowed(entry, bundledAllowlist)) {

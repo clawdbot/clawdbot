@@ -1,4 +1,5 @@
 // Browser tests cover agent.existing session plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import {
@@ -126,12 +127,7 @@ function getDialogHookPostHandler() {
   return handler;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function callArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
@@ -204,6 +200,35 @@ describe("existing-session browser routes", () => {
     expect(cleanupParams.signal).toBeUndefined();
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
     expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalled();
+  });
+
+  it("omits deltas for existing-session snapshots without stable document identity", async () => {
+    chromeMcpMocks.takeChromeMcpSnapshot
+      .mockResolvedValueOnce({
+        id: "root-1",
+        role: "document",
+        name: "Example",
+        children: [{ id: "save-1", role: "button", name: "Save" }],
+      })
+      .mockResolvedValueOnce({
+        id: "root-2",
+        role: "document",
+        name: "Example",
+        children: [
+          { id: "save-2", role: "button", name: "Save" },
+          { id: "alert-2", role: "alert", name: "Required" },
+        ],
+      });
+    const handler = getSnapshotGetHandler();
+    const first = createBrowserRouteResponse();
+    const second = createBrowserRouteResponse();
+
+    await handler?.({ params: {}, query: { format: "ai" } }, first.res);
+    await handler?.({ params: {}, query: { format: "ai" } }, second.res);
+
+    const body = requireRecord(second.body, "second snapshot body");
+    expect(body.snapshot).not.toContain("[new]");
+    expect(body.newElements).toBeUndefined();
   });
 
   it("labels and returns only Chrome MCP refs inside the final snapshot budget", async () => {

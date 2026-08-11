@@ -77,6 +77,11 @@ type MessagePresentationAction =
       approvalKind: "exec" | "plugin";
       decision: "allow-once" | "allow-always" | "deny";
     }
+  | {
+      type: "question";
+      questionId: string;
+      optionValue: string;
+    }
   | { type: "url"; url: string }
   | {
       type: "web-app";
@@ -136,6 +141,16 @@ Button semantics:
   encode that action into a transport-private callback and resolve it through
   the approval service; they must not parse `/approve` command text or infer
   kind from the ID.
+- `action.type: "question"` identifies one choice for a live, runtime-authored
+  `ask_user` question. Like `approval`, this is an OpenClaw runtime action;
+  agents and plugins must not synthesize question IDs. Telegram, Discord, and
+  Slack map it to transport-private native callbacks and resolve the choice
+  through the Gateway. When the question becomes answered, expired, or
+  cancelled, those channels edit the delivered message, remove its actions,
+  and append the terminal status. WhatsApp, Signal, and iMessage render up to
+  four single-select choices as `1️⃣` through `4️⃣` reactions. Other question
+  shapes degrade to label text, and the user can answer with a plain-text
+  reply.
 - `action.type: "url"` opens a normal link.
 - `action.type: "web-app"` launches a channel-native web app. Set `url` for a
   URL-backed app or `widgetId` for an OpenClaw-hosted widget whose launch
@@ -416,6 +431,25 @@ const adapter: ChannelOutboundAdapter = {
 };
 ```
 
+When a capability depends on per-account configuration or the delivery's text
+funnel — for example Telegram only renders native tables on `richMessages`
+accounts and only on the markdown path — declare the optional
+`resolvePresentationCapabilities({ cfg, accountId, formatting })` hook next to
+the static object. Core resolves capabilities once per delivery and the hook
+takes precedence over the static declaration; keep the static object as the
+account-independent baseline.
+
+```ts
+const adapter: ChannelOutboundAdapter = {
+  presentationCapabilities: BASE_CAPABILITIES,
+  resolvePresentationCapabilities: ({ cfg, accountId, formatting }) => ({
+    ...BASE_CAPABILITIES,
+    tables: isRichAccount(cfg, accountId) && formatting?.parseMode !== "HTML",
+  }),
+  // ...
+};
+```
+
 Capability booleans describe what the renderer can make interactive. Optional
 `limits` describe the generic envelope core can adapt before calling the
 renderer:
@@ -489,6 +523,12 @@ plugins own native rendering and interaction handling.
 ## Degradation rules
 
 Presentation must be safe to send on limited channels.
+
+Producers that hand-author the plain rendering of the same facts can mark it
+with `presentationTextMode: "fallback"` on the reply payload. Channels that
+render the presentation's data blocks natively drop that text; when every
+`table` and `chart` block degrades and no interactive block remains, the
+authored text ships verbatim instead of the generic flatten below.
 
 Fallback text includes:
 
@@ -627,9 +667,8 @@ Non-deprecated helpers worth knowing:
 The legacy `InteractiveReply*` types and conversion helpers are marked
 `@deprecated` in the SDK:
 
-- `InteractiveReply`, `InteractiveReplyBlock`, `InteractiveReplyButton`,
-  `InteractiveReplyOption`, `InteractiveReplySelectBlock`, and
-  `InteractiveReplyTextBlock`
+- `InteractiveReply`, `InteractiveReplyBlock`, `InteractiveReplyButton`, and
+  `InteractiveReplyOption`
 - `normalizeInteractiveReply(...)`
 - `hasInteractiveReplyBlocks(...)`
 - `interactiveReplyToPresentation(...)`
@@ -645,8 +684,6 @@ them; send `presentation` and let core/channel adaptation handle rendering.
 
 Approval helpers also have presentation-first replacements:
 
-- use `buildApprovalPresentationFromActionDescriptors(...)` instead of
-  `buildApprovalInteractiveReplyFromActionDescriptors(...)`
 - use `buildApprovalPresentation(...)` instead of
   `buildApprovalInteractiveReply(...)`
 - use `buildExecApprovalPresentation(...)` instead of

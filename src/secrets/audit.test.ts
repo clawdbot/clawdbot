@@ -3,12 +3,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   resolveAuthProfileDatabasePath,
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { runSecretsAudit } from "./audit.js";
+import { writeSecretStoreEntry } from "./store/secret-store.js";
 
 type AuditFixture = {
   rootDir: string;
@@ -24,6 +27,7 @@ type AuditFixture = {
 
 const OPENAI_API_KEY_MARKER = "OPENAI_API_KEY"; // pragma: allowlist secret
 const MAX_AUDIT_MODELS_JSON_BYTES = 5 * 1024 * 1024;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function countNonEmptyLines(value: string): number {
   let count = 0;
@@ -219,6 +223,7 @@ describe("secrets audit", () => {
       await runSecretsAudit({ env: warmFixture.env });
     } finally {
       closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
       await fs.rm(warmFixture.rootDir, { recursive: true, force: true });
     }
   });
@@ -264,6 +269,7 @@ describe("secrets audit", () => {
 
   afterEach(async () => {
     closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
     await fs.rm(fixture.rootDir, { recursive: true, force: true });
   });
 
@@ -277,7 +283,52 @@ describe("secrets audit", () => {
     expectFindingCode(report, "PLAINTEXT_FOUND");
   });
 
-  it("does not mutate legacy auth.json during audit", async () => {
+  it("reports plaintext that duplicates the store while resolving store refs", async () => {
+    writeSecretStoreEntry({
+      scope: { kind: "team" },
+      name: "STORED_API_KEY",
+      value: "shared-store-value",
+      kind: "secret",
+      updatedBy: "test",
+      database: { env: fixture.env },
+    });
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          plaintext: {
+            baseUrl: "https://plaintext.example.test/v1",
+            api: "openai-completions",
+            apiKey: "shared-store-value",
+            models: [{ id: "fixture", name: "fixture" }],
+          },
+          referenced: {
+            baseUrl: "https://referenced.example.test/v1",
+            api: "openai-completions",
+            apiKey: { source: "store", provider: "default", id: "STORED_API_KEY" },
+            models: [{ id: "fixture", name: "fixture" }],
+          },
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(report.summary.storeResidueCount).toBe(1);
+    expect(report.findings.find((entry) => entry.code === "STORE_PLAINTEXT_RESIDUE")).toMatchObject(
+      {
+        jsonPath: "models.providers.plaintext.apiKey",
+        message: expect.stringContaining("STORED_API_KEY"),
+      },
+    );
+    expect(
+      report.findings.some(
+        (entry) =>
+          entry.code === "REF_UNRESOLVED" &&
+          entry.jsonPath === "models.providers.referenced.apiKey",
+      ),
+    ).toBe(false);
+  });
+
+  it("does not inspect or mutate legacy auth.json during audit", async () => {
     await writeJsonFile(fixture.authJsonPath, {
       openai: {
         type: "api_key",
@@ -287,17 +338,35 @@ describe("secrets audit", () => {
 
     const report = await runSecretsAudit({ env: fixture.env });
     expectFindingCode(report, "LEGACY_RESIDUE");
+    expect(report.filesScanned).not.toContain(fixture.authJsonPath);
     const authJsonStat = await fs.stat(fixture.authJsonPath);
     expect(authJsonStat.isFile()).toBe(true);
     await expectPathMissing(fixture.authStorePath);
   });
 
-  it("reports malformed sidecar JSON as findings instead of crashing", async () => {
+  it("ignores malformed legacy auth JSON instead of reading it", async () => {
     await fs.writeFile(fixture.authJsonPath, "{invalid-json", "utf8");
 
     const report = await runSecretsAudit({ env: fixture.env });
+    expectFindingCode(report, "LEGACY_RESIDUE");
     expectFindingFile(report, fixture.authJsonPath);
-    expectFindingCode(report, "REF_UNRESOLVED");
+  });
+
+  it("reports Doctor-created auth archives without reading their contents", async () => {
+    const archivePaths = [
+      `${fixture.authJsonPath}.migrated-2026-07-25T12-00-00.000Z-fake`,
+      `${fixture.authJsonPath}.sqlite-import.1753430400000.bak`,
+    ];
+    for (const archivePath of archivePaths) {
+      await fs.writeFile(archivePath, "opaque fake credential bytes", "utf8");
+    }
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expectFindingCode(report, "LEGACY_RESIDUE");
+    for (const archivePath of archivePaths) {
+      expectFindingFile(report, archivePath);
+      expect(report.filesScanned).not.toContain(archivePath);
+    }
   });
 
   it("skips exec ref resolution during audit unless explicitly allowed", async () => {
@@ -800,5 +869,75 @@ describe("secrets audit", () => {
           entry.jsonPath === "models.providers.openai.apiKey",
       ),
     ).toBe(true);
+  });
+
+  it("scans .env in legacy .clawdbot state directory via automatic fallback", async () => {
+    // Do NOT set OPENCLAW_STATE_DIR or OPENCLAW_CONFIG_PATH — rely on
+    // resolveStateDir's automatic legacy-directory fallback. A controlled
+    // HOME that contains only .clawdbot (no .openclaw) exercises the exact
+    // path the old resolveConfigDir call could not reach: resolveConfigDir
+    // always returns $HOME/.openclaw, so it would miss the .env inside
+    // .clawdbot.  resolveStateDir finds .clawdbot via its legacy-dir scan.
+    const homeDir = tempDirs.make("openclaw-secrets-audit-legacy-");
+    const legacyStateDir = path.join(homeDir, ".clawdbot");
+    const configPath = path.join(legacyStateDir, "openclaw.json");
+    const envPath = path.join(legacyStateDir, ".env");
+    const agentDir = path.join(legacyStateDir, "agents", "main", "agent");
+
+    await fs.mkdir(agentDir, { recursive: true });
+
+    const env = {
+      HOME: homeDir,
+      OPENAI_API_KEY: "env-openai-key", // pragma: allowlist secret
+      PATH: resolveRuntimePathEnv(),
+    };
+
+    await writeJsonFile(configPath, {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+
+    await fs.writeFile(
+      envPath,
+      "OPENAI_API_KEY=sk-legacy-plaintext\n", // pragma: allowlist secret
+      "utf8",
+    );
+
+    try {
+      const report = await runSecretsAudit({ env });
+      // Config-based key is ref'd from env, so no plaintext finding for config;
+      // but the .env file should be scanned and reported via the legacy fallback.
+      expect(report.status).toBe("findings");
+      expect(report.findings.some((f) => f.code === "PLAINTEXT_FOUND" && f.file === envPath)).toBe(
+        true,
+      );
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      await fs.rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("scans config and state .env files when the config path is external", async () => {
+    await seedAuditFixture(fixture);
+    const configDir = path.join(fixture.rootDir, "config");
+    const configPath = path.join(configDir, "openclaw.json");
+    const configEnvPath = path.join(configDir, ".env");
+    await fs.mkdir(configDir, { recursive: true });
+    await fs.copyFile(fixture.configPath, configPath);
+    await fs.copyFile(fixture.envPath, configEnvPath);
+    fixture.env.OPENCLAW_CONFIG_PATH = configPath;
+
+    const report = await runSecretsAudit({ env: fixture.env });
+
+    expectFindingFile(report, configEnvPath);
+    expectFindingFile(report, fixture.envPath);
   });
 });

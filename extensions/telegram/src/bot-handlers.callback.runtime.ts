@@ -18,6 +18,7 @@ import {
 } from "./bot-handlers.callback-errors.runtime.js";
 import { handleTelegramInteractiveCallback } from "./bot-handlers.callback-interactions.runtime.js";
 import { handleTelegramModelCallback } from "./bot-handlers.callback-model.runtime.js";
+import { handleTelegramQuestionCallback } from "./bot-handlers.callback-questions.runtime.js";
 import type { TelegramHandlerMessageRuntime } from "./bot-handlers.message.runtime.js";
 import { parseTelegramNativeCommandCallbackData } from "./bot-native-commands.js";
 import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
@@ -25,14 +26,33 @@ import {
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
-import { resolveTelegramForumFlag, withResolvedTelegramForumFlag } from "./bot/helpers.js";
+import {
+  resolveTelegramForumFlag,
+  resolveTelegramMessageThreadSpec,
+  withResolvedTelegramForumFlag,
+} from "./bot/helpers.js";
 import type { TelegramGetChat } from "./bot/types.js";
 import { getTelegramCallbackQueryAnswerPromise } from "./callback-query-answer-state.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
-import { parseTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
+import {
+  hasTelegramOpaqueCallbackPrefix,
+  parseTelegramOpaqueCallbackData,
+} from "./native-command-callback-data.js";
+import { isTelegramMessageNotModifiedError } from "./network-errors.js";
+import {
+  hasTelegramQuestionCallbackPrefix,
+  parseTelegramQuestionCallbackData,
+} from "./question-callback-data.js";
 
 export function registerTelegramCallbackQueryHandler(
-  { accountId, bot, runtime, telegramDeps, shouldSkipUpdate }: RegisterTelegramHandlerParams,
+  {
+    accountId,
+    bot,
+    runtime,
+    telegramDeps,
+    shouldSkipUpdate,
+    nativeCommandCallbackDispatcher,
+  }: RegisterTelegramHandlerParams,
   messageRuntime: TelegramHandlerMessageRuntime,
   authorizationRuntime: TelegramHandlerAuthorizationRuntime,
 ) {
@@ -47,26 +67,46 @@ export function registerTelegramCallbackQueryHandler(
 
   bot.on("callback_query", async (ctx) => {
     const callback = ctx.callbackQuery;
-    if (!callback || shouldSkipUpdate(ctx)) {
+    if (!callback) {
       return;
     }
-    const answerCallbackQuery = async () => {
+    let callbackAnswered = false;
+    const answerCallbackQuery = async (text?: string) => {
       // Callback answers prevent Telegram retries while the routed action runs.
       await withTelegramApiErrorLogging({
         operation: "answerCallbackQuery",
         runtime,
-        fn: () => bot.api.answerCallbackQuery(callback.id),
+        fn: () =>
+          text
+            ? bot.api.answerCallbackQuery(callback.id, { text })
+            : bot.api.answerCallbackQuery(callback.id),
       }).catch(() => {});
+      callbackAnswered = true;
     };
+    if (shouldSkipUpdate(ctx)) {
+      const earlyAnswerPromise = getTelegramCallbackQueryAnswerPromise(ctx);
+      if (earlyAnswerPromise) {
+        await earlyAnswerPromise.catch(async () => await answerCallbackQuery());
+      } else {
+        await answerCallbackQuery();
+      }
+      return;
+    }
+    const data = (callback.data ?? "").trim();
+    const typedQuestionCallback = parseTelegramQuestionCallbackData(data);
     const earlyAnswerPromise = getTelegramCallbackQueryAnswerPromise(ctx);
     if (earlyAnswerPromise) {
-      await earlyAnswerPromise.catch(answerCallbackQuery);
+      try {
+        await earlyAnswerPromise;
+        callbackAnswered = true;
+      } catch {
+        await answerCallbackQuery();
+      }
     } else {
       await answerCallbackQuery();
     }
 
     try {
-      const data = (callback.data ?? "").trim();
       const callbackMessage = callback.message;
       if (!data || !callbackMessage) {
         return;
@@ -75,30 +115,37 @@ export function registerTelegramCallbackQueryHandler(
       const isGroup =
         callbackMessage.chat.type === "group" || callbackMessage.chat.type === "supergroup";
       const nativeCallbackCommand = parseTelegramNativeCommandCallbackData(data);
+      const hasReservedOpaquePrefix = hasTelegramOpaqueCallbackPrefix(data);
       const opaqueCallbackData = parseTelegramOpaqueCallbackData(data);
       const genericCallbackText = data.startsWith("/") ? data : `callback_data: ${data}`;
       const callbackCommandText =
         nativeCallbackCommand ?? (opaqueCallbackData ? "" : genericCallbackText);
       const hasReservedApprovalPrefix = hasTelegramApprovalCallbackPrefix(data);
+      const hasReservedQuestionPrefix = hasTelegramQuestionCallbackPrefix(data);
       const typedApprovalCallback = parseTelegramApprovalCallbackData(data);
       const legacyApprovalCallback = parseExecApprovalCommandText(
         nativeCallbackCommand ?? (opaqueCallbackData ? "" : data),
       );
       const isApprovalCallback = hasReservedApprovalPrefix || legacyApprovalCallback !== null;
+      const isRuntimeControlCallback = isApprovalCallback || hasReservedQuestionPrefix;
       const authorizationCfg = telegramDeps.getRuntimeConfig();
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg: authorizationCfg,
         accountId,
       });
-      // Approval controls retain their kind-specific authorization after capability changes.
-      if (!isApprovalCallback) {
-        if (
-          inlineButtonsScope === "off" ||
-          (inlineButtonsScope === "dm" && isGroup) ||
-          (inlineButtonsScope === "group" && !isGroup)
-        ) {
-          return;
-        }
+      const inlineButtonsUnavailable =
+        inlineButtonsScope === "off" ||
+        (inlineButtonsScope === "dm" && isGroup) ||
+        (inlineButtonsScope === "group" && !isGroup);
+      // Runtime controls retain their authorization after inline-button capability changes.
+      // Stale typed controls cross this gate only to render their terminal result.
+      if (
+        !isRuntimeControlCallback &&
+        inlineButtonsUnavailable &&
+        !nativeCallbackCommand &&
+        !hasReservedOpaquePrefix
+      ) {
+        return;
       }
 
       const messageThreadId = callbackMessage.message_thread_id;
@@ -116,9 +163,8 @@ export function registerTelegramCallbackQueryHandler(
         cfg: authorizationCfg,
         chatId,
         isGroup,
-        isForum,
         senderId,
-        messageThreadId,
+        threadSpec: resolveTelegramMessageThreadSpec(callbackMessage, isForum),
       });
       const { resolvedThreadId, dmThreadId, storeAllowFrom, groupConfig } = eventAuthContext;
       const requireTopic = (groupConfig as { requireTopic?: boolean } | undefined)?.requireTopic;
@@ -128,8 +174,52 @@ export function registerTelegramCallbackQueryHandler(
         );
         return;
       }
-      const authorizationMode: TelegramEventAuthorizationMode =
-        !isGroup || (!isApprovalCallback && inlineButtonsScope === "allowlist")
+      const actions = createTelegramCallbackMessageActions({
+        bot,
+        callbackMessage,
+        isForum,
+      });
+      const clearRoutedCallbackButtons = async () => {
+        try {
+          await actions.clearCallbackButtons();
+        } catch (editErr) {
+          if (
+            !isTelegramMessageNotModifiedError(editErr) &&
+            !isPermanentTelegramCallbackEditError(editErr)
+          ) {
+            throw new TelegramRetryableCallbackError(editErr);
+          }
+        }
+      };
+      const terminalizeUnavailableCallback = async () => {
+        logVerbose("telegram: typed callback unavailable (handler missing or payload invalid)");
+        await clearRoutedCallbackButtons();
+        await actions.replyToCallbackChat("This action is no longer available.");
+      };
+
+      if (
+        inlineButtonsUnavailable &&
+        ((nativeCallbackCommand && !legacyApprovalCallback) || hasReservedOpaquePrefix)
+      ) {
+        await terminalizeUnavailableCallback();
+        return;
+      }
+      if (nativeCallbackCommand && nativeCommandCallbackDispatcher) {
+        const dispatch = await nativeCommandCallbackDispatcher({
+          botUser: ctx.me,
+          callbackQuery: callback,
+          commandText: nativeCallbackCommand,
+        });
+        if (dispatch.handled) {
+          if (dispatch.clearButtons) {
+            await clearRoutedCallbackButtons();
+          }
+          return;
+        }
+      }
+      const authorizationMode: TelegramEventAuthorizationMode = hasReservedQuestionPrefix
+        ? "callback-runtime-allowlist"
+        : !isGroup || (!isRuntimeControlCallback && inlineButtonsScope === "allowlist")
           ? "callback-allowlist"
           : "callback-scope";
       const senderAuthorization = await authorizeTelegramEventSender({
@@ -149,12 +239,6 @@ export function registerTelegramCallbackQueryHandler(
       const callbackConversationId =
         callbackThreadId != null ? `${chatId}:topic:${callbackThreadId}` : String(chatId);
       const runtimeCfg = telegramDeps.getRuntimeConfig();
-      const actions = createTelegramCallbackMessageActions({
-        bot,
-        callbackMessage,
-        isGroup,
-        isForum,
-      });
       const approvalRuntime = createTelegramCallbackApprovalRuntime({
         accountId,
         telegramDeps,
@@ -170,9 +254,25 @@ export function registerTelegramCallbackQueryHandler(
           senderUsername,
           context: eventAuthContext,
         });
-
       if (typedApprovalCallback) {
         await approvalRuntime.handleCanonical(typedApprovalCallback);
+        return;
+      }
+      if (typedQuestionCallback) {
+        await handleTelegramQuestionCallback({
+          callback: typedQuestionCallback,
+          cfg: runtimeCfg,
+          senderId,
+          feedback: async (text, terminal) => {
+            if (terminal) {
+              await actions.clearCallbackButtons().catch(() => {});
+            }
+            await actions.replyToCallbackChat(text);
+          },
+        });
+        return;
+      }
+      if (hasReservedQuestionPrefix) {
         return;
       }
       if (hasReservedApprovalPrefix) {
@@ -180,7 +280,9 @@ export function registerTelegramCallbackQueryHandler(
         return;
       }
       if (
-        await handleTelegramInteractiveCallback({
+        !nativeCallbackCommand &&
+        !inlineButtonsUnavailable &&
+        (await handleTelegramInteractiveCallback({
           accountId,
           callback,
           ctx,
@@ -197,7 +299,7 @@ export function registerTelegramCallbackQueryHandler(
           actions,
           messageRuntime,
           authorizeCallback,
-        })
+        }))
       ) {
         return;
       }
@@ -205,7 +307,8 @@ export function registerTelegramCallbackQueryHandler(
         await approvalRuntime.handleLegacy(legacyApprovalCallback);
         return;
       }
-      if (opaqueCallbackData) {
+      if (hasReservedOpaquePrefix) {
+        await terminalizeUnavailableCallback();
         return;
       }
       if (
@@ -228,6 +331,11 @@ export function registerTelegramCallbackQueryHandler(
         return;
       }
 
+      const hasCallbackInlineKeyboard =
+        (callbackMessage.reply_markup?.inline_keyboard?.length ?? 0) > 0;
+      if (hasCallbackInlineKeyboard) {
+        await clearRoutedCallbackButtons();
+      }
       const syntheticMessage = buildSyntheticTextMessage({
         base: withResolvedTelegramForumFlag(callbackMessage, isForum),
         from: callback.from,
@@ -257,6 +365,10 @@ export function registerTelegramCallbackQueryHandler(
       runtime.error?.(danger(`callback handler failed: ${String(err)}`));
       if (isTelegramSpooledReplayUpdate(ctx.update)) {
         recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: err });
+      }
+    } finally {
+      if (typedQuestionCallback && !callbackAnswered) {
+        await answerCallbackQuery();
       }
     }
   });

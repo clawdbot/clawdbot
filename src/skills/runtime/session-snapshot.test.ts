@@ -34,8 +34,8 @@ const {
   ),
 }));
 
-vi.mock("../loading/workspace.js", () => ({
-  buildWorkspaceSkillSnapshot: buildWorkspaceSkillSnapshotMock,
+vi.mock("../loading/workspace-skill-prompt.js", () => ({
+  buildSkillSnapshot: buildWorkspaceSkillSnapshotMock,
 }));
 
 vi.mock("./refresh.js", () => ({
@@ -269,5 +269,20 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
       "(buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<\n        [string, { snapshotVersion?: number }]\n      >)[0] test invariant",
     );
     expect(snapshotParams.snapshotVersion).toBe(0);
+  });
+
+  it("refreshes snapshots from before config-key skill identities", () => {
+    shouldRefreshSnapshotForVersionMock.mockReturnValue(false);
+    const result = resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir: TEST_WORKSPACE_DIR,
+      config: {},
+      existingSnapshot: {
+        ...strippedSnapshot(),
+        promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION - 1,
+      },
+    });
+
+    expect(result.shouldRefresh).toBe(true);
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
   });
 });

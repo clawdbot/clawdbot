@@ -108,54 +108,21 @@ jobs:
     if: needs.authorize_actor.outputs.authorized == 'true'
     runs-on: ubuntu-24.04
     outputs:
-      candidate_revision: ${{ steps.validate.outputs.candidate_revision }}
+      candidate_revision: ${{ steps.validate.outputs.candidate-revision }}
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           fetch-depth: 0
 
       - name: Validate ref is trusted
         id: validate
+        uses: ./.github/actions/mantis-validate-trusted-ref
         env:
           GH_TOKEN: ${{ github.token }}
-          CANDIDATE_REF: ${{ inputs.candidate_ref }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-
-          revision="$(git rev-parse "${CANDIDATE_REF}^{commit}")"
-          reason=""
-          if git merge-base --is-ancestor "$revision" refs/remotes/origin/main; then
-            reason="main-ancestor"
-          elif git tag --points-at "$revision" | grep -Eq '^v'; then
-            reason="release-tag"
-          else
-            pr_head_count="$(
-              gh api \
-                -H "Accept: application/vnd.github+json" \
-                "repos/${GITHUB_REPOSITORY}/commits/${revision}/pulls" \
-                --jq '[.[] | select(.state == "open" and .head.repo.full_name == "'"${GITHUB_REPOSITORY}"'" and .head.sha == "'"${revision}"'")] | length'
-            )"
-            if [[ "$pr_head_count" != "0" ]]; then
-              reason="open-pr-head"
-            fi
-          fi
-
-          if [[ -z "$reason" ]]; then
-            echo "Candidate ref '${CANDIDATE_REF}' resolved to ${revision}, which is not trusted for this secret-bearing Mantis run." >&2
-            exit 1
-          fi
-
-          echo "candidate_revision=${revision}" >> "$GITHUB_OUTPUT"
-          {
-            echo "candidate: \`${CANDIDATE_REF}\`"
-            echo "candidate SHA: \`${revision}\`"
-            echo "candidate trust reason: \`${reason}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+        with:
+          candidate-ref: ${{ inputs.candidate_ref }}
 
   run_slack_desktop:
     name: Run Slack desktop smoke
@@ -165,7 +132,7 @@ jobs:
     environment: qa-live-shared
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -180,7 +147,7 @@ jobs:
         run: pnpm build
 
       - name: Cache Mantis candidate pnpm store
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             ~/.local/share/pnpm/store
@@ -190,7 +157,7 @@ jobs:
             mantis-slack-pnpm-${{ runner.os }}-${{ env.NODE_VERSION }}-
 
       - name: Setup Go for Crabbox CLI
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: "1.26.x"
           cache: false

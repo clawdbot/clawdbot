@@ -1,14 +1,10 @@
 // Telegram plugin module coordinates one inbound message dispatch lifecycle.
-import {
-  createOutboundPayloadPlan,
-  projectOutboundPayloadPlanForDelivery,
-} from "openclaw/plugin-sdk/channel-outbound";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.js";
 import { createTelegramDeliveryController } from "./bot-message-dispatch-delivery.js";
 import { createTelegramDraftController } from "./bot-message-dispatch-draft.js";
-import { createTelegramReplyFenceController } from "./bot-message-dispatch-fence.js";
 import { createTelegramProgressController } from "./bot-message-dispatch-progress.js";
 import { createTelegramReplyDelivery } from "./bot-message-dispatch-reply.js";
 import {
@@ -19,7 +15,7 @@ import { createTelegramDispatchStatus } from "./bot-message-dispatch-status.js";
 import { runTelegramDispatchTurn } from "./bot-message-dispatch-turn.js";
 import {
   findModelInCatalog,
-  loadModelCatalog,
+  loadPreparedModelCatalog,
   modelSupportsVision,
   resolveAgentDir,
   resolveDefaultModelForAgent,
@@ -52,7 +48,12 @@ async function resolveStickerVisionSupport(
   agentId: string,
 ) {
   try {
-    const catalog = await loadModelCatalog({ config: cfg });
+    const catalog = await loadPreparedModelCatalog({
+      config: cfg,
+      agentId,
+      agentDir: resolveAgentDir(cfg, agentId),
+      readOnly: true,
+    });
     const defaultModel = resolveDefaultModelForAgent({ cfg, agentId });
     const entry = findModelInCatalog(catalog, defaultModel.provider, defaultModel.model);
     return entry ? modelSupportsVision(entry) : false;
@@ -61,20 +62,23 @@ async function resolveStickerVisionSupport(
   }
 }
 
-function includeStickerDescription(body: string | undefined, formattedDescription: string): string {
-  if (!body) {
-    return formattedDescription;
+function includeStickerDescription(params: {
+  body: string | undefined;
+  formattedDescription: string;
+}): string {
+  if (!params.body) {
+    return params.formattedDescription;
   }
-  const current = body.trim();
-  if (!current || current === "<media:image>") {
-    return formattedDescription;
+  const current = params.body.trim();
+  if (!current) {
+    return params.formattedDescription;
   }
   // Cached descriptions can already be present from inbound context construction.
   // Keep that body intact so captions, forwarded text, and supplemental context survive.
-  if (body.includes(formattedDescription)) {
-    return body;
+  if (params.body.includes(params.formattedDescription)) {
+    return params.body;
   }
-  return `${formattedDescription}\n${body}`;
+  return `${params.formattedDescription}\n${params.body}`;
 }
 
 function resolveTelegramQuoteContext(params: {
@@ -158,7 +162,13 @@ async function prepareTelegramSticker(params: {
 }) {
   const { context } = params;
   const sticker = context.ctxPayload.Sticker;
-  if (!sticker?.fileId || !sticker.fileUniqueId || !context.ctxPayload.MediaPath) {
+  const stickerFact = context.ctxPayload.media?.find((media) => media.kind === "sticker");
+  const stickerPath =
+    stickerFact?.path ??
+    (!stickerFact && context.ctxPayload.StickerMediaIncluded
+      ? context.ctxPayload.media?.[0]?.path
+      : undefined);
+  if (!sticker?.fileId || !sticker.fileUniqueId || !stickerPath) {
     return;
   }
   const agentDir = resolveAgentDir(params.cfg, context.route.agentId);
@@ -169,7 +179,7 @@ async function prepareTelegramSticker(params: {
   const description =
     sticker.cachedDescription ||
     (await describeStickerImage({
-      imagePath: context.ctxPayload.MediaPath,
+      imagePath: stickerPath,
       cfg: params.cfg,
       agentDir,
       agentId: context.route.agentId,
@@ -183,14 +193,19 @@ async function prepareTelegramSticker(params: {
   const formattedDescription = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}] ${description}`;
   sticker.cachedDescription = description;
   if (!stickerSupportsVision) {
-    context.ctxPayload.Body = includeStickerDescription(
-      context.ctxPayload.Body,
+    const isCaptionlessSticker =
+      !context.ctxPayload.RawBody?.trim() && context.ctxPayload.StickerMediaIncluded === true;
+    context.ctxPayload.Body = includeStickerDescription({
+      body: context.ctxPayload.Body,
       formattedDescription,
-    );
-    context.ctxPayload.BodyForAgent = includeStickerDescription(
-      context.ctxPayload.BodyForAgent,
-      formattedDescription,
-    );
+    });
+    context.ctxPayload.BodyForAgent =
+      isCaptionlessSticker && !context.ctxPayload.BodyForAgent?.trim()
+        ? formattedDescription
+        : includeStickerDescription({
+            body: context.ctxPayload.BodyForAgent,
+            formattedDescription,
+          });
     context.ctxPayload.SkipStickerMediaUnderstanding = true;
   }
   cacheSticker({
@@ -272,10 +287,7 @@ export const dispatchTelegramMessage = async ({
   opts,
   retryDispatchErrors = false,
   suppressFailureFallback = false,
-  onTurnAdopted,
-  onTurnDeferred,
-  onTurnAbandoned,
-  turnAbortSignal,
+  turnAdoptionLifecycle,
 }: DispatchTelegramMessageParams): Promise<TelegramDispatchResult> => {
   const dispatchStartedAt = Date.now();
   const dispatchContext = resolveDispatchTelegramContext({ context });
@@ -283,7 +295,7 @@ export const dispatchTelegramMessage = async ({
     injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
   const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg, telegramDeps });
   const isRoomEvent = dispatchContext.ctxPayload.InboundEventKind === "room_event";
-  const status = createTelegramDispatchStatus({ cfg, context: dispatchContext });
+  const status = createTelegramDispatchStatus({ context: dispatchContext });
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "telegram",
@@ -299,11 +311,19 @@ export const dispatchTelegramMessage = async ({
   const forceBlockStreamingForReasoning =
     resolvedReasoningLevel === "on" && streamMode !== "progress";
   const quote = resolveTelegramQuoteContext({ context: dispatchContext, replyToMode });
-  // Controllers retain this callback but cannot run it before turn dispatch.
-  // Acquire the fence afterward so controller setup failures claim no ownership.
-  const isDispatchSuperseded = () => fence.isSuperseded();
+  // Draft messages are provider-visible before final modifiers run. Suppress them when a hook
+  // can rewrite or cancel, or the original payload can flash before the normal delivery gate.
+  const hookRunner = getGlobalHookRunner();
+  const allowProviderPreview = !(
+    (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
+    (hookRunner?.hasHooks("message_sending") ?? false)
+  );
+  // Pre-adoption abort is drain-owned via turnAdoptionLifecycle.abortSignal.
+  const isDispatchSuperseded = () => turnAdoptionLifecycle?.abortSignal?.aborted === true;
+  const dispatchGeneration = 0;
   const draft = createTelegramDraftController({
     accountId: dispatchContext.route.accountId,
+    allowProviderPreview,
     bot,
     cfg,
     chatId: dispatchContext.chatId,
@@ -360,6 +380,7 @@ export const dispatchTelegramMessage = async ({
   });
   const state: TelegramDispatchTurnState = {
     queuedFinal: false,
+    noVisibleReplyFallbackEligible: false,
     suppressSilentReplyFallback: false,
     hadErrorReplyFailureOrSkip: false,
   };
@@ -369,7 +390,7 @@ export const dispatchTelegramMessage = async ({
     delivery,
     draft,
     fence: {
-      generation: () => fence.generation(),
+      generation: () => dispatchGeneration,
       isSuperseded: isDispatchSuperseded,
     },
     progress,
@@ -386,13 +407,6 @@ export const dispatchTelegramMessage = async ({
     !dispatchContext.isGroup &&
     dispatchContext.threadSpec.scope === "dm" &&
     dispatchContext.threadSpec.id != null;
-  const fence = createTelegramReplyFenceController({
-    context: dispatchContext,
-    onTurnAdopted,
-    onTurnDeferred,
-    onTurnAbandoned,
-    turnAbortSignal,
-  });
   try {
     await prepareTelegramSticker({ cfg, context: dispatchContext });
     if (isDmTopic) {
@@ -418,7 +432,8 @@ export const dispatchTelegramMessage = async ({
         context: dispatchContext,
         delivery,
         draft,
-        fence,
+        turnAdoptionLifecycle,
+        isSuperseded: isDispatchSuperseded,
         progress,
         reply,
         state,
@@ -439,20 +454,19 @@ export const dispatchTelegramMessage = async ({
         state.dispatchError ??= err;
         runtime.error?.(danger(`telegram terminal block delivery failed: ${String(err)}`));
       }
-      await draft.cleanup(fence.isSuperseded());
+      await draft.cleanup(isDispatchSuperseded());
       if (
         streamMode === "progress" &&
         progress.sawProgressFinal() &&
         !state.dispatchError &&
         !state.hadErrorReplyFailureOrSkip &&
-        !fence.isSuperseded()
+        !isDispatchSuperseded()
       ) {
         await delivery.deliverProgressCollapseSummary();
       }
     }
   } finally {
-    dispatchWasSuperseded = fence.isSuperseded();
-    fence.release();
+    dispatchWasSuperseded = isDispatchSuperseded();
   }
 
   if (turnDispatched === false) {
@@ -460,9 +474,7 @@ export const dispatchTelegramMessage = async ({
   }
   if (dispatchWasSuperseded) {
     if (status.controller) {
-      status.finalizeInBackground({ outcome: "done", hasFinalResponse: true }, "finalize");
-    } else {
-      status.removeAck();
+      status.finalizeInBackground({ outcome: "done" }, "finalize");
     }
     return { kind: "completed" };
   }
@@ -474,8 +486,8 @@ export const dispatchTelegramMessage = async ({
     !suppressFailureFallback &&
     !progress.finalAnswerDelivered() &&
     (state.dispatchError ||
-      deliverySummary.skippedNonSilent > 0 ||
-      deliverySummary.failedNonSilent > 0);
+      deliverySummary.failedNonSilent > 0 ||
+      (deliverySummary.skippedNonSilent > 0 && !state.suppressSilentReplyFallback));
   if (shouldSendFailureFallback) {
     const fallbackText = state.dispatchError
       ? "Something went wrong while processing your request. Please try again."
@@ -494,25 +506,12 @@ export const dispatchTelegramMessage = async ({
     !deliverySummary.delivered &&
     !state.suppressSilentReplyFallback &&
     !state.queuedFinal &&
-    dispatchContext.isGroup
+    state.noVisibleReplyFallbackEligible
   ) {
-    const policySessionKey =
-      dispatchContext.ctxPayload.CommandSource === "native"
-        ? (dispatchContext.ctxPayload.CommandTargetSessionKey ??
-          dispatchContext.ctxPayload.SessionKey)
-        : dispatchContext.ctxPayload.SessionKey;
-    const silentReplyFallback = projectOutboundPayloadPlanForDelivery(
-      createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
-        cfg,
-        sessionKey: policySessionKey,
-        surface: "telegram",
-      }),
-    );
-    if (silentReplyFallback.length > 0) {
-      sentFallback = (await delivery.deliverFallback(silentReplyFallback, false)).delivered;
-    }
-    silentReplyDispatchLogger.debug("telegram turn ended without visible final response", {
-      hasSessionKey: Boolean(policySessionKey),
+    sentFallback = (await delivery.deliverFallback([{ text: EMPTY_RESPONSE_FALLBACK }], false))
+      .delivered;
+    silentReplyDispatchLogger.debug("telegram recovered eligible turn without visible response", {
+      hasSessionKey: Boolean(dispatchContext.ctxPayload.SessionKey),
       hasChatId: dispatchContext.chatId != null,
       queuedFinal: state.queuedFinal,
       sentFallback,
@@ -541,7 +540,7 @@ export const dispatchTelegramMessage = async ({
       : null);
 
   if (status.controller && !hasVisibleResponse) {
-    status.finalizeInBackground({ outcome: "error", hasFinalResponse: false }, "error finalize");
+    status.finalizeInBackground({ outcome: "error" }, "error finalize");
   }
   const shouldReturnRetryableDispatchFailure =
     retryDispatchErrors &&
@@ -568,12 +567,9 @@ export const dispatchTelegramMessage = async ({
           !progress.finalAnswerDelivered() && (state.dispatchError != null || sentFallback)
             ? "error"
             : "done",
-        hasFinalResponse: true,
       },
       "finalize",
     );
-  } else {
-    status.removeAck();
   }
   return { kind: "completed" };
 };

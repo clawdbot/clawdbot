@@ -96,11 +96,22 @@ export function verifyChain(
   if (expected?.length !== undefined && entries.length !== expected.length) {
     return false;
   }
-  let previous = "";
+  return verifyChainSegment(entries, {
+    previousHash: "",
+    previousSeq: 0,
+    ...(expected?.head === undefined ? {} : { head: expected.head }),
+  });
+}
+
+export function verifyChainSegment(
+  entries: readonly AuditEntry[],
+  expected: { previousHash: string; previousSeq: number; head?: string },
+): boolean {
+  let previous = expected.previousHash;
   for (let index = 0; index < entries.length; index++) {
     const entry = entries[index]!;
     if (
-      entry.event.seq !== index + 1 ||
+      entry.event.seq !== expected.previousSeq + index + 1 ||
       entry.prevHash !== previous ||
       entry.entryHash !== hashEntry(previous, entry.event)
     ) {
@@ -108,7 +119,7 @@ export function verifyChain(
     }
     previous = entry.entryHash;
   }
-  return expected?.head === undefined || previous === expected.head;
+  return expected.head === undefined || previous === expected.head;
 }
 
 export function signCheckpoint(

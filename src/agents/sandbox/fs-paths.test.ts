@@ -1,8 +1,10 @@
 // Sandbox filesystem path tests cover bind parsing, host/container path mapping,
 // and writable-root detection.
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   buildSandboxFsMounts,
   hasSandboxBindContainerPathAliases,
@@ -12,6 +14,8 @@ import {
 } from "./fs-paths.js";
 import { createSandboxTestContext } from "./test-fixtures.js";
 import type { SandboxContext } from "./types.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createSandbox(overrides?: Partial<SandboxContext>): SandboxContext {
   return createSandboxTestContext({ overrides });
@@ -52,7 +56,9 @@ describe("sandbox bind mounts", () => {
   });
 
   it("detects bind mounts whose container path differs from the host path", () => {
-    expect(hasSandboxBindContainerPathAliases(["/tmp/data:/tmp/data:rw"])).toBe(false);
+    expect(hasSandboxBindContainerPathAliases(["/tmp/data:/tmp/data:rw"])).toBe(
+      process.platform === "win32",
+    );
     expect(hasSandboxBindContainerPathAliases(["/tmp/data:/data:rw"])).toBe(true);
     expect(hasSandboxBindContainerPathAliases(["invalid-bind"])).toBe(false);
   });
@@ -177,11 +183,36 @@ describe("resolveSandboxFsPathWithMounts", () => {
     expect(thrown).toBeInstanceOf(Error);
     const message = (thrown as Error).message;
     expect(message).toContain(
-      "Path escapes sandbox root (~/workspace-coder; container root /workspace): /tmp/outside",
+      `Path escapes sandbox root (~${path.sep}workspace-coder; container root /workspace): /tmp/outside`,
     );
     expect(message).toContain("Use a path under /workspace/ instead.");
     expect(message).not.toContain(os.homedir());
   });
+
+  it.skipIf(process.platform !== "win32")(
+    "does not expose real Windows home casing aliases in escape errors",
+    () => {
+      const homeAlias = os.homedir().toUpperCase();
+      expect(fs.statSync(homeAlias).isDirectory()).toBe(true);
+      const workspaceDir = path.join(homeAlias, "workspace-coder");
+      const sandbox = createSandbox({
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+      });
+
+      expect(() =>
+        resolveSandboxFsPathWithMounts({
+          filePath: "C:\\outside\\secret.txt",
+          cwd: sandbox.workspaceDir,
+          defaultWorkspaceRoot: sandbox.workspaceDir,
+          defaultContainerRoot: sandbox.containerWorkdir,
+          mounts: buildSandboxFsMounts(sandbox),
+        }),
+      ).toThrow(
+        `Path escapes sandbox root (~${path.sep}workspace-coder; container root /workspace)`,
+      );
+    },
+  );
 
   it("prefers custom bind mounts over default workspace mount at /workspace", () => {
     const sandbox = createSandbox({
@@ -201,5 +232,37 @@ describe("resolveSandboxFsPathWithMounts", () => {
 
     expect(resolved.hostPath).toBe(path.join(path.resolve("/tmp/override"), "docs", "AGENTS.md"));
     expect(resolved.writable).toBe(false);
+  });
+
+  it("omits binds that collide with protected skill mounts", () => {
+    const workspaceDir = tempDirs.make("openclaw-fs-mounts-");
+    const customRoot = tempDirs.make("openclaw-fs-mounts-");
+    fs.mkdirSync(path.join(workspaceDir, "skills", "demo"), { recursive: true });
+    const sandbox = createSandbox({
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      containerWorkdir: "/workspace/.",
+      docker: {
+        ...createSandbox().docker,
+        workdir: "/workspace/.",
+        binds: [`${customRoot}:/workspace/skills:rw`],
+      },
+    });
+
+    const mounts = buildSandboxFsMounts(sandbox);
+
+    expect(mounts).toContainEqual({
+      hostRoot: path.join(workspaceDir, "skills"),
+      containerRoot: "/workspace/skills",
+      writable: false,
+      source: "protectedSkill",
+    });
+    expect(mounts).not.toContainEqual(
+      expect.objectContaining({
+        hostRoot: customRoot,
+        containerRoot: "/workspace/skills",
+        source: "bind",
+      }),
+    );
   });
 });

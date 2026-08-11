@@ -21,5 +21,6 @@ export function recordCodexDynamicToolResult(
       response.sideEffectEvidence === true ||
       response.terminalResolution?.sideEffectEvidence === true,
     contentItems: protocolResponse.contentItems,
+    details: response.transcriptDetails,
   });
 }

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { describeRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import { resolveUserPath } from "../utils.js";
 import { buildPluginApi } from "./api-builder.js";
 import {
@@ -17,7 +17,7 @@ import {
   createPluginModuleLoader,
   formatBundledChannelWrongLoaderError,
   resolvePluginModuleExport,
-  runPluginRegisterSync,
+  runPluginRegisterSyncInRegistry,
 } from "./loader-module-runtime.js";
 import {
   formatAutoEnabledActivationReason,
@@ -38,7 +38,7 @@ import {
 } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import { withProfile } from "./plugin-load-profile.js";
-import { createPluginRegistrationTransaction } from "./plugin-registration-transaction.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { createPluginIdScopeSet } from "./plugin-scope.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -62,7 +62,7 @@ export async function loadOpenClawPluginCliRegistry(
     devSourceRoot: context.devSourceRoot,
     pluginSdkResolution: options.pluginSdkResolution,
   });
-  const { registry, registerCli } = createPluginRegistry({
+  const { registry, registerCli, rollbackPluginGlobalSideEffects } = createPluginRegistry({
     logger,
     runtime: {} as PluginRuntime,
     coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
@@ -71,7 +71,7 @@ export async function loadOpenClawPluginCliRegistry(
     }),
     activateGlobalSideEffects: false,
   });
-  const { manifestRegistry, orderedCandidates, manifestByRoot } = resolvePluginLoadDiscovery({
+  const { manifestRegistry, orderedCandidates, manifestBySource } = resolvePluginLoadDiscovery({
     options,
     context,
     diagnostics: registry.diagnostics,
@@ -92,11 +92,12 @@ export async function loadOpenClawPluginCliRegistry(
   });
 
   for (const candidate of orderedCandidates) {
-    const manifestRecord = manifestByRoot.get(candidate.rootDir);
+    const manifestRecord = manifestBySource.get(candidate.source);
     if (!manifestRecord) {
       continue;
     }
     const pluginId = manifestRecord.id;
+    const policyId = normalizePluginPolicyId(pluginId);
     if (
       !matchesScopedPluginOrDreamingSidecar({
         onlyPluginIdSet,
@@ -153,7 +154,7 @@ export async function loadOpenClawPluginCliRegistry(
           enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
           activationSource: context.activationSource,
         });
-    const entry = context.normalized.entries[pluginId];
+    const entry = context.normalized.entries[policyId];
     const record = createManifestPluginRecord({
       candidate,
       manifestRecord,
@@ -222,7 +223,14 @@ export async function loadOpenClawPluginCliRegistry(
       skipLexicalRootCheck: true,
     });
     if (!opened.ok) {
-      pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
+      pushPluginLoadError(
+        describeRootFileOpenFailure({
+          failure: opened,
+          subject: "plugin entry path",
+          boundaryLabel: "plugin root",
+          filePath: sourceForCliMetadata,
+        }),
+      );
       continue;
     }
     const safeSource = opened.path;
@@ -321,16 +329,14 @@ export async function loadOpenClawPluginCliRegistry(
         registerCli: (registrar, opts) => registerCli(record, registrar, opts),
       },
     });
-    const transaction = createPluginRegistrationTransaction({ registry });
     try {
       withProfile({ pluginId: record.id, source: record.source }, "cli-metadata:register", () =>
-        runPluginRegisterSync(register, api),
+        runPluginRegisterSyncInRegistry(register, api, registry, record.id),
       );
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
-      transaction.commit({ activate: true });
     } catch (error) {
-      transaction.rollback();
+      rollbackPluginGlobalSideEffects(record.id, record);
       recordPluginError({
         logger,
         registry,

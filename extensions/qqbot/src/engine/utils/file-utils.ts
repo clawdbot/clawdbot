@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -9,11 +10,10 @@ import {
   readRegularFile,
   statRegularFileSync,
 } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getPlatformAdapter } from "../adapter/index.js";
 import type { SsrfPolicyConfig } from "../adapter/types.js";
 import { MediaFileType } from "../types.js";
-import { formatErrorMessage } from "./format.js";
-import { normalizeOptionalString } from "./string-normalize.js";
 
 /** Maximum file size accepted by the QQ Bot one-shot upload API (base64 direct). */
 export const MAX_UPLOAD_SIZE = 20 * 1024 * 1024;

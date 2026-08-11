@@ -6,8 +6,9 @@ import type { DatabaseSync } from "node:sqlite";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import * as tar from "tar";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
+import { isTransientSqliteBackupPath } from "../infra/backup-volatile-filter.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { isRecord, resolveUserPath } from "../utils.js";
@@ -18,9 +19,6 @@ const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_SQLITE_SNAPSHOT_EXTRACT_BYTES = 64 * 1024 * 1024 * 1024;
 const SQLITE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024;
 const SQLITE_SNAPSHOT_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
-const SQLITE_BACKUP_EXCLUDED_SUFFIXES = [".reindex-lock.sqlite"] as const;
-const SQLITE_BACKUP_REINDEX_TRANSIENT_PATTERN =
-  /\.sqlite\.(?:backup|memory-reindex|tmp)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 type BackupManifestAsset = {
   kind: string;
@@ -400,9 +398,7 @@ function isSqliteSnapshotRelativePath(relativePath: string): boolean {
     return true;
   }
   return (
-    !portablePath.split("/").includes("node_modules") &&
-    !SQLITE_BACKUP_REINDEX_TRANSIENT_PATTERN.test(relativePath) &&
-    !SQLITE_BACKUP_EXCLUDED_SUFFIXES.some((suffix) => portablePath.endsWith(suffix))
+    !portablePath.split("/").includes("node_modules") && !isTransientSqliteBackupPath(portablePath)
   );
 }
 
@@ -690,8 +686,7 @@ async function verifySqliteSnapshots(params: {
           // snapshot shape, but only canonical schemas are safe to interpret.
           continue;
         }
-        const sqlite = requireNodeSqlite();
-        database = new sqlite.DatabaseSync(extractedPath, {
+        database = openNodeSqliteDatabase(extractedPath, {
           allowExtension: true,
           readOnly: true,
         });

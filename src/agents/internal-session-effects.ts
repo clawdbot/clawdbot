@@ -7,9 +7,10 @@ import {
   replaceTranscriptEvents,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import { createSessionTranscriptHeader } from "../config/sessions/transcript-header.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 
 type InternalSessionEffectsTarget = Required<
@@ -29,10 +30,17 @@ export function resolveInternalSessionEffectsTarget(params: {
   runId: string;
   storePath: string;
 }): Required<Pick<AgentRunSessionTarget, "agentId" | "sessionId" | "sessionKey" | "storePath">> {
+  const incognito = isIncognitoOpenClawAgentSqlitePath(params.storePath, {
+    agentId: params.agentId,
+  });
   return {
     agentId: params.agentId,
     storePath: params.storePath,
-    ...resolveInternalSessionEffectsIdentity(params),
+    ...resolveInternalSessionEffectsIdentity({
+      agentId: params.agentId,
+      runId: params.runId,
+      ...(incognito ? { incognito: true } : {}),
+    }),
   };
 }
 
@@ -48,11 +56,7 @@ function toInternalSessionEffectsTarget(params: {
     sessionKey: params.sessionKey,
     storePath: params.storePath,
     sessionEntry: params.entry,
-    sessionFile: formatSqliteSessionFileMarker({
-      agentId: params.agentId,
-      sessionId: params.entry.sessionId,
-      storePath: params.storePath,
-    }),
+    sessionFile: params.sessionKey,
   };
 }
 
@@ -93,7 +97,12 @@ export async function prepareInternalSessionEffectsSession(params: {
   }
   const now = Date.now();
   const entry = await upsertSessionEntry(scope, {
+    ...buildSessionCreationStamp({ via: "internal", actor: { type: "system" } }),
+    delivery: { kind: "internal" },
     sessionId: scope.sessionId,
+    ...(isIncognitoOpenClawAgentSqlitePath(params.storePath, { agentId: params.agentId })
+      ? { incognito: true as const }
+      : {}),
     sessionStartedAt: now,
     updatedAt: now,
   });

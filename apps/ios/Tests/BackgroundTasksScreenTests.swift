@@ -28,6 +28,22 @@ struct BackgroundTasksScreenTests {
         #expect(task.activityMilliseconds > 0)
     }
 
+    @Test func `running task prefers live activity over progress summary`() throws {
+        let data = Data(#"""
+        {
+          "id":"task-live",
+          "status":"running",
+          "runtime":"subagent",
+          "lastActivity":"Editing the shared transcript",
+          "progressSummary":"Earlier milestone"
+        }
+        """#.utf8)
+
+        let task = try JSONDecoder().decode(MobileBackgroundTask.self, from: data)
+
+        #expect(task.output == "Editing the shared transcript")
+    }
+
     @Test func `groups active work and deduplicates newest task snapshot`() throws {
         let recent = try self.task(id: "finished", status: "completed", updatedAt: 4000)
         let stale = try self.task(id: "running", status: "running", updatedAt: 2000)
@@ -46,13 +62,16 @@ struct BackgroundTasksScreenTests {
           "id":"ledger-1",
           "taskId":"runtime-1",
           "status":"running",
-          "runtime":"cli"
+          "runtime":"cli",
+          "kind":"exec"
         }
         """#.utf8)
 
         let task = try JSONDecoder().decode(MobileBackgroundTask.self, from: data)
 
         #expect(task.displayTitle == "ledger-1")
+        #expect(task.isActive)
+        #expect(task.runtimeLabel == "CLI")
     }
 
     @Test func `terminal snapshot wins a timestamp tie`() throws {

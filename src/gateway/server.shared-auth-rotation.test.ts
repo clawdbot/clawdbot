@@ -16,7 +16,7 @@ import {
   getFreePort,
   installGatewayTestHooks,
   rpcReq,
-  startGatewayServer,
+  startTestGatewayServer,
   testState,
   trackConnectChallengeNonce,
 } from "./test-helpers.js";
@@ -50,7 +50,7 @@ async function openDeviceTokenWsWithDetails(
     auth?: { deviceToken?: unknown };
   };
 }> {
-  const identityPath = path.join(os.tmpdir(), `openclaw-shared-auth-${process.pid}-${port}.json`);
+  const identityPath = path.join(os.tmpdir(), `openclaw-shared-auth-${process.pid}-${port}.sqlite`);
   const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
     await import("../infra/device-identity.js");
   const { approveDevicePairing, ensureDeviceToken, requestDevicePairing, rotateDeviceToken } =
@@ -69,7 +69,7 @@ async function openDeviceTokenWsWithDetails(
         mode: "test",
       };
 
-  const identity = loadOrCreateDeviceIdentity(identityPath);
+  const identity = loadOrCreateDeviceIdentity({ path: identityPath });
   const pending = await requestDevicePairing({
     deviceId: identity.deviceId,
     publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
@@ -250,7 +250,7 @@ async function expectIssuerMetadataPreservedOnReconnect(params: { browserClient?
 }
 
 describe("gateway shared auth rotation", () => {
-  let server: Awaited<ReturnType<typeof startGatewayServer>>;
+  let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
   let sharedTokenRotationCase: {
     closed: Awaited<ReturnType<typeof waitForGatewayWsClose>>;
     ok: boolean;
@@ -259,7 +259,7 @@ describe("gateway shared auth rotation", () => {
   beforeAll(async () => {
     port = await getFreePort();
     testState.gatewayAuth = { mode: "token", token: OLD_TOKEN };
-    server = await startGatewayServer(port, { controlUiEnabled: true });
+    server = await startTestGatewayServer(port, { controlUiEnabled: true });
 
     const ws = await openAuthenticatedGatewayWs(port, OLD_TOKEN);
     try {
@@ -330,7 +330,7 @@ describe("gateway shared auth rotation", () => {
 });
 
 describe("gateway shared auth rotation with unchanged SecretRefs", () => {
-  let secretRefServer: Awaited<ReturnType<typeof startGatewayServer>>;
+  let secretRefServer: Awaited<ReturnType<typeof startTestGatewayServer>>;
   let secretRefPort = 0;
 
   beforeAll(async () => {
@@ -358,7 +358,7 @@ describe("gateway shared auth rotation with unchanged SecretRefs", () => {
       )}\n`,
       "utf-8",
     );
-    secretRefServer = await startGatewayServer(secretRefPort, { controlUiEnabled: true });
+    secretRefServer = await startTestGatewayServer(secretRefPort, { controlUiEnabled: true });
   });
 
   beforeEach(() => {

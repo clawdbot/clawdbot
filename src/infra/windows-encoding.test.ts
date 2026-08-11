@@ -4,12 +4,23 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
+const queryWindowsRegistryValueMock = vi.hoisted(() => vi.fn((): string | null => null));
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
     spawnSync: spawnSyncMock,
+  };
+});
+
+vi.mock("./windows-install-roots.js", async () => {
+  const actual = await vi.importActual<typeof import("./windows-install-roots.js")>(
+    "./windows-install-roots.js",
+  );
+  return {
+    ...actual,
+    queryWindowsRegistryValue: queryWindowsRegistryValueMock,
   };
 });
 
@@ -24,6 +35,96 @@ describe("windows output encoding", () => {
     vi.resetModules();
     vi.restoreAllMocks();
     spawnSyncMock.mockReset();
+    queryWindowsRegistryValueMock.mockReset();
+  });
+
+  it("maps every supported boot-time OEM code page", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const mappings = [
+      [65001, "utf-8"],
+      [874, "windows-874"],
+      [932, "shift_jis"],
+      [936, "gbk"],
+      [949, "euc-kr"],
+      [950, "big5"],
+      [1258, "windows-1258"],
+      [437, "cp437"],
+      [720, "cp720"],
+      [737, "cp737"],
+      [775, "cp775"],
+      [850, "cp850"],
+      [852, "cp852"],
+      [855, "cp855"],
+      [857, "cp857"],
+      [858, "cp858"],
+      [860, "cp860"],
+      [861, "cp861"],
+      [862, "cp862"],
+      [863, "cp863"],
+      [865, "cp865"],
+      [866, "cp866"],
+      [869, "cp869"],
+    ] as const;
+
+    for (const [codePage, expectedEncoding] of mappings) {
+      queryWindowsRegistryValueMock.mockReturnValueOnce(String(codePage));
+      vi.resetModules();
+      const {
+        resolveWindowsOemCodePage,
+        resolveWindowsOemCodePageForEncoding,
+        resolveWindowsOemEncoding,
+      } = await import("./windows-encoding.js");
+
+      expect(resolveWindowsOemEncoding(), `OEMCP ${codePage}`).toBe(expectedEncoding);
+      expect(resolveWindowsOemCodePage()).toBe(codePage);
+      expect(resolveWindowsOemCodePageForEncoding(expectedEncoding)).toBe(codePage);
+    }
+  });
+
+  it("reads and caches the boot-time OEM code page from HKLM", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    queryWindowsRegistryValueMock.mockReturnValue("857");
+    vi.resetModules();
+    const {
+      resolveWindowsOemCodePage,
+      resolveWindowsOemCodePageForEncoding,
+      resolveWindowsOemEncoding,
+    } = await import("./windows-encoding.js");
+
+    expect(resolveWindowsOemEncoding()).toBe("cp857");
+    expect(resolveWindowsOemCodePage()).toBe(857);
+    expect(resolveWindowsOemEncoding()).toBe("cp857");
+    expect(resolveWindowsOemCodePageForEncoding("cp857")).toBe(857);
+    expect(resolveWindowsOemCodePageForEncoding("bogus")).toBeNull();
+    expect(queryWindowsRegistryValueMock).toHaveBeenCalledOnce();
+    expect(queryWindowsRegistryValueMock).toHaveBeenCalledWith(
+      "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Nls\\CodePage",
+      "OEMCP",
+    );
+  });
+
+  it("caches unsupported OEM code pages as unavailable", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    queryWindowsRegistryValueMock.mockReturnValue("864");
+    vi.resetModules();
+    const { resolveWindowsOemCodePage, resolveWindowsOemEncoding } =
+      await import("./windows-encoding.js");
+
+    expect(resolveWindowsOemEncoding()).toBeNull();
+    expect(resolveWindowsOemCodePage()).toBe(864);
+    expect(resolveWindowsOemEncoding()).toBeNull();
+    expect(queryWindowsRegistryValueMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not query the Windows registry on other platforms", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.resetModules();
+    const { resolveWindowsOemCodePage, resolveWindowsOemEncoding } =
+      await import("./windows-encoding.js");
+
+    expect(resolveWindowsOemEncoding()).toBeNull();
+    expect(resolveWindowsOemCodePage()).toBeNull();
+    expect(queryWindowsRegistryValueMock).not.toHaveBeenCalled();
   });
 
   it("bounds and caches failed Windows encoding probes", async () => {
@@ -170,6 +271,41 @@ describe("windows output encoding", () => {
     expect(decoder.decode(raw.subarray(0, 1))).toBe("");
     expect(decoder.decode(raw.subarray(1, 3))).toBe("测");
     expect(decoder.decode(raw.subarray(3))).toBe("试");
+    expect(decoder.flush()).toBe("");
+  });
+
+  it("strips a leading UTF-8 BOM by default", () => {
+    const decoder = createWindowsOutputDecoder({ platform: "linux" });
+
+    expect(decoder.decode(Buffer.from("\uFEFFhello", "utf8"))).toBe("hello");
+    expect(decoder.flush()).toBe("");
+  });
+
+  it("preserves a split UTF-8 BOM when requested on POSIX", () => {
+    const decoder = createWindowsOutputDecoder({
+      platform: "linux",
+      preserveUtf8Bom: true,
+    });
+    const raw = Buffer.from("\uFEFFhello", "utf8");
+
+    expect(decoder.decode(raw.subarray(0, 1))).toBe("");
+    expect(decoder.decode(raw.subarray(1, 2))).toBe("");
+    expect(decoder.decode(raw.subarray(2))).toBe("\uFEFFhello");
+    expect(decoder.flush()).toBe("");
+  });
+
+  it("preserves a split UTF-8 BOM before the Windows codepage fallback", () => {
+    const decoder = createWindowsOutputDecoder({
+      platform: "win32",
+      preserveUtf8Bom: true,
+      windowsEncoding: "gbk",
+    });
+    const raw = Buffer.from("\uFEFF测试", "utf8");
+
+    expect(decoder.decode(raw.subarray(0, 1))).toBe("");
+    expect(decoder.decode(raw.subarray(1, 2))).toBe("");
+    expect(decoder.decode(raw.subarray(2, 4))).toBe("\uFEFF");
+    expect(decoder.decode(raw.subarray(4))).toBe("测试");
     expect(decoder.flush()).toBe("");
   });
 

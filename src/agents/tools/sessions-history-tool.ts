@@ -3,16 +3,14 @@
  *
  * Reads bounded, redacted session transcript history after session visibility filtering.
  */
-import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
-import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { callGateway } from "../../gateway/call.js";
 import { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { resolveDefaultAgentId } from "../agent-scope-config.js";
 import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import {
   describeSessionsHistoryTool,
@@ -24,9 +22,14 @@ import {
   jsonResult,
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
-  readStringParam,
+  readToolStringParam,
   ToolInputError,
 } from "./common.js";
+import {
+  callAgentToolGatewayRequest,
+  type AgentToolGatewayRequestCaller,
+} from "./in-process-gateway.js";
+import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
@@ -45,9 +48,35 @@ const SessionsHistoryToolSchema = Type.Object({
   includeTools: Type.Optional(Type.Boolean()),
 });
 
+const SessionsHistoryOutputSchema = Type.Union([
+  Type.Object(
+    {
+      sessionKey: Type.String(),
+      messages: Type.Array(Type.Unknown()),
+      truncated: Type.Boolean(),
+      droppedMessages: Type.Boolean(),
+      contentTruncated: Type.Boolean(),
+      contentRedacted: Type.Boolean(),
+      bytes: Type.Number(),
+      offset: Type.Optional(Type.Number()),
+      nextOffset: Type.Optional(Type.Number()),
+      hasMore: Type.Optional(Type.Boolean()),
+      totalMessages: Type.Optional(Type.Number()),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      status: Type.Union([Type.Literal("error"), Type.Literal("forbidden")]),
+      error: Type.String(),
+    },
+    { additionalProperties: false },
+  ),
+]);
+
 const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
 const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
-type GatewayCaller = typeof callGateway;
+type GatewayCaller = AgentToolGatewayRequestCaller;
 type ChatHistoryPaginationMetadata = {
   offset?: number;
   nextOffset?: number;
@@ -92,48 +121,23 @@ function sanitizeHistoryContentBlock(block: unknown): {
   const entry = { ...(block as Record<string, unknown>) };
   let truncated = false;
   let redacted = false;
-  const type = typeof entry.type === "string" ? entry.type : "";
   if (typeof entry.text === "string") {
     const res = truncateHistoryText(entry.text);
     entry.text = res.text;
     truncated ||= res.truncated;
     redacted ||= res.redacted;
   }
-  if (type === "thinking") {
-    if (typeof entry.thinking === "string") {
-      const res = truncateHistoryText(entry.thinking);
-      entry.thinking = res.text;
-      truncated ||= res.truncated;
-      redacted ||= res.redacted;
-    }
-    // The encrypted signature can be extremely large and is not useful for history recall.
-    if ("thinkingSignature" in entry) {
-      delete entry.thinkingSignature;
-      truncated = true;
-    }
-    if ("openclawReasoningReplay" in entry) {
-      delete entry.openclawReasoningReplay;
-      truncated = true;
-    }
+  if (entry.type === "thinking" && typeof entry.thinking === "string") {
+    const res = truncateHistoryText(entry.thinking);
+    entry.thinking = res.text;
+    truncated ||= res.truncated;
+    redacted ||= res.redacted;
   }
   if (typeof entry.partialJson === "string") {
     const res = truncateHistoryText(entry.partialJson);
     entry.partialJson = res.text;
     truncated ||= res.truncated;
     redacted ||= res.redacted;
-  }
-  if (type === "image") {
-    const data = readStringValue(entry.data);
-    const existingBytes = typeof entry.bytes === "number" ? entry.bytes : undefined;
-    const bytes = data === undefined ? existingBytes : estimateBase64DecodedBytes(data);
-    if ("data" in entry) {
-      delete entry.data;
-      truncated = true;
-    }
-    entry.omitted = true;
-    if (bytes !== undefined) {
-      entry.bytes = bytes;
-    }
   }
   return { block: entry, truncated, redacted };
 }
@@ -357,12 +361,24 @@ export function createSessionsHistoryTool(opts?: {
     displaySummary: SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
     description: describeSessionsHistoryTool(),
     parameters: SessionsHistoryToolSchema,
+    outputSchema: SessionsHistoryOutputSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const gatewayCall = opts?.callGateway ?? callGateway;
-      const sessionKeyParam = readStringParam(params, "sessionKey", {
+      const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
+      const sessionKeyParam = readToolStringParam(params, "sessionKey", {
         required: true,
       });
+      const limit = readPositiveIntegerParam(params, "limit");
+      const offset = readOffsetParam(params);
+      const messageId = readToolStringParam(params, "messageId");
+      const sessionId = readToolStringParam(params, "sessionId");
+      if (offset !== undefined && messageId) {
+        throw new ToolInputError("offset and messageId cannot be used together");
+      }
+      if (sessionId && !messageId) {
+        throw new ToolInputError("sessionId requires messageId");
+      }
+      const includeTools = Boolean(params.includeTools);
       const cfg = opts?.config ?? getRuntimeConfig();
       const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
@@ -376,15 +392,18 @@ export function createSessionsHistoryTool(opts?: {
         mainKey,
         requesterInternalKey: effectiveRequesterKey,
         restrictToSpawned,
+        callGateway: gatewayCall,
       });
       if (!resolvedSession.ok) {
         return jsonResult({ status: resolvedSession.status, error: resolvedSession.error });
       }
       const visibleSession = await resolveVisibleSessionReference({
+        action: "history",
         resolvedSession,
         requesterSessionKey: effectiveRequesterKey,
         restrictToSpawned,
         visibilitySessionKey: sessionKeyParam,
+        callGateway: gatewayCall,
       });
       if (!visibleSession.ok) {
         return jsonResult({
@@ -403,9 +422,11 @@ export function createSessionsHistoryTool(opts?: {
       });
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "history",
+        defaultAgentId: resolveDefaultAgentId(cfg),
         requesterSessionKey: effectiveRequesterKey,
         visibility,
         a2aPolicy,
+        callGateway: gatewayCall,
       });
       const access = visibilityGuard.check(resolvedKey);
       if (!access.allowed) {
@@ -415,32 +436,27 @@ export function createSessionsHistoryTool(opts?: {
         });
       }
 
-      const limit = readPositiveIntegerParam(params, "limit");
-      const offset = readOffsetParam(params);
-      const messageId = readStringParam(params, "messageId");
-      const sessionId = readStringParam(params, "sessionId");
-      if (offset !== undefined && messageId) {
-        throw new ToolInputError("offset and messageId cannot be used together");
-      }
-      if (sessionId && !messageId) {
-        throw new ToolInputError("sessionId requires messageId");
-      }
-      const includeTools = Boolean(params.includeTools);
-      const result = await gatewayCall<{
-        messages: Array<unknown>;
-        offset?: number;
-        nextOffset?: number;
-        hasMore?: boolean;
-        totalMessages?: number;
-      }>({
-        method: "chat.history",
-        params: {
-          sessionKey: resolvedKey,
-          limit,
-          ...(offset !== undefined ? { offset } : {}),
-          ...(messageId ? { messageId } : {}),
-          ...(sessionId ? { sessionId } : {}),
-        },
+      const result = await runWithScopedSessionAccess({
+        cfg,
+        expectedSessionId: access.expectedSessionId,
+        targetSessionKey: resolvedKey,
+        run: async () =>
+          await gatewayCall<{
+            messages: Array<unknown>;
+            offset?: number;
+            nextOffset?: number;
+            hasMore?: boolean;
+            totalMessages?: number;
+          }>({
+            method: "chat.history",
+            params: {
+              sessionKey: resolvedKey,
+              limit,
+              ...(offset !== undefined ? { offset } : {}),
+              ...(messageId ? { messageId } : {}),
+              ...(sessionId ? { sessionId } : {}),
+            },
+          }),
       });
       const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
       const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);

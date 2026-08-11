@@ -12,6 +12,7 @@ import {
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../../api/gateway.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
 import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
@@ -32,11 +33,15 @@ type BundledPluginTabView = {
       embedSandboxMode: ApplicationContext<RouteId>["config"]["current"]["embedSandboxMode"];
       allowExternalEmbedUrls: boolean;
     };
-    onRequestUpdate?: () => void;
+    onRequestUpdate: () => void;
     // L5: custom widgets need the gateway HTTP base (iframe src) and the session
     // key (prompt dispatch). Bundled views that don't use them ignore these.
     basePath?: string;
     sessionKey?: string;
+    /** Canonical sessions.list publication revision, used by session-backed widgets. */
+    sessionListRevision?: number;
+    /** Whether this connection can decide pending custom-widget code. */
+    canApproveWidgets?: boolean;
   }) => unknown;
   stop: (host: object) => void;
 };
@@ -67,13 +72,6 @@ const EXTERNAL_AUTH_PROBE_TIMEOUT_MS = 5_000;
 
 // Keyed by pluginId/tabId: tab ids are only unique within their plugin.
 const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
-  "workspaces/workspaces": async () => {
-    const [{ renderWorkspace }, { stopWorkspace }] = await Promise.all([
-      import("./workspace-view.ts"),
-      import("./workspace-controller.ts"),
-    ]);
-    return { render: renderWorkspace, stop: stopWorkspace };
-  },
   "logbook/logbook": async () => {
     const [{ renderLogbook }, { stopLogbookPolling }] = await Promise.all([
       import("./logbook-view.ts"),
@@ -110,11 +108,16 @@ export class PluginPage extends OpenClawLightDomContentsElement {
   private externalAuthRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private externalAuthExpiryTimer: ReturnType<typeof setTimeout> | null = null;
   private externalAuthRefreshedAt = 0;
-  private readonly subscriptions = new SubscriptionsController(this).watch(
-    () => this.context?.gateway,
-    (gateway, notify) => gateway.subscribe(notify),
-    (gateway) => this.updateGatewaySource(gateway),
-  );
+  private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.gateway,
+      (gateway, notify) => gateway.subscribe(notify),
+      (gateway) => this.updateGatewaySource(gateway),
+    )
+    .watch(
+      () => this.context?.sessions,
+      (sessions, notify) => sessions.subscribe(notify),
+    );
 
   private readonly handleVisibilityChange = () => {
     if (document.visibilityState !== "visible" || !this.externalAuthTargetKey) {
@@ -267,7 +270,7 @@ export class PluginPage extends OpenClawLightDomContentsElement {
     const context = this.context;
     if (
       !context ||
-      !context.gateway.snapshot.connected ||
+      context.gateway.snapshot.phase !== "connected" ||
       this.externalAuthTargetKey !== targetKey ||
       this.externalAuthRefreshMarker ||
       this.externalAuthProbeMarker
@@ -506,7 +509,8 @@ export class PluginPage extends OpenClawLightDomContentsElement {
   }
 
   private updateGatewaySource(gateway: ApplicationContext<RouteId>["gateway"]) {
-    const { client, connected } = gateway.snapshot;
+    const { client } = gateway.snapshot;
+    const connected = gateway.snapshot.phase === "connected";
     if (
       this.gatewaySource === gateway &&
       this.gatewayClient === client &&
@@ -542,13 +546,11 @@ export class PluginPage extends OpenClawLightDomContentsElement {
         return nothing;
       }
       const snapshot = context.gateway.snapshot;
-      // Config may be absent in unit harnesses; the Workspaces view defaults the
-      // embed policy to strict when `embed` is omitted.
       const config = context.config?.current;
       return this.bundledView.render({
         host: this.bundledViewHost,
         client: snapshot.client,
-        connected: snapshot.connected,
+        connected: snapshot.phase === "connected",
         embed: config
           ? {
               embedSandboxMode: config.embedSandboxMode,
@@ -558,6 +560,8 @@ export class PluginPage extends OpenClawLightDomContentsElement {
         onRequestUpdate: () => this.requestUpdate(),
         basePath: context.basePath,
         sessionKey: snapshot.sessionKey,
+        sessionListRevision: context.sessions?.canonicalListRevision,
+        canApproveWidgets: hasOperatorApprovalsAccess(snapshot.hello?.auth ?? null),
       });
     }
     if (info?.path) {

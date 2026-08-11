@@ -52,5 +52,6 @@ describe("system.info", () => {
     expect(payload.memoryTotalBytes).toBeGreaterThan(0);
     expect(payload.processInstanceId).toBe(getGatewayProcessInstanceId());
     expect(payload.uptimeMs).toBeGreaterThanOrEqual(0);
+    expect(payload.defaultAgentUtilityModel).toEqual({ status: "unavailable" });
   });
 });

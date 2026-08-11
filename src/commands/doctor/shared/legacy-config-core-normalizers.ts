@@ -5,10 +5,12 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
-import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-promotion-helpers.js";
+import { resolveBundledChannelSetupPromotionSurface } from "../../../channels/plugins/setup-promotion-bundled.js";
+import { resolveSingleAccountPromotion } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { DEFAULT_GOOGLE_API_BASE_URL } from "../../../infra/google-api-base-url.js";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../routing/session-key.js";
 import {
   isBlockedLegacyCodexModelRef,
@@ -17,6 +19,10 @@ import {
 import { hasOwnKey, isRecord } from "./legacy-config-record-shared.js";
 import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
 import {
+  modelEntryWithRuntimePolicy,
+  selectedCanonicalModelRefsForRuntimePolicy,
+} from "./legacy-runtime-model-policy.js";
+import {
   legacyRuntimeModelAliasRequiresRuntimePolicy,
   listLegacyRuntimeModelProviderAliases,
   migrateLegacyRuntimeModelRef,
@@ -24,26 +30,7 @@ import {
 export { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
 
 const INHERITED_ACCOUNT_POLICY_KEYS = ["dmPolicy", "allowFrom", "groupPolicy", "groupAllowFrom"];
-
-/** Remove deprecated command config keys that no runtime reads anymore. */
-export function normalizeLegacyCommandsConfig(
-  cfg: OpenClawConfig,
-  changes: string[],
-): OpenClawConfig {
-  const rawCommands = cfg.commands;
-  if (!isRecord(rawCommands) || !("modelsWrite" in rawCommands)) {
-    return cfg;
-  }
-
-  const commands = { ...rawCommands };
-  delete commands.modelsWrite;
-  changes.push("Removed deprecated commands.modelsWrite (/models add is deprecated).");
-
-  return {
-    ...cfg,
-    commands: commands as OpenClawConfig["commands"],
-  };
-}
+const log = createSubsystemLogger("doctor");
 
 /** Migrate legacy browser/Chrome relay config to current browser profile settings. */
 export function normalizeLegacyBrowserConfig(
@@ -164,10 +151,20 @@ export function seedMissingDefaultAccountsFromSingleAccountBase(
     if (hasDefault) {
       continue;
     }
-    const keysToMove = resolveSingleAccountKeysToMove({
+    const promotion = resolveSingleAccountPromotion({
       channelKey: channelId,
       channel: rawChannel,
+      resolveBundledSurface: resolveBundledChannelSetupPromotionSurface,
     });
+    // Defer only undeclared keys outside generic + legacy coverage. A partial
+    // accounts.default would make later runs skip and permanently strand them at root.
+    if (promotion.shouldDeferPromotion) {
+      log.debug(
+        `Deferring channels.${channelId} single-account promotion until its plugin declares uncovered root keys.`,
+      );
+      continue;
+    }
+    const keysToMove = promotion.keysToMove;
     if (keysToMove.length === 0) {
       continue;
     }
@@ -397,20 +394,6 @@ function runtimeNeedsExplicitModelPolicy(runtime: string | undefined): runtime i
   return Boolean(runtime && runtime !== "codex");
 }
 
-function modelEntryWithRuntimePolicy(entry: unknown, runtime: string): Record<string, unknown> {
-  const base = isRecord(entry) ? { ...entry } : {};
-  const currentRuntime = isRecord(base.agentRuntime)
-    ? normalizeOptionalLowercaseString(base.agentRuntime.id)
-    : undefined;
-  if (!currentRuntime || currentRuntime === "auto") {
-    base.agentRuntime = {
-      ...(isRecord(base.agentRuntime) ? base.agentRuntime : {}),
-      id: runtime,
-    };
-  }
-  return base;
-}
-
 function mergeModelEntryWithRuntimePolicy(
   legacyEntry: unknown,
   currentEntry: unknown,
@@ -418,7 +401,9 @@ function mergeModelEntryWithRuntimePolicy(
   requiresRuntimePolicy = runtimeNeedsExplicitModelPolicy(runtime),
 ): unknown {
   const merged = mergeModelEntry(legacyEntry, currentEntry);
-  return runtime && requiresRuntimePolicy ? modelEntryWithRuntimePolicy(merged, runtime) : merged;
+  return runtime && requiresRuntimePolicy
+    ? modelEntryWithRuntimePolicy(merged, runtime).entry
+    : merged;
 }
 
 function normalizeLegacyRuntimeAllowlistModels(
@@ -492,50 +477,13 @@ function ensureSelectedModelRuntimePolicies(
     }
     const current = next[ref];
     const updated = modelEntryWithRuntimePolicy(current, runtime);
-    if (JSON.stringify(updated) !== JSON.stringify(current ?? {})) {
-      next[ref] = updated;
-      changed = true;
+    if (!updated.changed) {
+      continue;
     }
+    next[ref] = updated.entry;
+    changed = true;
   }
   return { value: next, changed };
-}
-
-function selectedCanonicalModelRefsForRuntimePolicy(
-  rawModel: unknown,
-  provider: string,
-  runtime: string,
-  requiresRuntimePolicy: boolean,
-): SelectedRuntimeRef[] {
-  const refs: SelectedRuntimeRef[] = [];
-  const addRef = (rawRef: unknown) => {
-    if (typeof rawRef !== "string") {
-      return;
-    }
-    const trimmed = rawRef.trim();
-    const slash = trimmed.indexOf("/");
-    if (slash <= 0 || slash >= trimmed.length - 1) {
-      return;
-    }
-    if (normalizeProviderId(trimmed.slice(0, slash)) !== normalizeProviderId(provider)) {
-      return;
-    }
-    refs.push({ ref: trimmed, runtime, requiresRuntimePolicy });
-  };
-
-  if (typeof rawModel === "string") {
-    addRef(rawModel);
-    return refs;
-  }
-  if (!isRecord(rawModel)) {
-    return refs;
-  }
-  addRef(rawModel.primary);
-  if (Array.isArray(rawModel.fallbacks)) {
-    for (const fallback of rawModel.fallbacks) {
-      addRef(fallback);
-    }
-  }
-  return refs;
 }
 
 function normalizeLegacyCodexCliRuntimePinsInModels(
@@ -609,12 +557,14 @@ function normalizeLegacyRuntimeAgentContainer(
   }
 
   if (legacyWholeAgentRuntime) {
-    const selectedRefs = selectedCanonicalModelRefsForRuntimePolicy(
+    const selectedRefs: SelectedRuntimeRef[] = selectedCanonicalModelRefsForRuntimePolicy(
       next.model ?? raw.model,
       legacyWholeAgentRuntime.provider,
-      legacyWholeAgentRuntime.runtime,
-      legacyWholeAgentRuntime.requiresRuntimePolicy,
-    );
+    ).map((ref) => ({
+      ref,
+      runtime: legacyWholeAgentRuntime.runtime,
+      requiresRuntimePolicy: legacyWholeAgentRuntime.requiresRuntimePolicy,
+    }));
     const modelRuntimes = ensureSelectedModelRuntimePolicies(next.models, selectedRefs);
     if (modelRuntimes.changed) {
       next.models = modelRuntimes.value;
@@ -959,7 +909,7 @@ export function normalizeLegacyNanoBananaSkill(
     };
   }
 
-  const existingImageGenerationModel = next.agents?.defaults?.imageGenerationModel;
+  const existingImageGenerationModel = next.agents?.defaults?.mediaModels?.image;
   if (existingImageGenerationModel === undefined) {
     next = {
       ...next,
@@ -967,14 +917,15 @@ export function normalizeLegacyNanoBananaSkill(
         ...next.agents,
         defaults: {
           ...next.agents?.defaults,
-          imageGenerationModel: {
-            primary: NANO_BANANA_MODEL,
+          mediaModels: {
+            ...next.agents?.defaults?.mediaModels,
+            image: { primary: NANO_BANANA_MODEL },
           },
         },
       },
     };
     changes.push(
-      `Moved skills.entries.${NANO_BANANA_SKILL_KEY} → agents.defaults.imageGenerationModel.primary (${NANO_BANANA_MODEL}).`,
+      `Moved skills.entries.${NANO_BANANA_SKILL_KEY} → agents.defaults.mediaModels.image.primary (${NANO_BANANA_MODEL}).`,
     );
   }
 
@@ -1039,180 +990,6 @@ export function normalizeLegacyNanoBananaSkill(
   return {
     ...next,
     skills,
-  };
-}
-
-/** Move legacy cross-context send boolean into explicit message crossContext policy. */
-export function normalizeLegacyCrossContextMessageConfig(
-  cfg: OpenClawConfig,
-  changes: string[],
-): OpenClawConfig {
-  const rawTools = cfg.tools;
-  if (!isRecord(rawTools)) {
-    return cfg;
-  }
-  const rawMessage = rawTools.message;
-  if (!isRecord(rawMessage) || !("allowCrossContextSend" in rawMessage)) {
-    return cfg;
-  }
-
-  const legacyAllowCrossContextSend = rawMessage.allowCrossContextSend;
-  if (typeof legacyAllowCrossContextSend !== "boolean") {
-    return cfg;
-  }
-
-  const nextMessage = { ...rawMessage };
-  delete nextMessage.allowCrossContextSend;
-
-  if (legacyAllowCrossContextSend) {
-    const rawCrossContext = isRecord(nextMessage.crossContext)
-      ? structuredClone(nextMessage.crossContext)
-      : {};
-    rawCrossContext.allowWithinProvider = true;
-    rawCrossContext.allowAcrossProviders = true;
-    nextMessage.crossContext = rawCrossContext;
-    changes.push(
-      "Moved tools.message.allowCrossContextSend → tools.message.crossContext.allowWithinProvider/allowAcrossProviders (true).",
-    );
-  } else {
-    changes.push(
-      "Removed tools.message.allowCrossContextSend=false (default cross-context policy already matches canonical settings).",
-    );
-  }
-
-  return {
-    ...cfg,
-    tools: {
-      ...cfg.tools,
-      message: nextMessage,
-    },
-  };
-}
-
-function mapDeepgramCompatToProviderOptions(
-  rawCompat: Record<string, unknown>,
-): Record<string, string | number | boolean> {
-  const providerOptions: Record<string, string | number | boolean> = {};
-  if (typeof rawCompat.detectLanguage === "boolean") {
-    providerOptions.detect_language = rawCompat.detectLanguage;
-  }
-  if (typeof rawCompat.punctuate === "boolean") {
-    providerOptions.punctuate = rawCompat.punctuate;
-  }
-  if (typeof rawCompat.smartFormat === "boolean") {
-    providerOptions.smart_format = rawCompat.smartFormat;
-  }
-  return providerOptions;
-}
-
-function migrateLegacyDeepgramCompat(params: {
-  owner: Record<string, unknown>;
-  pathPrefix: string;
-  changes: string[];
-}): boolean {
-  const rawCompat = isRecord(params.owner.deepgram) ? structuredClone(params.owner.deepgram) : null;
-  if (!rawCompat) {
-    return false;
-  }
-
-  const compatProviderOptions = mapDeepgramCompatToProviderOptions(rawCompat);
-  const currentProviderOptions = isRecord(params.owner.providerOptions)
-    ? structuredClone(params.owner.providerOptions)
-    : {};
-  const currentDeepgram = isRecord(currentProviderOptions.deepgram)
-    ? structuredClone(currentProviderOptions.deepgram)
-    : {};
-  const mergedDeepgram = { ...compatProviderOptions, ...currentDeepgram };
-
-  delete params.owner.deepgram;
-  currentProviderOptions.deepgram = mergedDeepgram;
-  params.owner.providerOptions = currentProviderOptions;
-
-  const hadCanonicalDeepgram = Object.keys(currentDeepgram).length > 0;
-  params.changes.push(
-    hadCanonicalDeepgram
-      ? `Merged ${params.pathPrefix}.deepgram → ${params.pathPrefix}.providerOptions.deepgram (filled missing canonical fields from legacy).`
-      : `Moved ${params.pathPrefix}.deepgram → ${params.pathPrefix}.providerOptions.deepgram.`,
-  );
-  return true;
-}
-
-/** Move legacy media provider option aliases into providerOptions maps. */
-export function normalizeLegacyMediaProviderOptions(
-  cfg: OpenClawConfig,
-  changes: string[],
-): OpenClawConfig {
-  const rawTools = cfg.tools;
-  if (!isRecord(rawTools)) {
-    return cfg;
-  }
-  const rawMedia = rawTools.media;
-  if (!isRecord(rawMedia)) {
-    return cfg;
-  }
-
-  let mediaChanged = false;
-  const nextMedia = structuredClone(rawMedia);
-  const migrateModelList = (models: unknown, pathPrefix: string): boolean => {
-    if (!Array.isArray(models)) {
-      return false;
-    }
-    let changedAny = false;
-    for (const [index, entry] of models.entries()) {
-      if (!isRecord(entry)) {
-        continue;
-      }
-      if (
-        migrateLegacyDeepgramCompat({
-          owner: entry,
-          pathPrefix: `${pathPrefix}[${index}]`,
-          changes,
-        })
-      ) {
-        changedAny = true;
-      }
-    }
-    return changedAny;
-  };
-
-  for (const capability of ["audio", "image", "video"] as const) {
-    const config = isRecord(nextMedia[capability]) ? structuredClone(nextMedia[capability]) : null;
-    if (!config) {
-      continue;
-    }
-    let configChanged = false;
-    if (
-      migrateLegacyDeepgramCompat({
-        owner: config,
-        pathPrefix: `tools.media.${capability}`,
-        changes,
-      })
-    ) {
-      configChanged = true;
-    }
-    if (migrateModelList(config.models, `tools.media.${capability}.models`)) {
-      configChanged = true;
-    }
-    if (configChanged) {
-      nextMedia[capability] = config;
-      mediaChanged = true;
-    }
-  }
-
-  if (migrateModelList(nextMedia.models, "tools.media.models")) {
-    mediaChanged = true;
-  }
-
-  if (!mediaChanged) {
-    return cfg;
-  }
-
-  return {
-    ...cfg,
-    tools: {
-      ...cfg.tools,
-      media: nextMedia as NonNullable<OpenClawConfig["tools"]>["media"],
-    },
   };
 }
 

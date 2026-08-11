@@ -23,9 +23,33 @@ function makeEvent(
 const BOT_OPEN_ID = "ou_bot";
 
 describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
+  it("classifies Feishu bot senders without changing legacy sender defaults", () => {
+    const botEvent = makeEvent("hello");
+    botEvent.sender.sender_type = "bot";
+
+    expect(parseFeishuMessageEvent(botEvent, BOT_OPEN_ID).senderType).toBe("bot");
+    expect(parseFeishuMessageEvent(makeEvent("hello"), BOT_OPEN_ID).senderType).toBe("user");
+  });
+
   it("returns original text when mentions are missing", () => {
     const ctx = parseFeishuMessageEvent(makeEvent("hello world", undefined), BOT_OPEN_ID);
     expect(ctx.content).toBe("hello world");
+  });
+
+  it("parses an empty group message body with bot-mention metadata", () => {
+    const event = makeEvent(
+      "",
+      [{ key: "@_bot_1", name: "Bot", id: { open_id: BOT_OPEN_ID } }],
+      "group",
+    );
+    event.message.content = "";
+
+    expect(parseFeishuMessageEvent(event, BOT_OPEN_ID)).toMatchObject({
+      content: "",
+      chatType: "group",
+      mentionedBot: true,
+      hasAnyMention: true,
+    });
   });
 
   it("strips bot mention in p2p (addressing prefix, not semantic content)", () => {

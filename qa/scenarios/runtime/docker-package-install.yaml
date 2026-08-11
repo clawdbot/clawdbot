@@ -2,32 +2,35 @@ title: Docker package install evidence
 
 scenario:
   id: docker-package-install
-  surface: docker-podman-hosting
-  category: docker-podman-hosting.image-release-and-validation
+  surface: containers
+  category: containers.image-release-and-validation
   coverage:
-    secondary:
-      - docker.package-artifact-generation
+    primary:
+      - containers.docker-e2e-package-artifact-generation
       - cli.package-manager-installs
-  objective: Build the real OpenClaw package artifact, install and execute it in the scheduler-selected bare container image, and record exact package, image, and container identities.
+    secondary:
+      - cli.cli-entrypoint
+  objective: Build the real OpenClaw package artifact, install it globally with npm, pnpm, and Bun in clean containers, execute each manager-created PATH entrypoint, and record exact identities.
   successCriteria:
     - The canonical Docker package helper builds and validates the real npm tarball.
     - The scheduler prepares the package and bare target image through the shared planner and catalog.
-    - A clean target container installs the tarball with npm and executes the installed OpenClaw CLI.
-    - The installed package name and version match the tarball metadata.
-    - Evidence records the package digest and version, bare image ID, target container ID, installed package root, and executed CLI version.
+    - Clean target containers install the same tarball globally with npm, pnpm, and Bun.
+    - Each package manager creates a PATH-resolved OpenClaw executable that serves help and the candidate version.
+    - Every installed package version matches the tarball metadata.
+    - Evidence records the package digest and version, bare image ID, manager container IDs, package roots, executable paths, and CLI versions.
   docsRefs:
     - docs/install/updating.md
     - docs/help/testing.md
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
-    - scripts/package-openclaw-for-docker.mjs
+    - scripts/package-openclaw-for-docker.mts
     - scripts/e2e/docker-package-install.sh
-    - scripts/lib/docker-e2e-scenarios.mjs
+    - scripts/lib/docker-e2e-scenarios.mts
     - test/e2e/qa-lab/runtime/docker-artifact-proof.ts
   execution:
     kind: script
     path: test/e2e/qa-lab/runtime/docker-artifact-proof.ts
-    summary: Builds the real package artifact, installs and executes it in a clean target container, and records artifact identities.
+    summary: Builds one real package artifact, installs and executes it through npm, pnpm, and Bun PATH entrypoints in clean containers, and records artifact identities.
     timeoutMs: 1800000
     args:
       - --artifact-base

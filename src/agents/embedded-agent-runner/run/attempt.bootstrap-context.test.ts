@@ -1,6 +1,6 @@
 // Coverage for attempt context path remapping.
 import { describe, expect, it } from "vitest";
-import { remapInjectedContextFilesToWorkspace } from "./attempt.bootstrap-context.js";
+import { remapInjectedContextFilesToWorkspace } from "./attempt-setup.js";
 
 describe("remapInjectedContextFilesToWorkspace", () => {
   it("rewrites injected file paths onto the effective workspace when the tool root changes", () => {
@@ -14,8 +14,8 @@ describe("remapInjectedContextFilesToWorkspace", () => {
             content: "agents",
           },
           {
-            path: "/real/workspace/nested/TOOLS.md",
-            content: "tools",
+            path: "/real/workspace/nested/SOUL.md",
+            content: "soul",
           },
           {
             path: "/real/workspace/..context/USER.md",
@@ -35,8 +35,8 @@ describe("remapInjectedContextFilesToWorkspace", () => {
         content: "agents",
       },
       {
-        path: "/sandbox/workspace/nested/TOOLS.md",
-        content: "tools",
+        path: "/sandbox/workspace/nested/SOUL.md",
+        content: "soul",
       },
       {
         path: "/sandbox/workspace/..context/USER.md",

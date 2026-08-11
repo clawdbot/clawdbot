@@ -22,7 +22,7 @@ export const DEFAULT_LIVE_MUSIC_MODELS: Record<string, string> = {
 
 /** Resolve configured provider/model refs from the musicGenerationModel defaults. */
 export function resolveConfiguredLiveMusicModels(cfg: OpenClawConfig): Map<string, string> {
-  return resolveConfiguredLiveProviderModels(cfg.agents?.defaults?.musicGenerationModel);
+  return resolveConfiguredLiveProviderModels(cfg.agents?.defaults?.mediaModels?.music);
 }
 
 /** Resolve whether live music tests should require auth profile keys. */

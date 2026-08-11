@@ -1,5 +1,11 @@
+import {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { expect, it } from "vitest";
 import {
+  appendAssistantMirrorMessageByIdentity,
+  type DispatchReplyWithBufferedBlockDispatcherArgs,
   describeTelegramDispatch,
   createContext,
   createReasoningStreamContext,
@@ -9,16 +15,19 @@ import {
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchWithContext,
   editMessageTelegram,
+  emitTelegramMessageSentHooks,
   expectDeliveredReply,
   expectDeliverRepliesParams,
   expectRecordFields,
   expectWindowCollapsedTo,
+  loadSessionStore,
   mockCallArg,
   mockDefaultSessionEntry,
   readLatestAssistantTextByIdentity,
   recordOutboundMessageForPromptContext,
   setupDraftStreams,
   telegramProgressPreview,
+  type TelegramMessageContext,
 } from "./bot-message-dispatch.test-harness.js";
 
 describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
@@ -154,7 +163,10 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
 
     await dispatchWithContext({ context: createContext(), textLimit: 80 });
 
-    expect(answerDraftStream.update).toHaveBeenLastCalledWith(longText.trimEnd());
+    expect(answerDraftStream.update).toHaveBeenLastCalledWith(
+      longText.trimEnd(),
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expectRecordFields(mockCallArg(recordOutboundMessageForPromptContext), {
       messageId: 2001,
       text: longText.trimEnd(),
@@ -166,9 +178,10 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
   it("keeps streamed final text in place when late media arrives", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     const mediaMaxBytes = 50 * 1024 * 1024;
+    let partialAccepted: boolean | void = undefined;
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onPartialReply?.({ text: "Photo" });
+        partialAccepted = await replyOptions?.onPartialReply?.({ text: "Photo" });
         await dispatcherOptions.deliver(
           { text: "Photo", mediaUrl: "https://example.com/a.png" },
           { kind: "final" },
@@ -184,9 +197,111 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
 
     expect(answerDraftStream.clear).not.toHaveBeenCalled();
     expect(answerDraftStream.update).toHaveBeenCalledWith("Photo");
+    expect(partialAccepted).toBe(true);
     expectDeliverRepliesParams({ mediaMaxBytes });
     expectDeliveredReply(0, { text: undefined, mediaUrl: "https://example.com/a.png" });
+    expect(emitTelegramMessageSentHooks).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(emitTelegramMessageSentHooks), {
+      content: "Photo",
+      messageId: 2001,
+    });
   });
+
+  it.each([
+    {
+      label: "direct chat",
+      sessionKey: "agent:test:telegram:direct:123",
+      createMessageContext: () =>
+        createContext({
+          ctxPayload: {
+            SessionKey: "agent:test:telegram:direct:123",
+            ChatType: "direct",
+          } as TelegramMessageContext["ctxPayload"],
+        }),
+    },
+    {
+      label: "group chat",
+      sessionKey: "agent:test:telegram:group:-100123",
+      createMessageContext: () =>
+        createContext({
+          chatId: -100123,
+          isGroup: true,
+          ctxPayload: {
+            SessionKey: "agent:test:telegram:group:-100123",
+            ChatType: "group",
+          } as TelegramMessageContext["ctxPayload"],
+          primaryCtx: {
+            message: { chat: { id: -100123, type: "supergroup", title: "Test group" } },
+          } as TelegramMessageContext["primaryCtx"],
+          msg: {
+            chat: { id: -100123, type: "supergroup", title: "Test group" },
+            message_id: 456,
+          } as TelegramMessageContext["msg"],
+          threadSpec: { id: undefined, scope: "none" },
+          replyThreadId: undefined,
+        }),
+    },
+  ])(
+    "keeps a finalized preview authoritative when late media fails in a $label",
+    async ({ createMessageContext, sessionKey }) => {
+      const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+      loadSessionStore.mockReturnValue({ [sessionKey]: { sessionId: "s1", updatedAt: 1 } });
+      const mediaFailure = createChannelPartialDeliveryError(new Error("media rejected"), {
+        messageIds: ["2002"],
+        visibleReplySent: true,
+      });
+      deliverReplies.mockRejectedValueOnce(mediaFailure);
+      let observedError: unknown;
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onPartialReply?.({ text: "Photo" });
+          try {
+            await dispatcherOptions.deliver(
+              { text: "Photo", mediaUrl: "https://example.com/a.png" },
+              { kind: "final" },
+            );
+          } catch (error) {
+            observedError = error;
+            await dispatcherOptions.onError?.(error, { kind: "final" });
+          }
+          return {
+            queuedFinal: false,
+            counts: { block: 0, final: 1, tool: 0 },
+          };
+        },
+      );
+
+      await dispatchWithContext({ context: createMessageContext() });
+
+      expect(isChannelPartialDeliveryError(observedError)).toBe(true);
+      if (!isChannelPartialDeliveryError(observedError)) {
+        throw new Error("expected structured partial delivery error");
+      }
+      expect(observedError.deliveryResult).toMatchObject({
+        content: "Photo",
+        messageIds: ["2001", "2002"],
+        receipt: { primaryPlatformMessageId: "2001" },
+        visibleReplySent: true,
+      });
+      // onError records a non-silent failure. Avoiding a second delivery proves
+      // the finalized answer was committed before that failure was surfaced.
+      expect(deliverReplies).toHaveBeenCalledTimes(1);
+      expectDeliveredReply(0, { text: undefined, mediaUrl: "https://example.com/a.png" });
+      expect(answerDraftStream.stop).toHaveBeenCalled();
+      expect(answerDraftStream.clear).not.toHaveBeenCalled();
+      expect(emitTelegramMessageSentHooks).toHaveBeenCalledTimes(1);
+      expectRecordFields(mockCallArg(emitTelegramMessageSentHooks), {
+        content: "Photo",
+        messageId: 2001,
+        success: true,
+      });
+      expect(appendAssistantMirrorMessageByIdentity).toHaveBeenCalledTimes(1);
+      expectRecordFields(mockCallArg(appendAssistantMirrorMessageByIdentity), {
+        sessionKey,
+        text: "Photo",
+      });
+    },
+  );
 
   it("sends standalone MEDIA directive final replies as media", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
@@ -253,6 +368,38 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
     );
     expect(draftStream.flush).toHaveBeenCalled();
+  });
+
+  it("reopens progress drafts for queued followups after the source dispatch settles", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    let queuedReplyOptions: DispatchReplyWithBufferedBlockDispatcherArgs["replyOptions"];
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      queuedReplyOptions = replyOptions;
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+    });
+
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    await queuedReplyOptions?.onQueuedFollowupAdmitted?.();
+    await queuedReplyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+    await queuedReplyOptions?.onToolResult?.({ text: "📄 Web Fetch: working" });
+
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(draftStream.updatePreview).toHaveBeenCalledWith(
+      telegramProgressPreview(
+        "Shelling\n\n🛠️ Exec\n📄 Web Fetch: working",
+        "<b>Shelling</b>\n<b>🛠️ Exec</b>\n📄 Web Fetch: working",
+      ),
+    );
+
+    await queuedReplyOptions?.onQueuedFollowupSettled?.();
+    expect(draftStream.clear).toHaveBeenCalledTimes(2);
   });
 
   it("keeps eight rolling tool rows beneath a preamble with verbose off", async () => {
@@ -660,6 +807,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
   it("keeps string tool-result progress beneath a Telegram preamble", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);
+    let rendered: boolean | void = undefined;
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onReplyStart?.();
       await replyOptions?.onItemEvent?.({
@@ -667,7 +815,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
         itemId: "preamble-1",
         progressText: "Checking recent context",
       });
-      await replyOptions?.onToolResult?.({ text: "Background task still running" });
+      rendered = await replyOptions?.onToolResult?.({ text: "Background task still running" });
       return { queuedFinal: false };
     });
 
@@ -683,7 +831,27 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     const preview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
     expect(preview?.text).toBe("Shelling\nChecking recent context\nBackground task still running");
     expect(JSON.stringify(preview?.richMessage)).toContain("Background task still running");
+    expect(rendered).toBe(true);
     expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("reports empty tool-result progress as not rendered", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    let rendered: boolean | void = undefined;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      rendered = await replyOptions?.onToolResult?.({ text: "   " });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+    });
+
+    expect(rendered).toBe(false);
+    expect(draftStream.updatePreview).not.toHaveBeenCalled();
   });
 
   it("retracts the Telegram preamble headline by item identity", async () => {

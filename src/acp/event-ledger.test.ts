@@ -1,15 +1,10 @@
-/** Tests ACP event ledger recording, replay, retention, and SQLite migration. */
-import fs from "node:fs/promises";
+/** Tests ACP event ledger recording, replay, retention, and SQLite persistence. */
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import {
-  createInMemoryAcpEventLedger,
-  createSqliteAcpEventLedger,
-  migrateFileAcpEventLedgerToSqlite,
-} from "./event-ledger.js";
+import { createInMemoryAcpEventLedger, createSqliteAcpEventLedger } from "./event-ledger.js";
 
 describe("ACP event ledger", () => {
   afterEach(() => {
@@ -150,68 +145,6 @@ describe("ACP event ledger", () => {
         sessionUpdate: "agent_thought_chunk",
         content: { type: "text", text: "Thinking" },
       });
-    });
-  });
-
-  it("imports legacy file-backed replay state into SQLite", async () => {
-    await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
-      const filePath = path.join(dir, "acp", "event-ledger.json");
-      const databasePath = path.join(dir, "openclaw.sqlite");
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(
-        filePath,
-        JSON.stringify({
-          version: 1,
-          sessions: {
-            "session-1": {
-              sessionId: "session-1",
-              sessionKey: "agent:main:work",
-              cwd: "/work",
-              complete: true,
-              createdAt: 1000,
-              updatedAt: 1000,
-              nextSeq: 2,
-              events: [
-                {
-                  seq: 1,
-                  at: 1000,
-                  sessionId: "session-1",
-                  sessionKey: "agent:main:work",
-                  runId: "run-1",
-                  update: {
-                    sessionUpdate: "agent_message_chunk",
-                    content: { type: "text", text: "Answer" },
-                  },
-                },
-              ],
-            },
-          },
-        }),
-        "utf8",
-      );
-
-      const migrated = await migrateFileAcpEventLedgerToSqlite({
-        filePath,
-        path: databasePath,
-        archiveSource: true,
-      });
-      const sqlite = createSqliteAcpEventLedger({ path: databasePath });
-      const replay = await sqlite.readReplay({
-        sessionId: "session-1",
-        sessionKey: "agent:main:work",
-      });
-
-      expect(migrated).toEqual({
-        importedSessions: 1,
-        importedEvents: 1,
-        archived: true,
-      });
-      expect(replay.complete).toBe(true);
-      expect(replay.events[0]?.update).toEqual({
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "Answer" },
-      });
-      await expect(fs.stat(`${filePath}.migrated`)).resolves.toBeTruthy();
     });
   });
 

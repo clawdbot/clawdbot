@@ -1,7 +1,11 @@
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
+import { isPluginMetadataSnapshotCompatible } from "../../../plugins/plugin-metadata-snapshot.js";
+import { resolveProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
+import { resolvePreparedRunAdmission } from "../../admitted-run-context.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { isProfileInCooldown } from "../../auth-profiles.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
+import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import {
   hasPreparedAuthAttemptModelMetadata,
   resolveCredentialScopedAuthAttemptModelDecision,
@@ -50,6 +54,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     context?: Omit<Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0], "phase">,
   ) => void;
   fallbackConfigured: boolean;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 }) {
   const params = input.runParams;
   let provider = input.provider;
@@ -64,13 +69,14 @@ export async function prepareEmbeddedRunRuntime(input: {
     hookRunner: input.hookRunner,
     hookContext: input.hookContext,
     onHooksResolved: () => input.markStartupStage("hooks"),
+    preparedModelRuntime: input.preparedModelRuntime,
   });
   provider = modelSetup.provider;
   modelId = modelSetup.modelId;
+  const pluginMetadataSnapshot = input.preparedModelRuntime?.metadataSnapshot;
   const {
     requestedModelId,
     modelSelectionChangedByHook,
-    beforeAgentStartResult,
     requestStreamTransportOverrides,
     expectedHarnessArtifact,
     nativeModelOwnedHarnessId,
@@ -157,6 +163,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     nativeModelOwned,
     authStorage,
     modelRegistry,
+    preparedModelRuntime: input.preparedModelRuntime,
     getAgentHarness: () => agentHarness,
     setAgentHarness: (nextHarness) => {
       agentHarness = nextHarness;
@@ -169,7 +176,6 @@ export async function prepareEmbeddedRunRuntime(input: {
     markStage: (stage) => authStages?.mark(stage),
   });
   const {
-    usesOpenAIAuthRouting,
     attemptAuthProfileStore,
     lockedProfileId,
     preferredProfileId,
@@ -227,7 +233,6 @@ export async function prepareEmbeddedRunRuntime(input: {
   );
   const pluginHarnessNeedsOpenClawAuthBootstrap =
     pluginHarnessOwnsTransport &&
-    usesOpenAIAuthRouting &&
     (preparedApiKeyRoute ||
       (!pluginHarnessOwnsAuthBootstrap &&
         profileCandidates.some((profileId) => Boolean(profileId))));
@@ -460,12 +465,42 @@ export async function prepareEmbeddedRunRuntime(input: {
   }
   input.markStartupStage("auth");
   input.notifyExecutionPhase("auth", { provider, model: modelId });
+  const compatibleMetadataSnapshot =
+    pluginMetadataSnapshot &&
+    pluginMetadataSnapshot.pluginIds === undefined &&
+    isPluginMetadataSnapshotCompatible({
+      snapshot: pluginMetadataSnapshot,
+      config: params.config,
+      env: process.env,
+      workspaceDir: input.workspaceDir,
+    })
+      ? pluginMetadataSnapshot
+      : undefined;
+  const providerRuntimeHandle = {
+    ...resolveProviderRuntimePluginHandle({
+      provider,
+      modelId,
+      config: params.config,
+      workspaceDir: input.workspaceDir,
+      env: process.env,
+      ...(compatibleMetadataSnapshot ? { pluginMetadataSnapshot: compatibleMetadataSnapshot } : {}),
+    }),
+    modelId,
+    prepared: true as const,
+  };
+
+  const admittedRunContext = await resolvePreparedRunAdmission({
+    runId: params.runId,
+    runtimeKind: pluginHarnessOwnsTransport ? "plugin-harness" : "embedded",
+    admittedRunContext: params.admittedRunContext,
+    preparedRunAdmission: params.preparedRunAdmission,
+  });
 
   return {
+    admittedRunContext,
     provider,
     modelId,
     requestedModelId,
-    beforeAgentStartResult,
     expectedHarnessArtifact,
     nativeModelOwned,
     model,
@@ -513,6 +548,8 @@ export async function prepareEmbeddedRunRuntime(input: {
       apiKeyInfo,
       lastProfileId,
       runtimeAuthState,
+      pluginMetadataSnapshot,
+      providerRuntimeHandle,
     }),
   };
 }

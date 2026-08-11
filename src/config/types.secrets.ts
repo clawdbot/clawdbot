@@ -1,9 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Defines secret reference and resolution configuration types.
-import { isRecord } from "../utils.js";
 
 /** Supported secret reference backends in config. */
-export type SecretRefSource = "env" | "file" | "exec"; // pragma: allowlist secret
+export type SecretRefSource = "env" | "file" | "exec" | "store"; // pragma: allowlist secret
 
 /**
  * Stable identifier for a secret in a configured source.
@@ -11,6 +11,7 @@ export type SecretRefSource = "env" | "file" | "exec"; // pragma: allowlist secr
  * - env source: provider "default", id "OPENAI_API_KEY"
  * - file source: provider "mounted-json", id "/providers/openai/apiKey"
  * - exec source: provider "vault", id "openai/api-key"
+ * - store source: provider "default", id "OPENAI_API_KEY"
  */
 export type SecretRef = {
   source: SecretRefSource;
@@ -44,6 +45,8 @@ type SecretDefaults = {
   file?: string;
   /** Default provider alias for exec SecretRefs. */
   exec?: string;
+  /** Default provider alias for shared-store SecretRefs. */
+  store?: string;
 };
 
 /** Return whether an env SecretRef id is a supported uppercase environment variable name. */
@@ -60,7 +63,10 @@ export function isSecretRef(value: unknown): value is SecretRef {
     return false;
   }
   return (
-    (value.source === "env" || value.source === "file" || value.source === "exec") &&
+    (value.source === "env" ||
+      value.source === "file" ||
+      value.source === "exec" ||
+      value.source === "store") &&
     typeof value.provider === "string" &&
     value.provider.trim().length > 0 &&
     typeof value.id === "string" &&
@@ -75,7 +81,10 @@ function isLegacySecretRefWithoutProvider(
     return false;
   }
   return (
-    (value.source === "env" || value.source === "file" || value.source === "exec") &&
+    (value.source === "env" ||
+      value.source === "file" ||
+      value.source === "exec" ||
+      value.source === "store") &&
     typeof value.id === "string" &&
     value.id.trim().length > 0 &&
     value.provider === undefined
@@ -102,12 +111,46 @@ export function parseEnvTemplateSecretRef(
   };
 }
 
-/** Parse legacy env SecretRef marker strings kept for config migration/read compatibility. */
+/** Collect env ids from supported SecretRef shapes anywhere in a config tree. */
+export function collectEnvSecretRefIds(value: unknown): Set<string> {
+  const ids = new Set<string>();
+  const seen = new WeakSet<object>();
+  const visit = (candidate: unknown): void => {
+    const ref = coerceSecretRef(candidate);
+    if (ref?.source === "env" && isValidEnvSecretRefId(ref.id)) {
+      ids.add(ref.id);
+      return;
+    }
+    if (typeof candidate !== "object" || candidate === null || seen.has(candidate)) {
+      return;
+    }
+    seen.add(candidate);
+    for (const child of Array.isArray(candidate) ? candidate : Object.values(candidate)) {
+      visit(child);
+    }
+  };
+  visit(value);
+  return ids;
+}
+
+/** Detect retired env SecretRef marker strings for migration and explicit rejection. */
+export function isLegacySecretRefEnvMarker(value: unknown): value is string {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const trimmed = value.trim();
+  return (
+    trimmed.startsWith(LEGACY_SECRETREF_ENV_MARKER_PREFIX) ||
+    trimmed.startsWith(LEGACY_DOUBLE_UNDERSCORE_ENV_MARKER_PREFIX)
+  );
+}
+
+/** Parse legacy env SecretRef marker strings for config migration. */
 export function parseLegacySecretRefEnvMarker(
   value: unknown,
   provider = DEFAULT_SECRET_PROVIDER_ALIAS,
 ): SecretRef | null {
-  if (typeof value !== "string") {
+  if (!isLegacySecretRefEnvMarker(value)) {
     return null;
   }
   const trimmed = value.trim();
@@ -130,22 +173,14 @@ export function parseLegacySecretRefEnvMarker(
   };
 }
 
-/** Coerce canonical, legacy, and env-shorthand secret inputs into a SecretRef. */
+/** Coerce canonical and env-shorthand secret inputs into a SecretRef.
+ * Retired string markers are parsed only by doctor migration above. */
 export function coerceSecretRef(value: unknown, defaults?: SecretDefaults): SecretRef | null {
   if (isSecretRef(value)) {
     return value;
   }
-  const legacyEnvMarker = parseLegacySecretRefEnvMarker(value, defaults?.env);
-  if (legacyEnvMarker) {
-    return legacyEnvMarker;
-  }
   if (isLegacySecretRefWithoutProvider(value)) {
-    const provider =
-      value.source === "env"
-        ? (defaults?.env ?? DEFAULT_SECRET_PROVIDER_ALIAS)
-        : value.source === "file"
-          ? (defaults?.file ?? DEFAULT_SECRET_PROVIDER_ALIAS)
-          : (defaults?.exec ?? DEFAULT_SECRET_PROVIDER_ALIAS);
+    const provider = defaults?.[value.source] ?? DEFAULT_SECRET_PROVIDER_ALIAS;
     return {
       source: value.source,
       provider,
@@ -311,7 +346,6 @@ export type FileSecretProviderConfig = {
   mode?: FileSecretProviderMode;
   timeoutMs?: number;
   maxBytes?: number;
-  allowInsecurePath?: boolean;
 };
 
 export type ManualExecSecretProviderConfig = {
@@ -325,8 +359,6 @@ export type ManualExecSecretProviderConfig = {
   env?: Record<string, string>;
   passEnv?: string[];
   trustedDirs?: string[];
-  allowInsecurePath?: boolean;
-  allowSymlinkCommand?: boolean;
 };
 
 export type PluginIntegrationSecretProviderConfig = {
@@ -341,10 +373,15 @@ export type ExecSecretProviderConfig =
   | ManualExecSecretProviderConfig
   | PluginIntegrationSecretProviderConfig;
 
+export type StoreSecretProviderConfig = {
+  source: "store";
+};
+
 export type SecretProviderConfig =
   | EnvSecretProviderConfig
   | FileSecretProviderConfig
-  | ExecSecretProviderConfig;
+  | ExecSecretProviderConfig
+  | StoreSecretProviderConfig;
 
 export type SecretsConfig = {
   providers?: Record<string, SecretProviderConfig>;
@@ -352,10 +389,6 @@ export type SecretsConfig = {
     env?: string;
     file?: string;
     exec?: string;
-  };
-  resolution?: {
-    maxProviderConcurrency?: number;
-    maxRefsPerProvider?: number;
-    maxBatchBytes?: number;
+    store?: string;
   };
 };

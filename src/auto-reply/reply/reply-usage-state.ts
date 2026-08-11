@@ -1,10 +1,12 @@
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import { deriveContextPromptTokens, type NormalizedUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { PluginHookReplyUsageState } from "../../plugins/hook-types.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 
 const TTL_MS = 5 * 60_000;
+const MAX_REPLY_USAGE_STATE_ENTRIES = 1_024;
 
 const store = new Map<string, { snapshot: PluginHookReplyUsageState; expiresAt: number }>();
 
@@ -110,6 +112,9 @@ function prune(now: number): void {
       store.delete(key);
     }
   }
+  // This handoff is best-effort metadata for an optional hook. Bound bursts so
+  // completed runs cannot retain one full snapshot each for the whole TTL.
+  pruneMapToMaxSize(store, MAX_REPLY_USAGE_STATE_ENTRIES);
 }
 
 export function recordReplyUsageState(

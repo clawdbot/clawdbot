@@ -1,7 +1,28 @@
-/**
- * Public TTS runtime barrel exposed to core callers and plugin SDK facades.
- * Implementation stays in plugin-sdk/tts-runtime so provider surfaces share one contract.
- */
+/** Public TTS runtime barrel exposed to core callers and plugin SDK facades. */
+import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
+import {
+  setSpeechRuntimeAvailabilityGuard,
+  setTtsMachinePrefsPathResolver,
+} from "./runtime-api.js";
+import { persistTtsAudioToMediaStore } from "./tts-audio-store.js";
+import { maybeApplyTtsToPayload as maybeApplyTtsToPayloadCore } from "./tts-payload.js";
+import { textToSpeech as textToSpeechCore } from "./tts-synthesis.js";
+
+setSpeechRuntimeAvailabilityGuard(() => {
+  assertSecretOwnerAvailable("capability", "tts");
+});
+
+setTtsMachinePrefsPathResolver(() => readConfigMachineState<string>("tts.prefsPath"));
+
+export function textToSpeech(params: Parameters<typeof textToSpeechCore>[0]) {
+  return textToSpeechCore(params, persistTtsAudioToMediaStore);
+}
+
+export function maybeApplyTtsToPayload(params: Parameters<typeof maybeApplyTtsToPayloadCore>[0]) {
+  return maybeApplyTtsToPayloadCore(params, persistTtsAudioToMediaStore);
+}
+
 export {
   getLastTtsAttempt,
   getResolvedSpeechProviderConfig,
@@ -13,9 +34,7 @@ export {
   isTtsProviderConfigured,
   listSpeechVoices,
   listTtsPersonas,
-  maybeApplyTtsToPayload,
   resolveExplicitTtsOverrides,
-  resolveTtsAutoMode,
   resolveTtsConfig,
   resolveTtsPrefsPath,
   resolveTtsProviderOrder,
@@ -26,7 +45,6 @@ export {
   setTtsPersona,
   setTtsProvider,
   synthesizeSpeech,
-  textToSpeech,
   type ResolvedTtsConfig,
   type TtsDirectiveOverrides,
-} from "../plugin-sdk/tts-runtime.js";
+} from "./runtime-api.js";

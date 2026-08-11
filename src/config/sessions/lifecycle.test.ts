@@ -10,6 +10,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import {
   hasTerminalMainSessionTranscriptNewerThanRegistry,
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
+  resolveSessionLifecycleTimestamps,
 } from "./lifecycle.js";
 import { appendTranscriptEvent, loadSessionEntry, upsertSessionEntry } from "./session-accessor.js";
 import type { SessionEntry } from "./types.js";
@@ -129,6 +130,23 @@ describe("terminal main session transcript freshness", () => {
     });
 
     expect(check(entry, sessionKey)).toBe(true);
+  });
+
+  it("preserves Date.parse semantics for a numeric-looking transcript header", async () => {
+    const sessionId = "session-header-without-key";
+    const timestamp = "2026";
+    await appendTranscriptEvent(
+      { agentId: "main", sessionId, sessionKey: "agent:main:header", storePath },
+      { type: "session", version: 3, id: sessionId, timestamp, cwd: stateDir },
+    );
+
+    expect(
+      resolveSessionLifecycleTimestamps({
+        agentId: "main",
+        entry: { sessionId, updatedAt: Date.now() },
+        storePath,
+      }).sessionStartedAt,
+    ).toBe(Date.parse(timestamp));
   });
 
   it("does not rotate after a same-millisecond registry write observes the mutation", async () => {

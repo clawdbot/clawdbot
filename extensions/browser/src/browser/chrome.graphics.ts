@@ -1,3 +1,4 @@
+import { asNullableRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 /**
  * Managed Chrome graphics diagnostics.
  *
@@ -15,8 +16,6 @@ import type {
   BrowserVideoEncodeCapability,
 } from "./client.types.js";
 
-type UnknownRecord = Record<string, unknown>;
-
 type ChromeGraphicsProbeOptions = {
   httpTimeoutMs?: number;
   handshakeTimeoutMs?: number;
@@ -24,22 +23,16 @@ type ChromeGraphicsProbeOptions = {
   ssrfPolicy?: SsrFPolicy;
 };
 
-function asRecord(value: unknown): UnknownRecord | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as UnknownRecord)
-    : null;
-}
-
-function readString(value: unknown): string {
+function readChromeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function readNumber(value: unknown): number {
+function readChromeNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function readStringRecord(value: unknown): Record<string, string> {
-  const record = asRecord(value);
+  const record = asNullableRecord(value);
   if (!record) {
     return {};
   }
@@ -56,72 +49,43 @@ function readStringArray(value: unknown): string[] {
 }
 
 function readSize(value: unknown): { width: number; height: number } {
-  const size = asRecord(value);
+  const size = asNullableRecord(value);
   return {
-    width: readNumber(size?.width),
-    height: readNumber(size?.height),
+    width: readChromeNumber(size?.width),
+    height: readChromeNumber(size?.height),
   };
 }
 
+function readRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
 function readDevices(value: unknown): BrowserGraphicsDevice[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.flatMap((item) => {
-    const device = asRecord(item);
-    if (!device) {
-      return [];
-    }
-    return [
-      {
-        vendorId: readNumber(device.vendorId),
-        deviceId: readNumber(device.deviceId),
-        vendor: readString(device.vendorString),
-        device: readString(device.deviceString),
-        driverVendor: readString(device.driverVendor),
-        driverVersion: readString(device.driverVersion),
-      },
-    ];
-  });
+  return readRecordArray(value).map((device) => ({
+    vendorId: readChromeNumber(device.vendorId),
+    deviceId: readChromeNumber(device.deviceId),
+    vendor: readChromeString(device.vendorString),
+    device: readChromeString(device.deviceString),
+    driverVendor: readChromeString(device.driverVendor),
+    driverVersion: readChromeString(device.driverVersion),
+  }));
 }
 
 function readVideoDecoding(value: unknown): BrowserVideoDecodeCapability[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.flatMap((item) => {
-    const capability = asRecord(item);
-    if (!capability) {
-      return [];
-    }
-    return [
-      {
-        profile: readString(capability.profile),
-        minResolution: readSize(capability.minResolution),
-        maxResolution: readSize(capability.maxResolution),
-      },
-    ];
-  });
+  return readRecordArray(value).map((capability) => ({
+    profile: readChromeString(capability.profile),
+    minResolution: readSize(capability.minResolution),
+    maxResolution: readSize(capability.maxResolution),
+  }));
 }
 
 function readVideoEncoding(value: unknown): BrowserVideoEncodeCapability[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.flatMap((item) => {
-    const capability = asRecord(item);
-    if (!capability) {
-      return [];
-    }
-    return [
-      {
-        profile: readString(capability.profile),
-        maxResolution: readSize(capability.maxResolution),
-        maxFramerateNumerator: readNumber(capability.maxFramerateNumerator),
-        maxFramerateDenominator: readNumber(capability.maxFramerateDenominator),
-      },
-    ];
-  });
+  return readRecordArray(value).map((capability) => ({
+    profile: readChromeString(capability.profile),
+    maxResolution: readSize(capability.maxResolution),
+    maxFramerateNumerator: readChromeNumber(capability.maxFramerateNumerator),
+    maxFramerateDenominator: readChromeNumber(capability.maxFramerateDenominator),
+  }));
 }
 
 function firstAttribute(
@@ -129,7 +93,7 @@ function firstAttribute(
   names: readonly string[],
 ): string | null {
   for (const name of names) {
-    const value = readString(attributes[name]);
+    const value = readChromeString(attributes[name]);
     if (value) {
       return value;
     }
@@ -169,8 +133,8 @@ function normalizeChromeGraphicsInfo(
   value: unknown,
   observedAt = Date.now(),
 ): BrowserGraphicsDiagnostics {
-  const result = asRecord(value);
-  const gpu = asRecord(result?.gpu);
+  const result = asNullableRecord(value);
+  const gpu = asNullableRecord(result?.gpu);
   if (!gpu) {
     return {
       status: "unavailable",

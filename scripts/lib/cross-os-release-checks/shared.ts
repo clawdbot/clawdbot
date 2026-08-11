@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { truncateUtf16Safe } from "../../../packages/normalization-core/src/utf16-slice.ts";
 
 export function resolveCommandPath(command: string) {
   const pathValue = process.env.PATH ?? "";
@@ -28,7 +29,7 @@ export function trimForSummary(value: string) {
   if (trimmed.length <= 600) {
     return trimmed;
   }
-  return `${trimmed.slice(0, 600)}...`;
+  return `${truncateUtf16Safe(trimmed, 600)}...`;
 }
 
 export function formatError(error: unknown) {

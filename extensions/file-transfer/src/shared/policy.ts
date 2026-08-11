@@ -156,6 +156,13 @@ function matchesAny(target: string, patterns: string[]): boolean {
   return false;
 }
 
+function matchesAnyDeny(target: string, patterns: string[]): boolean {
+  if (matchesAny(target, patterns)) {
+    return true;
+  }
+  return matchesAny(`${target.replace(/[\\/]+$/u, "")}/`, patterns);
+}
+
 function resolveNodePolicy(
   config: FilePolicyConfig,
   nodeId: string,
@@ -262,7 +269,7 @@ export function evaluateFilePolicy(input: {
 
   // 1. Deny patterns always win.
   const denyPatterns = normalizeGlobs(nodeConfig.denyPaths);
-  if (matchesAny(input.path, denyPatterns)) {
+  if (matchesAnyDeny(input.path, denyPatterns)) {
     return {
       ok: false,
       code: "POLICY_DENIED",

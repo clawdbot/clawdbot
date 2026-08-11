@@ -4,23 +4,24 @@
  * These values cross the WebSocket handshake boundary, so additions must stay
  * aligned with protocol schemas and server policy checks.
  */
+import { normalizeOptionalProtocolString } from "./protocol-value-normalization.js";
+
 function normalizeOptionalLowercaseString(raw?: string | null): string | undefined {
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const normalized = raw.trim().toLowerCase();
-  return normalized || undefined;
+  return normalizeOptionalProtocolString(raw)?.toLowerCase();
 }
 
 /** Canonical client ids accepted in gateway hello/connect payloads. */
 export const GATEWAY_CLIENT_IDS = {
   WEBCHAT_UI: "webchat-ui",
   CONTROL_UI: "openclaw-control-ui",
+  BROWSER_COPILOT: "openclaw-browser-copilot",
   TUI: "openclaw-tui",
   WEBCHAT: "webchat",
   CLI: "cli",
   GATEWAY_CLIENT: "gateway-client",
   MACOS_APP: "openclaw-macos",
+  // Native Linux UI uses the same trusted-client admission class as the macOS app.
+  LINUX_APP: "openclaw-linux",
   IOS_APP: "openclaw-ios",
   WATCHOS_APP: "openclaw-watchos",
   ANDROID_APP: "openclaw-android",
@@ -76,9 +77,12 @@ export type GatewayClientInfo = {
 
 /** Capability flags a client may advertise during the gateway handshake. */
 export const GATEWAY_CLIENT_CAPS = {
+  AGENT_KIND: "agent-kind",
   APPROVALS: "approvals",
   EXEC_APPROVALS: "exec-approvals",
   INLINE_WIDGETS: "inline-widgets",
+  RUN_TOOL_BINDINGS: "run-tool-bindings",
+  SESSION_SCOPED_EVENTS: "session-scoped-events",
   PLUGIN_APPROVALS: "plugin-approvals",
   TASK_SUGGESTIONS: "task-suggestions",
   TERMINAL_OFFSET_SEQ: "terminal-offset-seq",

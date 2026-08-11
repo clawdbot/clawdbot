@@ -1,5 +1,8 @@
 // Canvas tests cover bundle a2ui plugin behavior.
+import { execFileSync } from "node:child_process";
+import fs from "node:fs/promises";
 import path from "node:path";
+import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { describe, expect, it } from "vitest";
 import {
   compareNormalizedPaths,
@@ -58,4 +61,46 @@ describe("scripts/bundle-a2ui.mjs", () => {
       path.join(repoRoot, "ui", "node_modules", "lit", "package.json"),
     );
   });
+
+  it.skipIf(process.platform === "win32")(
+    "falls back when tracked-input discovery stalls",
+    async () => {
+      await withTempWorkspace(
+        { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-a2ui-git-timeout-" },
+        async ({ dir }) => {
+          const fakeBinDir = path.join(dir, "bin");
+          const fakeGitPath = path.join(fakeBinDir, "git");
+          const outputFile = path.join(dir, "a2ui.bundle.js");
+          const hashFile = path.join(dir, "a2ui.bundle.hash");
+          await fs.mkdir(fakeBinDir, { recursive: true });
+          await fs.writeFile(
+            fakeGitPath,
+            `#!${process.execPath}\nsetTimeout(() => {}, 30_000);\n`,
+            "utf8",
+          );
+          await fs.chmod(fakeGitPath, 0o755);
+
+          execFileSync(
+            process.execPath,
+            [path.resolve("extensions/canvas/scripts/bundle-a2ui.mjs")],
+            {
+              cwd: process.cwd(),
+              encoding: "utf8",
+              env: {
+                ...process.env,
+                OPENCLAW_A2UI_BUNDLE_HASH_FILE: hashFile,
+                OPENCLAW_A2UI_BUNDLE_OUT: outputFile,
+                PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
+              },
+              killSignal: "SIGKILL",
+              timeout: 12_000,
+            },
+          );
+
+          await expect(fs.stat(outputFile)).resolves.toBeDefined();
+          await expect(fs.stat(hashFile)).resolves.toBeDefined();
+        },
+      );
+    },
+  );
 });

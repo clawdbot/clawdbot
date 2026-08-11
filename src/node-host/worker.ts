@@ -1,7 +1,9 @@
 /** Private JSONL worker exposing the CLI node-host runtime to the macOS app. */
 import { createInterface } from "node:readline";
 import { VERSION } from "../version.js";
+import { loadNodeHostConfig } from "./config.js";
 import { prepareNodeHostRuntime, type NodeHostInventory } from "./runtime.js";
+import { runStartupMigrations } from "./startup-state-migrations.js";
 import {
   NodeHostWorkerBridgeClient,
   parseNodeHostWorkerInput,
@@ -12,12 +14,23 @@ function writeMessage(message: unknown): void {
   process.stdout.write(`${JSON.stringify(message)}\n`);
 }
 
+function writeStderrLine(message: string): void {
+  process.stderr.write(`${message}\n`);
+}
+
 function emitInventory(inventory: NodeHostInventory): void {
   writeMessage({ type: "inventory", inventory });
 }
 
 export async function runNodeHostWorker(): Promise<void> {
-  const prepared = await prepareNodeHostRuntime({ enableDuplexPluginCommands: true });
+  // Operator-approved startup is a second authorized entry point for Doctor-owned
+  // state migrators. Runtime invokes those owners here and never migrates inline.
+  await runStartupMigrations({ log: { info: writeStderrLine, warn: writeStderrLine } });
+  const nodeConfig = await loadNodeHostConfig();
+  const prepared = await prepareNodeHostRuntime({
+    enableDuplexPluginCommands: true,
+    installedAppsSharingEnabled: nodeConfig?.installedAppsSharing === true,
+  });
   const client = new NodeHostWorkerBridgeClient(writeMessage);
   let stopping = false;
   let resolveStopped: (() => void) | undefined;

@@ -3,23 +3,28 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
-import { listNodePairing } from "../../infra/node-pairing.js";
+import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import type { WorkerEnvironmentRecord } from "../worker-environments/store.js";
-import type { WorkerTunnelStatus } from "../worker-environments/tunnel-contract.js";
 import { environmentsHandlers, summarizeWorkerEnvironment } from "./environments.js";
 
 vi.mock("../../infra/device-pairing.js", () => ({
   listDevicePairing: vi.fn(),
+  resolveNodePairingState: vi.fn(),
 }));
 
-vi.mock("../../infra/node-pairing.js", () => ({
+vi.mock("../../infra/device-pairing-node.js", () => ({
   listNodePairing: vi.fn(),
 }));
 
 const NOW = 10_000;
 
-type TestWorkerRecord = WorkerEnvironmentRecord & { tunnelStatus: WorkerTunnelStatus };
+type TestWorkerRecord = WorkerEnvironmentRecord &
+  Pick<
+    WorkerEnvironmentServiceRecord,
+    "desktopAvailable" | "desktopApps" | "tunnelStatus" | "error"
+  >;
 
 type TestWorkerService = {
   list: () => TestWorkerRecord[];
@@ -27,21 +32,33 @@ type TestWorkerService = {
   create: (profileId: string, idempotencyKey: string) => Promise<TestWorkerRecord>;
   destroy: (environmentId: string) => Promise<TestWorkerRecord>;
   destroyUnattached: (environmentId: string) => Promise<TestWorkerRecord>;
+  observeDesktop: (request: { environmentId: string; control: boolean }) => Promise<{
+    transport: "rfb";
+    wsPath: string;
+    expiresAtMs: number;
+    control: boolean;
+    vncPassword?: string;
+  }>;
+  launchDesktopApp: (request: {
+    environmentId: string;
+    app: "browser" | "terminal";
+  }) => Promise<{ app: "browser" | "terminal"; status: "ready" }>;
 };
 
 function mockContext(
   workerEnvironmentService?: TestWorkerService,
   reconcileActive: (environmentId?: string) => Promise<void> = vi.fn(async () => {}),
-  forceDestroyEnvironment: (environmentId: string) => Promise<TestWorkerRecord> = vi.fn(async () =>
-    workerRecord({ state: "destroyed" }),
-  ),
+  forceDestroyEnvironment: (
+    environmentId: string,
+    onCleanupError?: (error: unknown) => void,
+  ) => Promise<TestWorkerRecord> = vi.fn(async () => workerRecord({ state: "destroyed" })),
 ) {
   return {
     logGateway: {
       warn: vi.fn(),
     },
     nodeRegistry: {
-      listConnected: () => [
+      listConnectedForPairingStates: () => [
         {
           nodeId: "node-live",
           connId: "conn-live",
@@ -82,6 +99,7 @@ function workerRecord(overrides: Partial<TestWorkerRecord> = {}): TestWorkerReco
     profileSnapshot: { settings: {} },
     provisionOperationId: "provision:worker-1",
     leaseId: "lease-1",
+    desktop: null,
     sshEndpoint: {
       host: "worker.example.test",
       port: 22,
@@ -97,6 +115,8 @@ function workerRecord(overrides: Partial<TestWorkerRecord> = {}): TestWorkerReco
     idleSinceAtMs: null,
     lastError: null,
     tunnelStatus: "stopped",
+    desktopAvailable: false,
+    desktopApps: [],
     ...overrides,
   } as TestWorkerRecord;
 }
@@ -108,6 +128,13 @@ function workerService(overrides: Partial<TestWorkerService> = {}) {
     create: vi.fn(async () => workerRecord()),
     destroy: vi.fn(async () => workerRecord({ state: "destroyed" })),
     destroyUnattached: vi.fn(async () => workerRecord({ state: "destroyed" })),
+    observeDesktop: vi.fn(async ({ control }) => ({
+      transport: "rfb" as const,
+      wsPath: "/worker-desktop/observe?token=abc",
+      expiresAtMs: 70_000,
+      control,
+    })),
+    launchDesktopApp: vi.fn(async ({ app }) => ({ app, status: "ready" as const })),
     ...overrides,
   };
 }
@@ -117,12 +144,17 @@ async function callEnvironmentMethod(
     | "environments.list"
     | "environments.status"
     | "environments.create"
-    | "environments.destroy",
+    | "environments.destroy"
+    | "worker.desktop.observe"
+    | "worker.desktop.launch",
   params: unknown,
   options: {
     service?: TestWorkerService;
     reconcileActive?: (environmentId?: string) => Promise<void>;
-    forceDestroyEnvironment?: (environmentId: string) => Promise<TestWorkerRecord>;
+    forceDestroyEnvironment?: (
+      environmentId: string,
+      onCleanupError?: (error: unknown) => void,
+    ) => Promise<TestWorkerRecord>;
   } = {},
 ) {
   const respond = vi.fn();
@@ -251,6 +283,34 @@ describe("environment gateway methods", () => {
     ["orphaned", "error"],
   ] as const)("maps worker state %s to %s", (state, status) => {
     expect(summarizeWorkerEnvironment(workerRecord({ state }), NOW).status).toBe(status);
+  });
+
+  it("projects recorded errors only for terminal error states", () => {
+    expect(
+      summarizeWorkerEnvironment(
+        workerRecord({ state: "failed", error: "provider teardown failed" }),
+        NOW,
+      ).worker,
+    ).toMatchObject({ error: "provider teardown failed" });
+    expect(
+      summarizeWorkerEnvironment(
+        workerRecord({ state: "ready", error: "stale transient error" }),
+        NOW,
+      ).worker,
+    ).not.toHaveProperty("error");
+  });
+
+  it("projects desktop metadata only when the service reports it available", () => {
+    expect(
+      summarizeWorkerEnvironment(
+        workerRecord({ desktopAvailable: true, desktopApps: ["browser", "terminal"] }),
+        NOW,
+      ).worker,
+    ).toMatchObject({ desktop: true, desktopApps: ["browser", "terminal"] });
+    expect(
+      summarizeWorkerEnvironment(workerRecord({ desktopAvailable: false, desktopApps: [] }), NOW)
+        .worker,
+    ).not.toHaveProperty("desktopApps");
   });
 
   it("returns status for one node environment", async () => {
@@ -411,6 +471,147 @@ describe("environment gateway methods", () => {
     });
   });
 
+  it("starts desktop observation with explicit and default control modes", async () => {
+    const observeDesktop = vi.fn(async ({ control }: { control: boolean }) => ({
+      transport: "rfb" as const,
+      wsPath: "/worker-desktop/observe?token=abc",
+      expiresAtMs: 70_000,
+      control,
+    }));
+    const service = workerService({ observeDesktop });
+    const first = await callEnvironmentMethod(
+      "worker.desktop.observe",
+      { environmentId: "worker-1", control: true },
+      { service },
+    );
+    const second = await callEnvironmentMethod(
+      "worker.desktop.observe",
+      { environmentId: "worker-1" },
+      { service },
+    );
+    expect(first).toEqual([
+      true,
+      {
+        transport: "rfb",
+        wsPath: "/worker-desktop/observe?token=abc",
+        expiresAtMs: 70_000,
+        control: true,
+      },
+      undefined,
+    ]);
+    expect(second[1]).toMatchObject({ control: false });
+    expect(observeDesktop).toHaveBeenNthCalledWith(1, {
+      environmentId: "worker-1",
+      control: true,
+    });
+    expect(observeDesktop).toHaveBeenNthCalledWith(2, {
+      environmentId: "worker-1",
+      control: false,
+    });
+  });
+
+  it("maps desktop lifecycle errors to invalid request and hides runtime failures", async () => {
+    const invalidService = workerService({
+      observeDesktop: vi.fn(async () => {
+        throw new FakeWorkerServiceError("invalid_state", "environment has no desktop");
+      }),
+    });
+    const unavailableService = workerService({
+      observeDesktop: vi.fn(async () => {
+        throw new FakeWorkerServiceError("provider_failure", "private SSH failure");
+      }),
+    });
+    expect(
+      await callEnvironmentMethod(
+        "worker.desktop.observe",
+        { environmentId: "worker-1" },
+        { service: invalidService },
+      ),
+    ).toEqual([
+      false,
+      undefined,
+      { code: ErrorCodes.INVALID_REQUEST, message: "environment has no desktop" },
+    ]);
+    expect(
+      await callEnvironmentMethod(
+        "worker.desktop.observe",
+        { environmentId: "worker-1" },
+        { service: unavailableService },
+      ),
+    ).toEqual([
+      false,
+      undefined,
+      { code: ErrorCodes.UNAVAILABLE, message: "worker desktop observe unavailable" },
+    ]);
+  });
+
+  it("launches only a closed advertised desktop app and returns readiness", async () => {
+    const launchDesktopApp = vi.fn(async ({ app }: { app: "browser" | "terminal" }) => ({
+      app,
+      status: "ready" as const,
+    }));
+    const service = workerService({ launchDesktopApp });
+    const result = await callEnvironmentMethod(
+      "worker.desktop.launch",
+      { environmentId: "worker-1", app: "browser" },
+      { service },
+    );
+
+    expect(result).toEqual([true, { app: "browser", status: "ready" }, undefined]);
+    expect(launchDesktopApp).toHaveBeenCalledExactlyOnceWith({
+      environmentId: "worker-1",
+      app: "browser",
+    });
+    const rejected = await callEnvironmentMethod(
+      "worker.desktop.launch",
+      { environmentId: "worker-1", app: "editor" },
+      { service },
+    );
+    expect(rejected[0]).toBe(false);
+    expect(launchDesktopApp).toHaveBeenCalledOnce();
+  });
+
+  it("maps typed desktop launcher errors without exposing unknown runtime details", async () => {
+    const cases = [
+      [
+        "desktop_app_not_found",
+        ErrorCodes.INVALID_REQUEST,
+        "environment does not advertise desktop app: browser",
+      ],
+      [
+        "unsupported_platform",
+        ErrorCodes.INVALID_REQUEST,
+        "desktop app launch is not supported on Windows gateway hosts",
+      ],
+      [
+        "launcher_failure",
+        ErrorCodes.UNAVAILABLE,
+        "worker desktop browser launcher failed; verify the app is installed and retry",
+      ],
+      [
+        "provider_failure",
+        ErrorCodes.UNAVAILABLE,
+        "worker desktop app launch unavailable; try again",
+      ],
+    ] as const;
+    for (const [serviceCode, gatewayCode, message] of cases) {
+      const service = workerService({
+        launchDesktopApp: vi.fn(async () => {
+          throw new FakeWorkerServiceError(
+            serviceCode,
+            serviceCode === "provider_failure" ? "private SSH detail" : message,
+          );
+        }),
+      });
+      const response = await callEnvironmentMethod(
+        "worker.desktop.launch",
+        { environmentId: "worker-1", app: "browser" },
+        { service },
+      );
+      expect(response[2]).toEqual({ code: gatewayCode, message });
+    }
+  });
+
   it("destroys an environment idempotently", async () => {
     const destroyed = workerRecord({ state: "destroyed" });
     const destroyUnattached = vi.fn(async () => destroyed);
@@ -461,9 +662,7 @@ describe("environment gateway methods", () => {
 
   it("durably abandons placement ownership before forced destruction", async () => {
     const service = workerService();
-    const forceDestroyEnvironment = vi.fn(
-      async (environmentId: string) => await service.destroy(environmentId),
-    );
+    const forceDestroyEnvironment = vi.fn(async () => workerRecord({ state: "destroyed" }));
 
     const [ok, payload] = await callEnvironmentMethod(
       "environments.destroy",
@@ -473,9 +672,43 @@ describe("environment gateway methods", () => {
 
     expect(ok).toBe(true);
     expect(payload).toMatchObject({ worker: { state: "destroyed" } });
-    expect(forceDestroyEnvironment).toHaveBeenCalledExactlyOnceWith("worker-1");
-    expect(service.destroy).toHaveBeenCalledExactlyOnceWith("worker-1");
+    expect(forceDestroyEnvironment).toHaveBeenCalledExactlyOnceWith(
+      "worker-1",
+      expect.any(Function),
+    );
+    expect(service.destroy).not.toHaveBeenCalled();
     expect(service.destroyUnattached).not.toHaveBeenCalled();
+  });
+
+  it("logs best-effort forced teardown errors without failing the call", async () => {
+    const service = workerService();
+    const forceDestroyEnvironment = vi.fn(
+      async (_environmentId: string, onCleanupError?: (error: unknown) => void) => {
+        onCleanupError?.(new Error("provider stop remains pending"));
+        return workerRecord({ state: "destroying" });
+      },
+    );
+    const context = mockContext(
+      service,
+      vi.fn(async () => {}),
+      forceDestroyEnvironment,
+    );
+    const respond = vi.fn();
+
+    await environmentsHandlers["environments.destroy"]?.({
+      params: { environmentId: "worker-1", force: true },
+      respond,
+      context,
+    } as never);
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ worker: expect.objectContaining({ state: "destroying" }) }),
+      undefined,
+    );
+    expect(context.logGateway.warn).toHaveBeenCalledWith(
+      "worker environment forced teardown cleanup failed: Error: provider stop remains pending",
+    );
   });
 
   it("reconciles active placements before returning destroyed worker state", async () => {

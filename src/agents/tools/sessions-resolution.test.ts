@@ -155,6 +155,26 @@ describe("session reference shape detection", () => {
 });
 
 describe("resolved session visibility checks", () => {
+  it("rejects incognito targets even when the requester is the same session", async () => {
+    const sessionKey = "agent:main:dashboard:incognito-private";
+
+    await expect(
+      resolveVisibleSessionReference({
+        action: "history",
+        resolvedSession: {
+          ok: true,
+          key: sessionKey,
+          displayKey: sessionKey,
+          resolvedViaSessionId: false,
+        },
+        requesterSessionKey: sessionKey,
+        restrictToSpawned: false,
+        visibilitySessionKey: sessionKey,
+      }),
+    ).resolves.toMatchObject({ ok: false, status: "forbidden" });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("requires spawned-session verification only for sandboxed key-based cross-session access", async () => {
     const cases = [
       {
@@ -190,6 +210,7 @@ describe("resolved session visibility checks", () => {
     for (const testCase of cases) {
       callGatewayMock.mockResolvedValueOnce({ key: testCase.targetSessionKey });
       const result = resolveVisibleSessionReference({
+        action: "history",
         resolvedSession: {
           ok: true,
           key: testCase.targetSessionKey,
@@ -232,6 +253,7 @@ describe("resolved session visibility checks", () => {
 
     await expect(
       resolveVisibleSessionReference({
+        action: "history",
         resolvedSession: {
           ok: true,
           key: "agent:main:subagent:worker-999",
@@ -247,6 +269,34 @@ describe("resolved session visibility checks", () => {
       key: "agent:main:subagent:worker-999",
       displayKey: "agent:main:subagent:worker-999",
     });
+  });
+
+  it("falls back to spawned-session listing when exact resolution is unsupported", async () => {
+    callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "sessions.resolve") {
+        throw new Error("unsupported sessions.resolve shape");
+      }
+      return { sessions: [{ key: "agent:main:subagent:worker" }] };
+    });
+
+    await expect(
+      resolveVisibleSessionReference({
+        action: "history",
+        resolvedSession: {
+          ok: true,
+          key: "agent:main:subagent:worker",
+          displayKey: "agent:main:subagent:worker",
+          resolvedViaSessionId: false,
+        },
+        requesterSessionKey: "agent:main:main",
+        restrictToSpawned: true,
+        visibilitySessionKey: "agent:main:subagent:worker",
+      }),
+    ).resolves.toMatchObject({ ok: true, key: "agent:main:subagent:worker" });
+    expect(callGatewayMock.mock.calls.map(([request]) => request.method)).toEqual([
+      "sessions.resolve",
+      "sessions.list",
+    ]);
   });
 });
 

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { truncateUtf16Safe } from "../../../packages/normalization-core/src/utf16-slice.ts";
 import type { GatewayHandle, LaneState } from "./config.ts";
 import {
   CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS,
@@ -36,12 +37,50 @@ export function buildDiscordSmokeGuildsConfig(guildId: string, channelId: string
   };
 }
 
+export async function restartManualGatewayForDiscordSmoke(params: {
+  lane: LaneState;
+  cliPath: string;
+  env: NodeJS.ProcessEnv;
+  gatewayHolder: { current: GatewayHandle | null };
+  gatewayLogPath: string;
+  statusLogPath: string;
+  operations?: {
+    startGateway: typeof startManualGatewayFromInstalledCli;
+    stopGateway: typeof stopGateway;
+    waitForGateway: typeof waitForInstalledGateway;
+  };
+}) {
+  const operations = params.operations ?? {
+    startGateway: startManualGatewayFromInstalledCli,
+    stopGateway,
+    waitForGateway: waitForInstalledGateway,
+  };
+  if (params.gatewayHolder.current) {
+    await operations.stopGateway(params.gatewayHolder.current);
+    params.gatewayHolder.current = null;
+  }
+  params.gatewayHolder.current = await operations.startGateway({
+    lane: params.lane,
+    cliPath: params.cliPath,
+    env: params.env,
+    logPath: params.gatewayLogPath,
+  });
+  await operations.waitForGateway({
+    lane: params.lane,
+    cliPath: params.cliPath,
+    env: params.env,
+    gatewayHolder: params.gatewayHolder,
+    gatewayLogPath: params.gatewayLogPath,
+    logPath: params.statusLogPath,
+  });
+}
+
 async function configureDiscordSmoke(params: {
   lane: LaneState;
   cliPath: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
-  gatewayHolder?: { current: GatewayHandle | null };
+  gatewayHolder: { current: GatewayHandle | null };
   logPath: string;
   token: string;
   guildId: string;
@@ -94,24 +133,17 @@ async function configureDiscordSmoke(params: {
   });
   if (!shouldUseManagedGatewayService()) {
     const gatewayEnv = { ...params.env, DISCORD_BOT_TOKEN: params.token };
-    if (params.gatewayHolder?.current) {
-      await stopGateway(params.gatewayHolder.current);
-      params.gatewayHolder.current = null;
-    }
-    const gateway = await startManualGatewayFromInstalledCli({
+    const gatewayLogPath = join(
+      params.cwd,
+      `.openclaw/logs/${params.lane.name}-discord-gateway.log`,
+    );
+    await restartManualGatewayForDiscordSmoke({
       lane: params.lane,
       cliPath: params.cliPath,
       env: gatewayEnv,
-      logPath: join(params.cwd, `.openclaw/logs/${params.lane.name}-discord-gateway.log`),
-    });
-    if (params.gatewayHolder) {
-      params.gatewayHolder.current = gateway;
-    }
-    await waitForInstalledGateway({
-      lane: params.lane,
-      cliPath: params.cliPath,
-      env: gatewayEnv,
-      logPath: params.logPath,
+      gatewayHolder: params.gatewayHolder,
+      gatewayLogPath,
+      statusLogPath: params.logPath,
     });
     return;
   }
@@ -157,7 +189,7 @@ export async function readBoundedCrossOsResponseText(
 
       text += decoder.decode(value, { stream: true });
       if (text.length > maxChars) {
-        text = text.slice(0, maxChars);
+        text = truncateUtf16Safe(text, maxChars);
         truncated = true;
         break;
       }

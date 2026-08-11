@@ -3,14 +3,18 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { extensionForMime, type MediaKind } from "openclaw/plugin-sdk/media-mime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import {
   pathExistsSync,
   resolveLocalPathFromRootsSync,
+  sanitizeUntrustedFileName,
+  writeExternalFileWithinRoot,
 } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { GatewayAccount } from "../types.js";
 import { MediaFileType } from "../types.js";
@@ -23,7 +27,6 @@ import {
   getMaxUploadSize,
   readFileAsync,
 } from "../utils/file-utils.js";
-import { formatErrorMessage } from "../utils/format.js";
 import { debugError, debugLog, debugWarn } from "../utils/log.js";
 import {
   getQQBotDataDir,
@@ -31,7 +34,7 @@ import {
   isLocalPath as isLocalFilePath,
   normalizePath,
 } from "../utils/platform.js";
-import { normalizeLowercaseStringOrEmpty, sanitizeFileName } from "../utils/string-normalize.js";
+import { sanitizeFileName } from "../utils/string-normalize.js";
 import { audioFileToSilkBase64, shouldTranscodeVoice, waitForFile } from "./outbound-audio-port.js";
 import {
   isPathWithinRoot,
@@ -206,7 +209,7 @@ function mediaFileTypeForKind(mediaKind: QQBotMediaKind): MediaFileType {
 
 function senderKindForLoadedMedia(
   mediaKind: QQBotMediaKind,
-  loadedKind: "image" | "audio" | "video" | "document" | undefined,
+  loadedKind: MediaKind | undefined,
 ): "image" | "video" | "file" | null {
   if (mediaKind === "image") {
     return loadedKind === "image" ? "image" : null;
@@ -252,17 +255,21 @@ async function stageLoadedHostReadVoice(
   loaded: LoadedOutboundMedia,
 ): Promise<string> {
   const stagedDir = getQQBotMediaDir("host-read", "voice");
-  await mkdir(stagedDir, { recursive: true });
-  const rawFileName = sanitizeFileName(loaded.fileName || path.basename(mediaPath) || "voice");
-  const ext = path.extname(rawFileName);
-  const inferredExt = extensionForMime(loaded.contentType);
-  const baseName = sanitizeFileName(path.basename(rawFileName, ext)) || "voice";
-  const stagedPath = path.join(
-    stagedDir,
-    `${baseName}-${randomUUID()}${ext || inferredExt || ".bin"}`,
+  // Decode QQ escapes once before applying portable basename policy. Decoding
+  // again after basename can recreate traversal separators at the write boundary.
+  const normalizedFileName = sanitizeFileName(
+    loaded.fileName || path.basename(mediaPath) || "voice",
   );
-  await writeFile(stagedPath, loaded.buffer);
-  return stagedPath;
+  const safeFileName = sanitizeUntrustedFileName(normalizedFileName, "voice");
+  const ext = path.extname(safeFileName);
+  const inferredExt = extensionForMime(loaded.contentType);
+  const baseName = path.basename(safeFileName, ext) || "voice";
+  const staged = await writeExternalFileWithinRoot({
+    rootDir: stagedDir,
+    path: `${baseName}-${randomUUID()}${ext || inferredExt || ".bin"}`,
+    write: async (tempPath) => await writeFile(tempPath, loaded.buffer),
+  });
+  return staged.path;
 }
 
 async function stageHostReadVoice(
@@ -322,9 +329,7 @@ async function trySendViaHostRead(
       return { channel: "qqbot", error: `File is empty: ${hostReadMediaPath}` };
     }
     if (mediaKind === "media" && loaded.kind === "audio") {
-      const directUploadFormats =
-        ctx.account.config?.audioFormatPolicy?.uploadDirectFormats ??
-        ctx.account.config?.voiceDirectUploadFormats;
+      const directUploadFormats = ctx.account.config?.audioFormatPolicy?.uploadDirectFormats;
       const transcodeEnabled = ctx.account.config?.audioFormatPolicy?.transcodeEnabled !== false;
       const stagedPath = await stageLoadedHostReadVoice(mediaPath, loaded);
       return await sendVoiceFromLocal(ctx, stagedPath, directUploadFormats, transcodeEnabled);

@@ -1,18 +1,22 @@
 // Setup migration snapshots bind retries to unchanged source and target state.
+import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withFileLock } from "../infra/file-lock.js";
+import { isNotFoundPathError } from "../infra/path-guards.js";
 import type { MigrationPlan } from "../plugins/types.js";
 import { resolveUserPath } from "../utils.js";
+import { canonicalizeSetupMigrationValue } from "./setup.migration-canonical.js";
 
-const SETUP_MIGRATION_LOCK_OPTIONS = {
-  retries: { retries: 60, factor: 1, minTimeout: 500, maxTimeout: 500 },
+const ONBOARDING_TARGET_LOCK_OPTIONS = {
+  retries: { retries: 1_200, factor: 1, minTimeout: 500, maxTimeout: 500 },
   stale: 30 * 60 * 1000,
   staleRecovery: "remove-if-unchanged" as const,
 };
+const activeSetupMigrationTargetLock = new AsyncLocalStorage<string>();
 const MEANINGFUL_CONFIG_IGNORED_KEYS = new Set(["$schema", "meta"]);
 const MEANINGFUL_WIZARD_CONFIG_IGNORED_KEYS = new Set(["securityAcknowledgedAt"]);
 const MEANINGFUL_WORKSPACE_ENTRIES = [
@@ -23,27 +27,7 @@ const MEANINGFUL_WORKSPACE_ENTRIES = [
   "MEMORY.md",
   "skills",
 ] as const;
-const MEANINGFUL_STATE_ENTRIES = ["credentials", "sessions", "agents"] as const;
-
-function isMissingPathError(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
-}
-
-function canonicalizeJsonValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(canonicalizeJsonValue);
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  const record = value as Record<string, unknown>;
-  return Object.fromEntries(
-    Object.keys(record)
-      .toSorted()
-      .filter((key) => record[key] !== undefined)
-      .map((key) => [key, canonicalizeJsonValue(record[key])]),
-  );
-}
+const MEANINGFUL_STATE_ENTRIES = ["credentials", "sessions", "agents", "state"] as const;
 
 async function exists(candidate: string): Promise<boolean> {
   try {
@@ -117,6 +101,12 @@ export async function inspectSetupMigrationFreshness(params: {
       reasons.push(`workspace ${entry} exists`);
     }
   }
+  if (
+    reasons.every((reason) => !reason.startsWith("workspace ")) &&
+    (await hasDirectoryEntries(params.workspaceDir))
+  ) {
+    reasons.push("workspace directory is not empty");
+  }
   for (const entry of MEANINGFUL_STATE_ENTRIES) {
     if (await hasDirectoryEntries(path.join(params.stateDir, entry))) {
       reasons.push(`state ${entry}/ exists`);
@@ -149,7 +139,7 @@ async function hashTargetPath(
   try {
     stat = await fs.lstat(candidate);
   } catch (error) {
-    if (isMissingPathError(error)) {
+    if (isNotFoundPathError(error)) {
       hash.update(`missing:${snapshotPath}\0`);
       return;
     }
@@ -187,7 +177,7 @@ async function hashSourcePath(
   try {
     stat = await fs.lstat(candidate);
   } catch (error) {
-    if (isMissingPathError(error)) {
+    if (isNotFoundPathError(error)) {
       hash.update(`missing:${snapshotPath}\0`);
       return;
     }
@@ -242,10 +232,8 @@ export async function buildSetupMigrationTargetSnapshot(params: {
 }): Promise<string> {
   const hash = crypto.createHash("sha256");
   const targetConfig = buildSetupMigrationSnapshotConfig(params.config);
-  hash.update(`config:${JSON.stringify(canonicalizeJsonValue(targetConfig))}\0`);
-  for (const entry of MEANINGFUL_WORKSPACE_ENTRIES) {
-    await hashTargetPath(hash, path.join(params.workspaceDir, entry), `workspace/${entry}`);
-  }
+  hash.update(`config:${JSON.stringify(canonicalizeSetupMigrationValue(targetConfig))}\0`);
+  await hashTargetPath(hash, params.workspaceDir, "workspace");
   for (const entry of MEANINGFUL_STATE_ENTRIES) {
     await hashTargetPath(hash, path.join(params.stateDir, entry), `state/${entry}`);
   }
@@ -315,17 +303,31 @@ export async function prepareSetupMigrationAttemptBoundary(params: {
   };
 }
 
-/** Serializes all onboarding migration writes that share one OpenClaw state target. */
+/** Serializes onboarding writes that share one OpenClaw state target. */
 export async function withSetupMigrationTargetLock<T>(
   stateDir: string,
   fn: () => Promise<T>,
+  options?: { wait?: boolean },
 ): Promise<T> {
-  const migrationDir = path.join(stateDir, "migration");
+  const resolvedStateDir = path.resolve(stateDir);
+  const activeStateDir = activeSetupMigrationTargetLock.getStore();
+  if (activeStateDir) {
+    if (activeStateDir !== resolvedStateDir) {
+      throw new Error("nested onboarding target lock cannot switch the OpenClaw state directory");
+    }
+    return await fn();
+  }
+  const migrationDir = path.join(resolvedStateDir, "migration");
   await fs.mkdir(migrationDir, { recursive: true, mode: 0o700 });
   return await withFileLock(
     path.join(migrationDir, "onboarding.lock-target"),
-    SETUP_MIGRATION_LOCK_OPTIONS,
-    fn,
+    options?.wait === false
+      ? {
+          ...ONBOARDING_TARGET_LOCK_OPTIONS,
+          retries: { ...ONBOARDING_TARGET_LOCK_OPTIONS.retries, retries: 0 },
+        }
+      : ONBOARDING_TARGET_LOCK_OPTIONS,
+    async () => await activeSetupMigrationTargetLock.run(resolvedStateDir, fn),
   );
 }
 

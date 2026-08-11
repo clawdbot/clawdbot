@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import { OpenClawTerminalPanel } from "./terminal-panel.ts";
 import type { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
@@ -31,20 +33,12 @@ function createTerminalController() {
 const createTerminal = vi.fn(async () => createTerminalController());
 
 class ReadinessTestTerminalPanel extends OpenClawTerminalPanel {
-  protected override createTerminal =
+  override createTerminalController =
     createTerminal as unknown as typeof createIsolatedGhosttyTerminal;
 }
 
 const TERMINAL_PANEL_ELEMENT_NAME = `test-terminal-panel-readiness-${crypto.randomUUID()}`;
 customElements.define(TERMINAL_PANEL_ELEMENT_NAME, ReadinessTestTerminalPanel);
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
 
 function terminalOpenResult(sessionId: string) {
   return {
@@ -79,7 +73,7 @@ describe("terminal panel readiness", () => {
       new CustomEvent("openclaw:terminal-toggle", { detail: { open: false } }),
     );
 
-    expect((panel as unknown as { open: boolean }).open).toBe(false);
+    expect(panel.terminalPanelOpen).toBe(false);
   });
 
   it("opens and co-attaches an agent terminal requested by ui.command", async () => {
@@ -110,7 +104,7 @@ describe("terminal panel readiness", () => {
       }),
     );
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(requests).toContainEqual({
         method: "terminal.attach",
         params: { sessionId: "agent-terminal-1" },
@@ -120,7 +114,7 @@ describe("terminal panel readiness", () => {
   });
 
   it("shows a connecting animation while a terminal open is in flight", async () => {
-    const open = deferred<{
+    const open = createDeferred<{
       sessionId: string;
       agentId: string;
       shell: string;
@@ -139,7 +133,7 @@ describe("terminal panel readiness", () => {
     document.body.append(panel);
     panel.toggle();
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(panel.renderRoot.querySelector(".tp-connecting")?.textContent).toContain(
         "Connecting to session",
       );
@@ -149,7 +143,7 @@ describe("terminal panel readiness", () => {
     });
 
     open.resolve(terminalOpenResult("session-1"));
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(panel.renderRoot.querySelector(".tp-connecting")).toBeNull();
       expect(panel.renderRoot.querySelector(".tabstrip-tab")?.classList.contains("is-live")).toBe(
         true,
@@ -186,7 +180,7 @@ describe("terminal panel readiness", () => {
 
     panel.handleToggleRequest(new CustomEvent("openclaw:terminal-toggle", { detail: { catalog } }));
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(requests).toContainEqual({
         method: "terminal.open",
         params: { agentId: undefined, cols: 100, rows: 30, catalog },
@@ -203,7 +197,7 @@ describe("terminal panel readiness", () => {
       event: "terminal.data",
       payload: { sessionId: "catalog-terminal-1", seq: 5, data: "ready" },
     });
-    await vi.waitFor(() => expect(panel.renderRoot.querySelector(".tp-connecting")).toBeNull());
+    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp-connecting")).toBeNull());
     expect(new TextDecoder().decode(controller.write.mock.calls[0]?.[0])).toBe("ready");
     expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
       JSON.stringify(["catalog-terminal-1"]),
@@ -211,8 +205,8 @@ describe("terminal panel readiness", () => {
   });
 
   it("marks a catalog terminal ready when its first visible output is a replay", async () => {
-    const controller = createTerminalController();
-    createTerminal.mockResolvedValue(controller);
+    const controllers = [createTerminalController(), createTerminalController()] as const;
+    createTerminal.mockResolvedValueOnce(controllers[0]).mockResolvedValueOnce(controllers[1]);
     const requests: Array<{ method: string; params: unknown }> = [];
     let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
     const client: TerminalGatewayClient = {
@@ -248,20 +242,24 @@ describe("terminal panel readiness", () => {
         detail: { catalog: { catalogId: "anthropic", hostId: "node:mac", threadId: "thread" } },
       }),
     );
-    await vi.waitFor(() => expect(panel.renderRoot.querySelector(".tp-connecting")).not.toBeNull());
+    await waitForFast(() =>
+      expect(panel.renderRoot.querySelector(".tp-connecting")).not.toBeNull(),
+    );
 
     listener?.({
       event: "terminal.data",
       payload: { sessionId: "catalog-terminal-1", seq: 12, data: "gap" },
     });
 
-    await vi.waitFor(() => expect(panel.renderRoot.querySelector(".tp-connecting")).toBeNull());
+    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp-connecting")).toBeNull());
     expect(requests).toContainEqual({
       method: "terminal.attach",
       params: { sessionId: "catalog-terminal-1" },
     });
-    expect(controller.terminal.reset).toHaveBeenCalledOnce();
-    expect(new TextDecoder().decode(controller.write.mock.calls[0]?.[0])).toBe("recovered output");
+    expect(controllers[0].dispose).toHaveBeenCalledOnce();
+    expect(new TextDecoder().decode(controllers[1].write.mock.calls[0]?.[0])).toBe(
+      "recovered output",
+    );
   });
 
   it("closes a catalog terminal and shows an error when no output arrives", async () => {
@@ -290,7 +288,7 @@ describe("terminal panel readiness", () => {
       }),
     );
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(panel.renderRoot.querySelector(".tp-error")?.textContent).toContain(
         "Session did not connect within 30 seconds",
       );

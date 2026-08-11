@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { normalizeOptionalString as normalizeRunId } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeDeliveryContext,
   type DeliveryContext,
@@ -16,10 +17,6 @@ type RestartRecoveryChannelAuthority = {
   deliveryContext: DeliveryContext & { channel: string; to: string };
   sourceTurnId: string;
 };
-
-function normalizeRunId(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 /** Resolves only a complete durable channel claim; session-route fallbacks carry no authority. */
 export function resolveRestartRecoveryChannelAuthority(
@@ -470,15 +467,17 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
   entry: SessionEntry;
   recordTerminalSource: boolean;
   terminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidenceResult;
+  terminalRunId?: string;
   terminalSourceRunId?: string;
 }): Partial<SessionEntry> {
   const sourceRunId =
     normalizeRunId(params.terminalSourceRunId) ??
     normalizeRunId(params.entry.restartRecoveryDeliverySourceRunId);
   const terminalRunIds =
-    params.recordTerminalSource && sourceRunId
+    params.recordTerminalSource && (sourceRunId || params.terminalRunId)
       ? mergeRestartRecoveryTerminalRunIds(params.entry.restartRecoveryTerminalRunIds, [
-          sourceRunId,
+          ...(sourceRunId ? [sourceRunId] : []),
+          ...(params.terminalRunId ? [params.terminalRunId] : []),
         ])
       : undefined;
   const terminalDeliveryEvidence =

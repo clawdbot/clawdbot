@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   WORKER_PROTOCOL_FEATURES,
+  WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
   WORKER_RPC_SET_VERSION,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
@@ -10,7 +11,7 @@ import { buildWorkerConnectParams, parseWorkerLaunchDescriptor } from "./launch-
 
 function launchDescriptor(): WorkerLaunchDescriptor {
   return {
-    version: 1,
+    version: 2,
     socketPath: "/tmp/openclaw-worker/gateway.sock",
     admission: {
       environmentId: "environment-1",
@@ -25,6 +26,9 @@ function launchDescriptor(): WorkerLaunchDescriptor {
       },
     },
     assignment: {
+      agentId: "agent-1",
+      operationalRunInstance: { instanceId: "instance-run-1", runId: "run-1" },
+      agentRuntimeIdentityToken: "signed-runtime-token",
       runId: "run-1",
       turnId: "turn-1",
       prompt: "Inspect the workspace.",
@@ -41,6 +45,7 @@ function launchDescriptor(): WorkerLaunchDescriptor {
       ],
       transcript: { baseLeafId: "leaf-7", nextSeq: 8 },
       liveEvents: { ackedSeq: 12, nextSeq: 13 },
+      toolAuthority: { allowedToolNames: ["read", "exec"] },
     },
   };
 }
@@ -73,6 +78,13 @@ describe("worker launch descriptor", () => {
         ...descriptor,
         assignment: {
           ...descriptor.assignment,
+          operationalRunInstance: { instanceId: "instance-run-1", runId: "other-run" },
+        },
+      },
+      {
+        ...descriptor,
+        assignment: {
+          ...descriptor.assignment,
           modelRef: { ...descriptor.assignment.modelRef, unexpected: true },
         },
       },
@@ -97,12 +109,111 @@ describe("worker launch descriptor", () => {
           liveEvents: { ...descriptor.assignment.liveEvents, unexpected: true },
         },
       },
+      {
+        ...descriptor,
+        assignment: {
+          ...descriptor.assignment,
+          toolAuthority: { ...descriptor.assignment.toolAuthority, unexpected: true },
+        },
+      },
     ];
 
     for (const candidate of cases) {
       expect(() => parseWorkerLaunchDescriptor(candidate)).toThrow(
         "invalid worker launch descriptor",
       );
+    }
+  });
+
+  it("requires a unique closed worker tool authority", () => {
+    const descriptor = launchDescriptor();
+    const { toolAuthority: _missing, ...assignmentWithoutAuthority } = descriptor.assignment;
+    const cases: unknown[] = [
+      { ...descriptor, version: 1 },
+      { ...descriptor, assignment: assignmentWithoutAuthority },
+      {
+        ...descriptor,
+        assignment: {
+          ...descriptor.assignment,
+          toolAuthority: { allowedToolNames: ["read", "read"] },
+        },
+      },
+      {
+        ...descriptor,
+        assignment: {
+          ...descriptor.assignment,
+          toolAuthority: { allowedToolNames: ["read", "gateway"] },
+        },
+      },
+    ];
+
+    for (const candidate of cases) {
+      expect(() => parseWorkerLaunchDescriptor(candidate)).toThrow(
+        "invalid worker launch descriptor",
+      );
+    }
+
+    descriptor.assignment.toolAuthority.allowedToolNames = [];
+    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+
+    descriptor.assignment.toolAuthority.allowedToolNames = ["browser"];
+    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+  });
+
+  it("accepts only a closed absolute loopback browser attachment descriptor", () => {
+    const descriptor = launchDescriptor();
+    descriptor.assignment.browser = {
+      cdpUrl: "http://127.0.0.1:9222",
+      launcherPath: "/usr/local/bin/openclaw-worker-browser",
+    };
+    expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+
+    const browser = descriptor.assignment.browser;
+    const cases: unknown[] = [
+      { ...browser, unexpected: true },
+      { ...browser, cdpUrl: "https://127.0.0.1:9222" },
+      { ...browser, cdpUrl: "http://localhost:9222" },
+      { ...browser, cdpUrl: "http://127.0.0.1" },
+      { ...browser, cdpUrl: "http://127.0.0.1:9222/json/version" },
+      { ...browser, launcherPath: "openclaw-worker-browser" },
+    ];
+    for (const invalidBrowser of cases) {
+      expect(() =>
+        parseWorkerLaunchDescriptor({
+          ...descriptor,
+          assignment: { ...descriptor.assignment, browser: invalidBrowser },
+        }),
+      ).toThrow("invalid worker launch descriptor");
+    }
+  });
+
+  it("rejects the legacy v2 assignment without admitted execution context", () => {
+    const descriptor = launchDescriptor();
+    const {
+      operationalRunInstance: _operationalRunInstance,
+      agentRuntimeIdentityToken: _agentRuntimeIdentityToken,
+      ...legacyAssignment
+    } = descriptor.assignment;
+
+    expect(() =>
+      parseWorkerLaunchDescriptor({ ...descriptor, assignment: legacyAssignment }),
+    ).toThrow("invalid worker launch descriptor");
+  });
+
+  it("requires the host-assigned agent identity", () => {
+    const descriptor = launchDescriptor();
+    const { agentId: _agentId, ...assignmentWithoutAgent } = descriptor.assignment;
+
+    expect(() =>
+      parseWorkerLaunchDescriptor({ ...descriptor, assignment: assignmentWithoutAgent }),
+    ).toThrow("invalid worker launch descriptor");
+    for (const agentId of ["", " agent-1", "a".repeat(WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH + 1)]) {
+      expect(() =>
+        parseWorkerLaunchDescriptor({
+          ...descriptor,
+          assignment: { ...descriptor.assignment, agentId },
+        }),
+      ).toThrow("invalid worker launch descriptor");
     }
   });
 

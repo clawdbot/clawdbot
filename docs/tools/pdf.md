@@ -47,7 +47,7 @@ Optional model override in `provider/model` form.
 </ParamField>
 
 <ParamField path="maxBytesMb" type="number">
-Per-PDF size cap in MB. Defaults to `agents.defaults.pdfMaxBytesMb`, or `10` if unset.
+Per-PDF size cap in MB. Defaults to `agents.defaults.pdfMaxMb`, or `10` if unset.
 </ParamField>
 
 Notes:
@@ -100,18 +100,18 @@ Details:
         primary: "anthropic/claude-opus-4-6",
         fallbacks: ["openai/gpt-5.4-mini"],
       },
-      pdfMaxBytesMb: 10,
+      pdfMaxMb: 10,
       pdfMaxPages: 20,
     },
   },
 }
 ```
 
-| Key                             | Default | Meaning                                                                                   |
-| ------------------------------- | ------- | ----------------------------------------------------------------------------------------- |
-| `agents.defaults.pdfModel`      | unset   | Explicit primary/fallback PDF models; falls back to `imageModel`, then the session model. |
-| `agents.defaults.pdfMaxBytesMb` | `10`    | Per-PDF size cap in MB.                                                                   |
-| `agents.defaults.pdfMaxPages`   | `20`    | Max pages processed per PDF.                                                              |
+| Key                           | Default | Meaning                                                                                   |
+| ----------------------------- | ------- | ----------------------------------------------------------------------------------------- |
+| `agents.defaults.pdfModel`    | unset   | Explicit primary/fallback PDF models; falls back to `imageModel`, then the session model. |
+| `agents.defaults.pdfMaxMb`    | `10`    | Per-PDF size cap in MB.                                                                   |
+| `agents.defaults.pdfMaxPages` | `20`    | Max pages processed per PDF.                                                              |
 
 See [Configuration Reference](/gateway/config-agents#agent-defaults) for full field details.
 
@@ -186,4 +186,4 @@ Encrypted PDF with extraction fallback:
 ## Related
 
 - [Tools Overview](/tools) - all available agent tools
-- [Configuration Reference](/gateway/config-agents#agent-defaults) - pdfMaxBytesMb and pdfMaxPages config
+- [Configuration Reference](/gateway/config-agents#agent-defaults) - `pdfMaxMb` and `pdfMaxPages` config

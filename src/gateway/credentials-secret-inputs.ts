@@ -5,6 +5,7 @@ import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveSecretInputString } from "../secrets/resolve-secret-input-string.js";
 import {
   GatewaySecretRefUnavailableError,
+  resolveExplicitGatewayAuth,
   resolveGatewayCredentialsFromConfig,
   trimToUndefined,
   type ExplicitGatewayAuth,
@@ -29,8 +30,7 @@ type GatewayCredentialSecretInputOptions = {
   urlOverrideSource?: "cli" | "env";
   env?: NodeJS.ProcessEnv;
   modeOverride?: GatewayCredentialMode;
-  localTokenPrecedence?: GatewayCredentialPrecedence;
-  localPasswordPrecedence?: GatewayCredentialPrecedence;
+  localPrecedence?: GatewayCredentialPrecedence;
   remoteTokenPrecedence?: GatewayRemoteCredentialPrecedence;
   remotePasswordPrecedence?: GatewayRemoteCredentialPrecedence;
   remoteTokenFallback?: GatewayRemoteCredentialFallback;
@@ -44,16 +44,6 @@ type NormalizedGatewayCredentialSecretInputOptions = Omit<
 > & {
   explicitAuth: ExplicitGatewayAuth;
 };
-
-function resolveExplicitGatewayAuth(opts?: ExplicitGatewayAuth): ExplicitGatewayAuth {
-  const token =
-    typeof opts?.token === "string" && opts.token.trim().length > 0 ? opts.token.trim() : undefined;
-  const password =
-    typeof opts?.password === "string" && opts.password.trim().length > 0
-      ? opts.password.trim()
-      : undefined;
-  return { token, password };
-}
 
 async function resolveGatewaySecretInputString(params: {
   config: OpenClawConfig;
@@ -101,8 +91,7 @@ function resolveGatewayCredentialsFromConfigOptions(params: {
     urlOverride: options.urlOverride,
     urlOverrideSource: options.urlOverrideSource,
     modeOverride: options.modeOverride,
-    localTokenPrecedence: options.localTokenPrecedence,
-    localPasswordPrecedence: options.localPasswordPrecedence,
+    localPrecedence: options.localPrecedence,
     remoteTokenPrecedence: options.remoteTokenPrecedence,
     remotePasswordPrecedence: options.remotePasswordPrecedence ?? "env-first", // pragma: allowlist secret
     remoteTokenFallback: options.remoteTokenFallback,

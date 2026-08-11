@@ -17,6 +17,8 @@ export interface PoolKey {
   readonly authMode: "useLoggedInUser" | "gitHubToken" | "byok";
   readonly authProfileId?: string;
   readonly authProfileVersion?: string;
+  /** Distinguishes hardened empty-mode clients from normal Copilot CLI clients. */
+  readonly clientMode?: CopilotClientOptions["mode"];
 }
 
 export interface ClientCreateOptions extends Omit<
@@ -116,7 +118,7 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
       try {
         return await client.stop();
       } catch (error: unknown) {
-        return [toError(error)];
+        return [toCopilotRuntimeError(error)];
       } finally {
         entry.state = { kind: "stopped" };
         maybeDeleteEntry(entry);
@@ -134,7 +136,7 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
           await entry.state.promise;
         } catch (error: unknown) {
           maybeDeleteEntry(entry);
-          return [toError(error)];
+          return [toCopilotRuntimeError(error)];
         }
         return stopEntry(entry);
       }
@@ -185,7 +187,7 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
       } catch (error: unknown) {
         entry.state = { kind: "stopped" };
         maybeDeleteEntry(entry);
-        throw toError(error);
+        throw toCopilotRuntimeError(error);
       }
     })();
 
@@ -198,7 +200,7 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
     inputKey: PoolKey,
     optionsForCreate: ClientCreateOptions,
   ): Promise<PooledClient> => {
-    const key = normalizePoolKey(inputKey, optionsForCreate.copilotHome);
+    const key = normalizePoolKey(inputKey, optionsForCreate.copilotHome, optionsForCreate.mode);
     const cacheKey = JSON.stringify(key);
     const clientOptions = normalizeClientCreateOptions(optionsForCreate, key.copilotHome);
 
@@ -218,7 +220,7 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
           }
           return { key: created.entry.key, client };
         } catch (error: unknown) {
-          throw toError(error);
+          throw toCopilotRuntimeError(error);
         }
       }
 
@@ -233,7 +235,7 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
             }
             return { key: existing.key, client };
           } catch (error: unknown) {
-            throw toError(error);
+            throw toCopilotRuntimeError(error);
           }
         }
         case "ready":
@@ -348,13 +350,20 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
   };
 }
 
-function normalizePoolKey(key: PoolKey, rawCopilotHome: string): PoolKey {
+function normalizePoolKey(
+  key: PoolKey,
+  rawCopilotHome: string,
+  clientMode: CopilotClientOptions["mode"],
+): PoolKey {
   return {
     agentId: key.agentId,
     copilotHome: normalizeCopilotHome(rawCopilotHome),
     authMode: key.authMode,
     authProfileId: key.authProfileId,
     authProfileVersion: key.authProfileVersion,
+    // Undefined and `copilot-cli` are equivalent SDK defaults. Preserve the
+    // existing cache identity while keeping empty-mode finalizers isolated.
+    ...(clientMode === "empty" ? { clientMode } : {}),
   };
 }
 
@@ -381,7 +390,7 @@ function normalizeCopilotHome(copilotHome: string): string {
   return normalizedHome;
 }
 
-function toError(error: unknown): Error {
+function toCopilotRuntimeError(error: unknown): Error {
   if (error instanceof Error) {
     return error;
   }

@@ -26,12 +26,16 @@ export function createLazyExecTool(
   presentation?: LazyExecToolPresentation,
 ): AnyAgentTool {
   let loadedTool: AnyAgentTool | undefined;
-  const loadTool = async () => {
-    if (!loadedTool) {
-      const { createExecTool } = await bashToolsModuleLoader.load();
-      loadedTool = createExecTool(defaults) as unknown as AnyAgentTool;
+  let loadingTool: Promise<AnyAgentTool> | undefined;
+  const loadTool = () => {
+    if (loadedTool) {
+      return Promise.resolve(loadedTool);
     }
-    return loadedTool;
+    loadingTool ??= bashToolsModuleLoader.load().then(({ createExecTool }) => {
+      loadedTool = createExecTool(defaults) as unknown as AnyAgentTool;
+      return loadedTool;
+    });
+    return loadingTool;
   };
 
   return {
@@ -84,7 +88,7 @@ export function resolveExecToolConfig(params: { cfg?: OpenClawConfig; agentId?: 
     }),
     reviewer: agentExec?.reviewer ?? globalExec?.reviewer,
     backgroundMs: agentExec?.backgroundMs ?? globalExec?.backgroundMs,
-    timeoutSec: agentExec?.timeoutSec ?? globalExec?.timeoutSec,
+    timeoutSec: agentExec?.timeoutSeconds ?? globalExec?.timeoutSeconds,
     approvalRunningNoticeMs:
       agentExec?.approvalRunningNoticeMs ?? globalExec?.approvalRunningNoticeMs,
     cleanupMs: agentExec?.cleanupMs ?? globalExec?.cleanupMs,

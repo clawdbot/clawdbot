@@ -81,13 +81,14 @@ interface EmbeddedGatewayRuntime {
   }) => Promise<SessionsListResult>;
   loadCombinedSessionStoreForGateway: (
     cfg: OpenClawConfig,
-    opts?: { agentId?: string },
+    opts?: { agentId?: string; projection?: "full" | "list" },
   ) => {
     storePath: string;
     store: unknown;
   };
   resolveSessionKeyFromResolveParams: (opts: {
     cfg: OpenClawConfig;
+    client: null;
     p: SessionsResolveParams;
   }) => Promise<SessionsResolveResult>;
   loadSessionEntry: (
@@ -200,6 +201,7 @@ async function handleSessionsList(params: Record<string, unknown>) {
   const opts = params as SessionsListParams;
   const { storePath, store } = rt.loadCombinedSessionStoreForGateway(cfg, {
     agentId: opts.agentId,
+    projection: "list",
   });
   return rt.listSessionsFromStoreAsync({
     cfg,
@@ -214,6 +216,7 @@ async function handleSessionsResolve(params: Record<string, unknown>) {
   const cfg = rt.getRuntimeConfig();
   const resolved = await rt.resolveSessionKeyFromResolveParams({
     cfg,
+    client: null,
     p: params as SessionsResolveParams,
   });
   if (!resolved.ok) {
@@ -221,6 +224,9 @@ async function handleSessionsResolve(params: Record<string, unknown>) {
   }
   if ("missing" in resolved) {
     return { ok: false };
+  }
+  if ("ambiguous" in resolved) {
+    return { ok: false, candidates: resolved.candidates };
   }
   return { ok: true, key: resolved.key };
 }

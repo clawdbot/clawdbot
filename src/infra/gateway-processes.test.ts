@@ -1,11 +1,7 @@
 // Covers gateway process discovery across platform process listings.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
-import {
-  getWindowsPowerShellExePath,
-  getWindowsSystem32ExePath,
-  getWindowsWmicExePath,
-} from "./windows-install-roots.js";
+import { getWindowsPowerShellExePath, getWindowsSystem32ExePath } from "./windows-install-roots.js";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const readFileSyncMock = vi.hoisted(() => vi.fn());
@@ -64,7 +60,6 @@ vi.mock("../channels/chat-meta.js", () => ({
 const {
   findVerifiedGatewayListenerPidsOnPortSync,
   formatGatewayPidList,
-  readGatewayProcessArgsSync,
   signalVerifiedGatewayPidSync,
 } = await import("./gateway-processes.js");
 
@@ -86,80 +81,6 @@ describe("gateway-processes", () => {
     vi.restoreAllMocks();
   });
 
-  it("reads linux process args from /proc and parses cmdlines", () => {
-    setPlatform("linux");
-    readFileSyncMock.mockReturnValue("node\0dist/index.js\0gateway\0run\0");
-    parseProcCmdlineMock.mockReturnValue(["node", "dist/index.js", "gateway", "run"]);
-
-    expect(readGatewayProcessArgsSync(4242)).toEqual(["node", "dist/index.js", "gateway", "run"]);
-    expect(readFileSyncMock).toHaveBeenCalledWith("/proc/4242/cmdline", "utf8");
-    expect(parseProcCmdlineMock).toHaveBeenCalledWith("node\0dist/index.js\0gateway\0run\0");
-  });
-
-  it("reads darwin process args from ps output and returns null on ps failure", () => {
-    setPlatform("darwin");
-    spawnSyncMock
-      .mockReturnValueOnce({
-        error: null,
-        status: 0,
-        stdout: "node /repo/dist/index.js gateway run\n",
-      })
-      .mockReturnValueOnce({
-        error: null,
-        status: 1,
-        stdout: "",
-      });
-
-    expect(readGatewayProcessArgsSync(123)).toEqual([
-      "node",
-      "/repo/dist/index.js",
-      "gateway",
-      "run",
-    ]);
-    expect(readGatewayProcessArgsSync(124)).toBeNull();
-  });
-
-  it("falls back from powershell to wmic for windows process args", () => {
-    setPlatform("win32");
-    spawnSyncMock
-      .mockReturnValueOnce({
-        error: new Error("powershell missing"),
-        status: null,
-        stdout: "",
-      })
-      .mockReturnValueOnce({
-        error: null,
-        status: 0,
-        stdout: "CommandLine=node.exe gateway run\r\n",
-      });
-    parseCmdScriptCommandLineMock.mockReturnValue(["node.exe", "gateway", "run"]);
-
-    expect(readGatewayProcessArgsSync(77)).toEqual(["node.exe", "gateway", "run"]);
-    expect(spawnSyncMock.mock.calls[0]?.[0]).toBe(getWindowsPowerShellExePath());
-    expect(spawnSyncMock.mock.calls[1]?.[0]).toBe(getWindowsWmicExePath());
-    expect(parseCmdScriptCommandLineMock).toHaveBeenCalledWith("node.exe gateway run");
-  });
-
-  it("decodes UTF-16 WMIC output when reading windows process args", () => {
-    setPlatform("win32");
-    spawnSyncMock
-      .mockReturnValueOnce({
-        error: new Error("powershell missing"),
-        status: null,
-        stdout: "",
-      })
-      .mockReturnValueOnce({
-        error: null,
-        status: 0,
-        stdout: Buffer.from("\uFEFFCommandLine=node.exe gateway run\r\n", "utf16le"),
-      });
-    parseCmdScriptCommandLineMock.mockReturnValue(["node.exe", "gateway", "run"]);
-
-    expect(readGatewayProcessArgsSync(77)).toEqual(["node.exe", "gateway", "run"]);
-    expect(spawnSyncMock.mock.calls[1]?.[0]).toBe(getWindowsWmicExePath());
-    expect(parseCmdScriptCommandLineMock).toHaveBeenCalledWith("node.exe gateway run");
-  });
-
   it("signals only verified gateway processes", () => {
     setPlatform("linux");
     readFileSyncMock.mockReturnValue("node\0gateway\0");
@@ -173,6 +94,33 @@ describe("gateway-processes", () => {
     expect(() => signalVerifiedGatewayPidSync(501, "SIGUSR1")).toThrow(
       /refusing to signal non-gateway process pid 501/,
     );
+  });
+
+  it("swallows ESRCH when a verified gateway process exits before the signal", () => {
+    setPlatform("linux");
+    readFileSyncMock.mockReturnValue("node\0gateway\0");
+    parseProcCmdlineMock.mockReturnValue(["node", "gateway"]);
+    isGatewayArgvMock.mockReturnValue(true);
+    const esrchErr = Object.assign(new Error("no such process"), { code: "ESRCH" });
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
+      throw esrchErr;
+    });
+
+    expect(() => signalVerifiedGatewayPidSync(500, "SIGTERM")).not.toThrow();
+    expect(killSpy).toHaveBeenCalledWith(500, "SIGTERM");
+  });
+
+  it("re-throws non-ESRCH kill errors", () => {
+    setPlatform("linux");
+    readFileSyncMock.mockReturnValue("node\0gateway\0");
+    parseProcCmdlineMock.mockReturnValue(["node", "gateway"]);
+    isGatewayArgvMock.mockReturnValue(true);
+    const epermErr = Object.assign(new Error("permission denied"), { code: "EPERM" });
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw epermErr;
+    });
+
+    expect(() => signalVerifiedGatewayPidSync(500, "SIGTERM")).toThrow("permission denied");
   });
 
   it("dedupes and filters verified gateway listener pids on unix and windows", () => {

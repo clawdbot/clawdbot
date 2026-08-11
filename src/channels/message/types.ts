@@ -183,6 +183,10 @@ export type ChannelMessageSendTextContext<TConfig = OpenClawConfig> = {
   deliveryQueueId?: string;
   /** @internal Stable platform-send index within one durable payload. */
   deliveryPartIndex?: number;
+  /** @internal Exact platform-send count within one durable payload. */
+  deliveryPartCount?: number;
+  /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
+  preparedMessageId?: string;
   /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
   /** @internal Report each completed platform sub-send before another fallible step. */
@@ -353,6 +357,8 @@ type ChannelMessageSendAdapter<
 /** Durable final-delivery extension for queue reconciliation and capability declaration. */
 export type ChannelMessageDurableFinalAdapter = {
   capabilities?: DurableFinalDeliveryRequirementMap;
+  /** Opt into provider reconciliation for ordinary single-payload queued sends. */
+  automaticUnknownSendReconciliation?: boolean;
   /**
    * Synchronous provider admission before a durable intent is created or replayed.
    * Providers must not perform I/O from this hook.
@@ -368,6 +374,8 @@ export type ChannelMessageDurableFinalAdapter = {
     | Promise<ChannelMessageUnknownSendReconciliationResult | null>
     | ChannelMessageUnknownSendReconciliationResult
     | null;
+  /** Cleanup after core authoritatively retires an ambiguous send as failed. */
+  afterUnknownSendTerminal?: (ctx: ChannelMessageUnknownSendContext) => Promise<void> | void;
 };
 
 /** Live-message feature key declared by adapters that support preview or streaming behavior. */

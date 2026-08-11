@@ -20,7 +20,7 @@ export {
   resolveLiveVideoResolution,
 } from "../video-generation/live-test-helpers.js";
 export { normalizeVideoGenerationDuration } from "../video-generation/duration-support.js";
-export { parseVideoGenerationModelRef } from "../video-generation/model-ref.js";
+export { parseVideoGenerationModelRef } from "../media-generation/model-ref.js";
 export type {
   GeneratedVideoAsset,
   VideoGenerationMode,

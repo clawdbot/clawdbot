@@ -155,7 +155,7 @@ describe("gateway chat.inject transcript writes", () => {
         sessionKey: "global",
         storePath: fixture.storePath,
         message: `Here is your key: ${fakeApiKey}`,
-        config: { logging: { redactSensitive: "tools" } },
+        config: {},
       });
 
       expect(appended.ok).toBe(true);

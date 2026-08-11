@@ -1,7 +1,41 @@
+import fs from "node:fs";
+import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
 import { MAX_REGISTERED_ITEMS, parseOnePasswordConfig } from "./config.js";
 
+const manifest = JSON.parse(
+  fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+) as { configSchema: Record<string, unknown> };
+
 describe("parseOnePasswordConfig", () => {
+  it("allows an empty plugin config for SecretRef-only use", () => {
+    expect(
+      validateJsonSchemaValue({
+        schema: manifest.configSchema,
+        cacheKey: "onepassword.manifest.config-schema",
+        value: {},
+      }).ok,
+    ).toBe(true);
+    expect(parseOnePasswordConfig({})).toBeUndefined();
+    expect(
+      parseOnePasswordConfig({ defaultPolicy: "approve", cacheTtlSeconds: 300 }),
+    ).toBeUndefined();
+    expect(
+      validateJsonSchemaValue({
+        schema: manifest.configSchema,
+        cacheKey: "onepassword.manifest.config-schema",
+        value: { vault: "Automation" },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateJsonSchemaValue({
+        schema: manifest.configSchema,
+        cacheKey: "onepassword.manifest.config-schema",
+        value: { items: { token: { item: "Token" } } },
+      }).ok,
+    ).toBe(false);
+  });
+
   it("rejects invalid slug grammar", () => {
     expect(() =>
       parseOnePasswordConfig({ vault: "Automation", items: { Bad_Slug: { item: "Token" } } }),

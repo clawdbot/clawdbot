@@ -4,61 +4,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installGatewayTestHooks, testState, writeSessionStore } from "../test-helpers.js";
 import { getGatewayConfigModule, sessionStoreEntry } from "../test/server-sessions.test-helpers.js";
+import { toolsEffectiveGlobalAgentRuntimeMocks as inventoryMocks } from "./__mocks__/tools-effective.runtime.js";
 import { testing, toolsEffectiveHandlers } from "./tools-effective.js";
 
-const inventoryMocks = vi.hoisted(() => ({
-  resolveEffectiveToolInventory: vi.fn(
-    (params: { agentId: string; modelProvider?: string; modelId?: string }) => ({
-      agentId: params.agentId,
-      profile: "coding",
-      groups: [
-        {
-          id: "core",
-          label: "Built-in tools",
-          source: "core",
-          tools: [
-            {
-              id: "exec",
-              label: "Exec",
-              description: "Run shell commands",
-              source: "core",
-            },
-          ],
-        },
-      ],
-      modelProvider: params.modelProvider,
-      modelId: params.modelId,
-    }),
-  ),
-  resolveEffectiveToolInventoryRuntimeModelContext: vi.fn(() => ({
-    modelApi: "openai-responses",
-    runtimeModel: {
-      id: "work-model",
-      name: "Work model",
-      provider: "openai",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-    },
-  })),
-}));
-
-vi.mock("./tools-effective.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./tools-effective.runtime.js")>();
-  return {
-    ...actual,
-    resolveEffectiveToolInventory: inventoryMocks.resolveEffectiveToolInventory,
-    resolveEffectiveToolInventoryRuntimeModelContext:
-      inventoryMocks.resolveEffectiveToolInventoryRuntimeModelContext,
-    peekSessionMcpRuntime: vi.fn(() => undefined),
-    resolveSessionMcpConfigSummary: vi.fn(() => ({ fingerprint: "mcp:0", serverNames: [] })),
-    buildBundleMcpToolsFromCatalog: vi.fn(() => []),
-    applyFinalEffectiveToolPolicy: vi.fn(
-      (params: { bundledTools: unknown[] }) => params.bundledTools,
-    ),
-    getActivePluginRegistryVersion: vi.fn(() => 1),
-    getActivePluginChannelRegistryVersion: vi.fn(() => 1),
-  };
-});
+vi.mock("./tools-effective.runtime.js");
 
 installGatewayTestHooks();
 

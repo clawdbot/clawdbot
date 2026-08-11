@@ -21,7 +21,7 @@ A local Unix socket connects the node host service to the macOS app for exec app
 
 - The app runs the Gateway (local mode) and connects to it as a node.
 - Agent actions are performed via `node.invoke` (e.g. `system.run`, `system.notify`, `canvas.*`).
-- Node commands include `canvas.*`, `camera.snap`, `camera.clip`, `screen.snapshot`, `screen.record`, `computer.act`, `system.run`, and `system.notify`.
+- Node commands include `canvas.*`, `camera.list`, `camera.snap`, `camera.clip`, `camera.ptz.status`, `camera.ptz.control`, `screen.snapshot`, `screen.record`, `computer.act`, `system.run`, and `system.notify`.
 - The node reports a `permissions` map so agents can see whether screen, camera, microphone, speech, automation, or accessibility access is available.
 
 ### Node service + app IPC
@@ -58,7 +58,9 @@ Agent -> Gateway -> Node Service (WS)
 - PeekabooBridge: `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1` (DEBUG-only) may allow same-UID callers for local development.
 - All communication remains local-only; no network sockets are exposed.
 - TCC prompts originate only from the GUI app bundle; keep the signed bundle ID stable across rebuilds.
-- Exec approvals socket hardening: file mode `0600`, shared token, peer-UID check (`getpeereid`), HMAC-SHA256 challenge/response, and a short TTL on requests.
+- Exec approvals socket hardening: file mode `0600`, shared token stored in the
+  `exec_approvals_config` row of `state/openclaw.sqlite`, peer-UID check
+  (`getpeereid`), HMAC-SHA256 challenge/response, and a short TTL on requests.
 
 ## Related
 

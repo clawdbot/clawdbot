@@ -7,7 +7,13 @@ import path from "node:path";
 import { shouldStartOnboardingForFreshInstall } from "../../../../dist/cli/run-main.js";
 import { clearConfigCache } from "../../../../dist/config/config.js";
 import type { OpenClawConfig } from "../../../../dist/config/types.openclaw.js";
+import { createSqliteAuditRecordStore } from "../../../../dist/infra/sqlite-audit-record-store.js";
 import type { RuntimeEnv } from "../../../../dist/runtime.js";
+import {
+  SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
+  SYSTEM_AGENT_AUDIT_SCOPE,
+  type SystemAgentAuditEntry,
+} from "../../../../dist/system-agent/audit.js";
 import {
   activateSetupInference,
   verifySetupInference,
@@ -245,7 +251,7 @@ async function main() {
   });
   assert(activation.ok, `fake Claude inference activation failed: ${JSON.stringify(activation)}`);
   assert(
-    activation.modelRef === "claude-cli/claude-opus-4-8",
+    activation.modelRef === "claude-cli/claude-opus-5",
     `activation selected the wrong model: ${activation.modelRef}`,
   );
   const inferenceConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
@@ -298,6 +304,32 @@ async function main() {
       result.code === 0 && output.includes(command.expectOutput),
       `OpenClaw first-run command ${command.id} did not apply: ${output}`,
     );
+    if (command.id === "setup") {
+      assert(result.code === 0, `OpenClaw setup exited with ${result.code}: ${output}`);
+      assert(
+        output.includes("[openclaw] done: openclaw.setup"),
+        `OpenClaw setup did not report completion: ${output}`,
+      );
+      assert(
+        output.includes(
+          "Gateway: OpenClaw gateway lifecycle is managed by an external supervisor " +
+            "(OPENCLAW_SUPERVISOR_MODE=external). Use that supervisor to start the gateway.",
+        ),
+        `OpenClaw setup did not report the externally supervised gateway: ${output}`,
+      );
+      assert(
+        !output.includes("Systemd user services are not available"),
+        `OpenClaw setup probed systemd before honoring external supervision: ${output}`,
+      );
+      assert(
+        !output.includes("Gateway service install failed"),
+        `OpenClaw setup attempted and failed gateway service installation: ${output}`,
+      );
+      assert(
+        !output.includes("service management skipped: non-default state dir or config path"),
+        `OpenClaw setup used the non-default-path service-management skip: ${output}`,
+      );
+    }
     if (command.planner) {
       assert(
         output.includes(`[openclaw] planner: ${spec.model}`) &&
@@ -339,7 +371,7 @@ async function main() {
     "first-run setup did not write default workspace",
   );
   assert(resolveDefaultModel(config) === spec.model, "first-run setup did not write default model");
-  const reef = config.agents?.list?.find((agent) => agent.id === spec.agentId);
+  const reef = config.agents?.entries?.[spec.agentId];
   assert(reef, "OpenClaw did not create reef agent");
   assert(reef.workspace === spec.dockerAgentWorkspace, "OpenClaw did not write reef workspace");
   assert(
@@ -367,10 +399,15 @@ async function main() {
     "OpenClaw persisted an unrelated ambient credential",
   );
 
-  const auditPath = path.join(stateDir, "audit", "system-agent.jsonl");
-  const audit = (await fs.readFile(auditPath, "utf8")).trim();
+  const audit = createSqliteAuditRecordStore<SystemAgentAuditEntry>({
+    scope: SYSTEM_AGENT_AUDIT_SCOPE,
+    maxEntries: SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
+  }).entries();
   for (const operation of spec.auditOperations) {
-    assert(audit.includes(`"operation":"${operation}"`), `${operation} audit entry missing`);
+    assert(
+      audit.some((entry) => entry.value.operation === operation),
+      `${operation} audit entry missing`,
+    );
   }
 
   console.log("OpenClaw first-run Docker E2E passed");

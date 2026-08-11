@@ -13,6 +13,7 @@ type Step = {
   run?: string;
   uses?: string;
   with?: Record<string, string | number>;
+  "working-directory"?: string;
 };
 type Job = {
   name?: string;
@@ -104,6 +105,30 @@ describe("plugin npm extended-stable workflow", () => {
     }
   });
 
+  it("runs complete trusted packaging tooling against the frozen source checkout", () => {
+    const parsed = workflow();
+    const preflightCheckout = step(
+      parsed.jobs?.preview_plugin_pack,
+      "Checkout trusted packaging tooling",
+    );
+    expect(preflightCheckout.with).toMatchObject({
+      ref: "${{ github.workflow_sha }}",
+      path: ".release-tooling",
+      "sparse-checkout": "scripts",
+    });
+    const previewCommand = step(parsed.jobs?.preview_plugin_pack, "Preview publish command").run;
+    expect(previewCommand).toContain(".release-tooling/scripts/plugin-npm-publish.sh");
+    expect(previewCommand).toContain('--repo-root "$GITHUB_WORKSPACE"');
+    expect(
+      step(parsed.jobs?.preview_plugin_pack, "Prepare immutable npm preflight artifact").run,
+    ).toContain(".release-tooling/scripts/plugin-npm-publish.sh");
+
+    const publish = step(parsed.jobs?.publish_plugins_npm, "Publish with trusted publisher");
+    expect(publish.run).toContain("scripts/plugin-npm-publish.sh");
+    expect(publish.run).toContain("--repo-root .publication-target");
+    expect(publish["working-directory"]).toBeUndefined();
+  });
+
   it("trusts only the canonical monthly branch at the exact checked-out SHA", () => {
     const trusted = step(
       workflow().jobs?.preview_plugins_npm,
@@ -173,10 +198,15 @@ describe("plugin npm extended-stable workflow", () => {
       "plugin-npm-package-source-${{ needs.preview_plugins_npm.outputs.ref_revision }}-${{ matrix.plugin.extensionId }}",
     );
     expect(prepare.if).toBeUndefined();
-    expect(prepare.run).toContain('bash scripts/plugin-npm-publish.sh --pack "${PACKAGE_DIR}"');
-    expect(prepare.run).toContain('raw.lastIndexOf("[")');
+    expect(prepare.run).toContain("bash .release-tooling/scripts/plugin-npm-publish.sh");
+    expect(prepare.run).toContain('--repo-root "$GITHUB_WORKSPACE"');
+    expect(prepare.run).toContain('--pack "${PACKAGE_DIR}"');
+    expect(prepare.run).toContain(
+      'import { resolveNpmJsonEntries } from "./.release-tooling/scripts/lib/npm-json-output.mts";',
+    );
+    expect(prepare.run).toContain('raw[index] !== "[" && raw[index] !== "{"');
+    expect(prepare.run).toContain("const entries = resolveNpmJsonEntries(candidate)");
     expect(prepare.run).toContain("npm can print bundled-dependency summaries");
-    expect(prepare.run).toContain("if (index === 0)");
     expect(prepare.run).toContain(
       "fs.writeFileSync(process.argv[3], `${JSON.stringify(pack, null, 2)}\\n`)",
     );
@@ -321,6 +351,22 @@ describe("plugin npm extended-stable workflow", () => {
     expect(pluginManifest.id).toBe("meta");
   });
 
+  it("bounds external git fetch and npm publish operations", () => {
+    const source = readFileSync(workflowPath, "utf8");
+    const gitFetchLines = source.split("\n").filter((line) => line.includes("git fetch"));
+    const npmPublishLines = source
+      .split("\n")
+      .filter((line) => line.includes('npm publish "$TARBALL_PATH"'));
+
+    expect(gitFetchLines).toHaveLength(6);
+    expect(
+      gitFetchLines.every((line) => line.includes("timeout --signal=TERM --kill-after=10s 120s")),
+    ).toBe(true);
+    expect(npmPublishLines).toEqual([
+      '            timeout --signal=TERM --kill-after=10s 300s npm publish "$TARBALL_PATH" \\',
+    ]);
+  });
+
   it("publishes extended-stable with OIDC only and verifies every package tag", () => {
     const parsed = workflow();
     const publish = step(parsed.jobs?.publish_plugins_npm, "Publish with trusted publisher");
@@ -329,8 +375,19 @@ describe("plugin npm extended-stable workflow", () => {
     });
     expect(publish.env?.NODE_AUTH_TOKEN).toBeUndefined();
     expect(publish.env?.NPM_TOKEN).toBeUndefined();
+    const bootstrapCheck = step(
+      parsed.jobs?.publish_plugins_npm,
+      "Check bootstrap npm package version",
+    );
+    expect(bootstrapCheck.if).toContain("npm-token-bootstrap");
+    expect(bootstrapCheck.run).toContain("fetchNpmRegistryPackumentWithRetry");
+    expect(bootstrapCheck.run).toContain("publishedDist.integrity !== expectedIntegrity");
+    expect(bootstrapCheck.run).toContain("already_published=true");
     const bootstrap = step(parsed.jobs?.publish_plugins_npm, "Publish approved bootstrap tarball");
     expect(bootstrap.if).toContain("npm-token-bootstrap");
+    expect(bootstrap.if).toContain(
+      "steps.bootstrap_npm_package_version.outputs.already_published != 'true'",
+    );
     expect(bootstrap.env?.NPM_TOKEN).toBe("${{ secrets.NPM_TOKEN }}");
     expect(bootstrap.env?.PACKAGE_NAME).toContain("publication_evidence.outputs.package_name");
     expect(bootstrap.run).not.toContain("@openclaw/meta-provider");
@@ -372,6 +429,12 @@ describe("plugin npm extended-stable workflow", () => {
       step(parsed.jobs?.publish_plugins_npm, "Checkout trusted publication tooling").with?.ref,
     ).toBe("${{ github.workflow_sha }}");
     expect(
+      step(parsed.jobs?.preview_plugin_pack, "Checkout trusted packaging tooling").with,
+    ).toMatchObject({
+      ref: "${{ github.workflow_sha }}",
+      path: ".release-tooling",
+    });
+    expect(
       step(parsed.jobs?.publish_plugins_npm, "Setup trusted publication dependencies").if,
     ).toContain("npm-token-bootstrap");
     expect(
@@ -380,6 +443,12 @@ describe("plugin npm extended-stable workflow", () => {
     expect(step(parsed.jobs?.publish_plugins_npm, "Checkout OIDC publication target").if).toContain(
       "npm-oidc",
     );
+    expect(
+      step(parsed.jobs?.publish_plugins_npm, "Checkout OIDC publication target").with?.path,
+    ).toBe(".publication-target");
+    expect(
+      step(parsed.jobs?.publish_plugins_npm, "Setup trusted OIDC packaging dependencies").uses,
+    ).toBe("./.github/actions/setup-node-env");
     expect(parsed.jobs?.reconcile_plugins_npm).toBeUndefined();
     expect(readFileSync(workflowPath, "utf8")).not.toContain(
       'npm dist-tag add "${PACKAGE_NAME}@${PACKAGE_VERSION}" extended-stable',

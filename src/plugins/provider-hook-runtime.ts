@@ -1,13 +1,10 @@
 // Runtime bridge for invoking provider hooks supplied by plugins.
-import {
-  findNormalizedProviderValue,
-  normalizeProviderId,
-} from "@openclaw/model-catalog-core/provider-id";
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveModelCatalogScope } from "../agents/model-catalog-scope.js";
+import { resolveModelCatalogScope } from "../agents/model-discovery-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import {
@@ -18,12 +15,14 @@ import {
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import { resolveProviderConfigApiOwnerHint } from "./provider-config-owner.js";
+import { matchesProviderPluginRef } from "./provider-registry-shared.js";
 import { isPluginProvidersLoadInFlight, resolvePluginProviders } from "./providers.runtime.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
   getActivePluginRegistryWorkspaceDirFromState,
   getPluginRegistryState,
 } from "./runtime-state.js";
+import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import type {
   ProviderPlugin,
   ProviderExtraParamsForTransportContext,
@@ -36,7 +35,6 @@ import type {
 
 let providerRuntimePluginCache: ConfigScopedRuntimeCache<ProviderPlugin | null> = new WeakMap();
 const defaultProviderRuntimePluginCache = new PluginLruCache<ProviderPlugin | null>(128);
-const PREPARED_PROVIDER_RUNTIME_SURFACES = ["channel"] as const;
 
 type ProviderRuntimePluginLookupParams = {
   provider: string;
@@ -45,7 +43,6 @@ type ProviderRuntimePluginLookupParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   applyAutoEnable?: boolean;
-  bundledProviderVitestCompat?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 };
 
@@ -53,26 +50,40 @@ export type ProviderRuntimePluginHandle = ProviderRuntimePluginLookupParams & {
   plugin?: ProviderPlugin;
 };
 
+const MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL = Symbol.for(
+  "openclaw.modelProviderRuntimePluginHandle",
+);
+
+type ModelWithProviderRuntimePluginHandle = {
+  [MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL]?: ProviderRuntimePluginHandle;
+};
+
 type ProviderRuntimePluginHandleParams = ProviderRuntimePluginLookupParams & {
   runtimeHandle?: ProviderRuntimePluginHandle;
 };
 
+/** Carries one attempt's prepared provider plugin through the model transport boundary. */
+export function attachModelProviderRuntimePluginHandle<TModel extends object>(
+  model: TModel,
+  runtimeHandle: ProviderRuntimePluginHandle,
+): TModel {
+  const next = { ...model } as TModel & ModelWithProviderRuntimePluginHandle;
+  next[MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL] = runtimeHandle;
+  return next;
+}
+
+/** Reads the provider plugin handle attached to a prepared attempt model. */
+export function getModelProviderRuntimePluginHandle(
+  model: object | undefined,
+): ProviderRuntimePluginHandle | undefined {
+  return model
+    ? (model as ModelWithProviderRuntimePluginHandle)[MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL]
+    : undefined;
+}
+
 export function clearProviderRuntimePluginCacheForTest(): void {
   providerRuntimePluginCache = new WeakMap();
   defaultProviderRuntimePluginCache.clear();
-}
-
-function matchesProviderId(provider: ProviderPlugin, providerId: string): boolean {
-  const normalized = normalizeProviderId(providerId);
-  if (!normalized) {
-    return false;
-  }
-  if (normalizeProviderId(provider.id) === normalized) {
-    return true;
-  }
-  return [...(provider.aliases ?? []), ...(provider.hookAliases ?? [])].some(
-    (alias) => normalizeProviderId(alias) === normalized,
-  );
 }
 
 function resolveProviderRuntimePluginCacheKey(
@@ -91,7 +102,6 @@ function resolveProviderRuntimePluginCacheKey(
     models: params.config?.models?.providers,
     workspaceDir: params.workspaceDir ?? "",
     applyAutoEnable: params.applyAutoEnable ?? null,
-    bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? null,
     pluginMetadata:
       params.pluginMetadataSnapshot?.manifestRegistry.plugins
         .map((plugin) => plugin.id)
@@ -141,6 +151,17 @@ function findProviderRuntimePluginInLoadedRegistries(params: {
   lookup: ProviderRuntimePluginLookupParams;
   apiOwnerHint?: string;
 }): ProviderPlugin | undefined {
+  const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const scopedPlugin = scopedRegistry
+    ? findProviderRuntimePluginInRegistry({
+        registry: scopedRegistry,
+        provider: params.lookup.provider,
+        apiOwnerHint: params.apiOwnerHint,
+      })
+    : undefined;
+  if (scopedPlugin) {
+    return scopedPlugin;
+  }
   const activeRegistry = getLoadedRuntimePluginRegistry({
     env: params.lookup.env,
     workspaceDir: params.lookup.workspaceDir,
@@ -154,23 +175,6 @@ function findProviderRuntimePluginInLoadedRegistries(params: {
     : undefined;
   if (activePlugin) {
     return activePlugin;
-  }
-  for (const surface of PREPARED_PROVIDER_RUNTIME_SURFACES) {
-    const registry = getLoadedRuntimePluginRegistry({
-      env: params.lookup.env,
-      workspaceDir: params.lookup.workspaceDir,
-      surface,
-    });
-    const plugin = registry
-      ? findProviderRuntimePluginInRegistry({
-          registry,
-          provider: params.lookup.provider,
-          apiOwnerHint: params.apiOwnerHint,
-        })
-      : undefined;
-    if (plugin) {
-      return plugin;
-    }
   }
   return undefined;
 }
@@ -186,10 +190,10 @@ function findProviderRuntimePluginInRegistry(params: {
       if (params.apiOwnerHint) {
         return (
           matchesProviderLiteralId(plugin, params.provider) ||
-          matchesProviderId(plugin, params.apiOwnerHint)
+          matchesProviderPluginRef(plugin, params.apiOwnerHint)
         );
       }
-      return matchesProviderId(plugin, params.provider);
+      return matchesProviderPluginRef(plugin, params.provider);
     });
 }
 
@@ -210,7 +214,6 @@ export function resolveProviderPluginsForHooks(params: {
   providerRefs?: readonly string[];
   modelRefs?: readonly string[];
   applyAutoEnable?: boolean;
-  bundledProviderVitestCompat?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
@@ -221,7 +224,6 @@ export function resolveProviderPluginsForHooks(params: {
     env,
     activate: false,
     applyAutoEnable: params.applyAutoEnable,
-    bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
     skipIfLoadInFlight: true,
   });
 }
@@ -252,7 +254,6 @@ export function resolveProviderRuntimePlugin(
       providerRefs,
       activate: false,
       applyAutoEnable: params.applyAutoEnable,
-      bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
     })
   ) {
     return undefined;
@@ -270,16 +271,15 @@ export function resolveProviderRuntimePlugin(
         providerRefs: lookupScope.providerRefs,
         modelRefs: lookupScope.modelRefs,
         applyAutoEnable: params.applyAutoEnable,
-        bundledProviderVitestCompat: params.bundledProviderVitestCompat,
         pluginMetadataSnapshot: params.pluginMetadataSnapshot,
       }).find((plugin) => {
         if (apiOwnerHint) {
           return (
             matchesProviderLiteralId(plugin, params.provider) ||
-            matchesProviderId(plugin, apiOwnerHint)
+            matchesProviderPluginRef(plugin, apiOwnerHint)
           );
         }
-        return matchesProviderId(plugin, params.provider);
+        return matchesProviderPluginRef(plugin, params.provider);
       }) ?? null
     );
   };
@@ -335,7 +335,7 @@ export function resolveProviderHookPlugin(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-  }).find((candidate) => matchesProviderId(candidate, params.provider));
+  }).find((candidate) => matchesProviderPluginRef(candidate, params.provider));
 }
 
 export function resolveProviderRuntimePluginHandle(
@@ -372,7 +372,6 @@ export function ensureProviderRuntimePluginHandle(
       workspaceDir: params.workspaceDir ?? params.runtimeHandle?.workspaceDir,
       env: params.env ?? params.runtimeHandle?.env,
       applyAutoEnable: params.runtimeHandle?.applyAutoEnable,
-      bundledProviderVitestCompat: params.runtimeHandle?.bundledProviderVitestCompat,
       pluginMetadataSnapshot:
         params.pluginMetadataSnapshot ?? params.runtimeHandle?.pluginMetadataSnapshot,
     });

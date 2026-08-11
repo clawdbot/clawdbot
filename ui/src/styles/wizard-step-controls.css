@@ -1,0 +1,113 @@
+.wizard-step__form {
+  display: grid;
+  gap: 12px;
+}
+
+.wizard-step__message {
+  white-space: pre-wrap;
+}
+
+.wizard-step__device-code {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+
+.wizard-step__device-code code {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.wizard-step__options {
+  display: grid;
+  gap: 8px;
+}
+
+.wizard-step__option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: var(--cursor-action);
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.wizard-step__option:has(input:not(:disabled)):hover {
+  border-color: var(--border-hover);
+  background: var(--bg-hover);
+}
+
+.wizard-step__option:has(input:focus-visible) {
+  border-color: var(--border-hover);
+  box-shadow: var(--focus-ring);
+}
+
+.wizard-step__option:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.wizard-step__form > .input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.wizard-step__option small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.wizard-step__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.wizard-step__actions--split {
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.wizard-step__progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+
+.wizard-step__spinner {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  border: 2px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: wizard-step-spin 800ms linear infinite;
+}
+
+@keyframes wizard-step-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wizard-step__spinner {
+    animation: none;
+    border-color: var(--accent);
+  }
+}

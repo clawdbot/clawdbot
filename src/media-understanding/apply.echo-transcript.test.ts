@@ -68,8 +68,7 @@ async function createTempAudioFile(): Promise<string> {
 function createAudioCtxWithProvider(mediaPath: string, extra?: Partial<MsgContext>): MsgContext {
   return {
     Body: "<media:audio>",
-    MediaPath: mediaPath,
-    MediaType: "audio/ogg",
+    media: [{ path: mediaPath, contentType: "audio/ogg" }],
     Provider: "voicechat",
     From: "+10000000001",
     AccountId: "acc1",
@@ -88,10 +87,10 @@ function createAudioConfigWithEcho(opts?: {
   const cfg: OpenClawConfig = {
     tools: {
       media: {
+        models: [{ provider: "groq", capabilities: ["audio"] }],
         audio: {
           enabled: true,
           maxBytes: 1024 * 1024,
-          models: [{ provider: "groq" }],
           echoTranscript: opts?.echoTranscript ?? true,
           ...(opts?.echoFormat !== undefined ? { echoFormat: opts.echoFormat } : {}),
         },
@@ -309,8 +308,7 @@ describe("applyMediaUnderstanding – echo transcript", () => {
 
     const ctx: MsgContext = {
       Body: "<media:image>",
-      MediaPath: imgPath,
-      MediaType: "image/jpeg",
+      media: [{ path: imgPath, contentType: "image/jpeg" }],
       Provider: "voicechat",
       From: "+10000000001",
     };

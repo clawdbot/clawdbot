@@ -39,14 +39,16 @@ function mockGuardedResponse(
   body: BodyInit = MEDIA_BYTES,
   init?: ResponseInit,
 ): {
+  response: Response;
   release: ReturnType<typeof vi.fn>;
 } {
   const release = vi.fn(async () => {});
+  const response = new Response(body, init);
   fetchWithSsrFGuardMock.mockResolvedValueOnce({
-    response: new Response(body, init),
+    response,
     release,
   });
-  return { release };
+  return { response, release };
 }
 
 function mockApiClient(): ApiClient {
@@ -428,7 +430,8 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
 
   it("rejects HTTP errors from guarded direct-upload downloads before calling the QQ API", async () => {
     fetchWithSsrFGuardMock.mockReset();
-    mockGuardedResponse("not found", { status: 404 });
+    const { response, release } = mockGuardedResponse("not found", { status: 404 });
+    const cancelSpy = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
     const client = mockApiClient();
     const tokenManager = mockTokenManager();
     const api = new MediaApi(client, tokenManager);
@@ -443,7 +446,77 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
       ),
     ).rejects.toThrow("Direct-upload media URL returned HTTP 404");
 
+    expect(cancelSpy).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
     expect(tokenManager["getAccessToken"]).not.toHaveBeenCalled();
     expect(client["request"]).not.toHaveBeenCalled();
+  });
+
+  it("rejects promptly when a capture clone keeps body cancellation pending", async () => {
+    fetchWithSsrFGuardMock.mockReset();
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("server error"));
+        },
+      }),
+      { status: 500 },
+    );
+    const captureClone = response.clone();
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({ response, release });
+
+    const body = response.body!;
+    const originalCancel = body.cancel.bind(body);
+    let cancellation: Promise<void> | undefined;
+    let cancellationSettled = false;
+    const cancellationStarted = new Promise<void>((resolve) => {
+      vi.spyOn(body, "cancel").mockImplementation((reason) => {
+        cancellation = originalCancel(reason).finally(() => {
+          cancellationSettled = true;
+        });
+        resolve();
+        return cancellation;
+      });
+    });
+
+    const client = mockApiClient();
+    const tokenManager = mockTokenManager();
+    const api = new MediaApi(client, tokenManager);
+    const upload = api.uploadMedia(
+      "c2c",
+      "user-openid",
+      MediaFileType.IMAGE,
+      { appId: "app-id", clientSecret: "client-secret" },
+      { url: "https://cdn.example.com/server-error.png" },
+    );
+    const cancellationPending = Symbol("capture cancellation pending");
+
+    try {
+      await cancellationStarted;
+      expect(cancellationSettled).toBe(false);
+
+      const result = await Promise.race([
+        upload.then(
+          () => undefined,
+          (error: unknown) => error,
+        ),
+        new Promise<symbol>((resolve) => {
+          setImmediate(() => resolve(cancellationPending));
+        }),
+      ]);
+
+      expect(result).not.toBe(cancellationPending);
+      expect(result).toMatchObject({
+        message: "Direct-upload media URL returned HTTP 500",
+      });
+      expect(release).toHaveBeenCalledOnce();
+      expect(tokenManager["getAccessToken"]).not.toHaveBeenCalled();
+      expect(client["request"]).not.toHaveBeenCalled();
+    } finally {
+      void captureClone.body?.cancel().catch(() => undefined);
+      await cancellation?.catch(() => undefined);
+      await upload.catch(() => undefined);
+    }
   });
 });

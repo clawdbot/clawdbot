@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   resolveOpenClawNpmResumeRun,
+  runOpenClawNpmResumeGh,
   validateOpenClawNpmResumeRun,
-} from "../../scripts/openclaw-npm-resume-run.mjs";
-import type { OpenClawNpmResumeValidationInput } from "../../scripts/openclaw-npm-resume-run.mjs";
+} from "../../scripts/openclaw-npm-resume-run.mts";
+import type { OpenClawNpmResumeValidationInput } from "../../scripts/openclaw-npm-resume-run.mts";
 
 const SHA = "a".repeat(40);
 const TAG_OBJECT_SHA = "b".repeat(40);
@@ -36,6 +37,40 @@ function fixture(
 }
 
 describe("openclaw npm resume run identity", () => {
+  it("bounds each GitHub lookup", () => {
+    const execFileSyncImpl = vi.fn(() => "result");
+
+    expect(
+      runOpenClawNpmResumeGh(["api", "repos/openclaw/openclaw/actions/runs/456"], {
+        execFileSyncImpl,
+      }),
+    ).toBe("result");
+    expect(execFileSyncImpl).toHaveBeenCalledWith(
+      "gh",
+      ["api", "repos/openclaw/openclaw/actions/runs/456"],
+      {
+        encoding: "utf8",
+        killSignal: "SIGKILL",
+        maxBuffer: 32 * 1024 * 1024,
+        timeout: 60_000,
+      },
+    );
+  });
+
+  it("propagates GitHub lookup timeouts", () => {
+    const timeoutError = Object.assign(new Error("spawnSync gh ETIMEDOUT"), {
+      code: "ETIMEDOUT",
+    });
+
+    expect(() =>
+      runOpenClawNpmResumeGh(["api", "repos/openclaw/openclaw/actions/runs/456"], {
+        execFileSyncImpl: () => {
+          throw timeoutError;
+        },
+      }),
+    ).toThrow(timeoutError);
+  });
+
   it("accepts a successful run bound to a signed main-reachable tooling tag", () => {
     expect(validateOpenClawNpmResumeRun(fixture())).toEqual({
       tagObjectSha: TAG_OBJECT_SHA,

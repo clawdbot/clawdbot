@@ -1,0 +1,80 @@
+title: Telegram empty-response recovery after a side-effecting write
+
+scenario:
+  id: telegram-empty-response-after-write-recovery
+  surface: channel-framework
+  category: channel-framework.channel-actions-commands-and-approvals
+  coverage:
+    primary: [agent-runtime.failure-recovery-empty-response-recovery]
+    secondary: [agent-runtime.failure-recovery-retry-policy]
+  regressionRefs:
+    - openclaw/openclaw#108738
+  objective: Verify a settled side-effecting tool followed by an empty stop gets one fresh continuation and one visible Telegram final reply.
+  successCriteria:
+    - The model plans the side-effecting write exactly once.
+    - The runtime continues from settled tool results without replaying the write.
+    - Telegram receives the exact recovery marker.
+  codeRefs:
+    - src/agents/embedded-agent-runner/run/incomplete-turn.ts
+    - src/agents/embedded-agent-runner/run/terminal-resolution.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+  execution:
+    kind: flow
+    channel: telegram
+    summary: Prove post-tool empty-stop recovery through real Telegram transport.
+    config:
+      requiredProviderMode: mock-openai
+      promptSnippet: Empty response after write recovery QA check
+      retryNeedle: The previous assistant turn completed its tool calls but did not produce a user-visible answer.
+      expectedMarker: TELEGRAM-EMPTY-WRITE-RECOVERED-OK
+
+flow:
+  steps:
+    - name: continues once after the settled write and delivers the final marker
+      actions:
+        - assert:
+            expr: "env.providerMode === 'mock-openai'"
+            message: this Telegram regression scenario is mock-openai only
+        - resetTransport: true
+        - set: requestCursorBefore
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
+        - set: startIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation: { id: telegram-command-room, kind: channel }
+            senderId: qa-command-operator
+            senderName: QA Command Operator
+            text: "@openclaw Empty response after write recovery QA check: write qa-empty-response-side-effect.txt with the text side effect completed once, then answer exactly TELEGRAM-EMPTY-WRITE-RECOVERED-OK."
+        - waitForOutbound:
+            conversation: { id: telegram-command-room, kind: channel }
+            sinceIndex: { ref: startIndex }
+            textIncludes: { ref: config.expectedMarker }
+            timeoutMs: 60000
+          saveAs: reply
+        - set: scenarioRequests
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet)) : []"
+        - set: writeRequests
+          value:
+            expr: "scenarioRequests.filter((request) => request.plannedToolName === 'write')"
+        - set: continuationRequests
+          value:
+            expr: "scenarioRequests.filter((request) => String(request.allInputText ?? '').includes(config.retryNeedle))"
+        - assert:
+            expr: "writeRequests.length === 1"
+            message:
+              expr: "`expected one write plan, saw ${String(writeRequests.length)}`"
+        - assert:
+            expr: "continuationRequests.length === 1"
+            message:
+              expr: "`expected one settled-tool continuation, saw ${String(continuationRequests.length)}`"
+        - assert:
+            expr: "continuationRequests.every((request) => !Array.isArray(request.body?.tools) || request.body.tools.length === 0)"
+            message: settled-tool continuation exposed a model tool surface
+        - assert:
+            expr: "reply.text.trim() === config.expectedMarker"
+            message:
+              expr: "`Telegram reply did not exactly match the recovery marker: ${reply.text}`"
+      detailsExpr: "`${reply.text}\nrequests=${String(scenarioRequests.length)} writes=${String(writeRequests.length)} continuations=${String(continuationRequests.length)}`"

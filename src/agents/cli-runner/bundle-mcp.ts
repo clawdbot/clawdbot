@@ -2,11 +2,9 @@
  * Prepares bundled MCP configuration for CLI runner backends.
  */
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { applyMergePatch } from "../../config/merge-patch.js";
-import type { CliBackendConfig } from "../../config/types.js";
+import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { tryReadJson } from "../../infra/json-files.js";
@@ -15,19 +13,33 @@ import {
   OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_PROPOSAL_ENV,
   OPENCLAW_TOOLS_MCP_TOOLS_ENV,
 } from "../../mcp/openclaw-tools-serve-config.js";
-import { extractMcpServerMap, type BundleMcpConfig } from "../../plugins/bundle-mcp.js";
-import type { CliBundleMcpMode } from "../../plugins/types.js";
-import { loadMergedBundleMcpConfig, toCliBundleMcpServerConfig } from "../bundle-mcp-config.js";
-import { resolveMcpBearerBundleConfig } from "../mcp-auth-profile.js";
-import { isRecord } from "./bundle-mcp-adapter-shared.js";
 import {
-  findClaudeMcpConfigPath,
+  extractMcpServerMap,
+  type BundleMcpConfig,
+  type BundleMcpServerConfig,
+} from "../../plugins/bundle-mcp.js";
+import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
+import type { CliBundleMcpMode } from "../../plugins/types.js";
+import { isRecord } from "../bundle-mcp-adapter.js";
+import {
+  loadMergedBundleMcpConfig,
+  prepareOwnedBundleMcpDataDirs,
+  toCliBundleMcpServerConfig,
+} from "../bundle-mcp-config.js";
+import { resolveMcpBearerBundleConfig } from "../mcp-auth-profile.js";
+import {
   findClaudeMcpConfigPaths,
   injectClaudeMcpConfigArgs,
+  injectClaudeWebSearchDisabledArgs,
   writeClaudeMcpCaptureConfig,
 } from "./bundle-mcp-claude.js";
 import { injectCodexMcpConfigArgs } from "./bundle-mcp-codex.js";
-import { writeGeminiMcpCaptureSettings, writeGeminiSystemSettings } from "./bundle-mcp-gemini.js";
+import {
+  writeGeminiMcpCaptureSettings,
+  writeGeminiSystemSettings,
+  writeGeminiWebSearchDisabledSettings,
+} from "./bundle-mcp-gemini.js";
+import { injectBundleMcpBackendArgs, writeTemporaryBundleMcpJson } from "./bundle-mcp-runtime.js";
 
 type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
@@ -37,10 +49,6 @@ type PreparedCliBundleMcpConfig = {
   mcpResumeHash?: string;
   env?: Record<string, string>;
 };
-
-function resolveBundleMcpMode(mode: CliBundleMcpMode | undefined): CliBundleMcpMode {
-  return mode ?? "claude-config-file";
-}
 
 async function readExternalMcpConfig(configPath: string): Promise<BundleMcpConfig> {
   return { mcpServers: extractMcpServerMap(await tryReadJson<unknown>(configPath)) };
@@ -112,6 +120,65 @@ function canonicalizeBundleMcpConfigForResume(config: BundleMcpConfig): BundleMc
 
 const OPENCLAW_MCP_ENV_TEMPLATE_PATTERN = /\$\{(OPENCLAW_MCP_[A-Z0-9_]+)\}/g;
 
+function normalizeMcpToolDenials(
+  value?: Record<string, string[]>,
+): Record<string, string[]> | undefined {
+  const entries = Object.entries(value ?? {})
+    .map(([serverName, toolNames]) => [serverName, [...new Set(toolNames)].toSorted()] as const)
+    .filter(([, toolNames]) => toolNames.length > 0)
+    .toSorted(([left], [right]) => left.localeCompare(right));
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function applyCodexMcpToolDenials(
+  config: BundleMcpConfig,
+  denials: Record<string, string[]> | undefined,
+): BundleMcpConfig {
+  if (!denials) {
+    return config;
+  }
+  return {
+    mcpServers: Object.fromEntries(
+      Object.entries(config.mcpServers).map(([serverName, server]) => {
+        const denied = Object.hasOwn(denials, serverName) ? denials[serverName] : undefined;
+        if (!denied?.length) {
+          return [serverName, server];
+        }
+        const toolFilter = isRecord(server.toolFilter) ? server.toolFilter : {};
+        const existing = Array.isArray(toolFilter.exclude)
+          ? toolFilter.exclude.filter((name): name is string => typeof name === "string")
+          : [];
+        return [
+          serverName,
+          {
+            ...server,
+            toolFilter: {
+              ...toolFilter,
+              exclude: [...new Set([...existing, ...denied])].toSorted(),
+            },
+          } satisfies BundleMcpServerConfig,
+        ];
+      }),
+    ),
+  };
+}
+
+function applyMcpServerOverrides(
+  config: BundleMcpConfig,
+  overrides: Record<string, boolean> | undefined,
+): BundleMcpConfig {
+  return overrides
+    ? {
+        mcpServers: Object.fromEntries(
+          Object.entries(config.mcpServers).filter(
+            ([serverName]) =>
+              !Object.hasOwn(overrides, serverName) || overrides[serverName] !== false,
+          ),
+        ),
+      }
+    : config;
+}
+
 function resolveOpenClawMcpEnvTemplates(value: unknown, env?: Record<string, string>): unknown {
   if (!env) {
     return value;
@@ -138,26 +205,38 @@ async function prepareModeSpecificBundleMcpConfig(params: {
   backend: CliBackendConfig;
   mergedConfig: BundleMcpConfig;
   env?: Record<string, string>;
+  mcpToolsDeny?: Record<string, string[]>;
+  webSearchEnabled?: boolean;
 }): Promise<PreparedCliBundleMcpConfig> {
-  const serializedConfig = `${JSON.stringify(params.mergedConfig, null, 2)}\n`;
+  const mcpToolsDeny = normalizeMcpToolDenials(params.mcpToolsDeny);
+  const webSearchDisabled = params.webSearchEnabled === false;
+  const configHashInput =
+    mcpToolsDeny || webSearchDisabled
+      ? { config: params.mergedConfig, mcpToolsDeny, webSearchDisabled }
+      : params.mergedConfig;
+  const serializedConfig = `${JSON.stringify(configHashInput, null, 2)}\n`;
   const mcpConfigHash = crypto.createHash("sha256").update(serializedConfig).digest("hex");
   const serializedResumeConfig = `${JSON.stringify(
-    canonicalizeBundleMcpConfigForResume(params.mergedConfig),
+    mcpToolsDeny || webSearchDisabled
+      ? {
+          config: canonicalizeBundleMcpConfigForResume(params.mergedConfig),
+          mcpToolsDeny,
+          webSearchDisabled,
+        }
+      : canonicalizeBundleMcpConfigForResume(params.mergedConfig),
     null,
     2,
   )}\n`;
   const mcpResumeHash = crypto.createHash("sha256").update(serializedResumeConfig).digest("hex");
 
   if (params.mode === "codex-config-overrides") {
+    const codexConfig = applyCodexMcpToolDenials(params.mergedConfig, mcpToolsDeny);
     return {
-      backend: {
-        ...params.backend,
-        args: injectCodexMcpConfigArgs(params.backend.args, params.mergedConfig),
-        resumeArgs: injectCodexMcpConfigArgs(
-          params.backend.resumeArgs ?? params.backend.args ?? [],
-          params.mergedConfig,
-        ),
-      },
+      backend: injectBundleMcpBackendArgs(params.backend, (args) =>
+        webSearchDisabled
+          ? [...injectCodexMcpConfigArgs(args, codexConfig), "-c", 'web_search="disabled"']
+          : injectCodexMcpConfigArgs(args, codexConfig),
+      ),
       mcpConfigHash,
       mcpResumeHash,
       env: params.env,
@@ -165,7 +244,12 @@ async function prepareModeSpecificBundleMcpConfig(params: {
   }
 
   if (params.mode === "gemini-system-settings") {
-    const settings = await writeGeminiSystemSettings(params.mergedConfig, params.env);
+    const settings = await writeGeminiSystemSettings(
+      params.mergedConfig,
+      params.env,
+      mcpToolsDeny,
+      params.webSearchEnabled,
+    );
     return {
       backend: params.backend,
       mcpConfigHash,
@@ -175,30 +259,49 @@ async function prepareModeSpecificBundleMcpConfig(params: {
     };
   }
 
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-mcp-"));
-  const mcpConfigPath = path.join(tempDir, "mcp.json");
   const runtimeConfig = resolveOpenClawMcpEnvTemplates(
     params.mergedConfig,
     params.env,
   ) as BundleMcpConfig;
-  await fs.writeFile(mcpConfigPath, `${JSON.stringify(runtimeConfig, null, 2)}\n`, "utf-8");
+  const temporary = await writeTemporaryBundleMcpJson(
+    "openclaw-cli-mcp-",
+    runtimeConfig,
+    "mcp.json",
+    false,
+  );
   return {
-    backend: {
-      ...params.backend,
-      args: injectClaudeMcpConfigArgs(params.backend.args, mcpConfigPath),
-      resumeArgs: injectClaudeMcpConfigArgs(
-        params.backend.resumeArgs ?? params.backend.args ?? [],
-        mcpConfigPath,
-      ),
-    },
+    backend: injectBundleMcpBackendArgs(params.backend, (args) =>
+      injectClaudeMcpConfigArgs(args, temporary.filePath, mcpToolsDeny, params.webSearchEnabled),
+    ),
     mcpConfigHash,
     mcpResumeHash,
     env: params.env,
-    cleanup: async () => {
-      // Claude config files are generated per run and should not survive cleanup.
-      await fs.rm(tempDir, { recursive: true, force: true });
-    },
+    cleanup: temporary.cleanup,
   };
+}
+
+async function prepareCliWebSearchDisabled(params: {
+  mode: CliBundleMcpMode;
+  backend: CliBackendConfig;
+  env?: Record<string, string>;
+}): Promise<PreparedCliBundleMcpConfig> {
+  const fingerprint = crypto.createHash("sha256").update("web-search-disabled-v1").digest("hex");
+  if (params.mode === "gemini-system-settings") {
+    const settings = await writeGeminiWebSearchDisabledSettings(params.env);
+    return {
+      backend: params.backend,
+      env: settings.env,
+      cleanup: settings.cleanup,
+      mcpConfigHash: fingerprint,
+      mcpResumeHash: fingerprint,
+    };
+  }
+  const backend = injectBundleMcpBackendArgs(params.backend, (args) =>
+    params.mode === "codex-config-overrides"
+      ? [...(args ?? []), "-c", 'web_search="disabled"']
+      : injectClaudeWebSearchDisabledArgs(args),
+  );
+  return { backend, env: params.env, mcpConfigHash: fingerprint, mcpResumeHash: fingerprint };
 }
 
 /** Prepare backend args/env/cleanup for bundle MCP injection into a CLI run. */
@@ -208,6 +311,7 @@ export async function prepareCliBundleMcpConfig(params: {
   backend: CliBackendConfig;
   workspaceDir: string;
   config?: OpenClawConfig;
+  toolOverrides?: SessionToolOverrides;
   agentDir?: string;
   additionalConfig?: BundleMcpConfig;
   /**
@@ -220,16 +324,27 @@ export async function prepareCliBundleMcpConfig(params: {
   warn?: (message: string) => void;
 }): Promise<PreparedCliBundleMcpConfig> {
   if (!params.enabled) {
-    return { backend: params.backend, env: params.env };
+    return params.toolOverrides?.webSearch === false
+      ? await prepareCliWebSearchDisabled({
+          mode: params.mode ?? "claude-config-file",
+          backend: params.backend,
+          env: params.env,
+        })
+      : { backend: params.backend, env: params.env };
   }
 
-  const mode = resolveBundleMcpMode(params.mode);
+  const mode = params.mode ?? "claude-config-file";
   if (params.exclusiveConfig) {
     return await prepareModeSpecificBundleMcpConfig({
       mode,
       backend: params.backend,
-      mergedConfig: params.exclusiveConfig,
+      mergedConfig: applyMcpServerOverrides(
+        params.exclusiveConfig,
+        params.toolOverrides?.mcpServers,
+      ),
       env: params.env,
+      mcpToolsDeny: params.toolOverrides?.mcpToolsDeny,
+      webSearchEnabled: params.toolOverrides?.webSearch,
     });
   }
   const resumeMcpConfigPaths =
@@ -258,13 +373,18 @@ export async function prepareCliBundleMcpConfig(params: {
     workspaceDir: params.workspaceDir,
     cfg: params.config,
     mapConfiguredServer: toCliBundleMcpServerConfig,
+    toolOverrides: params.toolOverrides,
   });
   for (const diagnostic of bundleConfig.diagnostics) {
     params.warn?.(`bundle MCP skipped for ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
   mergedConfig = applyMergePatch(mergedConfig, bundleConfig.config) as BundleMcpConfig;
+  const prepareDataDirsByServer = { ...bundleConfig.prepareDataDirsByServer };
   if (params.additionalConfig) {
     mergedConfig = applyMergePatch(mergedConfig, params.additionalConfig) as BundleMcpConfig;
+    for (const serverName of Object.keys(params.additionalConfig.mcpServers)) {
+      delete prepareDataDirsByServer[serverName];
+    }
   }
   const resolvedBearerConfig = await resolveMcpBearerBundleConfig({
     config: mergedConfig,
@@ -278,11 +398,21 @@ export async function prepareCliBundleMcpConfig(params: {
       ),
   });
 
+  const preparedDataDirs = prepareOwnedBundleMcpDataDirs({
+    config: applyMcpServerOverrides(resolvedBearerConfig.config, params.toolOverrides?.mcpServers),
+    prepareDataDirsByServer,
+  });
+  for (const diagnostic of preparedDataDirs.diagnostics) {
+    params.warn?.(`bundle MCP skipped for ${diagnostic.pluginId}: ${diagnostic.message}`);
+  }
+
   return await prepareModeSpecificBundleMcpConfig({
     mode,
     backend: params.backend,
-    mergedConfig: resolvedBearerConfig.config,
+    mergedConfig: preparedDataDirs.config,
     env: resolvedBearerConfig.env,
+    mcpToolsDeny: params.toolOverrides?.mcpToolsDeny,
+    webSearchEnabled: params.toolOverrides?.webSearch,
   });
 }
 
@@ -296,16 +426,16 @@ export async function prepareCliBundleMcpCaptureAttempt(params: {
   if (!params.captureKey) {
     return { env: params.env };
   }
-  if (resolveBundleMcpMode(params.mode) === "gemini-system-settings") {
+  if ((params.mode ?? "claude-config-file") === "gemini-system-settings") {
     return await writeGeminiMcpCaptureSettings({
       inheritedEnv: params.env,
       captureKey: params.captureKey,
     });
   }
-  if (resolveBundleMcpMode(params.mode) === "claude-config-file") {
+  if ((params.mode ?? "claude-config-file") === "claude-config-file") {
     const mcpConfigPath =
-      findClaudeMcpConfigPath(params.backend?.args) ??
-      findClaudeMcpConfigPath(params.backend?.resumeArgs);
+      findClaudeMcpConfigPaths(params.backend?.args)[0] ??
+      findClaudeMcpConfigPaths(params.backend?.resumeArgs)[0];
     if (mcpConfigPath) {
       await writeClaudeMcpCaptureConfig({
         mcpConfigPath,

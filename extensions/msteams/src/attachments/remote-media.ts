@@ -2,7 +2,7 @@
 import { saveResponseMedia, type SavedRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import type { SsrFPolicy } from "../../runtime-api.js";
 import { getMSTeamsRuntime } from "../runtime.js";
-import { inferPlaceholder } from "./shared.js";
+import { resolveMSTeamsMediaKind } from "./shared.js";
 import type { MSTeamsInboundMedia } from "./types.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -43,7 +43,7 @@ export async function downloadAndStoreMSTeamsRemoteMedia(params: {
   fetchImpl?: FetchLike;
   ssrfPolicy?: SsrFPolicy;
   contentTypeHint?: string;
-  placeholder?: string;
+  kind?: MSTeamsInboundMedia["kind"];
   preserveFilenames?: boolean;
   /**
    * Opt into the Teams-specific guarded fetch path. Only safe when the
@@ -76,8 +76,11 @@ export async function downloadAndStoreMSTeamsRemoteMedia(params: {
   return {
     path: saved.path,
     contentType: saved.contentType,
-    placeholder:
-      params.placeholder ??
-      inferPlaceholder({ contentType: saved.contentType, fileName: params.filePathHint }),
+    kind:
+      params.kind ??
+      resolveMSTeamsMediaKind({
+        contentType: saved.contentType,
+        fileName: params.filePathHint,
+      }),
   };
 }

@@ -173,6 +173,26 @@ describe("gh-read helpers", () => {
     expect(text.length).toBeLessThan(4200);
   });
 
+  it.each([
+    {
+      caseName: "drops a split surrogate pair",
+      responseBody: `abc\u{1f600}tail`,
+      expectedText: "abc\n[truncated]",
+    },
+    {
+      caseName: "preserves a complete surrogate pair",
+      responseBody: `ab\u{1f600}tail`,
+      expectedText: `ab\u{1f600}\n[truncated]`,
+    },
+  ])(
+    "keeps GitHub API error truncation UTF-16 safe: $caseName",
+    async ({ responseBody, expectedText }) => {
+      const response = new Response(responseBody, { status: 500 });
+
+      await expect(readBoundedGitHubErrorText(response, 4)).resolves.toBe(expectedText);
+    },
+  );
+
   it("reads bounded GitHub API JSON responses", async () => {
     await expect(readBoundedGitHubJson(new Response('{"id":123}'), 1024)).resolves.toEqual({
       id: 123,

@@ -1,5 +1,6 @@
 /** Module-level session MCP runtime manager entry APIs. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -15,6 +16,13 @@ function getSessionMcpRuntimeManager(): SessionMcpRuntimeManager {
   return resolveGlobalSingleton(SESSION_MCP_RUNTIME_MANAGER_KEY, createSessionMcpRuntimeManager);
 }
 
+function peekSessionMcpRuntimeManager(): SessionMcpRuntimeManager | undefined {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  return Object.hasOwn(globalStore, SESSION_MCP_RUNTIME_MANAGER_KEY)
+    ? (globalStore[SESSION_MCP_RUNTIME_MANAGER_KEY] as SessionMcpRuntimeManager)
+    : undefined;
+}
+
 export async function getOrCreateSessionMcpRuntime(params: {
   sessionId: string;
   sessionKey?: string;
@@ -25,6 +33,7 @@ export async function getOrCreateSessionMcpRuntime(params: {
   requesterSenderId?: string | null;
   agentAccountId?: string | null;
   messageChannel?: string | null;
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 }): Promise<SessionMcpRuntime> {
   return await getSessionMcpRuntimeManager().getOrCreate(params);
 }
@@ -43,6 +52,7 @@ export async function getOrCreateRequesterScopedMcpRuntime(params: {
   requesterSenderId?: string | null;
   agentAccountId?: string | null;
   messageChannel?: string | null;
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 }): Promise<SessionMcpRuntime | undefined> {
   return await getSessionMcpRuntimeManager().getOrCreateRequesterScoped(params);
 }
@@ -65,7 +75,7 @@ export function peekSessionMcpRuntime(params: {
 }): SessionMcpRuntime | undefined {
   const sessionId = normalizeOptionalString(params.sessionId);
   const sessionKey = normalizeOptionalString(params.sessionKey);
-  return getSessionMcpRuntimeManager().peekSession({
+  return peekSessionMcpRuntimeManager()?.peekSession({
     ...(sessionId ? { sessionId } : {}),
     ...(sessionKey ? { sessionKey } : {}),
   });
@@ -79,6 +89,7 @@ export async function retireSessionMcpRuntime(params: {
   sessionId?: string | null;
   reason: string;
   preserveActiveLeases?: boolean;
+  retainAcrossReuse?: boolean;
   onError?: (error: unknown, sessionId: string, reason: string) => void;
 }): Promise<boolean> {
   const sessionId = normalizeOptionalString(params.sessionId);
@@ -86,13 +97,23 @@ export async function retireSessionMcpRuntime(params: {
     return false;
   }
   const manager = getSessionMcpRuntimeManager();
+  const retainAcrossReuse =
+    params.preserveActiveLeases === true && params.retainAcrossReuse === true;
   // Aggregate leases across static + all requester-scoped parts so preserveActiveLeases
   // does not miss a leased scoped runtime while peeking only the bare session key.
-  if (params.preserveActiveLeases === true && manager.totalActiveLeasesForSession(sessionId) > 0) {
-    manager.deferRetirement(sessionId);
-    return true;
+  if (params.preserveActiveLeases === true) {
+    manager.deferRetirement(sessionId, {
+      retainAcrossReuse,
+    });
+    if (manager.totalActiveLeasesForSession(sessionId) > 0) {
+      return true;
+    }
   }
   try {
+    if (retainAcrossReuse) {
+      await manager.completeDeferredRetirement(sessionId);
+      return true;
+    }
     await disposeSessionMcpRuntime(sessionId);
     return true;
   } catch (error) {

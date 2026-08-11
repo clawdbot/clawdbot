@@ -1,7 +1,7 @@
 /** Shared CLI runner test doubles for supervisor, bootstrap, and heartbeat seams. */
 import type { Mock } from "vitest";
 import { beforeEach, vi } from "vitest";
-import { getClaudeLiveSessionGenerationForOwner } from "./cli-runner/claude-live-session.js";
+import { getClaudeGeneration } from "./cli-runner/claude-live-registry.js";
 import { createManagedRun, supervisorSpawnMock } from "./cli-runner/execute.test-support.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.test-support.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
@@ -42,14 +42,14 @@ setCliRunnerPrepareTestDeps({
 });
 
 /** Queue one successful CLI supervisor run. */
-export function mockSuccessfulCliRun() {
+export function mockSuccessfulCliRun(stdout = "ok") {
   supervisorSpawnMock.mockResolvedValueOnce(
     createManagedRun({
       reason: "exit",
       exitCode: 0,
       exitSignal: null,
       durationMs: 50,
-      stdout: "ok",
+      stdout,
       stderr: "",
       timedOut: false,
       noOutputTimedOut: false,
@@ -63,7 +63,7 @@ export function restoreCliRunnerPrepareTestDeps() {
     makeBootstrapWarn: () => () => {},
     resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
     resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
-    getClaudeLiveSessionGenerationForOwner,
+    getClaudeGeneration,
   });
 }
 

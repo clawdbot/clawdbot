@@ -17,7 +17,6 @@ import type {
 import {
   asBoolean,
   asFiniteNumber,
-  asObject,
   normalizeApplyTextNormalization,
   normalizeLanguageCode,
   normalizeSeed,
@@ -29,7 +28,11 @@ import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeLowercaseStringOrEmpty,
+  parseBooleanValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveElevenLabsApiKeyWithProfileFallback } from "./config-api.js";
 import { isValidElevenLabsVoiceId, normalizeElevenLabsBaseUrl } from "./shared.js";
 import { elevenLabsTTS, elevenLabsTTSStream } from "./tts.js";
@@ -79,17 +82,6 @@ type ElevenLabsProviderConfig = {
     speed: number;
   };
 };
-
-function parseBooleanValue(value: string): boolean | undefined {
-  const normalized = normalizeLowercaseStringOrEmpty(value);
-  if (["true", "1", "yes", "on"].includes(normalized)) {
-    return true;
-  }
-  if (["false", "0", "no", "off"].includes(normalized)) {
-    return false;
-  }
-  return undefined;
-}
 
 function parseNumberValue(value: string): number | undefined {
   return parseStrictFiniteNumber(value);
@@ -142,13 +134,13 @@ function normalizeVoiceSettings(
 function normalizeElevenLabsProviderConfig(
   rawConfig: Record<string, unknown>,
 ): ElevenLabsProviderConfig {
-  const providers = asObject(rawConfig.providers);
-  const raw = asObject(providers?.elevenlabs) ?? asObject(rawConfig.elevenlabs);
-  const rawVoiceSettings = asObject(raw?.voiceSettings);
+  const providers = asOptionalRecord(rawConfig.providers);
+  const raw = asOptionalRecord(providers?.elevenlabs) ?? asOptionalRecord(rawConfig.elevenlabs);
+  const rawVoiceSettings = asOptionalRecord(raw?.voiceSettings);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.elevenlabs.apiKey",
+      path: "tts.providers.elevenlabs.apiKey",
     }),
     baseUrl: normalizeElevenLabsBaseUrl(trimToUndefined(raw?.baseUrl)),
     voiceId: trimToUndefined(raw?.voiceId) ?? DEFAULT_ELEVENLABS_VOICE_ID,
@@ -170,7 +162,7 @@ function normalizeElevenLabsProviderConfig(
 
 function readElevenLabsProviderConfig(config: SpeechProviderConfig): ElevenLabsProviderConfig {
   const defaults = normalizeElevenLabsProviderConfig({});
-  const voiceSettings = asObject(config.voiceSettings);
+  const voiceSettings = asOptionalRecord(config.voiceSettings);
   return {
     apiKey: trimToUndefined(config.apiKey) ?? defaults.apiKey,
     baseUrl: normalizeElevenLabsBaseUrl(trimToUndefined(config.baseUrl) ?? defaults.baseUrl),
@@ -213,7 +205,7 @@ function mergeVoiceSettingsOverride(
   return {
     ...ctx.currentOverrides,
     voiceSettings: {
-      ...asObject(ctx.currentOverrides?.voiceSettings),
+      ...asOptionalRecord(ctx.currentOverrides?.voiceSettings),
       ...next,
     },
   };
@@ -223,7 +215,7 @@ function resolveVoiceSettingsOverride(
   base: ElevenLabsProviderConfig["voiceSettings"],
   overrides: unknown,
 ): ElevenLabsProviderConfig["voiceSettings"] {
-  const voiceSettings = asObject(overrides);
+  const voiceSettings = asOptionalRecord(overrides);
   return {
     ...base,
     ...normalizeVoiceSettings(voiceSettings),
@@ -458,7 +450,7 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
     parseDirectiveToken,
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
       const base = normalizeElevenLabsProviderConfig(baseTtsConfig);
-      const talkVoiceSettings = asObject(talkProviderConfig.voiceSettings);
+      const talkVoiceSettings = asOptionalRecord(talkProviderConfig.voiceSettings);
       const resolvedTalkApiKey = resolveElevenLabsTalkApiKey(talkProviderConfig);
       return {
         ...base,

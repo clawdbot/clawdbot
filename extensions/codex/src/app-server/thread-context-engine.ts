@@ -1,6 +1,6 @@
 import {
   isActiveHarnessContextEngine,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   resolveCodexContextEngineProjectionMaxChars,
@@ -42,9 +42,7 @@ export function buildContextEngineBinding(
       contextTokenBudget: params.contextTokenBudget,
       projectionMaxChars: resolveCodexContextEngineProjectionMaxChars({
         contextTokenBudget: params.contextTokenBudget,
-        reserveTokens: resolveCodexContextEngineProjectionReserveTokens({
-          config: params.config,
-        }),
+        reserveTokens: resolveCodexContextEngineProjectionReserveTokens(),
       }),
     }),
     projection: projection ? buildContextEngineProjectionBinding(projection) : undefined,

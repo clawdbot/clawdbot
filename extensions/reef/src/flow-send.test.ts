@@ -1,20 +1,23 @@
-import { randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { generateIdentity, MemoryAuditStore, MemoryReplayStore } from "../protocol/index.js";
 import { ReefMessageFlow } from "./flow.js";
 import {
   allow,
   config,
+  flowStores,
   guard,
   peerTrust,
   reefKeys,
+  resetFlowStoresForTests,
   transport,
   trust,
 } from "./flow.test-helpers.js";
 import { reefPeerIdentity } from "./friend-types.js";
 import { reefMessageTextHash } from "./rejection-resend.js";
-import { ReviewApprovalStore } from "./state.js";
 import type { ReefTransportClient } from "./transport.js";
+
+beforeEach(resetFlowStoresForTests);
+afterEach(resetFlowStoresForTests);
 
 describe("ReefMessageFlow send recovery", () => {
   it("persists automatic resends as non-resendable deliveries", async () => {
@@ -29,12 +32,12 @@ describe("ReefMessageFlow send recovery", () => {
       config: cfg,
       trust: trusted.store,
       keys: alice,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+
       transport: relay as unknown as ReefTransportClient,
       guard: guard(allow),
       audit: new MemoryAuditStore(new Uint8Array(32).fill(7)),
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...flowStores(),
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });

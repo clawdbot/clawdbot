@@ -7,7 +7,6 @@ interface BackupRotationFs {
   unlink: (path: string) => Promise<void>;
   rename: (from: string, to: string) => Promise<void>;
   chmod?: (path: string, mode: number) => Promise<void>;
-  readdir?: (path: string) => Promise<string[]>;
 }
 
 interface BackupMaintenanceFs extends BackupRotationFs {
@@ -60,41 +59,6 @@ async function hardenBackupPermissions(configPath: string, ioFs: BackupRotationF
   }
 }
 
-/** Prunes stale `.bak.*` files that are outside the managed numbered ring. */
-async function cleanOrphanBackups(configPath: string, ioFs: BackupRotationFs): Promise<void> {
-  if (!ioFs.readdir) {
-    return;
-  }
-  const dir = path.dirname(configPath);
-  const base = path.basename(configPath);
-  const bakPrefix = `${base}.bak.`;
-
-  const validSuffixes = new Set<string>();
-  for (let i = 1; i < CONFIG_BACKUP_COUNT; i++) {
-    validSuffixes.add(String(i));
-  }
-
-  let entries: string[];
-  try {
-    entries = await ioFs.readdir(dir);
-  } catch {
-    return; // best-effort
-  }
-
-  for (const entry of entries) {
-    if (!entry.startsWith(bakPrefix)) {
-      continue;
-    }
-    const suffix = entry.slice(bakPrefix.length);
-    if (validSuffixes.has(suffix)) {
-      continue;
-    }
-    await ioFs.unlink(path.join(dir, entry)).catch(() => {
-      // best-effort
-    });
-  }
-}
-
 interface PreUpdateSnapshotFs {
   writeFile: (
     path: string,
@@ -140,7 +104,7 @@ export async function createPreUpdateConfigSnapshot(params: {
   }
 }
 
-/** Runs rotation, primary copy, permission hardening, then orphan pruning. */
+/** Runs rotation, primary copy, and permission hardening. */
 export async function maintainConfigBackups(
   configPath: string,
   ioFs: BackupMaintenanceFs,
@@ -150,5 +114,4 @@ export async function maintainConfigBackups(
     // best-effort
   });
   await hardenBackupPermissions(configPath, ioFs);
-  await cleanOrphanBackups(configPath, ioFs);
 }

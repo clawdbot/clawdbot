@@ -124,6 +124,8 @@ describe("worker session placement store", () => {
       state: "failed",
       generation: 3,
       recoveryError: "workspace synchronization failed",
+      terminalReason: "workspace synchronization failed",
+      terminalAtMs: 1_000,
     });
     expect(() =>
       store.fail({
@@ -133,12 +135,15 @@ describe("worker session placement store", () => {
       }),
     ).toThrow("changed before failure");
     expect(store.get(SESSION.sessionId)?.recoveryError).toBe("workspace synchronization failed");
+    nowMs = 2_000;
     expect(
       store.fail({ sessionId: SESSION.sessionId, recoveryError: "teardown retry failed" }),
     ).toMatchObject({
       state: "failed",
       generation: failed.generation,
       recoveryError: "teardown retry failed",
+      terminalReason: "workspace synchronization failed",
+      terminalAtMs: 1_000,
     });
   });
 
@@ -468,12 +473,10 @@ describe("worker session placement store", () => {
       expectedGeneration: draining.generation,
     });
     expect(
-      store.transition({
+      store.fail({
         sessionId: SESSION.sessionId,
-        from: "reconciling",
-        to: "failed",
         expectedGeneration: reconciling.generation,
-        patch: { recoveryError: "active worker disappeared" },
+        recoveryError: "active worker disappeared",
       }),
     ).toMatchObject({ state: "failed", turnClaim: null });
     expect(store.validateTurnClaim(workerClaim)).toBe(false);
@@ -743,11 +746,29 @@ describe("worker session placement store", () => {
         gatewayInstanceId: store.workspaceResultInstanceId(),
         recoveryRequestedAtMs: null,
         workspaceAcceptedAtMs: null,
+        stagedResultRef: null,
       },
     ]);
     expect(() => store.releaseTurn(claim)).toThrow("pending cloud workspace result");
 
     const manifestRef = `sha256:${"f".repeat(64)}`;
+    const stagedResultRef = `refs/openclaw/worker-results/${claim.claimId}`;
+    expect(() =>
+      store.recordStagedWorkspaceResult(claim, "refs/openclaw/worker-results/unsafe.claim"),
+    ).toThrow("Worker workspace staged result reference is invalid");
+    store.recordStagedWorkspaceResult(claim, stagedResultRef);
+    store.recordWorkspaceResultConflict(claim, {
+      paths: [" z.txt ", "a.txt", "a.txt"],
+      stagedResultRef,
+    });
+    expect(store.get(SESSION.sessionId)?.workspaceResultConflict).toEqual({
+      paths: [" z.txt ", "a.txt"],
+      stagedResultRef,
+      totalCount: 2,
+    });
+    expect(store.listPendingWorkspaceResults()).toMatchObject([
+      { sessionId: active.sessionId, stagedResultRef },
+    ]);
     store.updateWorkspaceBaseManifest({ claim, manifestRef });
     expect(store.listPendingWorkspaceResults()).toMatchObject([
       { sessionId: active.sessionId, workspaceAcceptedAtMs: null },
@@ -757,50 +778,36 @@ describe("worker session placement store", () => {
       { sessionId: active.sessionId, workspaceAcceptedAtMs: nowMs },
     ]);
     expect(store.completeWorkspaceResultAndReleaseTurn(claim)).toMatchObject({ turnClaim: null });
-    expect(store.listPendingWorkspaceResults()).toEqual([]);
-  });
-
-  it("atomically reclaims an accepted result after its stale environment is destroyed", () => {
-    const active = advanceToActive();
-    const claim = store.claimTurn({
+    expect(store.get(SESSION.sessionId)?.workspaceResultConflict).toEqual({
+      paths: [" z.txt ", "a.txt"],
+      stagedResultRef,
+      totalCount: 2,
+    });
+    const laterClaim = store.claimTurn({
       ...SESSION,
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-      claimId: "recovered-workspace-claim",
-      runId: "recovered-workspace-run",
+      owner: claim.owner,
+      claimId: "later-clean-claim",
+      runId: "later-clean-run",
     });
-    store.markWorkspaceResultPending(claim);
-    expect(() => store.completeWorkspaceResultAndReleaseTurn(claim, { reclaim: true })).toThrow(
-      "workspace result was not accepted",
-    );
-    store.updateWorkspaceBaseManifest({ claim, manifestRef: `sha256:${"e".repeat(64)}` });
-    store.acceptWorkspaceResult(claim);
-
-    expect(store.completeWorkspaceResultAndReleaseTurn(claim, { reclaim: true })).toMatchObject({
-      state: "reclaimed",
-      turnClaim: null,
+    store.recordWorkspaceResultConflict(laterClaim, {
+      paths: Array.from(
+        { length: 300 },
+        (_, index) => `conflict-${index.toString().padStart(3, "0")}`,
+      ),
+      stagedResultRef: `refs/openclaw/worker-results/${laterClaim.claimId}`,
     });
-    expect(store.listPendingWorkspaceResults()).toEqual([]);
-  });
-
-  it("finishes an idle destroyed-worker reclaim in one placement transition", () => {
-    const active = advanceToActive();
-
+    expect(store.get(SESSION.sessionId)?.workspaceResultConflict).toMatchObject({
+      totalCount: 300,
+      paths: expect.arrayContaining(["conflict-000", "conflict-255"]),
+    });
+    expect(store.get(SESSION.sessionId)?.workspaceResultConflict?.paths).toHaveLength(256);
+    store.recordWorkspaceResultConflict(laterClaim, undefined);
+    expect(store.get(SESSION.sessionId)).not.toHaveProperty("workspaceResultConflict");
+    store.releaseTurn(laterClaim);
     expect(
-      store.finishReclaim({
-        sessionId: active.sessionId,
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-        expectedGeneration: active.generation,
-      }),
-    ).toMatchObject({
-      state: "reclaimed",
-      generation: active.generation + 1,
-      turnClaim: null,
-    });
+      createWorkerSessionPlacementStore({ database, now: () => nowMs }).get(SESSION.sessionId),
+    ).not.toHaveProperty("workspaceResultConflict");
+    expect(store.listPendingWorkspaceResults()).toEqual([]);
   });
 
   it("preserves an admitted worker result while its placement is draining", () => {
@@ -987,7 +994,17 @@ describe("worker session placement store", () => {
       claimId: "journal-claim",
       runId: "journal-run",
     });
+    store.markWorkspaceResultPending(claim);
+    const appliedManifestRef = active.workspaceBaseManifestRef;
+    store.updateWorkspaceBaseManifest({ claim, manifestRef: appliedManifestRef });
+    expect(store.loadWorkspaceReconciliation(owner)).toMatchObject({
+      appliedManifestRef,
+    });
     store.updateWorkspaceBaseManifest({ claim, manifestRef: currentManifestRef });
+    expect(store.loadWorkspaceReconciliation(owner)).toMatchObject({
+      appliedManifestRef: currentManifestRef,
+    });
+    store.acceptWorkspaceResult(claim);
     expect(store.loadWorkspaceReconciliation(owner)).toBeUndefined();
   });
 });

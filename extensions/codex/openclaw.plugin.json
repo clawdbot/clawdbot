@@ -1,5 +1,19 @@
 {
   "id": "codex",
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": true
+  },
+  "sessionRouteStateOwners": [
+    {
+      "id": "codex",
+      "label": "Codex",
+      "providerIds": ["codex", "codex-cli", "openai-codex"],
+      "runtimeIds": ["codex", "codex-cli"],
+      "cliSessionKeys": ["codex-cli"],
+      "authProfilePrefixes": ["codex:", "codex-cli:", "openai-codex:"]
+    }
+  ],
   "name": "Codex",
   "description": "Codex app-server harness and native session catalog.",
   "contracts": {
@@ -28,6 +42,7 @@
     "onAgentHarnesses": ["codex"],
     "onCommands": ["codex"],
     "onConfigPaths": [
+      "plugins.entries.codex.config.appServer.transport",
       "plugins.entries.codex.config.sessionCatalog.enabled",
       "plugins.entries.codex.config.supervision.enabled"
     ]
@@ -235,8 +250,7 @@
           },
           "homeScope": {
             "type": "string",
-            "enum": ["agent", "user"],
-            "default": "agent"
+            "enum": ["agent", "user"]
           },
           "command": { "type": "string" },
           "args": {
@@ -278,6 +292,11 @@
             "type": "number",
             "minimum": 1,
             "default": 60000
+          },
+          "turnAssistantCompletionIdleTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 10000
           },
           "postToolRawAssistantCompletionIdleTimeoutMs": {
             "type": "number",
@@ -536,7 +555,7 @@
     },
     "appServer.transport": {
       "label": "Transport",
-      "help": "Use stdio to spawn Codex locally, unix for the shared local control socket, or websocket for a remote app-server.",
+      "help": "Use stdio to spawn Codex locally or unix for the shared local control socket. Remote websocket transport is experimental and unsupported by Codex.",
       "advanced": true
     },
     "appServer.homeScope": {
@@ -599,6 +618,11 @@
     "appServer.turnCompletionIdleTimeoutMs": {
       "label": "Turn Completion Idle Timeout",
       "help": "Maximum quiet time after Codex accepts a turn or after a turn-scoped app-server request before OpenClaw interrupts the turn while waiting for turn/completed.",
+      "advanced": true
+    },
+    "appServer.turnAssistantCompletionIdleTimeoutMs": {
+      "label": "Assistant Completion Idle Timeout",
+      "help": "Short quiet-time guard after Codex reports a completed assistant message before OpenClaw releases the turn.",
       "advanced": true
     },
     "appServer.postToolRawAssistantCompletionIdleTimeoutMs": {

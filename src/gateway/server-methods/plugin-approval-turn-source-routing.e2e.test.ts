@@ -13,24 +13,28 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
-import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
+import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { APPROVALS_SCOPE } from "../method-scopes.js";
 import { startGatewayServer } from "../server.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  getFreeGatewayPort,
+  getGatewayE2ePortBlock,
 } from "../test-helpers.e2e.js";
+import {
+  configureManualGatewayBackgroundEnv,
+  MANUAL_GATEWAY_ENV_KEYS,
+} from "../test-helpers.manual-gateway-env.js";
 
 const TEST_ENV_KEYS = [
   "HOME",
+  ...MANUAL_GATEWAY_ENV_KEYS,
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_URL",
   "OPENCLAW_GATEWAY_TOKEN",
   "OPENCLAW_GATEWAY_PASSWORD",
-  "OPENCLAW_GATEWAY_PORT",
 ];
 
 describe("plugin.approval.request delivery routing (real gateway)", () => {
@@ -55,8 +59,9 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
     await fs.mkdir(stateDir, { recursive: true });
     setTestEnvValue("HOME", tempHome);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    configureManualGatewayBackgroundEnv(tempHome);
 
-    const port = await getFreeGatewayPort();
+    const port = await getGatewayE2ePortBlock();
     const token = "plugin-approval-turn-source-e2e-token";
     const url = `ws://127.0.0.1:${port}`;
     setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));

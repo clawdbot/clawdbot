@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "../bundled-plugin-paths.mjs";
-import { publicPluginSdkEntrypoints } from "../plugin-sdk-entries.mjs";
+import { publicPluginSdkEntrypoints } from "../plugin-sdk-entries.mts";
 import type { ConsumerScope, PublicEntrypoint, TopologyScope, UsageBucket } from "./types.js";
 
 function isTestFile(relPath: string): boolean {
@@ -125,8 +125,7 @@ export function createPluginSdkScope(_repoRoot: string): TopologyScope {
   const entrypoints = publicPluginSdkEntrypoints.map((entrypoint) => ({
     entrypoint,
     sourcePath: `src/plugin-sdk/${entrypoint}.ts`,
-    importSpecifier:
-      entrypoint === "index" ? "openclaw/plugin-sdk" : `openclaw/plugin-sdk/${entrypoint}`,
+    importSpecifier: `openclaw/plugin-sdk/${entrypoint}`,
   }));
   return buildScopeFromEntrypoints("plugin-sdk", "OpenClaw plugin-sdk public surface", entrypoints);
 }

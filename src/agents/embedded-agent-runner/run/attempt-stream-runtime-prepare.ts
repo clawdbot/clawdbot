@@ -10,8 +10,8 @@ import { abortable as abortableWithSignal } from "./abortable.js";
 import {
   type createEmbeddedAttemptExternalAbortController,
   createEmbeddedAttemptRunAbort,
-} from "./attempt-abort.js";
-import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
+} from "./attempt-finalize.js";
+import { prepareEmbeddedAttemptHistory } from "./attempt-history.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
 import { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
 import { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
@@ -33,7 +33,6 @@ type StreamGuardPhaseInput = Omit<
   | "onIdleTimeout"
   | "onRejectedThinkingReplayRepaired"
   | "session"
-  | "sessionLockController"
   | "sessionManager"
 >;
 type HistoryPhaseInput = Omit<HistoryInput, "activeSession" | "attempt" | "sessionManager">;
@@ -54,7 +53,6 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
   activeSession: StreamInput["activeSession"];
   sessionManager: HistoryInput["sessionManager"] &
     NonNullable<ToolResultFlushInput["sessionManager"]>;
-  sessionLockController: StreamGuardInput["sessionLockController"];
   ownedTranscriptWriteContext: Parameters<typeof withOwnedSessionTranscriptWrites>[0];
   runAbortController: AbortController;
   externalAbortController: ExternalAbortController;
@@ -81,12 +79,11 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
 }) {
   const { activeSession, attempt, sessionManager } = input;
   const idleTimeoutTriggerRef: { current?: (error: Error) => void } = {};
-  const { cacheObservabilityEnabled, promptCacheToolNames } = installEmbeddedAttemptStreamGuards({
+  const { cacheObservabilityEnabled, promptCacheTools } = installEmbeddedAttemptStreamGuards({
     ...input.guards,
     attempt,
     session: activeSession,
     sessionManager,
-    sessionLockController: input.sessionLockController,
     isYieldDetected: input.lifecycle.isYieldDetected,
     onRejectedThinkingReplayRepaired: input.lifecycle.markRejectedThinkingReplayRepaired,
     onIdleTimeout: (error) => idleTimeoutTriggerRef.current?.(error),
@@ -123,7 +120,6 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
     isProbeSession,
     log,
     runAbortController: input.runAbortController,
-    sessionLockController: input.sessionLockController,
     state: input.abortState,
   });
   input.externalAbortController.setRunAbort(abortRun);
@@ -137,9 +133,14 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
     prompt: string,
     options?: Parameters<typeof activeSession.prompt>[1],
   ): Promise<void> =>
-    withOwnedSessionTranscriptWrites(input.ownedTranscriptWriteContext, async () =>
-      abortable(input.trackPromptSettlePromise(activeSession.prompt(prompt, options))),
-    );
+    withOwnedSessionTranscriptWrites(input.ownedTranscriptWriteContext, async () => {
+      // Prompting starts its own agent loop; reject before creating a loop that
+      // an already-aborted attempt can no longer cancel.
+      if (input.runAbortController.signal.aborted) {
+        return abortable(Promise.resolve());
+      }
+      return abortable(input.trackPromptSettlePromise(activeSession.prompt(prompt, options)));
+    });
   const onBlockReply = attempt.onBlockReply
     ? bindOwnedSessionTranscriptWrites(input.ownedTranscriptWriteContext, attempt.onBlockReply)
     : undefined;
@@ -171,7 +172,6 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
     compactionTimeoutMs: input.compactionTimeoutMs,
     isProbeSession,
     abortRun,
-    markExternalAbort: input.lifecycle.markExternalAbort,
     markTimedOutDuringCompaction: input.lifecycle.markTimedOutDuringCompaction,
     markTimedOutByRunBudget: input.lifecycle.markTimedOutByRunBudget,
   });
@@ -180,7 +180,7 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
     abortable,
     cache: {
       observabilityEnabled: cacheObservabilityEnabled,
-      promptToolNames: promptCacheToolNames,
+      promptTools: promptCacheTools,
     },
     history: preparedHistory,
     isProbeSession,

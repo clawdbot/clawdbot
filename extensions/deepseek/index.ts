@@ -4,7 +4,8 @@ import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-en
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { fetchDeepSeekUsage } from "openclaw/plugin-sdk/provider-usage";
-import { applyDeepSeekConfig, DEEPSEEK_DEFAULT_MODEL_REF } from "./onboard.js";
+import { applyDeepSeekConfig } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildDeepSeekProvider } from "./provider-catalog.js";
 import { createDeepSeekV4ThinkingWrapper } from "./stream.js";
 import { resolveDeepSeekV4ThinkingProfile } from "./thinking.js";
@@ -15,31 +16,15 @@ export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "DeepSeek Provider",
   description: "Bundled DeepSeek provider plugin",
+  manifest,
   provider: {
     label: "DeepSeek",
     docsPath: "/providers/deepseek",
-    auth: [
-      {
-        methodId: "api-key",
-        label: "DeepSeek API key",
-        hint: "API key",
-        optionKey: "deepseekApiKey",
-        flagName: "--deepseek-api-key",
-        envVar: "DEEPSEEK_API_KEY",
-        promptMessage: "Enter DeepSeek API key",
-        defaultModel: DEEPSEEK_DEFAULT_MODEL_REF,
-        applyConfig: (cfg) => applyDeepSeekConfig(cfg),
-        wizard: {
-          choiceId: "deepseek-api-key",
-          choiceLabel: "DeepSeek API key",
-          groupId: "deepseek",
-          groupLabel: "DeepSeek",
-          groupHint: "API key",
-        },
-      },
-    ],
+    manifestAuth: { applyConfig: applyDeepSeekConfig },
     catalog: {
       buildProvider: buildDeepSeekProvider,
+      buildStaticProvider: buildDeepSeekProvider,
+      liveModelDiscovery: true,
     },
     augmentModelCatalog: ({ config }) =>
       readConfiguredProviderCatalogEntries({

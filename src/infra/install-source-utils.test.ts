@@ -6,6 +6,7 @@ import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   packNpmSpecToArchive,
   resolveArchiveSourcePath,
+  resolveNpmPackArchiveMetadata,
   resolveNpmSpecMetadata,
   withTempDir,
 } from "./install-source-utils.js";
@@ -377,7 +378,13 @@ describe("packNpmSpecToArchive", () => {
       ]),
     });
 
-    const result = await runPack("openclaw-plugin@1.2.3", cwd);
+    const signal = new AbortController().signal;
+    const result = await packNpmSpecToArchive({
+      spec: "openclaw-plugin@1.2.3",
+      timeoutMs: 1000,
+      cwd,
+      signal,
+    });
 
     expect(result).toEqual({
       ok: true,
@@ -395,6 +402,8 @@ describe("packNpmSpecToArchive", () => {
       {
         cwd,
         timeoutMs: 300_000,
+        signal,
+        killProcessTree: true,
         env: {
           COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
           NPM_CONFIG_IGNORE_SCRIPTS: "true",
@@ -407,6 +416,38 @@ describe("packNpmSpecToArchive", () => {
         },
       },
     );
+  });
+
+  it("unpacks npm 12 name-keyed pack json output", async () => {
+    const cwd = await createFixtureDir();
+    const archivePath = path.join(cwd, "openclaw-plugin-1.2.3.tgz");
+    await fs.writeFile(archivePath, "", "utf-8");
+    mockPackCommandResult({
+      stdout: JSON.stringify({
+        "openclaw-plugin": {
+          id: "openclaw-plugin@1.2.3",
+          name: "openclaw-plugin",
+          version: "1.2.3",
+          filename: "openclaw-plugin-1.2.3.tgz",
+          integrity: "sha512-test-integrity",
+          shasum: "abc123",
+        },
+      }),
+    });
+
+    const result = await runPack("openclaw-plugin@1.2.3", cwd);
+
+    expect(result).toEqual({
+      ok: true,
+      archivePath,
+      metadata: {
+        name: "openclaw-plugin",
+        version: "1.2.3",
+        resolvedSpec: "openclaw-plugin@1.2.3",
+        integrity: "sha512-test-integrity",
+        shasum: "abc123",
+      },
+    });
   });
 
   it("falls back to parsing final stdout line when npm json output is unavailable", async () => {
@@ -529,6 +570,74 @@ describe("packNpmSpecToArchive", () => {
     expect(result).toEqual({
       ok: false,
       error: "npm pack failed: network timeout",
+    });
+  });
+});
+
+describe("resolveNpmPackArchiveMetadata", () => {
+  it("reads archive metadata from npm <=11 array pack output", async () => {
+    const cwd = await createFixtureDir();
+    const archivePath = path.join(cwd, "openclaw-plugin-1.2.3.tgz");
+    await fs.writeFile(archivePath, "tar-bytes", "utf-8");
+    mockPackCommandResult({
+      stdout: JSON.stringify([
+        {
+          id: "openclaw-plugin@1.2.3",
+          name: "openclaw-plugin",
+          version: "1.2.3",
+          filename: "openclaw-plugin-1.2.3.tgz",
+          integrity: "sha512-test-integrity",
+          shasum: "abc123",
+        },
+      ]),
+    });
+
+    const result = await resolveNpmPackArchiveMetadata({ archivePath, timeoutMs: 1000 });
+
+    expect(result).toEqual({
+      ok: true,
+      archivePath,
+      tarballName: "openclaw-plugin-1.2.3.tgz",
+      metadata: {
+        name: "openclaw-plugin",
+        version: "1.2.3",
+        resolvedSpec: "openclaw-plugin@1.2.3",
+        integrity: "sha512-test-integrity",
+        shasum: "abc123",
+      },
+    });
+  });
+
+  it("reads archive metadata from npm 12 name-keyed pack output", async () => {
+    const cwd = await createFixtureDir();
+    const archivePath = path.join(cwd, "openclaw-plugin-1.2.3.tgz");
+    await fs.writeFile(archivePath, "tar-bytes", "utf-8");
+    mockPackCommandResult({
+      stdout: JSON.stringify({
+        "openclaw-plugin": {
+          id: "openclaw-plugin@1.2.3",
+          name: "openclaw-plugin",
+          version: "1.2.3",
+          filename: "openclaw-plugin-1.2.3.tgz",
+          integrity: "sha512-test-integrity",
+          shasum: "abc123",
+        },
+      }),
+    });
+
+    const result = await resolveNpmPackArchiveMetadata({ archivePath, timeoutMs: 1000 });
+
+    expect(result).toEqual({
+      ok: true,
+      archivePath,
+      tarballName: "openclaw-plugin-1.2.3.tgz",
+      metadata: {
+        name: "openclaw-plugin",
+        version: "1.2.3",
+        resolvedSpec: "openclaw-plugin@1.2.3",
+        integrity: "sha512-test-integrity",
+        shasum: "abc123",
+      },
     });
   });
 });

@@ -1,6 +1,7 @@
 // Matrix tests cover setup core plugin behavior.
 import type { ChannelSetupWizardAdapter } from "openclaw/plugin-sdk/setup";
 import { describe, expect, it, vi } from "vitest";
+import type { MatrixSetupInput } from "./setup-config.js";
 import { createMatrixSetupWizardProxy, matrixSetupAdapter } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
 
@@ -12,7 +13,7 @@ function applyOpsAccountConfig(cfg: CoreConfig): CoreConfig {
       name: "Ops",
       homeserver: "https://matrix.example.org",
       accessToken: "ops-token",
-    },
+    } as MatrixSetupInput,
   }) as CoreConfig;
 }
 
@@ -201,7 +202,7 @@ describe("matrixSetupAdapter", () => {
         homeserver: "https://matrix.example.org",
         userId: "@ops:example.org",
         accessToken: "ops-token",
-      },
+      } as MatrixSetupInput,
     }) as CoreConfig;
 
     expect(next.channels?.matrix?.homeserver).toBeUndefined();
@@ -346,7 +347,7 @@ describe("matrixSetupAdapter", () => {
         name: "Ops",
         useEnv: true,
         avatarUrl: "  mxc://example.org/ops-avatar  ",
-      },
+      } as MatrixSetupInput,
     }) as CoreConfig;
 
     expectFields(next.channels?.matrix?.accounts?.ops, {
@@ -366,7 +367,7 @@ describe("matrixSetupAdapter", () => {
         homeserver: "https://matrix.example.org",
         accessToken: "ops-token",
         proxy: "http://127.0.0.1:7890",
-      },
+      } as MatrixSetupInput,
     }) as CoreConfig;
 
     expectFields(next.channels?.matrix?.accounts?.ops, {
@@ -385,7 +386,7 @@ describe("matrixSetupAdapter", () => {
         homeserver: "https://matrix.example.org",
         accessToken: "ops-token",
         avatarUrl: "  mxc://example.org/ops-avatar  ",
-      },
+      } as MatrixSetupInput,
     }) as CoreConfig;
 
     expectFields(next.channels?.matrix?.accounts?.ops, {
@@ -404,7 +405,7 @@ describe("matrixSetupAdapter", () => {
         homeserver: "https://matrix.example.org",
         accessToken: "ops-token",
         avatarUrl: "file:///tmp/avatar.png",
-      },
+      } as MatrixSetupInput,
     });
 
     expect(validationError).toBe("Matrix avatar URL must be an mxc:// URI or an http(s) URL.");
@@ -418,7 +419,7 @@ describe("matrixSetupAdapter", () => {
         homeserver: "http://matrix.internal:8008",
         accessToken: "ops-token",
         dangerouslyAllowPrivateNetwork: true,
-      },
+      } as MatrixSetupInput,
     }) as CoreConfig;
 
     expectFields(next.channels?.matrix?.accounts?.ops, {
@@ -458,7 +459,7 @@ describe("matrixSetupAdapter", () => {
         homeserver: "https://matrix.example.org",
         userId: "@ops:example.org",
         accessToken: "ops-token",
-      },
+      } as MatrixSetupInput,
     }) as CoreConfig;
 
     expect(next.channels?.matrix?.streaming).toEqual({ block: { enabled: true } });

@@ -14,14 +14,15 @@ import {
   hasChildExited,
   invokeMemorySearch,
   parseArgs,
+  parseNonNegativeInteger,
   readBoundedResponseText,
-  readNumber,
   readPositiveNumber,
   stopGatewayWithRuntime,
   updateGatewayReadyOutputState,
   waitForGatewayReady,
   writeConfig,
-} from "../../scripts/check-memory-fd-repro.mjs";
+} from "../../scripts/check-memory-fd-repro.mts";
+import { validateConfigObject } from "../../src/config/validation.js";
 import { withEnv } from "../../src/test-utils/env.js";
 
 async function listen(server: Server): Promise<number> {
@@ -41,13 +42,19 @@ async function listen(server: Server): Promise<number> {
 
 describe("check-memory-fd-repro", () => {
   it("parses file, fd, and timing limits as strict integers", () => {
-    expect(readNumber("0", "limit")).toBe(0);
-    expect(readNumber(" 42 ", "limit")).toBe(42);
+    expect(parseNonNegativeInteger("0", "limit")).toBe(0);
+    expect(parseNonNegativeInteger(" 42 ", "limit")).toBe(42);
     expect(readPositiveNumber("1", "limit")).toBe(1);
 
-    expect(() => readNumber("1.5", "limit")).toThrow("limit must be a non-negative integer");
-    expect(() => readNumber("1e3", "limit")).toThrow("limit must be a non-negative integer");
-    expect(() => readNumber("10files", "limit")).toThrow("limit must be a non-negative integer");
+    expect(() => parseNonNegativeInteger("1.5", "limit")).toThrow(
+      "limit must be a non-negative integer",
+    );
+    expect(() => parseNonNegativeInteger("1e3", "limit")).toThrow(
+      "limit must be a non-negative integer",
+    );
+    expect(() => parseNonNegativeInteger("10files", "limit")).toThrow(
+      "limit must be a non-negative integer",
+    );
     expect(() => readPositiveNumber("0", "limit")).toThrow("limit must be greater than 0");
   });
 
@@ -175,7 +182,11 @@ describe("check-memory-fd-repro", () => {
         resultCount: 0,
       });
     } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => {
+          resolve();
+        });
+      });
     }
   });
 
@@ -196,18 +207,15 @@ describe("check-memory-fd-repro", () => {
         token: "test-token",
       });
       const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-      const memorySearch = config.agents.defaults.memorySearch;
+      const memorySearch = config.memory.search;
 
+      expect(validateConfigObject(config)).toMatchObject({ ok: true });
       expect(memorySearch.store).toEqual({ vector: { enabled: false } });
       expect(memorySearch).toMatchObject({
         provider: "none",
         model: "",
-        sync: {
-          onSearch: false,
-          onSessionStart: false,
-          watch: true,
-        },
       });
+      expect(memorySearch).not.toHaveProperty("sync");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

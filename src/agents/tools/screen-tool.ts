@@ -1,8 +1,10 @@
 import { Type } from "typebox";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { UiCommand, UiCommandParams } from "../../../packages/gateway-protocol/src/index.js";
+// The tool returns the Gateway result unchanged, so the wire schema remains the single owner.
+import { UiCommandResultSchema } from "../../../packages/gateway-protocol/src/schema/ui-command.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringParam, ToolInputError } from "./common.js";
+import { jsonResult, readToolStringParam, ToolInputError } from "./common.js";
 import { callInProcessGatewayTool, type InProcessGatewayCaller } from "./in-process-gateway.js";
 
 const ACTIONS = [
@@ -39,7 +41,7 @@ function resolveSessionKey(
   params: Record<string, unknown>,
   agentSessionKey: string | undefined,
 ): string {
-  const sessionKey = readStringParam(params, "sessionKey") ?? agentSessionKey?.trim();
+  const sessionKey = readToolStringParam(params, "sessionKey") ?? agentSessionKey?.trim();
   if (!sessionKey) {
     throw new ToolInputError("sessionKey required");
   }
@@ -47,7 +49,7 @@ function resolveSessionKey(
 }
 
 function readDock(params: Record<string, unknown>): "bottom" | "right" | undefined {
-  const dock = readStringParam(params, "dock");
+  const dock = readToolStringParam(params, "dock");
   if (dock === undefined || dock === "bottom" || dock === "right") {
     return dock;
   }
@@ -99,12 +101,13 @@ export function createScreenTool(opts: ScreenToolOptions = {}): AnyAgentTool {
     label: "Screen",
     name: "screen",
     description:
-      "Drive operator web UI. Split panes, focus, panels, sidebar, navigate. Needs connected web client.",
+      "Drive operator web UI: split_right/split_down, close_pane, focus, navigate, panel toggles terminal_show/terminal_hide, browser_show/browser_hide, sidebar_show/sidebar_hide. Optional sessionKey targets another session. Needs connected web client.",
     parameters: ScreenToolSchema,
+    outputSchema: UiCommandResultSchema,
     requiredClientCaps: [GATEWAY_CLIENT_CAPS.UI_COMMANDS],
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
-      const action = readStringParam(params, "action", { required: true });
+      const action = readToolStringParam(params, "action", { required: true });
       const payload: UiCommandParams = {
         command: commandForAction(action, params, opts.agentSessionKey),
         ...(opts.agentSessionKey ? { sessionKey: opts.agentSessionKey } : {}),

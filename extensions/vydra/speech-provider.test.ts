@@ -1,3 +1,4 @@
+import { bufferedOversizedJsonResponse as oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 // Vydra tests cover speech provider plugin behavior.
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,12 +9,6 @@ describe("vydra speech provider", () => {
 
   const provider = buildVydraSpeechProvider();
   const originalVydraApiKey = process.env.VYDRA_API_KEY;
-
-  const oversizedJsonResponse = () =>
-    new Response(Buffer.alloc(16 * 1024 * 1024 + 1, 0x20), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
 
   afterEach(() => {
     if (originalVydraApiKey === undefined) {
@@ -42,7 +37,7 @@ describe("vydra speech provider", () => {
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
-            audioUrl: "https://cdn.vydra.ai/generated/test.mp3",
+            audioUrl: "https://www.vydra.ai/generated/test.mp3",
           }),
           {
             status: 200,
@@ -78,6 +73,8 @@ describe("vydra speech provider", () => {
     );
     const headers = new Headers(init.headers);
     expect(headers.get("authorization")).toBe("Bearer vydra-test-key");
+    const [, downloadInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(new Headers(downloadInit.headers).get("authorization")).toBe("Bearer vydra-test-key");
     expect(result.outputFormat).toBe("mp3");
     expect(result.fileExtension).toBe(".mp3");
     expect(result.audioBuffer).toEqual(Buffer.from("mp3-data"));

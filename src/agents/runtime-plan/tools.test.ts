@@ -8,6 +8,7 @@ import {
   createParameterFreeTool,
   normalizedParameterFreeSchema,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tools.js";
 import {
@@ -204,6 +205,20 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     });
   });
 
+  it("does not load a provider runtime to normalize an empty tool set", () => {
+    const onPreNormalizationSchemaDiagnostics = vi.fn();
+
+    expect(
+      normalizeAgentRuntimeTools({
+        tools: [],
+        provider: "openai",
+        onPreNormalizationSchemaDiagnostics,
+      }),
+    ).toEqual([]);
+    expect(onPreNormalizationSchemaDiagnostics).toHaveBeenCalledWith([], []);
+    expect(mocks.normalizeProviderToolSchemas).not.toHaveBeenCalled();
+  });
+
   it("preserves plugin metadata when provider schema normalization clones tools", () => {
     // Provider normalization may clone tool objects; plugin metadata has to move
     // with the clone so later dispatch still knows the owning plugin/MCP server.
@@ -237,6 +252,30 @@ describe("AgentRuntimePlan tool policy helpers", () => {
         toolName: "lookup_note",
       },
     });
+  });
+
+  it("preserves declared output schemas when runtime normalization clones tools", () => {
+    const outputSchema = Type.Object(
+      { id: Type.String(), ready: Type.Boolean() },
+      { additionalProperties: false },
+    );
+    const tool = {
+      ...createParameterFreeTool("fixture_status"),
+      outputSchema,
+    } as unknown as AgentTool;
+    const normalized = {
+      ...createParameterFreeTool("fixture_status"),
+      parameters: normalizedParameterFreeSchema(),
+    } as unknown as AgentTool;
+    mocks.normalizeProviderToolSchemas.mockReturnValueOnce([normalized]);
+
+    const result = normalizeAgentRuntimeTools({
+      tools: [tool],
+      provider: "openai",
+    });
+
+    expect(result[0]).toBe(normalized);
+    expect(result[0]?.outputSchema).toBe(outputSchema);
   });
 
   it("preserves private execution metadata when provider normalization clones tools", () => {

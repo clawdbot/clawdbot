@@ -7,7 +7,9 @@ import { parseConfigJson5 } from "../config/io.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { buildConfigSchema } from "../config/schema.js";
+import { isMissingPathError } from "../infra/errors.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
+import { readRegularFileSync } from "../infra/regular-file.js";
 import { VERSION } from "../version.js";
 import {
   readDiagnosticStabilityBundleFileSync,
@@ -38,6 +40,9 @@ const DIAGNOSTIC_SUPPORT_EXPORT_VERSION = 1;
 
 const DEFAULT_LOG_LIMIT = 5000;
 const DEFAULT_LOG_MAX_BYTES = 1_000_000;
+// Support export must remain usable when the config is corrupt or unexpectedly
+// large. This defensive ceiling is not the product's general config-file limit.
+const SUPPORT_EXPORT_CONFIG_MAX_BYTES = 8 * 1024 * 1024;
 const SUPPORT_EXPORT_PREFIX = "openclaw-diagnostics-";
 const SUPPORT_EXPORT_SUFFIX = ".zip";
 type Awaitable<T> = T | Promise<T>;
@@ -320,13 +325,6 @@ function configShapeReadFailure(params: {
   return shape;
 }
 
-function isMissingPathError(error: unknown): boolean {
-  if (!error || typeof error !== "object" || !("code" in error)) {
-    return false;
-  }
-  return error.code === "ENOENT" || error.code === "ENOTDIR";
-}
-
 function configReadErrorMessage(error: unknown, stat?: fs.Stats): string | undefined {
   if (!stat && isMissingPathError(error)) {
     return undefined;
@@ -343,7 +341,11 @@ function readConfigExport(options: {
   let stat: fs.Stats | undefined;
   try {
     stat = fs.statSync(options.configPath);
-    const parsed = parseConfigJson5(fs.readFileSync(options.configPath, "utf8"));
+    const { buffer } = readRegularFileSync({
+      filePath: options.configPath,
+      maxBytes: SUPPORT_EXPORT_CONFIG_MAX_BYTES,
+    });
+    const parsed = parseConfigJson5(buffer.toString("utf8"));
     if (!parsed.ok) {
       return {
         shape: configShapeReadFailure({

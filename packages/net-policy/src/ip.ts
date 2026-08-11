@@ -1,23 +1,17 @@
 // Network Policy module implements ip behavior.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import ipaddr from "ipaddr.js";
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
-
-function normalizeLowercaseStringOrEmpty(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
 
 /** Parsed IP address value returned by the net-policy parsing helpers. */
 export type ParsedIpAddress = ipaddr.IPv4 | ipaddr.IPv6;
 type Ipv4Range = ReturnType<ipaddr.IPv4["range"]>;
 type Ipv6Range = ReturnType<ipaddr.IPv6["range"]>;
-type BlockedIpv6Range = Ipv6Range | "discard";
+// Older co-installed ipaddr.js declarations can merge with 2.4's ambient module and
+// omit newer runtime ranges from ReturnType, so preserve the policy's known labels.
+type BlockedIpv6Range = Ipv6Range | "benchmarking" | "discard" | "orchid2";
 type Ipv6Hextets = readonly [number, number, number, number, number, number, number, number];
 
 // ipaddr.js guarantees 8 hextets; throw loudly on an impossible shape instead of
@@ -362,10 +356,13 @@ export function isIpInCidr(ip: string, cidr: string): boolean {
   try {
     const [baseAddress, prefixLength] = ipaddr.parseCIDR(candidate);
     const comparableBase = normalizeIpv4MappedAddress(baseAddress);
-    return (
-      comparableIp.kind() === comparableBase.kind() &&
-      comparableIp.match([comparableBase, prefixLength])
-    );
+    if (isIpv4Address(comparableIp) && isIpv4Address(comparableBase)) {
+      return comparableIp.match([comparableBase, prefixLength]);
+    }
+    if (isIpv6Address(comparableIp) && isIpv6Address(comparableBase)) {
+      return comparableIp.match([comparableBase, prefixLength]);
+    }
+    return false;
   } catch {
     return false;
   }

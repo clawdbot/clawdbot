@@ -12,17 +12,11 @@ type PluginSdkDocMetadata = {
 };
 
 export const pluginSdkDocMetadata = {
-  index: {
-    category: "legacy",
-  },
   core: {
     category: "core",
   },
   health: {
     category: "core",
-  },
-  sandbox: {
-    category: "runtime",
   },
   "approval-runtime": {
     category: "runtime",
@@ -39,13 +33,7 @@ export const pluginSdkDocMetadata = {
   "approval-gateway-runtime": {
     category: "runtime",
   },
-  "approval-reference-runtime": {
-    category: "runtime",
-  },
   "approval-native-runtime": {
-    category: "runtime",
-  },
-  "approval-reaction-runtime": {
     category: "runtime",
   },
   "approval-reply-runtime": {
@@ -54,19 +42,10 @@ export const pluginSdkDocMetadata = {
   "plugin-entry": {
     category: "core",
   },
-  "access-groups": {
-    category: "channel",
-  },
   "channel-actions": {
     category: "channel",
   },
   "channel-config-schema": {
-    category: "channel",
-  },
-  "channel-config-schema-legacy": {
-    category: "channel",
-  },
-  "chat-channel-ids": {
     category: "channel",
   },
   "channel-contract": {
@@ -84,17 +63,14 @@ export const pluginSdkDocMetadata = {
   "channel-setup": {
     category: "channel",
   },
-  "command-auth": {
+  "channel-dm-policy": {
     category: "channel",
   },
-  zalouser: {
+  "command-auth": {
     category: "channel",
   },
   "command-status": {
     category: "channel",
-  },
-  "command-status-runtime": {
-    category: "runtime",
   },
   "secret-input": {
     category: "channel",
@@ -102,40 +78,19 @@ export const pluginSdkDocMetadata = {
   "webhook-ingress": {
     category: "channel",
   },
-  "provider-onboard": {
-    category: "provider",
-  },
-  "provider-oauth-runtime": {
-    category: "provider",
-  },
-  "message-tool-delivery-hints": {
-    category: "runtime",
-  },
-  "tool-results": {
-    category: "utilities",
-  },
   "widget-html": {
     category: "utilities",
   },
-  "provider-selection-runtime": {
-    category: "provider",
-  },
-  "provider-catalog-live-runtime": {
-    category: "provider",
-  },
-  "provider-model-types": {
-    category: "provider",
-  },
   "runtime-store": {
+    category: "runtime",
+  },
+  "plugin-command-runtime": {
     category: "runtime",
   },
   "session-store-runtime": {
     category: "runtime",
   },
-  "session-transcript-runtime": {
-    category: "runtime",
-  },
-  "sqlite-runtime": {
+  "agent-scope-runtime": {
     category: "runtime",
   },
   "agent-runtime": {
@@ -144,25 +99,16 @@ export const pluginSdkDocMetadata = {
   "agent-harness-runtime": {
     category: "runtime",
   },
-  "speech-core": {
-    category: "provider",
-  },
   "speech-settings": {
     category: "provider",
-  },
-  "realtime-voice": {
-    category: "provider",
-  },
-  "tts-runtime": {
-    category: "runtime",
-  },
-  "inline-image-data-url-runtime": {
-    category: "runtime",
   },
   "allow-from": {
     category: "utilities",
   },
   "reply-payload": {
+    category: "utilities",
+  },
+  "media-local-roots": {
     category: "utilities",
   },
 } as const satisfies Record<string, PluginSdkDocMetadata>;

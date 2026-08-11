@@ -265,6 +265,7 @@ export async function resolveNodeProgramArguments(params: {
   tlsFingerprint?: string;
   nodeId?: string;
   displayName?: string;
+  installedAppsSharing?: boolean;
   dev?: boolean;
   runtime?: GatewayRuntimePreference;
   nodePath?: string;
@@ -288,6 +289,9 @@ export async function resolveNodeProgramArguments(params: {
   }
   if (params.displayName) {
     args.push("--display-name", params.displayName);
+  }
+  if (params.installedAppsSharing !== undefined) {
+    args.push(params.installedAppsSharing ? "--share-installed-apps" : "--no-share-installed-apps");
   }
   return resolveCliProgramArguments({
     args,

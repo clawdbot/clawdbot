@@ -167,12 +167,13 @@ struct AsyncTimeoutTests {
         }
     }
 
-    @Test func `caller cancellation returns before operation finishes`() async {
+    @Test(arguments: [0.0, 60.0])
+    func `caller cancellation returns before operation finishes`(seconds: Double) async {
         let operation = CancellationIgnoringOperation()
         let cancellation = CancellationProbe()
         let task = Task {
             try await AsyncTimeout.withTimeout(
-                seconds: 60,
+                seconds: seconds,
                 onTimeout: { ExpectedTimeout() },
                 operation: {
                     await withTaskCancellationHandler {

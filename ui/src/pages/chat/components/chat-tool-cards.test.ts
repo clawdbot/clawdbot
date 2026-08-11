@@ -40,12 +40,9 @@ function pointerClick(element: Element) {
 
 describe("tool-cards", () => {
   it("routes MCP App previews through the dedicated double-iframe host", async () => {
-    vi.resetModules();
-    const { renderToolPreview: renderToolPreviewWithLazyMock } =
-      await import("./chat-tool-cards.ts");
     const container = document.createElement("div");
     render(
-      renderToolPreviewWithLazyMock(
+      renderToolPreview(
         {
           kind: "canvas",
           surface: "assistant_message",
@@ -72,7 +69,7 @@ describe("tool-cards", () => {
 
     const toolContainer = document.createElement("div");
     render(
-      renderToolPreviewWithLazyMock(
+      renderToolPreview(
         {
           kind: "canvas",
           surface: "assistant_message",
@@ -242,11 +239,11 @@ describe("tool-cards", () => {
     const states = [
       {
         name: "running",
-        card: { live: true },
+        card: { live: true, liveDiffStat: { added: 12, removed: 3 } },
         runActive: true,
         verb: "running",
         label: "Attempted changes",
-        hasStat: false,
+        hasStat: true,
         failed: false,
       },
       {

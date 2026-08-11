@@ -31,11 +31,11 @@ import type {
   TelegramTranscriptMirrorPayload,
 } from "./bot-message-dispatch.types.js";
 import type { TelegramBotOptions } from "./bot.types.js";
-import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
-import type { TelegramThreadSpec } from "./bot/helpers.js";
-import { resolveTelegramReplyId } from "./bot/helpers.js";
+import { deliverReplies, emitTelegramMessageSentHooks } from "./bot/delivery.js";
+import { resolveTelegramReplyId, type TelegramThreadSpec } from "./bot/helpers.js";
 import type { TelegramNativeQuoteCandidateByMessageId } from "./bot/native-quote.js";
 import type { TelegramInlineButtons } from "./button-types.js";
+import { mergeTelegramPartialDeliveryError } from "./chunk-delivery.js";
 import { canonicalizeTelegramPresentationPayload } from "./interactive-fallback.js";
 import {
   createLaneDeliveryStateTracker,
@@ -52,6 +52,7 @@ import {
   type TelegramPromptContextSource,
 } from "./prompt-context-projection.js";
 import { editMessageTelegram } from "./send.js";
+import { resolveTelegramTargetChatType } from "./targets.js";
 
 export function createTelegramDeliveryController(params: {
   bot: Bot;
@@ -149,6 +150,7 @@ export function createTelegramDeliveryController(params: {
       ...(record.text ? { text: record.text } : {}),
       ...(record.projection ? { promptContextProjection: record.projection } : {}),
       ...(params.threadSpec.id !== undefined ? { messageThreadId: params.threadSpec.id } : {}),
+      successfulSendThread: params.threadSpec,
     });
   const createPromptContextSequence = (source?: TelegramPromptContextSource) =>
     createTelegramPromptContextProjectionSequence({
@@ -169,6 +171,7 @@ export function createTelegramDeliveryController(params: {
       }
     : undefined;
   const deliveryBaseOptions = {
+    cfg: params.cfg,
     chatId: String(context.chatId),
     accountId: context.route.accountId,
     sessionKeyForInternalHooks: sessionKey,
@@ -206,7 +209,10 @@ export function createTelegramDeliveryController(params: {
     ) {
       return payload;
     }
-    return { ...payload, replyToId: implicitQuoteReplyTargetId };
+    return {
+      ...payload,
+      replyToId: implicitQuoteReplyTargetId,
+    };
   };
   const usesNativeTelegramQuote = (payload: ReplyPayload): boolean =>
     params.replyQuoteText != null ||
@@ -221,6 +227,8 @@ export function createTelegramDeliveryController(params: {
       mirrorTranscript?: boolean;
       promptContextSequence?: TelegramPromptContextProjectionSequence;
       textMode?: "html";
+      onPlatformSendDispatch?: () => Promise<void>;
+      bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
     },
   ) => {
     if (params.isDispatchSuperseded()) {
@@ -251,10 +259,13 @@ export function createTelegramDeliveryController(params: {
             )
           : undefined,
       );
-    const effectivePayload = withTelegramPromptContextSource(
+    const projectedPayload = withTelegramPromptContextSource(
       deliverablePayload,
       projectionSequence.source,
     );
+    const effectivePayload = options?.bindPendingFinalDelivery
+      ? options.bindPendingFinalDelivery(projectedPayload)
+      : projectedPayload;
     const silent =
       options?.silent ??
       (params.telegramCfg.silentErrorReplies === true && payload.isError === true);
@@ -263,7 +274,8 @@ export function createTelegramDeliveryController(params: {
       const durable = await durableDelivery({
         cfg: params.cfg,
         channel: "telegram",
-        to: String(context.chatId),
+        to:
+          context.ctxPayload.OriginatingTo ?? context.ctxPayload.To ?? `telegram:${context.chatId}`,
         accountId: context.route.accountId,
         agentId: context.route.agentId,
         ctxPayload: context.ctxPayload,
@@ -313,6 +325,7 @@ export function createTelegramDeliveryController(params: {
         silent,
         mediaLoader: params.telegramDeps.loadWebMedia,
         promptContextSequence: projectionSequence,
+        onPlatformSendDispatch: options?.onPlatformSendDispatch,
         ...(options?.textMode ? { textMode: options.textMode } : {}),
       });
       if (!result.delivered) {
@@ -329,10 +342,15 @@ export function createTelegramDeliveryController(params: {
   };
 
   const emitPreviewFinalizedHook = async (result: LaneDeliveryResult) => {
-    if (params.isDispatchSuperseded() || result.kind !== "preview-finalized") {
+    if (
+      params.isDispatchSuperseded() ||
+      (result.kind !== "preview-finalized" && result.kind !== "preview-finalized-partial")
+    ) {
       return;
     }
-    (params.telegramDeps.emitInternalMessageSentHook ?? emitInternalMessageSentHook)({
+    // A finalized preview is the durable Telegram message. Emit the composite
+    // terminal here so plugin and internal observers see that one provider result.
+    (params.telegramDeps.emitTelegramMessageSentHooks ?? emitTelegramMessageSentHooks)({
       sessionKeyForInternalHooks: sessionKey,
       chatId: String(context.chatId),
       accountId: context.route.accountId,
@@ -427,6 +445,8 @@ export function createTelegramDeliveryController(params: {
     payload: ReplyPayload,
     text: string,
     promptContextSequence: TelegramPromptContextProjectionSequence,
+    onPlatformSendDispatch?: () => Promise<void>,
+    bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T,
   ): Promise<LaneDeliveryResult> => {
     const afterAcceptedDraft = params.draft.answerLane.stream?.hasConsumedReplyTarget?.() === true;
     if (payload.isError === true) {
@@ -436,6 +456,8 @@ export function createTelegramDeliveryController(params: {
         afterAcceptedDraft,
         durable: true,
         promptContextSequence,
+        onPlatformSendDispatch,
+        bindPendingFinalDelivery,
       });
       if (!delivered) {
         return { kind: "skipped" };
@@ -449,6 +471,8 @@ export function createTelegramDeliveryController(params: {
       afterAcceptedDraft,
       durable: true,
       promptContextSequence,
+      onPlatformSendDispatch,
+      bindPendingFinalDelivery,
     });
     if (barLine) {
       await params.progress.applyCollapseSummary(barLine, postCosmeticSummaryBar);
@@ -467,6 +491,8 @@ export function createTelegramDeliveryController(params: {
     answerPayload: ReplyPayload,
     text: string,
     buttons?: TelegramInlineButtons,
+    onPlatformSendDispatch?: () => Promise<void>,
+    bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T,
   ): Promise<LaneDeliveryResult> => {
     const transcriptFinal = await resolveCurrentTurnTranscriptFinal();
     const finalText = await resolveTranscriptBackedChannelFinalText({
@@ -486,6 +512,8 @@ export function createTelegramDeliveryController(params: {
         answerPayload,
         finalText,
         promptContextSequence,
+        onPlatformSendDispatch,
+        bindPendingFinalDelivery,
       );
     } else {
       if (isFollowUp) {
@@ -501,13 +529,23 @@ export function createTelegramDeliveryController(params: {
         buttons,
         allowStream: !usesNativeTelegramQuote(answerPayload),
         promptContextSequence,
+        onPlatformSendDispatch,
+        bindPendingFinalDelivery,
       });
       if (!isFollowUp && result.kind !== "skipped") {
         params.progress.markFinalDelivered();
       }
     }
-    if (result.kind === "preview-finalized") {
+    if (result.kind === "preview-finalized" || result.kind === "preview-finalized-partial") {
       await emitPreviewFinalizedHook(result);
+    }
+    if (result.kind === "preview-finalized-partial") {
+      throw mergeTelegramPartialDeliveryError(result.error, {
+        receipt: result.delivery.receipt,
+        content: result.delivery.content,
+        messageIds: result.delivery.receipt.platformMessageIds,
+        visibleReplySent: true,
+      });
     }
     return result;
   };
@@ -560,7 +598,21 @@ export function createTelegramDeliveryController(params: {
         delete payloadForPlan.isReasoning;
       }
       const normalized = projectPayloadForDelivery(payloadForPlan);
-      return normalized ? canonicalizeTelegramPresentationPayload(normalized) : undefined;
+      if (!normalized) {
+        return undefined;
+      }
+      // Retained finals can still select HTML at send time, and HTML bypasses
+      // rich blocks. Converting a presentation here would strip it while the
+      // final funnel is still undecided, so rich accounts defer canonicalization
+      // to the sender (deliverReplies / the outbound adapter) which knows the
+      // text mode. Plain accounts always flatten, so deciding early is safe.
+      if (params.telegramCfg.richMessages === true && normalized.presentation) {
+        return normalized;
+      }
+      return canonicalizeTelegramPresentationPayload(normalized, {
+        allowWebAppButtons: resolveTelegramTargetChatType(String(context.chatId)) === "direct",
+        richTables: false,
+      });
     },
     sendPayload,
     snapshot: deliveryState.snapshot,

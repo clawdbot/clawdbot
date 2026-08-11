@@ -2,46 +2,54 @@
 
 export {
   buildBootstrapContextFiles,
-  ensureSessionHeader,
   resolveBootstrapMaxChars,
-  resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
 } from "./embedded-agent-helpers/bootstrap.js";
 export {
-  BILLING_ERROR_USER_MESSAGE,
   classifyAssistantFailoverReason,
-  classifyProviderRuntimeFailureKind,
-  formatBillingErrorMessage,
-  formatRateLimitOrOverloadedErrorCopy,
-  classifyFailoverReason,
-  formatRawAssistantErrorForUi,
+  isAuthAssistantError,
+  isBillingAssistantError,
+  isFailoverAssistantError,
+  isRateLimitAssistantError,
+} from "./embedded-agent-helpers/assistant-message-failures.js";
+export {
+  extractObservedOverflowTokenCount,
+  isCompactionFailureError,
+} from "./embedded-agent-helpers/context-overflow-observation.js";
+export type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
+export {
   formatAssistantErrorText,
   formatUserFacingAssistantErrorText,
   GENERIC_ASSISTANT_ERROR_TEXT,
-  getApiErrorPayloadFingerprint,
-  isAuthAssistantError,
-  isAuthErrorMessage,
-  isBillingAssistantError,
-  extractObservedOverflowTokenCount,
-  parseApiErrorInfo,
-  isBillingErrorMessage,
-  isCloudCodeAssistFormatError,
-  isCompactionFailureError,
-  isContextOverflowError,
-  isLikelyContextOverflowError,
-  isFailoverAssistantError,
-  isFailoverErrorMessage,
-  isGenericUnknownStreamErrorMessage,
-  isOverloadedErrorMessage,
-  isRawApiErrorPayload,
-  isRateLimitAssistantError,
-  isRateLimitErrorMessage,
-  isTransientHttpError,
-  isTimeoutErrorMessage,
+} from "./embedded-agent-helpers/error-text.js";
+export {
   parseImageDimensionError,
   parseImageSizeError,
-} from "./embedded-agent-helpers/errors.js";
-export type { ProviderRuntimeFailureKind } from "./embedded-agent-helpers/errors.js";
+} from "./embedded-agent-helpers/image-errors.js";
+export { classifyProviderRuntimeFailureKind } from "./embedded-agent-helpers/provider-runtime-failure.js";
+export type { ProviderRuntimeFailureKind } from "./embedded-agent-helpers/provider-runtime-failure.js";
+export {
+  BILLING_ERROR_USER_MESSAGE,
+  formatBillingErrorMessage,
+  getApiErrorPayloadFingerprint,
+  isRawApiErrorPayload,
+} from "./failover/user-copy.js";
+export {
+  formatRawAssistantErrorForUi,
+  parseApiErrorInfo,
+} from "../shared/assistant-error-format.js";
+export {
+  classifyFailoverReason,
+  isAuthErrorMessage,
+  isCloudCodeAssistFormatError,
+  isContextOverflowError,
+  isFailoverErrorMessage,
+  isGenericUnknownStreamErrorMessage,
+  isLikelyContextOverflowError,
+  isTransientHttpError,
+  isTimeoutErrorMessage,
+} from "./failover/classify.js";
+export type { FailoverReason } from "./failover/signal.js";
 export { sanitizeGoogleTurnOrdering } from "./embedded-agent-helpers/google.js";
 
 export {
@@ -59,4 +67,3 @@ export {
 export { pickFallbackThinkingLevel } from "./embedded-agent-helpers/thinking.js";
 
 export { validateAnthropicTurns, validateGeminiTurns } from "./embedded-agent-helpers/turns.js";
-export type { EmbeddedContextFile, FailoverReason } from "./embedded-agent-helpers/types.js";

@@ -8,6 +8,7 @@ import {
   buildAgentHookContextIdentityFields,
 } from "../../../plugins/hook-agent-context.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { createCacheTrace } from "../../cache-trace.js";
 import { isCloudCodeAssistFormatError } from "../../embedded-agent-helpers.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
@@ -15,7 +16,7 @@ import { log } from "../logger.js";
 import type { PromptCacheBreak, PromptCacheChange } from "../prompt-cache-observability.js";
 import { observeReplayMetadata, replayMetadataFromState } from "../replay-state.js";
 import { finalizeEmbeddedAttempt } from "./attempt-finalize.js";
-import { shouldRunLlmOutputHooksForAttempt } from "./attempt.run-decisions.js";
+import { shouldRunLlmOutputHooksForAttempt } from "./attempt-run-decisions.js";
 import {
   buildAttemptReplayMetadata,
   hasAttemptTerminalState,
@@ -41,15 +42,7 @@ export type EmbeddedAttemptClientToolCallSlot = {
 
 type EmbeddedAttemptResultState = Pick<
   EmbeddedRunAttemptResult,
-  | "aborted"
-  | "externalAbort"
-  | "timedOut"
-  | "idleTimedOut"
-  | "timedOutDuringCompaction"
-  | "timedOutDuringToolExecution"
-  | "timedOutByRunBudget"
-  | "promptError"
-  | "promptErrorSource"
+  | "terminal"
   | "preflightRecovery"
   | "sessionIdUsed"
   | "sessionFileUsed"
@@ -59,6 +52,7 @@ type EmbeddedAttemptResultState = Pick<
   | "beforeAgentFinalizeRevisionReason"
   | "lastAssistant"
   | "currentAttemptAssistant"
+  | "currentAttemptCompletedAssistant"
   | "attemptUsage"
   | "promptCache"
   | "contextBudgetStatus"
@@ -100,7 +94,7 @@ function normalizeEmbeddedAttemptToolMetas(
         toolName: string;
         meta?: string;
         replaySafe?: boolean;
-        isError?: true;
+        isError?: boolean;
         asyncStarted?: boolean;
         asyncTaskRunId?: string;
         asyncTaskId?: string;
@@ -112,8 +106,8 @@ function normalizeEmbeddedAttemptToolMetas(
         meta: entry.meta,
         replaySafe: entry.replaySafe === true,
       };
-      if (entry.isError === true) {
-        normalized.isError = true;
+      if (typeof entry.isError === "boolean") {
+        normalized.isError = entry.isError;
       }
       if (entry.asyncStarted === true) {
         normalized.asyncStarted = true;
@@ -150,17 +144,20 @@ export function completeEmbeddedAttemptResult(
   input: CompleteEmbeddedAttemptResultInput,
 ): EmbeddedRunAttemptResult {
   const { attempt, state, subscription } = input;
+  const terminal = projectAgentRunAttemptTerminal(state.terminal);
   const {
     assistantTexts,
     didSendDeterministicApprovalPrompt,
     didSendViaMessagingTool,
     getAcceptedSessionSpawns,
+    getAssistantTurnCount,
     getCompactionCount,
     getHeartbeatToolResponse,
     getItemLifecycle,
     getLastAssistantTextMessageIndex,
     getLastCompactionTokensAfter,
     getLastToolError,
+    getLatestMcpAppChannelView,
     getMessagingToolSentMediaUrls,
     getMessagingToolSentTargets,
     getMessagingToolSentTexts,
@@ -215,8 +212,9 @@ export function completeEmbeddedAttemptResult(
   }
 
   if (
+    attempt.operation !== "settled-tool-finalization" &&
     input.hookRunner?.hasHooks("llm_output") &&
-    shouldRunLlmOutputHooksForAttempt({ promptErrorSource: state.promptErrorSource })
+    shouldRunLlmOutputHooksForAttempt({ promptErrorSource: terminal.promptErrorSource })
   ) {
     input.hookRunner
       .runLlmOutput(
@@ -332,8 +330,8 @@ export function completeEmbeddedAttemptResult(
   const silentToolResultReplyPayload = resolveSilentToolResultReplyPayload({
     isCronTrigger: attempt.trigger === "cron",
     payloadCount: pendingToolMediaPayloadCount,
-    aborted: state.aborted,
-    timedOut: state.timedOut,
+    aborted: terminal.aborted,
+    timedOut: terminal.timedOut,
     attempt: {
       clientToolCalls,
       yieldDetected: state.yieldDetected,
@@ -350,9 +348,10 @@ export function completeEmbeddedAttemptResult(
     (silentToolResultReplyPayload ? 1 : 0);
   const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
     allowEmptyAssistantReplyAsSilent: attempt.allowEmptyAssistantReplyAsSilent,
+    terminalReplyExpectation: attempt.terminalReplyExpectation,
     payloadCount: 0,
-    aborted: state.aborted,
-    timedOut: state.timedOut,
+    aborted: terminal.aborted,
+    timedOut: terminal.timedOut,
     attempt: {
       assistantTexts,
       clientToolCalls,
@@ -370,8 +369,7 @@ export function completeEmbeddedAttemptResult(
       messagesSnapshot: state.messagesSnapshot,
       toolMetas: toolMetasNormalized,
       replayMetadata,
-      promptErrorSource: state.promptErrorSource,
-      timedOutDuringCompaction: state.timedOutDuringCompaction,
+      terminal: state.terminal,
     },
   });
   const result: EmbeddedRunAttemptResult = {
@@ -379,10 +377,12 @@ export function completeEmbeddedAttemptResult(
     replayMetadata,
     currentAttemptReplayMetadata,
     itemLifecycle: getItemLifecycle(),
+    assistantTurns: getAssistantTurnCount(),
     setTerminalLifecycleMeta,
     bootstrapPromptWarningSignaturesSeen: input.bootstrapPromptWarning.warningSignaturesSeen,
     bootstrapPromptWarningSignature: input.bootstrapPromptWarning.signature,
     assistantTexts,
+    latestMcpAppChannelView: getLatestMcpAppChannelView(),
     lastAssistantTextMessageIndex: getLastAssistantTextMessageIndex(),
     toolMetas: toolMetasNormalized,
     acceptedSessionSpawns,

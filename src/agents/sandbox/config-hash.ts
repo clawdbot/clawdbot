@@ -35,7 +35,7 @@ type SandboxBrowserHashInput = {
     | "vncPort"
     | "noVncPort"
     | "headless"
-    | "enableNoVnc"
+    | "noVncEnabled"
     | "autoStartTimeoutMs"
   >;
   securityEpoch: string;

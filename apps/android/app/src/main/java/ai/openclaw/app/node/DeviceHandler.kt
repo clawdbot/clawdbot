@@ -3,8 +3,6 @@ package ai.openclaw.app.node
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.SensitiveFeatureConfig
 import ai.openclaw.app.gateway.GatewaySession
-import ai.openclaw.app.hasPhotoReadPermission
-import android.Manifest
 import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.content.Context
@@ -20,7 +18,6 @@ import android.os.Environment
 import android.os.PowerManager
 import android.os.StatFs
 import android.os.SystemClock
-import androidx.core.content.ContextCompat
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -118,27 +115,56 @@ class DeviceHandler private constructor(
   private val callLogEnabled: Boolean = SensitiveFeatureConfig.callLogEnabled,
   private val photosEnabled: Boolean = SensitiveFeatureConfig.photosEnabled,
   private val appSource: DeviceAppSource = AndroidDeviceAppSource(appContext),
+  private val permissionSnapshot: () -> AndroidPermissionSnapshot,
 ) {
   constructor(
     appContext: Context,
     smsEnabled: Boolean = SensitiveFeatureConfig.smsEnabled,
     callLogEnabled: Boolean = SensitiveFeatureConfig.callLogEnabled,
     photosEnabled: Boolean = SensitiveFeatureConfig.photosEnabled,
+    backgroundLocationEnabled: Boolean = SensitiveFeatureConfig.backgroundLocationEnabled,
   ) : this(
     appContext = appContext,
     smsEnabled = smsEnabled,
     callLogEnabled = callLogEnabled,
     photosEnabled = photosEnabled,
     appSource = AndroidDeviceAppSource(appContext),
+    permissionSnapshot = {
+      readAndroidPermissionSnapshot(
+        context = appContext,
+        smsEnabled = smsEnabled,
+        callLogEnabled = callLogEnabled,
+        photosEnabled = photosEnabled,
+        backgroundLocationEnabled = backgroundLocationEnabled,
+      )
+    },
   )
 
   companion object {
+    internal fun withPermissionSnapshot(
+      appContext: Context,
+      smsEnabled: Boolean,
+      callLogEnabled: Boolean,
+      photosEnabled: Boolean,
+      permissionSnapshot: () -> AndroidPermissionSnapshot,
+    ): DeviceHandler =
+      DeviceHandler(
+        appContext = appContext,
+        smsEnabled = smsEnabled,
+        callLogEnabled = callLogEnabled,
+        photosEnabled = photosEnabled,
+        appSource = AndroidDeviceAppSource(appContext),
+        permissionSnapshot = permissionSnapshot,
+      )
+
     internal fun forTesting(
       appContext: Context,
       appSource: DeviceAppSource,
       smsEnabled: Boolean = SensitiveFeatureConfig.smsEnabled,
       callLogEnabled: Boolean = SensitiveFeatureConfig.callLogEnabled,
       photosEnabled: Boolean = SensitiveFeatureConfig.photosEnabled,
+      backgroundLocationEnabled: Boolean = SensitiveFeatureConfig.backgroundLocationEnabled,
+      permissionSnapshot: (() -> AndroidPermissionSnapshot)? = null,
     ): DeviceHandler =
       DeviceHandler(
         appContext = appContext,
@@ -146,6 +172,16 @@ class DeviceHandler private constructor(
         callLogEnabled = callLogEnabled,
         photosEnabled = photosEnabled,
         appSource = appSource,
+        permissionSnapshot =
+          permissionSnapshot ?: {
+            readAndroidPermissionSnapshot(
+              context = appContext,
+              smsEnabled = smsEnabled,
+              callLogEnabled = callLogEnabled,
+              photosEnabled = photosEnabled,
+              backgroundLocationEnabled = backgroundLocationEnabled,
+            )
+          },
       )
 
     /**
@@ -316,24 +352,8 @@ class DeviceHandler private constructor(
   }
 
   private fun permissionsPayloadJson(): String {
+    val snapshot = permissionSnapshot()
     val canSendSms = appContext.packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY)
-    val smsSendGranted = hasPermission(Manifest.permission.SEND_SMS)
-    val smsReadGranted = hasPermission(Manifest.permission.READ_SMS)
-    val notificationAccess = DeviceNotificationListenerService.isAccessEnabled(appContext)
-    val photosGranted =
-      if (!photosEnabled) {
-        false
-      } else {
-        hasPhotoReadPermission(appContext)
-      }
-    val motionGranted = hasPermission(Manifest.permission.ACTIVITY_RECOGNITION)
-    val notificationsGranted =
-      if (Build.VERSION.SDK_INT >= 33) {
-        // POST_NOTIFICATIONS exists only on Android 13+.
-        hasPermission(Manifest.permission.POST_NOTIFICATIONS)
-      } else {
-        true
-      }
     return buildJsonObject {
       put(
         "permissions",
@@ -341,23 +361,21 @@ class DeviceHandler private constructor(
           put(
             "camera",
             permissionStateJson(
-              granted = hasPermission(Manifest.permission.CAMERA),
+              granted = snapshot.camera,
               promptableWhenDenied = true,
             ),
           )
           put(
             "microphone",
             permissionStateJson(
-              granted = hasPermission(Manifest.permission.RECORD_AUDIO),
+              granted = snapshot.microphone,
               promptableWhenDenied = true,
             ),
           )
           put(
             "location",
             permissionStateJson(
-              granted =
-                hasPermission(Manifest.permission.ACCESS_FINE_LOCATION) ||
-                  hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION),
+              granted = snapshot.location,
               promptableWhenDenied = true,
             ),
           )
@@ -370,8 +388,8 @@ class DeviceHandler private constructor(
                   if (hasAnySmsCapability(
                       smsEnabled,
                       canSendSms,
-                      smsSendGranted,
-                      smsReadGranted,
+                      snapshot.smsSend,
+                      snapshot.smsRead,
                     )
                   ) {
                     "granted"
@@ -380,21 +398,31 @@ class DeviceHandler private constructor(
                   },
                 ),
               )
-              put("promptable", JsonPrimitive(isSmsPromptable(smsEnabled, canSendSms, smsSendGranted, smsReadGranted)))
+              put(
+                "promptable",
+                JsonPrimitive(
+                  isSmsPromptable(
+                    smsEnabled,
+                    canSendSms,
+                    snapshot.smsSend,
+                    snapshot.smsRead,
+                  ),
+                ),
+              )
               put(
                 "capabilities",
                 buildJsonObject {
                   put(
                     "send",
                     permissionStateJson(
-                      granted = smsEnabled && smsSendGranted && canSendSms,
+                      granted = snapshot.smsSend,
                       promptableWhenDenied = smsEnabled && canSendSms,
                     ),
                   )
                   put(
                     "read",
                     permissionStateJson(
-                      granted = smsEnabled && smsReadGranted && canSendSms,
+                      granted = snapshot.smsRead,
                       promptableWhenDenied = smsEnabled && canSendSms,
                     ),
                   )
@@ -405,53 +433,49 @@ class DeviceHandler private constructor(
           put(
             "notificationListener",
             permissionStateJson(
-              granted = notificationAccess,
+              granted = snapshot.notificationListener,
               promptableWhenDenied = true,
             ),
           )
           put(
             "notifications",
             permissionStateJson(
-              granted = notificationsGranted,
+              granted = snapshot.notifications,
               promptableWhenDenied = true,
             ),
           )
           put(
             "photos",
             permissionStateJson(
-              granted = photosGranted,
+              granted = snapshot.photos,
               promptableWhenDenied = photosEnabled,
             ),
           )
           put(
             "contacts",
             permissionStateJson(
-              granted =
-                hasPermission(Manifest.permission.READ_CONTACTS) &&
-                  hasPermission(Manifest.permission.WRITE_CONTACTS),
+              granted = snapshot.contactsRead && snapshot.contactsWrite,
               promptableWhenDenied = true,
             ),
           )
           put(
             "calendar",
             permissionStateJson(
-              granted =
-                hasPermission(Manifest.permission.READ_CALENDAR) &&
-                  hasPermission(Manifest.permission.WRITE_CALENDAR),
+              granted = snapshot.calendarRead && snapshot.calendarWrite,
               promptableWhenDenied = true,
             ),
           )
           put(
             "callLog",
             permissionStateJson(
-              granted = callLogEnabled && hasPermission(Manifest.permission.READ_CALL_LOG),
+              granted = snapshot.callLog,
               promptableWhenDenied = callLogEnabled,
             ),
           )
           put(
             "motion",
             permissionStateJson(
-              granted = motionGranted,
+              granted = snapshot.motion,
               promptableWhenDenied = true,
             ),
           )
@@ -616,11 +640,6 @@ class DeviceHandler private constructor(
     put("status", JsonPrimitive(if (granted) "granted" else "denied"))
     put("promptable", JsonPrimitive(!granted && promptableWhenDenied))
   }
-
-  private fun hasPermission(permission: String): Boolean =
-    (
-      ContextCompat.checkSelfPermission(appContext, permission) == PackageManager.PERMISSION_GRANTED
-    )
 
   private fun mapMemoryPressure(
     totalBytes: Long,

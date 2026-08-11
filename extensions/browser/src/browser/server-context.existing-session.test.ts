@@ -61,6 +61,8 @@ function makeState(): BrowserServerState {
       cdpPortRangeEnd: 18899,
       extensionRelayDefaultPort: 18799,
       extensionRelayPorts: {},
+      extensionRelay: { allowLegacyAuth: true },
+      extensionRelayInternalTokens: {},
       cdpProtocol: "http",
       cdpHost: "127.0.0.1",
       cdpIsLoopback: true,
@@ -286,12 +288,27 @@ describe("browser server-context existing-session profile", () => {
     expect(listCall?.[1]?.name).toBe("chrome-live");
     expect(listCall?.[1]?.driver).toBe("existing-session");
     const [openCall] = vi.mocked(chromeMcp.openChromeMcpTab).mock.calls as unknown as Array<
-      [string, string, ChromeLiveProfile]
+      [
+        string,
+        string,
+        ChromeLiveProfile,
+        {
+          signal?: AbortSignal;
+          cdpTimeouts?: { httpTimeoutMs?: number; handshakeTimeoutMs?: number };
+        },
+      ]
     >;
     expect(openCall?.[0]).toBe("chrome-live");
     expect(openCall?.[1]).toBe("about:blank");
     expect(openCall?.[2]?.name).toBe("chrome-live");
     expect(openCall?.[2]?.driver).toBe("existing-session");
+    expect(openCall?.[3]).toMatchObject({
+      signal: expect.any(AbortSignal),
+      cdpTimeouts: {
+        httpTimeoutMs: state.resolved.remoteCdpTimeoutMs,
+        handshakeTimeoutMs: state.resolved.remoteCdpHandshakeTimeoutMs,
+      },
+    });
     const [focusCall] = vi.mocked(chromeMcp.focusChromeMcpTab).mock.calls as unknown as Array<
       [string, string, ChromeLiveProfile]
     >;

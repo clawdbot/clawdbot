@@ -4,8 +4,12 @@ import {
   resolveDefaultAgentId,
   setAgentEffectiveModelPrimary,
 } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveMigrationConfigRuntime } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
-import { readString } from "./helpers.js";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   HERMES_REASON_ALREADY_CONFIGURED,
   HERMES_REASON_CONFIG_RUNTIME_UNAVAILABLE,
@@ -146,30 +150,24 @@ function isRetiredHermesQwenProviderValue(value: string): boolean {
 }
 
 export function usesRetiredHermesQwenProvider(config: Record<string, unknown>): boolean {
-  const model = asRecord(config.model);
+  const model = asOptionalRecord(config.model);
   return [
-    readString(config.provider),
+    normalizeOptionalString(config.provider),
     typeof config.model === "string" ? config.model : undefined,
-    readString(model?.provider),
-    readString(model?.default),
-    readString(model?.model),
-    readString(config.default_model),
-    readString(config.model_name),
+    normalizeOptionalString(model?.provider),
+    normalizeOptionalString(model?.default),
+    normalizeOptionalString(model?.model),
+    normalizeOptionalString(config.default_model),
+    normalizeOptionalString(config.model_name),
   ].some((value) => value !== undefined && isRetiredHermesQwenProviderValue(value));
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function readBaseUrl(value: Record<string, unknown> | undefined): string | undefined {
   return value
-    ? (readString(value.base_url) ??
-        readString(value.baseUrl) ??
-        readString(value.url) ??
-        readString(value.api))
+    ? (normalizeOptionalString(value.base_url) ??
+        normalizeOptionalString(value.baseUrl) ??
+        normalizeOptionalString(value.url) ??
+        normalizeOptionalString(value.api))
     : undefined;
 }
 
@@ -178,8 +176,9 @@ function readKimiBaseUrl(
   provider: string,
   env: Record<string, string>,
 ): string | undefined {
-  const model = asRecord(config.model);
-  const selectedProvider = readString(model?.provider) ?? readString(config.provider);
+  const model = asOptionalRecord(config.model);
+  const selectedProvider =
+    normalizeOptionalString(model?.provider) ?? normalizeOptionalString(config.provider);
   if (
     selectedProvider &&
     HERMES_DYNAMIC_KIMI_PROVIDER_IDS.has(normalizeHermesCustomProviderId(selectedProvider))
@@ -189,13 +188,13 @@ function readKimiBaseUrl(
       return modelBaseUrl;
     }
   }
-  const providers = asRecord(config.providers);
+  const providers = asOptionalRecord(config.providers);
   for (const [id, value] of Object.entries(providers ?? {})) {
     if (
       normalizeHermesCustomProviderId(id) === normalizeHermesCustomProviderId(provider) &&
-      asRecord(value)
+      asOptionalRecord(value)
     ) {
-      const providerBaseUrl = readBaseUrl(asRecord(value));
+      const providerBaseUrl = readBaseUrl(asOptionalRecord(value));
       if (providerBaseUrl) {
         return providerBaseUrl;
       }
@@ -259,7 +258,7 @@ function hasExplicitHermesProvider(config: Record<string, unknown>, provider: st
         return false;
       }
       const record = entry as Record<string, unknown>;
-      const id = readString(record.name) ?? readString(record.id);
+      const id = normalizeOptionalString(record.name) ?? normalizeOptionalString(record.id);
       return id ? normalizeHermesCustomProviderId(id) === normalized : false;
     })
   );
@@ -316,20 +315,23 @@ export function resolveHermesModelRef(
   const model = config.model;
   if (typeof model === "string" && model.trim()) {
     const rawModel = model.trim();
-    const provider = readString(config.provider);
+    const provider = normalizeOptionalString(config.provider);
     return joinHermesProviderModel(config, provider, rawModel, env);
   }
   if (model && typeof model === "object" && !Array.isArray(model)) {
     const modelRecord = model as Record<string, unknown>;
-    const rawModel = readString(modelRecord.default) ?? readString(modelRecord.model);
+    const rawModel =
+      normalizeOptionalString(modelRecord.default) ?? normalizeOptionalString(modelRecord.model);
     const hasCustomEndpoint = Boolean(
-      readString(modelRecord.base_url) ?? readString(modelRecord.baseUrl),
+      normalizeOptionalString(modelRecord.base_url) ?? normalizeOptionalString(modelRecord.baseUrl),
     );
-    const provider = readString(modelRecord.provider) ?? (hasCustomEndpoint ? "custom" : undefined);
+    const provider =
+      normalizeOptionalString(modelRecord.provider) ?? (hasCustomEndpoint ? "custom" : undefined);
     return rawModel ? joinHermesProviderModel(config, provider, rawModel, env) : undefined;
   }
-  const rootModel = readString(config.default_model) ?? readString(config.model_name);
-  const rootProvider = readString(config.provider);
+  const rootModel =
+    normalizeOptionalString(config.default_model) ?? normalizeOptionalString(config.model_name);
+  const rootProvider = normalizeOptionalString(config.provider);
   return rootModel ? joinHermesProviderModel(config, rootProvider, rootModel, env) : undefined;
 }
 
@@ -368,7 +370,7 @@ export async function applyModelItem(
     return item;
   }
   try {
-    const configApi = ctx.runtime?.config;
+    const configApi = resolveMigrationConfigRuntime(ctx);
     if (!configApi?.current || !configApi.mutateConfigFile) {
       return hermesItemError(item, HERMES_REASON_CONFIG_RUNTIME_UNAVAILABLE);
     }

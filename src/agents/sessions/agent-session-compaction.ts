@@ -1,5 +1,5 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
-import { streamSimple } from "../../llm/stream.js";
+import { InvalidSummaryOutputError } from "../../../packages/agent-core/src/harness/types.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import {
   calculateContextTokens,
@@ -7,19 +7,28 @@ import {
   estimateContextTokens,
   prepareCompaction,
   shouldCompact,
+  type CompactionPreparation,
   type CompactionResult,
 } from "../runtime/index.js";
 import { AgentSessionInspection } from "./agent-session-inspection.js";
 import { unwrapCoreResult } from "./agent-session-utils.js";
 import { formatNoModelSelectedMessage } from "./auth-guidance.js";
+import { preflightManualSessionCompaction } from "./manual-compaction-preflight.js";
+import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { getLatestCompactionEntry, type CompactionEntry } from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
 
 type CompactionReason = "manual" | "threshold" | "overflow";
+type SummaryOutputPolicy = "none" | "retry-invalid-once";
 type CompactionWorkOutcome =
   | { status: "compacted"; result: CompactionResult }
   | { status: "aborted" }
   | { status: "skipped" };
+
+/** @internal */
+export const agentSessionAutomaticCompaction: unique symbol = Symbol.for(
+  "openclaw.agent-session.automatic-compaction",
+);
 
 export abstract class AgentSessionCompaction extends AgentSessionInspection {
   // =========================================================================
@@ -32,13 +41,21 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
    * @param customInstructions Optional instructions for the compaction summary
    */
   async compact(customInstructions?: string): Promise<CompactionResult> {
-    return await this.runWithSessionWriteLock(
-      async () => await this.compactWithSessionWriteLock(customInstructions),
+    return await this.runWithSessionWriteSettlement(
+      async () => await this.compactWithSessionWriteSettlement(customInstructions, "none"),
     );
   }
 
-  private async compactWithSessionWriteLock(
+  async [agentSessionAutomaticCompaction](customInstructions?: string): Promise<CompactionResult> {
+    return await this.runWithSessionWriteSettlement(
+      async () =>
+        await this.compactWithSessionWriteSettlement(customInstructions, "retry-invalid-once"),
+    );
+  }
+
+  private async compactWithSessionWriteSettlement(
     customInstructions?: string,
+    summaryOutputPolicy: SummaryOutputPolicy = "none",
   ): Promise<CompactionResult> {
     this.disconnectFromAgent();
     await this.abort();
@@ -50,6 +67,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       const outcome = await this.runCompactionWork({
         customInstructions,
         mode: "manual",
+        summaryOutputPolicy,
         settings,
         signal: this.compactionAbortController.signal,
       });
@@ -107,7 +125,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       }
     | undefined
   > {
-    if (this.agent.streamFn !== streamSimple) {
+    if (
+      this.agent.streamFn !==
+      getModelRegistryRuntime(this.sessionModelRegistry).llmRuntime.streamSimple
+    ) {
       return this.getCompactionRequestAuth(model);
     }
 
@@ -124,6 +145,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     signal: AbortSignal;
     customInstructions?: string;
     mode: "manual" | "auto";
+    summaryOutputPolicy: SummaryOutputPolicy;
   }): Promise<CompactionWorkOutcome> {
     const isManual = options.mode === "manual";
     if (!this.model) {
@@ -132,25 +154,27 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       }
       return { status: "skipped" };
     }
+    const model = this.model;
 
     const auth = isManual
-      ? await this.getCompactionRequestAuth(this.model)
-      : await this.getAutoCompactionRequestAuth(this.model);
+      ? await this.getCompactionRequestAuth(model)
+      : await this.getAutoCompactionRequestAuth(model);
     if (!auth) {
       return { status: "skipped" };
     }
 
     const pathEntries = this.sessionManager.getBranch();
-    const preparation = unwrapCoreResult(prepareCompaction(pathEntries, options.settings));
-    if (!preparation) {
-      if (isManual) {
-        const lastEntry = pathEntries[pathEntries.length - 1];
-        throw new Error(
-          lastEntry?.type === "compaction"
-            ? "Already compacted"
-            : "Nothing to compact (session too small)",
-        );
+    let preparation: CompactionPreparation | undefined;
+    if (isManual) {
+      const manualPreflight = preflightManualSessionCompaction(pathEntries, options.settings);
+      if (!manualPreflight.compactable) {
+        throw new Error(manualPreflight.reason);
       }
+      preparation = manualPreflight.preparation;
+    } else {
+      preparation = unwrapCoreResult(prepareCompaction(pathEntries, options.settings));
+    }
+    if (!preparation) {
       return { status: "skipped" };
     }
 
@@ -163,6 +187,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         branchEntries: pathEntries,
         customInstructions: options.customInstructions,
         signal: options.signal,
+        // Extension-owned compaction must use the same prepared model execution
+        // context as the core path below or provider wrappers and reasoning drift.
+        thinkingLevel: this.thinkingLevel,
+        streamFn: this.agent.streamFn,
       });
 
       if (extensionResult?.cancel) {
@@ -175,18 +203,36 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       }
     }
 
-    compactionResult ??= unwrapCoreResult(
-      await compact(
-        preparation,
-        this.model,
-        auth.apiKey,
-        auth.headers,
-        options.customInstructions,
-        options.signal,
-        this.thinkingLevel,
-        this.agent.streamFn,
-      ),
-    );
+    if (!compactionResult) {
+      const runCoreCompaction = () =>
+        compact(
+          preparation,
+          model,
+          auth.apiKey,
+          auth.headers,
+          options.customInstructions,
+          options.signal,
+          this.thinkingLevel,
+          this.agent.streamFn,
+        );
+      let result = await runCoreCompaction();
+      // Automatic core compaction owns one retry for invalid summary output.
+      // Manual, provider-error, and extension-owned paths keep their own policy.
+      if (options.signal.aborted) {
+        return { status: "aborted" };
+      }
+      if (
+        options.summaryOutputPolicy === "retry-invalid-once" &&
+        !result.ok &&
+        result.error instanceof InvalidSummaryOutputError
+      ) {
+        result = await runCoreCompaction();
+        if (options.signal.aborted) {
+          return { status: "aborted" };
+        }
+      }
+      compactionResult = unwrapCoreResult(result);
+    }
 
     if (options.signal.aborted) {
       return { status: "aborted" };
@@ -265,8 +311,16 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       return false;
     }
 
-    // Case 1: Overflow - LLM returned context overflow error
-    if (sameModel && isContextOverflow(assistantMessage, contextWindow)) {
+    // Case 1: Overflow - an unsuccessful response needs compact-and-retry recovery.
+    // Successful high-usage responses fall through to threshold maintenance below.
+    if (
+      sameModel &&
+      (assistantMessage.stopReason === "error" || assistantMessage.stopReason === "length") &&
+      isContextOverflow(assistantMessage, contextWindow)
+    ) {
+      if (this.contextOverflowRecoveryOwner === "caller") {
+        return false;
+      }
       if (this.overflowRecoveryAttempted) {
         this.emit({
           type: "compaction_end",
@@ -281,8 +335,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       }
 
       this.overflowRecoveryAttempted = true;
-      // Remove the error message from agent state (it IS saved to session for history,
-      // but we don't want it in context for the retry)
+      // Keep the failed response in history, but exclude it from the retry context.
       const messages = this.agent.state.messages;
       if (messages.at(-1)?.role === "assistant") {
         this.agent.state.messages = messages.slice(0, -1);
@@ -342,6 +395,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     try {
       const outcome = await this.runCompactionWork({
         mode: "auto",
+        summaryOutputPolicy: "retry-invalid-once",
         settings,
         signal: this.autoCompactionAbortController.signal,
       });
@@ -376,7 +430,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       if (willRetry) {
         const messages = this.agent.state.messages;
         const lastMsg = messages[messages.length - 1];
-        if (lastMsg?.role === "assistant" && lastMsg.stopReason === "error") {
+        if (
+          lastMsg?.role === "assistant" &&
+          (lastMsg.stopReason === "error" || lastMsg.stopReason === "length")
+        ) {
           this.agent.state.messages = messages.slice(0, -1);
         }
         return true;

@@ -1,5 +1,26 @@
 # OpenClaw iOS Changelog
 
+## Unreleased
+
+## 2026.8.10
+
+- Chat keeps the keyboard available when you tap the message composer and preserves a stable sidebar layout while typing.
+
+## 2026.7.23
+
+- Permission requests now open the native iOS authorization sheet only when you use a related feature, and Calendar and Reminders access completes without relaunching.
+- Chat preserves attachments when a route is unavailable, shared drafts avoid duplicate links, permission actions stay readable, and forced realtime Talk sessions route through your Gateway relay.
+
+## 2026.7.22
+
+- Prevented stale Watch reconnect recovery from disconnecting a newly selected Gateway, kept delivered Watch messages from reappearing after a crash, and preserved attachments when retrying uncertain offline sends.
+
+## 2026.7.21
+
+- Fixed background Gateway sessions restarting while waiting for pairing or authentication attention.
+- Prevented failed offline-data resets from reusing retired chat database handles and kept byte-distinct Gateway owners isolated.
+- Made Apple Watch message acknowledgments wait for persisted handling and preserved pending voice turns across navigation and relaunches.
+
 ## 2026.7.2 - 2026-07-13
 
 - Added native Automations search, filtering, details, history, revision-safe editing, run tracking, enable/disable, and confirmed deletion.

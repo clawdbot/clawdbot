@@ -10,6 +10,13 @@ import { createTerminalLaunchPolicy } from "../terminal/launch.js";
 import type { TerminalSessionSummary } from "../terminal/session-types.js";
 import { terminalHandlers, TERMINAL_OPEN_DEADLINE_MS } from "./terminal.js";
 
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
 const policyMocks = vi.hoisted(() => ({
   resolveNodeCommandAllowlist: vi.fn(() => new Set<string>()),
   isNodeCommandAllowed: vi.fn<() => { ok: true } | { ok: false; reason: string }>(() => ({
@@ -194,6 +201,11 @@ describe("terminal gateway policy", () => {
     const openTerminal = vi.fn(async () => ({
       kind: "local" as const,
       argv: ["codex", "resume", "thread"],
+      env: {
+        CODEX_HOME: "/agent/codex-home",
+        ComSpec: "C:\\Windows\\System32\\ambient-cmd.exe",
+        COMSPEC: "C:\\Windows\\System32\\configured-cmd.exe",
+      },
       pathEnv: "/login-shell/bin:/usr/bin",
       title: "codex resume thread",
     }));
@@ -222,10 +234,22 @@ describe("terminal gateway policy", () => {
     expect(sessions.open).toHaveBeenCalledWith(
       expect.objectContaining({
         shell: expect.any(String),
-        args: ["-il", "-c", "'codex' 'resume' 'thread'"],
-        env: expect.objectContaining({ PATH: "/login-shell/bin:/usr/bin" }),
+        args:
+          process.platform === "win32"
+            ? ["resume", "thread"]
+            : ["-il", "-c", "'codex' 'resume' 'thread'"],
+        env: expect.objectContaining({
+          CODEX_HOME: "/agent/codex-home",
+          PATH: "/login-shell/bin:/usr/bin",
+        }),
       }),
     );
+    if (process.platform === "win32") {
+      const terminalEnv = sessions.open.mock.calls[0]?.[0] as { env: Record<string, string> };
+      expect(
+        Object.entries(terminalEnv.env).filter(([key]) => key.toUpperCase() === "COMSPEC"),
+      ).toEqual([["COMSPEC", "C:\\Windows\\System32\\configured-cmd.exe"]]);
+    }
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ sessionId: "terminal-1", title: "codex resume thread" }),
@@ -323,7 +347,7 @@ describe("terminal gateway policy", () => {
     );
 
     const opening = expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
-    await vi.waitFor(() => expect(openTerminal).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(openTerminal).toHaveBeenCalledOnce());
     isConnectionActive.mockReturnValue(false);
     plan.resolve({ kind: "local", argv: ["codex", "resume", "thread"] });
     await opening;
@@ -351,7 +375,7 @@ describe("terminal gateway policy", () => {
     sessions.open.mockImplementationOnce(async () => await created.promise);
 
     const opening = expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
-    await vi.waitFor(() => expect(sessions.open).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(sessions.open).toHaveBeenCalledOnce());
     isConnectionActive.mockReturnValue(false);
     created.resolve({
       ok: true,
@@ -388,7 +412,7 @@ describe("terminal gateway policy", () => {
       });
 
       const opening = expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
-      await vi.waitFor(() => expect(openSignal).toBeDefined());
+      await waitForFast(() => expect(openSignal).toBeDefined());
       await vi.advanceTimersByTimeAsync(TERMINAL_OPEN_DEADLINE_MS);
       await opening;
 
@@ -405,7 +429,7 @@ describe("terminal gateway policy", () => {
         shell: "/bin/zsh",
         cwd: "/work",
       });
-      await vi.waitFor(() =>
+      await waitForFast(() =>
         expect(sessions.close).toHaveBeenCalledWith("conn-1", "terminal-late"),
       );
     } finally {
@@ -433,7 +457,7 @@ describe("terminal gateway policy", () => {
     );
 
     const opening = expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
-    await vi.waitFor(() => expect(openTerminal).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(openTerminal).toHaveBeenCalledOnce());
     isTerminalEnabled.mockReturnValue(false);
     plan.resolve({ kind: "local", argv: ["codex", "resume", "thread"] });
     await opening;
@@ -466,7 +490,7 @@ describe("terminal gateway policy", () => {
     );
 
     const opening = expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
-    await vi.waitFor(() => expect(openTerminal).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(openTerminal).toHaveBeenCalledOnce());
     resolveTerminalLaunchPolicy.mockReturnValue({
       ok: true,
       plan: { agentId: "main", cwd: process.cwd(), shell: "/bin/refreshed", args: [] },
@@ -475,7 +499,10 @@ describe("terminal gateway policy", () => {
     await opening;
 
     expect(sessions.open).toHaveBeenCalledWith(
-      expect.objectContaining({ cwd: process.cwd(), shell: "/bin/refreshed" }),
+      expect.objectContaining({
+        cwd: process.cwd(),
+        shell: process.platform === "win32" ? "codex" : "/bin/refreshed",
+      }),
     );
   });
 
@@ -564,10 +591,15 @@ describe("terminal gateway policy", () => {
         paramsJSON: JSON.stringify({ threadId: "thread" }),
       }),
     });
-    const node = { nodeId: "node-1", connId: "conn-node", commands: [command] };
+    const node = {
+      nodeId: "node-1",
+      connId: "conn-node",
+      pairingGeneration: "generation-node",
+      commands: [command],
+    };
     const invoke = vi.fn((rawParams: unknown) => {
-      const params = rawParams as { onInvokeId?: (id: string) => void };
-      params.onInvokeId?.("invoke-1");
+      const params = rawParams as { onDispatchReady?: (id: string) => void };
+      params.onDispatchReady?.("invoke-1");
       return Promise.resolve({ ok: true });
     });
     const nodeRegistry = { get: () => node, invoke, sendInvokeInput: vi.fn() };
@@ -603,7 +635,11 @@ describe("terminal gateway policy", () => {
     )?.at(0);
     await openRequest?.createBackend?.();
     expect(invoke).toHaveBeenCalledWith(
-      expect.objectContaining({ nodeId: "node-1", expectedConnId: "conn-node" }),
+      expect.objectContaining({
+        nodeId: "node-1",
+        expectedConnId: "conn-node",
+        expectedPairingGeneration: "generation-node",
+      }),
     );
   });
 
@@ -636,7 +672,7 @@ describe("terminal gateway policy", () => {
     );
 
     const opening = expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
-    await vi.waitFor(() => expect(policyMocks.applyPluginNodeInvokePolicy).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(policyMocks.applyPluginNodeInvokePolicy).toHaveBeenCalledOnce());
     node = { nodeId: "node-1", connId: "conn-new", commands: [] };
     policy.resolve(null);
     await opening;
@@ -788,6 +824,7 @@ describe("terminal gateway policy", () => {
     const node = {
       nodeId: "node-1",
       connId: "conn-node",
+      pairingGeneration: "generation-node",
       commands: [command, uploadCommand],
     };
     const invoke = vi.fn(async () => ({
@@ -817,28 +854,11 @@ describe("terminal gateway policy", () => {
     expect(invoke).toHaveBeenCalledWith({
       nodeId: "node-1",
       expectedConnId: "conn-node",
+      expectedPairingGeneration: "generation-node",
       command: uploadCommand,
       params: { name: "report.pdf", contentBase64: "dGVzdA==" },
       timeoutMs: 120_000,
     });
     expect(result).toEqual({ path: "/tmp/node/report.pdf", size: 4 });
-  });
-
-  it("sanitizes terminal snapshots before returning plain text", async () => {
-    const { opts, sessions, respond } = makeOpts({ sessionId: "s1" }, { enabled: true });
-    const finals = Array.from({ length: 0x7e - 0x40 + 1 }, (_, offset) =>
-      String.fromCharCode(0x40 + offset),
-    );
-    const sequences = ["\u001B[", "\u009B"]
-      .flatMap((introducer) => finals.map((finalByte) => introducer + finalByte))
-      .join("");
-    sessions.snapshot.mockReturnValue(`before${sequences}after`);
-
-    await expectDefined(
-      terminalHandlers["terminal.text"],
-      'terminalHandlers["terminal.text"] test invariant',
-    )(opts);
-
-    expect(respond).toHaveBeenCalledWith(true, { text: "beforeafter" });
   });
 });

@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AuthProfileCredential } from "../src/agents/auth-profiles.js";
 import {
   parseBooleanEnv,
@@ -140,7 +141,7 @@ function summarizeText(text: string, max = 120): string {
   if (normalized.length <= max) {
     return normalized;
   }
-  return `${normalized.slice(0, max - 1)}…`;
+  return `${truncateUtf16Safe(normalized, max - 1)}…`;
 }
 
 function summarizeCapture(
@@ -853,7 +854,6 @@ async function runGatewayPrompt(prompt: string): Promise<PromptResult> {
           },
           discovery: {
             mdns: { mode: "off" },
-            wideArea: { enabled: false },
           },
           ...(proxyPort
             ? {
@@ -1007,7 +1007,6 @@ async function main() {
 export const testing = {
   cleanupPromptProbeTmpDir,
   installGatewayPromptParentSignalHandlers,
-  matchesExtraUsage400,
   promptProbeTmpResult,
   readLogTail,
   readRequestBody,
@@ -1015,8 +1014,6 @@ export const testing = {
   runDirectPrompt,
   startAnthropicProxy,
   stopGatewayPromptChild,
-  summarizeCapture,
-  summarizeText,
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

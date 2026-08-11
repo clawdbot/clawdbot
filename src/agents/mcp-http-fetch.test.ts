@@ -12,15 +12,21 @@ import {
   withoutMcpAuthorizationHeader,
   withSameOriginMcpHttpHeaders,
 } from "./mcp-http-fetch.js";
+import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
 
 const testGlobal = globalThis as Record<string, unknown>;
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
-const { lookupMock } = vi.hoisted(() => ({
+const { lookupMock, oauthResolveMock } = vi.hoisted(() => ({
   lookupMock: vi.fn(),
+  oauthResolveMock: vi.fn(),
 }));
 
 vi.mock("node:dns/promises", () => ({
   lookup: lookupMock,
+}));
+
+vi.mock("./mcp-oauth.js", () => ({
+  resolveMcpOAuthAccessToken: oauthResolveMock,
 }));
 
 class TestAgent {
@@ -141,6 +147,7 @@ describe("MCP HTTP fetch helpers", () => {
     vi.stubEnv("no_proxy", "");
     lookupMock.mockReset();
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    oauthResolveMock.mockReset();
     testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
       Agent: TestAgent,
       EnvHttpProxyAgent: TestEnvHttpProxyAgent,
@@ -277,6 +284,78 @@ describe("MCP HTTP fetch helpers", () => {
     expect(new Headers(calls[0]?.[1]?.headers).get("x-tenant")).toBe("docs");
     expect(new Headers(calls[0]?.[1]?.headers).get("mcp-protocol-version")).toBe("2025-06-18");
     expect(calls[1]?.[1]?.headers).toBeUndefined();
+  });
+
+  it("preserves POST bodies and bearer headers through the production OAuth fetch stack", async () => {
+    oauthResolveMock.mockResolvedValueOnce("first-token").mockResolvedValueOnce("second-token");
+    const requests: Array<{
+      method: string;
+      body: string;
+      authorization: string | null;
+      cache: RequestCache;
+      credentials: RequestCredentials;
+      keepalive: boolean;
+      mode: RequestMode;
+    }> = [];
+    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: TestAgent,
+      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+      ProxyAgent: TestProxyAgent,
+      fetch: async (url: string | URL | Request, init?: RequestInit) => {
+        const request = new Request(url, init);
+        requests.push({
+          method: request.method,
+          body: await request.text(),
+          authorization: request.headers.get("authorization"),
+          cache: request.cache,
+          credentials: request.credentials,
+          keepalive: request.keepalive,
+          mode: request.mode,
+        });
+        return new Response(requests.length === 1 ? "unauthorized" : "ok", {
+          status: requests.length === 1 ? 401 : 200,
+        });
+      },
+    };
+    const resourceUrl = "https://mcp.example.com/mcp";
+    const fetch = withMcpOAuthBearer({
+      fetchFn: buildMcpHttpFetch({ resourceUrl }),
+      authFetchFn: buildMcpHttpFetch({ resourceUrl }),
+      serverName: "docs",
+      resourceUrl,
+    });
+
+    const response = await fetch(resourceUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: '{"jsonrpc":"2.0","method":"tools/list"}',
+      cache: "no-store",
+      credentials: "include",
+      keepalive: true,
+      mode: "cors",
+    });
+
+    expect(await response.text()).toBe("ok");
+    expect(requests).toEqual([
+      {
+        method: "POST",
+        body: '{"jsonrpc":"2.0","method":"tools/list"}',
+        authorization: "Bearer first-token",
+        cache: "no-store",
+        credentials: "include",
+        keepalive: true,
+        mode: "cors",
+      },
+      {
+        method: "POST",
+        body: '{"jsonrpc":"2.0","method":"tools/list"}',
+        authorization: "Bearer second-token",
+        cache: "no-store",
+        credentials: "include",
+        keepalive: true,
+        mode: "cors",
+      },
+    ]);
   });
 
   it.each([undefined, "64", "1048577"])(

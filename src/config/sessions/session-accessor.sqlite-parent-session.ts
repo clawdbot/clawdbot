@@ -12,9 +12,10 @@ import type {
   SessionParentForkDecision,
 } from "./session-accessor.sqlite-contract.js";
 import {
-  deleteSqliteLifecycleTargetRows,
+  deleteLegacySessionEntryRows,
   normalizeSqliteLifecycleTarget,
   readSqliteSessionIdentitySnapshot,
+  rehomeSqliteSessionWindows,
   resolveSqliteLifecyclePrimaryEntry,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
@@ -34,7 +35,8 @@ import {
 import { loadSqliteTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
   cloneSessionEntry,
-  formatSqliteSessionMarkerForScope,
+  formatLegacySqliteSessionMarkerForScope,
+  formatSqliteSessionReferenceForScope,
   normalizeSqliteSessionKey,
   resolveSqliteScope,
   resolveSqliteStoreScope,
@@ -46,7 +48,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry, SessionEntry } from "./types.js";
 import { mergeSessionEntry, resolveFreshSessionTotalTokens } from "./types.js";
 
 // Parent-session fork owner: decision, transcript copy, and child entry commit.
@@ -82,7 +84,7 @@ export async function forkSqliteSessionTranscriptFromParent(
   // in the source agent database while the child transcript must be owned by
   // the target agent's database. Two databases cannot share one transaction,
   // so read the parent branch first, then write the child under the target's
-  // exclusive session write lock.
+  // exclusive target-database writer queue.
   if (!params.parentEntry.sessionId) {
     return { status: "missing-parent" };
   }
@@ -93,7 +95,7 @@ export async function forkSqliteSessionTranscriptFromParent(
   if (!source) {
     return { status: "failed" };
   }
-  const parentSessionFile = formatSqliteSessionMarkerForScope({
+  const parentSessionFile = formatLegacySqliteSessionMarkerForScope({
     ...resolved,
     sessionId: params.parentEntry.sessionId,
     sessionKey: normalizeSqliteSessionKey(params.parentSessionKey),
@@ -105,7 +107,7 @@ export async function forkSqliteSessionTranscriptFromParent(
       sessionId,
       sessionKey: normalizeSqliteSessionKey(params.sessionKey),
     };
-    const sessionFile = formatSqliteSessionMarkerForScope(targetScope);
+    const sessionFile = formatSqliteSessionReferenceForScope(targetScope);
     runOpenClawAgentWriteTransaction((database) => {
       writeSqliteForkedChildTranscriptInTransaction(database, targetScope, {
         parentSessionFile,
@@ -216,20 +218,41 @@ export async function forkSqliteSessionEntryFromParentTarget(
         fork: fork.transcript,
         parentEntry: cloneSessionEntry(freshParent),
       });
-      const next = mergeSessionEntry(freshBase, {
+      const forkIdentityPatch: Partial<InternalSessionEntry> = {
         ...patch,
+        forkSource: {
+          sessionKey: parentTarget.canonicalKey,
+          sessionId: freshParent.sessionId,
+        },
         forkedFromParent: true,
-        sessionFile: fork.transcript.sessionFile,
+        lifecycleRunId: undefined,
         sessionId: fork.transcript.sessionId,
-      });
+        totalTokens: undefined,
+        totalTokensFresh: false,
+        totalTokensVersion: undefined,
+      };
+      const next = mergeSessionEntry(freshBase, forkIdentityPatch);
       previousIdentity = readSqliteSessionIdentitySnapshot(writeDatabase, sessionTarget.storeKeys);
-      deleteSqliteLifecycleTargetRows(writeDatabase, sessionTarget);
-      writeSessionEntry(writeDatabase, sessionTarget.canonicalKey, next);
+      writeSessionEntry(writeDatabase, sessionTarget.canonicalKey, next, {
+        previousEntry: freshBase,
+      });
+      rehomeSqliteSessionWindows(
+        writeDatabase,
+        sessionTarget.canonicalKey,
+        sessionTarget.storeKeys,
+      );
+      deleteLegacySessionEntryRows(
+        writeDatabase,
+        sessionTarget.storeKeys,
+        sessionTarget.canonicalKey,
+        { rehomeMembers: freshBase.sessionId === next.sessionId },
+      );
       maintenancePlans.push(
         applySqliteSessionEntryMaintenance(writeDatabase, {
           activeSessionKey: sessionTarget.canonicalKey,
           archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
           skipMaintenance: true,
+          storePath: params.storePath,
         }),
       );
       currentIdentity = readSqliteSessionIdentitySnapshot(writeDatabase, sessionTarget.storeKeys);
@@ -242,7 +265,7 @@ export async function forkSqliteSessionEntryFromParentTarget(
       };
     }, toDatabaseOptions(resolved));
     emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
-    finalizeSqliteSessionEntryMaintenancePlansBestEffort(resolved, maintenancePlans);
+    await finalizeSqliteSessionEntryMaintenancePlansBestEffort(resolved, maintenancePlans);
     return result;
   });
 }
@@ -268,19 +291,32 @@ async function persistSqliteParentForkSkipPatch(params: {
   let currentIdentity = new Map<string, SessionEntry>();
   runOpenClawAgentWriteTransaction((database) => {
     previousIdentity = readSqliteSessionIdentitySnapshot(database, params.sessionTarget.storeKeys);
-    deleteSqliteLifecycleTargetRows(database, params.sessionTarget);
-    writeSessionEntry(database, params.sessionTarget.canonicalKey, next);
+    writeSessionEntry(database, params.sessionTarget.canonicalKey, next, {
+      previousEntry: params.entry,
+    });
+    rehomeSqliteSessionWindows(
+      database,
+      params.sessionTarget.canonicalKey,
+      params.sessionTarget.storeKeys,
+    );
+    deleteLegacySessionEntryRows(
+      database,
+      params.sessionTarget.storeKeys,
+      params.sessionTarget.canonicalKey,
+      { rehomeMembers: params.entry.sessionId === next.sessionId },
+    );
     maintenancePlans.push(
       applySqliteSessionEntryMaintenance(database, {
         activeSessionKey: params.sessionTarget.canonicalKey,
         archiveDirectory: resolveSqliteTranscriptArchiveDirectory(params.resolved),
         skipMaintenance: true,
+        storePath: params.params.storePath,
       }),
     );
     currentIdentity = readSqliteSessionIdentitySnapshot(database, params.sessionTarget.storeKeys);
   }, toDatabaseOptions(params.resolved));
   emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
-  finalizeSqliteSessionEntryMaintenancePlansBestEffort(params.resolved, maintenancePlans);
+  await finalizeSqliteSessionEntryMaintenancePlansBestEffort(params.resolved, maintenancePlans);
   return cloneSessionEntry(next);
 }
 
@@ -333,12 +369,12 @@ function forkSqliteParentTranscriptInTransaction(
     sessionId,
     sessionKey: normalizeSqliteSessionKey(params.targetSessionKey),
   };
-  const parentSessionFile = formatSqliteSessionMarkerForScope({
+  const parentSessionFile = formatLegacySqliteSessionMarkerForScope({
     ...resolved,
     sessionId: params.parentEntry.sessionId,
     sessionKey: normalizeSqliteSessionKey(params.parentSessionKey),
   });
-  const sessionFile = formatSqliteSessionMarkerForScope(targetScope);
+  const sessionFile = formatSqliteSessionReferenceForScope(targetScope);
   writeSqliteForkedChildTranscriptInTransaction(database, targetScope, {
     parentSessionFile,
     source,

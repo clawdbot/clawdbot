@@ -9,14 +9,15 @@ import { ANTHROPIC_CONTEXT_1M_TOKENS } from "../agents/context-resolution.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
-} from "../agents/subagent-registry.test-helpers.js";
+} from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
   appendTranscriptMessageSync,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { registerAgentRunContext, resetAgentEventsForTest } from "../infra/agent-events.js";
+import { resetAgentEventsForTest } from "../infra/agent-events.js";
+import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
@@ -667,6 +668,7 @@ describe("listSessionsFromStore search", () => {
         updatedAt: now,
         totalTokens: 1200,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       } as SessionEntry,
       "agent:main:stale": {
         sessionId: "sess-stale",
@@ -934,6 +936,7 @@ describe("listSessionsFromStore search", () => {
             contextTokens: 200_000,
             totalTokens: TRANSCRIPT_TOTAL_TOKENS,
             totalTokensFresh: true,
+            totalTokensVersion: 1,
           }),
         });
 

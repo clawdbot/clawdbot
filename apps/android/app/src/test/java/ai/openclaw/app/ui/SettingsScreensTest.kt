@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayCronJobSummary
 import ai.openclaw.app.GatewayExecApprovalSummary
@@ -134,6 +135,30 @@ class SettingsScreensTest {
   }
 
   @Test
+  fun gatewayStatusLabelPreservesPartialConnectivity() {
+    assertEquals(
+      "Connected (node offline)",
+      gatewayStatusLabel(
+        GatewayConnectionDisplay(
+          isConnected = true,
+          statusText = "Connected (node offline)",
+          problem = null,
+        ),
+      ),
+    )
+    assertEquals(
+      "Connected (operator offline)",
+      gatewayStatusLabel(
+        GatewayConnectionDisplay(
+          isConnected = false,
+          statusText = "Connected (operator offline)",
+          problem = null,
+        ),
+      ),
+    )
+  }
+
+  @Test
   fun gatewaySetupResetCopyExplainsCredentialAndApprovalImpact() {
     val text = gatewaySettingsSetupResetConfirmationText()
 
@@ -157,7 +182,8 @@ class SettingsScreensTest {
   fun devicePairingAdminCopySeparatesPairingFromNodeApproval() {
     val text = devicePairingAdminUnavailableText()
 
-    assertEquals(true, text.contains("approve new phone pairing"))
+    assertEquals(true, text.contains("openclaw devices list"))
+    assertEquals(true, text.contains("Gateway host"))
     assertEquals(true, text.contains("Node capability approval is separate"))
     assertEquals(true, text.contains("nodes approve <request id>"))
   }

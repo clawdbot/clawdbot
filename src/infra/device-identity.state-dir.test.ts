@@ -1,76 +1,92 @@
-// Covers default device identity path under state dir.
-import fs from "node:fs/promises";
+// Covers default device identity SQLite path under the state dir.
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveGatewayLockDir } from "../config/paths.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { loadOrCreateDeviceIdentity } from "./device-identity.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
+import { resolveDeviceIdentityCoordinatorPaths } from "./device-identity-coordinator-paths.js";
+import { loadDeviceIdentityIfPresent, loadOrCreateDeviceIdentity } from "./device-identity.js";
+
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+  vi.restoreAllMocks();
+});
 
 describe("device identity state dir defaults", () => {
-  it("writes the default identity file under OPENCLAW_STATE_DIR", async () => {
+  it("writes the default identity to the shared state database", async () => {
     await withStateDirEnv("openclaw-identity-state-", async ({ stateDir }) => {
       const identity = loadOrCreateDeviceIdentity();
-      const identityPath = path.join(stateDir, "identity", "device.json");
-      const raw = JSON.parse(await fs.readFile(identityPath, "utf8")) as { deviceId?: string };
-      expect(raw.deviceId).toBe(identity.deviceId);
+      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+      const lockDir = resolveGatewayLockDir(stateDir);
+
+      expect(loadDeviceIdentityIfPresent()).toEqual(identity);
+      expect(fs.existsSync(databasePath)).toBe(true);
+      expect(fs.readdirSync(lockDir)).toContainEqual(
+        expect.stringMatching(/^device-identity\.[0-9a-f]{8}\.lock\.sqlite$/u),
+      );
+      expect(fs.existsSync(path.join(stateDir, "identity", "device.json"))).toBe(false);
     });
   });
 
   it("reuses the stored identity on subsequent loads", async () => {
-    await withStateDirEnv("openclaw-identity-state-", async ({ stateDir }) => {
+    await withStateDirEnv("openclaw-identity-state-", async () => {
       const first = loadOrCreateDeviceIdentity();
       const second = loadOrCreateDeviceIdentity();
-      const identityPath = path.join(stateDir, "identity", "device.json");
-      const raw = JSON.parse(await fs.readFile(identityPath, "utf8")) as {
-        deviceId?: string;
-        publicKeyPem?: string;
-      };
 
       expect(second).toEqual(first);
-      expect(raw.deviceId).toBe(first.deviceId);
-      expect(raw.publicKeyPem).toBe(first.publicKeyPem);
     });
   });
 
-  it("repairs stored device IDs that no longer match the public key", async () => {
-    await withStateDirEnv("openclaw-identity-state-", async ({ stateDir }) => {
-      const original = loadOrCreateDeviceIdentity();
-      const identityPath = path.join(stateDir, "identity", "device.json");
-      const raw = JSON.parse(await fs.readFile(identityPath, "utf8")) as Record<string, unknown>;
+  it("uses the supplied state environment for its coordinator", async () => {
+    await withTempDir("openclaw-identity-env-state-", async (rootDir) => {
+      const stateDir = path.join(rootDir, "selected-state");
+      const fakeHome = path.join(rootDir, "home");
+      const legacyTmpDir = path.join(rootDir, "legacy-process-tmp");
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.mkdirSync(fakeHome, { recursive: true });
+      fs.mkdirSync(legacyTmpDir, { recursive: true });
+      vi.spyOn(os, "tmpdir").mockReturnValue(legacyTmpDir);
+      const env = {
+        ...process.env,
+        HOME: fakeHome,
+        OPENCLAW_HOME: fakeHome,
+        OPENCLAW_STATE_DIR: stateDir,
+      };
 
-      await fs.writeFile(
-        identityPath,
-        `${JSON.stringify({ ...raw, deviceId: "stale-device-id" }, null, 2)}\n`,
-        "utf8",
-      );
+      loadOrCreateDeviceIdentity({ env });
 
-      const repaired = loadOrCreateDeviceIdentity();
-      const stored = JSON.parse(await fs.readFile(identityPath, "utf8")) as { deviceId?: string };
-
-      expect(repaired.deviceId).toBe(original.deviceId);
-      expect(stored.deviceId).toBe(original.deviceId);
+      const coordinatorPaths = resolveDeviceIdentityCoordinatorPaths({
+        databasePath: path.join(stateDir, "state", "openclaw.sqlite"),
+        stateDir,
+        temporaryDirectory: legacyTmpDir,
+        uid: typeof process.getuid === "function" ? process.getuid() : undefined,
+      });
+      const processTempPath = coordinatorPaths[0];
+      const stateLocalPath = coordinatorPaths[1];
+      if (!processTempPath || !stateLocalPath) {
+        throw new Error("coordinator bridge paths are unavailable");
+      }
+      const stateCoordinators = fs
+        .readdirSync(path.dirname(stateLocalPath))
+        .filter((entry) => entry.startsWith("device-identity."));
+      const processTempCoordinators = fs
+        .readdirSync(path.dirname(processTempPath))
+        .filter((entry) => entry.startsWith("device-identity."));
+      expect(stateCoordinators).toHaveLength(1);
+      expect(processTempCoordinators).toEqual(stateCoordinators);
+      expect(fs.existsSync(path.join(fakeHome, ".openclaw"))).toBe(false);
     });
   });
 
-  it("returns a transient identity without overwriting an invalid stored file", async () => {
+  it("keeps read-only lookup non-creating when the default database is absent", async () => {
     await withStateDirEnv("openclaw-identity-state-", async ({ stateDir }) => {
-      const identityPath = path.join(stateDir, "identity", "device.json");
-      await fs.mkdir(path.dirname(identityPath), { recursive: true });
-      const before = [
-        "{",
-        '  "version": 1,',
-        '  "deviceId": "broken",',
-        '  "publicKeyPem": "not-a-valid-public-key",',
-        '  "privateKeyPem": "not-a-valid-private-key"',
-        "}",
-        "",
-      ].join("\n");
-      await fs.writeFile(identityPath, before, "utf8");
+      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
 
-      const regenerated = loadOrCreateDeviceIdentity();
-      const stored = await fs.readFile(identityPath, "utf8");
-
-      expect(regenerated.deviceId).not.toBe("broken");
-      expect(stored).toBe(before);
+      expect(loadDeviceIdentityIfPresent()).toBeNull();
+      expect(fs.existsSync(databasePath)).toBe(false);
     });
   });
 });

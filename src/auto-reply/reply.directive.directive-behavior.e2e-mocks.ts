@@ -104,8 +104,9 @@ vi.mock("../agents/embedded-agent.runtime.js", () => ({
   waitForEmbeddedAgentRunEnd: vi.fn().mockResolvedValue(true),
 }));
 
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: loadModelCatalogMock,
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
+  loadPreparedModelCatalog: loadModelCatalogMock,
 }));
 
 vi.mock("../agents/thinking-runtime.js", async (importOriginal) => {
@@ -130,11 +131,15 @@ vi.mock("../agents/auth-profiles/session-override.js", () => ({
     resolveSessionAuthProfileOverrideMock(...args),
 }));
 
-vi.mock("../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () => undefined,
-  initializeGlobalHookRunner: vi.fn(),
-  resetGlobalHookRunner: vi.fn(),
-}));
+vi.mock("../plugins/hook-runner-global.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/hook-runner-global.js")>();
+  return {
+    ...actual,
+    getGlobalHookRunner: () => undefined,
+    initializeGlobalHookRunner: vi.fn(),
+    resetGlobalHookRunner: vi.fn(),
+  };
+});
 
 vi.mock("./reply/agent-runner.runtime.js", () => ({
   runReplyAgent: (...args: unknown[]) => runReplyAgentMock(...args),

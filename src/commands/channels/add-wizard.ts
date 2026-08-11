@@ -39,12 +39,13 @@ export async function resolveInitialWizardChannel(
     installedPlugins: listActiveChannelSetupPlugins(),
     workspaceDir: resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)),
   });
-  return resolved.entries.find(
-    (entry) =>
-      normalizeOptionalLowercaseString(entry.id) === normalized ||
+  return (
+    resolved.entries.find((entry) => normalizeOptionalLowercaseString(entry.id) === normalized) ??
+    resolved.entries.find((entry) =>
       (entry.meta.aliases ?? []).some(
         (alias) => normalizeOptionalLowercaseString(alias) === normalized,
       ),
+    )
   )?.id;
 }
 
@@ -79,6 +80,7 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
   await prompter.intro("Channel setup");
   let nextConfig = await onboardChannels.setupChannels(cfg, runtime, prompter, {
     ...(params.initialChannel ? { initialSelection: [params.initialChannel] } : {}),
+    ...(params.initialChannel ? { finishAfterInitialSelection: true } : {}),
     allowDisable: false,
     allowIMessageInstall: true,
     allowSignalInstall: true,
@@ -102,15 +104,50 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
       resolvedPlugins.set(channel, plugin);
     },
   });
+  const commitWizardConfig = async (config: OpenClawConfig) => {
+    await params.beforePersistentEffect?.();
+    const committed = await commitConfigWithPendingPluginInstalls({
+      nextConfig: config,
+      ...(baseHash !== undefined ? { baseHash } : {}),
+    });
+    if (committed.movedInstallRecords) {
+      await refreshPluginRegistryAfterConfigMutation({
+        config: committed.config,
+        reason: "source-changed",
+        installRecords: committed.installRecords,
+        logger: { warn: (message) => runtime.log(message) },
+      });
+    }
+    await onboardChannels.runCollectedChannelOnboardingPostWriteHooks({
+      hooks: postWriteHooks.drain(),
+      cfg: committed.config,
+      runtime,
+      ...(params.beforePersistentEffect
+        ? { beforePersistentEffect: params.beforePersistentEffect }
+        : {}),
+    });
+    return committed.config;
+  };
   if (selection.length === 0) {
+    if (nextConfig !== cfg) {
+      await commitWizardConfig(nextConfig);
+      await prompter.outro("Channels updated.");
+      return;
+    }
     await prompter.outro("No channel changes made.");
     return;
   }
 
-  const wantsNames = await prompter.confirm({
-    message: "Name these channel accounts now? (optional)",
-    initialValue: false,
-  });
+  const usesTargetedDefaults =
+    params.initialChannel !== undefined &&
+    selection.length === 1 &&
+    selection[0] === params.initialChannel;
+  const wantsNames = usesTargetedDefaults
+    ? false
+    : await prompter.confirm({
+        message: "Name these channel accounts now? (optional)",
+        initialValue: false,
+      });
   if (wantsNames) {
     for (const channel of selection) {
       const accountId = accountIds[channel] ?? DEFAULT_ACCOUNT_ID;
@@ -150,12 +187,17 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
       } => Boolean(value.accountId),
     );
   if (bindTargets.length > 0) {
-    const bindNow = await prompter.confirm({
-      message: "Route these channel accounts to agents now?",
-      initialValue: true,
-    });
+    const agentSummaries = buildAgentSummaries(nextConfig);
+    const bindNow =
+      usesTargetedDefaults && agentSummaries.length <= 1
+        ? false
+        : usesTargetedDefaults
+          ? true
+          : await prompter.confirm({
+              message: "Route these channel accounts to agents now?",
+              initialValue: true,
+            });
     if (bindNow) {
-      const agentSummaries = buildAgentSummaries(nextConfig);
       const defaultAgentId = resolveDefaultAgentId(nextConfig);
       for (const target of bindTargets) {
         const targetAgentId = await prompter.select({
@@ -198,28 +240,7 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
     }
   }
 
-  await params.beforePersistentEffect?.();
-  const committed = await commitConfigWithPendingPluginInstalls({
-    nextConfig,
-    ...(baseHash !== undefined ? { baseHash } : {}),
-  });
-  const writtenConfig = committed.config;
-  if (committed.movedInstallRecords) {
-    await refreshPluginRegistryAfterConfigMutation({
-      config: writtenConfig,
-      reason: "source-changed",
-      installRecords: committed.installRecords,
-      logger: { warn: (message) => runtime.log(message) },
-    });
-  }
-  await onboardChannels.runCollectedChannelOnboardingPostWriteHooks({
-    hooks: postWriteHooks.drain(),
-    cfg: writtenConfig,
-    runtime,
-    ...(params.beforePersistentEffect
-      ? { beforePersistentEffect: params.beforePersistentEffect }
-      : {}),
-  });
+  await commitWizardConfig(nextConfig);
   params.onConfigured?.(
     selection.map((channel) => ({
       channel,

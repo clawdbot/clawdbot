@@ -500,7 +500,6 @@ struct ChatStreamReplayTests {
     }
 
     @Test func `reconnect mid-run converges via history refetch and drains pending run`() async throws {
-        let now = Date().timeIntervalSince1970 * 1000
         let harness = try await StreamReplayHarness.bootstrapped()
         let runId = try await harness.send("please finish")
 
@@ -509,17 +508,23 @@ struct ChatStreamReplayTests {
         // Stream stops here (no final, no lifecycle end). The gateway finished the
         // run while the client was away, so the next history fetch returns the
         // completed transcript keyed to this run.
+        // With no terminal event, the pending run drains only via the history
+        // poller, which requires the durable assistant row to be timestamped at
+        // or after the optimistic user echo. Anchor the transcript after the
+        // send instead of at test start, where slow bootstrap (>900ms on loaded
+        // CI runners) left the row "older" than the echo and the run never drained.
+        let reconnectNow = Date().timeIntervalSince1970 * 1000
         await harness.transport.setHistory(
             replayHistory(messages: [
                 replayRawMessage(
                     role: "user",
                     text: "please finish",
-                    timestamp: now + 100,
+                    timestamp: reconnectNow + 100,
                     idempotencyKey: "\(runId):user"),
                 replayRawMessage(
                     role: "assistant",
                     text: "Finished while you were away.",
-                    timestamp: now + 900,
+                    timestamp: reconnectNow + 900,
                     idempotencyKey: runId),
             ]))
         await MainActor.run { harness.vm.resumeFromForeground() }

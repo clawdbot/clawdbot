@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   collectTempCreationFindingsFromDiff,
   formatGithubWarning,
-} from "../../scripts/report-test-temp-creations.mjs";
+} from "../../scripts/report-test-temp-creations.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = process.cwd();
@@ -32,13 +32,6 @@ function createNestedGitEnv(): NodeJS.ProcessEnv {
 }
 
 describe("report-test-temp-creations", () => {
-  it("keeps a non-executed warning fixture for changed-gate proof", () => {
-    // openclaw-temp-dir: allow test fixture for the temp warning report
-    const warningFixture = 'fs.mkdtempSync("openclaw-warning-fixture-")';
-
-    expect(warningFixture).toContain("mkdtempSync");
-  });
-
   it("reports added bare temp creation lines using changed-lane test path scope", () => {
     const bareTempSource = [
       "const tempRoot = fs.",
@@ -93,24 +86,17 @@ describe("report-test-temp-creations", () => {
         reason: "new mkdtemp temp directory creation",
         source: bareTempSource,
       },
-      {
-        file: "test/helper.test-support.mjs",
+      ...[
+        "test/helper.test-support.mjs",
+        "test/helpers/temp-fixture.ts",
+        "packages/foo/__tests__/helper.ts",
+        "extensions/discord/src/monitor/message-handler.test-helpers.ts",
+      ].map((file) => ({
+        file,
         line: 2,
         reason: "new mkdtemp temp directory creation",
         source: mkdtempSource,
-      },
-      {
-        file: "test/helpers/temp-fixture.ts",
-        line: 2,
-        reason: "new mkdtemp temp directory creation",
-        source: mkdtempSource,
-      },
-      {
-        file: "packages/foo/__tests__/helper.ts",
-        line: 2,
-        reason: "new mkdtemp temp directory creation",
-        source: mkdtempSource,
-      },
+      })),
     ]);
   });
 

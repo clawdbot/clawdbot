@@ -1,14 +1,13 @@
 // Lists available agents for subagent spawn and focus commands.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { subagentRuns } from "../../../agents/subagent-registry-memory.js";
-import { countPendingDescendantRunsFromRuns } from "../../../agents/subagent-registry-queries.js";
-import { getSubagentRunsSnapshotForRead } from "../../../agents/subagent-registry-state.js";
+import { buildSubagentRunReadIndex } from "../../../agents/subagents/registry/subagent-registry-read.js";
 import { getChannelPlugin, normalizeChannelId } from "../../../channels/plugins/index.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import { resolveChannelAccountId, resolveCommandSurfaceChannel } from "../channel-context.js";
+import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel, sortSubagentRuns } from "../subagents-utils.js";
-import { RECENT_WINDOW_MINUTES, type SubagentsCommandContext, stopWithText } from "./shared.js";
+import { RECENT_WINDOW_MINUTES, type SubagentsCommandContext } from "./shared.js";
 
 function formatConversationBindingText(params: { conversationId: string }): string {
   return `binding:${params.conversationId}`;
@@ -26,7 +25,7 @@ function supportsConversationBindings(channel: string): boolean {
 
 export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): CommandHandlerResult {
   const { params, requesterKey, runs } = ctx;
-  const runsSnapshot = getSubagentRunsSnapshotForRead(subagentRuns);
+  const readIndex = buildSubagentRunReadIndex();
   const channel = resolveCommandSurfaceChannel(params);
   const accountId = resolveChannelAccountId(params);
   const currentConversationBindingsSupported = supportsConversationBindings(channel);
@@ -64,14 +63,13 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
   const numericOrder = [
     ...dedupedRuns.filter(
       (entry) =>
-        !entry.endedAt ||
-        countPendingDescendantRunsFromRuns(runsSnapshot, entry.childSessionKey) > 0,
+        !entry.execution.endedAt || readIndex.countPendingDescendantRuns(entry.childSessionKey) > 0,
     ),
     ...dedupedRuns.filter(
       (entry) =>
-        entry.endedAt &&
-        countPendingDescendantRunsFromRuns(runsSnapshot, entry.childSessionKey) === 0 &&
-        entry.endedAt >= recentCutoff,
+        entry.execution.endedAt &&
+        readIndex.countPendingDescendantRuns(entry.childSessionKey) === 0 &&
+        entry.execution.endedAt >= recentCutoff,
     ),
   ];
   const indexByChildSessionKey = new Map(
@@ -81,8 +79,8 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
   const visibleRuns: typeof dedupedRuns = [];
   for (const entry of dedupedRuns) {
     const visible =
-      !entry.endedAt ||
-      countPendingDescendantRunsFromRuns(runsSnapshot, entry.childSessionKey) > 0 ||
+      !entry.execution.endedAt ||
+      readIndex.countPendingDescendantRuns(entry.childSessionKey) > 0 ||
       resolveSessionBindings(entry.childSessionKey).length > 0;
     if (!visible) {
       continue;
@@ -124,5 +122,5 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
     }
   }
 
-  return stopWithText(lines.join("\n"));
+  return commandReply(lines.join("\n"));
 }

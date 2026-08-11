@@ -6,12 +6,13 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSignalAccount } from "./accounts.js";
-import { signalRpcRequest } from "./client-adapter.js";
+import { signalRpcRequest, type SignalTransportKind } from "./client-adapter.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
 
 export type SignalReactionOpts = {
   cfg: OpenClawConfig;
   baseUrl?: string;
+  transportKind?: SignalTransportKind;
   account?: string;
   accountId?: string;
   timeoutMs?: number;
@@ -23,13 +24,6 @@ export type SignalReactionOpts = {
 export type SignalReactionResult = {
   ok: boolean;
   timestamp?: number;
-};
-
-type SignalReactionErrorMessages = {
-  missingRecipient: string;
-  invalidTargetTimestamp: string;
-  missingEmoji: string;
-  missingTargetAuthor: string;
 };
 
 function normalizeSignalId(raw: string): string {
@@ -76,10 +70,8 @@ async function sendReactionSignalCore(params: {
   emoji: string;
   remove: boolean;
   opts: SignalReactionOpts;
-  errors: SignalReactionErrorMessages;
 }): Promise<SignalReactionResult> {
   const cfg = requireRuntimeConfig(params.opts.cfg, "Signal reactions");
-  const apiMode = cfg.channels?.signal?.apiMode;
   const accountInfo = resolveSignalAccount({
     cfg,
     accountId: params.opts.accountId,
@@ -88,15 +80,16 @@ async function sendReactionSignalCore(params: {
 
   const normalizedRecipient = normalizeSignalUuid(params.recipient);
   const groupId = params.opts.groupId?.trim();
+  const operation = `Signal reaction${params.remove ? " removal" : ""}`;
   if (!normalizedRecipient && !groupId) {
-    throw new Error(params.errors.missingRecipient);
+    throw new Error(`Recipient or groupId is required for ${operation}`);
   }
   if (!Number.isFinite(params.targetTimestamp) || params.targetTimestamp <= 0) {
-    throw new Error(params.errors.invalidTargetTimestamp);
+    throw new Error(`Valid targetTimestamp is required for ${operation}`);
   }
   const normalizedEmoji = params.emoji?.trim();
   if (!normalizedEmoji) {
-    throw new Error(params.errors.missingEmoji);
+    throw new Error(`Emoji is required for ${operation}`);
   }
 
   const targetAuthorParams = resolveTargetAuthorParams({
@@ -105,7 +98,9 @@ async function sendReactionSignalCore(params: {
     fallback: normalizedRecipient,
   });
   if (groupId && !targetAuthorParams.targetAuthor) {
-    throw new Error(params.errors.missingTargetAuthor);
+    throw new Error(
+      `targetAuthor is required for group reaction${params.remove ? " removal" : "s"}`,
+    );
   }
 
   const requestParams: Record<string, unknown> = {
@@ -127,7 +122,7 @@ async function sendReactionSignalCore(params: {
   const result = await signalRpcRequest<{ timestamp?: number }>("sendReaction", requestParams, {
     baseUrl,
     timeoutMs: params.opts.timeoutMs,
-    apiMode,
+    transportKind: params.opts.transportKind ?? accountInfo.transport.kind,
   });
 
   return {
@@ -155,12 +150,6 @@ export async function sendReactionSignal(
     emoji,
     remove: false,
     opts,
-    errors: {
-      missingRecipient: "Recipient or groupId is required for Signal reaction",
-      invalidTargetTimestamp: "Valid targetTimestamp is required for Signal reaction",
-      missingEmoji: "Emoji is required for Signal reaction",
-      missingTargetAuthor: "targetAuthor is required for group reactions",
-    },
   });
 }
 
@@ -183,11 +172,5 @@ export async function removeReactionSignal(
     emoji,
     remove: true,
     opts,
-    errors: {
-      missingRecipient: "Recipient or groupId is required for Signal reaction removal",
-      invalidTargetTimestamp: "Valid targetTimestamp is required for Signal reaction removal",
-      missingEmoji: "Emoji is required for Signal reaction removal",
-      missingTargetAuthor: "targetAuthor is required for group reaction removal",
-    },
   });
 }

@@ -26,6 +26,11 @@ function installStateRuntime(): void {
           "openChannelIngressQueue is not used by voice-call webhook lifecycle tests",
         );
       }) as never,
+      openChannelIngressDrain: (() => {
+        throw new Error(
+          "openChannelIngressDrain is not used by voice-call webhook lifecycle tests",
+        );
+      }) as never,
     },
   });
 }

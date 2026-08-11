@@ -2,12 +2,11 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
-import type { QueuedChatTurnEntry } from "../chat-queued-turns.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { createChatAbortMarker } from "../server-chat-state.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
-import { setGatewayDedupeEntry } from "./agent-job.js";
 import {
   normalizeOptionalChatText as normalizeOptionalText,
   normalizeUnknownChatText as normalizeUnknownText,
@@ -67,29 +66,9 @@ export function resolveChatAbortRequester(
 }
 
 export function canRequesterAbortChatRun(
-  entry: ChatAbortControllerEntry,
+  entry: Pick<ChatAbortControllerEntry, "ownerDeviceId" | "ownerConnId">,
   requester: ChatAbortRequester,
-): boolean {
-  if (requester.isAdmin) {
-    return true;
-  }
-  const ownerDeviceId = normalizeOptionalText(entry.ownerDeviceId);
-  const ownerConnId = normalizeOptionalText(entry.ownerConnId);
-  if (!ownerDeviceId && !ownerConnId) {
-    return true;
-  }
-  if (ownerDeviceId && requester.deviceId && ownerDeviceId === requester.deviceId) {
-    return true;
-  }
-  if (ownerConnId && requester.connId && ownerConnId === requester.connId) {
-    return true;
-  }
-  return false;
-}
-
-export function canRequesterAbortChatRunWithoutSessionMatch(
-  entry: ChatAbortControllerEntry,
-  requester: ChatAbortRequester,
+  options: { requireOwnerMatch?: boolean } = {},
 ): boolean {
   if (requester.isAdmin) {
     return true;
@@ -97,6 +76,7 @@ export function canRequesterAbortChatRunWithoutSessionMatch(
   const ownerDeviceId = normalizeOptionalText(entry.ownerDeviceId);
   const ownerConnId = normalizeOptionalText(entry.ownerConnId);
   return Boolean(
+    (!options.requireOwnerMatch && !ownerDeviceId && !ownerConnId) ||
     (ownerDeviceId && requester.deviceId && ownerDeviceId === requester.deviceId) ||
     (ownerConnId && requester.connId && ownerConnId === requester.connId),
   );
@@ -160,6 +140,7 @@ export function readPreRegisteredRun(params: {
   key: string;
   entry: GatewayRequestContext["dedupe"] extends Map<string, infer T> ? T | undefined : never;
   keyPrefix: string;
+  includeHidden?: boolean;
 }): PreRegisteredAgentRun | undefined {
   if (!params.key.startsWith(params.keyPrefix) || !params.entry?.ok) {
     return undefined;
@@ -168,7 +149,7 @@ export function readPreRegisteredRun(params: {
   if (payload?.status !== "accepted") {
     return undefined;
   }
-  if (payload.controlUiVisible === false) {
+  if (!params.includeHidden && payload.controlUiVisible === false) {
     return undefined;
   }
   const runId =
@@ -187,15 +168,8 @@ export function canRequesterAbortPreRegisteredRun(
 ): boolean {
   return canRequesterAbortChatRun(
     {
-      controller: new AbortController(),
-      sessionId: "",
-      sessionKey: normalizeUnknownText(payload.sessionKey) ?? "",
-      startedAtMs: 0,
-      expiresAtMs: 0,
       ownerConnId: normalizeUnknownText(payload.ownerConnId),
       ownerDeviceId: normalizeUnknownText(payload.ownerDeviceId),
-      controlUiVisible: payload.controlUiVisible === false ? false : undefined,
-      kind: "agent",
     },
     requester,
   );
@@ -268,7 +242,8 @@ export function writePreRegisteredChatAbort(params: {
     stopReason: params.stopReason,
     endedAt,
   });
-  params.context.chatAbortedRuns.set(params.runId, createChatAbortMarker(endedAt));
+  params.context.chatRunState.getOrCreate(params.runId).abortMarker =
+    createChatAbortMarker(endedAt);
   const pendingKey = pendingChatSendDedupeKey(params.runId);
   const pendingAttemptId = normalizeUnknownText(
     (params.context.dedupe.get(pendingKey)?.payload as PreRegisteredAgentDedupePayload | undefined)
@@ -292,6 +267,8 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
   requester: ChatAbortRequester;
   keyPrefix: string;
   preserveSideRuns?: boolean;
+  includeProtectedRuns?: boolean;
+  excludeRunIds?: ReadonlySet<string>;
 }) {
   const sessionKeys = new Set(
     Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalText(sessionKey)).filter(
@@ -299,13 +276,20 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
     ),
   );
   const authorizedByRunId = new Map<string, PreRegisteredAgentRun>();
-  let matchedSessionRuns = 0;
+  let hasUnauthorizedRuns = false;
+  let hasUnauthorizedProtectedRuns = false;
+  let hasProtectedRuns = false;
   for (const [key, entry] of params.context.dedupe) {
-    const run = readPreRegisteredRun({ key, entry, keyPrefix: params.keyPrefix });
+    const run = readPreRegisteredRun({
+      key,
+      entry,
+      keyPrefix: params.keyPrefix,
+      includeHidden: true,
+    });
     if (!run) {
       continue;
     }
-    if (params.preserveSideRuns && normalizeUnknownText(run.payload.turnKind) === "btw") {
+    if (params.excludeRunIds?.has(run.runId)) {
       continue;
     }
     const runSessionKeys = [
@@ -329,16 +313,35 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
         params.defaultAgentId,
       ) !== agentId
     ) {
+      // Global keys are shared across agent stores; another agent's run is
+      // outside the selected global-agent scope.
       continue;
     }
-    matchedSessionRuns += 1;
-    if (canRequesterAbortPreRegisteredRun(run.payload, params.requester)) {
+    const requesterCanAbort = canRequesterAbortPreRegisteredRun(run.payload, params.requester);
+    const isProtected =
+      params.includeProtectedRuns !== true &&
+      (run.payload.controlUiVisible === false ||
+        (params.preserveSideRuns && normalizeUnknownText(run.payload.turnKind) === "btw"));
+    if (isProtected) {
+      // Broad lifecycle cleanup still needs ownership, while ordinary chat.abort
+      // must keep treating hidden or preserved work as a non-match.
+      hasProtectedRuns = true;
+      if (!requesterCanAbort) {
+        hasUnauthorizedProtectedRuns = true;
+      }
+      continue;
+    }
+    if (requesterCanAbort) {
       authorizedByRunId.set(run.runId, run);
+    } else {
+      hasUnauthorizedRuns = true;
     }
   }
   return {
-    matchedSessionRuns,
     authorizedRuns: [...authorizedByRunId.values()],
+    hasUnauthorizedRuns,
+    hasUnauthorizedProtectedRuns,
+    hasProtectedRuns,
   };
 }
 
@@ -350,6 +353,8 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
   defaultAgentId: string;
   requester: ChatAbortRequester;
   preserveSideRuns?: boolean;
+  includeProtectedRuns?: boolean;
+  excludeRunIds?: ReadonlySet<string>;
 }) {
   const sessionKeys = new Set(
     Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalText(sessionKey)).filter(
@@ -362,13 +367,17 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
     ),
   );
   const agentId = normalizeOptionalText(params.agentId)?.toLowerCase();
-  const authorizedRuns: Array<{ runId: string; sessionKey: string }> = [];
-  let matchedSessionRuns = 0;
+  const authorizedRuns: Array<{
+    runId: string;
+    sessionKey: string;
+    entry: ChatAbortControllerEntry;
+  }> = [];
+  const matchedRunIds: string[] = [];
+  let hasUnauthorizedRuns = false;
+  let hasUnauthorizedProtectedRuns = false;
+  let hasProtectedRuns = false;
   for (const [runId, active] of params.chatAbortControllers) {
-    if (active.controlUiVisible === false) {
-      continue;
-    }
-    if (params.preserveSideRuns && active.turnKind === "btw") {
+    if (params.excludeRunIds?.has(runId)) {
       continue;
     }
     if (!sessionKeys.has(active.sessionKey) && !sessionIds.has(active.sessionId)) {
@@ -379,52 +388,35 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
       active.sessionKey === "global" &&
       resolveStoredGlobalRunAgentId(active.agentId, params.defaultAgentId) !== agentId
     ) {
+      // Global keys are shared across agent stores; another agent's run is
+      // outside the selected global-agent scope.
       continue;
     }
-    matchedSessionRuns += 1;
-    if (canRequesterAbortChatRun(active, params.requester)) {
-      authorizedRuns.push({ runId, sessionKey: active.sessionKey });
+    matchedRunIds.push(runId);
+    const requesterCanAbort = canRequesterAbortChatRun(active, params.requester);
+    const isProtected =
+      params.includeProtectedRuns !== true &&
+      (active.controlUiVisible === false || (params.preserveSideRuns && active.turnKind === "btw"));
+    if (isProtected) {
+      // Broad lifecycle cleanup still needs ownership, while ordinary chat.abort
+      // must keep treating hidden or preserved work as a non-match.
+      hasProtectedRuns = true;
+      if (!requesterCanAbort) {
+        hasUnauthorizedProtectedRuns = true;
+      }
+      continue;
+    }
+    if (requesterCanAbort) {
+      authorizedRuns.push({ runId, sessionKey: active.sessionKey, entry: active });
+    } else {
+      hasUnauthorizedRuns = true;
     }
   }
   return {
-    matchedSessionRuns,
     authorizedRuns,
+    matchedRunIds,
+    hasUnauthorizedRuns,
+    hasUnauthorizedProtectedRuns,
+    hasProtectedRuns,
   };
-}
-
-export function canRequesterAbortQueuedChatTurn(
-  entry: QueuedChatTurnEntry,
-  requester: ChatAbortRequester,
-): boolean {
-  // Same ownership rules as active chat runs.
-  if (requester.isAdmin) {
-    return true;
-  }
-  const ownerDeviceId = normalizeOptionalText(entry.ownerDeviceId);
-  const ownerConnId = normalizeOptionalText(entry.ownerConnId);
-  if (!ownerDeviceId && !ownerConnId) {
-    return true;
-  }
-  if (ownerDeviceId && requester.deviceId && ownerDeviceId === requester.deviceId) {
-    return true;
-  }
-  if (ownerConnId && requester.connId && ownerConnId === requester.connId) {
-    return true;
-  }
-  return false;
-}
-
-export function canRequesterAbortQueuedChatTurnWithoutSessionMatch(
-  entry: QueuedChatTurnEntry,
-  requester: ChatAbortRequester,
-): boolean {
-  if (requester.isAdmin) {
-    return true;
-  }
-  const ownerDeviceId = normalizeOptionalText(entry.ownerDeviceId);
-  const ownerConnId = normalizeOptionalText(entry.ownerConnId);
-  return Boolean(
-    (ownerDeviceId && requester.deviceId && ownerDeviceId === requester.deviceId) ||
-    (ownerConnId && requester.connId && ownerConnId === requester.connId),
-  );
 }

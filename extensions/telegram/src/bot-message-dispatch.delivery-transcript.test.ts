@@ -1,3 +1,4 @@
+import type { Message } from "grammy/types";
 import { expect, it, vi } from "vitest";
 import {
   describeTelegramDispatch,
@@ -10,7 +11,7 @@ import {
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchWithContext,
   editMessageTelegram,
-  emitInternalMessageSentHook,
+  emitTelegramMessageSentHooks,
   expectDraftStreamParams,
   expectRecordFields,
   loadSessionStore,
@@ -25,12 +26,10 @@ import type {
   TelegramBotDeps,
   TelegramMessageContext,
 } from "./bot-message-dispatch.test-harness.js";
-import {
-  buildTelegramConversationContext,
-  createTelegramMessageCache,
-  resolveTelegramMessageCacheScope,
-} from "./message-cache.js";
+import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
+import { buildTelegramConversationContext, createTelegramMessageCache } from "./message-cache.js";
 import { recordOutboundMessageForPromptContext as recordOutboundMessageForPromptContextActual } from "./outbound-message-context.js";
+import { wasSentByBot } from "./sent-message-cache.js";
 
 describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
   it("keeps the Telegram edit cap for non-block previews regardless of chunk config", async () => {
@@ -81,11 +80,14 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
 
     await dispatchWithContext({ context });
 
-    expect(answerDraftStream.update).toHaveBeenCalledWith("Final answer");
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      "Final answer",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(answerDraftStream.stop).toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(editMessageTelegram).not.toHaveBeenCalled();
-    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+    expectRecordFields(mockCallArg(emitTelegramMessageSentHooks), {
       content: "Final answer",
       messageId: 2001,
     });
@@ -209,8 +211,22 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
       text: "Done already: timeoutSeconds is now 7200s.",
       timestamp: transcriptTimestamp,
     });
+    const recordResults: boolean[] = [];
     setupDraftStreams({ answerMessageId: 1497 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      const streamParams = mockCallArg(createTelegramDraftStream) as Parameters<
+        NonNullable<TelegramBotDeps["createTelegramDraftStream"]>
+      >[0];
+      const providerMessage = {
+        chat: { id: 123, type: "private", first_name: "Keshav" },
+        message_thread_id: 777,
+        message_id: 1497,
+        date: 1_779_425_461,
+        text: "Initial streamed text",
+        from: { id: 999, is_bot: true, first_name: "Telegram Bot Name" },
+      } satisfies Message;
+      await streamParams.validateProviderMessage?.(providerMessage);
+      await streamParams.onProviderMessage?.(providerMessage);
       await dispatcherOptions.deliver(
         { text: "Done already: timeoutSeconds is now 7200s." },
         { kind: "final" },
@@ -224,9 +240,16 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
       telegramCfg: { name: "Configured Agent" },
       telegramDeps: {
         ...telegramDepsForTest,
-        recordOutboundMessageForPromptContext: recordOutboundMessageForPromptContextActual,
+        recordOutboundMessageForPromptContext: async (params) => {
+          const recorded = await recordOutboundMessageForPromptContextActual(params);
+          recordResults.push(recorded);
+          return recorded;
+        },
       },
     });
+
+    expect(recordResults).toEqual([true, true]);
+    expect(wasSentByBot("123", 1497, { session: { store: storePath } })).toBe(true);
 
     const cache = createTelegramMessageCache({
       scope: resolveTelegramMessageCacheScope(storePath),
@@ -278,6 +301,10 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
         finalPart: true,
       },
     });
+    expect(streamedReply?.node.threadBinding).toEqual({
+      kind: "provider-observed-v1",
+      threadSpec: { scope: "dm", id: 777 },
+    });
   });
 
   it("suppresses text-only tool payloads delivered after the final answer", async () => {
@@ -294,7 +321,10 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
     await dispatchWithContext({ context: createContext() });
 
     expect(answerDraftStream.update).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.update).toHaveBeenCalledWith("Final answer");
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      "Final answer",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
@@ -327,6 +357,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
 
     expect(answerDraftStream.update).toHaveBeenCalledWith(
       "FY25 outlook\n\nRevenue mix (pie chart)\n- Product: 60\n- Services: 40",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
     );
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(deliverInboundReplyWithMessageSendContext).not.toHaveBeenCalled();
@@ -361,6 +392,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
 
     expect(answerDraftStream.update).toHaveBeenCalledWith(
       "FY25 outlook\n\nPipeline (table)\n- Account: Acme; Stage: Won; ARR: 125000\n- Account: Globex; Stage: Review; ARR: 82000",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
     );
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(deliverInboundReplyWithMessageSendContext).not.toHaveBeenCalled();
@@ -395,6 +427,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
 
     expect(answerDraftStream.update).toHaveBeenCalledWith(
       "Quarterly results\n\nFY25 outlook\n\nDo not duplicate this block\n\nRevenue (bar chart)\n- USD: Q1: 12; Q2: 18",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
     );
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(deliverInboundReplyWithMessageSendContext).not.toHaveBeenCalled();
@@ -596,7 +629,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
 
     expect(answerDraftStream.update).toHaveBeenCalledWith(fullAnswer);
     expect(answerDraftStream.update).not.toHaveBeenCalledWith(truncatedFinal);
-    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+    expectRecordFields(mockCallArg(emitTelegramMessageSentHooks), {
       content: fullAnswer,
       messageId: 2001,
     });

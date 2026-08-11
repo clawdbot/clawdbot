@@ -12,8 +12,8 @@ extension AgentProTab {
                 subtitleFont: OpenClawType.subheadMedium,
                 subtitleLineLimit: 1)
             {
-                if let headerLeadingAction {
-                    OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+                if let headerSidebarAction {
+                    OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
                 }
             } accessory: {
                 OpenClawGlassControlGroup {
@@ -496,7 +496,7 @@ extension AgentProTab {
     }
 
     var sortedAgents: [AgentSummary] {
-        appModel.gatewayAgents.sorted { lhs, rhs in
+        appModel.gatewayAgents.filter(\.isSelectableAgent).sorted { lhs, rhs in
             if lhs.id == self.activeAgentID { return true }
             if rhs.id == self.activeAgentID { return false }
             return self.agentName(for: lhs)

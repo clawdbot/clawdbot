@@ -26,10 +26,14 @@ const agentEventMocks = vi.hoisted(() => {
       }
     }),
     getAgentEventLifecycleGeneration: vi.fn(() => "test-generation"),
+    isAgentEventLifecycleGenerationCurrent: vi.fn(
+      (generation: string) => generation === "test-generation",
+    ),
     onAgentEvent: vi.fn((handler: (event: AgentEvent) => void) => {
       handlers.add(handler);
       return () => handlers.delete(handler);
     }),
+    registerAgentEventLifecycleRotationHandler: vi.fn(),
     registerAgentRunContext: vi.fn(),
     withAgentRunLifecycleGeneration: vi.fn((_generation: string, run: () => unknown) => run()),
   };
@@ -48,6 +52,14 @@ const attemptExecutionMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../infra/agent-events.js", () => agentEventMocks);
+vi.mock("../infra/agent-run-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/agent-run-registry.js")>();
+  return {
+    ...actual,
+    clearAgentRunContext: agentEventMocks.clearAgentRunContext,
+    registerAgentRunContext: agentEventMocks.registerAgentRunContext,
+  };
+});
 
 vi.mock("../agents/command/delivery.runtime.js", () => ({
   deliverAgentCommandResult: vi.fn(
@@ -64,9 +76,11 @@ vi.mock("../agents/command/delivery.runtime.js", () => ({
 vi.mock("../agents/command/attempt-execution.runtime.js", () => {
   const createAcpVisibleTextAccumulator = () => {
     let text = "";
+    let silent = false;
     return {
       consume(chunk: string) {
         if (!chunk || chunk === "NO_REPLY") {
+          silent ||= chunk === "NO_REPLY";
           return null;
         }
         text += chunk;
@@ -74,6 +88,12 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
       },
       finalize: () => text.trim(),
       finalizeRaw: () => text,
+      finalizeReplySnapshot: () =>
+        text
+          ? { disposition: "visible" as const, text }
+          : silent
+            ? { disposition: "silent" as const }
+            : { disposition: "empty" as const },
     };
   };
 

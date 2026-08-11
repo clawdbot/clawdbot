@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { ClawHubTrustErrorCode } from "../infra/clawhub-install-trust.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
-import { satisfiesPluginApiRange } from "../infra/clawhub.js";
 import { unscopedPackageName } from "../infra/install-safe-path.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import { createNpmMetadataEnv, resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
@@ -32,11 +31,12 @@ import {
 } from "./install-channel-specs.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "./install.js";
 import { checkMinHostVersion } from "./min-host-version.js";
-import { resolveTrustedSourceLinkedOfficialNpmSpec } from "./official-external-install-records.js";
+import * as officialInstallRecords from "./official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogEntry,
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
+import { satisfiesPluginApiRange } from "./package-compat.js";
 import { resolvePackagePluginApiRange } from "./package-compat.js";
 
 /** Logger surface used by plugin update flows. */
@@ -126,10 +126,11 @@ export function pluginInstallRecordMayMigrateConfigId(params: {
     resolveNpmSpecPackageName(params.specOverride ?? params.record.spec) ??
     params.record.resolvedName ??
     resolveNpmSpecPackageName(params.record.resolvedSpec);
-  return Boolean(
-    packageName &&
-    packageName !== params.pluginId &&
-    unscopedPackageName(packageName) === params.pluginId,
+  return (
+    (packageName !== undefined &&
+      packageName !== params.pluginId &&
+      unscopedPackageName(packageName) === params.pluginId) ||
+    officialInstallRecords.hasOfficialNpmIdReplacement(params)
   );
 }
 
@@ -237,8 +238,9 @@ export async function resolveNewerExactPinnedNpmDefaultLine(params: {
   currentVersion: string | undefined;
   effectiveSpec: string | undefined;
   probeNpmVersion: string | undefined;
+  updateChannel?: UpdateChannel;
   timeoutMs?: number;
-}): Promise<{ packageName: string; version: string } | undefined> {
+}): Promise<{ packageName: string; registryLine: "beta" | "latest"; version: string } | undefined> {
   if (!params.currentVersion || !params.probeNpmVersion || !params.effectiveSpec) {
     return undefined;
   }
@@ -249,10 +251,16 @@ export async function resolveNewerExactPinnedNpmDefaultLine(params: {
     return undefined;
   }
 
-  const metadataResult = await resolveNpmSpecMetadata({
-    spec: packageName,
-    timeoutMs: params.timeoutMs,
-  }).catch(() => undefined);
+  const resolveMetadata = async (spec: string) =>
+    await resolveNpmSpecMetadata({ spec, timeoutMs: params.timeoutMs }).catch(() => undefined);
+  let registryLine: "beta" | "latest" = params.updateChannel === "beta" ? "beta" : "latest";
+  let metadataResult = await resolveMetadata(
+    registryLine === "beta" ? `${packageName}@beta` : packageName,
+  );
+  if (registryLine === "beta" && !metadataResult?.ok) {
+    registryLine = "latest";
+    metadataResult = await resolveMetadata(packageName);
+  }
   if (
     !metadataResult?.ok ||
     metadataResult.metadata.name !== packageName ||
@@ -261,7 +269,7 @@ export async function resolveNewerExactPinnedNpmDefaultLine(params: {
     return undefined;
   }
   return compareNpmSemverForUpdate(metadataResult.metadata.version, params.currentVersion) > 0
-    ? { packageName, version: metadataResult.metadata.version }
+    ? { packageName, registryLine, version: metadataResult.metadata.version }
     : undefined;
 }
 
@@ -613,7 +621,7 @@ export function isTrustedSourceLinkedOfficialNpmUpdate(params: {
   spec: string | undefined;
   record: PluginInstallRecord;
 }): boolean {
-  const officialSpec = resolveTrustedSourceLinkedOfficialNpmSpec(params);
+  const officialSpec = officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmSpec(params);
   const officialPackageName = resolveNpmSpecPackageName(officialSpec);
   const requestedPackageName = resolveNpmSpecPackageName(params.spec);
   return Boolean(officialPackageName && requestedPackageName === officialPackageName);
@@ -685,14 +693,6 @@ export function resolveNpmUpdateSpecs(params: {
   if (!recordSpec) {
     return {};
   }
-  if (params.specOverride) {
-    return resolveNpmInstallSpecsForUpdateChannel({
-      spec: recordSpec,
-      updateChannel: params.updateChannel,
-      officialPackageName: params.officialPackageName,
-      coreVersion: params.coreVersion,
-    });
-  }
   return resolveNpmInstallSpecsForUpdateChannel({
     spec: recordSpec,
     updateChannel: params.updateChannel,
@@ -711,11 +711,18 @@ export function resolveClawHubUpdateSpecs(params: {
   fallbackSpec?: string;
   fallbackLabel?: string;
 } {
-  if (!params.officialSpecOverride && !params.record.clawhubPackage) {
+  const clawhubPackage =
+    params.record.clawhubPackage ??
+    parseClawHubPluginSpec(params.record.spec ?? "")?.name ??
+    parseClawHubPluginSpec(params.record.resolvedSpec ?? "")?.name;
+  if (!params.officialSpecOverride && !clawhubPackage) {
     return {};
   }
   const recordSpec =
-    params.officialSpecOverride ?? params.record.spec ?? `clawhub:${params.record.clawhubPackage}`;
+    params.officialSpecOverride ??
+    params.record.spec ??
+    params.record.resolvedSpec ??
+    `clawhub:${clawhubPackage}`;
   return resolveClawHubInstallSpecsForUpdateChannel({
     spec: recordSpec,
     updateChannel: params.updateChannel,

@@ -1,13 +1,22 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { linuxCanvasSocketExists } from "./socket-path.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { linuxCanvasSocketExists, watchLinuxCanvasSocket } from "./socket-path.js";
+
+const loggerMocks = vi.hoisted(() => ({ warn: vi.fn() }));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  createSubsystemLogger: () => loggerMocks,
+}));
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  loggerMocks.warn.mockReset();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -41,4 +50,31 @@ describe("Linux Canvas socket availability", () => {
       expect(linuxCanvasSocketExists(socketPath)).toBe(false);
     },
   );
+
+  it("reports synchronous and asynchronous watcher failures before falling back to polling", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-linux-canvas-watch-"));
+    tempDirs.push(directory);
+    const socketPath = path.join(directory, "canvas.sock");
+    const watcher = Object.assign(new EventEmitter(), { close: vi.fn() });
+    const watch = vi
+      .spyOn(fs, "watch")
+      .mockImplementationOnce(() => watcher as unknown as fs.FSWatcher)
+      .mockImplementationOnce(() => {
+        throw new Error("EMFILE");
+      });
+
+    const stop = watchLinuxCanvasSocket(socketPath, vi.fn());
+    watcher.emit("error", new Error("ENOSPC"));
+    expect(loggerMocks.warn).toHaveBeenCalledWith(
+      expect.stringContaining("continuing with availability polling: Error: ENOSPC"),
+    );
+    stop();
+    expect(watcher.close).toHaveBeenCalledOnce();
+
+    expect(() => watchLinuxCanvasSocket(socketPath, vi.fn())).not.toThrow();
+    expect(loggerMocks.warn).toHaveBeenCalledWith(
+      expect.stringContaining("continuing with availability polling: Error: EMFILE"),
+    );
+    expect(watch).toHaveBeenCalledTimes(2);
+  });
 });

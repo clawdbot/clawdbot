@@ -103,16 +103,14 @@ export async function authorizeDiscordVoiceIngress(params: {
   });
 
   const admissionAllowList = normalizeDiscordAllowList(
-    params.admissionAllowFrom ??
-      params.discordConfig.allowFrom ??
-      params.discordConfig.dm?.allowFrom,
+    params.admissionAllowFrom ?? params.discordConfig.allowFrom ?? params.discordConfig.allowFrom,
     ["discord:", "user:", "pk:"],
   );
   const admissionAllowed = admissionAllowList
     ? allowListMatches(admissionAllowList, params.sender, { allowNameMatching: false })
     : false;
 
-  const useAccessGroups = params.useAccessGroups ?? params.cfg.commands?.useAccessGroups !== false;
+  const useAccessGroups = params.useAccessGroups ?? true;
   const authorizers = useAccessGroups
     ? [
         {

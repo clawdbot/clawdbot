@@ -282,26 +282,34 @@ describe("telegramPlugin gateway startup", () => {
     );
   });
 
-  it("stops before monitor startup when getMe rejects the token", async () => {
-    installTelegramRuntime();
-    probeTelegram.mockResolvedValue({
-      ok: false,
-      status: 401,
-      error: "Unauthorized",
-      elapsedMs: 12,
-    });
+  it.each([401, 404] as const)(
+    "stops before monitor startup when getMe rejects the token with %s",
+    async (status) => {
+      installTelegramRuntime();
+      probeTelegram.mockResolvedValue({
+        ok: false,
+        status,
+        error: "Unauthorized",
+        elapsedMs: 12,
+      });
 
-    const { ctx, task } = startTelegramAccount("ops");
+      const { ctx, task } = startTelegramAccount("ops");
 
-    await expect(task).rejects.toThrow(
-      'Telegram bot token unauthorized for account "ops" (getMe returned 401',
-    );
-    await expect(task).rejects.toThrow("channels.telegram.accounts.ops.botToken/tokenFile");
-    expect(monitorTelegramProvider).not.toHaveBeenCalled();
-    expect(ctx.log?.error).toHaveBeenCalledWith(
-      '[ops] Telegram bot token unauthorized for account "ops" (getMe returned 401 from Telegram; source: config token). Update channels.telegram.accounts.ops.botToken/tokenFile with the current BotFather token.',
-    );
-  });
+      await expect(task).rejects.toThrow(
+        `Telegram bot token unauthorized for account "ops" (getMe returned ${status}`,
+      );
+      await expect(task).rejects.toThrow("channels.telegram.accounts.ops.botToken/tokenFile");
+      expect(monitorTelegramProvider).not.toHaveBeenCalled();
+      expect(ctx.log?.error).toHaveBeenCalledWith(
+        `[ops] Telegram bot token unauthorized for account "ops" (getMe returned ${status} from Telegram; source: config token). Update channels.telegram.accounts.ops.botToken/tokenFile with the current BotFather token.`,
+      );
+      expect(ctx.getStatus()).toMatchObject({
+        lifecycle: "blocked",
+        terminalDisconnect: true,
+        lastError: expect.stringContaining(`getMe returned ${status}`),
+      });
+    },
+  );
 
   it("keeps existing fallback startup for non-auth probe failures", async () => {
     installTelegramRuntime();
@@ -332,10 +340,11 @@ describe("telegramPlugin gateway startup", () => {
     });
     monitorTelegramProvider.mockResolvedValue(undefined);
 
-    const { task } = startTelegramAccount();
+    const { ctx, task } = startTelegramAccount();
 
     await expect(task).resolves.toBeUndefined();
     expect(probeTelegram).toHaveBeenCalledWith("123456:bad-token", 15_000, {
+      abortSignal: ctx.abortSignal,
       accountId: "default",
       proxyUrl: undefined,
       network: undefined,
@@ -551,7 +560,7 @@ describe("telegramPlugin gateway startup", () => {
     ).resolves.toBeNull();
   });
 
-  it("honors higher per-account timeoutSeconds for startup probe", async () => {
+  it("uses the built-in startup probe timeout", async () => {
     installTelegramRuntime();
     probeTelegram.mockResolvedValue({
       ok: true,
@@ -561,10 +570,11 @@ describe("telegramPlugin gateway startup", () => {
     });
     monitorTelegramProvider.mockResolvedValue(undefined);
 
-    const { task } = startTelegramAccount("ops", { timeoutSeconds: 60 });
+    const { ctx, task } = startTelegramAccount("ops", { timeoutSeconds: 60 });
 
     await expect(task).resolves.toBeUndefined();
-    expect(probeTelegram).toHaveBeenCalledWith("123456:bad-token", 60_000, {
+    expect(probeTelegram).toHaveBeenCalledWith("123456:bad-token", 15_000, {
+      abortSignal: ctx.abortSignal,
       accountId: "ops",
       proxyUrl: undefined,
       network: undefined,

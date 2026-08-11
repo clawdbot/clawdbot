@@ -21,8 +21,11 @@ import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import chalk from "chalk";
 import { extractArchive } from "../../infra/archive.js";
+import { isTruthyEnvValue } from "../../infra/env.js";
+import { cancelUnreadResponseBody } from "../../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { APP_NAME, getBinDir } from "../config.js";
+import { readProviderJsonResponse } from "../provider-http-errors.js";
 
 const TOOLS_DIR = getBinDir();
 const NETWORK_TIMEOUT_MS = 10_000;
@@ -32,19 +35,10 @@ const MAX_EXTRACTED_BYTES = 500 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES = 1_000;
 const ARCHIVE_EXTRACT_TIMEOUT_MS = 60_000;
 const CONTENT_LENGTH_RE = /^\d+$/;
-
-async function cancelUnreadResponseBody(response: Response): Promise<void> {
-  if (!response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
-}
+const GITHUB_RELEASE_JSON_MAX_BYTES = 1024 * 1024;
 
 function isOfflineModeEnabled(): boolean {
-  const value = process.env.OPENCLAW_OFFLINE;
-  if (!value) {
-    return false;
-  }
-  return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
+  return isTruthyEnvValue(process.env.OPENCLAW_OFFLINE);
 }
 
 interface ToolConfig {
@@ -160,7 +154,9 @@ async function getLatestVersion(repo: string): Promise<string> {
       throw new Error(`GitHub API error: ${response.status}`);
     }
 
-    const data = (await response.json()) as { tag_name: string };
+    const data = await readProviderJsonResponse<{ tag_name: string }>(response, "GitHub release", {
+      maxBytes: GITHUB_RELEASE_JSON_MAX_BYTES,
+    });
     return data.tag_name.replace(/^v/, "");
   } finally {
     await guarded.release();

@@ -78,5 +78,13 @@
   {
     "source": "Webhook",
     "target": "Webhook"
+  },
+  {
+    "source": "Pull request review flow",
+    "target": "Pull request inceleme akışı"
+  },
+  {
+    "source": "CI pipeline",
+    "target": "CI işlem hattı"
   }
 ]

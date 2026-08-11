@@ -1,7 +1,14 @@
 // Dispatches final reply payloads through visible senders and message tools.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  findPlatformMessageRejectedError,
+  isProvenDeliveryNotSentError,
+} from "../../infra/delivery-recovery.shared.js";
+import { collectErrorGraphCandidates } from "../../infra/errors.js";
+import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { generateSecureInt } from "../../infra/secure-random.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
@@ -43,6 +50,27 @@ export type ReplyDispatchDeliveryOutcome =
   | "failed-before-deliver"
   | "failed-deliver";
 
+function isRetryableNoSendFailure(error: unknown): boolean {
+  return (
+    isProvenDeliveryNotSentError(error) &&
+    !findPlatformMessageRejectedError(error) &&
+    !collectErrorGraphCandidates(error, (candidate) => [
+      candidate.cause,
+      candidate.original,
+      candidate.error,
+      candidate.reason,
+      ...(Array.isArray(candidate.errors) ? candidate.errors : []),
+    ]).some(
+      (candidate) =>
+        isRecord(candidate) &&
+        (candidate.sentBeforeError === true ||
+          candidate.visibleReplySent === true ||
+          (isRecord(candidate.deliveryResult) &&
+            candidate.deliveryResult.visibleReplySent === true)),
+    )
+  );
+}
+
 type ReplyDispatchDeliveryOutcomeTracker = {
   promise: Promise<ReplyDispatchDeliveryOutcome>;
   resolve: (outcome: ReplyDispatchDeliveryOutcome) => void;
@@ -62,6 +90,7 @@ const DEFAULT_BEFORE_DELIVER_TIMEOUT_MS = 15_000;
 const silentReplyLogger = createSubsystemLogger("silent-reply/dispatcher");
 const beforeDeliverCancelledHooks = new WeakMap<ReplyDispatcher, ReplyDispatchCancelHandler[]>();
 const deliveryOutcomeTrackers = new WeakMap<ReplyPayload, ReplyDispatchDeliveryOutcomeTracker>();
+const undeliveredFallbacks = new WeakMap<ReplyPayload, ReplyPayload>();
 
 type ReplyDispatchBeforeDeliverStage = {
   hook: ReplyDispatchBeforeDeliver;
@@ -80,13 +109,6 @@ const beforeDeliverStagesByHook = new WeakMap<
   ReplyDispatchBeforeDeliver,
   readonly ReplyDispatchBeforeDeliverStage[]
 >();
-
-class ReplyDispatchBeforeDeliverTimeoutError extends Error {
-  constructor(timeoutMs: number) {
-    super(`beforeDeliver timed out after ${timeoutMs}ms`);
-    this.name = "ReplyDispatchBeforeDeliverTimeoutError";
-  }
-}
 
 function resolveReplyDispatchBeforeDeliverTimeoutMs(
   options: ReplyDispatchBeforeDeliverOptions | undefined,
@@ -112,7 +134,7 @@ async function runReplyDispatchBeforeDeliverStage(
   // delivery owner; Promise.race still observes any late rejection.
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(
-      () => reject(new ReplyDispatchBeforeDeliverTimeoutError(timeoutMs)),
+      () => reject(new Error(`beforeDeliver timed out after ${timeoutMs}ms`)),
       timeoutMs,
     );
     timer.unref?.();
@@ -217,6 +239,14 @@ export function captureReplyDispatchDeliveryOutcome(payload: ReplyPayload): {
   };
   deliveryOutcomeTrackers.set(payload, tracker);
   return { promise: tracker.promise, isTracked: () => tracker.tracked };
+}
+
+/** Attach a text alternative that is delivered only when the primary payload is proven unsent. */
+export function attachReplyDispatchUndeliveredFallback(
+  payload: ReplyPayload,
+  fallback: ReplyPayload,
+): void {
+  undeliveredFallbacks.set(payload, fallback);
 }
 
 function buildReplyDispatchRuntimeInfo(
@@ -407,9 +437,84 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     }
   };
 
+  const deliverOnce = async (
+    payload: ReplyPayload,
+    info: ReplyDispatchRuntimeInfo,
+  ): Promise<ReplyDispatchDeliveryOutcome> => {
+    let deliverPayload: ReplyPayload | null = payload;
+    let deliveryStarted = false;
+    const custody = getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion;
+    try {
+      if (beforeDeliver) {
+        try {
+          deliverPayload = await beforeDeliver(payload, info);
+        } catch (error) {
+          await notifyBeforeDeliverCancelled(payload, info);
+          throw error;
+        }
+        if (!deliverPayload) {
+          // Record the intentional non-delivery before observers run so a
+          // restart during observer work cannot replay a suppressed final.
+          if (custody) {
+            await settlePendingFinalDelivery({ kind: "pending-final", ...custody }, "suppressed", [
+              "prepared",
+            ]);
+          }
+          await notifyBeforeDeliverCancelled(payload, info);
+          return "cancelled";
+        }
+        deliverPayload = copyReplyPayloadMetadata(payload, deliverPayload);
+      }
+      if (custody) {
+        // Claim direct-send custody before provider I/O; a non-prepared marker
+        // means another owner already delivered, suppressed, or superseded this
+        // final, so repeating the send would duplicate it.
+        const claim = await settlePendingFinalDelivery(
+          { kind: "pending-final", ...custody },
+          "queued",
+          ["prepared"],
+        );
+        if (claim.state !== "queued") {
+          await notifyBeforeDeliverCancelled(payload, info);
+          return "cancelled";
+        }
+      }
+      deliveryStarted = true;
+      await options.deliver(deliverPayload, info);
+      if (custody) {
+        await settlePendingFinalDelivery({ kind: "pending-final", ...custody }, "delivered", [
+          "queued",
+        ]);
+      }
+      return "delivered";
+    } catch (error) {
+      const outcome =
+        deliveryStarted && !isRetryableNoSendFailure(error)
+          ? "failed-deliver"
+          : "failed-before-deliver";
+      if (custody && deliveryStarted) {
+        // Proven no-send keeps the marker replayable for restart recovery —
+        // including after direct custody escalated queued→unknown pre-I/O,
+        // since the error proves the send never crossed the wire. Anything
+        // else after platform I/O started fails closed as "unknown".
+        await settlePendingFinalDelivery(
+          { kind: "pending-final", ...custody },
+          outcome === "failed-deliver" ? "unknown" : "prepared",
+          outcome === "failed-deliver" ? ["queued"] : ["queued", "unknown"],
+        );
+      }
+      try {
+        await options.onError?.(error, info);
+      } catch {}
+      return outcome;
+    }
+  };
+
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
+    const fallback = undeliveredFallbacks.get(payload);
+    undeliveredFallbacks.delete(payload);
     const originalWasExactSilent = isSilentReplyText(payload.text, SILENT_REPLY_TOKEN);
-    const normalized = normalizeReplyPayloadInternal(payload, {
+    const normalizedPrimary = normalizeReplyPayloadInternal(payload, {
       responsePrefix: options.responsePrefix,
       responsePrefixContext: options.responsePrefixContext,
       responsePrefixContextProvider: options.responsePrefixContextProvider,
@@ -421,6 +526,16 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           reason,
         }),
     });
+    const normalizedFallback = fallback
+      ? normalizeReplyPayloadInternal(fallback, {
+          responsePrefix: options.responsePrefix,
+          responsePrefixContext: options.responsePrefixContext,
+          responsePrefixContextProvider: options.responsePrefixContextProvider,
+          transformReplyPayload: options.transformReplyPayload,
+          onHeartbeatStrip: options.onHeartbeatStrip,
+        })
+      : null;
+    const normalized = normalizedPrimary ?? normalizedFallback;
     if (!normalized) {
       if (kind === "final" && originalWasExactSilent) {
         silentReplyLogger.debug("exact NO_REPLY final payload was skipped before delivery", {
@@ -431,6 +546,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       }
       return false;
     }
+    const deliveryFallback = normalizedPrimary ? normalizedFallback : null;
     queuedCounts[kind] += 1;
     pending += 1;
     const deliveryOutcomeTracker = deliveryOutcomeTrackers.get(payload);
@@ -443,7 +559,6 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     if (kind === "block") {
       sentFirstBlock = true;
     }
-    let deliveryStarted = false;
     let deliveryOutcome: ReplyDispatchDeliveryOutcome = "failed-before-deliver";
 
     sendChain = sendChain
@@ -456,30 +571,28 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           }
         }
         const dispatchInfo = buildReplyDispatchRuntimeInfo(normalized, kind);
-        let deliverPayload: ReplyPayload | null = normalized;
-        if (beforeDeliver) {
-          try {
-            deliverPayload = await beforeDeliver(normalized, dispatchInfo);
-          } catch (err: unknown) {
-            await notifyBeforeDeliverCancelled(normalized, dispatchInfo);
-            throw err;
-          }
-          if (!deliverPayload) {
-            deliveryOutcome = "cancelled";
-            cancelledCounts[kind] += 1;
-            await notifyBeforeDeliverCancelled(normalized, dispatchInfo);
-            return;
-          }
-          deliverPayload = copyReplyPayloadMetadata(normalized, deliverPayload);
+        deliveryOutcome = await deliverOnce(normalized, dispatchInfo);
+        if (
+          deliveryFallback &&
+          (deliveryOutcome === "cancelled" || deliveryOutcome === "failed-before-deliver")
+        ) {
+          deliveryOutcome = await deliverOnce(deliveryFallback, dispatchInfo);
         }
-        deliveryStarted = true;
-        await options.deliver(deliverPayload, dispatchInfo);
-        deliveryOutcome = "delivered";
+        if (deliveryOutcome === "cancelled") {
+          cancelledCounts[kind] += 1;
+        } else if (
+          deliveryOutcome === "failed-before-deliver" ||
+          deliveryOutcome === "failed-deliver"
+        ) {
+          failedCounts[kind] += 1;
+        }
       })
-      .catch((err: unknown) => {
-        deliveryOutcome = deliveryStarted ? "failed-deliver" : "failed-before-deliver";
+      .catch(async (err: unknown) => {
         failedCounts[kind] += 1;
-        void options.onError?.(err, buildReplyDispatchRuntimeInfo(normalized, kind));
+        try {
+          await options.onError?.(err, buildReplyDispatchRuntimeInfo(normalized, kind));
+        } catch {}
+        deliveryOutcome = "failed-before-deliver";
       })
       .finally(() => {
         const dispatchInfo = buildReplyDispatchRuntimeInfo(normalized, kind);

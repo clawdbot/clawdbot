@@ -9,9 +9,9 @@ import { resolveFetch } from "./fetch.js";
 import { resolveProxyFetchFromEnv } from "./net/proxy-fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
-  DEFAULT_TIMEOUT_MS,
+  PROVIDER_USAGE_TIMEOUT_MS,
   ignoredErrors,
-  resolveProviderUsageDisplayName,
+  providerUsageLabel,
   withTimeout,
 } from "./provider-usage.shared.js";
 import type {
@@ -30,7 +30,7 @@ async function fetchProviderUsageSnapshotFallback(params: {
   void params.fetchFn;
   return {
     provider: params.auth.provider,
-    displayName: resolveProviderUsageDisplayName(params.auth.provider),
+    displayName: providerUsageLabel(params.auth.provider) ?? params.auth.provider,
     windows: [],
     error: "Unsupported provider",
   };
@@ -94,7 +94,7 @@ export async function loadProviderUsageSummary(
   opts: UsageSummaryOptions = {},
 ): Promise<UsageSummary> {
   const now = opts.now ?? Date.now();
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutMs = opts.timeoutMs ?? PROVIDER_USAGE_TIMEOUT_MS;
   const config = opts.config ?? getRuntimeConfig();
   const env = opts.env ?? process.env;
   const fetchFn = opts.fetch
@@ -107,12 +107,12 @@ export async function loadProviderUsageSummary(
   const descriptors: ProviderUsagePluginDescriptor[] = opts.providers
     ? opts.providers.map((provider) => ({
         provider,
-        displayName: resolveProviderUsageDisplayName(provider),
+        displayName: providerUsageLabel(provider) ?? provider,
       }))
     : opts.auth
       ? opts.auth.map((auth) => ({
           provider: auth.provider,
-          displayName: resolveProviderUsageDisplayName(auth.provider),
+          displayName: providerUsageLabel(auth.provider) ?? auth.provider,
         }))
       : listProviderUsagePluginDescriptors({
           config,
@@ -138,7 +138,7 @@ export async function loadProviderUsageSummary(
     const failureSnapshot = (error: string): ProviderUsageSnapshot => ({
       provider: auth.provider,
       displayName:
-        displayNames.get(auth.provider) ?? resolveProviderUsageDisplayName(auth.provider),
+        displayNames.get(auth.provider) ?? providerUsageLabel(auth.provider) ?? auth.provider,
       windows: [],
       error,
     });
@@ -156,7 +156,7 @@ export async function loadProviderUsageSummary(
       {
         provider: auth.provider,
         displayName:
-          displayNames.get(auth.provider) ?? resolveProviderUsageDisplayName(auth.provider),
+          displayNames.get(auth.provider) ?? providerUsageLabel(auth.provider) ?? auth.provider,
         windows: [],
         error: "Timeout",
       },

@@ -1,6 +1,7 @@
 /**
  * Handles lifecycle and compaction events from subscribed embedded-agent sessions.
  */
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";
@@ -26,7 +27,6 @@ import {
   hasAssistantVisibleReply,
 } from "./embedded-agent-subscribe.handlers.messages.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
-import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import { isAssistantMessage } from "./embedded-agent-utils.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 import { summarizeToolValidationError } from "./tool-error-summary.js";
@@ -67,6 +67,7 @@ export function handleAgentEnd(
   ctx: EmbeddedAgentSubscribeContext,
   evt?: Extract<AgentSessionEvent, { type: "agent_end" }>,
 ): void | Promise<void> {
+  ctx.state.liveEditDiffStateById.clear();
   type BeforeTerminalDeliveryDecision = void | { suppressTerminalDelivery?: boolean };
   const lastAssistant = ctx.state.lastAssistant;
   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
@@ -91,9 +92,11 @@ export function handleAgentEnd(
     toolAudioAsVoice:
       ctx.state.pendingToolAudioAsVoice ||
       ctx.state.deferredBlockReplies.some((payload) => payload.audioAsVoice),
-    toolTrustedLocalMedia:
-      ctx.state.pendingToolTrustedLocalMedia ||
-      ctx.state.deferredBlockReplies.some((payload) => payload.trustedLocalMedia),
+    toolTrustedLocalMedia: resolveTerminalToolMediaTrust({
+      pendingMediaUrls: ctx.state.pendingToolMediaUrls,
+      pendingTrustByUrl: ctx.state.pendingToolMediaTrustByUrl,
+      deferredReplies: ctx.state.deferredBlockReplies,
+    }),
     hasToolMediaBlockReply: ctx.state.hasToolMediaBlockReply,
     didDeliverSourceReplyViaMessageTool:
       ctx.state.messageToolOnlySourceReplyDelivered ||
@@ -287,6 +290,7 @@ export function handleAgentEnd(
     const result = ctx.params.onBeforeTerminalDelivery?.({
       messages: evt?.messages ?? [],
       willRetry: evt?.willRetry === true,
+      ...(evt?.assistantEntryId ? { assistantEntryId: evt.assistantEntryId } : {}),
       ...(lastAssistant ? { lastAssistant } : {}),
       assistantTexts: ctx.state.assistantTexts,
       hasAssistantVisibleText,
@@ -401,3 +405,19 @@ export function handleAgentEnd(
   }
   return deliverTerminalWithLifecycleErrorFallback();
 }
+function resolveTerminalToolMediaTrust(params: {
+  pendingMediaUrls: readonly string[];
+  pendingTrustByUrl: ReadonlyMap<string, boolean>;
+  deferredReplies: readonly { mediaUrls?: string[]; trustedLocalMedia?: boolean }[];
+}): boolean {
+  const trust = [
+    ...params.pendingMediaUrls.map((url) => params.pendingTrustByUrl.get(url.trim()) === true),
+    ...params.deferredReplies.flatMap((payload) =>
+      (payload.mediaUrls ?? []).map(() => payload.trustedLocalMedia === true),
+    ),
+  ];
+  return trust.length > 0 && trust.every(Boolean);
+}
+
+const testing = { resolveTerminalToolMediaTrust };
+export { testing as __testing };

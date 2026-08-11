@@ -1,9 +1,5 @@
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
-import {
-  analyzeBootstrapBudget,
-  buildBootstrapInjectionStats,
-  buildBootstrapPromptWarning,
-} from "../../bootstrap-budget.js";
+import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
 import {
   buildBootstrapContextForFiles,
   hasCompletedBootstrapTurn,
@@ -17,18 +13,13 @@ import {
   resolveWorkspaceBootstrapRouting,
 } from "../../bootstrap-routing.js";
 import {
-  resolveBootstrapMaxChars,
-  resolveBootstrapPromptTruncationWarningMode,
-  resolveBootstrapTotalMaxChars,
-} from "../../embedded-agent-helpers.js";
-import {
   DEFAULT_BOOTSTRAP_FILENAME,
   isWorkspaceBootstrapPending,
   type WorkspaceBootstrapFile,
 } from "../../workspace.js";
 import { log } from "../logger.js";
-import { remapInjectedContextFilesToWorkspace } from "./attempt.bootstrap-context.js";
-import { resolveAttemptBootstrapContext } from "./attempt.context-engine-helpers.js";
+import { resolveAttemptBootstrapContext } from "./attempt-context-engine-helpers.js";
+import { remapInjectedContextFilesToWorkspace } from "./attempt-setup.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export async function prepareEmbeddedAttemptBootstrap(params: {
@@ -42,6 +33,8 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
   sessionLabel: string;
 }) {
   const { attempt } = params;
+  const suppressAmbientContext =
+    params.isRawModelRun || attempt.operation === "settled-tool-finalization";
   const contextInjectionMode = resolveContextInjectionMode(attempt.config, params.sessionAgentId);
   const bootstrapWarn = makeBootstrapWarn({
     sessionLabel: params.sessionLabel,
@@ -49,8 +42,8 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     warn: (message) => log.warn(message),
   });
   let completedBootstrapTurn: boolean | undefined;
-  const hasCompletedBootstrapTurnForAttempt = async (sessionFile: string) => {
-    completedBootstrapTurn ??= await hasCompletedBootstrapTurn(sessionFile);
+  const hasCompletedBootstrapTurnForAttempt = async () => {
+    completedBootstrapTurn ??= await hasCompletedBootstrapTurn(attempt.sessionTarget);
     return completedBootstrapTurn;
   };
   const resolveBootstrapRouting = (bootstrapFiles?: readonly WorkspaceBootstrapFile[]) =>
@@ -67,17 +60,17 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
       hasBootstrapFileAccess: params.hasReadTool,
     });
   const shouldProbeContinuationSkip =
-    !params.isRawModelRun &&
+    !suppressAmbientContext &&
     contextInjectionMode === "continuation-skip" &&
     !isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind) &&
-    (await hasCompletedBootstrapTurnForAttempt(attempt.sessionFile));
+    (await hasCompletedBootstrapTurnForAttempt());
   let preloadedBootstrapFiles: WorkspaceBootstrapFile[] | undefined;
   let bootstrapRouting =
-    shouldProbeContinuationSkip || params.isRawModelRun || contextInjectionMode === "never"
+    shouldProbeContinuationSkip || suppressAmbientContext || contextInjectionMode === "never"
       ? await resolveBootstrapRouting()
       : undefined;
   if (
-    !params.isRawModelRun &&
+    !suppressAmbientContext &&
     contextInjectionMode !== "never" &&
     (bootstrapRouting === undefined || bootstrapRouting.bootstrapMode === "full")
   ) {
@@ -86,6 +79,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
       config: attempt.config,
       sessionKey: attempt.sessionKey,
       sessionId: attempt.sessionId,
+      chatType: attempt.chatType,
       agentId: params.sessionAgentId,
       warn: bootstrapWarn,
       contextMode: attempt.bootstrapContextMode,
@@ -100,13 +94,12 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     contextFiles: resolvedContextFiles,
     shouldRecordCompletedBootstrapTurn,
   } = await resolveAttemptBootstrapContext({
-    // modelRun is a provider probe, not an agent turn. Keep AGENTS/BOOTSTRAP
-    // context out even when the gateway is exercising the embedded runtime.
-    contextInjectionMode: params.isRawModelRun ? "never" : contextInjectionMode,
+    // Raw probes and isolated finalization must not load AGENTS/BOOTSTRAP
+    // context even though finalization preserves the settled transcript.
+    contextInjectionMode: suppressAmbientContext ? "never" : contextInjectionMode,
     bootstrapContextMode: attempt.bootstrapContextMode,
     bootstrapContextRunKind: attempt.bootstrapContextRunKind ?? "default",
     bootstrapMode,
-    sessionFile: attempt.sessionFile,
     hasCompletedBootstrapTurn: hasCompletedBootstrapTurnForAttempt,
     resolveBootstrapContextForRun: async () => {
       const bootstrapFiles =
@@ -116,6 +109,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
           config: attempt.config,
           sessionKey: attempt.sessionKey,
           sessionId: attempt.sessionId,
+          chatType: attempt.chatType,
           agentId: params.sessionAgentId,
           warn: bootstrapWarn,
           contextMode: attempt.bootstrapContextMode,
@@ -143,23 +137,11 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
   const bootstrapFilesForInjectionStats = bootstrapRouting.includeBootstrapInSystemContext
     ? hookAdjustedBootstrapFiles
     : hookAdjustedBootstrapFiles.filter((file) => file.name !== DEFAULT_BOOTSTRAP_FILENAME);
-  const bootstrapMaxChars = resolveBootstrapMaxChars(attempt.config, params.sessionAgentId);
-  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(
-    attempt.config,
-    params.sessionAgentId,
-  );
-  const bootstrapAnalysis = analyzeBootstrapBudget({
-    files: buildBootstrapInjectionStats({
-      bootstrapFiles: bootstrapFilesForInjectionStats,
-      injectedFiles: contextFiles,
-    }),
-    bootstrapMaxChars,
-    bootstrapTotalMaxChars,
-  });
-  const bootstrapPromptWarningMode = resolveBootstrapPromptTruncationWarningMode(attempt.config);
-  const bootstrapPromptWarning = buildBootstrapPromptWarning({
-    analysis: bootstrapAnalysis,
-    mode: bootstrapPromptWarningMode,
+  const bootstrapBudget = buildBootstrapBudgetState({
+    config: attempt.config,
+    agentId: params.sessionAgentId,
+    bootstrapFiles: bootstrapFilesForInjectionStats,
+    injectedFiles: contextFiles,
     seenSignatures: attempt.bootstrapPromptWarningSignaturesSeen,
     previousSignature: attempt.bootstrapPromptWarningSignature,
   });
@@ -178,12 +160,8 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
   }
 
   return {
-    bootstrapAnalysis,
-    bootstrapMaxChars,
+    ...bootstrapBudget,
     bootstrapMode,
-    bootstrapPromptWarning,
-    bootstrapPromptWarningMode,
-    bootstrapTotalMaxChars,
     contextFiles,
     hookAdjustedBootstrapFiles,
     shouldRecordCompletedBootstrapTurn,

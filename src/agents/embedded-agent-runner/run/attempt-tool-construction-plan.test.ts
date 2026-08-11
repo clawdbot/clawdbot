@@ -1,5 +1,6 @@
 // Coverage for embedded attempt tool construction and runtime allowlists.
 import { describe, expect, it } from "vitest";
+import { attachToolAllowlistIntersection } from "../../tool-policy.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
@@ -71,6 +72,36 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
 
     expect(toolsAllow).toEqual(["message"]);
     expect(applyEmbeddedAttemptToolsAllow(tools, toolsAllow).map((tool) => tool.name)).toEqual([
+      "message",
+    ]);
+  });
+
+  it("materializes host-required collector output through empty runtime allowlists", () => {
+    const tools = [{ name: "structured_output" }, { name: "read" }];
+    const toolsAllow = mergeForcedEmbeddedAttemptToolsAllow([], {
+      forceToolNames: ["structured_output"],
+    });
+
+    expect(toolsAllow).toEqual(["structured_output"]);
+    expect(applyEmbeddedAttemptToolsAllow(tools, toolsAllow).map((tool) => tool.name)).toEqual([
+      "structured_output",
+    ]);
+    expect(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow })).toMatchObject({
+      constructTools: true,
+      includeCoreTools: true,
+      codingToolConstructionPlan: { includeOpenClawTools: true },
+    });
+  });
+
+  it("keeps forced tools through preserved hook intersections", () => {
+    const tools = [{ name: "web_search" }, { name: "message" }, { name: "read" }];
+    const toolsAllow = mergeForcedEmbeddedAttemptToolsAllow(
+      attachToolAllowlistIntersection([], [["web_*"], ["*_search"]]),
+      { forceMessageTool: true },
+    );
+
+    expect(applyEmbeddedAttemptToolsAllow(tools, toolsAllow).map((tool) => tool.name)).toEqual([
+      "web_search",
       "message",
     ]);
   });
@@ -349,7 +380,7 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
         },
       },
     );
-    for (const toolName of ["spawn_task", "dismiss_task"]) {
+    for (const toolName of ["suggest_task", "dismiss_task"]) {
       expectConstructionPlan(
         resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: [toolName] }),
         {

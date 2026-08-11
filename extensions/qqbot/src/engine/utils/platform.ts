@@ -9,8 +9,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getPlatformAdapter } from "../adapter/index.js";
-import { formatErrorMessage } from "./format.js";
 import { debugLog, debugWarn } from "./log.js";
 
 /**

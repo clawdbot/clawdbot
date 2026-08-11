@@ -12,7 +12,14 @@ import {
   KNIP_MAX_BUFFER_BYTES,
   parseKnipCompactUnusedFiles,
   runKnipUnusedFiles,
-} from "../../scripts/check-deadcode-unused-files.mjs";
+} from "../../scripts/check-deadcode-unused-files.mts";
+import {
+  isProcessAlive,
+  waitForChildClose,
+  waitForDead,
+  waitForFile,
+  waitForPidFile,
+} from "../helpers/process-wait.js";
 
 class FakeKnipProcess extends EventEmitter {
   readonly stderr = new EventEmitter();
@@ -29,62 +36,10 @@ function finishFakeProcess(
   child.emit("close", status, signal);
 }
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (existsSync(filePath)) {
-      return;
-    }
-    await sleep(5);
-  }
-  throw new Error(`timeout waiting for ${filePath}`);
-}
-
-async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (!isProcessAlive(pid)) {
-      return;
-    }
-    await sleep(5);
-  }
-  throw new Error(`process still alive: ${pid}`);
-}
-
-function waitForChildClose(
-  child: ReturnType<typeof spawn>,
-  timeoutMs = 5_000,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error("child did not close before timeout"));
-    }, timeoutMs);
-    child.once("close", (code, signal) => {
-      clearTimeout(timeout);
-      resolve({ code, signal });
-    });
-  });
-}
-
 describe("check-deadcode-unused-files", () => {
   it("has no checked-in unused-file allowlist", () => {
     expect(existsSync(path.resolve("scripts/deadcode-unused-files.allowlist.mjs"))).toBe(false);
-    const script = readFileSync(path.resolve("scripts/check-deadcode-unused-files.mjs"), "utf8");
+    const script = readFileSync(path.resolve("scripts/check-deadcode-unused-files.mts"), "utf8");
     expect(script).not.toContain("allowlist");
     expect(script).toContain("production and full-tree unused-file checks passed with 0 entries");
     expect(script).toContain('"config/knip.all-exports.config.ts"');
@@ -120,9 +75,9 @@ left-pad: package.json
   it("keeps dot-directory and root entry files", () => {
     expect(
       parseKnipCompactUnusedFiles(
-        ".agents/skills/example/scripts/check.mjs: .agents/skills/example/scripts/check.mjs\ntsdown.ai.config.ts: tsdown.ai.config.ts\n",
+        ".agents/skills/example/scripts/check.mts: .agents/skills/example/scripts/check.mts\ntsdown.ai.config.ts: tsdown.ai.config.ts\n",
       ),
-    ).toEqual([".agents/skills/example/scripts/check.mjs", "tsdown.ai.config.ts"]);
+    ).toEqual([".agents/skills/example/scripts/check.mts", "tsdown.ai.config.ts"]);
   });
 
   it("ignores pnpm dlx progress lines in files-only compact output", () => {
@@ -353,8 +308,7 @@ Delete the files or model their real entrypoints in Knip.`,
           writeStatus: () => {},
         });
 
-        await waitForFile(childPidPath, 2_000);
-        childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
+        childPid = await waitForPidFile(childPidPath, 2_000);
         expect(isProcessAlive(childPid)).toBe(true);
 
         await expect(resultPromise).resolves.toMatchObject({
@@ -376,7 +330,7 @@ Delete the files or model their real entrypoints in Knip.`,
       const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-knip-parent-signal-"));
       const childPidPath = path.join(root, "child.pid");
       const readyPath = path.join(root, "child.ready");
-      const scriptUrl = pathToFileURL(path.resolve("scripts/check-deadcode-unused-files.mjs")).href;
+      const scriptUrl = pathToFileURL(path.resolve("scripts/check-deadcode-unused-files.mts")).href;
       let childPid = 0;
       let runner: ReturnType<typeof spawn> | undefined;
 
@@ -412,8 +366,7 @@ Delete the files or model their real entrypoints in Knip.`,
         });
 
         await waitForFile(readyPath, 2_000);
-        await waitForFile(childPidPath, 2_000);
-        childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
+        childPid = await waitForPidFile(childPidPath, 2_000);
         expect(isProcessAlive(childPid)).toBe(true);
 
         runner.kill("SIGTERM");

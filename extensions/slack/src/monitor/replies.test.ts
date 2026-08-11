@@ -185,13 +185,10 @@ describe("deliverReplies identity passthrough", () => {
     const metadata = { event_type: "openclaw_test", event_payload: { source: "chart" } };
     const listenerClient = { chat: { postMessage: vi.fn() } } as never;
     const eventScope = {
-      apiAppId: "A1",
-      enterpriseId: "E1",
-      isEnterpriseInstall: true as const,
       teamId: "T1",
       client: listenerClient,
     };
-    const enterpriseCfg = { channels: { slack: { enterpriseOrgInstall: true } } };
+    const enterpriseCfg = { channels: { slack: {} } };
 
     const result = await deliverReplies(
       baseParams({
@@ -231,8 +228,7 @@ describe("deliverReplies identity passthrough", () => {
       mediaUrl: "https://example.com/report.png",
       threadTs: "thread-ts",
       accountId: "work",
-      client: listenerClient,
-      enterpriseEventScope: eventScope,
+      eventScope,
       textLimit: 4000,
       mediaMaxBytes: 1024,
       identity,
@@ -243,8 +239,7 @@ describe("deliverReplies identity passthrough", () => {
       token: "xoxb-test",
       threadTs: "thread-ts",
       accountId: "work",
-      client: listenerClient,
-      enterpriseEventScope: eventScope,
+      eventScope,
       textLimit: 4000,
       mediaMaxBytes: 1024,
       blocks: [
@@ -284,28 +279,24 @@ describe("deliverReplies identity passthrough", () => {
     expect(options).not.toHaveProperty("identity");
   });
 
-  it("forwards the validated Enterprise event scope and exact listener client", async () => {
+  it("forwards the validated Enterprise event scope", async () => {
     sendMock.mockResolvedValue({ messageId: "123.456", channelId: "C123" });
     const listenerClient = { chat: { postMessage: vi.fn() } } as never;
     const eventScope = {
-      apiAppId: "A1",
-      enterpriseId: "E1",
-      isEnterpriseInstall: true as const,
       teamId: "T1",
       client: listenerClient,
     };
 
     await deliverReplies(
       baseParams({
-        cfg: { channels: { slack: { enterpriseOrgInstall: true } } },
+        cfg: { channels: { slack: {} } },
         eventScope,
         mediaMaxBytes: 1024,
       }),
     );
 
     const options = requireSendCall()[2];
-    expect(options.client).toBe(listenerClient);
-    expect(options.enterpriseEventScope).toBe(eventScope);
+    expect(options.eventScope).toBe(eventScope);
     expect(options.textLimit).toBe(4000);
     expect(options.mediaMaxBytes).toBe(1024);
   });
@@ -680,6 +671,55 @@ describe("deliverSlackSlashReplies chunking", () => {
     expect(fallback.mrkdwn).toBe(false);
   });
 
+  it("does not repeat a response_url mutation when body inspection stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      const cancel = vi.fn(async () => undefined);
+      const response = {
+        status: 200,
+        body: {
+          getReader: () => ({
+            read: async () => await new Promise<never>(() => {}),
+            cancel,
+            releaseLock: () => {},
+          }),
+        },
+      };
+      const respond = vi.fn(async () => response);
+
+      const delivery = deliverSlackSlashReplies({
+        replies: [
+          {
+            channelData: {
+              slack: {
+                blocks: [
+                  {
+                    type: "data_visualization",
+                    title: "Revenue mix",
+                    chart: {
+                      type: "pie",
+                      segments: [{ label: "Product", value: 60 }],
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        ],
+        respond,
+        ephemeral: true,
+        textLimit: 8000,
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await expect(delivery).resolves.toBeUndefined();
+      expect(respond).toHaveBeenCalledTimes(1);
+      expect(cancel).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses complete 40k blockless chunks for oversized native-only fallback", async () => {
     const respond = vi.fn(async () => undefined);
     const caption = "c".repeat(41_000);
@@ -704,6 +744,39 @@ describe("deliverSlackSlashReplies chunking", () => {
     expect(messages.every((message) => message.mrkdwn === false)).toBe(true);
     expect(messages.every((message) => message.text.length <= 40_000)).toBe(true);
     expect(messages.map((message) => message.text).join("")).toBe(
+      `${caption} (table)\nAccount\nAcme`,
+    );
+  });
+
+  it("keeps 4k native fallback chunks for uncapped Web API delivery", async () => {
+    const respond = vi
+      .fn(async () => undefined)
+      .mockRejectedValueOnce({ response: { data: { error: "invalid_blocks" } } });
+    const caption = "c".repeat(9_000);
+    const blocks = [
+      {
+        type: "data_table",
+        caption,
+        rows: [[{ type: "raw_text", text: "Account" }], [{ type: "raw_text", text: "Acme" }]],
+      },
+    ] as never;
+
+    await deliverSlackSlashReplies({
+      replies: [{ channelData: { slack: { blocks } } }],
+      respond,
+      responseBudget: {
+        respond,
+        remaining: () => undefined,
+      },
+      ephemeral: true,
+      textLimit: 8000,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(4);
+    const fallback = [1, 2, 3].map((index) => requireSlashMessage(respond, index));
+    expect(fallback.every((message) => message.blocks === undefined)).toBe(true);
+    expect(fallback.every((message) => message.text.length <= 4_000)).toBe(true);
+    expect(fallback.map((message) => message.text).join("")).toBe(
       `${caption} (table)\nAccount\nAcme`,
     );
   });

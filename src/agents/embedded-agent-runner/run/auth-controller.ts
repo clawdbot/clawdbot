@@ -6,13 +6,13 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import type { Model } from "../../../llm/types.js";
 import type { ProviderModelRouteAuthRequirement } from "../../../plugin-sdk/provider-model-types.js";
 import { prepareProviderRuntimeAuth } from "../../../plugins/provider-runtime.js";
+import { SecretSurfaceUnavailableError } from "../../../secrets/runtime-degraded-state.js";
 import {
   type AuthProfileStore,
   isProfileInCooldown,
   resolveProfilesUnavailableReason,
   resolveSubscriptionAuthModeForProfiles,
 } from "../../auth-profiles.js";
-import { formatAuthProfileFailureMessage } from "../../auth-profiles/failure-copy.js";
 import {
   classifyFailoverReason,
   isFailoverErrorMessage,
@@ -20,11 +20,13 @@ import {
 } from "../../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { shouldUseTransientCooldownProbeSlot } from "../../failover-policy.js";
+import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
 import {
   getApiKeyForModel,
   MissingProviderAuthError,
   type ResolvedProviderAuth,
 } from "../../model-auth.js";
+import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint.js";
 import { providerModelRouteAcceptsAuthMode } from "../../provider-model-route-auth.js";
 import {
   applyPreparedRuntimeAuthToModel,
@@ -402,14 +404,19 @@ export function createEmbeddedRunAuthController(params: {
     });
     const message =
       failoverParams.message?.trim() ||
-      formatAuthProfileFailureMessage({
+      renderAuthProfileFailoverCopy({
         reason,
         provider,
         allInCooldown: failoverParams.allInCooldown,
-        cause: failoverParams.error,
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: process.env,
+        causeText: failoverParams.error
+          ? formatErrorMessage(failoverParams.error).trim()
+          : undefined,
+        recoveryHint: buildProviderAuthRecoveryHint({
+          provider,
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: process.env,
+        }),
       });
     if (params.fallbackConfigured) {
       const authMode =
@@ -583,6 +590,9 @@ export function createEmbeddedRunAuthController(params: {
         params.attemptedThinking.clear();
         return true;
       } catch (err) {
+        if (err instanceof SecretSurfaceUnavailableError) {
+          throw err;
+        }
         if (candidate && candidate === params.lockedProfileId) {
           throw err;
         }
@@ -631,7 +641,7 @@ export function createEmbeddedRunAuthController(params: {
         throwAuthProfileFailover({ allInCooldown: true });
       }
     } catch (err) {
-      if (err instanceof FailoverError) {
+      if (err instanceof FailoverError || err instanceof SecretSurfaceUnavailableError) {
         throw err;
       }
       if (params.profileCandidates[params.getProfileIndex()] === params.lockedProfileId) {

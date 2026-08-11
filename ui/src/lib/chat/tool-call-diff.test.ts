@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover inline diff parsing and computation for tool-call rows.
 import { describe, expect, it } from "vitest";
 import {

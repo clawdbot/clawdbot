@@ -1,3 +1,4 @@
+import { Task, TaskStatus } from "@lit/task";
 // Session diff panel: renders the sessions.diff RPC result (branch +
 // working-tree changes per file) inside the chat detail sidebar.
 import { html, nothing, type TemplateResult } from "lit";
@@ -20,6 +21,11 @@ type FileView = {
   parsed: ParsedFilePatch | null;
 };
 
+type SessionDiffTaskResult = {
+  result: SessionsDiffResult;
+  views: FileView[];
+};
+
 function statusLabel(file: SessionDiffFile): string {
   switch (file.status) {
     case "added":
@@ -36,55 +42,38 @@ function statusLabel(file: SessionDiffFile): string {
 class SessionDiffPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) loader: SessionDiffLoader | null = null;
 
-  @state() private result: SessionsDiffResult | null = null;
-  @state() private views: FileView[] = [];
-  @state() private loading = false;
-  @state() private error: string | null = null;
   @state() private collapsedPaths = new Set<string>();
 
-  private requestVersion = 0;
+  private readonly diffTask = new Task(this, {
+    args: () => [this.loader] as const,
+    task: async ([loader]): Promise<SessionDiffTaskResult | null> => {
+      if (!loader) {
+        return null;
+      }
+      const result = await loader();
+      return {
+        result,
+        views: result.files.map((file) => ({
+          file,
+          parsed: file.patch
+            ? parseSessionDiffPatch(file.patch, (count) =>
+                t("chat.sessionDiff.unmodifiedLines", { count: String(count) }),
+              )
+            : null,
+        })),
+      };
+    },
+    onComplete: () => {
+      this.collapsedPaths = new Set<string>();
+    },
+  });
 
-  protected override updated(changed: Map<string, unknown>) {
-    if (changed.has("loader")) {
-      void this.refresh();
-    }
+  private get loading(): boolean {
+    return this.diffTask.status === TaskStatus.PENDING;
   }
 
-  private async refresh(): Promise<void> {
-    const loader = this.loader;
-    const version = ++this.requestVersion;
-    if (!loader) {
-      this.result = null;
-      this.views = [];
-      return;
-    }
-    this.loading = true;
-    this.error = null;
-    try {
-      const result = await loader();
-      if (version !== this.requestVersion) {
-        return;
-      }
-      this.result = result;
-      this.views = result.files.map((file) => ({
-        file,
-        parsed: file.patch
-          ? parseSessionDiffPatch(file.patch, (count) =>
-              t("chat.sessionDiff.unmodifiedLines", { count: String(count) }),
-            )
-          : null,
-      }));
-      this.collapsedPaths = new Set<string>();
-    } catch (error) {
-      if (version !== this.requestVersion) {
-        return;
-      }
-      this.error = error instanceof Error ? error.message : String(error);
-    } finally {
-      if (version === this.requestVersion) {
-        this.loading = false;
-      }
-    }
+  private refresh(): Promise<void> {
+    return this.diffTask.run();
   }
 
   private toggleFile(path: string): void {
@@ -174,13 +163,17 @@ class SessionDiffPanel extends OpenClawLightDomElement {
   }
 
   private renderBody(): TemplateResult {
-    if (this.error) {
-      return html`<div class="callout danger">${this.error}</div>`;
+    if (this.diffTask.status === TaskStatus.ERROR) {
+      const error = this.diffTask.error;
+      return html`<div class="callout danger">
+        ${error instanceof Error ? error.message : String(error)}
+      </div>`;
     }
-    const result = this.result;
-    if (!result) {
+    const value = this.diffTask.value;
+    if (!value) {
       return html`<div class="session-diff__note">${t("chat.sessionDiff.loading")}</div>`;
     }
+    const { result, views } = value;
     if (result.unavailableReason === "not_git") {
       return html`<div class="session-diff__note">${t("chat.sessionDiff.notGit")}</div>`;
     }
@@ -191,7 +184,7 @@ class SessionDiffPanel extends OpenClawLightDomElement {
       ${this.renderSummary(result)}
       ${result.files.length === 0
         ? html`<div class="session-diff__note">${t("chat.sessionDiff.empty")}</div>`
-        : this.views.map((view) => this.renderFile(view))}
+        : views.map((view) => this.renderFile(view))}
       ${result.truncated === true
         ? html`<div class="session-diff__note">${t("chat.sessionDiff.truncatedResult")}</div>`
         : nothing}

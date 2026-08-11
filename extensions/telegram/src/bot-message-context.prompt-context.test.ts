@@ -9,6 +9,7 @@ import {
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it } from "vitest";
+import { createTelegramMessageContextRuntime } from "./bot-handlers.message-context.runtime.js";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 import type { TelegramPromptContextEntry } from "./bot-message-context.types.js";
 
@@ -60,7 +61,7 @@ describe("buildTelegramMessageContext prompt context", () => {
     });
 
     expect(ctx?.ctxPayload.SessionKey).toBe("agent:main:main");
-    expect(ctx?.ctxPayload.UntrustedStructuredContext).toBeUndefined();
+    expect(ctx?.ctxPayload.ChannelStructuredContext).toBeUndefined();
   });
 
   it("keeps Telegram chat-window context for fresh private DM sessions", async () => {
@@ -73,7 +74,7 @@ describe("buildTelegramMessageContext prompt context", () => {
       promptContext: [telegramChatWindowContext],
     });
 
-    expect(ctx?.ctxPayload.UntrustedStructuredContext).toEqual([telegramChatWindowContext]);
+    expect(ctx?.ctxPayload.ChannelStructuredContext).toEqual([telegramChatWindowContext]);
   });
 
   it("keeps Telegram chat-window context for existing private DM replies", async () => {
@@ -97,7 +98,194 @@ describe("buildTelegramMessageContext prompt context", () => {
       },
     });
 
-    expect(ctx?.ctxPayload.UntrustedStructuredContext).toEqual([telegramChatWindowContext]);
+    expect(ctx?.ctxPayload.ChannelStructuredContext).toEqual([telegramChatWindowContext]);
+  });
+
+  it("honors per-turn zero DM history while preserving the current reply target", async () => {
+    const registrationCfg = {
+      agents: { defaults: {} },
+      channels: { telegram: { dmPolicy: "open", dmHistoryLimit: 10 } },
+    } as never;
+    const registrationTelegramCfg = {
+      dmPolicy: "open",
+      dmHistoryLimit: 10,
+    } as never;
+    const runtimeCfg = {
+      agents: { defaults: {} },
+      channels: { telegram: { dmPolicy: "open", dmHistoryLimit: 0 } },
+    } as never;
+    const runtimeTelegramCfg = {
+      dmPolicy: "open",
+      dmHistoryLimit: 0,
+    } as never;
+    const storePath = createTempSessionStorePath();
+
+    const messageContextRuntime = createTelegramMessageContextRuntime({
+      cfg: registrationCfg,
+      accountId: "default",
+      opts: {
+        token: "test-token",
+        botInfo: { id: 7, username: "bot", first_name: "Bot" },
+      } as never,
+      telegramCfg: registrationTelegramCfg,
+      telegramDeps: {
+        resolveStorePath: () => storePath,
+      } as never,
+    });
+
+    const chat = { id: 1234, type: "private", first_name: "Pat" } as const;
+
+    await messageContextRuntime.recordMessageForReplyChain({
+      chat,
+      message_id: 10,
+      date: 1_700_000_000,
+      text: "older unrelated DM",
+      from: { id: 1234, is_bot: false, first_name: "Pat" },
+    } as never);
+
+    const currentMessage = {
+      chat,
+      message_id: 12,
+      date: 1_700_000_020,
+      text: "answer this reply target",
+      from: { id: 1234, is_bot: false, first_name: "Pat" },
+      reply_to_message: {
+        chat,
+        message_id: 11,
+        date: 1_700_000_010,
+        text: "current reply target",
+        from: { id: 1234, is_bot: false, first_name: "Pat" },
+      },
+    } as never;
+
+    await messageContextRuntime.recordMessageForReplyChain(currentMessage);
+
+    const replyChainNodes = await messageContextRuntime.buildReplyChainForMessage(currentMessage);
+
+    const promptContext = await messageContextRuntime.buildPromptContextForMessage(
+      { me: { id: 7, username: "bot", first_name: "Bot" } } as never,
+      currentMessage,
+      replyChainNodes,
+      runtimeCfg,
+      runtimeTelegramCfg,
+    );
+
+    expect(promptContext).toEqual([
+      expect.objectContaining({
+        label: "Conversation context",
+        source: "telegram",
+        type: "chat_window",
+        payload: expect.objectContaining({
+          messages: [
+            expect.objectContaining({
+              message_id: "11",
+              body: "current reply target",
+              is_reply_target: true,
+            }),
+          ],
+        }),
+      }),
+    ]);
+    expect(JSON.stringify(promptContext)).not.toContain("older unrelated DM");
+  });
+
+  it("bounds cached DM context with the per-sender override", async () => {
+    const cfg = {
+      agents: { defaults: {} },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          dmHistoryLimit: 0,
+          dms: { "1234": { historyLimit: 1 } },
+        },
+      },
+    } as never;
+    const telegramCfg = {
+      dmPolicy: "open",
+      dmHistoryLimit: 0,
+      dms: { "1234": { historyLimit: 1 } },
+    } as never;
+    const storePath = createTempSessionStorePath();
+    const messageContextRuntime = createTelegramMessageContextRuntime({
+      cfg,
+      accountId: "default",
+      opts: {
+        token: "test-token",
+        botInfo: { id: 7, username: "bot", first_name: "Bot" },
+      } as never,
+      telegramCfg,
+      telegramDeps: {
+        resolveStorePath: () => storePath,
+      } as never,
+    });
+    const chat = { id: 1234, type: "private", first_name: "Pat" } as const;
+    for (const [messageId, text] of [
+      [10, "older DM"],
+      [11, "latest DM"],
+    ] as const) {
+      await messageContextRuntime.recordMessageForReplyChain({
+        chat,
+        message_id: messageId,
+        date: 1_700_000_000 + messageId,
+        text,
+        from: { id: 1234, is_bot: false, first_name: "Pat" },
+      } as never);
+    }
+    const currentMessage = {
+      chat,
+      message_id: 12,
+      date: 1_700_000_020,
+      text: "continue",
+      from: { id: 1234, is_bot: false, first_name: "Pat" },
+    } as never;
+    await messageContextRuntime.recordMessageForReplyChain(currentMessage);
+
+    const promptContext = await messageContextRuntime.buildPromptContextForMessage(
+      { me: { id: 7, username: "bot", first_name: "Bot" } } as never,
+      currentMessage,
+      [],
+      cfg,
+      telegramCfg,
+    );
+
+    expect(JSON.stringify(promptContext)).toContain("latest DM");
+    expect(JSON.stringify(promptContext)).not.toContain("older DM");
+  });
+
+  it("disables persisted DM transcript injection when the effective limit is zero", async () => {
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        chat: { id: 1234, type: "private", first_name: "Pat" },
+        from: { id: 1234, first_name: "Pat" },
+        text: "answer this reply",
+        reply_to_message: {
+          chat: { id: 1234, type: "private", first_name: "Pat" },
+          from: { id: 1234, first_name: "Pat" },
+          text: "explicit reply target",
+          date: 1_700_000_000,
+          message_id: 10,
+        },
+      },
+      dmHistoryLimit: 0,
+    });
+
+    expect(ctx?.ctxPayload.SessionTranscriptContext).toBeUndefined();
+    expect(ctx?.ctxPayload.ReplyToBody).toBe("explicit reply target");
+  });
+
+  it("bounds persisted DM transcript injection with a nonzero override", async () => {
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        chat: { id: 1234, type: "private", first_name: "Pat" },
+        from: { id: 1234, first_name: "Pat" },
+        text: "continue",
+      },
+      dmHistoryLimit: 2,
+    });
+
+    expect(ctx?.ctxPayload.SessionTranscriptContext).toEqual(
+      expect.objectContaining({ historyLimit: 2 }),
+    );
   });
 
   it("preserves richer chat-window fields when merging duplicate group history", async () => {
@@ -148,7 +336,7 @@ describe("buildTelegramMessageContext prompt context", () => {
       ],
     });
 
-    expect(ctx?.ctxPayload.UntrustedStructuredContext).toEqual([
+    expect(ctx?.ctxPayload.ChannelStructuredContext).toEqual([
       expect.objectContaining({
         type: "chat_window",
         payload: expect.objectContaining({
@@ -213,7 +401,7 @@ describe("buildTelegramMessageContext prompt context", () => {
       },
     });
 
-    expect(ctx?.ctxPayload.UntrustedStructuredContext).toEqual([
+    expect(ctx?.ctxPayload.ChannelStructuredContext).toEqual([
       expect.objectContaining({
         type: "chat_window",
         payload: expect.objectContaining({
@@ -226,7 +414,7 @@ describe("buildTelegramMessageContext prompt context", () => {
         }),
       }),
     ]);
-    expect(JSON.stringify(ctx?.ctxPayload.UntrustedStructuredContext)).not.toContain(
+    expect(JSON.stringify(ctx?.ctxPayload.ChannelStructuredContext)).not.toContain(
       "persisted ambient",
     );
   });
@@ -331,7 +519,7 @@ describe("buildTelegramMessageContext prompt context", () => {
       SenderName: "Pat",
     });
     expect(ctx.ctxPayload.InboundHistory).toBeUndefined();
-    expect(ctx.ctxPayload.UntrustedStructuredContext).toBeUndefined();
+    expect(ctx.ctxPayload.ChannelStructuredContext).toBeUndefined();
   });
 
   it("backfills Telegram group history when the ambient watermark belongs to a reset session", async () => {
@@ -410,7 +598,7 @@ describe("buildTelegramMessageContext prompt context", () => {
       },
     });
 
-    expect(ctx?.ctxPayload.UntrustedStructuredContext).toEqual([
+    expect(ctx?.ctxPayload.ChannelStructuredContext).toEqual([
       expect.objectContaining({
         type: "chat_window",
         payload: expect.objectContaining({

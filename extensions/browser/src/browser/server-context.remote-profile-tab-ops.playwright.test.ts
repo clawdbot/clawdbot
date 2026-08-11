@@ -33,7 +33,6 @@ async function expectBlockedCdpEndpoint(promise: Promise<unknown>) {
 const permissiveRemoteCdpPolicy = {
   allowPrivateNetwork: true,
   allowedHostnames: ["1.1.1.1"],
-  hostnameAllowlist: ["1.1.1.1"],
 };
 
 describe("browser remote profile tab ops via Playwright", () => {
@@ -55,7 +54,17 @@ describe("browser remote profile tab ops via Playwright", () => {
       closePageByTargetIdViaPlaywright,
     } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
 
-    const { state, remote, fetchMock } = deps.createRemoteRouteHarness();
+    const fetchMock = vi.fn(async (url: unknown) => {
+      expect(String(url)).toContain("/json/version");
+      return {
+        ok: true,
+        json: async () => ({
+          webSocketDebuggerUrl:
+            "wss://1.1.1.1:9222/devtools/browser/REMOTE-BROWSER?auth=fixture-value",
+        }),
+      } as unknown as Response;
+    });
+    const { state, remote } = deps.createRemoteRouteHarness(fetchMock);
 
     const tabs = await remote.listTabs();
     expect(tabs.map((t) => t.targetId)).toEqual(["T1"]);
@@ -67,6 +76,12 @@ describe("browser remote profile tab ops via Playwright", () => {
 
     const opened = await remote.openTab("http://127.0.0.1:3000");
     expect(opened.targetId).toBe("T2");
+    expect((opened as { ownership?: unknown }).ownership).toMatchObject({
+      status: "durable",
+      nativeTargetId: "T2",
+      profileFingerprint: expect.stringMatching(/^sha256:/),
+      browserInstanceFingerprint: expect.stringMatching(/^sha256:/),
+    });
     expect(state.profiles.get("remote")?.lastTargetId).toBe("T2");
     expect(createPageViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: "https://1.1.1.1:9222/chrome?token=abc",
@@ -81,7 +96,74 @@ describe("browser remote profile tab ops via Playwright", () => {
       targetId: "T1",
       ssrfPolicy: permissiveRemoteCdpPolicy,
     });
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("uses the remote HTTP timeout for the ownership version probe", async () => {
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      createPageViaPlaywright: vi.fn(async () => page("T2")),
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+    const fetchMock = vi.fn(
+      async (_url: unknown, init?: RequestInit) =>
+        await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(new Error("ownership version probe timed out")),
+            { once: true },
+          );
+        }),
+    );
+    const { state, remote } = deps.createRemoteRouteHarness(fetchMock);
+    state.resolved.remoteCdpTimeoutMs = 25;
+
+    const startedAt = Date.now();
+    const opened = await remote.openTab("https://t2.example");
+
+    expect(Date.now() - startedAt).toBeLessThan(700);
+    expect((opened as { ownership?: unknown }).ownership).toEqual({
+      status: "non-durable",
+      reason: "browser-identity-lookup-failed",
+    });
+  });
+
+  it("propagates caller abort through the ownership version probe", async () => {
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      createPageViaPlaywright: vi.fn(async () => page("T2")),
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+    let markProbeStarted!: () => void;
+    const probeStarted = new Promise<void>((resolve) => {
+      markProbeStarted = resolve;
+    });
+    const cleanupUrls: string[] = [];
+    const fetchMock = vi.fn(async (url: unknown, init?: RequestInit) => {
+      if (String(url).includes("/json/close/T2")) {
+        cleanupUrls.push(String(url));
+        return new Response(null, { status: 200 });
+      }
+      return await new Promise<Response>((_resolve, reject) => {
+        markProbeStarted();
+        init?.signal?.addEventListener(
+          "abort",
+          () =>
+            reject(
+              init.signal?.reason instanceof Error
+                ? init.signal.reason
+                : new Error("ownership version probe aborted"),
+            ),
+          { once: true },
+        );
+      });
+    });
+    const { remote } = deps.createRemoteRouteHarness(fetchMock);
+    const controller = new AbortController();
+    const abortError = new Error("caller aborted ownership probe");
+
+    const opening = remote.openTab("https://t2.example", { signal: controller.signal });
+    await probeStarted;
+    controller.abort(abortError);
+
+    await expect(opening).rejects.toBe(abortError);
+    expect(cleanupUrls).toEqual([expect.stringContaining("/json/close/T2")]);
   });
 
   it("rejects invalid labels before Playwright creates a page", async () => {
@@ -386,7 +468,7 @@ describe("browser remote profile tab ops via Playwright", () => {
     const state = deps.makeState("remote");
     state.resolved.ssrfPolicy = {
       dangerouslyAllowPrivateNetwork: false,
-      hostnameAllowlist: ["browserless.example.com"],
+      allowedHostnames: ["browserless.example.com"],
     };
     const remoteProfile = expectDefined(state.resolved.profiles.remote, "remote browser profile");
     state.resolved.profiles.remote = {

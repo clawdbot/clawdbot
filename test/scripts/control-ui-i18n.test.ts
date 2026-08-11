@@ -7,25 +7,158 @@ import { pathToFileURL } from "node:url";
 import * as ts from "typescript";
 import { describe, expect, it } from "vitest";
 import {
-  isControlUiGeneratedI18nConflictPath,
-  isControlUiGeneratedI18nPath,
-  mergeControlUiTranslationMemory,
-  resolveControlUiGeneratedConflict,
-} from "../../scripts/control-ui-i18n-resolve-conflicts.ts";
+  assertControlUiGeneratedArtifactsIsolated,
+  resolveAllowedGeneratedMixBranch,
+  shouldStrictControlUiI18n,
+} from "../../scripts/ci-changed-scope.mjs";
 import {
   analyzeControlUiCatalogs,
-  assertScopedCatalogFallbackUpdate,
   flattenControlUiCatalog,
+  formatControlUiCatalogFallbackDriftError,
 } from "../../scripts/control-ui-i18n-verify.ts";
 import {
   appendBoundedProcessOutput,
+  assertNoControlUiFallbacks,
   buildBatchPrompt,
+  filterPlaceholderCompatibleTranslations,
   parseTranslationBatchReply,
   runProcess,
   shouldReuseExistingTranslation,
 } from "../../scripts/control-ui-i18n.ts";
 import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
+
+describe("control-ui-i18n generated ownership", () => {
+  it("keeps generated locale snapshots out of source PRs", () => {
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated([
+        "ui/src/i18n/locales/en.ts",
+        "ui/src/i18n/locales/de.ts",
+        "ui/src/i18n/.i18n/de.meta.json",
+      ]),
+    ).toThrow("Control UI generated locale artifacts must be isolated from source changes");
+
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated([
+        "ui/src/i18n/.i18n/catalog-fallbacks.json",
+        "ui/src/i18n/.i18n/de.meta.json",
+        "ui/src/i18n/.i18n/de.tm.jsonl",
+      ]),
+    ).not.toThrow();
+
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated([
+        "ui/src/i18n/locales/de.ts",
+        "ui/src/i18n/.i18n/glossary.de.json",
+      ]),
+    ).not.toThrow();
+
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated([
+        "ui/src/i18n/.i18n/catalog-fallbacks.json",
+        "ui/src/i18n/.i18n/raw-copy-baseline.json",
+      ]),
+    ).toThrow("Control UI generated locale artifacts must be isolated from source changes");
+
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated([
+        "ui/src/i18n/locales/en.ts",
+        "ui/src/i18n/.i18n/raw-copy-baseline.json",
+      ]),
+    ).not.toThrow();
+
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated(
+        ["package.json", "ui/src/i18n/locales/de.ts"],
+        "release/2026.7.3",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated(
+        ["package.json", "ui/src/i18n/locales/de.ts"],
+        "main",
+      ),
+    ).not.toThrow();
+
+    expect(shouldStrictControlUiI18n(["ui/src/i18n/locales/de.ts"])).toBe(false);
+    expect(shouldStrictControlUiI18n(["ui/src/i18n/.i18n/de.tm.jsonl"])).toBe(true);
+    expect(shouldStrictControlUiI18n(["ui/src/i18n/locales/en.ts"])).toBe(false);
+    expect(shouldStrictControlUiI18n(null)).toBe(true);
+  });
+
+  it("allows only a complete canonical translation-memory ownership migration", () => {
+    const locales = readdirSync(path.resolve("ui/src/i18n/.i18n"))
+      .filter((fileName) => fileName.endsWith(".tm.jsonl"))
+      .map((fileName) => fileName.slice(0, -".tm.jsonl".length));
+    const owners = [
+      ".gitattributes",
+      "scripts/ci-changed-scope.mjs",
+      "scripts/control-ui-i18n.ts",
+      "scripts/control-ui-i18n-verify.ts",
+      "scripts/lib/control-ui-i18n-catalog.ts",
+      "scripts/lib/control-ui-i18n-sync-plan.ts",
+      "ui/AGENTS.md",
+      "ui/config/control-ui-locales.ts",
+      "ui/vite.config.ts",
+    ];
+    const adapters = locales.map((locale) => `ui/src/i18n/locales/${locale}.ts`);
+    const generated = [
+      "ui/src/i18n/.i18n/catalog-fallbacks.json",
+      ...locales.flatMap((locale) => [
+        `ui/src/i18n/.i18n/${locale}.tm.jsonl`,
+        `ui/src/i18n/.i18n/${locale}.meta.json`,
+      ]),
+    ];
+    const migration = [...owners, ...adapters, ...generated];
+
+    expect(() => assertControlUiGeneratedArtifactsIsolated(migration)).not.toThrow();
+    expect(() => assertControlUiGeneratedArtifactsIsolated(migration.slice(1))).toThrow(
+      "Control UI generated locale artifacts must be isolated",
+    );
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated(
+        migration.filter((filePath) => filePath !== generated[1]),
+      ),
+    ).toThrow("Control UI generated locale artifacts must be isolated");
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated([...migration, "ui/src/i18n/.i18n/other.tm.jsonl"]),
+    ).toThrow("Control UI generated locale artifacts must be isolated");
+  });
+
+  it("allows generated release output on trusted release and main runs only", () => {
+    const trustedActions = {
+      GITHUB_ACTIONS: "true",
+      OPENCLAW_ALLOW_RELEASE_GENERATED_MIX: "true",
+    };
+
+    expect(
+      resolveAllowedGeneratedMixBranch(
+        {
+          ...trustedActions,
+          GITHUB_EVENT_NAME: "push",
+          GITHUB_REF: "refs/heads/main",
+        },
+        "main",
+      ),
+    ).toBe("main");
+    expect(
+      resolveAllowedGeneratedMixBranch(
+        {
+          ...trustedActions,
+          GITHUB_EVENT_NAME: "pull_request",
+          GITHUB_REF: "refs/pull/1/merge",
+        },
+        "main",
+      ),
+    ).toBe("");
+    expect(resolveAllowedGeneratedMixBranch(trustedActions, "release/2026.7.3")).toBe(
+      "release/2026.7.3",
+    );
+    expect(resolveAllowedGeneratedMixBranch({ GITHUB_ACTIONS: "true" }, "release/2026.7.3")).toBe(
+      "",
+    );
+  });
+});
 
 function processIsAlive(pid: number): boolean {
   try {
@@ -65,109 +198,12 @@ async function waitForChildClose(
 }
 
 describe("control-ui-i18n process runner", () => {
-  it("recognizes only generated conflict paths", () => {
-    expect(isControlUiGeneratedI18nPath("ui/src/i18n/.i18n/catalog-fallbacks.json")).toBe(true);
-    expect(isControlUiGeneratedI18nPath("ui/src/i18n/.i18n/raw-copy-baseline.json")).toBe(true);
-    expect(isControlUiGeneratedI18nPath("ui/src/i18n/.i18n/de.meta.json")).toBe(true);
-    expect(isControlUiGeneratedI18nPath("ui/src/i18n/.i18n/de.tm.jsonl")).toBe(true);
-    expect(isControlUiGeneratedI18nPath("ui/src/i18n/locales/de.ts")).toBe(true);
-    expect(isControlUiGeneratedI18nPath("ui/src/i18n/.i18n/glossary.de.json")).toBe(false);
-    expect(isControlUiGeneratedI18nPath("ui/src/i18n/locales/en.ts")).toBe(false);
-    expect(isControlUiGeneratedI18nPath("ui/src/i18n/locales/en-agents.ts")).toBe(false);
-    expect(isControlUiGeneratedI18nPath("ui/src/i18n/locales/unknown.ts")).toBe(false);
-    expect(
-      isControlUiGeneratedI18nConflictPath("ui/src/i18n/locales/removed.ts", [
-        "// Generated locale bundle for Control UI translations.\nexport const removed = {};\n",
-        null,
-      ]),
-    ).toBe(true);
-    expect(
-      isControlUiGeneratedI18nConflictPath("ui/src/i18n/locales/en-agents.ts", [
-        "// Agent-specific English strings stay split from the oversized source locale.\n",
-      ]),
-    ).toBe(false);
-  });
+  it("points strict catalog drift at the generated release repair", () => {
+    const message = formatControlUiCatalogFallbackDriftError();
 
-  it("uses the replayed entry when both sides change the same cache key", () => {
-    const base = [{ cache_key: "shared", translated: "base" }];
-    const ours = [
-      { cache_key: "b", translated: "upstream-only" },
-      { cache_key: "shared", translated: "upstream" },
-    ];
-    const theirs = [
-      { cache_key: "a", translated: "branch-only" },
-      { cache_key: "shared", translated: "branch" },
-    ];
-    const merged = mergeControlUiTranslationMemory(
-      `${base.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
-      `${ours.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
-      `${theirs.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as { cache_key: string; translated: string });
-
-    expect(merged).toEqual([
-      { cache_key: "a", translated: "branch-only" },
-      { cache_key: "b", translated: "upstream-only" },
-      { cache_key: "shared", translated: "branch" },
-    ]);
-  });
-
-  it("preserves one-sided translation-memory changes and deletions", () => {
-    const base = [
-      { cache_key: "branch-change", translated: "base" },
-      { cache_key: "branch-delete", translated: "base" },
-      { cache_key: "upstream-change", translated: "base" },
-      { cache_key: "upstream-delete", translated: "base" },
-    ];
-    const ours = [
-      { cache_key: "branch-change", translated: "base" },
-      { cache_key: "branch-delete", translated: "base" },
-      { cache_key: "upstream-add", translated: "upstream" },
-      { cache_key: "upstream-change", translated: "upstream" },
-    ];
-    const theirs = [
-      { cache_key: "branch-add", translated: "branch" },
-      { cache_key: "branch-change", translated: "branch" },
-      { cache_key: "upstream-change", translated: "base" },
-      { cache_key: "upstream-delete", translated: "base" },
-    ];
-    const encode = (entries: Array<{ cache_key: string; translated: string }>) =>
-      `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
-    const merged = mergeControlUiTranslationMemory(encode(base), encode(ours), encode(theirs))
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as { cache_key: string; translated: string });
-
-    expect(merged).toEqual([
-      { cache_key: "branch-add", translated: "branch" },
-      { cache_key: "branch-change", translated: "branch" },
-      { cache_key: "upstream-add", translated: "upstream" },
-      { cache_key: "upstream-change", translated: "upstream" },
-    ]);
-  });
-
-  it("preserves replayed-side generated-file deletion before regeneration", () => {
-    expect(
-      resolveControlUiGeneratedConflict(
-        "ui/src/i18n/.i18n/de.tm.jsonl",
-        '{"cache_key":"stale"}\n',
-        '{"cache_key":"stale"}\n',
-        null,
-      ),
-    ).toBeNull();
-  });
-
-  it("preserves stage-2 translation-memory deletion when no records survive", () => {
-    expect(
-      resolveControlUiGeneratedConflict(
-        "ui/src/i18n/.i18n/de.tm.jsonl",
-        '{"cache_key":"a"}\n{"cache_key":"b"}\n',
-        null,
-        '{"cache_key":"a"}\n',
-      ),
-    ).toBeNull();
+    expect(message).toContain("pnpm ui:i18n:sync");
+    expect(message).toContain("pnpm release:prep");
+    expect(message).not.toContain("pnpm ui:i18n:baseline");
   });
 
   it("builds a deterministic fallback list without accepting catalog drift", () => {
@@ -215,39 +251,9 @@ describe("control-ui-i18n process runner", () => {
     );
   });
 
-  it("allows scoped sync to remove only that locale's approved fallbacks", () => {
-    const current = {
-      fallbacks: { "group.second": ["de", "fr"] },
-      sourceHash: "source",
-      version: 1,
-    };
-
-    expect(() =>
-      assertScopedCatalogFallbackUpdate(
-        current,
-        { ...current, fallbacks: { "group.second": ["fr"] } },
-        "de",
-      ),
-    ).not.toThrow();
-    expect(() =>
-      assertScopedCatalogFallbackUpdate(
-        current,
-        { ...current, fallbacks: { "group.second": ["de"] } },
-        "de",
-      ),
-    ).toThrow("unrelated catalog fallback drift");
-    expect(() =>
-      assertScopedCatalogFallbackUpdate(
-        current,
-        { ...current, fallbacks: { "group.second": ["de", "es", "fr"] } },
-        "de",
-      ),
-    ).toThrow("unrelated catalog fallback drift");
-  });
-
   it("finds raw text and attributes split by template interpolation", () => {
     const source =
-      'const jsx = <button aria-label="Archive" />; const view = html`<button title="Delete ${name}">Delete ${name}</button>`;';
+      'const jsx = <button aria-label="Archive" />; const view = html`<button title="Delete ${name}">Delete ${name}</button>`; const image = html`<img alt="Preview" />`; menu.setAttribute("aria-label", "Selection actions"); reply.setAttribute("aria-label", `Reply to ${name}`); file.setAttribute("title", "Open " + fileName);';
     const sourceFile = ts.createSourceFile(
       "ui/src/pages/example.ts",
       source,
@@ -264,8 +270,12 @@ describe("control-ui-i18n process runner", () => {
       }).map(({ kind, text }) => ({ kind, text })),
     ).toEqual([
       { kind: "html-attribute", text: "Archive" },
+      { kind: "html-attribute", text: "Preview" },
       { kind: "html-attribute", text: "Delete" },
       { kind: "html-text", text: "Delete" },
+      { kind: "html-attribute", text: "Selection actions" },
+      { kind: "html-attribute", text: "Reply to" },
+      { kind: "html-attribute", text: "Open" },
     ]);
   });
 
@@ -285,7 +295,7 @@ describe("control-ui-i18n process runner", () => {
     );
 
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("catalog:");
+    expect(result.stdout).toContain("source:");
     expect(result.stdout).not.toContain("provider=openai");
     expect(result.stdout).not.toContain("provider=anthropic");
   });
@@ -314,6 +324,21 @@ describe("control-ui-i18n process runner", () => {
         "ar",
       ),
     ).toEqual(new Map([["configView.viewPendingChange", "Pending change ({count})"]]));
+  });
+
+  it("makes placeholder-incompatible existing copy pending for bot repair", () => {
+    const reusable = filterPlaceholderCompatibleTranslations(
+      new Map([
+        ["changed", "Waiting for {total}"],
+        ["same", "Waiting for {count}"],
+      ]),
+      new Map([
+        ["changed", "Warten auf {count}"],
+        ["same", "Warten auf {count}"],
+      ]),
+    );
+
+    expect([...reusable]).toEqual([["same", "Warten auf {count}"]]);
   });
 
   it("feeds the exact validation failure back into a retry prompt", () => {
@@ -345,6 +370,21 @@ describe("control-ui-i18n process runner", () => {
       });
 
     expect(fallbacks).toEqual([]);
+  });
+
+  it("makes the strict gate reject recorded English fallbacks", () => {
+    expect(() =>
+      assertNoControlUiFallbacks([
+        { fallbackCount: 0, locale: "de" },
+        { fallbackCount: 2, locale: "fr" },
+      ]),
+    ).toThrow("fr: 2 fallback keys");
+    expect(() =>
+      assertNoControlUiFallbacks([
+        { fallbackCount: 0, locale: "de" },
+        { fallbackCount: 0, locale: "fr" },
+      ]),
+    ).not.toThrow();
   });
 
   it("refreshes recorded fallback copy when sync is forced without a provider", () => {

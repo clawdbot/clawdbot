@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionOrigin } from "../config/sessions/types.js";
 import {
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
@@ -12,6 +13,7 @@ import {
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   doesApprovalRequestMatchChannelAccount,
+  doesApprovalRequestSelectChannelAccount,
   resolveApprovalRequestAccountId,
   resolveApprovalRequestChannelAccountId,
 } from "./approval-request-account-binding.js";
@@ -22,6 +24,7 @@ import {
 } from "./exec-approval-session-target.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
+import { normalizeLegacySessionEntryDelivery } from "./state-migrations.legacy-session-store.js";
 
 vi.mock("../channels/plugins/session-conversation.js", () => ({
   resolveSessionConversationRef(sessionKey: string | undefined | null) {
@@ -63,9 +66,133 @@ const baseRequest: ExecApprovalRequest = {
   expiresAtMs: 6000,
 };
 
+describe("native approval account selection", () => {
+  it("selects only the sole eligible account when no owner is recorded", () => {
+    expect(
+      doesApprovalRequestSelectChannelAccount({
+        cfg: {},
+        request: baseRequest,
+        channel: "telegram",
+        accountId: "default",
+        defaultAccountId: "default",
+        eligibleAccountIds: ["default"],
+      }),
+    ).toBe(true);
+    expect(
+      doesApprovalRequestSelectChannelAccount({
+        cfg: {},
+        request: baseRequest,
+        channel: "telegram",
+        accountId: "default",
+        defaultAccountId: "default",
+        eligibleAccountIds: ["default", "ops"],
+      }),
+    ).toBe(false);
+  });
+
+  it("selects the recorded account even when several accounts are eligible", () => {
+    const request = buildRequest({
+      turnSourceChannel: "telegram",
+      turnSourceAccountId: "ops",
+    });
+    expect(
+      doesApprovalRequestSelectChannelAccount({
+        cfg: {},
+        request,
+        channel: "telegram",
+        accountId: "ops",
+        defaultAccountId: "default",
+        eligibleAccountIds: ["default", "ops"],
+      }),
+    ).toBe(true);
+    expect(
+      doesApprovalRequestSelectChannelAccount({
+        cfg: {},
+        request,
+        channel: "telegram",
+        accountId: "default",
+        defaultAccountId: "default",
+        eligibleAccountIds: ["default", "ops"],
+      }),
+    ).toBe(false);
+  });
+
+  it("maps unscoped explicit targets to default and preserves scoped targets", () => {
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [
+            { channel: "telegram", to: "owner" },
+            { channel: "telegram", to: "ops-owner", accountId: "ops" },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+    for (const [accountId, selected] of [
+      ["default", true],
+      ["ops", true],
+      ["other", false],
+    ] as const) {
+      expect(
+        doesApprovalRequestSelectChannelAccount({
+          cfg,
+          request: baseRequest,
+          channel: "telegram",
+          accountId,
+          defaultAccountId: "default",
+          eligibleAccountIds: ["default", "ops", "other"],
+        }),
+      ).toBe(selected);
+    }
+  });
+
+  it("selects the source account and explicit targets in both mode", () => {
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "both",
+          targets: [{ channel: "telegram", accountId: "audit" }],
+        },
+      },
+    } as OpenClawConfig;
+    const request = buildRequest({
+      turnSourceChannel: "telegram",
+      turnSourceAccountId: "ops",
+    });
+
+    for (const [accountId, selected] of [
+      ["ops", true],
+      ["audit", true],
+      ["other", false],
+    ] as const) {
+      expect(
+        doesApprovalRequestSelectChannelAccount({
+          cfg,
+          request,
+          channel: "telegram",
+          accountId,
+          defaultAccountId: "default",
+          eligibleAccountIds: ["ops", "audit", "other"],
+        }),
+      ).toBe(selected);
+    }
+  });
+});
+
+type SessionEntryFixture = Partial<SessionEntry> & {
+  origin?: SessionOrigin;
+  lastChannel?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+  lastThreadId?: string | number;
+};
+
 async function writeStoreFile(
   storePath: string,
-  entries: Record<string, Partial<SessionEntry>>,
+  entries: Record<string, SessionEntryFixture>,
 ): Promise<OpenClawConfig> {
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
   await Promise.all(
@@ -75,11 +202,11 @@ async function writeStoreFile(
           storePath,
           sessionKey,
         },
-        {
+        normalizeLegacySessionEntryDelivery({
           sessionId: entry.sessionId ?? sessionKey,
           updatedAt: entry.updatedAt ?? Date.now(),
           ...entry,
-        } as SessionEntry,
+        } as SessionEntry),
       ),
     ),
   );
@@ -145,7 +272,7 @@ describe("exec approval session target", () => {
   type PlaceholderStoreCase = {
     name: string;
     relativeStoreDir: string;
-    entries: Record<string, Partial<SessionEntry>>;
+    entries: Record<string, SessionEntryFixture>;
     request: ExecApprovalRequest;
     expected: ReturnType<typeof resolveExecApprovalSessionTarget>;
   };

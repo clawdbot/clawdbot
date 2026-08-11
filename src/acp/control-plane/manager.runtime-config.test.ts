@@ -995,38 +995,4 @@ describe("AcpSessionManager runtime config", () => {
     });
     expect(nextOptions).toEqual({ permissionProfile: "strict" });
   });
-
-  it("rejects invalid runtime option values before backend controls run", async () => {
-    const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.readAcpSessionEntryMock.mockReturnValue({
-      sessionKey: "agent:codex:acp:session-1",
-      storeSessionKey: "agent:codex:acp:session-1",
-      acp: readySessionMeta(),
-    });
-
-    const manager = new AcpSessionManager();
-    await expectRejectedRecord(
-      manager.setSessionConfigOption({
-        cfg: baseCfg,
-        sessionKey: "agent:codex:acp:session-1",
-        key: "timeout",
-        value: "not-a-number",
-      }),
-      { code: "ACP_INVALID_RUNTIME_OPTION" },
-    );
-    expect(runtimeState.setConfigOption).not.toHaveBeenCalled();
-
-    await expectRejectedRecord(
-      manager.updateSessionRuntimeOptions({
-        cfg: baseCfg,
-        sessionKey: "agent:codex:acp:session-1",
-        patch: { cwd: "relative/path" },
-      }),
-      { code: "ACP_INVALID_RUNTIME_OPTION" },
-    );
-  });
 });

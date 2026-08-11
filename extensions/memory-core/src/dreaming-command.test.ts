@@ -2,20 +2,14 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { handleDreamingCommand } from "./dreaming-command.js";
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
 function resolveStoredDreaming(config: OpenClawConfig): Record<string, unknown> {
-  const entry = asRecord(config.plugins?.entries?.["memory-core"]);
-  const pluginConfig = asRecord(entry?.config);
-  return asRecord(pluginConfig?.dreaming) ?? {};
+  const entry = asNullableRecord(config.plugins?.entries?.["memory-core"]);
+  const pluginConfig = asNullableRecord(entry?.config);
+  return asNullableRecord(pluginConfig?.dreaming) ?? {};
 }
 
 function createHarness(initialConfig: OpenClawConfig = {}) {
@@ -202,9 +196,10 @@ describe("memory-core /dreaming command", () => {
     const result = await runDreamingCommand(harness, "status");
 
     expect(result.text).toContain("Dreaming status:");
-    expect(result.text).toContain("- enabled: off (America/Los_Angeles)");
+    // Dreaming is enabled by default; the fixture sets no explicit enabled flag.
+    expect(result.text).toContain("- enabled: on (America/Los_Angeles)");
     expect(result.text).toContain("- sweep cadence: 15 */8 * * *");
-    expect(result.text).toContain("- promotion policy: score>=0.8, recalls>=3, uniqueQueries>=3");
+    expect(result.text).toContain("- promotion policy: score>=0.75, recalls>=3, uniqueQueries>=3");
     expect(harness.runtime.config.mutateConfigFile).not.toHaveBeenCalled();
   });
 

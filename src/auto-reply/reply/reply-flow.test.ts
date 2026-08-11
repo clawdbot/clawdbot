@@ -1,5 +1,6 @@
 // Tests high-level reply flow decisions across commands and agent dispatch.
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
@@ -15,14 +16,6 @@ type DeliverMock = { mock: { calls: unknown[][] } };
 function deliveredText(deliver: DeliverMock, index = 0) {
   const payload = deliver.mock.calls[index]?.[0] as DeliverPayload | undefined;
   return payload?.text;
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
 }
 
 describe("createReplyDispatcher", () => {
@@ -166,10 +159,35 @@ describe("createReplyDispatcher", () => {
     expect(delivered).toEqual(["tool", "block", "final"]);
   });
 
+  it("waits for asynchronous delivery error cleanup before becoming idle", async () => {
+    const cleanup = createDeferred();
+    const order: string[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async () => {
+        throw new Error("delivery failed");
+      },
+      onError: async () => {
+        order.push("cleanup-start");
+        await cleanup.promise;
+        order.push("cleanup-end");
+      },
+    });
+
+    dispatcher.sendFinalReply({ text: "final" });
+    const idle = dispatcher.waitForIdle().then(() => {
+      order.push("idle");
+    });
+    await vi.waitFor(() => expect(order).toEqual(["cleanup-start"]));
+
+    cleanup.resolve();
+    await idle;
+    expect(order).toEqual(["cleanup-start", "cleanup-end", "idle"]);
+  });
+
   it("releases the same dispatcher after a beforeDeliver timeout", async () => {
     vi.useFakeTimers();
     try {
-      const hookStarted = createDeferred<void>();
+      const hookStarted = createDeferred();
       const delivered: string[] = [];
       const errors: string[] = [];
       let hookCalls = 0;
@@ -210,7 +228,7 @@ describe("createReplyDispatcher", () => {
   it("bounds hooks appended after dispatcher construction", async () => {
     vi.useFakeTimers();
     try {
-      const hookStarted = createDeferred<void>();
+      const hookStarted = createDeferred();
       const delivered: string[] = [];
       let hookCalls = 0;
       const dispatcher = createReplyDispatcher({
@@ -552,7 +570,7 @@ describe("createReplyToModeFilterForChannel", () => {
         expectedReplyToId: undefined,
       },
       {
-        filter: createReplyToModeFilterForChannel("off", "slack"),
+        filter: createReplyToModeFilterForChannel("off", "telegram"),
         input: { text: "hi", replyToId: "1", replyToTag: true },
         expectedReplyToId: "1",
       },

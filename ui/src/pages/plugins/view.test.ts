@@ -49,6 +49,7 @@ function createProps(overrides: Partial<PluginsViewProps> = {}): PluginsViewProp
     messages: {},
     pendingRemoval: {},
     detailPluginId: null,
+    iconUrls: {},
     canMutate: true,
     mutationBlockedReason: null,
     pageNotice: null,
@@ -60,6 +61,7 @@ function createProps(overrides: Partial<PluginsViewProps> = {}): PluginsViewProp
     onQueryChange: () => undefined,
     onFilterChange: () => undefined,
     onRefresh: () => undefined,
+    onIconError: () => undefined,
     onShowDetails: () => undefined,
     onSetEnabled: () => undefined,
     onInstall: () => undefined,
@@ -167,13 +169,42 @@ describe("renderPlugins", () => {
     }
   });
 
+  it("renders proxied plugin icons and falls back after an image error", () => {
+    const plugin = createPlugin({
+      id: "remote-icon",
+      name: "FireCrawl",
+      origin: "official",
+      hasIcon: true,
+    });
+    const onIconError = vi.fn();
+    const first = mount(
+      createProps({
+        result: createResult([plugin]),
+        iconUrls: { "remote-icon": "blob:firecrawl-icon" },
+        onIconError,
+      }),
+    );
+    const image = first.querySelector<HTMLImageElement>(
+      '[data-plugin-id="remote-icon"] .plugins-tile img.plugins-icon',
+    );
+    expect(image?.getAttribute("src")).toBe("blob:firecrawl-icon");
+    image?.dispatchEvent(new Event("error"));
+    expect(onIconError).toHaveBeenCalledWith("remote-icon");
+
+    const fallback = mount(createProps({ result: createResult([plugin]) }));
+    expect(
+      fallback.querySelector('[data-plugin-id="remote-icon"] .plugins-tile--fallback')?.textContent,
+    ).toContain("FI");
+  });
+
   it("keeps plugin monograms usable when Intl.Segmenter is unavailable", async () => {
     const originalSegmenter = Intl.Segmenter;
     Object.defineProperty(Intl, "Segmenter", { configurable: true, value: undefined });
     vi.resetModules();
 
     try {
-      const { pluginMonogram } = await import("./presentation.ts");
+      const freshModulePath = "./presentation.ts?without-intl-segmenter";
+      const { pluginMonogram } = await import(/* @vite-ignore */ freshModulePath);
       expect(pluginMonogram("😀 Tools")).toBe("😀T");
       expect(pluginMonogram("👩‍💻 Tools")).toBe("👩T");
     } finally {
@@ -202,6 +233,44 @@ describe("renderPlugins", () => {
       group.dispatchEvent(new Event("change", { bubbles: true }));
     }
     expect(onFilterChange).toHaveBeenCalledWith("issues");
+  });
+
+  it.each(["@openclaw/workboard", "  @OPENCLAW/WORKBOARD  "])(
+    "finds an installed plugin by its scoped package name %s",
+    (query) => {
+      const plugin = createPlugin({ packageName: "@openclaw/workboard" });
+      const container = mount(createProps({ query, result: createResult([plugin]) }));
+
+      expect(container.querySelector('[data-plugin-id="workboard"]')).not.toBeNull();
+      expect(normalizedText(container)).toContain("@openclaw/workboard");
+    },
+  );
+
+  it.each([
+    { shelf: "featured", featured: true },
+    { shelf: "official", featured: false },
+  ])("finds an official $shelf plugin by its scoped package name", ({ featured }) => {
+    const plugin = createPlugin({
+      id: "calendar-runtime",
+      name: "Shared Calendar",
+      packageName: "@openclaw/calendar-runtime",
+      description: "Schedule team events.",
+      origin: "official",
+      installed: false,
+      enabled: false,
+      state: "not-installed",
+      featured,
+      install: { source: "official", pluginId: "calendar-runtime" },
+    });
+    const container = mount(
+      createProps({
+        activeTab: "discover",
+        query: "@openclaw/calendar-runtime",
+        result: createResult([plugin]),
+      }),
+    );
+
+    expect(container.querySelector('[data-plugin-id="calendar-runtime"]')).not.toBeNull();
   });
 
   it("offers enable and remove through direct row actions", () => {
@@ -266,8 +335,19 @@ describe("renderPlugins", () => {
   it("opens the detail overlay from a row and renders actions and metadata", () => {
     const onShowDetails = vi.fn();
     const clickable = mount(createProps({ onShowDetails }));
-    clickable.querySelector<HTMLElement>('[data-plugin-id="workboard"]')?.click();
+    const row = clickable.querySelector<HTMLElement>('[data-plugin-id="workboard"]');
+    const detailButton = row?.querySelector<HTMLButtonElement>(".plugins-item__detail-button");
+    expect(detailButton).toBeInstanceOf(HTMLButtonElement);
+    expect(detailButton?.type).toBe("button");
+    expect(detailButton?.getAttribute("aria-label")).toBe("Workboard");
+    detailButton?.focus();
+    expect(document.activeElement).toBe(detailButton);
+    detailButton?.click();
+    expect(onShowDetails).toHaveBeenCalledOnce();
     expect(onShowDetails).toHaveBeenCalledWith("workboard");
+
+    row?.click();
+    expect(onShowDetails).toHaveBeenCalledTimes(2);
 
     const onSetEnabled = vi.fn();
     const container = mount(
@@ -298,9 +378,12 @@ describe("renderPlugins", () => {
           {
             name: "github",
             enabled: true,
-            transport: "http",
+            transport: "streamable-http",
             target: "https://api.githubcopilot.com/mcp/",
             auth: "oauth",
+            toolFilter: false,
+            parallel: false,
+            tls: null,
           },
         ],
         onMcpToggle,
@@ -317,13 +400,14 @@ describe("renderPlugins", () => {
     actionButton(row, "Remove github")?.click();
     expect(onMcpRemove).toHaveBeenCalledWith("github");
 
-    const form = container.querySelector<HTMLFormElement>(".plugins-mcp-form")!;
+    const form = container.querySelector<HTMLFormElement>(".mcp-server-form")!;
     form.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "context7";
     form.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value =
       "https://mcp.context7.com/mcp";
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     expect(onMcpAdd).toHaveBeenCalledWith({
       name: "context7",
+      transport: "streamable-http",
       target: "https://mcp.context7.com/mcp",
     });
   });
@@ -360,6 +444,41 @@ describe("renderPlugins", () => {
     });
   });
 
+  it("renders featured plugins newest-featured first", () => {
+    const plugins = [
+      createPlugin({
+        id: "not-featured",
+        name: "Not Featured",
+        featured: false,
+        origin: "official",
+        installed: false,
+        order: 0,
+      }),
+      createPlugin({
+        id: "older-popular",
+        name: "Older Popular",
+        featured: true,
+        featuredAt: 100,
+        order: 1,
+      }),
+      createPlugin({
+        id: "newest-featured",
+        name: "Newest Featured",
+        featured: true,
+        featuredAt: 200,
+        order: 99,
+      }),
+    ];
+
+    const container = mount(createProps({ activeTab: "discover", result: createResult(plugins) }));
+
+    expect(
+      [...container.querySelectorAll<HTMLElement>("[data-plugin-id]")].map(
+        (row) => row.dataset.pluginId,
+      ),
+    ).toEqual(["newest-featured", "older-popular", "not-featured"]);
+  });
+
   it("adds MCP connectors and routes ClawHub connector searches", () => {
     const onAddConnector = vi.fn();
     const onSearchClawHub = vi.fn();
@@ -384,7 +503,16 @@ describe("renderPlugins", () => {
       createProps({
         activeTab: "discover",
         mcpServers: [
-          { name: "github", enabled: true, transport: "http", target: "https://x", auth: "oauth" },
+          {
+            name: "github",
+            enabled: true,
+            transport: "streamable-http",
+            target: "https://x",
+            auth: "oauth",
+            toolFilter: false,
+            parallel: false,
+            tls: null,
+          },
         ],
       }),
     );
@@ -545,6 +673,7 @@ describe("renderPlugins", () => {
       install: undefined,
     });
     const onSetEnabled = vi.fn();
+    const onShowDetails = vi.fn();
     const container = mount(
       createProps({
         activeTab: "discover",
@@ -563,6 +692,7 @@ describe("renderPlugins", () => {
           },
         ],
         onSetEnabled,
+        onShowDetails,
       }),
     );
 
@@ -571,6 +701,13 @@ describe("renderPlugins", () => {
     expect(row.querySelector(".plugins-install")).toBeNull();
     actionButton(row, "Disable")?.click();
     expect(onSetEnabled).toHaveBeenCalledWith("calendar-runtime", false, clawHubKey(packageName));
+    expect(onShowDetails).not.toHaveBeenCalled();
+    const detailButton = row.querySelector<HTMLButtonElement>(".plugins-item__detail-button");
+    expect(detailButton).toBeInstanceOf(HTMLButtonElement);
+    expect(detailButton?.getAttribute("aria-label")).toBe("Calendar Plus");
+    detailButton?.click();
+    expect(onShowDetails).toHaveBeenCalledOnce();
+    expect(onShowDetails).toHaveBeenCalledWith("calendar-runtime");
   });
 
   it("does not present an empty catalog alongside an initial list failure", () => {

@@ -3,6 +3,7 @@ import { vi } from "vitest";
 import {
   inspectPortUsage,
   killProcessTree,
+  resolveGatewayServiceProbeHosts,
   schtasksCalls,
   schtasksResponses,
 } from "./schtasks-fixtures.js";
@@ -15,8 +16,13 @@ vi.mock("../schtasks-exec.js", () => ({
   },
 }));
 
-vi.mock("../../infra/ports.js", () => ({
-  inspectPortUsage: (port: number) => inspectPortUsage(port),
+vi.mock("../../infra/ports-inspect.js", () => ({
+  inspectPortUsage: (port: number, options?: { probeHosts?: readonly string[] }) =>
+    inspectPortUsage(port, options),
+}));
+
+vi.mock("../gateway-service-probe-hosts.js", () => ({
+  resolveGatewayServiceProbeHosts: () => resolveGatewayServiceProbeHosts(),
 }));
 
 vi.mock("../../process/kill-tree.js", () => ({
@@ -24,10 +30,14 @@ vi.mock("../../process/kill-tree.js", () => ({
 }));
 
 // Launcher encode/decode must not depend on the dev or CI machine's code page;
-// unpinned, a CJK-locale Windows host would ANSI-encode fixture launcher files.
+// unpinned, a non-UTF-8-locale Windows host would OEM-encode fixture launcher files.
 vi.mock("../../infra/windows-encoding.js", async () => {
   const actual = await vi.importActual<typeof import("../../infra/windows-encoding.js")>(
     "../../infra/windows-encoding.js",
   );
-  return { ...actual, resolveWindowsSystemEncoding: () => null };
+  return {
+    ...actual,
+    resolveWindowsOemCodePage: () => 437,
+    resolveWindowsOemEncoding: () => "cp437",
+  };
 });

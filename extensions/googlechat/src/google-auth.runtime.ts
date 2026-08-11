@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES } from "./google-auth-limits.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type GoogleAuthRuntime = typeof import("google-auth-library");
@@ -45,8 +46,6 @@ const GOOGLE_AUTH_TOKEN_URI = "https://oauth2.googleapis.com/token";
 const GOOGLE_AUTH_UNIVERSE_DOMAIN = "googleapis.com";
 const GOOGLE_CLIENT_CERTS_URL_PREFIX = "https://www.googleapis.com/robot/v1/metadata/x509/";
 const MAX_GOOGLE_AUTH_RESPONSE_BYTES = 1024 * 1024;
-const MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES = 64 * 1024;
-
 let googleAuthRuntimePromise: Promise<GoogleAuthRuntime> | null = null;
 
 function normalizeGoogleAuthPreparedRequestHeaders<T extends RequestInit & { headers?: unknown }>(
@@ -433,6 +432,12 @@ function createGoogleAuthFetch(): FetchLike {
         statusText: response.statusText,
       });
     } finally {
+      // The size guard can reject before the stream is touched, leaving an
+      // unread body. Start cancellation before release; awaiting it can
+      // deadlock when debug capture tees the stream.
+      if (!response.bodyUsed) {
+        void response.body?.cancel().catch(() => undefined);
+      }
       await release();
     }
   };

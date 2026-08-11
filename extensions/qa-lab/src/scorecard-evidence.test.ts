@@ -1,4 +1,4 @@
-// Qa Lab tests cover profile scorecard evidence math.
+// QA Lab tests cover profile scorecard evidence math.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +8,7 @@ import {
   type QaEvidenceSummaryJson,
   type QaEvidenceSummaryEntry,
 } from "./evidence-summary.js";
+import type { QaProfileEvidencePlan } from "./profile-evidence-plan.js";
 import { attachQaProfileScorecardEvidenceToFile } from "./scorecard-evidence.js";
 import type { QaScorecardCategoryCoverageReport } from "./scorecard-taxonomy.js";
 
@@ -69,12 +70,30 @@ async function buildQaProfileScorecardEvidence(params: {
     const scorecard = await attachQaProfileScorecardEvidenceToFile({
       evidencePath,
       profile: "release",
+      profilePlan: {
+        profile: "release",
+        membership: [],
+        selected: [],
+        excluded: [],
+        expectedCells: [],
+        observedCells: [],
+        missingCells: [],
+        counts: {
+          membership: 0,
+          selected: 0,
+          excluded: 0,
+          expectedCells: 0,
+          observedCells: 0,
+          missingCells: 0,
+        },
+      } satisfies QaProfileEvidencePlan,
       filters: params.filters,
       categories: params.categories,
     });
     const writtenEvidence = validateQaEvidenceSummaryJson(
       JSON.parse(await fs.readFile(evidencePath, "utf8")),
     );
+    expect(writtenEvidence.profilePlan?.profile).toBe("release");
     return { scorecard, writtenEvidence };
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
@@ -82,14 +101,17 @@ async function buildQaProfileScorecardEvidence(params: {
 }
 
 describe("profile scorecard evidence", () => {
-  it("scores partial multi-id feature coverage by covered coverage IDs", async () => {
+  it("scores atomic feature coverage by its one exact coverage ID", async () => {
     const category: QaScorecardCategoryCoverageReport = {
       id: "surface.category",
       taxonomySurfaceId: "surface",
       taxonomyCategoryName: "Category",
       inventoryStatus: "partial",
       profiles: ["release"],
-      features: [{ name: "Multi-id feature", coverageIds: ["coverage.one", "coverage.two"] }],
+      features: [
+        { name: "Covered feature", coverageIds: ["coverage.one"] },
+        { name: "Missing feature", coverageIds: ["coverage.two"] },
+      ],
       coverageIds: ["coverage.one", "coverage.two"],
       inventoriedCoverageIds: ["coverage.one"],
       inventoryRefs: [],
@@ -117,11 +139,11 @@ describe("profile scorecard evidence", () => {
 
     expect(scorecard.categoryReports[0]?.status).toBe("partial");
     expect(scorecard.categoryReports[0]?.features).toMatchObject({
-      total: 1,
-      fulfilled: 0,
-      partial: 1,
-      missing: 0,
-      fulfillmentPercent: 0,
+      total: 2,
+      fulfilled: 1,
+      partial: 0,
+      missing: 1,
+      fulfillmentPercent: 50,
     });
     expect(scorecard.categoryReports[0]?.coverageIds).toMatchObject({
       total: 2,
@@ -137,11 +159,11 @@ describe("profile scorecard evidence", () => {
       fulfillmentPercent: 50,
     });
     expect(scorecard.features).toMatchObject({
-      total: 1,
-      fulfilled: 0,
-      partial: 1,
-      missing: 0,
-      fulfillmentPercent: 0,
+      total: 2,
+      fulfilled: 1,
+      partial: 0,
+      missing: 1,
+      fulfillmentPercent: 50,
     });
   });
 

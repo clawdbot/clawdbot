@@ -9,9 +9,20 @@ import {
   redactLiveApiKey,
   resolveConfiguredLiveVideoModels,
   resolveLiveVideoAuthStore,
+  resolveLiveVideoResolution,
 } from "./live-test-helpers.js";
 
 describe("video-generation live-test helpers", () => {
+  it.each([
+    ["alibaba", "alibaba/wan2.6-t2v", "720P"],
+    ["qwen", "qwen/wan2.6-t2v", "720P"],
+    ["minimax", "minimax/MiniMax-Hailuo-2.3", "768P"],
+    ["pixverse", "pixverse/v6", "540P"],
+    ["google", "google/veo-3.1-fast-generate-preview", "480P"],
+  ] as const)("uses a supported %s live resolution", (providerId, modelRef, expected) => {
+    expect(resolveLiveVideoResolution({ providerId, modelRef })).toBe(expected);
+  });
+
   it("parses provider filters and treats empty/all as unfiltered", () => {
     expect(parseCsvFilter()).toBeNull();
     expect(parseCsvFilter("all")).toBeNull();
@@ -33,9 +44,11 @@ describe("video-generation live-test helpers", () => {
     const cfg = {
       agents: {
         defaults: {
-          videoGenerationModel: {
-            primary: "google/veo-3.1-fast-generate-preview",
-            fallbacks: ["openai/sora-2", "invalid"],
+          mediaModels: {
+            video: {
+              primary: "google/veo-3.1-fast-generate-preview",
+              fallbacks: ["openai/sora-2", "invalid"],
+            },
           },
         },
       },
@@ -78,8 +91,9 @@ describe("video-generation live-test helpers", () => {
 
   it("redacts live API keys for diagnostics", () => {
     expect(redactLiveApiKey(undefined)).toBe("none");
-    expect(redactLiveApiKey("short-key")).toBe("short-key");
-    expect(redactLiveApiKey("sk-proj-1234567890")).toBe("sk-proj-...7890");
+    expect(redactLiveApiKey("   ")).toBe("none");
+    expect(redactLiveApiKey("synthetic-12")).toBe("<redacted>");
+    expect(redactLiveApiKey("synthetic-credential-value")).toBe("<redacted>");
   });
 
   it("runs buffer-backed video-to-video only for supported providers/models", () => {

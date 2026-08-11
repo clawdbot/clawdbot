@@ -1,4 +1,7 @@
-import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+  type WorkerAdmissionHandshake,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/types.js";
 import type { WorkerDispatchEnvironmentService } from "./placement-dispatch-failure.js";
 import type { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
@@ -16,6 +19,7 @@ type DispatchEnvironmentRecord = Awaited<ReturnType<WorkerDispatchEnvironmentSer
 export type DispatchStage =
   | "barrier"
   | "workspace"
+  | "preflight"
   | "create"
   | "tunnel:ready"
   | "sync"
@@ -78,15 +82,15 @@ export function seedActivePlacement(
   });
 }
 
-export function createDispatchEnvironmentFixtures() {
+export function createDispatchEnvironmentFixtures(generation = 1) {
   const environmentId = workerEnvironmentIdForIdempotencyKey(
-    `session-dispatch:${REQUEST.sessionId}:1`,
+    `session-dispatch:${REQUEST.sessionId}:${generation}`,
   );
   const profileSnapshot: WorkerProfile = { settings: { region: "test" } };
   const bootstrapReceipt: WorkerAdmissionHandshake = {
     bundleHash: BUNDLE_HASH,
     openclawVersion: "2026.7.2",
-    protocolFeatures: [],
+    protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
   };
   const sshEndpoint: WorkerSshEndpoint = {
     host: "worker.example.test",
@@ -101,6 +105,7 @@ export function createDispatchEnvironmentFixtures() {
     profileId: "development",
     profileSnapshot,
     provisionOperationId: "provision-1",
+    sharedHost: false,
     bootstrapReceipt,
     teardownTerminalState: null,
     lastError: null,
@@ -111,6 +116,9 @@ export function createDispatchEnvironmentFixtures() {
     destroyRequestedAtMs: null,
     leaseId: "lease-1",
     sshEndpoint,
+    desktop: null,
+    desktopAvailable: false,
+    desktopApps: [],
   };
   const ready = {
     ...environmentBase,

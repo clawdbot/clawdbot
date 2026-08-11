@@ -1,6 +1,6 @@
 // Feishu plugin module implements app registration behavior.
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
-import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 /**
  * Feishu app registration via OAuth device-code flow.
  *
@@ -257,7 +257,7 @@ export async function pollAppRegistration(params: {
       );
     } catch {
       // Transient network error — keep polling.
-      await sleepRegistrationPollInterval(currentInterval);
+      await sleepRegistrationPollInterval(currentInterval, abortSignal);
       continue;
     }
 
@@ -303,7 +303,7 @@ export async function pollAppRegistration(params: {
       }
     }
 
-    await sleepRegistrationPollInterval(currentInterval);
+    await sleepRegistrationPollInterval(currentInterval, abortSignal);
   }
 
   return { status: "timeout" };
@@ -394,9 +394,14 @@ export async function getAppOwnerOpenId(params: {
   }
 }
 
-function sleepRegistrationPollInterval(intervalSeconds: number): Promise<void> {
+async function sleepRegistrationPollInterval(
+  intervalSeconds: number,
+  abortSignal?: AbortSignal,
+): Promise<void> {
   const intervalMs =
     finiteSecondsToTimerSafeMilliseconds(intervalSeconds) ??
     DEFAULT_REGISTRATION_POLL_INTERVAL_SECONDS * 1_000;
-  return sleep(intervalMs);
+  // Swallow the abort rejection: the poll loop's `aborted` check owns the exit
+  // path so PollOutcome stays "timeout" instead of an unhandled rejection.
+  await sleepWithAbort(intervalMs, abortSignal).catch(() => {});
 }

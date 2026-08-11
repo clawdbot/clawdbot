@@ -237,6 +237,7 @@ internal class AndroidOnDeviceVoiceWakeRecognizer(
 
 internal enum class VoiceWakeSuppressionReason {
   Camera,
+  Dictation,
   GatewaySync,
   VoiceCapture,
   VoiceNote,

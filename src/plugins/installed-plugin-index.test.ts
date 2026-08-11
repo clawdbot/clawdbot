@@ -1,12 +1,13 @@
-// Covers installed plugin index read, write, and policy behavior.
 import fs from "node:fs";
 import path from "node:path";
+// Covers installed plugin index read, write, and policy behavior.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
 import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
 import {
   loadInstalledPluginIndexInstallRecordsSync,
-  readPersistedInstalledPluginIndexInstallRecordsSync,
   writePersistedInstalledPluginIndexInstallRecords,
 } from "./installed-plugin-index-records.js";
 import {
@@ -48,16 +49,7 @@ function writeRuntimeEntry(rootDir: string) {
   );
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error(`Expected ${label} to be an object`);
-  }
-  return value;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
 
 function readRecordField(record: Record<string, unknown>, key: string, label: string) {
   const value = record[key];
@@ -157,13 +149,7 @@ function createRichPluginFixture(params: { id?: string; packageVersion?: string 
     contracts: {
       tools: ["demo-tool"],
     },
-    providerAuthEnvVars: {
-      demo: ["DEMO_API_KEY"],
-    },
     syntheticAuthRefs: ["demo", "demo-cli"],
-    channelEnvVars: {
-      "demo-chat": ["DEMO_CHAT_TOKEN"],
-    },
     activation: {
       onAgentHarnesses: ["codex"],
       onProviders: ["demo"],
@@ -199,23 +185,6 @@ function createRichPluginFixture(params: { id?: string; packageVersion?: string 
 }
 
 describe("installed plugin index", () => {
-  it("drops blocked install record keys while reading persisted index records", () => {
-    const root = makeTempDir();
-    const filePath = path.join(root, "installed-plugin-index.json");
-    fs.writeFileSync(
-      filePath,
-      '{"installRecords":{"safe":{"source":"npm","spec":"safe"},"constructor":{"source":"npm","spec":"poison"},"prototype":{"source":"npm","spec":"poison"},"__proto__":{"source":"npm","spec":"poison"}}}',
-      "utf-8",
-    );
-
-    const records = readPersistedInstalledPluginIndexInstallRecordsSync({ filePath });
-
-    expect(records?.safe).toEqual({ source: "npm", spec: "safe" });
-    expect(Object.hasOwn(records ?? {}, "constructor")).toBe(false);
-    expect(Object.hasOwn(records ?? {}, "prototype")).toBe(false);
-    expect(Object.hasOwn(records ?? {}, "__proto__")).toBe(false);
-  });
-
   it("builds a runtime-free installed plugin snapshot from manifest and package metadata", () => {
     const fixture = createRichPluginFixture();
 
@@ -244,8 +213,6 @@ describe("installed plugin index", () => {
         "activation-agent-harness-hint",
         "activation-channel-hint",
         "activation-provider-hint",
-        "channel-env-vars",
-        "provider-auth-env-vars",
       ],
     });
     expectRecordFields(readRecordField(plugin, "packageInstall", "package install"), {
@@ -375,6 +342,37 @@ describe("installed plugin index", () => {
       compat: [],
     });
     expect(records[0]?.startup.sidecar).toBe(false);
+  });
+
+  it("does not read inherited prototype names as install records", () => {
+    const rootDir = makeTempDir();
+    writeRuntimeEntry(rootDir);
+    const manifestPath = path.join(rootDir, "openclaw.plugin.json");
+
+    const records = buildInstalledPluginIndexRecords({
+      candidates: [createPluginCandidate({ rootDir, idHint: "toString" })],
+      registry: {
+        plugins: [
+          {
+            id: "toString",
+            providers: [],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            origin: "global",
+            rootDir,
+            source: path.join(rootDir, "index.ts"),
+            manifestPath,
+          } as unknown as PluginManifestRecord,
+        ],
+        diagnostics: [],
+      },
+      diagnostics: [],
+      installRecords: {},
+    });
+
+    expect(records[0]?.pluginId).toBe("toString");
+    expect(records[0]?.installRecordHash).toBeUndefined();
   });
 
   it("indexes manifestless Claude bundles without missing-manifest diagnostics", () => {
@@ -1003,8 +1001,6 @@ describe("installed plugin index", () => {
         startup: {
           sidecar: plugin.startup.sidecar,
           memory: plugin.startup.memory,
-          deferConfiguredChannelFullLoadUntilAfterListen:
-            plugin.startup.deferConfiguredChannelFullLoadUntilAfterListen,
           agentHarnesses: plugin.startup.agentHarnesses,
         },
       })),
@@ -1156,6 +1152,31 @@ describe("installed plugin index", () => {
       })),
     };
     expect(diffInstalledPluginIndexInvalidationReasons(current, moved)).toContain("source-changed");
+  });
+
+  it("invalidates persisted metadata when only the doctor contract changes", () => {
+    const fixture = createRichPluginFixture();
+    const contractPath = path.join(fixture.rootDir, "doctor-contract-api.ts");
+    fs.writeFileSync(contractPath, "export const stateMigrations = [];\n", "utf8");
+    const previous = loadInstalledPluginIndex({
+      candidates: [fixture.candidate],
+      env: hermeticEnv(),
+    });
+
+    fs.writeFileSync(contractPath, "export const stateMigrations = [{ id: 'changed' }];\n", "utf8");
+    const current = loadInstalledPluginIndex({
+      candidates: [fixture.candidate],
+      env: hermeticEnv(),
+    });
+
+    expect(current.plugins[0]?.manifestHash).toBe(previous.plugins[0]?.manifestHash);
+    expect(current.plugins[0]?.packageJson?.hash).toBe(previous.plugins[0]?.packageJson?.hash);
+    expect(current.plugins[0]?.doctorContractHash).not.toBe(
+      previous.plugins[0]?.doctorContractHash,
+    );
+    expect(diffInstalledPluginIndexInvalidationReasons(previous, current)).toEqual([
+      "stale-manifest",
+    ]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

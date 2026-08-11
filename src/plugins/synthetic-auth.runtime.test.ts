@@ -46,7 +46,6 @@ vi.mock("./manifest-registry-installed.js", () => ({
 }));
 
 import {
-  resolveRuntimeExternalAuthProviderRefs,
   resolveRuntimeSyntheticAuthProviderRefState,
   resolveRuntimeSyntheticAuthProviderRefs,
 } from "./synthetic-auth.runtime.js";
@@ -114,30 +113,6 @@ describe("synthetic auth runtime refs", () => {
     });
   });
 
-  it("uses persisted registry external auth provider refs before the runtime registry exists", () => {
-    const snapshot = {
-      plugins: [{ syntheticAuthRefs: [] }],
-    };
-    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "persisted",
-      snapshot,
-      diagnostics: [],
-    });
-    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
-      plugins: [
-        { contracts: { externalAuthProviders: [" runtime-provider ", "runtime-provider"] } },
-        { contracts: { externalAuthProviders: ["external-cli"] } },
-        { contracts: {} },
-      ],
-      diagnostics: [],
-    });
-
-    expect(resolveRuntimeExternalAuthProviderRefs()).toEqual(["runtime-provider", "external-cli"]);
-    expect(pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledWith({
-      index: snapshot,
-    });
-  });
-
   it("does not derive the registry just to resolve synthetic auth refs", () => {
     pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
       source: "derived",
@@ -158,17 +133,6 @@ describe("synthetic auth runtime refs", () => {
     });
   });
 
-  it("does not derive the registry just to resolve external auth refs", () => {
-    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "derived",
-      snapshot: { plugins: [] },
-      diagnostics: [],
-    });
-
-    expect(resolveRuntimeExternalAuthProviderRefs()).toStrictEqual([]);
-    expect(pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
-  });
-
   it("does not treat a provided index with registry diagnostics as validated synthetic auth", () => {
     const index = {
       plugins: [{ syntheticAuthRefs: ["local-provider"] }],
@@ -183,22 +147,6 @@ describe("synthetic auth runtime refs", () => {
       }),
     ).toStrictEqual([]);
     expect(pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
-  });
-
-  it("does not treat a provided index with registry diagnostics as validated external auth", () => {
-    const index = {
-      plugins: [{ syntheticAuthRefs: [] }],
-    };
-
-    expect(
-      resolveRuntimeExternalAuthProviderRefs({
-        index: index as unknown as NonNullable<
-          Parameters<typeof resolveRuntimeExternalAuthProviderRefs>[0]
-        >["index"],
-        registryDiagnostics: [{ code: "persisted-registry-missing" }],
-      }),
-    ).toStrictEqual([]);
-    expect(pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
   });
 
   it("prefers the active runtime registry when plugins are already loaded", () => {
@@ -245,43 +193,6 @@ describe("synthetic auth runtime refs", () => {
       refs: ["manifest-provider", "runtime-provider", "runtime-cli"],
       complete: true,
     });
-    expect(pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
-  });
-
-  it("prefers active runtime registry external auth refs when plugins are already loaded", () => {
-    getPluginRegistryState.mockReturnValue({
-      activeRegistry: {
-        plugins: [
-          {
-            contracts: {
-              externalAuthProviders: ["manifest-provider"],
-            },
-          },
-        ],
-        providers: [
-          {
-            provider: {
-              id: "runtime-provider",
-              resolveExternalAuthProfiles: () => [],
-            },
-          },
-        ],
-        cliBackends: [
-          {
-            backend: {
-              id: "runtime-cli",
-              resolveExternalAuthProfiles: () => [],
-            },
-          },
-        ],
-      },
-    });
-
-    expect(resolveRuntimeExternalAuthProviderRefs()).toEqual([
-      "manifest-provider",
-      "runtime-provider",
-      "runtime-cli",
-    ]);
     expect(pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
   });
 });

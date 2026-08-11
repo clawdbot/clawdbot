@@ -107,8 +107,8 @@ export abstract class AgentSessionInspection extends AgentSessionModels {
             if (contextTokens > 0) {
               hasPostCompactionUsage = true;
               estimateFromContent = false;
+              break;
             }
-            break;
           }
         }
       }

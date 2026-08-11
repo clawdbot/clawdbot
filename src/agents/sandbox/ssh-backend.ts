@@ -16,11 +16,14 @@ import type {
   SandboxBackendManager,
 } from "./backend.types.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
+import { hashTextSha256 } from "./hash.js";
 import {
   createRemoteShellSandboxFsBridge,
   type RemoteShellSandboxHandle,
 } from "./remote-fs-bridge.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
+import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
+import { resolveSandboxAgentId } from "./shared.js";
 import {
   buildRemoteCommand,
   buildRemoteWorkdirValidationCommand,
@@ -49,7 +52,8 @@ type ResolvedSshRuntimePaths = {
 /** SSH backend lifecycle hooks for probing and removing remote sandbox copies. */
 export const sshSandboxBackendManager: SandboxBackendManager = {
   async describeRuntime({ entry, config, agentId }) {
-    const cfg = resolveSandboxConfigForAgent(config, agentId);
+    const effectiveAgentId = agentId ?? resolveSandboxAgentId(entry.sessionKey);
+    const cfg = resolveSandboxConfigForAgent(config, effectiveAgentId);
     if (cfg.backend !== "ssh" || !cfg.ssh.target) {
       return {
         running: false,
@@ -57,6 +61,11 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
         configLabelMatch: false,
       };
     }
+    assertSshSandboxSecretOwnerAvailable({
+      config,
+      scope: cfg.scope,
+      agentId: effectiveAgentId,
+    });
     const runtimePaths = resolveSshRuntimePaths(cfg.ssh.workspaceRoot, entry.sessionKey);
     const session = await createSshSandboxSessionFromSettings({
       ...cfg.ssh,
@@ -83,10 +92,16 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
     }
   },
   async removeRuntime({ entry, config, agentId }) {
-    const cfg = resolveSandboxConfigForAgent(config, agentId);
+    const effectiveAgentId = agentId ?? resolveSandboxAgentId(entry.sessionKey);
+    const cfg = resolveSandboxConfigForAgent(config, effectiveAgentId);
     if (cfg.backend !== "ssh" || !cfg.ssh.target) {
       return;
     }
+    assertSshSandboxSecretOwnerAvailable({
+      config,
+      scope: cfg.scope,
+      agentId: effectiveAgentId,
+    });
     const runtimePaths = resolveSshRuntimePaths(cfg.ssh.workspaceRoot, entry.sessionKey);
     const session = await createSshSandboxSessionFromSettings({
       ...cfg.ssh,
@@ -445,6 +460,9 @@ export function resolveSshRuntimePaths(
 
 function buildSshSandboxRuntimeId(scopeKey: string): string {
   const trimmed = scopeKey.trim() || "session";
+  if (/:workspace:[a-f0-9]{32}$/i.test(trimmed)) {
+    return `openclaw-ssh-workspace-${hashTextSha256(trimmed).slice(0, 32)}`;
+  }
   // Keep the path human-readable while hashing the original scope to avoid
   // collisions after normalization and truncation.
   const safe = normalizeLowercaseStringOrEmpty(trimmed)

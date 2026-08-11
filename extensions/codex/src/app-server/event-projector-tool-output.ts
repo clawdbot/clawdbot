@@ -2,8 +2,8 @@ import {
   formatToolAggregate,
   formatToolProgressOutput,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { readString } from "./event-projector-values.js";
 import { isJsonObject, type CodexThreadItem } from "./protocol.js";
 
 export const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;

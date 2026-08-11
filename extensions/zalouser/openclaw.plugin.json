@@ -1,5 +1,9 @@
 {
   "id": "zalouser",
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": true
+  },
   "name": "Zalo Personal",
   "description": "OpenClaw Zalo Personal Account plugin via native zca-js integration.",
   "icon": "https://cdn.simpleicons.org/zalo",
@@ -9,9 +13,6 @@
   "channels": ["zalouser"],
   "contracts": {
     "tools": ["zalouser"]
-  },
-  "channelEnvVars": {
-    "zalouser": ["ZALOUSER_PROFILE", "ZCA_PROFILE"]
   },
   "configSchema": {
     "type": "object",

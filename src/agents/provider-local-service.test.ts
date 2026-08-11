@@ -1,5 +1,6 @@
 // Verifies managed local provider services start, lease, probe, and stop safely.
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
@@ -20,8 +21,12 @@ import {
   getManagedProviderLocalServiceDiagnosticsForTest,
   getModelProviderLocalService,
   hasLocalServiceProcessExited,
-  stopManagedProviderLocalServicesForTest,
+  stopManagedProviderLocalServices,
 } from "./provider-local-service.js";
+
+const ONE_SHOT_HOST_READY_TIMEOUT_MS = 30_000;
+const ONE_SHOT_HOST_EXIT_TIMEOUT_MS = 5_000;
+const ONE_SHOT_HOST_READY_KIND = "ready-for-exit";
 
 async function freePort(): Promise<number> {
   // Allocate a real loopback port to exercise child process health probes.
@@ -104,11 +109,80 @@ async function withSpawnReadyHealthProbe<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
+async function waitForReadyOneShotHostExit(
+  child: ReturnType<typeof spawn>,
+  readStderr: () => string,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timeout);
+      child.off("message", onMessage);
+      child.off("error", onError);
+      child.off("exit", onExit);
+    };
+    const finish = (error?: Error) => {
+      cleanup();
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    const onMessage = (message: unknown) => {
+      if (
+        message &&
+        typeof message === "object" &&
+        (message as { kind?: unknown }).kind === ONE_SHOT_HOST_READY_KIND
+      ) {
+        finish();
+      }
+    };
+    const onError = (error: Error) => finish(error);
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      finish(
+        new Error(
+          `one-shot host exited before readiness (code=${String(code)} signal=${String(signal)})${readStderr()}`,
+        ),
+      );
+    };
+    const timeout = setTimeout(() => {
+      finish(new Error(`one-shot host did not become ready${readStderr()}`));
+    }, ONE_SHOT_HOST_READY_TIMEOUT_MS);
+
+    child.on("message", onMessage);
+    child.on("error", onError);
+    child.on("exit", onExit);
+  });
+
+  const exitPromise = waitForOneShotHostExit(child, readStderr);
+  // The fixture-owned IPC channel gates the exit deadline. Once removed,
+  // only the managed service's diagnostic pipes can keep this host alive.
+  child.disconnect();
+  return await exitPromise;
+}
+
+async function waitForOneShotHostExit(
+  child: ReturnType<typeof spawn>,
+  readStderr: () => string,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return { code: child.exitCode, signal: child.signalCode };
+  }
+  try {
+    const [code, signal] = (await once(child, "exit", {
+      signal: AbortSignal.timeout(ONE_SHOT_HOST_EXIT_TIMEOUT_MS),
+    })) as [number | null, NodeJS.Signals | null];
+    return { code, signal };
+  } catch (error) {
+    throw new Error(`one-shot host did not exit after readiness${readStderr()}`, { cause: error });
+  }
+}
+
 describe("provider local service", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   afterEach(() => {
-    stopManagedProviderLocalServicesForTest();
+    stopManagedProviderLocalServices();
   });
 
   it("attaches local service metadata to model objects", () => {
@@ -693,6 +767,8 @@ describe("provider local service", () => {
     const script = [
       `import fs from "node:fs/promises";`,
       `import { ensureProviderLocalService, getManagedProviderLocalServiceDiagnosticsForTest } from ${JSON.stringify(moduleUrl)};`,
+      `if (!process.send) throw new Error("missing one-shot host IPC");`,
+      `process.on("disconnect", () => {});`,
       `const port = ${port};`,
       `const lease = await ensureProviderLocalService({`,
       `  providerId: "local-unref",`,
@@ -709,37 +785,28 @@ describe("provider local service", () => {
       `if (diagnostics.stdoutTail || diagnostics.stderrTail) throw new Error("runtime output was retained");`,
       `await fs.writeFile(${JSON.stringify(servicePidPath)}, String(diagnostics.pid));`,
       `lease?.release();`,
+      `process.send({ kind: ${JSON.stringify(ONE_SHOT_HOST_READY_KIND)} });`,
     ].join("\n");
     const parent = spawn(
       process.execPath,
       ["--import", "tsx", "--input-type=module", "-e", script],
       {
         cwd: process.cwd(),
-        stdio: ["ignore", "ignore", "pipe"],
+        stdio: ["ignore", "ignore", "pipe", "ipc"],
       },
     );
     let stderr = "";
-    parent.stderr.on("data", (chunk: Buffer | string) => {
+    parent.stderr?.on("data", (chunk: Buffer | string) => {
       stderr += chunk.toString();
     });
     let servicePid: number | undefined;
-    let exitTimeout: NodeJS.Timeout | undefined;
 
     try {
-      const result = await Promise.race([
-        new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-          parent.once("exit", (code, signal) => resolve({ code, signal }));
-        }),
-        new Promise<"timeout">((resolve) => {
-          exitTimeout = setTimeout(() => resolve("timeout"), 5_000);
-        }),
-      ]);
-      clearTimeout(exitTimeout);
+      const result = await waitForReadyOneShotHostExit(parent, () => stderr);
       expect(result, stderr).toEqual({ code: 0, signal: null });
       servicePid = await readPidFile(servicePidPath);
       expect(await waitForPidToExit(servicePid)).toBe(true);
     } finally {
-      clearTimeout(exitTimeout);
       killPidIfAlive(parent.pid);
       if (servicePid === undefined) {
         servicePid = await readPidFile(servicePidPath).catch(() => undefined);
@@ -753,14 +820,34 @@ describe("provider local service", () => {
     const tempDir = tempDirs.make("openclaw-local-service-failed-unref-");
     const servicePidPath = path.join(tempDir, "service.pid");
     const moduleUrl = new URL("./provider-local-service.ts", import.meta.url).href;
+    const failedServiceReadyTimeoutMs = 60_000;
     const serviceScript = [
       `const fs=require("node:fs");`,
       `fs.writeFileSync(${JSON.stringify(servicePidPath)},String(process.pid));`,
       `process.on("SIGTERM",()=>{});`,
       `setInterval(()=>process.stderr.write("tick\\n"),10);`,
     ].join("");
+    // Advance only the nested host's readiness clock after the service PID exists.
+    // This preserves live-child failure cleanup without spending the deadline in wall time.
     const script = [
+      `import fs from "node:fs";`,
       `import { ensureProviderLocalService } from ${JSON.stringify(moduleUrl)};`,
+      `if (!process.send) throw new Error("missing one-shot host IPC");`,
+      `process.on("disconnect", () => {});`,
+      `const realNow = Date.now.bind(Date);`,
+      `const realSetTimeout = globalThis.setTimeout.bind(globalThis);`,
+      `let clockOffsetMs = 0;`,
+      `Date.now = () => realNow() + clockOffsetMs;`,
+      `globalThis.setTimeout = (callback, delay, ...args) => {`,
+      `  if (clockOffsetMs === 0 && fs.existsSync(${JSON.stringify(servicePidPath)})) {`,
+      `    return realSetTimeout(() => {`,
+      `      clockOffsetMs = ${failedServiceReadyTimeoutMs + 1};`,
+      `      globalThis.setTimeout = realSetTimeout;`,
+      `      callback(...args);`,
+      `    }, 0);`,
+      `  }`,
+      `  return realSetTimeout(callback, delay, ...args);`,
+      `};`,
       `try {`,
       `  await ensureProviderLocalService({`,
       `    providerId: "local-failed-unref",`,
@@ -768,36 +855,34 @@ describe("provider local service", () => {
       `    service: {`,
       `      command: process.execPath,`,
       `      args: ["-e", ${JSON.stringify(serviceScript)}],`,
-      `      readyTimeoutMs: 100,`,
+      `      readyTimeoutMs: ${failedServiceReadyTimeoutMs},`,
       `    },`,
       `  });`,
-      `} catch {}`,
+      `} catch (error) {`,
+      `  if (!(error instanceof Error) || !error.message.includes("did not become ready")) throw error;`,
+      `}`,
+      `if (clockOffsetMs === 0) throw new Error("test clock did not advance");`,
+      `process.send({ kind: ${JSON.stringify(ONE_SHOT_HOST_READY_KIND)} });`,
     ].join("\n");
     const parent = spawn(
       process.execPath,
       ["--import", "tsx", "--input-type=module", "-e", script],
       {
         cwd: process.cwd(),
-        stdio: ["ignore", "ignore", "ignore"],
+        stdio: ["ignore", "ignore", "pipe", "ipc"],
       },
     );
+    let stderr = "";
+    parent.stderr?.on("data", (chunk: Buffer | string) => {
+      stderr += chunk.toString();
+    });
     let servicePid: number | undefined;
-    let exitTimeout: NodeJS.Timeout | undefined;
 
     try {
-      const result = await Promise.race([
-        new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-          parent.once("exit", (code, signal) => resolve({ code, signal }));
-        }),
-        new Promise<"timeout">((resolve) => {
-          exitTimeout = setTimeout(() => resolve("timeout"), 5_000);
-        }),
-      ]);
-      clearTimeout(exitTimeout);
-      expect(result).toEqual({ code: 0, signal: null });
+      const result = await waitForReadyOneShotHostExit(parent, () => stderr);
+      expect(result, stderr).toEqual({ code: 0, signal: null });
       servicePid = await readPidFile(servicePidPath);
     } finally {
-      clearTimeout(exitTimeout);
       killPidIfAlive(parent.pid);
       if (servicePid === undefined) {
         servicePid = await readPidFile(servicePidPath).catch(() => undefined);

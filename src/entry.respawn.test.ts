@@ -37,6 +37,18 @@ describe("buildCliRespawnPlan", () => {
     ).toBeNull();
   });
 
+  it("does not detach native hook relays through a startup respawn", () => {
+    expect(
+      buildCliRespawnPlan({
+        argv: ["node", "openclaw", "hooks", "relay", "--relay-id", "relay-1"],
+        env: {},
+        execArgv: [],
+        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+        platform: "linux",
+      }),
+    ).toBeNull();
+  });
+
   it("adds NODE_EXTRA_CA_CERTS and warning suppression in one respawn", () => {
     const plan = buildCliRespawnPlan({
       argv: ["node", "openclaw", "status"],
@@ -87,6 +99,56 @@ describe("buildCliRespawnPlan", () => {
     const respawnPlan = expectCliRespawnPlan(plan);
     expect(respawnPlan.argv).toEqual([EXPERIMENTAL_WARNING_FLAG, "openclaw"]);
     expect(respawnPlan.detachForProcessTree).toBe(false);
+  });
+
+  it("preserves macOS system CA trust through one-shot warning respawns", () => {
+    const plan = buildCliRespawnPlan({
+      argv: ["node", "openclaw", "cron", "list", "--json"],
+      env: { NODE_USE_SYSTEM_CA: "1" },
+      execArgv: [],
+      autoNodeExtraCaCerts: undefined,
+      platform: "darwin",
+    });
+
+    const respawnPlan = expectCliRespawnPlan(plan);
+    expect(respawnPlan.argv).toEqual([
+      EXPERIMENTAL_WARNING_FLAG,
+      "openclaw",
+      "cron",
+      "list",
+      "--json",
+    ]);
+    expect(respawnPlan.env.NODE_USE_SYSTEM_CA).toBe("1");
+  });
+
+  it.each([
+    ["interactive commands", ["node", "openclaw", "tui"]],
+    ["the foreground Gateway", ["node", "openclaw", "gateway", "run"]],
+  ] as const)("keeps macOS system CA loading for %s", (_label, argv) => {
+    expect(
+      buildCliRespawnPlan({
+        argv: [...argv],
+        env: { NODE_USE_SYSTEM_CA: "1" },
+        execArgv: [],
+        autoNodeExtraCaCerts: undefined,
+        platform: "darwin",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not respawn one-shot commands only to change CA trust", () => {
+    expect(
+      buildCliRespawnPlan({
+        argv: ["node", "openclaw", "cron", "list", "--json"],
+        env: {
+          NODE_USE_SYSTEM_CA: "1",
+          [OPENCLAW_NODE_OPTIONS_READY]: "1",
+        },
+        execArgv: [EXPERIMENTAL_WARNING_FLAG],
+        autoNodeExtraCaCerts: undefined,
+        platform: "darwin",
+      }),
+    ).toBeNull();
   });
 
   it("does not respawn interactive commands for warning suppression only", () => {
@@ -154,7 +216,7 @@ describe("buildCliRespawnPlan", () => {
     expect(respawnPlan.detachForProcessTree).toBe(false);
   });
 
-  it("normalizes duplicated Windows node.exe argv before respawning", () => {
+  it("normalizes a duplicated Windows node.exe launcher prefix before respawning", () => {
     const scriptPath =
       "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs";
     const plan = buildCliRespawnPlan({
@@ -162,7 +224,6 @@ describe("buildCliRespawnPlan", () => {
         "C:\\Program Files\\nodejs\\node.exe",
         "C:\\Program Files\\nodejs\\node.exe",
         scriptPath,
-        "node.exe",
         "dashboard",
         "--no-open",
       ],
@@ -174,6 +235,27 @@ describe("buildCliRespawnPlan", () => {
 
     const respawnPlan = expectCliRespawnPlan(plan);
     expect(respawnPlan.argv).toEqual(["--stack-size=8192", scriptPath, "dashboard", "--no-open"]);
+  });
+
+  it("preserves post-script node.exe arguments after normalizing the launcher prefix", () => {
+    const scriptPath =
+      "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs";
+    const plan = buildCliRespawnPlan({
+      argv: [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "C:\\Program Files\\nodejs\\node.exe",
+        scriptPath,
+        "node.exe",
+        "status",
+      ],
+      env: {},
+      execArgv: [],
+      execPath: "C:\\Program Files\\nodejs\\node.exe",
+      platform: "win32",
+    });
+
+    const respawnPlan = expectCliRespawnPlan(plan);
+    expect(respawnPlan.argv).toEqual(["--stack-size=8192", scriptPath, "node.exe", "status"]);
   });
 
   it("does not respawn on Windows when stack size is already configured", () => {

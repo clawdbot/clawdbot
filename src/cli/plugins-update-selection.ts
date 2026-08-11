@@ -27,26 +27,18 @@ export function resolvePluginUpdateSelection(params: {
 
   const parsedSpec = parseRegistryNpmSpec(params.rawId);
   if (!parsedSpec) {
-    return { pluginIds: [params.rawId] };
+    return { pluginIds: [] };
   }
   const matches = Object.entries(params.installs).filter(([, install]) => {
     return extractInstalledNpmPackageName(install) === parsedSpec.name;
   });
   if (matches.length !== 1) {
-    return { pluginIds: [params.rawId] };
+    return { pluginIds: [] };
   }
 
   const [pluginId] = expectDefined(matches[0], "matches capture group 0");
   if (!pluginId) {
-    return { pluginIds: [params.rawId] };
-  }
-  if (parsedSpec.selectorKind === "none") {
-    return {
-      pluginIds: [pluginId],
-      specOverrides: {
-        [pluginId]: parsedSpec.raw,
-      },
-    };
+    return { pluginIds: [] };
   }
   return {
     pluginIds: [pluginId],

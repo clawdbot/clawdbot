@@ -153,6 +153,26 @@ export const en = {
       summaryTitle: "Memory import summary",
       title: "Memories found",
     },
+    appRecommendations: {
+      catalogEntryMissing: "Official plugin catalog entry is unavailable.",
+      detected: "Detected apps: {apps}",
+      disclosure: "App names were matched using your configured model and ClawHub search.",
+      installFailed: "Could not install {name}: {reason}",
+      noneFound: "No app-based plugin or skill recommendations found.",
+      option: "{name} — {reason} (detected: {app})",
+      optionThirdParty:
+        "{name} — {reason} (detected: {app}) — third-party ClawHub skill; installs its publisher's code",
+      scanDisclosure:
+        "App names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations).",
+      scanning: "Scanning installed apps…",
+      scanningCandidate: "Found 1 app — searching plugins and skills for {sample}…",
+      scanningCandidates: "Found {count} apps — searching plugins and skills for {sample}…",
+      scanningMatch: "Asking your model to pick the best matches…",
+      select: "Install recommended plugins and skills",
+      skillTrust: "Trust and install the ClawHub skill {name}?",
+      skipped: "App recommendations skipped: {reason}",
+      title: "App recommendations",
+    },
     plugins: {
       configureBackHint: "Return to section menu",
       configureEmpty: "No plugins with configurable fields found.",
@@ -252,13 +272,49 @@ export const en = {
       websocketUrl: "Gateway WebSocket URL",
     },
     guided: {
+      accessFullHint: "Recommended. I look for AI apps and keys on this machine and test them.",
+      accessFullLabel: "Full access — find everything automatically",
+      accessGuardedHint: "I ask once before looking around, or you configure manually.",
+      accessGuardedLabel: "Ask first — check with me before looking around",
+      accessQuestion: "How should I set things up?",
       aiAccessTitle: "AI access",
       apiKeyPrompt: "API key or token for {label}",
       appliedTitle: "Inference ready",
+      alreadySetUp: "Everything's already set up here — your AI just passed a fresh check.",
+      applyFailedFallback:
+        "Something went wrong while applying setup: {detail}\nLet's finish together in chat instead.",
+      browserHandoffContinuing: "Dashboard connected — continuing in your browser.",
+      browserHandoffCopy:
+        "Open this URL in your browser:\n\n{url}\n\nWaiting for the dashboard to connect…",
+      browserHandoffOpening: "Opening the Control UI dashboard and waiting for it to connect…",
+      browserHandoffReady: "Your browser is ready — I'll be in Settings.",
+      browserHandoffTitle: "Continue in your browser",
+      codingAgentQuip:
+        "I can see {labels} on this machine — good taste. Once your AI works I can bring their memories along too.",
+      controlUiPreparing: "Preparing the Control UI…",
+      custodianIntro: "Hi — I'm OpenClaw. I keep this system running. Let's get you set up.",
+      failedOptionLine: "{label}: {reason}",
+      failedOptionsIntro: "These didn't work just now:",
+      findMeLater:
+        "You can always find me later — run `openclaw` in a terminal, or open Settings in the dashboard.",
+      hatchingNow: "Hatching your agent now…",
+      keepingCurrent: "Keeping the working AI you already have.",
+      lookAroundManual: "No — I'll configure it manually",
+      lookAroundQuestion: "May I look around to find your AI access?",
+      lookAroundYes: "Yes, take a look",
+      routeConfirm: "Use {label}?",
+      routeOther: "See other options",
+      routeUse: "Continue with {label} — recommended",
+      settingUp: "Setting up your workspace, gateway, and sessions…",
+      setupDone: "Everything's in place.",
+      silentFailures:
+        '{count} detected option(s) didn\'t respond — details under "See other options".',
       complete: "OpenClaw is ready.",
       completeWithoutAi: "OpenClaw setup is saved. Connect AI before opening chat.",
       detected: "AI detection complete.",
       detectedCandidate: "{label} — {detail}{recommended}",
+      detectedGroupLabel: "Detected on this machine",
+      detectedGroupPrompt: "Use which detected AI?",
       detectedTitle: "AI found",
       detecting: "Looking for AI you already use…",
       enterApiKey: "Enter API key — {label}",
@@ -273,6 +329,8 @@ export const en = {
       failureUnavailable: "This AI route is not available right now.",
       failureUnknown: "The completion failed for an unknown reason.",
       foundNothing: "No existing AI access was detected on this machine.",
+      recommendedInstall: "{label} — {hint}\n  {website}",
+      recommendedInstallsTitle: "Recommended installs",
       intro: "Connect your AI",
       invalidConfigDetails: "OpenClaw config {path} is invalid:\n{issues}",
       invalidConfigRepair:
@@ -301,6 +359,8 @@ export const en = {
       ttyRequired:
         "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
       welcomeTitle: "Setup choices",
+      workspaceConflictClassic:
+        "This verification run kept the configured workspace. Run `{command}` to review and explicitly approve moving the existing agent fleet.",
     },
     setup: {
       authChoiceFailedRetry: "Pick another provider or auth method, or choose Skip for now.",
@@ -363,33 +423,38 @@ export const en = {
       testAiSuccess: "AI access works. Replied in {seconds}s.",
       testAiTitle: "AI access test",
       whatSetup: "What do you want to set up?",
+      workspaceConflictConfirm: "Move the existing agent fleet to the requested workspace?",
+      workspaceConflictNotice:
+        "Existing agents currently use {current}. The requested workspace is {requested}. Changing this fleet-wide default can disconnect agents from their memory and bootstrap files.",
+      workspaceConflictTitle: "Existing agent workspace",
       workspaceDirectory: "Workspace directory",
     },
     security: {
       askForHelp:
         "Ask someone experienced to help before enabling tools or exposing it to the internet.",
+      attribution:
+        "OpenClaw is an open-source assistant that learns and grows with you, by the OpenClaw Foundation (a non-profit).",
       baselineDmSessions:
         "Shared inboxes: isolate DM sessions (session.dmScope: per-channel-peer) and keep tool access minimal.",
-      baselinePairing: "Pairing/allowlists + mention gating.",
-      baselineSandbox: "Sandbox + least-privilege tools.",
-      baselineSecrets: "Keep secrets out of the agent's reachable filesystem.",
+      baselinePairing: "Use pairing or allowlists; require mentions in group chats.",
+      baselineSandbox: "Use a sandbox and give tools only the permissions they need.",
+      baselineSecrets: "Keep secrets outside the agent's reachable filesystem.",
       baselineSharedInbox:
-        "Multi-user/shared inbox: split trust boundaries (separate gateway/credentials, ideally separate OS users/hosts).",
+        "Shared inboxes: use separate gateways and credentials; separate OS users or hosts provide stronger isolation.",
       baselineStrongModel:
-        "Use the strongest available model for any bot with tools or untrusted inboxes.",
-      beta: "OpenClaw is a hobby project and still in beta. Expect sharp edges.",
+        "Use the strongest available model for bots with tools or shared/public inboxes.",
       confirm:
         "I understand this is personal-by-default and shared/multi-user use requires lock-down. Continue?",
       hardeningRequired:
-        "If you're not comfortable with security hardening and access control, don't run OpenClaw.",
-      learnMore: "Learn more",
-      notMultitenant: "OpenClaw is not a hostile multi-tenant boundary by default.",
-      personalAgent: "By default, OpenClaw is a personal agent: one trusted operator boundary.",
+        "If you're not comfortable managing access controls and security hardening, don't run OpenClaw without help.",
+      learnMore: "Learn more at",
+      notMultitenant: "OpenClaw is not designed to safely separate multiple users by default.",
+      personalAgent: "By default, OpenClaw is a personal agent for one operator.",
       promptRisk: "A bad prompt can trick it into doing unsafe things.",
-      recommendedBaseline: "Recommended baseline",
+      recommendedBaseline: "Recommended safer setup",
       runRegularly: "Run regularly",
       sharedAuthority:
-        "If multiple users can message one tool-enabled agent, they share that delegated tool authority.",
+        "If multiple users can message one tool-enabled agent, they can all influence how it uses its tools.",
       title: "Security disclaimer",
       toolAccess: "This bot can read files and run actions if tools are enabled.",
     },
@@ -455,6 +520,8 @@ export const en = {
         "{channel} plugin not available (continuing with setup). If the channel still doesn't work after setup, run `{listCommand}` and `{enableCommand}`, then restart the gateway.",
       pluginNotAvailable: "{channel} plugin not available.",
       removeTitle: "Remove channel",
+      resumeDisabledPluginSetup: "{channel} plugin is disabled. Enable it and continue setup now?",
+      resumeDisabledSetup: "{channel} is disabled. Enable it and continue setup now?",
       select: "Select a channel",
       selectQuickstart: "Select channel (QuickStart)",
       selectedTitle: "Selected channels",
@@ -642,8 +709,6 @@ export const en = {
       channelsLabel: "Slack channels",
       envPrompt: "SLACK_BOT_TOKEN + SLACK_APP_TOKEN detected. Use env vars?",
       examples: "Examples:",
-      interactiveRepliesPrompt:
-        "Enable Slack interactive replies (buttons/selects) for agent responses?",
       multipleEntries: "Multiple entries: comma-separated.",
       socketModeTokensTitle: "Slack socket mode tokens",
     },
@@ -834,6 +899,7 @@ export const en = {
       helpNeedsUrlCode: "You need your Urbit ship URL and login code.",
       helpPrivateNetwork:
         "If your ship URL is on a private network (LAN/localhost), you must explicitly allow it during setup.",
+      loginCodeKeep: "Login code already configured. Keep it?",
       loginCodePrompt: "Login code",
       privateNetworkPrompt:
         "Ship URL looks like a private/internal host. Allow private network access? (SSRF risk)",
@@ -856,7 +922,7 @@ export const en = {
       helpPointWebhook: "3) Point the outgoing webhook to https://<gateway-host>{path}",
       incomingWebhookHelpReplies: "This is the URL OpenClaw uses to send replies back to Chat.",
       incomingWebhookHelpUseUrl: "Use the incoming webhook URL from Synology Chat integrations.",
-      incomingWebhookKeep: "Incoming webhook URL set ({value}). Keep it?",
+      incomingWebhookKeep: "Incoming webhook URL already configured. Keep it?",
       incomingWebhookTitle: "Synology Chat incoming webhook",
       incomingWebhookUrlPrompt: "Incoming webhook URL",
       multipleEntries: "Multiple entries: comma-separated.",
@@ -949,6 +1015,7 @@ export const en = {
       botUsernamePrompt: "Twitch bot username",
       channelJoinPrompt: "Channel to join",
       clientIdPrompt: "Twitch Client ID",
+      clientSecretKeep: "Client secret already configured. Keep it?",
       clientSecretPrompt: "Twitch Client Secret (for token refresh)",
       envPrompt: "Twitch env var OPENCLAW_TWITCH_ACCESS_TOKEN detected. Use env token?",
       helpCopyToken: "3. Copy the token (starts with 'oauth:') and Client ID",
@@ -959,6 +1026,7 @@ export const en = {
       helpTokenTools: "   Use https://twitchtokengenerator.com/ or https://twitchapps.com/tmi/",
       oauthTokenPrompt: "Twitch OAuth token (oauth:...)",
       refreshTokenInputPrompt: "Twitch Refresh Token",
+      refreshTokenKeep: "Refresh token already configured. Keep it?",
       refreshTokenPrompt:
         "Enable automatic token refresh (requires client secret and refresh token)?",
       setupTitle: "Twitch setup",

@@ -4,11 +4,13 @@ export {
   parseConfigJson5,
   resolveConfigSnapshotHash,
   restoreEnvChangesIfUnchanged,
+  snapshotEnv,
 } from "./io.read-helpers.js";
 export {
   clearConfigCache,
   getRuntimeConfig,
   loadConfig,
+  preserveConfigSnapshotAsClobbered,
   promoteConfigSnapshotToLastKnownGood,
   readBestEffortConfig,
   readBestEffortConfigSnapshot,
@@ -30,6 +32,7 @@ export {
   type ConfigIoDeps,
   type ConfigSnapshotReadMeasure,
   type ConfigSnapshotReadOptions,
+  type ConfigWriteAuditOrigin,
   type ConfigWriteNotification,
   type ConfigWriteOptions,
   type ConfigWriteResult,

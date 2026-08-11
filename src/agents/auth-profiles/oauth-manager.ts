@@ -1,4 +1,3 @@
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 /**
  * OAuth credential manager.
  * Resolves usable access tokens, refreshes expired credentials under global
@@ -9,8 +8,10 @@ import { normalizeSecretInputString } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { redactSensitiveText } from "../../logging/redact.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { OAUTH_REFRESH_CALL_TIMEOUT_MS, OAUTH_REFRESH_LOCK_OPTIONS, log } from "./constants.js";
+import { hasUsableOAuthCredential } from "./credential-state.js";
 import { shouldMirrorRefreshedOAuthCredential } from "./oauth-identity.js";
 import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
 import {
@@ -20,13 +21,13 @@ import {
 import {
   areOAuthCredentialsEquivalent,
   hasMatchingOAuthIdentity,
-  hasUsableOAuthCredential,
   isSafeToAdoptBootstrapOAuthIdentity,
   isSafeToAdoptMainStoreOAuthIdentity,
   shouldBootstrapFromExternalCliCredential,
   shouldReplaceStoredOAuthCredential,
 } from "./oauth-shared.js";
-import { resolveAuthStorePath, resolveOAuthRefreshLockPath } from "./paths.js";
+import { resolveOAuthRefreshLockPath } from "./paths.js";
+import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   loadAuthProfileStoreWithoutExternalProfiles,
@@ -41,7 +42,10 @@ type OAuthManagerAdapter = {
     credentials: OAuthCredential,
     context: { cfg?: OpenClawConfig; agentDir?: string },
   ) => Promise<string>;
-  refreshCredential: (credential: OAuthCredential) => Promise<OAuthCredentials | null>;
+  refreshCredential: (
+    credential: OAuthCredential,
+    context: { cfg?: OpenClawConfig; agentDir?: string },
+  ) => Promise<OAuthCredentials | null>;
   readBootstrapCredential: (params: {
     store: AuthProfileStore;
     profileId: string;
@@ -254,7 +258,7 @@ async function loadFreshStoredOAuthCredential(params: {
 }
 
 /** Select local OAuth unless a safe external bootstrap credential should win. */
-export function resolveEffectiveOAuthCredential(params: {
+export function resolveEffectiveOAuthCredentialCore(params: {
   store: AuthProfileStore;
   profileId: string;
   credential: OAuthCredential;
@@ -489,7 +493,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     attemptedCredentials?: OAuthCredential[];
   }): Promise<ResolvedOAuthAccess | null> {
     const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir(params);
-    const authPath = resolveAuthStorePath(ownerAgentDir);
+    const authPath = resolveAuthProfileDatabasePath(ownerAgentDir);
     const globalRefreshLockPath = resolveOAuthRefreshLockPath(params.provider, params.profileId);
 
     try {
@@ -607,7 +611,10 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           OAUTH_REFRESH_CALL_TIMEOUT_MS,
           async () => {
             params.attemptedCredentials?.push(credentialToRefresh);
-            const refreshed = await adapter.refreshCredential(credentialToRefresh);
+            const refreshed = await adapter.refreshCredential(credentialToRefresh, {
+              cfg: params.cfg,
+              agentDir: params.agentDir,
+            });
             return refreshed
               ? ({
                   ...credentialToRefresh,
@@ -650,7 +657,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           }
         }
         if (ownerAgentDir) {
-          const mainPath = resolveAuthStorePath(undefined);
+          const mainPath = resolveAuthProfileDatabasePath(undefined);
           if (mainPath !== authPath) {
             await mirrorRefreshedCredentialIntoMainStore({
               profileId: params.profileId,
@@ -705,7 +712,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         agentDir: params.agentDir,
         credential: params.credential,
       }) ?? params.credential;
-    const effectiveCredential = resolveEffectiveOAuthCredential({
+    const effectiveCredential = resolveEffectiveOAuthCredentialCore({
       store: params.store,
       profileId: params.profileId,
       credential: adoptedCredential,

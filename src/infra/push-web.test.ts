@@ -26,9 +26,13 @@ const generatedVapidKeys = vi.hoisted(
       ["privateKey", "test-private-key-base64url"],
     ]) as { publicKey: string; privateKey: string },
 );
-vi.mock("../config/paths.js", () => ({
-  resolveStateDir: () => tmpDir,
-}));
+vi.mock("../config/paths.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/paths.js")>();
+  return {
+    ...actual,
+    resolveStateDir: () => tmpDir,
+  };
+});
 
 vi.mock("web-push", () => ({
   default: {
@@ -112,13 +116,38 @@ describe("resolveVapidKeys", () => {
       "OPENCLAW_VAPID_PRIVATE_KEY",
       "OPENCLAW_VAPID_SUBJECT",
     ]);
-    setTestEnvValue("OPENCLAW_VAPID_PUBLIC_KEY", environmentKeys.publicKey);
-    setTestEnvValue("OPENCLAW_VAPID_PRIVATE_KEY", environmentKeys.privateKey);
-    setTestEnvValue("OPENCLAW_VAPID_SUBJECT", environmentKeys.subject);
+    setTestEnvValue("OPENCLAW_VAPID_PUBLIC_KEY", `  ${environmentKeys.publicKey}  `);
+    setTestEnvValue("OPENCLAW_VAPID_PRIVATE_KEY", `  ${environmentKeys.privateKey}  `);
+    setTestEnvValue("OPENCLAW_VAPID_SUBJECT", `  ${environmentKeys.subject}  `);
     try {
       await expect(resolveVapidKeys(tmpDir)).resolves.toEqual(environmentKeys);
       expect(readPersistedVapidKeyPair(tmpDir)).toBeNull();
       expect(vi.mocked(webPush.generateVAPIDKeys)).not.toHaveBeenCalled();
+    } finally {
+      envSnapshot.restore();
+    }
+  });
+
+  it("treats blank environment values as unset", async () => {
+    const envSnapshot = captureEnv([
+      "OPENCLAW_VAPID_PUBLIC_KEY",
+      "OPENCLAW_VAPID_PRIVATE_KEY",
+      "OPENCLAW_VAPID_SUBJECT",
+    ]);
+    setTestEnvValue("OPENCLAW_VAPID_PUBLIC_KEY", "   ");
+    setTestEnvValue("OPENCLAW_VAPID_PRIVATE_KEY", "   ");
+    setTestEnvValue("OPENCLAW_VAPID_SUBJECT", "   ");
+    try {
+      const keys = await resolveVapidKeys(tmpDir);
+      expect(keys).toEqual(
+        createWebPushVapidKeyPair(
+          "test-public-key-base64url",
+          "test-private-key-base64url",
+          "https://openclaw.ai",
+        ),
+      );
+      expect(readPersistedVapidKeyPair(tmpDir)).toEqual(keys);
+      expect(vi.mocked(webPush.generateVAPIDKeys)).toHaveBeenCalledTimes(1);
     } finally {
       envSnapshot.restore();
     }

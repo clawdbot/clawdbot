@@ -93,6 +93,30 @@ describe("worker bundle producer", () => {
     });
   });
 
+  it("keeps lazy Control UI assets out of worker identity", async () => {
+    await withTempDir({ prefix: "openclaw-worker-bundle-control-ui-" }, async (root) => {
+      const packageRoot = path.join(root, "package");
+      const cacheDir = path.join(root, "cache");
+      await writeFixture(packageRoot, [["dist/entry.js", "export const entry = true;\n"]]);
+      const beforeUiBuild = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
+
+      await fs.mkdir(path.join(packageRoot, "dist/control-ui/assets"), { recursive: true });
+      await fs.writeFile(path.join(packageRoot, "dist/control-ui/index.html"), "<main>UI</main>\n");
+      await fs.writeFile(
+        path.join(packageRoot, "dist/control-ui/assets/app.js"),
+        "console.log('ui');\n",
+      );
+      const afterUiBuild = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
+
+      expect(afterUiBuild.bundleHash).toBe(beforeUiBuild.bundleHash);
+      await expect(listTarball(afterUiBuild.tarballPath)).resolves.toEqual([
+        "dist/entry.js",
+        "openclaw.mjs",
+        "package.json",
+      ]);
+    });
+  });
+
   it("prunes workspace deps and lifecycle fields from dev manifests", async () => {
     await withTempDir({ prefix: "openclaw-worker-bundle-prune-" }, async (root) => {
       const packageRoot = path.join(root, "package");
@@ -378,7 +402,6 @@ describe("worker npm installation artifact", () => {
   it("uses an exact registry-proven gateway package", async () => {
     await withTempDir({ prefix: "openclaw-worker-npm-release-" }, async (packageRoot) => {
       await writeFixture(packageRoot, [["dist/entry.js", "export {};\n"]]);
-      await fs.writeFile(path.join(packageRoot, "npm-shrinkwrap.json"), "{}\n", "utf8");
       const packageIntegrity = `sha512-${Buffer.alloc(64).toString("base64")}`;
       const verifyRelease = vi.fn(async () => packageIntegrity);
 
@@ -427,7 +450,6 @@ describe("worker npm installation artifact", () => {
   it("rejects a source checkout even when its version is published", async () => {
     await withTempDir({ prefix: "openclaw-worker-npm-source-" }, async (packageRoot) => {
       await writeFixture(packageRoot, [["dist/entry.js", "export {};\n"]]);
-      await fs.writeFile(path.join(packageRoot, "npm-shrinkwrap.json"), "{}\n", "utf8");
       await fs.mkdir(path.join(packageRoot, ".git"));
       const verifyRelease = vi.fn(async () => `sha512-${Buffer.alloc(64).toString("base64")}`);
 

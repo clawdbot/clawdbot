@@ -1,6 +1,10 @@
 // Line plugin module implements bot handlers behavior.
 import type { webhook } from "@line/bot-sdk";
-import { buildMentionRegexes, matchesMentionPatterns } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  buildMentionRegexes,
+  isChannelPartialDeliveryError,
+  matchesMentionPatterns,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
@@ -10,7 +14,7 @@ import {
   resolvePairingIdLabel,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   createChannelHistoryWindow,
@@ -35,11 +39,12 @@ import {
   getLineSourceInfo,
   type LineInboundContext,
 } from "./bot-message-context.js";
-import { downloadLineMedia } from "./download.js";
+import { downloadLineMedia, isRetryableLineInboundMediaError } from "./download.js";
 import { reserveLineGroupHistory } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { pushMessageLine, replyMessageLine } from "./send.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
+import type { LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
 
 type FollowEvent = webhook.FollowEvent;
 type JoinEvent = webhook.JoinEvent;
@@ -72,63 +77,17 @@ interface LineHandlerContext {
   account: ResolvedLineAccount;
   runtime: RuntimeEnv;
   mediaMaxBytes: number;
-  processMessage: (ctx: LineInboundContext) => Promise<void>;
-  replayCache?: LineWebhookReplayCache;
+  processMessage: (
+    ctx: LineInboundContext,
+    control: { turnAdoptionLifecycle?: LineWebhookTurnAdoptionLifecycle },
+  ) => Promise<void>;
+  turnAdoptionLifecycle?: LineWebhookTurnAdoptionLifecycle;
   groupHistories?: Map<string, HistoryEntry[]>;
   historyLimit?: number;
 }
 
-const LINE_WEBHOOK_REPLAY_WINDOW_MS = 10 * 60 * 1000;
-const LINE_WEBHOOK_REPLAY_MAX_ENTRIES = 4096;
-
 function normalizeLineIngressEntry(value: string): string | null {
   return normalizeLineAllowEntry(value) || null;
-}
-
-type LineReplayEvent = { event: WebhookEvent; accountId: string };
-
-export function createLineWebhookReplayCache() {
-  return createChannelReplayGuard<LineReplayEvent>({
-    dedupe: {
-      ttlMs: LINE_WEBHOOK_REPLAY_WINDOW_MS,
-      memoryMaxSize: LINE_WEBHOOK_REPLAY_MAX_ENTRIES,
-    },
-    buildReplayKey: ({ event, accountId }) => buildLineWebhookReplayKey(event, accountId)?.key,
-  });
-}
-
-type LineWebhookReplayCache = ReturnType<typeof createLineWebhookReplayCache>;
-
-function buildLineWebhookReplayKey(
-  event: WebhookEvent,
-  accountId: string,
-): { key: string; eventId: string } | null {
-  if (event.type === "message") {
-    const messageId = event.message?.id?.trim();
-    if (messageId) {
-      return {
-        key: `${accountId}|message:${messageId}`,
-        eventId: `message:${messageId}`,
-      };
-    }
-  }
-  const eventId = (event as { webhookEventId?: string }).webhookEventId?.trim();
-  if (!eventId) {
-    return null;
-  }
-
-  const source = (
-    event as {
-      source?: { type?: string; userId?: string; groupId?: string; roomId?: string };
-    }
-  ).source;
-  const sourceId =
-    source?.type === "group"
-      ? `group:${source.groupId ?? ""}`
-      : source?.type === "room"
-        ? `room:${source.roomId ?? ""}`
-        : `user:${source?.userId ?? ""}`;
-  return { key: `${accountId}|${event.type}|${sourceId}|${eventId}`, eventId: `event:${eventId}` };
 }
 
 function resolveLineGroupConfig(params: {
@@ -182,6 +141,10 @@ async function sendLinePairingReply(params: {
           return;
         } catch (err) {
           logVerbose(`line pairing reply failed for ${senderId}: ${String(err)}`);
+          // A visible reply survived failed bookkeeping; a fallback push would duplicate it.
+          if (isChannelPartialDeliveryError(err)) {
+            return;
+          }
         }
       }
       try {
@@ -460,6 +423,13 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
           contentType: media.contentType,
         });
       } catch (err) {
+        if (isRetryableLineInboundMediaError(err)) {
+          // Preparation-phase failure before turn adoption: reject so the durable
+          // ingress drain retries the whole event once LINE finishes preparing the
+          // media, instead of degrading it to an unavailable-attachment notice that
+          // permanently loses media with no text fallback.
+          throw err;
+        }
         mediaUnavailable = true;
         const errMsg = String(err);
         if (errMsg.includes("exceeds") && errMsg.includes("limit")) {
@@ -485,7 +455,10 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
       return;
     }
 
-    await processMessage(messageContext);
+    await processMessage(
+      messageContext,
+      context.turnAdoptionLifecycle ? { turnAdoptionLifecycle: context.turnAdoptionLifecycle } : {},
+    );
     historyReservation.commit();
   } finally {
     historyReservation.release();
@@ -537,7 +510,10 @@ async function handlePostbackEvent(
     return;
   }
 
-  await context.processMessage(postbackContext);
+  await context.processMessage(
+    postbackContext,
+    context.turnAdoptionLifecycle ? { turnAdoptionLifecycle: context.turnAdoptionLifecycle } : {},
+  );
 }
 
 export async function handleLineWebhookEvents(
@@ -547,35 +523,14 @@ export async function handleLineWebhookEvents(
   let firstError: unknown;
   for (const event of events) {
     try {
-      if (!context.replayCache) {
-        await handleLineWebhookEvent(event, context);
-        continue;
-      }
-      const replayEvent = { event, accountId: context.account.accountId };
-      const result = await context.replayCache.processGuarded(
-        replayEvent,
-        async () => await handleLineWebhookEvent(event, context),
-        { onError: "commit" },
-      );
-      const replayId = buildLineWebhookReplayKey(event, context.account.accountId)?.eventId;
-      if (result.kind === "inflight") {
-        logVerbose(`line: skipped in-flight replayed webhook event ${replayId ?? "unknown"}`);
-        try {
-          await result.pending;
-        } catch (err) {
-          context.runtime.error?.(danger(`line: replayed in-flight event failed: ${String(err)}`));
-          firstError ??= err;
-        }
-      } else if (result.kind === "duplicate") {
-        logVerbose(`line: skipped replayed webhook event ${replayId ?? "unknown"}`);
-      }
+      await handleLineWebhookEvent(event, context);
     } catch (err) {
       context.runtime.error?.(danger(`line: event handler failed: ${String(err)}`));
       firstError ??= err;
     }
   }
   if (firstError) {
-    throw toLintErrorObject(firstError, "Non-Error thrown");
+    throw toErrorObject(firstError, "Non-Error thrown");
   }
 }
 
@@ -605,18 +560,4 @@ async function handleLineWebhookEvent(
     default:
       logVerbose(`line: unhandled event type: ${(event as WebhookEvent).type}`);
   }
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

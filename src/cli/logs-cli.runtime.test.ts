@@ -49,6 +49,18 @@ describe("execFileUtf8Tail", () => {
     expect(result.truncated).toBe(false);
   });
 
+  it("terminates a stalled command at the configured deadline", async () => {
+    const startedAt = Date.now();
+
+    const result = await execFileUtf8Tail(process.execPath, ["-e", "setTimeout(() => {}, 1_000)"], {
+      maxBytes: 1024,
+      timeoutMs: 25,
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(result).toMatchObject({ code: 124, stdout: "", truncated: false });
+  });
+
   it("returns a soft failure when command launch fails", async () => {
     const command = `openclaw-missing-${process.pid}-${Date.now()}`;
     const result = await execFileUtf8Tail(command, [], { maxBytes: 1024 });

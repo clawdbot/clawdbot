@@ -1,3 +1,4 @@
+import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI chat domain owns pure tool-card extraction rules.
 import {
@@ -293,34 +294,21 @@ export function resolveCollapsedToolArgumentPreview(args: unknown): string | und
   return undefined;
 }
 
-function findFirstUnmatchedCard(
-  cards: ToolCard[],
-  id: string,
-  name: string,
-  fallbackMatchedCards: WeakSet<ToolCard>,
-): ToolCard | undefined {
-  let nameOnlyCandidate: ToolCard | undefined;
-  for (const card of cards) {
-    if (card.id === id) {
-      return card;
-    }
-    if (
-      !nameOnlyCandidate &&
-      card.name === name &&
-      card.outputText === undefined &&
-      !fallbackMatchedCards.has(card)
-    ) {
-      nameOnlyCandidate = card;
-    }
-  }
-  return nameOnlyCandidate;
-}
-
 function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
   const m = message as Record<string, unknown>;
   const content = normalizeContent(m.content);
   const messageIsError = readToolErrorFlag(m);
   const isLiveToolStream = m["__openclawToolStreamLive"] === true;
+  const liveDiff = readRecord(m["__openclawToolStreamDiffStat"]);
+  const liveDiffStat =
+    typeof liveDiff?.added === "number" &&
+    Number.isInteger(liveDiff.added) &&
+    liveDiff.added >= 0 &&
+    typeof liveDiff.removed === "number" &&
+    Number.isInteger(liveDiff.removed) &&
+    liveDiff.removed >= 0
+      ? { added: liveDiff.added, removed: liveDiff.removed }
+      : undefined;
   const cards: ToolCard[] = [];
   const fallbackMatchedCards = new WeakSet<ToolCard>();
   const transcriptMessageId = resolveTranscriptMessageId(m);
@@ -343,6 +331,7 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
         ...(isLiveToolStream
           ? { live: true, completed: m["__openclawToolStreamResultReceived"] === true }
           : {}),
+        ...(liveDiffStat ? { liveDiffStat } : {}),
         messageId: transcriptMessageId,
       });
       continue;
@@ -352,7 +341,16 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
       const name = resolveToolName(item, m);
       const cardId = resolveToolCardId(item, m, index, prefix);
       const callId = resolveToolCallId(item, m);
-      const existing = findFirstUnmatchedCard(cards, cardId, name, fallbackMatchedCards);
+      const existing =
+        cards.find((card) => card.id === cardId) ??
+        cards.find(
+          (card) =>
+            // Same-name fallback belongs to legacy blocks missing an explicit identity.
+            (!callId || !card.callId) &&
+            card.name === name &&
+            card.outputText === undefined &&
+            !fallbackMatchedCards.has(card),
+        );
       const text = extractToolText(item);
       const details = item.details ?? m.details;
       const preview = extractCanvasFromDetails(details) ?? extractToolPreview(text, name);

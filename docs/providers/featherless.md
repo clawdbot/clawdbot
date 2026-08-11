@@ -40,7 +40,7 @@ openclaw onboard --auth-choice featherless-api-key
 For non-interactive setup:
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --mode local \
   --auth-choice featherless-api-key \
   --featherless-api-key "$FEATHERLESS_API_KEY"
@@ -65,9 +65,11 @@ documents native tool calling for the Qwen 3 family. OpenClaw configures its
 32,768-token context window, a conservative 4,096-token output limit, and
 Qwen chat-template thinking controls.
 
-The catalog cost fields are zero because Featherless supports multiple billing
-modes and OpenClaw does not embed account-specific plan or request-pricing
-rates.
+The catalog cost fields use Featherless's published request-pricing rates of
+$0.102 per million input tokens and $0.493 per million output tokens. Fixed
+subscription plans remain flat-rate; the cache cost fields stay zero because
+Featherless does not publish separate cache-read or cache-write rates for this
+model.
 
 ## Other Featherless models
 

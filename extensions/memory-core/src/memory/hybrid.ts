@@ -1,6 +1,9 @@
+import type { MemoryEntryProvenance } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 // Memory Core plugin module implements hybrid behavior.
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { applyImportanceMultiplier } from "./importance.js";
 import { applyMMRToHybridResults, type MMRConfig, DEFAULT_MMR_CONFIG } from "./mmr.js";
+import { applyProjectRanking, projectScoreMultiplier } from "./project-ranking.js";
 import {
   applyTemporalDecayToHybridResults,
   type TemporalDecayConfig,
@@ -18,7 +21,11 @@ type HybridVectorResult = {
   source: HybridSource;
   snippet: string;
   vectorScore: number;
+  importance?: number;
+  triggers?: string;
+  projectKey?: string;
   exactPathSpecificity?: ExactPathSpecificity;
+  provenance?: MemoryEntryProvenance;
 };
 
 type HybridKeywordResult = {
@@ -29,9 +36,13 @@ type HybridKeywordResult = {
   source: HybridSource;
   snippet: string;
   textScore: number;
+  importance?: number;
+  triggers?: string;
+  projectKey?: string;
   rankingScore?: number;
   pathScore?: number;
   exactPathSpecificity?: ExactPathSpecificity;
+  provenance?: MemoryEntryProvenance;
 };
 
 export function buildFtsQuery(raw: string): string | null {
@@ -63,11 +74,13 @@ export async function mergeHybridResults(params: {
   keyword: HybridKeywordResult[];
   vectorWeight: number;
   textWeight: number;
+  isNonTextMediaPath?: (path: string) => boolean;
   workspaceDir?: string;
   /** MMR configuration for diversity-aware re-ranking */
   mmr?: Partial<MMRConfig>;
   /** Temporal decay configuration for recency-aware scoring */
   temporalDecay?: Partial<TemporalDecayConfig>;
+  activeProjectKeys?: readonly string[];
   /** Test hook for deterministic time-dependent behavior */
   nowMs?: number;
 }): Promise<
@@ -80,6 +93,10 @@ export async function mergeHybridResults(params: {
     textScore: number;
     snippet: string;
     source: HybridSource;
+    importance?: number;
+    triggers?: string;
+    projectKey?: string;
+    provenance?: MemoryEntryProvenance;
   }>
 > {
   const byId = new Map<
@@ -96,6 +113,12 @@ export async function mergeHybridResults(params: {
       rankingScore: number;
       pathScore: number;
       exactPathSpecificity: ExactPathSpecificity;
+      hasVector: boolean;
+      hasKeyword: boolean;
+      importance?: number;
+      triggers?: string;
+      projectKey?: string;
+      provenance?: MemoryEntryProvenance;
     }
   >();
 
@@ -112,6 +135,12 @@ export async function mergeHybridResults(params: {
       rankingScore: 0,
       pathScore: 0,
       exactPathSpecificity: r.exactPathSpecificity ?? 0,
+      hasVector: true,
+      hasKeyword: false,
+      importance: r.importance,
+      triggers: r.triggers,
+      projectKey: r.projectKey,
+      ...(r.provenance ? { provenance: r.provenance } : {}),
     });
   }
 
@@ -126,6 +155,13 @@ export async function mergeHybridResults(params: {
         existing.exactPathSpecificity,
         exactPathSpecificity,
       ) as ExactPathSpecificity;
+      existing.hasKeyword = true;
+      existing.importance ??= r.importance;
+      existing.triggers ??= r.triggers;
+      existing.projectKey ??= r.projectKey;
+      if (!existing.provenance && r.provenance) {
+        existing.provenance = r.provenance;
+      }
       if (r.snippet && r.snippet.length > 0) {
         existing.snippet = r.snippet;
       }
@@ -142,6 +178,12 @@ export async function mergeHybridResults(params: {
         rankingScore: r.rankingScore ?? r.textScore,
         pathScore: r.pathScore ?? 0,
         exactPathSpecificity,
+        hasVector: false,
+        hasKeyword: true,
+        importance: r.importance,
+        triggers: r.triggers,
+        projectKey: r.projectKey,
+        ...(r.provenance ? { provenance: r.provenance } : {}),
       });
     }
   }
@@ -156,7 +198,14 @@ export async function mergeHybridResults(params: {
         : entry.exactPathSpecificity > 0
           ? 0
           : entry.pathScore;
-    const contentScore = params.vectorWeight * entry.vectorScore + params.textWeight * keywordScore;
+    const dropMediaTextSignal =
+      entry.hasVector &&
+      !entry.hasKeyword &&
+      params.vectorWeight > 0 &&
+      params.isNonTextMediaPath?.(entry.path) === true;
+    const contentScore = dropMediaTextSignal
+      ? entry.vectorScore
+      : params.vectorWeight * entry.vectorScore + params.textWeight * keywordScore;
     const hasWeightedContentRelevance = contentScore > 0;
     // With decay enabled, reserve the lower half of an exact tier for path
     // identity and the upper half for content relevance. This lets recency beat
@@ -169,7 +218,7 @@ export async function mergeHybridResults(params: {
             ? contentScore
             : 1
         : contentScore;
-    return {
+    const result = {
       path: entry.path,
       startLine: entry.startLine,
       endLine: entry.endLine,
@@ -180,7 +229,14 @@ export async function mergeHybridResults(params: {
       hasWeightedContentRelevance,
       snippet: entry.snippet,
       source: entry.source,
+      importance: entry.importance,
+      triggers: entry.triggers,
+      projectKey: entry.projectKey,
     };
+    if (entry.provenance) {
+      Object.assign(result, { provenance: entry.provenance });
+    }
+    return result;
   });
 
   // Keep component scores as raw retrieval diagnostics. Temporal decay and MMR
@@ -191,18 +247,30 @@ export async function mergeHybridResults(params: {
     workspaceDir: params.workspaceDir,
     nowMs: params.nowMs,
   });
-  const rankable = decayed.map((entry) => {
+  const rankable = applyProjectRanking(
+    applyImportanceMultiplier(decayed),
+    params.activeProjectKeys,
+  ).map((entry) => {
     // Specificity owns cross-tier precedence. Keep the decayed weighted score
     // separately for within-tier ranking while exact public scores stay at 1.
     const exactPathTieScore = entry.score;
     return Object.assign(entry, {
       exactPathTieScore,
-      score: entry.exactPathSpecificity > 0 ? 1 : entry.score,
+      score:
+        entry.exactPathSpecificity > 0
+          ? projectScoreMultiplier(entry.projectKey, params.activeProjectKeys)
+          : entry.score,
     });
   });
   const nonExact = rankable
     .filter((entry) => entry.exactPathSpecificity === 0)
-    .toSorted((a, b) => b.score - a.score);
+    .toSorted(
+      (a, b) =>
+        b.score - a.score ||
+        a.path.localeCompare(b.path) ||
+        a.startLine - b.startLine ||
+        a.endLine - b.endLine,
+    );
 
   // Apply MMR re-ranking if enabled
   const mmrConfig = { ...DEFAULT_MMR_CONFIG, ...params.mmr };
@@ -213,7 +281,11 @@ export async function mergeHybridResults(params: {
     return applyMMRToHybridResults(
       entries.map((entry) => Object.assign(entry, { score: entry.exactPathTieScore })),
       mmrConfig,
-    ).map((entry) => Object.assign(entry, { score: 1 }));
+    ).map((entry) =>
+      Object.assign(entry, {
+        score: projectScoreMultiplier(entry.projectKey, params.activeProjectKeys),
+      }),
+    );
   };
   const compareExactTieScores = (a: (typeof rankable)[number], b: (typeof rankable)[number]) =>
     b.exactPathTieScore - a.exactPathTieScore ||

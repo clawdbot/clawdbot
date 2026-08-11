@@ -1,6 +1,7 @@
 /**
  * Normalizes and delivers agent command results to outbound channels.
  */
+import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -23,6 +24,7 @@ import {
 } from "../../channels/message/runtime.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -50,7 +52,7 @@ import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
 import type { EmbeddedAgentRunMeta } from "../embedded-agent-runner/types.js";
 import { isNestedAgentLane } from "../lanes.js";
 import { isAgentRunRestartAbortReason } from "../run-termination.js";
-import type { AgentCommandOpts, AgentCommandResultMetaOverrides } from "./types.js";
+import type { AgentCommandOpts } from "./types.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
 type DurableSendResult = Awaited<ReturnType<typeof sendDurableMessageBatch>>;
@@ -98,7 +100,7 @@ type AgentCommandDeliveryStatus = {
 /** Agent command result after payload normalization and optional delivery. */
 type AgentCommandDeliveryResult = {
   payloads: ReturnType<typeof projectOutboundPayloadPlanForJson>;
-  meta: EmbeddedAgentRunMeta & AgentCommandResultMetaOverrides;
+  meta: EmbeddedAgentRunMeta;
   didSendViaMessagingTool?: boolean;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
@@ -130,6 +132,8 @@ type DeliverAgentCommandResultParams = {
   sessionEntry: SessionEntry | undefined;
   result: RunResult;
   payloads: RunResult["payloads"];
+  /** Channel plugin already selected and bootstrapped by the caller. */
+  preparedPlugin?: ChannelPlugin;
   assertDeliveryCurrent?: () => void;
   onDeliveryResult?: (result: AgentCommandDeliveryResult) => void;
 } & FreshSessionDeliveryRefreshParams;
@@ -182,23 +186,6 @@ function logNestedOutput(
     }
     runtime.log(`${prefix} ${line}`);
   }
-}
-
-function mergeResultMetaOverrides(
-  meta: EmbeddedAgentRunMeta,
-  overrides: AgentCommandResultMetaOverrides | undefined,
-): EmbeddedAgentRunMeta & AgentCommandResultMetaOverrides {
-  if (!overrides) {
-    return meta;
-  }
-  return {
-    ...meta,
-    ...overrides,
-  };
-}
-
-function hasNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
 }
 
 function hasNonEmptyStringArray(value: unknown): value is string[] {
@@ -478,6 +465,7 @@ function normalizeAgentCommandReplyPayloads(params: {
   payloads: RunResult["payloads"];
   result: RunResult;
   deliveryChannel?: string;
+  plugin?: ChannelPlugin;
   accountId?: string;
   applyChannelTransforms?: boolean;
   includeRunModelContext?: boolean;
@@ -494,7 +482,7 @@ function normalizeAgentCommandReplyPayloads(params: {
     return payloads as ReplyPayload[];
   }
   const applyChannelTransforms = params.applyChannelTransforms ?? true;
-  const deliveryPlugin = applyChannelTransforms ? getChannelPlugin(channel) : undefined;
+  const deliveryPlugin = applyChannelTransforms ? params.plugin : undefined;
 
   const sessionKey = params.outboundSession?.key ?? params.opts.sessionKey;
   const agentId =
@@ -585,6 +573,7 @@ export async function deliverAgentCommandResult(
       explicitThreadId: opts.threadId,
       accountId: opts.replyAccountId ?? opts.accountId,
       wantsDelivery: deliver,
+      preparedPlugin: params.preparedPlugin,
       turnSourceChannel,
       turnSourceTo,
       turnSourceAccountId,
@@ -592,11 +581,13 @@ export async function deliverAgentCommandResult(
     });
     params.assertDeliveryCurrent?.();
     let deliveryChannel = deliveryPlan.resolvedChannel;
+    let preparedPlugin = deliveryPlan.plugin;
     if (deliver && isInternalMessageChannel(deliveryChannel) && !explicitChannelHint) {
       try {
         const selection = await resolveMessageChannelSelection({ cfg });
         params.assertDeliveryCurrent?.();
         deliveryChannel = selection.channel;
+        preparedPlugin = selection.plugin;
       } catch {
         // Keep the internal channel marker; error handling below reports the failure.
       }
@@ -607,27 +598,34 @@ export async function deliverAgentCommandResult(
         : {
             ...deliveryPlan,
             resolvedChannel: deliveryChannel,
+            plugin: preparedPlugin,
           };
-    // Channel docking: delivery channels are resolved via plugin registry.
+    // Bundled/setup channels may be dockable before they appear in the registered
+    // deliverable-id list. Resolve only when upstream planning prepared no plugin.
     const deliveryPlugin =
       deliver && !isInternalMessageChannel(deliveryChannel)
-        ? getChannelPlugin(normalizeChannelId(deliveryChannel) ?? deliveryChannel)
+        ? (effectiveDeliveryPlan.plugin ??
+          getChannelPlugin(normalizeChannelId(deliveryChannel) ?? deliveryChannel))
         : undefined;
+    const pluginDeliveryPlan =
+      deliveryPlugin && deliveryPlugin !== effectiveDeliveryPlan.plugin
+        ? { ...effectiveDeliveryPlan, plugin: deliveryPlugin }
+        : effectiveDeliveryPlan;
     const isDeliveryChannelKnown =
       isInternalMessageChannel(deliveryChannel) || Boolean(deliveryPlugin);
     const targetMode =
       opts.deliveryTargetMode ??
-      effectiveDeliveryPlan.deliveryTargetMode ??
+      pluginDeliveryPlan.deliveryTargetMode ??
       (opts.to ? "explicit" : "implicit");
     const defaultAccountId =
-      !effectiveDeliveryPlan.resolvedAccountId && deliveryPlugin?.config?.listAccountIds
+      !pluginDeliveryPlan.resolvedAccountId && deliveryPlugin?.config?.listAccountIds
         ? resolveChannelDefaultAccountId({ plugin: deliveryPlugin, cfg })
         : undefined;
-    const resolvedAccountId = effectiveDeliveryPlan.resolvedAccountId ?? defaultAccountId;
+    const resolvedAccountId = pluginDeliveryPlan.resolvedAccountId ?? defaultAccountId;
     const resolvedDeliveryPlan =
-      resolvedAccountId === effectiveDeliveryPlan.resolvedAccountId
-        ? effectiveDeliveryPlan
-        : { ...effectiveDeliveryPlan, resolvedAccountId };
+      resolvedAccountId === pluginDeliveryPlan.resolvedAccountId
+        ? pluginDeliveryPlan
+        : { ...pluginDeliveryPlan, resolvedAccountId };
     const resolved =
       deliver && isDeliveryChannelKnown && deliveryChannel
         ? resolveAgentOutboundTarget({
@@ -734,6 +732,7 @@ export async function deliverAgentCommandResult(
     deliveryTarget,
     resolvedReplyToId,
     resolvedThreadTarget,
+    deliveryPlugin,
   } = deliveryRouting;
 
   let deliveryLoggedError = false;
@@ -780,6 +779,7 @@ export async function deliverAgentCommandResult(
     payloads,
     result,
     deliveryChannel,
+    plugin: deliveryPlugin,
     accountId: resolvedAccountId,
     applyChannelTransforms: deliver,
   });
@@ -799,6 +799,7 @@ export async function deliverAgentCommandResult(
       payloads: sentTexts.map((text) => ({ text })),
       result,
       deliveryChannel,
+      plugin: deliveryPlugin,
       accountId: resolvedAccountId,
       applyChannelTransforms: deliver,
       includeRunModelContext: false,
@@ -852,7 +853,6 @@ export async function deliverAgentCommandResult(
   params.assertDeliveryCurrent?.();
   const outboundPayloadPlan = createOutboundPayloadPlan(mediaNormalizedReplyPayloads);
   const normalizedPayloads = projectOutboundPayloadPlanForJson(outboundPayloadPlan);
-  const resultMeta = mergeResultMetaOverrides(result.meta, opts.resultMetaOverrides);
   const captureDeliveryResult = (
     deliveryResult: AgentCommandDeliveryResult,
   ): AgentCommandDeliveryResult => {
@@ -866,7 +866,7 @@ export async function deliverAgentCommandResult(
     writeRuntimeJson(runtime, {
       ...buildOutboundResultEnvelope({
         payloads: normalizedPayloads,
-        meta: resultMeta,
+        meta: result.meta,
       }),
       ...(status ? { deliveryStatus: status } : {}),
     });
@@ -876,7 +876,7 @@ export async function deliverAgentCommandResult(
     captureDeliveryResult(
       buildDeliveryResult({
         payloads: normalizedPayloads,
-        meta: resultMeta,
+        meta: result.meta,
         result,
         deliveryStatus,
       }),
@@ -892,7 +892,7 @@ export async function deliverAgentCommandResult(
     return captureDeliveryResult(
       buildDeliveryResult({
         payloads: normalizedPayloads,
-        meta: resultMeta,
+        meta: result.meta,
         result,
         deliverySucceeded,
         deliveryStatus,
@@ -921,7 +921,7 @@ export async function deliverAgentCommandResult(
     }
     emitJsonEnvelope();
     return captureDeliveryResult(
-      buildDeliveryResult({ payloads: normalizedPayloads, meta: resultMeta, result }),
+      buildDeliveryResult({ payloads: normalizedPayloads, meta: result.meta, result }),
     );
   }
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
@@ -937,6 +937,19 @@ export async function deliverAgentCommandResult(
           accountId: resolvedAccountId,
           payloads: deliveryPayloads,
           session: outboundSession,
+          replyPayloadSendingHook: {
+            kind: "final",
+            channel: deliveryChannel,
+            ...(effectiveSessionKey ? { sessionKey: effectiveSessionKey } : {}),
+            ...(opts.runId ? { runId: opts.runId } : {}),
+            context: {
+              channelId: deliveryChannel,
+              ...(resolvedAccountId ? { accountId: resolvedAccountId } : {}),
+              conversationId: deliveryTarget,
+              ...(effectiveSessionKey ? { sessionKey: effectiveSessionKey } : {}),
+              ...(opts.runId ? { runId: opts.runId } : {}),
+            },
+          },
           replyToId: resolvedReplyToId ?? null,
           threadId: resolvedThreadTarget ?? null,
           bestEffort: bestEffortDeliver,
@@ -959,7 +972,7 @@ export async function deliverAgentCommandResult(
         captureDeliveryResult(
           buildDeliveryResult({
             payloads: normalizedPayloads,
-            meta: resultMeta,
+            meta: result.meta,
             result,
             deliverySucceeded: false,
             deliveryStatus,
@@ -989,7 +1002,7 @@ export async function deliverAgentCommandResult(
   return captureDeliveryResult(
     buildDeliveryResult({
       payloads: normalizedPayloads,
-      meta: resultMeta,
+      meta: result.meta,
       result,
       deliverySucceeded,
       deliveryStatus,

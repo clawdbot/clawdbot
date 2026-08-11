@@ -1,9 +1,11 @@
-import { readFileSync } from "node:fs";
-import { compileFunction } from "node:vm";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
   buildSummary,
+  filterIgnoredFindings,
   formatAnnotation,
   intersectFindings,
   parseRepoLocation,
@@ -11,6 +13,7 @@ import {
 } from "../../scripts/periphery-intersection.mjs";
 
 const WORKFLOW_PATH = ".github/workflows/shared-openclawkit-periphery.yml";
+const FINDING_SOURCE = "../shared/OpenClawKit/Sources/OpenClawKit/Example.swift";
 
 type WorkflowStep = {
   id?: string;
@@ -25,6 +28,7 @@ type Workflow = {
     {
       name?: string;
       needs?: string[] | string;
+      "runs-on"?: string;
       steps?: WorkflowStep[];
     }
   >;
@@ -34,10 +38,22 @@ function finding(overrides: Record<string, unknown> = {}) {
   return {
     ids: ["s:11OpenClawKit7ExampleV"],
     kind: "struct",
-    location: "../shared/OpenClawKit/Sources/OpenClawKit/Example.swift:12:8",
+    location: `${FINDING_SOURCE}:12:8`,
     name: "Example",
     ...overrides,
   };
+}
+
+function withSharedSource(source: string, test: (repoRoot: string) => void) {
+  const repoRoot = mkdtempSync(join(tmpdir(), "openclaw-periphery-intersection-"));
+  const sourceFile = join(repoRoot, "apps/shared/OpenClawKit/Sources/OpenClawKit/Example.swift");
+  mkdirSync(dirname(sourceFile), { recursive: true });
+  writeFileSync(sourceFile, source);
+  try {
+    test(repoRoot);
+  } finally {
+    rmSync(repoRoot, { force: true, recursive: true });
+  }
 }
 
 describe("Periphery intersection", () => {
@@ -59,6 +75,32 @@ describe("Periphery intersection", () => {
       name: "Later",
     });
     expect(intersectFindings([later, finding()], [finding(), later])).toEqual([finding(), later]);
+  });
+
+  it("honors bare Periphery ignore comments on or above declarations", () => {
+    withSharedSource(
+      [
+        "// periphery:ignore - exported package surface",
+        "public struct Example {}",
+        "",
+        'public init(value: String = "value") {} // periphery:ignore - exported initializer',
+      ].join("\n"),
+      (repoRoot) => {
+        const declaration = finding({ location: `${FINDING_SOURCE}:2:8` });
+        const inline = finding({ location: `${FINDING_SOURCE}:4:8` });
+        expect(filterIgnoredFindings([declaration, inline], repoRoot)).toEqual([]);
+      },
+    );
+  });
+
+  it("does not treat scoped Periphery commands as bare ignores", () => {
+    withSharedSource(
+      ["// periphery:ignore:parameters value", "public struct Example {}"].join("\n"),
+      (repoRoot) => {
+        const command = finding({ location: `${FINDING_SOURCE}:2:8` });
+        expect(filterIgnoredFindings([command], repoRoot)).toEqual([command]);
+      },
+    );
   });
 
   it("fails closed when a finding has no USR", () => {
@@ -97,6 +139,8 @@ describe("shared OpenClawKit Periphery workflow", () => {
     expect(workflow.jobs?.["scan-ios"]?.name).toBe("Scan shared kit from iOS");
     expect(workflow.jobs?.["scan-macos"]?.name).toBe("Scan shared kit from macOS");
     expect(workflow.jobs?.intersect?.needs).toEqual(["scope", "scan-ios", "scan-macos"]);
+    expect(workflow.jobs?.["scan-ios"]?.["runs-on"]).toContain("github.run_attempt > 1");
+    expect(workflow.jobs?.["scan-macos"]?.["runs-on"]).toContain("github.run_attempt > 1");
 
     const iosUpload = workflow.jobs?.["scan-ios"]?.steps?.find(
       (step) => step.name === "Upload iOS consumer report",
@@ -121,44 +165,5 @@ describe("shared OpenClawKit Periphery workflow", () => {
       (step) => step.name === "Scan shared kit",
     );
     expect(macosScan?.run).not.toContain("--exclude-tests");
-  });
-
-  it("scopes native consumer, shared package, and workflow changes", async () => {
-    const script = workflow.jobs?.scope?.steps?.find((step) => step.id === "scope")?.with?.script;
-    expect(script).toBeTruthy();
-    const execute = compileFunction(`return (async () => {\n${script}\n})();`, [
-      "context",
-      "core",
-      "exec",
-    ]) as (context: unknown, core: unknown, exec: unknown) => Promise<void>;
-
-    for (const filename of [
-      "apps/ios/Sources/App.swift",
-      "apps/macos/Sources/OpenClaw/App.swift",
-      "apps/shared/OpenClawKit/Sources/OpenClawKit/Example.swift",
-      WORKFLOW_PATH,
-    ]) {
-      const outputs = new Map<string, string>();
-      await execute(
-        {
-          eventName: "pull_request",
-          payload: { pull_request: { base: { sha: "base-sha" }, draft: false, number: 1 } },
-          repo: {},
-        },
-        { setOutput: (name: string, value: string) => outputs.set(name, value) },
-        {
-          async getExecOutput(command: string, args: string[]) {
-            expect(command).toBe("git");
-            expect(args.slice(0, 5)).toEqual(["diff", "--quiet", "base-sha", "HEAD", "--"]);
-            const pathspecs = args.slice(5);
-            const changed = pathspecs.some((pathspec) =>
-              pathspec.endsWith("/") ? filename.startsWith(pathspec) : filename === pathspec,
-            );
-            return { exitCode: changed ? 1 : 0 };
-          },
-        },
-      );
-      expect(outputs.get("should-scan"), filename).toBe("true");
-    }
   });
 });

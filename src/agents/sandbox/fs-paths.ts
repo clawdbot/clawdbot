@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { shortenPathWithHome } from "../../infra/home-display.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { resolveSandboxInputPath, resolveSandboxPath } from "../sandbox-paths.js";
 import type { SandboxFsBridgeContext } from "./backend-handle.types.js";
@@ -15,10 +16,13 @@ import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import {
   isPathInsideContainerRoot,
-  normalizeContainerPath,
+  normalizeContainerPathCore,
   relativePathEscapesContainerRoot,
 } from "./path-utils.js";
-import { resolveReadOnlyWorkspaceSkillMounts } from "./workspace-mounts.js";
+import {
+  resolveProtectedSkillMountContainerPaths,
+  resolveReadOnlyWorkspaceSkillMounts,
+} from "./workspace-mounts.js";
 
 export type SandboxFsMount = {
   hostRoot: string;
@@ -61,7 +65,7 @@ function parseSandboxBindMount(spec: string): ParsedBindMount | null {
   const writable = !optionParts.includes("ro");
   return {
     hostRoot: path.resolve(hostToken),
-    containerRoot: normalizeContainerPath(containerToken),
+    containerRoot: normalizeContainerPathCore(containerToken),
     writable,
   };
 }
@@ -70,7 +74,7 @@ export function buildSandboxFsMounts(sandbox: SandboxFsBridgeContext): SandboxFs
   const mounts: SandboxFsMount[] = [
     {
       hostRoot: path.resolve(sandbox.workspaceDir),
-      containerRoot: normalizeContainerPath(sandbox.containerWorkdir),
+      containerRoot: normalizeContainerPathCore(sandbox.containerWorkdir),
       writable: sandbox.workspaceAccess === "rw",
       source: "workspace",
     },
@@ -88,24 +92,32 @@ export function buildSandboxFsMounts(sandbox: SandboxFsBridgeContext): SandboxFs
     });
   }
 
-  for (const mount of resolveReadOnlyWorkspaceSkillMounts({
+  const protectedSkillMounts = resolveReadOnlyWorkspaceSkillMounts({
     workspaceDir: sandbox.workspaceDir,
     agentWorkspaceDir: sandbox.agentWorkspaceDir,
     skillsWorkspaceDir: sandbox.skillsWorkspaceDir,
     workdir: sandbox.containerWorkdir,
     workspaceAccess: sandbox.workspaceAccess,
-  })) {
+  });
+
+  for (const mount of protectedSkillMounts) {
     mounts.push({
       hostRoot: path.resolve(mount.hostPath),
-      containerRoot: normalizeContainerPath(mount.containerPath),
+      containerRoot: normalizeContainerPathCore(mount.containerPath),
       writable: false,
       source: "protectedSkill",
     });
   }
 
+  // Protected skill mounts are authoritative; skip user binds that target the
+  // same container path to avoid duplicate entries in the mount table.
+  const protectedPaths = resolveProtectedSkillMountContainerPaths(protectedSkillMounts);
   for (const bind of sandbox.docker.binds ?? []) {
     const parsed = parseSandboxBindMount(bind);
     if (!parsed) {
+      continue;
+    }
+    if (protectedPaths.has(parsed.containerRoot)) {
       continue;
     }
     mounts.push({
@@ -284,13 +296,15 @@ function resolveRelativeContainerCandidate(params: {
     const containerCwd = relPosix
       ? path.posix.join(cwdMount.containerRoot, relPosix)
       : cwdMount.containerRoot;
-    return normalizeContainerPath(path.posix.resolve(containerCwd, params.inputPosix));
+    return normalizeContainerPathCore(path.posix.resolve(containerCwd, params.inputPosix));
   }
   const cwdPosix = normalizePosixInput(params.cwd);
   if (path.posix.isAbsolute(cwdPosix)) {
-    return normalizeContainerPath(path.posix.resolve(cwdPosix, params.inputPosix));
+    return normalizeContainerPathCore(path.posix.resolve(cwdPosix, params.inputPosix));
   }
-  return normalizeContainerPath(path.posix.resolve(params.defaultContainerRoot, params.inputPosix));
+  return normalizeContainerPathCore(
+    path.posix.resolve(params.defaultContainerRoot, params.inputPosix),
+  );
 }
 
 function formatSandboxRootEscapeMessage(params: {
@@ -298,17 +312,13 @@ function formatSandboxRootEscapeMessage(params: {
   defaultWorkspaceRoot: string;
   defaultContainerRoot: string;
 }): string {
-  const containerRoot = normalizeContainerPath(params.defaultContainerRoot);
+  const containerRoot = normalizeContainerPathCore(params.defaultContainerRoot);
   const workspaceRoot = shortenHomePath(path.resolve(params.defaultWorkspaceRoot));
   return `Path escapes sandbox root (${workspaceRoot}; container root ${containerRoot}): ${params.input}. Use a path under ${containerRoot}/ instead.`;
 }
 
 function shortenHomePath(value: string): string {
-  const home = os.homedir();
-  if (value === home || value.startsWith(`${home}${path.sep}`)) {
-    return `~${value.slice(home.length)}`;
-  }
-  return value;
+  return shortenPathWithHome(value, { home: os.homedir(), prefix: "~" });
 }
 
 function compareMountsByContainerPath(a: SandboxFsMount, b: SandboxFsMount): number {

@@ -1,5 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  isSyntheticSourceReplyTurn,
+  resolveSourceReplyDeliveryMode,
+} from "../../auto-reply/reply/source-reply-delivery-mode.js";
+import {
   formatThinkingLevels,
   normalizeThinkLevel,
   normalizeVerboseLevel,
@@ -10,7 +14,10 @@ import { resolveAgentExplicitRecipientSession } from "../../infra/outbound/agent
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
-import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
+import {
+  isPluginMetadataSnapshotCompatible,
+  resolvePluginMetadataSnapshot,
+} from "../../plugins/plugin-metadata-snapshot.js";
 import {
   classifySessionKeyShape,
   isUnscopedSessionKeySentinel,
@@ -24,6 +31,10 @@ import {
   resolveAgentHarnessSessionContextError,
 } from "../../sessions/agent-harness-session-key.js";
 import { resolveUserPath } from "../../utils.js";
+import {
+  sessionDeliveryChannel,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel, resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "../agent-runtime-config.js";
 import {
@@ -34,8 +45,9 @@ import {
   resolveAgentWorkspaceDir,
 } from "../agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
+import { selectAgentHarness } from "../harness/selection.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
-import type { ModelManifestNormalizationContext } from "../model-selection-normalize.js";
+import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { buildConfiguredModelCatalog, resolveConfiguredModelRef } from "../model-selection.js";
 import { normalizeSpawnedRunMetadata } from "../spawned-context.js";
 import { resolveEffectiveAgentRuntime } from "../thinking-runtime.js";
@@ -82,7 +94,7 @@ export function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "
   return trimmed;
 }
 
-export function resolveExplicitAgentCommandSessionKey(params: {
+function resolveExplicitAgentCommandSessionKey(params: {
   rawExplicitSessionKey?: string;
   agentIdOverride?: string;
   shouldScopeDefaultAgentKey?: boolean;
@@ -133,7 +145,7 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
     );
   }
 
-  const { cfg } = await resolveAgentRuntimeConfig(runtime, {
+  const { cfg, pluginMetadataSnapshot } = await resolveAgentRuntimeConfig(runtime, {
     runtimeTargetsChannelSecrets: opts.deliver === true,
     runtimeChannelSecretScope:
       opts.deliver !== true && shouldResolveExplicitRecipientSession && recipientChannel
@@ -230,7 +242,7 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
   if (explicitRecipientSession?.error) {
     throw explicitRecipientSession.error;
   }
-  const commandOpts = explicitRecipientSession?.sessionKey
+  let commandOpts: AgentCommandOpts = explicitRecipientSession?.sessionKey
     ? {
         ...selectedCommandOpts,
         channel: explicitRecipientSession.channel,
@@ -247,9 +259,15 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
     agentId: agentIdOverride,
     clone: false,
   });
-
-  const { sessionId, sessionKey, storePath, isNewSession, persistedThinking, persistedVerbose } =
-    sessionResolution;
+  const {
+    sessionId,
+    sessionKey,
+    storePath,
+    isNewSession,
+    previousSessionId,
+    persistedThinking,
+    persistedVerbose,
+  } = sessionResolution;
   const harnessSessionError = sessionKey
     ? resolveAgentHarnessSessionContextError(sessionKey, sessionResolution.sessionEntry)
     : undefined;
@@ -285,7 +303,16 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const pluginsEnabled = normalizePluginsConfig(cfg.plugins).enabled;
   const manifestMetadataSnapshot = pluginsEnabled
-    ? loadManifestMetadataSnapshot({ config: cfg, workspaceDir, env: process.env })
+    ? pluginMetadataSnapshot &&
+      pluginMetadataSnapshot.pluginIds === undefined &&
+      isPluginMetadataSnapshotCompatible({
+        snapshot: pluginMetadataSnapshot,
+        config: cfg,
+        env: process.env,
+        workspaceDir,
+      })
+      ? pluginMetadataSnapshot
+      : resolvePluginMetadataSnapshot({ config: cfg, env: process.env, workspaceDir })
     : undefined;
   const modelManifestContext = {
     manifestPlugins: manifestMetadataSnapshot?.plugins ?? [],
@@ -310,6 +337,54 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
     sessionKey,
     sessionEntry: sessionEntryRaw,
   });
+  if (
+    sessionEntryRaw &&
+    commandOpts.cliSessionBindingFacts === undefined &&
+    isSyntheticSourceReplyTurn({
+      inputProvenance: commandOpts.inputProvenance,
+      isHeartbeat: commandOpts.bootstrapContextRunKind === "heartbeat",
+    })
+  ) {
+    // Lifecycle turns keep their effective delivery mode, but CLI reuse belongs
+    // to the existing session's normal source-reply policy.
+    const stableReplyContext = {
+      CommandAuthorized: false,
+      ChatType: sessionEntryRaw.chatType,
+      Provider: sessionDeliveryOrigin(sessionEntryRaw)?.provider,
+      Surface: sessionDeliveryChannel(sessionEntryRaw),
+      InputProvenance: commandOpts.inputProvenance,
+    };
+    const stableProvider = sessionEntryRaw.modelProvider ?? configuredModel.provider;
+    const stableModel = sessionEntryRaw.model ?? configuredModel.model;
+    const stableRuntime = resolveEffectiveAgentRuntime({
+      cfg,
+      provider: stableProvider,
+      modelId: stableModel,
+      agentId: sessionAgentId,
+      sessionKey,
+      sessionEntry: sessionEntryRaw,
+    });
+    const harness = selectAgentHarness({
+      provider: stableProvider,
+      modelId: stableModel,
+      config: cfg,
+      agentId: sessionAgentId,
+      sessionKey,
+      agentHarnessRuntimeOverride: stableRuntime,
+    });
+    const defaultVisibleReplies =
+      harness.deliveryDefaults?.visibleReplies ?? harness.deliveryDefaults?.sourceVisibleReplies;
+    commandOpts = {
+      ...commandOpts,
+      cliSessionBindingFacts: {
+        sourceReplyDeliveryMode: resolveSourceReplyDeliveryMode({
+          cfg,
+          ctx: stableReplyContext,
+          defaultVisibleReplies,
+        }),
+      },
+    };
+  }
   const thinkingLevelsHint = formatThinkingLevels(
     configuredModel.provider,
     configuredModel.model,
@@ -348,7 +423,7 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
     const transcriptBody =
       opts.transcriptMessage ?? resolveInternalEventTranscriptBody(message, opts.internalEvents);
 
-    return {
+    const prepared = {
       opts: commandOpts,
       body,
       transcriptBody,
@@ -367,6 +442,7 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
       sessionStore,
       storePath,
       isNewSession,
+      previousSessionId,
       persistedThinking,
       persistedVerbose,
       sessionAgentId,
@@ -383,6 +459,7 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
       acpResolution,
       runLease,
     };
+    return prepared;
   } catch (error) {
     await runLease?.release();
     throw error;

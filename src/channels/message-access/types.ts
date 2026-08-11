@@ -1,3 +1,4 @@
+import type { ResolvedChannelImplicitMentions } from "../../config/implicit-mentions.js";
 /**
  * Internal channel ingress access graph types.
  *
@@ -228,6 +229,7 @@ export type ChannelIngressPolicyInput = {
   activation?: {
     requireMention: boolean;
     allowTextCommands: boolean;
+    implicitMentions?: ResolvedChannelImplicitMentions;
     allowedImplicitMentionKinds?: readonly InboundImplicitMentionKind[];
     order?: "before-sender" | "after-command";
   };

@@ -1,37 +1,21 @@
 // Xai provider module implements model/runtime integration.
-import {
-  isProviderAuthProfileConfigured,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/provider-auth";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   createRealtimeTranscriptionWebSocketSession,
-  type RealtimeTranscriptionProviderConfig,
   type RealtimeTranscriptionProviderPlugin,
   type RealtimeTranscriptionSession,
   type RealtimeTranscriptionSessionCreateRequest,
   type RealtimeTranscriptionWebSocketTransport,
 } from "openclaw/plugin-sdk/realtime-transcription";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  normalizeOptionalString,
-  parseBooleanValue as readBoolean,
-  parseFiniteNumber as readFiniteNumber,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+  createXaiRealtimeTranscriptionProviderMetadata,
+  normalizeXaiRealtimeTranscriptionProviderConfig,
+  type XaiRealtimeTranscriptionEncoding,
+} from "./capability-provider-metadata.js";
 import { XAI_BASE_URL } from "./model-definitions.js";
 import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
-
-type XaiRealtimeTranscriptionEncoding = "pcm" | "mulaw" | "alaw";
-
-type XaiRealtimeTranscriptionProviderConfig = {
-  apiKey?: string;
-  baseUrl?: string;
-  sampleRate?: number;
-  encoding?: XaiRealtimeTranscriptionEncoding;
-  interimResults?: boolean;
-  endpointingMs?: number;
-  language?: string;
-};
 
 type XaiRealtimeTranscriptionSessionConfig = RealtimeTranscriptionSessionCreateRequest & {
   apiKey: string;
@@ -64,33 +48,6 @@ const XAI_REALTIME_STT_MAX_RECONNECT_ATTEMPTS = 5;
 const XAI_REALTIME_STT_RECONNECT_DELAY_MS = 1000;
 const XAI_REALTIME_STT_MAX_QUEUED_BYTES = 2 * 1024 * 1024;
 
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-
-function readNestedXaiConfig(rawConfig: RealtimeTranscriptionProviderConfig) {
-  const raw = readRecord(rawConfig);
-  const providers = readRecord(raw?.providers);
-  return readRecord(providers?.xai ?? raw?.xai ?? raw) ?? {};
-}
-
-function normalizeEncoding(value: unknown): XaiRealtimeTranscriptionEncoding | undefined {
-  const normalized = normalizeOptionalString(value)?.toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if (normalized === "ulaw" || normalized === "g711_ulaw" || normalized === "g711-mulaw") {
-    return "mulaw";
-  }
-  if (normalized === "g711_alaw" || normalized === "g711-alaw") {
-    return "alaw";
-  }
-  if (normalized === "pcm" || normalized === "mulaw" || normalized === "alaw") {
-    return normalized;
-  }
-  throw new Error(`Invalid xAI realtime transcription encoding: ${normalized}`);
-}
-
 function normalizeXaiRealtimeBaseUrl(value?: string): string {
   return normalizeOptionalString(value ?? process.env.XAI_BASE_URL) ?? XAI_BASE_URL;
 }
@@ -109,29 +66,11 @@ function toXaiRealtimeWsUrl(config: XaiRealtimeTranscriptionSessionConfig): stri
   return url.toString();
 }
 
-function normalizeProviderConfig(
-  config: RealtimeTranscriptionProviderConfig,
-): XaiRealtimeTranscriptionProviderConfig {
-  const raw = readNestedXaiConfig(config);
-  return {
-    apiKey: normalizeResolvedSecretInputString({
-      value: raw.apiKey,
-      path: "plugins.entries.voice-call.config.streaming.providers.xai.apiKey",
-    }),
-    baseUrl: normalizeOptionalString(raw.baseUrl),
-    sampleRate: readFiniteNumber(raw.sampleRate ?? raw.sample_rate),
-    encoding: normalizeEncoding(raw.encoding),
-    interimResults: readBoolean(raw.interimResults ?? raw.interim_results),
-    endpointingMs: readFiniteNumber(raw.endpointingMs ?? raw.endpointing ?? raw.silenceDurationMs),
-    language: normalizeOptionalString(raw.language),
-  };
-}
-
 function readErrorDetail(value: unknown): string {
   if (typeof value === "string") {
     return value;
   }
-  const record = readRecord(value);
+  const record = isRecord(value) ? value : undefined;
   const message = normalizeOptionalString(record?.message);
   const code = normalizeOptionalString(record?.code);
   return message ?? code ?? "xAI realtime transcription error";
@@ -174,6 +113,8 @@ function createXaiRealtimeTranscriptionSession(
           return;
         }
         if (!speechStarted) {
+          // Dedupe final/terminal echoes within one utterance, not identical later turns.
+          lastTranscript = undefined;
           speechStarted = true;
           config.onSpeechStart?.();
         }
@@ -231,16 +172,9 @@ function createXaiRealtimeTranscriptionSession(
 
 export function buildXaiRealtimeTranscriptionProvider(): RealtimeTranscriptionProviderPlugin {
   return {
-    id: "xai",
-    label: "xAI Realtime Transcription",
-    aliases: ["xai-realtime", "grok-stt-streaming"],
-    autoSelectOrder: 25,
-    resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
-    isConfigured: ({ providerConfig, cfg }) =>
-      Boolean(normalizeProviderConfig(providerConfig).apiKey || process.env.XAI_API_KEY) ||
-      isProviderAuthProfileConfigured({ provider: "xai", cfg }),
+    ...createXaiRealtimeTranscriptionProviderMetadata(),
     createSession: (req) => {
-      const config = normalizeProviderConfig(req.providerConfig);
+      const config = normalizeXaiRealtimeTranscriptionProviderConfig(req.providerConfig);
       // createSession must stay sync per RealtimeTranscriptionProviderPlugin; bearer is resolved lazily in headers().
       const seedApiKey =
         normalizeOptionalString(config.apiKey) ?? normalizeOptionalString(process.env.XAI_API_KEY);

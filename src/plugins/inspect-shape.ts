@@ -38,7 +38,6 @@ type PluginShapeSummary = {
   capabilityMode: "none" | "plain" | "hybrid";
   capabilityCount: number;
   capabilities: PluginCapabilityEntry[];
-  usesLegacyBeforeAgentStart: boolean;
 };
 
 function buildPluginCapabilityEntries(
@@ -151,8 +150,5 @@ export function buildPluginShapeSummary(params: {
     capabilityMode: capabilityCount === 0 ? "none" : capabilityCount === 1 ? "plain" : "hybrid",
     capabilityCount,
     capabilities,
-    usesLegacyBeforeAgentStart: params.report.typedHooks.some(
-      (entry) => entry.pluginId === params.plugin.id && entry.hookName === "before_agent_start",
-    ),
   };
 }

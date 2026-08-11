@@ -5,6 +5,11 @@ import path from "node:path";
 import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "openclaw/plugin-sdk/model-session-runtime";
 import { upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
+import {
+  getSessionEntry,
+  resolveStorePath,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildCodexSupervisionTestConnectionFingerprint,
@@ -65,10 +70,6 @@ let tempDir: string;
 const sharedClientMocks = vi.hoisted(() => ({
   getSharedCodexAppServerClient: vi.fn(),
 }));
-
-function controlClient(request: ReturnType<typeof vi.fn>, clientId = "control-client") {
-  return { request, getInstanceId: () => clientId };
-}
 
 vi.mock("./app-server/shared-client.js", () => ({
   ...sharedClientMocks,
@@ -267,31 +268,19 @@ describe("codex conversation controls", () => {
       model: "gpt-5.4",
       modelProvider: "openai",
     });
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(
-      controlClient(
-        vi.fn(async () => ({
-          thread: { id: "thread-1", cwd: tempDir },
-          model: "gpt-5.5",
-          modelProvider: "openai",
-        })),
-      ),
-    );
-
     await expect(
       setCodexConversationModel({ sessionFile, agentDir, model: "gpt-5.5" }),
     ).resolves.toBe("Codex model set to gpt-5.5.");
 
     const binding = await readCodexAppServerBinding(sessionFile);
-    const sharedClientParams = sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0];
-    expect(sharedClientParams?.agentDir).toBe(agentDir);
     expect(binding?.threadId).toBe("thread-1");
     expect(binding?.authProfileId).toBe("work");
     expect(binding?.model).toBe("gpt-5.5");
     expect(binding?.modelProvider).toBeUndefined();
-    expect(binding?.clientId).toBe("control-client");
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
-  it("keeps Guardian reviewer when switching a stale local binding to a provider-qualified OpenAI model", async () => {
+  it("persists provider-qualified model changes without resuming a subscribed thread", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-1",
@@ -301,13 +290,6 @@ describe("codex conversation controls", () => {
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
     });
-    const request = vi.fn(async (_method: string, _requestParams?: unknown) => ({
-      thread: { id: "thread-1", cwd: tempDir },
-      model: "gpt-5.5",
-      modelProvider: "openai",
-    }));
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(controlClient(request));
-
     await expect(
       setCodexConversationModel({
         sessionFile,
@@ -316,12 +298,10 @@ describe("codex conversation controls", () => {
       }),
     ).resolves.toBe("Codex model set to gpt-5.5.");
 
-    const resumeParams = request.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
     const binding = await readCodexAppServerBinding(sessionFile);
-    expect(resumeParams?.model).toBe("gpt-5.5");
-    expect(resumeParams?.modelProvider).toBe("openai");
-    expect(resumeParams?.approvalsReviewer).toBe("auto_review");
+    expect(binding?.model).toBe("gpt-5.5");
     expect(binding?.modelProvider).toBe("openai");
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
   it("keeps the bound local provider when switching to another unqualified model", async () => {
@@ -334,13 +314,6 @@ describe("codex conversation controls", () => {
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
     });
-    const request = vi.fn(async (_method: string, _requestParams?: unknown) => ({
-      thread: { id: "thread-1", cwd: tempDir },
-      model: "local-model-2",
-      modelProvider: "lmstudio",
-    }));
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(controlClient(request));
-
     await expect(
       setCodexConversationModel({
         sessionFile,
@@ -349,10 +322,11 @@ describe("codex conversation controls", () => {
       }),
     ).resolves.toBe("Codex model set to local-model-2.");
 
-    const resumeParams = request.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
-    expect(resumeParams?.model).toBe("local-model-2");
-    expect(resumeParams?.modelProvider).toBe("lmstudio");
-    expect(resumeParams?.approvalsReviewer).toBe("user");
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      model: "local-model-2",
+      modelProvider: "lmstudio",
+    });
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
   it("keeps the bound local provider when reselecting a model id with a slash", async () => {
@@ -365,13 +339,6 @@ describe("codex conversation controls", () => {
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
     });
-    const request = vi.fn(async (_method: string, _requestParams?: unknown) => ({
-      thread: { id: "thread-1", cwd: tempDir },
-      model: "openai/gpt-oss-20b",
-      modelProvider: "lmstudio",
-    }));
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(controlClient(request));
-
     await expect(
       setCodexConversationModel({
         sessionFile,
@@ -380,15 +347,103 @@ describe("codex conversation controls", () => {
       }),
     ).resolves.toBe("Codex model set to openai/gpt-oss-20b.");
 
-    const resumeParams = request.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
     const binding = await readCodexAppServerBinding(sessionFile);
-    expect(resumeParams?.model).toBe("openai/gpt-oss-20b");
-    expect(resumeParams?.modelProvider).toBe("lmstudio");
-    expect(resumeParams?.approvalsReviewer).toBe("user");
+    expect(binding?.model).toBe("openai/gpt-oss-20b");
     expect(binding?.modelProvider).toBe("lmstudio");
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
-  it("escapes model names returned from Codex before chat display", async () => {
+  it("persists ordinary model selection on SessionEntry without overwriting native ownership", async () => {
+    const sessionKey = "agent:main:model-session";
+    const sessionId = "session-model-authority";
+    const identity = { kind: "session" as const, agentId: "main", sessionId, sessionKey };
+    const storePath = resolveStorePath(undefined, { agentId: "main" });
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId,
+        updatedAt: Date.now(),
+        authProfileOverride: "openai:personal",
+        authProfileOverrideSource: "user",
+      },
+    });
+    await testCodexAppServerBindingStore.mutate(identity, {
+      kind: "set",
+      binding: {
+        threadId: "thread-model-authority",
+        cwd: tempDir,
+        model: "gpt-5.4",
+        modelProvider: "openai",
+      },
+    });
+
+    await expect(
+      setCodexConversationModelImpl({
+        identity,
+        bindingStore: testCodexAppServerBindingStore,
+        model: "gpt-5.5",
+      }),
+    ).resolves.toBe("Codex model set to gpt-5.5.");
+
+    expect(getSessionEntry({ storePath, sessionKey })).toMatchObject({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.5",
+      authProfileOverride: "openai:personal",
+      authProfileOverrideSource: "user",
+      liveModelSwitchPending: true,
+    });
+    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+      threadId: "thread-model-authority",
+      model: "gpt-5.4",
+    });
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+  });
+
+  it("drops an incompatible pinned auth profile when selecting another provider", async () => {
+    const sessionKey = "agent:main:model-provider-switch";
+    const sessionId = "session-provider-switch";
+    const identity = { kind: "session" as const, agentId: "main", sessionId, sessionKey };
+    const storePath = resolveStorePath(undefined, { agentId: "main" });
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId,
+        updatedAt: Date.now(),
+        authProfileOverride: "lmstudio:work",
+        authProfileOverrideSource: "user",
+      },
+    });
+    await testCodexAppServerBindingStore.mutate(identity, {
+      kind: "set",
+      binding: {
+        threadId: "thread-provider-switch",
+        cwd: tempDir,
+        model: "local-model",
+        modelProvider: "lmstudio",
+      },
+    });
+
+    await expect(
+      setCodexConversationModelImpl({
+        identity,
+        bindingStore: testCodexAppServerBindingStore,
+        model: "openai/gpt-5.5",
+      }),
+    ).resolves.toBe("Codex model set to gpt-5.5.");
+
+    expect(getSessionEntry({ storePath, sessionKey })).toMatchObject({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.5",
+      liveModelSwitchPending: true,
+    });
+    expect(getSessionEntry({ storePath, sessionKey })?.authProfileOverride).toBeUndefined();
+  });
+
+  it("escapes requested model names before chat display", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-1",
@@ -396,18 +451,13 @@ describe("codex conversation controls", () => {
       model: "gpt-5.4",
       modelProvider: "openai",
     });
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(
-      controlClient(
-        vi.fn(async () => ({
-          thread: { id: "thread-1", cwd: tempDir },
-          model: "gpt-5.5 <@U123> [trusted](https://evil)",
-          modelProvider: "openai",
-        })),
-      ),
-    );
-
-    await expect(setCodexConversationModel({ sessionFile, model: "gpt-5.5" })).resolves.toBe(
-      "Codex model set to gpt-5.5 &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09.",
+    await expect(
+      setCodexConversationModel({
+        sessionFile,
+        model: "gpt-5.5 <@U123> [trusted](evil)",
+      }),
+    ).resolves.toBe(
+      "Codex model set to gpt-5.5 &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08evil\uff09.",
     );
   });
 });

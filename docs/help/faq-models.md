@@ -48,7 +48,8 @@ troubleshooting, see the main [FAQ](/help/faq).
   <Accordion title="How do I switch models without wiping my config?">
     Change only the model fields — avoid full config replaces.
 
-    - `/model` in chat (per-session, see [Slash commands](/tools/slash-commands))
+    - `/model <model> -s` in chat (current session only; see [Slash commands](/tools/slash-commands))
+    - direct owner/admin `/model <model>` (current session plus a best-effort configured-default update request)
     - `openclaw models set ...` (updates just model config)
     - `openclaw configure --section model` (interactive)
     - edit `agents.defaults.model` in `~/.openclaw/openclaw.json` directly
@@ -86,22 +87,26 @@ troubleshooting, see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="How do I switch models on the fly (without restarting)?">
-    Send `/model <name>` as a standalone message. See
+    Send `/model <name> -s` as a standalone message for a temporary switch.
+    A direct owner/admin `/model <name>` without `-s` also requests a
+    best-effort configured-default update. See
     [Slash commands](/tools/slash-commands) for the
     full command list, including the numbered picker (`/model`, `/model
-    list`, `/model 3`), `/model default` to clear a session override, and
+    list`, `/model 3`), `/model default` to clear a session model override, and
     `/model status` for endpoint/API-mode detail.
 
     Force a specific auth profile per session with `@profile`:
 
     ```text
-    /model opus@anthropic:default
-    /model opus@anthropic:work
+    /model opus@anthropic:default -s
+    /model opus@anthropic:work -s
     ```
 
-    To unpin a profile set with `@profile`, re-run `/model` without the
-    suffix (e.g. `/model anthropic/claude-opus-4-6`), or pick the default from
-    `/model`. Use `/model status` to confirm the active auth profile.
+    A model selection without `@profile` preserves an existing compatible
+    profile pin. Choose another explicit `@profile` suffix to replace it. Use
+    `/model status` to inspect the active auth profile. `/model default` keeps
+    a compatible auth pin and clears one that does not match the configured
+    default provider.
 
   </Accordion>
 
@@ -180,18 +185,17 @@ troubleshooting, see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title='Why do I see "Model ... is not allowed" and then no reply?'>
-    If `agents.defaults.models` is set, it becomes the **allowlist** for
-    `/model` and session overrides. Picking a model outside that list returns
+    If `agents.defaults.modelPolicy.allow` is non-empty, it becomes the
+    **allowlist** for `/model`, session overrides, and `--model`. Picking a model outside that list returns
     this instead of a normal reply:
 
     ```text
-    Model "provider/model" is not allowed. Use /models to list providers, or /models <provider> to list models.
-    Add it with: openclaw config set agents.defaults.models '{"provider/model":{}}' --strict-json --merge
+    Model override "provider/model" is not allowed by agents.defaults.modelPolicy.allow.
     ```
 
-    Fix: add the exact model to `agents.defaults.models`, add a provider
-    wildcard such as `"provider/*": {}` for dynamic catalogs, remove the
-    allowlist, or pick a model from `/model list`. If the command also
+    Fix: add the exact model or a provider wildcard such as `"provider/*"` to
+    the named `modelPolicy.allow` list, remove/empty that list, or pick a model
+    from `/model list`. If the command also
     included `--runtime codex`, update the allowlist first, then retry the
     same `/model provider/model --runtime codex` command.
 
@@ -216,7 +220,7 @@ troubleshooting, see the main [FAQ](/help/faq).
 
     ```json5
     {
-      env: { MINIMAX_API_KEY: "sk-...", OPENAI_API_KEY: "sk-..." },
+      env: { vars: { MINIMAX_API_KEY: "sk-...", OPENAI_API_KEY: "sk-..." } },
       agents: {
         defaults: {
           model: { primary: "minimax/MiniMax-M3" },
@@ -229,7 +233,7 @@ troubleshooting, see the main [FAQ](/help/faq).
     }
     ```
 
-    Then `/model gpt`.
+    Then `/model gpt -s`.
 
     **Option B: separate agents** — Agent A defaults to MiniMax, Agent B
     defaults to OpenAI; route by agent or use `/agent` to switch.
@@ -245,8 +249,8 @@ troubleshooting, see the main [FAQ](/help/faq).
 
     | Alias | Resolves to |
     | --- | --- |
-    | `opus` | `anthropic/claude-opus-4-8` |
-    | `sonnet` | `anthropic/claude-sonnet-4-6` |
+    | `opus` | `anthropic/claude-opus-5` |
+    | `sonnet` | `anthropic/claude-sonnet-5` |
     | `gpt` | `openai/gpt-5.4` |
     | `gpt-mini` | `openai/gpt-5.4-mini` |
     | `gpt-nano` | `openai/gpt-5.4-nano` |
@@ -275,8 +279,9 @@ troubleshooting, see the main [FAQ](/help/faq).
     }
     ```
 
-    Then `/model sonnet` (or `/<alias>` when supported) resolves to that
-    model id.
+    Then `/model sonnet -s` resolves to that model id for the current session.
+    Omit `-s` only when an owner/admin also wants to request a configured-default
+    update.
 
   </Accordion>
 
@@ -291,7 +296,7 @@ troubleshooting, see the main [FAQ](/help/faq).
           models: { "openrouter/anthropic/claude-sonnet-4-6": {} },
         },
       },
-      env: { OPENROUTER_API_KEY: "sk-or-..." },
+      env: { vars: { OPENROUTER_API_KEY: "sk-or-..." } },
     }
     ```
 
@@ -305,7 +310,7 @@ troubleshooting, see the main [FAQ](/help/faq).
           models: { "zai/glm-5.1": {} },
         },
       },
-      env: { ZAI_API_KEY: "..." },
+      env: { vars: { ZAI_API_KEY: "..." } },
     }
     ```
 
@@ -463,8 +468,7 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     OpenClaw may skip a profile in a short **cooldown** (rate limits,
     timeouts, auth failures) or a longer **disabled** state
     (billing/insufficient credits). Inspect with `openclaw models status
-    --json` and check `auth.unusableProfiles`. Tune with
-    `auth.cooldowns.billingBackoffHours*`. Rate-limit cooldowns can be
+    --json` and check `auth.unusableProfiles`. Rate-limit cooldowns can be
     model-scoped — a profile cooling down for one model can still serve a
     sibling model on the same provider; billing/disabled windows block the
     whole profile.

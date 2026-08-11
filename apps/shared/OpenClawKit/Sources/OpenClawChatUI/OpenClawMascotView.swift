@@ -24,6 +24,7 @@ public struct OpenClawMascotView: View {
     private let mood: OpenClawMascotMood
     private let accessory: OpenClawMascotAccessory
     private let interactive: Bool
+    private let minimumFrameInterval: TimeInterval
 
     private var staticPose: OpenClawMascotPose {
         var pose = OpenClawMascotPose.staticPose(for: self.mood)
@@ -44,16 +45,19 @@ public struct OpenClawMascotView: View {
     ///   - interactive: enables click reactions and auto-sleep (waking takes
     ///     a click). Off by default so the mascot never swallows taps meant
     ///     for an enclosing control.
+    ///   - minimumFrameInterval: minimum redraw interval for animated poses.
     public init(
         floats: Bool = true,
         mood: OpenClawMascotMood = .idle,
         accessory: OpenClawMascotAccessory = .none,
-        interactive: Bool = false)
+        interactive: Bool = false,
+        minimumFrameInterval: TimeInterval = 1.0 / 30.0)
     {
         self.floats = floats
         self.mood = mood
         self.accessory = accessory
         self.interactive = interactive
+        self.minimumFrameInterval = minimumFrameInterval
         self._animator = State(initialValue: OpenClawMascotAnimator(allowsAutoSleep: interactive))
     }
 
@@ -68,7 +72,7 @@ public struct OpenClawMascotView: View {
 
     @ViewBuilder
     private func animatedMascot(palette: OpenClawMascotPalette) -> some View {
-        let core = TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+        let core = TimelineView(.animation(minimumInterval: self.minimumFrameInterval)) { timeline in
             let pose = self.animator.pose(at: timeline.date.timeIntervalSinceReferenceDate)
             // Float translates the whole canvas like the site floats the hero
             // container; drawing the offset inside the canvas would clip the

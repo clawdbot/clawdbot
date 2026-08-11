@@ -15,12 +15,39 @@ const baseCfg = {
 } as unknown as OpenClawConfig;
 
 function createDirectDmRuntime() {
-  const recordInboundSession = vi.fn(async () => {});
+  const recordInboundSessionMock = vi.fn(async (_params: unknown) => {});
   const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async ({ dispatcherOptions }) => {
     await dispatcherOptions.deliver({ text: "reply text" });
   });
+  const runInbound = vi.fn(async ({ adapter, raw }) => {
+    const input = await adapter.ingest(raw);
+    const turn = await adapter.resolveTurn(input, {
+      kind: "message",
+      canStartAgentTurn: true,
+    });
+    await recordInboundSessionMock({
+      storePath: "/tmp/direct-dm-session-store",
+      sessionKey: turn.route.sessionKey,
+      ctx: turn.ctxPayload,
+      onRecordError: turn.record?.onRecordError ?? (() => undefined),
+    });
+    return {
+      admission: { kind: "dispatch" },
+      dispatched: true,
+      dispatchResult: await dispatchReplyWithBufferedBlockDispatcher({
+        ctx: turn.ctxPayload,
+        cfg: turn.cfg,
+        dispatcherOptions: {
+          ...turn.dispatcherOptions,
+          deliver: turn.delivery.deliver,
+          onError: turn.delivery.onError,
+        },
+        replyOptions: turn.replyOptions,
+      }),
+    };
+  });
   return {
-    recordInboundSession,
+    recordInboundSession: recordInboundSessionMock,
     dispatchReplyWithBufferedBlockDispatcher,
     runtime: {
       channel: {
@@ -34,7 +61,7 @@ function createDirectDmRuntime() {
         session: {
           resolveStorePath: vi.fn(() => "/tmp/direct-dm-session-store"),
           readSessionUpdatedAt: vi.fn(() => 1234),
-          recordInboundSession,
+          recordInboundSession: recordInboundSessionMock,
         },
         reply: {
           resolveEnvelopeFormatOptions: vi.fn(() => ({ mode: "agent" })),
@@ -42,12 +69,13 @@ function createDirectDmRuntime() {
           finalizeInboundContext: vi.fn((ctx) => ctx),
           dispatchReplyWithBufferedBlockDispatcher,
         },
+        inbound: { run: runInbound },
       },
     } as never,
   };
 }
 
-describe("plugin-sdk/direct-dm", () => {
+describe("channel-inbound direct-message helpers", () => {
   it("resolves inbound DM access and command auth through one helper", async () => {
     const result = await resolveInboundDirectDmAccessWithRuntime({
       cfg: baseCfg,
@@ -233,6 +261,11 @@ describe("plugin-sdk/direct-dm", () => {
       conversationLabel: "sender-1",
       rawBody: "hello world",
       messageId: "event-123",
+      extraContext: {
+        ReplyToId: "event-parent",
+        ReplyToIdFull: "event-parent",
+        MessageThreadId: "thread-7",
+      },
       timestamp: 1_710_000_000_000,
       commandAuthorized: true,
       deliver,
@@ -250,6 +283,10 @@ describe("plugin-sdk/direct-dm", () => {
     expect(result.ctxPayload.To).toBe("nostr:bot-1");
     expect(result.ctxPayload.SenderId).toBe("sender-1");
     expect(result.ctxPayload.MessageSid).toBe("event-123");
+    expect(result.ctxPayload.ReplyToId).toBe("event-parent");
+    expect(result.ctxPayload.MessageThreadId).toBe("thread-7");
+    expect(result.ctxPayload.NativeDirectUserId).toBe("sender-1");
+    expect(result.ctxPayload.OriginatingTo).toBe("nostr:bot-1");
     expect(result.ctxPayload.CommandAuthorized).toBe(true);
     expect(recordInboundSession).toHaveBeenCalledTimes(1);
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);

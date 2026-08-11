@@ -1,4 +1,5 @@
 // Discord helper module supports normalize behavior.
+import { resolveAllowlistMatchByCandidates } from "openclaw/plugin-sdk/allow-from";
 import { parseDiscordTarget } from "./target-parsing.js";
 
 export function normalizeDiscordMessagingTarget(raw: string): string | undefined {
@@ -43,9 +44,13 @@ export function allowFromContainsDiscordUserId(
   if (!normalizedUserId) {
     return false;
   }
-  return (allowFrom ?? []).some(
-    (entry) => normalizeAllowFromDiscordUserId(entry) === normalizedUserId,
-  );
+  const normalizedAllowFrom = (allowFrom ?? [])
+    .map(normalizeAllowFromDiscordUserId)
+    .filter((entry): entry is string => Boolean(entry));
+  return resolveAllowlistMatchByCandidates({
+    allowList: normalizedAllowFrom,
+    candidates: [{ value: normalizedUserId, source: "id" }],
+  }).allowed;
 }
 
 function normalizeAllowFromDiscordUserId(entry: string): string | undefined {

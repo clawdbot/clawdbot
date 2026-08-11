@@ -57,6 +57,4 @@ export type PluginRuntimeTasks = {
   runs: PluginRuntimeTaskRuns;
   flows: PluginRuntimeTaskFlows;
   managedFlows: PluginRuntimeTaskFlow;
-  /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
-  flow: PluginRuntimeTaskFlow;
 };

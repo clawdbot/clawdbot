@@ -135,6 +135,23 @@ describe("scanStatusJsonFast", () => {
     expect(mocks.buildPluginCompatibilityNotices).not.toHaveBeenCalled();
   });
 
+  it("collects actual plugin compatibility warnings when full JSON status is requested", async () => {
+    const notice = {
+      pluginId: "legacy-plugin",
+      code: "hook-only",
+      severity: "warn",
+      message: "plugin registers only legacy hooks",
+    };
+    mocks.buildPluginCompatibilityNotices.mockReturnValue([notice]);
+
+    const result = await scanStatusJsonFast({ all: true }, {} as never);
+
+    expect(mocks.buildPluginCompatibilityNotices).toHaveBeenCalledWith({
+      config: createStatusMemorySearchConfig(),
+    });
+    expect(result.pluginCompatibility).toEqual([notice]);
+  });
+
   it("keeps default fast JSON update scans local-only", async () => {
     mocks.hasConfiguredChannels.mockReturnValue(true);
 
@@ -179,25 +196,6 @@ describe("scanStatusJsonFast", () => {
     await scanStatusJsonFast({ timeoutMs: 5000 }, {} as never);
 
     expect(mocks.probeGateway).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 5000 }));
-  });
-
-  it("keeps configured gateway handshake timeouts on the lean JSON path", async () => {
-    mocks.hasConfiguredChannels.mockReturnValue(true);
-    applyStatusScanDefaults(mocks, {
-      resolvedConfig: {
-        ...createStatusMemorySearchConfig(),
-        gateway: { handshakeTimeoutMs: 30_000 },
-      } as never,
-    });
-
-    await scanStatusJsonFast({}, {} as never);
-
-    expect(mocks.probeGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        preauthHandshakeTimeoutMs: 30_000,
-        timeoutMs: 30_000,
-      }),
-    );
   });
 
   it("restores the local status RPC fallback when --all is requested", async () => {

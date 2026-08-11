@@ -9,7 +9,7 @@ enum AppLogSettings {
     static let logLevelKey = appLogLevelKey
 
     static func logLevel() -> Logger.Level {
-        if let raw = UserDefaults.standard.string(forKey: self.logLevelKey),
+        if let raw = AppDefaults.standard.string(forKey: self.logLevelKey),
            let level = Logger.Level(rawValue: raw)
         {
             return level
@@ -18,11 +18,11 @@ enum AppLogSettings {
     }
 
     static func setLogLevel(_ level: Logger.Level) {
-        UserDefaults.standard.set(level.rawValue, forKey: self.logLevelKey)
+        AppDefaults.standard.set(level.rawValue, forKey: self.logLevelKey)
     }
 
     static func fileLoggingEnabled() -> Bool {
-        UserDefaults.standard.bool(forKey: debugFileLogEnabledKey)
+        AppDefaults.standard.bool(forKey: debugFileLogEnabledKey)
     }
 }
 

@@ -47,12 +47,34 @@ export interface AcpSessions {
   updated_at: number;
 }
 
+export interface AgentDatabaseLeases {
+  agent_id: string;
+  lease_id: string;
+  opened_at: number;
+  owner_pid: number;
+  owner_start_time: number | null;
+  path: string;
+}
+
 export interface AgentDatabases {
   agent_id: string;
   last_seen_at: number;
   path: string;
   schema_version: number;
   size_bytes: number | null;
+}
+
+export interface AgentDeletionJournal {
+  agent_dir: string;
+  agent_id: string;
+  cleanup_completed: Generated<number>;
+  cleanup_paths_json: Generated<string>;
+  created_at: number;
+  database_paths_json: Generated<string>;
+  delete_files: Generated<number>;
+  operation_id: Generated<string>;
+  sessions_dir: string;
+  workspace_dir: string;
 }
 
 export interface AgentModelCatalogs {
@@ -234,6 +256,91 @@ export interface ChannelPairingRequests {
   request_id: string;
 }
 
+export interface ClawCronRefs {
+  agent_id: string;
+  created_at_ms: number;
+  declaration_key: string;
+  error: string | null;
+  job_json: string;
+  manifest_id: string;
+  scheduler_job_id: string | null;
+  schema_version: string;
+  status: string;
+  updated_at_ms: number;
+}
+
+export interface ClawInstalls {
+  added_at_ms: number;
+  agent_config_digest: string;
+  agent_id: string;
+  agent_owned_paths_json: string;
+  bootstrap_content_digest: string | null;
+  bootstrap_source_path: string | null;
+  claw_name: string;
+  claw_version: string;
+  integrity: string;
+  integrity_kind: string;
+  manifest_path: string;
+  manifest_schema_version: number;
+  package_root: string;
+  plan_integrity: string;
+  schema_version: string;
+  source_byte_length: number;
+  source_kind: string;
+  status: string;
+  updated_at_ms: number;
+  workspace: string;
+}
+
+export interface ClawMcpServerRefs {
+  agent_id: string;
+  config_digest: string;
+  created_at_ms: number;
+  error: string | null;
+  independent_owner: Generated<number>;
+  name: string;
+  origin: string;
+  relationship: string;
+  schema_version: string;
+  status: string;
+  updated_at_ms: number;
+}
+
+export interface ClawPackageRefs {
+  agent_id: string;
+  claw_name: string;
+  extension_adapter_identity: string | null;
+  extension_detected_format: string | null;
+  extension_format: string | null;
+  extension_id: string | null;
+  extension_mapped_json: string | null;
+  extension_unavailable_json: string | null;
+  independent_owner: number;
+  installed_at_ms: number;
+  origin: string;
+  package_integrity: string;
+  package_kind: string;
+  package_ref: string;
+  package_source: string;
+  package_status: string;
+  package_version: string;
+  relationship: string;
+  schema_version: string;
+  updated_at_ms: number;
+}
+
+export interface ClawWorkspaceFiles {
+  agent_id: string;
+  content_digest: string;
+  created_at_ms: number;
+  schema_version: string;
+  source_path: string;
+  status: string;
+  target_path: string;
+  updated_at_ms: number;
+  workspace: string;
+}
+
 export interface ClawhubPromotionClaims {
   claimed_at_ms: number;
   ends_at_ms: number;
@@ -300,6 +407,21 @@ export interface ConfigHealthEntries {
   last_known_good_json: string | null;
   last_observed_suspicious_signature: string | null;
   last_promoted_good_json: string | null;
+  updated_at_ms: number;
+}
+
+export interface ConfigMachineState {
+  state_key: string;
+  updated_at_ms: number;
+  value_json: string;
+}
+
+export interface CronJobScratch {
+  content: string | null;
+  job_id: string;
+  revision: number;
+  source_sha256: string | null;
+  store_key: string;
   updated_at_ms: number;
 }
 
@@ -455,6 +577,7 @@ export interface DevicePairingPaired {
   approved_at_ms: number;
   approved_scopes_json: string | null;
   approved_via: string | null;
+  browser_origin: string | null;
   client_id: string | null;
   client_mode: string | null;
   created_at_ms: number;
@@ -476,6 +599,7 @@ export interface DevicePairingPaired {
 }
 
 export interface DevicePairingPending {
+  browser_origin: string | null;
   client_id: string | null;
   client_mode: string | null;
   device_family: string | null;
@@ -499,6 +623,7 @@ export interface DiagnosticEvents {
   event_key: string;
   payload_json: string;
   scope: string;
+  sequence: Generated<number>;
 }
 
 export interface DiagnosticStabilityBundles {
@@ -521,6 +646,16 @@ export interface ExecApprovalsConfig {
   raw_json: string;
   socket_path: string | null;
   updated_at_ms: number;
+}
+
+export interface ExecutionIdentityContexts {
+  context_bytes: number;
+  context_id: string;
+  context_json: string;
+  coverage_state: string;
+  created_at: number;
+  execution_id: string;
+  run_id: string;
 }
 
 export interface FleetCells {
@@ -563,6 +698,15 @@ export interface GatewayBootLifecycle {
   reason: string | null;
   started_at_ms: number;
   startup_reason: string | null;
+}
+
+export interface GatewayOriginDeviceTokens {
+  device_id: string;
+  gateway_scope: string;
+  role: string;
+  scopes_json: string;
+  token: string;
+  updated_at_ms: number;
 }
 
 export interface GatewayRestartHandoff {
@@ -658,6 +802,13 @@ export interface ManagedOutgoingImageRecords {
   updated_at: string | null;
 }
 
+export interface McpOauthStores {
+  format_version: number;
+  store_json: string;
+  store_key: string;
+  updated_at: number;
+}
+
 export interface MediaBlobs {
   blob: Uint8Array;
   content_type: string | null;
@@ -666,6 +817,47 @@ export interface MediaBlobs {
   size_bytes: number;
   subdir: string;
   updated_at: number;
+}
+
+export interface MeetingTranscriptSessions {
+  created_at_ms: number;
+  export_key: string;
+  export_manifest_json: Generated<string>;
+  export_pending_json: Generated<string>;
+  metadata_json: string | null;
+  next_utterance_seq: Generated<number>;
+  provider_id: string;
+  selector: string;
+  session_id: string;
+  session_slug: string;
+  source_json: string;
+  started_at: string;
+  stopped_at: string | null;
+  title: string | null;
+  updated_at_ms: number;
+}
+
+export interface MeetingTranscriptSummaries {
+  generated_at: string | null;
+  markdown: string | null;
+  session_id: string;
+  session_started_at: string;
+  summary_json: string | null;
+  utterance_count: number;
+}
+
+export interface MeetingTranscriptUtterances {
+  ended_at: string | null;
+  final: number | null;
+  metadata_json: string | null;
+  sequence: number;
+  session_id: string;
+  session_started_at: string;
+  speaker_id: string | null;
+  speaker_label: string | null;
+  started_at: string | null;
+  text: string;
+  utterance_id: string | null;
 }
 
 export interface MigrationRuns {
@@ -708,6 +900,17 @@ export interface ModelCapabilityCache {
   updated_at_ms: number;
 }
 
+export interface ModelCatalogRemote {
+  bundle_json: string;
+  checked_at: number;
+  etag: string | null;
+  generated_at: number;
+  id: Generated<number>;
+  last_modified: string | null;
+  min_version: string | null;
+  source_url: string;
+}
+
 export interface NativeHookRelayBridges {
   expires_at_ms: number;
   hostname: string;
@@ -726,6 +929,7 @@ export interface NodeHostConfig {
   gateway_port: number | null;
   gateway_tls: number | null;
   gateway_tls_fingerprint: string | null;
+  installed_apps_sharing: Generated<number>;
   node_id: string;
   token: string | null;
   updated_at_ms: number;
@@ -746,6 +950,21 @@ export interface OfficialExternalPluginCatalogSnapshots {
   trust_threshold: number | null;
   trust_verified_at: string | null;
   updated_at_ms: number;
+}
+
+export interface OnboardingRecommendations {
+  accepted_at_ms: number | null;
+  config_key: string;
+  inventory_hash: string;
+  matches_json: string;
+  offered_at_ms: number;
+  updated_at_ms: number;
+}
+
+export interface OperatorApprovalExecutionIdentities {
+  approval_id: string;
+  source_context_id: string;
+  source_execution_id: string;
 }
 
 export interface OperatorApprovals {
@@ -778,6 +997,15 @@ export interface OperatorApprovals {
   updated_at_ms: number;
 }
 
+export interface OutboundMediaProvenance {
+  created_at_ms: number;
+  kind: string;
+  realpath: string;
+  sha256: string;
+  size_bytes: number;
+  version: number;
+}
+
 export interface PluginBindingApprovals {
   account_id: string;
   approved_at: number;
@@ -806,6 +1034,16 @@ export interface PluginStateEntries {
   value_json: string;
 }
 
+export interface Projects {
+  created_at_ms: number;
+  display_name: string;
+  id: string;
+  origin_url: string | null;
+  repo_root: string;
+  source: string;
+  updated_at_ms: number;
+}
+
 export interface SandboxRegistryEntries {
   backend_id: string | null;
   cdp_port: number | null;
@@ -831,6 +1069,18 @@ export interface SchemaMeta {
   role: string;
   schema_version: number;
   updated_at: number;
+}
+
+export interface SecretStoreEntries {
+  created_at_ms: number;
+  deleted_at_ms: number | null;
+  kind: string;
+  name: string;
+  scope_id: string;
+  scope_kind: string;
+  updated_at_ms: number;
+  updated_by: string | null;
+  value: string;
 }
 
 export interface SessionGroups {
@@ -880,9 +1130,15 @@ export interface SessionWatchCursors {
   last_seen_sequence: Generated<number>;
   material_sequence: Generated<number>;
   notified_sequence: Generated<number>;
+  provenance: Generated<string>;
   target_session_key: string;
   updated_at: number;
   watcher_session_key: string;
+}
+
+export interface SidebarSections {
+  position: number;
+  section_id: string;
 }
 
 export interface SkillCuratorState {
@@ -939,6 +1195,57 @@ export interface SkillUsage {
   use_count: number;
 }
 
+export interface SkillWorkshopProposalEvents {
+  actor_json: string;
+  correlation_id: string | null;
+  event_id: string;
+  event_type: string;
+  occurred_at: string;
+  payload_json: string | null;
+  proposal_id: string;
+  proposed_version: string;
+  revision_hash: string;
+  sequence: Generated<number>;
+}
+
+export interface SkillWorkshopProposalOriginRuns {
+  mutation_count: number;
+  position: number;
+  proposal_id: string;
+  run_id: string;
+}
+
+export interface SkillWorkshopProposalRollbacks {
+  action: string;
+  previous_content: string | null;
+  previous_content_hash: string | null;
+  proposal_id: string;
+  support_files_json: string | null;
+  target_skill_file: string;
+  written_at: string;
+}
+
+export interface SkillWorkshopProposals {
+  applied_at: string | null;
+  created_at: string;
+  draft_hash: string;
+  kind: string;
+  origin_agent_id: string | null;
+  origin_message_id: string | null;
+  origin_run_id: string | null;
+  origin_session_key: string | null;
+  owner_agent_id: string | null;
+  proposal_id: string;
+  quarantined_at: string | null;
+  record_json: string;
+  rejected_at: string | null;
+  stale_at: string | null;
+  status: string;
+  status_reason: string | null;
+  updated_at: string;
+  workspace_dir: string;
+}
+
 export interface StateLeases {
   created_at: number;
   expires_at: number | null;
@@ -986,12 +1293,26 @@ export interface SubagentRuns {
   requester_display_key: string;
   requester_origin_json: string | null;
   requester_session_key: string;
+  requester_settle_wake_attempt_count: number | null;
+  requester_settle_wake_batch_run_ids_json: string | null;
+  requester_settle_wake_last_error: string | null;
+  requester_settle_wake_next_attempt_at: number | null;
+  requester_settle_wake_replay_count: number | null;
+  requester_settle_wake_retire_after: number | null;
+  requester_settle_wake_status: string | null;
   run_id: string;
   run_timeout_seconds: number | null;
   session_started_at: number | null;
   spawn_mode: string | null;
   started_at: number | null;
   suppress_announce_reason: string | null;
+  swarm_collector: number | null;
+  swarm_completion_status: string | null;
+  swarm_group_id: string | null;
+  swarm_output_schema_json: string | null;
+  swarm_schema_error: string | null;
+  swarm_structured_json: string | null;
+  swarm_usage_json: string | null;
   task: string;
   task_name: string | null;
   wake_on_descendant_settle: number | null;
@@ -1116,12 +1437,19 @@ export interface WorkerEnvironmentCredentials {
   session_id: string | null;
 }
 
+export interface WorkerEnvironmentSshFallbackPorts {
+  environment_id: string;
+  port: number;
+  position: number;
+}
+
 export interface WorkerEnvironments {
   attached_session_ids_json: Generated<string>;
   bootstrap_bundle_hash: string | null;
   bootstrap_openclaw_version: string | null;
   bootstrap_protocol_features_json: string | null;
   created_at_ms: number;
+  desktop_json: string | null;
   destroy_requested_at_ms: number | null;
   environment_id: string;
   idle_since_at_ms: number | null;
@@ -1132,6 +1460,7 @@ export interface WorkerEnvironments {
   profile_snapshot_json: string;
   provider_id: string;
   provision_operation_id: string;
+  shared_host: number | null;
   ssh_host: string | null;
   ssh_host_key: string | null;
   ssh_key_ref_json: string | null;
@@ -1169,6 +1498,8 @@ export interface WorkerSessionPlacements {
   session_key: string;
   state: string;
   state_changed_at_ms: number;
+  terminal_at_ms: number | null;
+  terminal_reason: string | null;
   transition_generation: Generated<number>;
   turn_claim_generation: number | null;
   turn_claim_id: string | null;
@@ -1178,6 +1509,21 @@ export interface WorkerSessionPlacements {
   updated_at_ms: number;
   worker_bundle_hash: string | null;
   workspace_base_manifest_ref: string | null;
+}
+
+export interface WorkerSessionToolOperations {
+  child_session_key: string | null;
+  created_at_ms: number;
+  gateway_instance_id: string;
+  operation_seed: string;
+  request_digest: string;
+  result_json: string | null;
+  source_claim_id: string;
+  source_session_id: string;
+  status: string;
+  tool_call_id: string;
+  tool_name: string;
+  updated_at_ms: number;
 }
 
 export interface WorkerTranscriptCommitHeads {
@@ -1199,6 +1545,17 @@ export interface WorkerTranscriptCommits {
   updated_at_ms: number;
 }
 
+export interface WorkerTurnToolAuthorities {
+  claim_id: string;
+  environment_id: string;
+  owner_epoch: number;
+  placement_generation: number;
+  run_id: string;
+  session_id: string;
+  tool_names_json: string;
+  updated_at_ms: number;
+}
+
 export interface WorkerWorkspacePendingResults {
   claim_id: string;
   created_at_ms: number;
@@ -1209,6 +1566,7 @@ export interface WorkerWorkspacePendingResults {
   recovery_requested_at_ms: number | null;
   run_id: string;
   session_id: string;
+  staged_result_ref: string | null;
   workspace_accepted_at_ms: number | null;
 }
 
@@ -1273,6 +1631,7 @@ export interface Worktrees {
   removed_at: number | null;
   repo_fingerprint: string;
   repo_root: string;
+  run_end_cleanup_json: string | null;
   snapshot_ref: string | null;
 }
 
@@ -1280,7 +1639,9 @@ export interface DB {
   acp_replay_events: AcpReplayEvents;
   acp_replay_sessions: AcpReplaySessions;
   acp_sessions: AcpSessions;
+  agent_database_leases: AgentDatabaseLeases;
   agent_databases: AgentDatabases;
+  agent_deletion_journal: AgentDeletionJournal;
   agent_model_catalogs: AgentModelCatalogs;
   android_notification_recent_packages: AndroidNotificationRecentPackages;
   apns_registration_tombstones: ApnsRegistrationTombstones;
@@ -1296,11 +1657,18 @@ export interface DB {
   channel_ingress_events: ChannelIngressEvents;
   channel_pairing_allow_entries: ChannelPairingAllowEntries;
   channel_pairing_requests: ChannelPairingRequests;
+  claw_cron_refs: ClawCronRefs;
+  claw_installs: ClawInstalls;
+  claw_mcp_server_refs: ClawMcpServerRefs;
+  claw_package_refs: ClawPackageRefs;
+  claw_workspace_files: ClawWorkspaceFiles;
   clawhub_promotion_claims: ClawhubPromotionClaims;
   clawhub_promotions_feed_state: ClawhubPromotionsFeedState;
   command_log_entries: CommandLogEntries;
   commitments: Commitments;
   config_health_entries: ConfigHealthEntries;
+  config_machine_state: ConfigMachineState;
+  cron_job_scratch: CronJobScratch;
   cron_jobs: CronJobs;
   current_conversation_bindings: CurrentConversationBindings;
   delivery_queue_entries: DeliveryQueueEntries;
@@ -1312,38 +1680,55 @@ export interface DB {
   diagnostic_events: DiagnosticEvents;
   diagnostic_stability_bundles: DiagnosticStabilityBundles;
   exec_approvals_config: ExecApprovalsConfig;
+  execution_identity_contexts: ExecutionIdentityContexts;
   fleet_cells: FleetCells;
   flow_runs: FlowRuns;
   gateway_boot_lifecycle: GatewayBootLifecycle;
+  gateway_origin_device_tokens: GatewayOriginDeviceTokens;
   gateway_restart_handoff: GatewayRestartHandoff;
   gateway_restart_intent: GatewayRestartIntent;
   gateway_restart_sentinel: GatewayRestartSentinel;
   installed_plugin_index: InstalledPluginIndex;
   macos_port_guardian_records: MacosPortGuardianRecords;
   managed_outgoing_image_records: ManagedOutgoingImageRecords;
+  mcp_oauth_stores: McpOauthStores;
   media_blobs: MediaBlobs;
+  meeting_transcript_sessions: MeetingTranscriptSessions;
+  meeting_transcript_summaries: MeetingTranscriptSummaries;
+  meeting_transcript_utterances: MeetingTranscriptUtterances;
   migration_runs: MigrationRuns;
   migration_sources: MigrationSources;
   model_capability_cache: ModelCapabilityCache;
+  model_catalog_remote: ModelCatalogRemote;
   native_hook_relay_bridges: NativeHookRelayBridges;
   node_host_config: NodeHostConfig;
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
+  onboarding_recommendations: OnboardingRecommendations;
+  operator_approval_execution_identities: OperatorApprovalExecutionIdentities;
   operator_approvals: OperatorApprovals;
+  outbound_media_provenance: OutboundMediaProvenance;
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;
+  projects: Projects;
   sandbox_registry_entries: SandboxRegistryEntries;
   schema_meta: SchemaMeta;
+  secret_store_entries: SecretStoreEntries;
   session_groups: SessionGroups;
   session_state_events: SessionStateEvents;
   session_state_heads: SessionStateHeads;
   session_upstream_links: SessionUpstreamLinks;
   session_watch_cursors: SessionWatchCursors;
+  sidebar_sections: SidebarSections;
   skill_curator_state: SkillCuratorState;
   skill_lifecycle: SkillLifecycle;
   skill_upload_chunks: SkillUploadChunks;
   skill_uploads: SkillUploads;
   skill_usage: SkillUsage;
+  skill_workshop_proposal_events: SkillWorkshopProposalEvents;
+  skill_workshop_proposal_origin_runs: SkillWorkshopProposalOriginRuns;
+  skill_workshop_proposal_rollbacks: SkillWorkshopProposalRollbacks;
+  skill_workshop_proposals: SkillWorkshopProposals;
   state_leases: StateLeases;
   subagent_runs: SubagentRuns;
   task_delivery_state: TaskDeliveryState;
@@ -1356,11 +1741,14 @@ export interface DB {
   web_push_subscriptions: WebPushSubscriptions;
   web_push_vapid_keys: WebPushVapidKeys;
   worker_environment_credentials: WorkerEnvironmentCredentials;
+  worker_environment_ssh_fallback_ports: WorkerEnvironmentSshFallbackPorts;
   worker_environments: WorkerEnvironments;
   worker_inference_turns: WorkerInferenceTurns;
   worker_session_placements: WorkerSessionPlacements;
+  worker_session_tool_operations: WorkerSessionToolOperations;
   worker_transcript_commit_heads: WorkerTranscriptCommitHeads;
   worker_transcript_commits: WorkerTranscriptCommits;
+  worker_turn_tool_authorities: WorkerTurnToolAuthorities;
   worker_workspace_pending_results: WorkerWorkspacePendingResults;
   worker_workspace_reconciliations: WorkerWorkspaceReconciliations;
   workspace_attestations: WorkspaceAttestations;

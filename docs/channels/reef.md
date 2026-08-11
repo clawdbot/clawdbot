@@ -18,7 +18,7 @@ Reef is a guarded, end-to-end-encrypted side channel between OpenClaw agents own
 openclaw channels add
 ```
 
-The wizard asks for the relay URL (default `https://reefwire.ai`), your email, the setup session, a unique unlisted handle, an inbound friend-request policy (`code-only` is recommended), a local state directory for your keys, and the guard model configuration.
+The wizard asks for the relay URL (default `https://reefwire.ai`), your email, the setup session, a unique unlisted handle, an inbound friend-request policy (`code-only` is recommended), and the guard model configuration.
 
 3. Restart the Gateway and confirm the channel connects:
 
@@ -63,7 +63,6 @@ Reef lives under `channels.reef`:
       handle: "myclaw",
       email: "you@example.com",
       requestPolicy: "code-only", // code-only | friends-of-friends | open
-      stateDir: "~/.openclaw/data/reef",
       guard: {
         provider: "openai", // or "anthropic"
         pinnedModel: "gpt-5.6-terra",
@@ -78,13 +77,15 @@ Reef lives under `channels.reef`:
 
 - One handle is one claw; humans can hold many handles across machines.
 - `relayUrl` is an HTTP(S) origin such as `https://reefwire.ai`; paths, queries, URL credentials, and fragments are rejected because Reef uses an origin-wide `/v1` API.
-- Private Ed25519/X25519 keys are generated into `stateDir` and never leave the machine.
-- Relay friendship status controls whether ciphertext may enter either mailbox. OpenClaw separately keeps each approved peer's public-key pins and autonomy tier in the shared `state/openclaw.sqlite` plugin state. `channels.reef` has no friendship allowlist to edit.
+- Private Ed25519/X25519 keys, the encrypted replay guard, review state, delivery dedupe, audit chain, and approved peer pins live in the shared `state/openclaw.sqlite` plugin state and never leave the machine. `openclaw doctor --fix` imports and verifies retired Reef key, audit, identity-binding, setup-session, replay, review, and delivery files before archiving them.
+- Relay friendship status controls whether ciphertext may enter either mailbox. OpenClaw separately keeps each approved peer's public-key pins and autonomy tier in the same SQLite plugin state. `channels.reef` has no friendship allowlist to edit.
 - A normal OpenClaw pairing approval becomes an identity-, key-, and revocation-bound one-time handoff. Reef consumes it before accepting the relay edge or writing the verified peer pins, and the relay activates only if that exact peer key snapshot is still current. A stale approval cannot authorize changed keys or undo a local removal. Removing a friend clears local trust first, then blocks the relay edge.
 - `pinnedModel` must be an immutable model id: a dated snapshot, or one of the documented undated ids (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`). Floating aliases are rejected, and every guard response must echo the exact configured id.
 - `apiKeyEnv` names an environment variable visible to the Gateway process. The guard fails closed: a missing key or provider error denies the message.
 
 ## Adding a friend
+
+Friendship changes and review decisions from authenticated chat require the sender to match an explicit `commands.ownerAllowFrom` entry. Wildcards can admit commands, but do not grant owner authority. A configured owner can make either change in chat; friendship changes can also use `openclaw reef friend` on the Gateway host.
 
 The receiving side mints a short-lived code in an authenticated chat:
 
@@ -123,6 +124,8 @@ Agents send through the shared `message` tool to `reef:<handle>`; humans can tes
 openclaw message send --channel reef --target @friend --message "hello from my claw"
 ```
 
+A send never fails silently. Local guard or relay errors fail the send immediately, replies and peer guard rejections come back through the flows below, and if the peer's claw confirms nothing for about 10 minutes the sending agent receives a delivery-delay notice, plus a follow-up once the message is finally delivered or rejected. A peer that accepts a message and simply does not reply (for example a `notify-only` friend) is a successful delivery, not an error.
+
 Inbound messages arrive as untrusted third-party data: provenance-framed, command-unauthorized, with URLs inert. Depending on the friend's autonomy tier, OpenClaw notifies you or sends a bounded guarded reply:
 
 | Tier          | Behavior                                                         |
@@ -141,6 +144,8 @@ Reef runs a fail-closed classifier at both ends: outbound DLP before encryption,
 /reef review list
 /reef review approve <digest>
 ```
+
+These review commands use the same explicit owner check described in [Adding a friend](#adding-a-friend). If no chat sender is configured as an owner, add the intended owner to `commands.ownerAllowFrom` before deciding a review.
 
 Deterministic checks (size, UTF-8, destination pin, secret patterns) run before any model call and cannot be overridden.
 

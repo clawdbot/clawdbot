@@ -5,6 +5,7 @@ import {
   resolveSlackChannelType,
   resolveSlackConversationInfo,
 } from "./channel-type.js";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
 
 const slackClientMocks = vi.hoisted(() => {
   const conversationsInfo = vi.fn();
@@ -12,6 +13,12 @@ const slackClientMocks = vi.hoisted(() => {
   return {
     conversationsInfo,
     conversationsOpen,
+    createSlackReadClient: vi.fn(() => ({
+      conversations: {
+        info: conversationsInfo,
+        open: conversationsOpen,
+      },
+    })),
     createSlackWebClient: vi.fn(() => ({
       conversations: {
         info: conversationsInfo,
@@ -23,10 +30,12 @@ const slackClientMocks = vi.hoisted(() => {
 const {
   conversationsInfo: conversationsInfoMock,
   conversationsOpen: conversationsOpenMock,
+  createSlackReadClient: createSlackReadClientMock,
   createSlackWebClient: createSlackWebClientMock,
 } = slackClientMocks;
 
 vi.mock("./client.js", () => ({
+  createSlackReadClient: slackClientMocks.createSlackReadClient,
   createSlackWebClient: slackClientMocks.createSlackWebClient,
 }));
 
@@ -34,6 +43,7 @@ describe("resolveSlackChannelType", () => {
   beforeEach(() => {
     conversationsInfoMock.mockReset();
     conversationsOpenMock.mockReset();
+    createSlackReadClientMock.mockClear();
     createSlackWebClientMock.mockClear();
     vi.stubEnv("SLACK_BOT_TOKEN", "");
     vi.stubEnv("SLACK_USER_TOKEN", "");
@@ -108,9 +118,25 @@ describe("resolveSlackChannelType", () => {
       type: "dm",
       user: "U09G2DJ0275",
     });
-    expect(createSlackWebClientMock).toHaveBeenCalledWith("xoxb-test");
+    expect(createSlackReadClientMock).toHaveBeenCalledWith("xoxb-test", { teamId: undefined });
+    expect(createSlackWebClientMock).not.toHaveBeenCalled();
     expect(conversationsInfoMock).toHaveBeenCalledWith({ channel: "D0AEWSDHAQH" });
     expect(conversationsOpenMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects unscoped Enterprise conversation lookup before creating a client", async () => {
+    const installationState = registerSlackInstallationState("default", "enterprise");
+    try {
+      await expect(
+        resolveSlackConversationInfo({
+          cfg: { channels: { slack: { botToken: "xoxb-test" } } } as never,
+          channelId: "C123",
+        }),
+      ).rejects.toThrow("unsupported_enterprise_slack_delivery");
+      expect(createSlackReadClientMock).not.toHaveBeenCalled();
+    } finally {
+      installationState.release();
+    }
   });
 
   it("uses conversations.open only for explicit native IM writes", async () => {
@@ -139,7 +165,46 @@ describe("resolveSlackChannelType", () => {
       type: "dm",
       user: "U09G2DJ0275",
     });
-    expect(createSlackWebClientMock).toHaveBeenCalledWith("botB");
+    expect(createSlackWebClientMock).toHaveBeenCalledWith("botB", { teamId: undefined });
+    expect(createSlackReadClientMock).not.toHaveBeenCalled();
+    expect(conversationsOpenMock).toHaveBeenCalledWith({
+      channel: "D0AEWSDHAQH",
+      prevent_creation: true,
+      return_im: true,
+    });
+    expect(conversationsInfoMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the user token to open native IMs for user identity", async () => {
+    conversationsOpenMock.mockResolvedValueOnce({
+      channel: {
+        id: "D0AEWSDHAQH",
+        is_im: true,
+        user: "U09G2DJ0275",
+      },
+    });
+
+    await expect(
+      resolveSlackConversationInfo({
+        cfg: {
+          channels: {
+            slack: {
+              postAs: "user",
+              userToken: "test-user-token",
+            },
+          },
+        } as never,
+        channelId: "D0AEWSDHAQH",
+        operation: "write",
+      }),
+    ).resolves.toEqual({
+      type: "dm",
+      user: "U09G2DJ0275",
+    });
+    expect(createSlackWebClientMock).toHaveBeenCalledWith("test-user-token", {
+      teamId: undefined,
+    });
+    expect(createSlackReadClientMock).not.toHaveBeenCalled();
     expect(conversationsOpenMock).toHaveBeenCalledWith({
       channel: "D0AEWSDHAQH",
       prevent_creation: true,
@@ -174,7 +239,8 @@ describe("resolveSlackChannelType", () => {
       type: "dm",
       user: "U09G2DJ0275",
     });
-    expect(createSlackWebClientMock).toHaveBeenCalledWith("envUsr");
+    expect(createSlackReadClientMock).toHaveBeenCalledWith("envUsr", { teamId: undefined });
+    expect(createSlackWebClientMock).not.toHaveBeenCalled();
     expect(conversationsInfoMock).toHaveBeenCalledWith({ channel: "D0AEWSDHAQH" });
     expect(conversationsOpenMock).not.toHaveBeenCalled();
   });
@@ -205,7 +271,8 @@ describe("resolveSlackChannelType", () => {
       type: "dm",
       user: "U09G2DJ0275",
     });
-    expect(createSlackWebClientMock).toHaveBeenCalledWith("envBot");
+    expect(createSlackWebClientMock).toHaveBeenCalledWith("envBot", { teamId: undefined });
+    expect(createSlackReadClientMock).not.toHaveBeenCalled();
     expect(conversationsOpenMock).toHaveBeenCalledWith({
       channel: "D0AEWSDHAQH",
       prevent_creation: true,
@@ -240,7 +307,10 @@ describe("resolveSlackChannelType", () => {
       type: "group",
       name: "mpdm-alice--bob-1",
     });
-    expect(createSlackWebClientMock).toHaveBeenCalledWith("xoxp-reader");
+    expect(createSlackReadClientMock).toHaveBeenCalledWith("xoxp-reader", {
+      teamId: undefined,
+    });
+    expect(createSlackWebClientMock).not.toHaveBeenCalled();
     expect(conversationsInfoMock).toHaveBeenCalledWith({ channel: "C0MPIM" });
   });
 
@@ -284,8 +354,12 @@ describe("resolveSlackChannelType", () => {
       }),
     ).resolves.toMatchObject({ name: "after-rotation" });
 
-    expect(createSlackWebClientMock).toHaveBeenNthCalledWith(1, "xoxb-before");
-    expect(createSlackWebClientMock).toHaveBeenNthCalledWith(2, "xoxb-after");
+    expect(createSlackReadClientMock).toHaveBeenNthCalledWith(1, "xoxb-before", {
+      teamId: undefined,
+    });
+    expect(createSlackReadClientMock).toHaveBeenNthCalledWith(2, "xoxb-after", {
+      teamId: undefined,
+    });
     expect(conversationsInfoMock).toHaveBeenCalledTimes(2);
   });
 

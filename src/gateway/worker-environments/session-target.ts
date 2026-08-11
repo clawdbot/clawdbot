@@ -3,21 +3,22 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
 import {
   loadCombinedSessionStoreForGateway,
-  resolveFreshestSessionEntryFromStoreKeys,
+  resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTargetWithStore,
 } from "../session-utils.js";
 
 export type ResolvedWorkerSessionTarget = Omit<
   SessionTranscriptWriteScope,
-  "sessionId" | "sessionKey"
+  "sessionId" | "sessionKey" | "storePath"
 > & {
-  sessionEntry: NonNullable<ReturnType<typeof resolveFreshestSessionEntryFromStoreKeys>>;
+  sessionEntry: NonNullable<ReturnType<typeof resolveCanonicalSessionEntryFromStoreKeys>>;
   sessionId: string;
   sessionKey: string;
   sessionStore: Record<
     string,
-    NonNullable<ReturnType<typeof resolveFreshestSessionEntryFromStoreKeys>>
+    NonNullable<ReturnType<typeof resolveCanonicalSessionEntryFromStoreKeys>>
   >;
+  storePath: string;
 };
 
 export function resolveWorkerSessionTarget(
@@ -35,7 +36,7 @@ export function resolveWorkerSessionTarget(
     key: selection.sessionKey,
     clone: false,
   });
-  const entry = resolveFreshestSessionEntryFromStoreKeys(target.store, target.storeKeys);
+  const entry = resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
   if (!entry || entry.sessionId !== sessionId) {
     return undefined;
   }

@@ -26,7 +26,12 @@ export type ChannelLegacyStateMigrationPlan =
         existingValue: unknown;
         incomingValue: unknown;
       }) => boolean | Promise<boolean>;
+      /**
+       * `timestamp` (epoch ms) and `ttlMs` order entries newest-first when capacity forces a
+       * partial import; `timestamp` is also persisted as the migrated row's creation time so
+       * cap eviction keeps treating imported rows as old as their legacy source.
+       */
       readEntries: () =>
-        | Array<{ key: string; value: unknown; ttlMs?: number }>
-        | Promise<Array<{ key: string; value: unknown; ttlMs?: number }>>;
+        | Array<{ key: string; value: unknown; ttlMs?: number; timestamp?: number }>
+        | Promise<Array<{ key: string; value: unknown; ttlMs?: number; timestamp?: number }>>;
     };

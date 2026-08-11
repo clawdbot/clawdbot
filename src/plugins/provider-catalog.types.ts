@@ -115,18 +115,3 @@ export type ProviderAugmentModelCatalogContext = {
   resolveProviderApiKey?: ProviderCatalogContext["resolveProviderApiKey"];
   entries: ModelCatalogEntry[];
 };
-
-/**
- * @deprecated Use ProviderCatalogOrder.
- */
-export type ProviderDiscoveryOrder = ProviderCatalogOrder;
-
-/**
- * @deprecated Use ProviderCatalogContext.
- */
-export type ProviderDiscoveryContext = ProviderCatalogContext;
-
-/**
- * @deprecated Use ProviderPluginCatalog.
- */
-export type ProviderPluginDiscovery = ProviderPluginCatalog;

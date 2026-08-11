@@ -1,51 +1,17 @@
 // Memory Wiki plugin module implements prompt section behavior.
-import fs from "node:fs";
-import path from "node:path";
 import type { MemoryPromptSectionBuilder } from "openclaw/plugin-sdk/memory-host-core";
+import {
+  loadMemoryWikiCompiledCache,
+  type MemoryWikiCompiledCacheSnapshot,
+  type MemoryWikiCompiledDigestClaim,
+  type MemoryWikiCompiledDigestPage,
+} from "./compiled-cache.js";
 import type { MemoryWikiConfigResolver, ResolvedMemoryWikiConfig } from "./config.js";
 
-const AGENT_DIGEST_PATH = ".openclaw-wiki/cache/agent-digest.json";
 const DIGEST_MAX_PAGES = 4;
 const DIGEST_MAX_CLAIMS_PER_PAGE = 2;
 
-type PromptDigestClaim = {
-  text: string;
-  status?: string;
-  confidence?: number;
-  freshnessLevel?: string;
-};
-
-type PromptDigestPage = {
-  title: string;
-  kind: string;
-  claimCount: number;
-  questions?: string[];
-  contradictions?: string[];
-  topClaims?: PromptDigestClaim[];
-};
-
-type PromptDigest = {
-  pageCounts?: Record<string, number>;
-  claimCount?: number;
-  contradictionClusters?: Array<unknown>;
-  pages?: PromptDigestPage[];
-};
-
-function tryReadPromptDigest(config: ResolvedMemoryWikiConfig): PromptDigest | null {
-  const digestPath = path.join(config.vault.path, AGENT_DIGEST_PATH);
-  try {
-    const raw = fs.readFileSync(digestPath, "utf8");
-    const parsed = JSON.parse(raw) as PromptDigest;
-    if (!parsed || typeof parsed !== "object") {
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function rankPromptDigestPage(page: PromptDigestPage): number {
+function rankPromptDigestPage(page: MemoryWikiCompiledDigestPage): number {
   return (
     (page.contradictions?.length ?? 0) * 6 +
     (page.questions?.length ?? 0) * 4 +
@@ -67,7 +33,9 @@ function rankPromptClaimFreshness(level?: string): number {
   }
 }
 
-function sortPromptClaims(claims: PromptDigestClaim[]): PromptDigestClaim[] {
+function sortPromptClaims(
+  claims: MemoryWikiCompiledDigestClaim[],
+): MemoryWikiCompiledDigestClaim[] {
   return [...claims].toSorted((left, right) => {
     const leftConfidence = typeof left.confidence === "number" ? left.confidence : -1;
     const rightConfidence = typeof right.confidence === "number" ? right.confidence : -1;
@@ -83,7 +51,7 @@ function sortPromptClaims(claims: PromptDigestClaim[]): PromptDigestClaim[] {
   });
 }
 
-function formatPromptClaim(claim: PromptDigestClaim): string {
+function formatPromptClaim(claim: MemoryWikiCompiledDigestClaim): string {
   const qualifiers = [
     claim.status?.trim() ? `status ${claim.status.trim()}` : null,
     typeof claim.confidence === "number" ? `confidence ${claim.confidence.toFixed(2)}` : null,
@@ -95,11 +63,9 @@ function formatPromptClaim(claim: PromptDigestClaim): string {
   return `${claim.text} (${qualifiers.join(", ")})`;
 }
 
-function buildDigestPromptSection(config: ResolvedMemoryWikiConfig): string[] {
-  if (!config.context.includeCompiledDigestPrompt) {
-    return [];
-  }
-  const digest = tryReadPromptDigest(config);
+function buildDigestPromptSection(
+  digest: MemoryWikiCompiledCacheSnapshot["digest"] | undefined,
+): string[] {
   if (!digest?.pages?.length) {
     return [];
   }
@@ -129,9 +95,7 @@ function buildDigestPromptSection(config: ResolvedMemoryWikiConfig): string[] {
     "## Compiled Wiki Snapshot",
     `Compiled wiki currently tracks ${digest.claimCount ?? 0} claims across ${selectedPages.length} high-signal pages.`,
   ];
-  if (Array.isArray(digest.contradictionClusters)) {
-    lines.push(`Contradiction clusters: ${digest.contradictionClusters.length}.`);
-  }
+  lines.push(`Contradiction clusters: ${digest.contradictionCount}.`);
   for (const page of selectedPages) {
     const details = [
       page.kind,
@@ -214,20 +178,24 @@ function buildWikiToolGuidance(availableTools: Set<string>): string[] {
   return lines;
 }
 
-export function createWikiPromptSectionBuilder(params: {
+export function createWikiPromptSectionBuilder(): MemoryPromptSectionBuilder {
+  return ({ availableTools }) => buildWikiToolGuidance(availableTools);
+}
+
+export function createWikiPromptSectionPreparer(params: {
   config: ResolvedMemoryWikiConfig;
   resolveConfig: MemoryWikiConfigResolver;
-}): MemoryPromptSectionBuilder {
-  return ({ availableTools, agentId }) => {
-    // Prompt contexts without an agent must not fall back to another agent's digest.
-    const digestLines =
-      params.config.vault.scope === "agent" && !agentId
-        ? []
-        : buildDigestPromptSection(params.resolveConfig(agentId));
-    const toolGuidance = buildWikiToolGuidance(availableTools);
-    if (digestLines.length === 0 && toolGuidance.length === 0) {
+}) {
+  return async ({ agentId }: Parameters<MemoryPromptSectionBuilder>[0]) => {
+    // Context-free preparation must not choose or disclose another agent's vault.
+    if (params.config.vault.scope === "agent" && !agentId) {
       return [];
     }
-    return [...toolGuidance, ...digestLines];
+    const config = params.resolveConfig(agentId);
+    if (!config.context.includeCompiledDigestPrompt) {
+      return [];
+    }
+    const snapshot = await loadMemoryWikiCompiledCache(config);
+    return buildDigestPromptSection(snapshot?.digest);
   };
 }

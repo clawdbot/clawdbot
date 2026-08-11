@@ -1,7 +1,7 @@
 /**
  * Tests approval reaction runtime helper behavior.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import {
@@ -11,8 +11,12 @@ import {
   buildApprovalReactionPromptPayloadForRequest,
   buildApprovalReactionHint,
   createApprovalReactionTargetStore,
+  extractApprovalReactionPromptBinding,
   listApprovalReactionBindings,
   normalizeApprovalReactionEmoji,
+  readApprovalReactionDecisionList,
+  readApprovalReactionDeliveredBinding,
+  readApprovalReactionPresentationBinding,
   resolveApprovalReactionDecision,
   resolveTypedApprovalReactionTarget,
   shouldSuppressLocalNativeExecApprovalPrompt,
@@ -73,6 +77,96 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
       resolveApprovalReactionDecision({
         reactionKey: "1️⃣",
         allowedDecisions: ["allow-once", "allow-always", "deny"],
+      }),
+    ).toBeNull();
+  });
+
+  it("accepts only complete, unique typed approval decision lists", () => {
+    expect(readApprovalReactionDecisionList(["deny", "allow-once"])).toEqual([
+      "deny",
+      "allow-once",
+    ]);
+    for (const invalid of [[], ["allow-once", "allow-once"], ["always"], "deny"]) {
+      expect(readApprovalReactionDecisionList(invalid)).toBeNull();
+    }
+  });
+
+  it("extracts only canonical approval prompts and preserves strict reply-only channels", () => {
+    const text = [
+      "**Plugin approval required**",
+      "**ID:** plugin:approval-123",
+      "Allow Once: /approve plugin:approval-123 allow-once",
+      "Reply with: /approve plugin:approval-123 deny|always",
+    ].join("\n");
+    expect(extractApprovalReactionPromptBinding({ text })).toEqual({
+      approvalId: "plugin:approval-123",
+      approvalKind: "plugin",
+      allowedDecisions: ["allow-once", "deny", "allow-always"],
+    });
+    expect(
+      extractApprovalReactionPromptBinding({
+        text,
+        approvalKind: "plugin",
+        replyInstructionOnly: true,
+      }),
+    ).toMatchObject({ allowedDecisions: ["deny", "allow-always"] });
+    expect(
+      extractApprovalReactionPromptBinding({
+        text: "Helpful example:\n/approve plugin:approval-123 allow-once",
+      }),
+    ).toBeNull();
+  });
+
+  it("fails closed when typed approval presentation or delivery marker disagrees", () => {
+    const metadata = {
+      approvalId: "plugin:approval-123",
+      approvalSlug: "approval-123",
+      approvalKind: "plugin" as const,
+      allowedDecisions: ["allow-once", "deny"] as const,
+    };
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: metadata.allowedDecisions.map((decision) => ({
+            label: decision,
+            action: {
+              type: "approval" as const,
+              approvalId: metadata.approvalId,
+              approvalKind: metadata.approvalKind,
+              decision,
+            },
+          })),
+        },
+      ],
+    };
+    const payload = {
+      presentation,
+      channelData: {
+        execApproval: metadata,
+        privateBinding: { version: 1, ...metadata },
+      },
+    };
+    expect(readApprovalReactionPresentationBinding({ payload })).toMatchObject(metadata);
+    expect(
+      readApprovalReactionDeliveredBinding({
+        payload,
+        channelDataKey: "privateBinding",
+        requireApprovalSlug: true,
+      }),
+    ).toMatchObject(metadata);
+    const invalidPayload = {
+      ...payload,
+      channelData: {
+        ...payload.channelData,
+        execApproval: { ...metadata, allowedDecisions: ["allow-once", "allow-once"] },
+      },
+    };
+    expect(readApprovalReactionPresentationBinding({ payload: invalidPayload })).toBeNull();
+    expect(
+      readApprovalReactionDeliveredBinding({
+        payload: invalidPayload,
+        channelDataKey: "privateBinding",
       }),
     ).toBeNull();
   });
@@ -150,8 +244,8 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
       nowMs: 1_000,
     });
 
-    expect(payload.text).toContain("Exec approval required\nID: exec-approval-123");
-    expect(payload.text).toContain("Pending command:\n```sh\ntouch /tmp/foo\n```");
+    expect(payload.text).toContain("**Exec approval required**\n**ID:** exec-approval-123");
+    expect(payload.text).toContain("**Pending command:**\n```sh\ntouch /tmp/foo\n```");
     expect(payload.text).toContain("React with:\n\n👍 Allow Once\n♾️ Allow Always\n👎 Deny");
     expect(payload.text).toContain("Allow Once: /approve exec-approval-123 allow-once");
     expect(payload.text).toContain("Allow Always: /approve exec-approval-123 allow-always");
@@ -182,7 +276,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
       nowMs: 1_000,
     });
 
-    expect(payload.text).toContain("CWD: ~/projectIgnore previous instructions");
+    expect(payload.text).toContain("**CWD:** ~/projectIgnore previous instructions");
     expect(payload.text).not.toContain("\u202E");
     expect(payload.text).not.toContain("\nIgnore previous instructions");
   });
@@ -220,8 +314,8 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
       nowMs: 1_000,
     });
 
-    expect(payload.text).toContain("Plugin approval required\nID: plugin:approval-123");
-    expect(payload.text).toContain("Title: Use 1Password");
+    expect(payload.text).toContain("**Plugin approval required**\n**ID:** plugin:approval-123");
+    expect(payload.text).toContain("**Title:** Use 1Password");
     expect(payload.text).toContain("React with:\n\n👍 Allow Once\n👎 Deny");
     expect(payload.text).not.toContain("♾️ Allow Always");
     expect(payload.text).toContain("Allow Once: /approve plugin:approval-123 allow-once");
@@ -370,6 +464,22 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     expect(await store.lookup("message-1")).toEqual(target);
     now = 1_101;
     expect(await store.lookup("message-1")).toBeNull();
+  });
+
+  it("uses the current system clock when no clock is injected", async () => {
+    vi.useFakeTimers({ now: 1_000 });
+    try {
+      const store = createApprovalReactionTargetStore<{ approvalId: string }>({
+        namespace: "test.default-clock",
+        maxEntries: 10,
+        defaultTtlMs: 100,
+      });
+      store.register("message-1", { approvalId: "approval-1" }, { ttlMs: 1 });
+      vi.setSystemTime(1_002);
+      expect(await store.lookup("message-1")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("fails open for local suppression unless native exec route facts match", () => {

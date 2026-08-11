@@ -6,7 +6,7 @@ import type {
 import {
   listSqliteSessionEntriesByStatus,
   listSqliteSessionTranscriptInstances,
-} from "./session-accessor.sqlite.js";
+} from "./session-accessor.sqlite-entry.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionEntryListScope = Partial<Omit<SessionAccessScope, "sessionKey">>;

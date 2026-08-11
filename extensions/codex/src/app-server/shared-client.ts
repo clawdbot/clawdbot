@@ -39,6 +39,8 @@ import { withTimeout } from "./timeout.js";
 
 export type { CodexAppServerPreparedAuth } from "./auth-bridge.js";
 
+const CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE = "codex app-server initialize timed out";
+
 type SharedCodexAppServerClientEntry = {
   client?: CodexAppServerClient;
   startup?: SharedCodexAppServerClientStartup;
@@ -57,7 +59,25 @@ type SharedCodexAppServerClientStartup = {
 
 type SharedCodexAppServerClientState = {
   clients: Map<string, SharedCodexAppServerClientEntry>;
+  liveClients: Set<CodexAppServerClient>;
+  entriesByClient: WeakMap<CodexAppServerClient, SharedCodexAppServerClientEntry>;
   leasedReleases: WeakMap<CodexAppServerClient, Array<() => void>>;
+  warmClientsByConfig?: WeakMap<
+    object,
+    WeakMap<CodexAppServerStartOptions, Map<string, WarmSharedCodexAppServerClient>>
+  >;
+};
+
+type WarmSharedCodexAppServerClient = {
+  key: string;
+  entry: SharedCodexAppServerClientEntry;
+  client: CodexAppServerClient;
+};
+
+type WarmSharedCodexAppServerClientIdentity = {
+  config: object;
+  startOptions: CodexAppServerStartOptions;
+  selectorKey: string;
 };
 
 type CodexAppServerClientStartMetadata = {
@@ -84,10 +104,6 @@ type CodexAppServerSpawnIdentity = Omit<
   "clientId" | "serverVersion" | "userAgent"
 >;
 
-// Clients we already force-closed for suspect retirement; a repeat retire must
-// report closed:false instead of pretending to close the corpse again.
-const suspectClosedClients = new WeakSet<CodexAppServerClient>();
-
 // Symbol.for shares one client table across duplicate module copies (dist +
 // src bundles in one process). Plugin updates restart the gateway, so every
 // copy writing this state runs the same code and the shape never migrates.
@@ -103,6 +119,8 @@ function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
   };
   globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE] ??= {
     clients: new Map(),
+    liveClients: new Set(),
+    entriesByClient: new WeakMap(),
     leasedReleases: new WeakMap(),
   };
   return globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE];
@@ -249,6 +267,7 @@ export type CodexAppServerClientOptions = {
   expectedRuntimeArtifact?: AgentHarnessRuntimeArtifactBinding;
   preparedAuth?: CodexAppServerPreparedAuth;
   authRequirement?: CodexAppServerAuthRequirement;
+  agentId?: string;
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   onStartedClient?: (client: CodexAppServerClient) => void;
@@ -298,6 +317,9 @@ async function resolveCodexAppServerClientStartContext(
     throw new Error("Prepared Codex API-key auth is missing its resolved key.");
   }
   if (preparedAuth && requestedStartOptions.homeScope === "user") {
+    // Backstop for the auth-bridge handoff: an app-server on the operator's native
+    // home persists api-key logins into CODEX_HOME/auth.json and replaces the live
+    // ChatGPT account for token logins, so prepared auth must never reach it.
     throw new Error("Prepared Codex auth requires an isolated app-server home.");
   }
   const preparedAuthRequirement = inferAuthRequirement(preparedAuth);
@@ -369,9 +391,11 @@ async function resolveCodexAppServerClientStartContext(
   const managedStartOptions = await resolveManagedCodexAppServerStartOptions(agentStartOptions);
   const startOptions = await bridgeCodexAppServerStartOptions({
     startOptions: managedStartOptions,
+    agentId: options?.agentId,
     agentDir,
     authProfileId: usesNativeAuth || preparedAuth?.kind === "api-key" ? null : authProfileId,
     ...(resolvedPreparedAuth ? { preparedAuth: resolvedPreparedAuth } : {}),
+    authRequirement,
     config: options?.config,
     pluginConfig: options?.pluginConfig,
     ...(authProfileStore ? { authProfileStore } : {}),
@@ -386,6 +410,82 @@ async function resolveCodexAppServerClientStartContext(
     authRequirement,
     startOptions,
   };
+}
+
+function resolveWarmSharedCodexAppServerClientIdentity(
+  options?: CodexAppServerClientOptions,
+): WarmSharedCodexAppServerClientIdentity | undefined {
+  if (
+    !options?.config ||
+    typeof options.config !== "object" ||
+    !options.startOptions ||
+    options.pluginConfig !== undefined ||
+    options.authProfileStore !== undefined ||
+    options.preparedAuth !== undefined ||
+    options.runtimeArtifactMode !== undefined ||
+    options.expectedRuntimeArtifact !== undefined
+  ) {
+    return undefined;
+  }
+  const authProfileSelector =
+    options.authProfileId === null
+      ? ["native"]
+      : options.authProfileId === undefined
+        ? ["implicit"]
+        : ["profile", options.authProfileId];
+  return {
+    config: options.config,
+    startOptions: options.startOptions,
+    selectorKey: JSON.stringify([
+      options.agentDir ?? resolveDefaultAgentDir(options.config),
+      authProfileSelector,
+      options.authBindingFingerprint ?? null,
+      options.authRequirement ?? null,
+    ]),
+  };
+}
+
+function readWarmSharedCodexAppServerClient(
+  state: SharedCodexAppServerClientState,
+  identity: WarmSharedCodexAppServerClientIdentity,
+): WarmSharedCodexAppServerClient | undefined {
+  const aliases = state.warmClientsByConfig?.get(identity.config)?.get(identity.startOptions);
+  const warm = aliases?.get(identity.selectorKey);
+  if (!warm) {
+    return undefined;
+  }
+  // Config/start options are immutable runtime snapshots. The alias is valid only while the
+  // canonical keyed entry still owns this physical client; close, retirement, and auth-profile
+  // invalidation remove that entry, forcing the next acquire through full start-context resolution.
+  if (
+    state.clients.get(warm.key) !== warm.entry ||
+    warm.entry.client !== warm.client ||
+    warm.entry.closeWhenIdle ||
+    warm.entry.closeError
+  ) {
+    aliases?.delete(identity.selectorKey);
+    return undefined;
+  }
+  return warm;
+}
+
+function rememberWarmSharedCodexAppServerClient(
+  state: SharedCodexAppServerClientState,
+  identity: WarmSharedCodexAppServerClientIdentity,
+  warm: WarmSharedCodexAppServerClient,
+): void {
+  state.warmClientsByConfig ??= new WeakMap();
+  let byStartOptions = state.warmClientsByConfig.get(identity.config);
+  if (!byStartOptions) {
+    byStartOptions = new WeakMap();
+    state.warmClientsByConfig.set(identity.config, byStartOptions);
+  }
+  let aliases = byStartOptions.get(identity.startOptions);
+  if (!aliases) {
+    aliases = new Map();
+    byStartOptions.set(identity.startOptions, aliases);
+  }
+  aliases.set(identity.selectorKey, warm);
 }
 
 /** Gets or starts a shared Codex app-server client without retaining a lease. */
@@ -513,6 +613,16 @@ async function acquireSharedCodexAppServerClient(
   if (options?.abandonSignal?.aborted) {
     throw new CodexAppServerStartupError("aborted", "codex app-server initialize aborted");
   }
+  const state = getSharedCodexAppServerClientState();
+  const warmIdentity = resolveWarmSharedCodexAppServerClientIdentity(options);
+  const warmClient = warmIdentity
+    ? readWarmSharedCodexAppServerClient(state, warmIdentity)
+    : undefined;
+  if (warmClient) {
+    options?.onStartedClient?.(warmClient.client);
+    const release = leaseOptions?.leased ? retainSharedClientEntry(warmClient.entry) : undefined;
+    return release ? { client: warmClient.client, release } : { client: warmClient.client };
+  }
   const acquireStartedAt = Date.now();
   const timeoutMs = options?.timeoutMs ?? 0;
   const context = await withCodexAppServerAcquireDeadline(
@@ -558,7 +668,6 @@ async function acquireSharedCodexAppServerClient(
   const key = runtimeArtifactMode
     ? `${baseKey}\0runtime-artifact:capture-v1:${expectedRuntimeArtifactKey}`
     : baseKey;
-  const state = getSharedCodexAppServerClientState();
   const entry = getOrCreateSharedClientEntry(state, key);
   if (runtimeArtifactMode) {
     entry.runtimeArtifactStartupAbort ??= new AbortController();
@@ -616,6 +725,8 @@ async function acquireSharedCodexAppServerClient(
       remainingTimeoutMs,
       startup.initialized,
       options?.abandonSignal,
+      CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE,
+      () => buildCodexAppServerInitializeTimeoutError(entry.client),
     );
     const client = await withCodexAppServerAcquireDeadline(
       timeoutMs,
@@ -636,6 +747,9 @@ async function acquireSharedCodexAppServerClient(
       config: options?.config,
     });
     const release = leaseOptions?.leased ? retainSharedClientEntry(entry) : undefined;
+    if (warmIdentity) {
+      rememberWarmSharedCodexAppServerClient(state, warmIdentity, { key, entry, client });
+    }
     return release ? { client, release } : { client };
   } catch (error) {
     // This deadline belongs to one waiter, not the shared physical client.
@@ -654,7 +768,8 @@ async function withCodexAppServerAcquireDeadline<T>(
   timeoutMs: number, // First: fail before the caller starts its promise argument.
   promise: Promise<T>,
   signal?: AbortSignal,
-  timeoutMessage = "codex app-server initialize timed out",
+  timeoutMessage = CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE,
+  timeoutErrorFactory?: () => CodexAppServerStartupError,
 ): Promise<T> {
   if (signal?.aborted) {
     throw new CodexAppServerStartupError("aborted", "codex app-server initialize aborted");
@@ -663,7 +778,7 @@ async function withCodexAppServerAcquireDeadline<T>(
     promise,
     timeoutMs,
     timeoutMessage,
-    () => new CodexAppServerStartupError("timed_out", timeoutMessage),
+    () => timeoutErrorFactory?.() ?? new CodexAppServerStartupError("timed_out", timeoutMessage),
   );
   if (!signal) {
     return await timed;
@@ -674,6 +789,18 @@ async function withCodexAppServerAcquireDeadline<T>(
     signal.addEventListener("abort", onAbort, { once: true });
     timed.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
   });
+}
+
+function buildCodexAppServerInitializeTimeoutError(
+  client: CodexAppServerClient | undefined,
+): CodexAppServerStartupError {
+  const stderr = client?.getStderrDiagnostic();
+  return new CodexAppServerStartupError(
+    "timed_out",
+    stderr
+      ? `${CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE}; stderr=${JSON.stringify(stderr)}`
+      : CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE,
+  );
 }
 
 function resolveRemainingAcquireTimeout(timeoutMs: number, startedAt: number): number {
@@ -718,7 +845,16 @@ function createSharedCodexAppServerClientStartup(params: {
     runtimeArtifactSignal: params.runtimeArtifactSignal,
     config: params.config,
     onStartedClient: (startedClient) => {
+      const state = getSharedCodexAppServerClientState();
       params.entry.client = startedClient;
+      state.entriesByClient.set(startedClient, params.entry);
+      // Graceful retirement detaches active clients from the acquisition map,
+      // so global teardown tracks physical lifetime until the close notification.
+      state.liveClients.add(startedClient);
+      startedClient.addCloseHandler((closedClient) => {
+        getSharedCodexAppServerClientState().liveClients.delete(closedClient);
+        clearSharedClientEntryIfCurrent(params.key, closedClient);
+      });
       for (const callback of params.entry.onStartedClientCallbacks) {
         callback(startedClient);
       }
@@ -728,9 +864,6 @@ function createSharedCodexAppServerClientStartup(params: {
   }).then(
     (client) => {
       params.entry.client = client;
-      client.addCloseHandler((closedClient) =>
-        clearSharedClientEntryIfCurrent(params.key, closedClient),
-      );
       return client;
     },
     (error: unknown) => {
@@ -844,6 +977,8 @@ async function startInitializedCodexAppServerClient(params: {
         resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt),
         (initialize = client.initialize()),
         params.abandonSignal,
+        CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE,
+        () => buildCodexAppServerInitializeTimeoutError(client),
       );
     } catch (error) {
       client.close();
@@ -979,7 +1114,9 @@ export function resetSharedCodexAppServerClientForTests(): void {
   const state = getSharedCodexAppServerClientState();
   const clients = collectSharedClients(state);
   state.clients.clear();
+  state.entriesByClient = new WeakMap();
   state.leasedReleases = new WeakMap();
+  state.warmClientsByConfig = new WeakMap();
   for (const client of clients) {
     client.close();
   }
@@ -990,6 +1127,7 @@ export function clearSharedCodexAppServerClient(): void {
   const state = getSharedCodexAppServerClientState();
   const clients = collectSharedClients(state);
   state.clients.clear();
+  state.warmClientsByConfig = new WeakMap();
   for (const client of clients) {
     client.close();
   }
@@ -1013,23 +1151,6 @@ export function clearSharedCodexAppServerClientIfCurrent(
   return false;
 }
 
-/** Detaches the shared entry without closing the client when it still matches. */
-export function detachSharedCodexAppServerClientIfCurrent(
-  client: CodexAppServerClient | undefined,
-): boolean {
-  if (!client) {
-    return false;
-  }
-  const state = getSharedCodexAppServerClientState();
-  for (const [key, entry] of state.clients) {
-    if (entry.client === client) {
-      state.clients.delete(key);
-      return true;
-    }
-  }
-  return false;
-}
-
 /** Retains the matching shared client and returns a release callback. */
 export function retainSharedCodexAppServerClientIfCurrent(
   client: CodexAppServerClient | undefined,
@@ -1042,6 +1163,24 @@ export function retainSharedCodexAppServerClientIfCurrent(
     if (entry.client === client) {
       return retainSharedClientEntry(entry);
     }
+  }
+  return undefined;
+}
+
+/** Retains the live shared client whose initialized instance id matches a thread binding. */
+export function retainSharedCodexAppServerClientByInstanceId(
+  clientId: string | undefined,
+): { client: CodexAppServerClient; release: () => void } | undefined {
+  const normalizedClientId = clientId?.trim();
+  if (!normalizedClientId) {
+    return undefined;
+  }
+  for (const entry of getSharedCodexAppServerClientState().clients.values()) {
+    const client = entry.client;
+    if (client?.getInstanceId() !== normalizedClientId || entry.closeWhenIdle || entry.closeError) {
+      continue;
+    }
+    return { client, release: retainSharedClientEntry(entry) };
   }
   return undefined;
 }
@@ -1069,27 +1208,27 @@ export function retireSharedCodexAppServerClientIfCurrent(
       entry.closeWhenIdle = true;
       if (opts?.failActiveLeases) {
         entry.closeError = new Error("codex app-server client is closed");
-        const closed = closeRetiredSharedClientEntry(entry);
-        if (closed) {
-          suspectClosedClients.add(client);
-        }
-        return { activeLeases: entry.activeLeases, closed };
+        return {
+          activeLeases: entry.activeLeases,
+          closed: closeRetiredSharedClientEntry(entry),
+        };
       }
       const closed = closeRetiredSharedClientEntryIfIdle(entry);
       return { activeLeases: entry.activeLeases, closed };
     }
   }
-  const activeLeases = state.leasedReleases.get(client)?.length ?? 0;
-  if (activeLeases > 0) {
-    // A gracefully detached client (e.g. one-shot cleanup) can still be leased
-    // when a later terminal-idle kill declares it suspect; the map miss must
-    // not let the poisoned process keep serving those co-leases.
-    if (opts?.failActiveLeases && !suspectClosedClients.has(client)) {
-      suspectClosedClients.add(client);
-      client.close();
-      return { activeLeases, closed: true };
+  const detachedEntry = state.entriesByClient.get(client);
+  if (detachedEntry && (detachedEntry.client === client || detachedEntry.closeError)) {
+    // Explicit native-subagent retains are not listed in leasedReleases; the
+    // detached entry owns every lease and records an already-forced closure.
+    if (opts?.failActiveLeases && !detachedEntry.closeError) {
+      detachedEntry.closeError = new Error("codex app-server client is closed");
+      return {
+        activeLeases: detachedEntry.activeLeases,
+        closed: closeRetiredSharedClientEntry(detachedEntry),
+      };
     }
-    return { activeLeases, closed: false };
+    return { activeLeases: detachedEntry.activeLeases, closed: false };
   }
   return undefined;
 }
@@ -1124,6 +1263,7 @@ export async function clearSharedCodexAppServerClientAndWait(options?: {
   const state = getSharedCodexAppServerClientState();
   const clients = collectSharedClients(state);
   state.clients.clear();
+  state.warmClientsByConfig = new WeakMap();
   await Promise.all(clients.map((client) => client.closeAndWait(options)));
 }
 
@@ -1269,12 +1409,6 @@ function retirePendingSharedClientEntryIfUnclaimed(
 }
 
 function collectSharedClients(state: SharedCodexAppServerClientState): CodexAppServerClient[] {
-  return [
-    ...new Set(
-      [...state.clients.values()]
-        .map((entry) => entry.client)
-        .filter((client): client is CodexAppServerClient => Boolean(client)),
-    ),
-  ];
+  return [...state.liveClients];
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

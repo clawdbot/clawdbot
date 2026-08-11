@@ -5,11 +5,11 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import {
-  asString,
   collectIssuesForEnabledAccounts,
   isRecord,
   readAccountStatusSnapshot,
 } from "openclaw/plugin-sdk/status-helpers";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const WHATSAPP_ACCOUNT_STATUS_FIELDS = [
   "statusState",
@@ -25,7 +25,7 @@ const RECENT_DISCONNECT_WARNING_WINDOW_MS = 15 * 60 * 1000;
 
 function readLastDisconnect(value: unknown): { at: number | null; error?: string } | null {
   if (typeof value === "string") {
-    const error = asString(value);
+    const error = normalizeOptionalString(value);
     return error ? { at: null, error } : null;
   }
   if (!isRecord(value)) {
@@ -33,7 +33,7 @@ function readLastDisconnect(value: unknown): { at: number | null; error?: string
   }
   return {
     at: typeof value.at === "number" ? value.at : null,
-    error: asString(value.error),
+    error: normalizeOptionalString(value.error),
   };
 }
 
@@ -52,7 +52,7 @@ export function collectWhatsAppStatusIssues(
     readAccount: (value) => readAccountStatusSnapshot(value, WHATSAPP_ACCOUNT_STATUS_FIELDS),
     collectIssues: ({ account, accountId, issues }) => {
       const linked = account.linked === true;
-      const statusState = asString(account.statusState);
+      const statusState = normalizeOptionalString(account.statusState);
       const running = account.running === true;
       const connected = account.connected === true;
       const reconnectAttempts =
@@ -60,8 +60,8 @@ export function collectWhatsAppStatusIssues(
       const lastInboundAt =
         typeof account.lastInboundAt === "number" ? account.lastInboundAt : null;
       const lastDisconnect = readLastDisconnect(account.lastDisconnect);
-      const lastError = asString(account.lastError) ?? lastDisconnect?.error;
-      const healthState = asString(account.healthState);
+      const lastError = normalizeOptionalString(account.lastError) ?? lastDisconnect?.error;
+      const healthState = normalizeOptionalString(account.healthState);
 
       if (statusState === "unstable") {
         issues.push({
@@ -70,6 +70,17 @@ export function collectWhatsAppStatusIssues(
           kind: "auth",
           message: "Auth state is still stabilizing.",
           fix: "Wait a moment for queued credential writes to finish, then retry the command or rerun health.",
+        });
+        return;
+      }
+
+      if (healthState === "logged-out") {
+        issues.push({
+          channel: "whatsapp",
+          accountId,
+          kind: "auth",
+          message: `Session logged out${lastError ? `: ${lastError}` : "."}`,
+          fix: `Run: ${formatCliCommand("openclaw channels login")} (scan QR on the gateway host).`,
         });
         return;
       }
@@ -117,17 +128,6 @@ export function collectWhatsAppStatusIssues(
           kind: "runtime",
           message: `Linked but ${stateLabel}${reconnectAttempts != null ? ` (reconnectAttempts=${reconnectAttempts})` : ""}${lastError ? `: ${lastError}` : "."}`,
           fix: `Run: ${formatCliCommand("openclaw doctor")} (or restart the gateway). If it persists, relink via channels login and check logs.`,
-        });
-        return;
-      }
-
-      if (healthState === "logged-out") {
-        issues.push({
-          channel: "whatsapp",
-          accountId,
-          kind: "auth",
-          message: `Linked session logged out${lastError ? `: ${lastError}` : "."}`,
-          fix: `Run: ${formatCliCommand("openclaw channels login")} (scan QR on the gateway host).`,
         });
         return;
       }

@@ -1,99 +1,48 @@
 // Restart health probes for gateway service restarts and port listener recovery.
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
-import type { PluginHealthErrorSummary } from "../../commands/health.types.js";
-import { createConfigIO } from "../../config/io.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-probe-hosts.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
-import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../../gateway/probe-auth.js";
-import { probeGateway } from "../../gateway/probe.js";
-import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
-import { classifyPortListener, inspectPortUsage, type PortUsage } from "../../infra/ports.js";
+import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
+import { classifyPortListener } from "../../infra/ports-format.js";
+import { inspectPortUsage } from "../../infra/ports-inspect.js";
+import type { PortUsage } from "../../infra/ports-types.js";
 import {
   hasActiveStartupMigrationLease,
   STARTUP_MIGRATION_LEASE_TTL_MS,
 } from "../../infra/startup-migration-checkpoint.js";
 import { sleep } from "../../utils.js";
-import type {
-  GatewayPortHealthSnapshot,
-  GatewayRestartSnapshot,
-  GatewayRestartWaitOutcome,
-} from "./restart-health.types.js";
-import { waitForGatewayLockReplacement } from "./restart-lock-replacement.js";
 import {
-  allListenersOwnedByRuntimePid,
-  hasListenerAttributionGap,
-  listenerOwnedByRuntimePid,
-} from "./restart-port-ownership.js";
+  confirmGatewayReachable,
+  resolveGatewayRestartProbeAuth,
+  type GatewayReachability,
+  type GatewayRestartProbeAuth,
+} from "./restart-health-probe.js";
+import {
+  DEFAULT_RESTART_HEALTH_ATTEMPTS,
+  DEFAULT_RESTART_HEALTH_DELAY_MS,
+} from "./restart-health.constants.js";
+import type { GatewayRestartSnapshot, GatewayRestartWaitOutcome } from "./restart-health.types.js";
+import { hasListenerAttributionGap, listenerOwnedByRuntimePid } from "./restart-port-ownership.js";
+export {
+  DEFAULT_RESTART_HEALTH_ATTEMPTS,
+  DEFAULT_RESTART_HEALTH_DELAY_MS,
+} from "./restart-health.constants.js";
 export {
   renderGatewayPortHealthDiagnostics,
   renderRestartDiagnostics,
 } from "./restart-health-diagnostics.js";
+export { waitForGatewayHealthyListener } from "./restart-health-external.js";
 export type {
   GatewayPortHealthSnapshot,
   GatewayRestartSnapshot,
   GatewayRestartWaitOutcome,
 } from "./restart-health.types.js";
-export { terminateStaleGatewayPids } from "./restart-stale-pids.js";
+export { terminateStaleGatewayPids } from "../../infra/restart-stale-pids.js";
 
-const DEFAULT_RESTART_HEALTH_TIMEOUT_MS = 60_000;
 const STARTUP_MIGRATION_ACTIVITY_POLL_MS = 5_000;
-export const DEFAULT_RESTART_HEALTH_DELAY_MS = 500;
-export const DEFAULT_RESTART_HEALTH_ATTEMPTS = Math.ceil(
-  DEFAULT_RESTART_HEALTH_TIMEOUT_MS / DEFAULT_RESTART_HEALTH_DELAY_MS,
-);
 const STOPPED_FREE_EARLY_EXIT_GRACE_MS = 10_000;
 const WINDOWS_STOPPED_FREE_EARLY_EXIT_GRACE_MS = 90_000;
-
-type GatewayReachability = {
-  reachable: boolean;
-  gatewayVersion: string | null;
-  activatedPluginErrors: PluginHealthErrorSummary[];
-  channelProbeErrors: Array<{ id: string; error: string }>;
-};
-
-type GatewayRestartProbeAuth = {
-  token?: string;
-  password?: string;
-};
-
-function looksLikeAuthClose(code: number | undefined, reason: string | undefined): boolean {
-  if (code !== 1008) {
-    return false;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(reason);
-  if (!normalized) {
-    return false;
-  }
-  // The restart probe runs against loopback only and only decides restart
-  // liveness, not authorization. Keep this allowlist exact so a local listener
-  // cannot satisfy the health check with broad device/auth-looking text.
-  return (
-    normalized === "auth required" ||
-    normalized === "owner auth required" ||
-    normalized === "connect failed" ||
-    normalized === "device required" ||
-    normalized === "pairing required" ||
-    normalized.startsWith("pairing required:") ||
-    normalized.startsWith("unauthorized: gateway token missing") ||
-    normalized.startsWith("unauthorized: gateway token mismatch") ||
-    normalized.startsWith("unauthorized: gateway token not configured") ||
-    normalized.startsWith("unauthorized: gateway password missing") ||
-    normalized.startsWith("unauthorized: gateway password mismatch") ||
-    normalized.startsWith("unauthorized: gateway password not configured") ||
-    normalized.startsWith("unauthorized: bootstrap token invalid or expired") ||
-    normalized.startsWith("unauthorized: tailscale identity missing") ||
-    normalized.startsWith("unauthorized: tailscale proxy headers missing") ||
-    normalized.startsWith("unauthorized: tailscale identity check failed") ||
-    normalized.startsWith("unauthorized: tailscale identity mismatch") ||
-    normalized.startsWith("unauthorized: too many failed authentication attempts") ||
-    normalized.startsWith("unauthorized: device token mismatch") ||
-    normalized.startsWith("unauthorized: device token rejected")
-  );
-}
 
 function applyExpectedVersion(
   snapshot: GatewayRestartSnapshot,
@@ -119,80 +68,6 @@ function applyExpectedVersion(
   };
 }
 
-function readActivatedPluginErrors(health: unknown): PluginHealthErrorSummary[] {
-  if (!health || typeof health !== "object") {
-    return [];
-  }
-  const plugins = (health as { plugins?: unknown }).plugins;
-  if (!plugins || typeof plugins !== "object") {
-    return [];
-  }
-  const errors = (plugins as { errors?: unknown }).errors;
-  if (!Array.isArray(errors)) {
-    return [];
-  }
-  return errors
-    .filter((entry): entry is PluginHealthErrorSummary => {
-      if (!entry || typeof entry !== "object") {
-        return false;
-      }
-      const candidate = entry as Partial<PluginHealthErrorSummary>;
-      return (
-        candidate.activated === true &&
-        typeof candidate.id === "string" &&
-        typeof candidate.error === "string"
-      );
-    })
-    .map((entry) => {
-      const error: PluginHealthErrorSummary = {
-        id: entry.id,
-        origin: typeof entry.origin === "string" ? entry.origin : "unknown",
-        activated: true,
-        error: entry.error,
-      };
-      if (typeof entry.activationSource === "string") {
-        error.activationSource = entry.activationSource;
-      }
-      if (typeof entry.activationReason === "string") {
-        error.activationReason = entry.activationReason;
-      }
-      if (typeof entry.failurePhase === "string") {
-        error.failurePhase = entry.failurePhase;
-      }
-      return error;
-    });
-}
-
-function readChannelProbeErrors(health: unknown): Array<{ id: string; error: string }> {
-  if (!health || typeof health !== "object") {
-    return [];
-  }
-  const channels = (health as { channels?: unknown }).channels;
-  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
-    return [];
-  }
-  const errors: Array<{ id: string; error: string }> = [];
-  for (const [id, summary] of Object.entries(channels)) {
-    if (!summary || typeof summary !== "object") {
-      continue;
-    }
-    const probe = (summary as { probe?: unknown }).probe;
-    if (!probe || typeof probe !== "object") {
-      continue;
-    }
-    const ok = (probe as { ok?: unknown }).ok;
-    if (ok !== false) {
-      continue;
-    }
-    const error = (probe as { error?: unknown }).error;
-    errors.push({
-      id,
-      error: typeof error === "string" && error.trim() ? error : "probe failed",
-    });
-  }
-  return errors;
-}
-
 function applyActivatedPluginErrors(snapshot: GatewayRestartSnapshot): GatewayRestartSnapshot {
   if (!snapshot.activatedPluginErrors?.length) {
     return snapshot;
@@ -207,104 +82,6 @@ function applyChannelProbeErrors(snapshot: GatewayRestartSnapshot): GatewayResta
   return { ...snapshot, healthy: false };
 }
 
-async function confirmGatewayReachable(params: {
-  port: number;
-  includeHealthDetails?: boolean;
-  auth?: GatewayRestartProbeAuth;
-  env?: NodeJS.ProcessEnv;
-  allowDeviceIdentityRequired?: boolean;
-}): Promise<GatewayReachability> {
-  const token = normalizeOptionalString(params.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN);
-  const password = normalizeOptionalString(
-    params.auth?.password ?? process.env.OPENCLAW_GATEWAY_PASSWORD,
-  );
-  const probe = await probeGateway({
-    url: `ws://127.0.0.1:${params.port}`,
-    auth: token || password ? { token, password } : undefined,
-    timeoutMs: 3_000,
-    includeDetails: params.includeHealthDetails === true,
-    env: params.env,
-  });
-  const reachedGateway =
-    probe.ok ||
-    looksLikeAuthClose(probe.close?.code, probe.close?.reason) ||
-    (params.allowDeviceIdentityRequired === true &&
-      probe.close?.code === 1008 &&
-      normalizeLowercaseStringOrEmpty(probe.close.reason) === "device identity required") ||
-    (probe.connectLatencyMs != null &&
-      probe.server?.version != null &&
-      probe.auth.capability === "connected_no_operator_scope");
-  return {
-    reachable: reachedGateway,
-    gatewayVersion: probe.server?.version ?? null,
-    activatedPluginErrors: readActivatedPluginErrors(probe.health),
-    channelProbeErrors: readChannelProbeErrors(probe.health),
-  };
-}
-
-async function resolveGatewayRestartProbeAuth(
-  env: NodeJS.ProcessEnv | undefined,
-): Promise<GatewayRestartProbeAuth | undefined> {
-  const mergedEnv = {
-    ...(process.env as Record<string, string | undefined>),
-    ...(env ?? undefined),
-  } as NodeJS.ProcessEnv;
-  const cfg = await createConfigIO({
-    env: mergedEnv,
-    pluginValidation: "skip",
-    suppressFutureVersionWarning: true,
-  })
-    .readBestEffortConfig()
-    .catch((): OpenClawConfig => ({}));
-  const resolved = await resolveGatewayProbeAuthSafeWithSecretInputs({
-    cfg,
-    mode: "local",
-    env: mergedEnv,
-  });
-  return resolved.auth;
-}
-
-async function inspectGatewayPortHealth(params: {
-  port: number;
-  auth?: GatewayRestartProbeAuth;
-  expectedListenerPid?: number;
-}): Promise<GatewayPortHealthSnapshot> {
-  let portUsage: PortUsage;
-  try {
-    portUsage = await inspectPortUsage(params.port);
-  } catch (err) {
-    portUsage = {
-      port: params.port,
-      status: "unknown",
-      listeners: [],
-      hints: [],
-      errors: [String(err)],
-    };
-  }
-
-  let healthy = false;
-  if (portUsage.status === "busy") {
-    const expectedListenerPid = params.expectedListenerPid;
-    const listenerOwnershipVerified =
-      expectedListenerPid !== undefined &&
-      allListenersOwnedByRuntimePid(portUsage.listeners, expectedListenerPid);
-    try {
-      healthy = (
-        await confirmGatewayReachable({
-          port: params.port,
-          auth: params.auth,
-          env: process.env,
-          allowDeviceIdentityRequired: listenerOwnershipVerified,
-        })
-      ).reachable;
-    } catch {
-      // best-effort probe
-    }
-  }
-
-  return { portUsage, healthy };
-}
-
 export async function inspectGatewayRestart(params: {
   service: GatewayService;
   port: number;
@@ -312,8 +89,15 @@ export async function inspectGatewayRestart(params: {
   expectedVersion?: string | null;
   includeUnknownListenersAsStale?: boolean;
   probeAuth?: GatewayRestartProbeAuth;
+  probeHosts?: readonly string[];
 }): Promise<GatewayRestartSnapshot> {
   const env = params.env ?? process.env;
+  const probeHosts =
+    params.probeHosts ??
+    (await resolveGatewayServiceProbeHosts({
+      env,
+      command: (await params.service.readCommand?.(env).catch(() => null)) ?? null,
+    }));
   const expectedVersion = normalizeOptionalString(params.expectedVersion);
   let reachability: GatewayReachability | null = null;
   let activatedPluginErrors: PluginHealthErrorSummary[] = [];
@@ -340,7 +124,9 @@ export async function inspectGatewayRestart(params: {
 
   let portUsage: PortUsage;
   try {
-    portUsage = await inspectPortUsage(params.port);
+    portUsage = await inspectPortUsage(params.port, {
+      probeHosts,
+    });
   } catch (err) {
     portUsage = {
       port: params.port,
@@ -505,7 +291,9 @@ export async function waitForGatewayHealthyRestart(params: {
   expectedVersion?: string | null;
   includeUnknownListenersAsStale?: boolean;
   requireRunningService?: boolean;
+  supervisorKeepsAlive?: boolean;
   isStartupMigrationActive?: typeof hasActiveStartupMigrationLease;
+  probeHosts?: readonly string[];
 }): Promise<GatewayRestartSnapshot> {
   const startedAtMs = performance.now();
   const attempts = params.attempts ?? DEFAULT_RESTART_HEALTH_ATTEMPTS;
@@ -513,6 +301,12 @@ export async function waitForGatewayHealthyRestart(params: {
   const standardDeadlineMs = attempts * delayMs;
 
   const probeAuth = await resolveGatewayRestartProbeAuth(params.env).catch(() => undefined);
+  const probeHosts =
+    params.probeHosts ??
+    (await resolveGatewayServiceProbeHosts({
+      env: params.env,
+      command: await params.service.readCommand(params.env ?? process.env).catch(() => null),
+    }));
   let snapshot = await inspectGatewayRestart({
     service: params.service,
     port: params.port,
@@ -520,6 +314,7 @@ export async function waitForGatewayHealthyRestart(params: {
     expectedVersion: params.expectedVersion,
     includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
     probeAuth,
+    probeHosts,
   });
 
   let consecutiveStoppedFreeCount = 0;
@@ -554,7 +349,12 @@ export async function waitForGatewayHealthyRestart(params: {
     if (snapshot.staleGatewayPids.length > 0 && snapshot.runtime.status !== "running") {
       return withWaitContext(snapshot, "stale-pids", elapsedMs);
     }
-    if (shouldEarlyExitStoppedFree(snapshot, attempt, minAttemptForEarlyExit)) {
+    // launchd KeepAlive can report a transient stopped state while its throttle window runs.
+    // Let the bounded standard deadline decide failure when the caller knows supervision persists.
+    if (
+      !params.supervisorKeepsAlive &&
+      shouldEarlyExitStoppedFree(snapshot, attempt, minAttemptForEarlyExit)
+    ) {
       consecutiveStoppedFreeCount += 1;
       if (consecutiveStoppedFreeCount >= STOPPED_FREE_THRESHOLD) {
         return withWaitContext(snapshot, "stopped-free", elapsedMs);
@@ -602,76 +402,7 @@ export async function waitForGatewayHealthyRestart(params: {
       expectedVersion: params.expectedVersion,
       includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
       probeAuth,
+      probeHosts,
     });
   }
-}
-
-export async function waitForGatewayHealthyListener(params: {
-  port: number;
-  attempts?: number;
-  delayMs?: number;
-  previousLockIdentity?: GatewayLockIdentity;
-  waitIndefinitelyForPreviousOwner?: boolean;
-}): Promise<GatewayPortHealthSnapshot> {
-  const attempts = params.attempts ?? DEFAULT_RESTART_HEALTH_ATTEMPTS;
-  const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
-  const previousLockIdentity = params.previousLockIdentity;
-
-  const probeAuth = await resolveGatewayRestartProbeAuth(undefined).catch(() => undefined);
-  let snapshot: GatewayPortHealthSnapshot = previousLockIdentity
-    ? {
-        portUsage: {
-          port: params.port,
-          status: "unknown",
-          listeners: [],
-          hints: [],
-          errors: [
-            `Previous gateway lock owner ${previousLockIdentity.ownerId ?? previousLockIdentity.pid} is still active.`,
-          ],
-        },
-        healthy: false,
-      }
-    : await inspectGatewayPortHealth({
-        port: params.port,
-        auth: probeAuth,
-      });
-
-  let attempt = 0;
-  let expectedListenerPid: number | undefined;
-  if (previousLockIdentity) {
-    const replacement = await waitForGatewayLockReplacement({
-      previousLockIdentity,
-      attempts,
-      delayMs,
-      waitIndefinitelyForPreviousOwner: params.waitIndefinitelyForPreviousOwner === true,
-    });
-    if (replacement.status === "timeout") {
-      return snapshot;
-    }
-    attempt = replacement.attemptsUsed;
-    expectedListenerPid = replacement.lockIdentity.pid;
-    snapshot = await inspectGatewayPortHealth({
-      port: params.port,
-      auth: probeAuth,
-      expectedListenerPid,
-    });
-  }
-
-  if (snapshot.healthy) {
-    return snapshot;
-  }
-  while (attempt < attempts) {
-    attempt += 1;
-    await sleep(delayMs);
-    snapshot = await inspectGatewayPortHealth({
-      port: params.port,
-      auth: probeAuth,
-      expectedListenerPid,
-    });
-    if (snapshot.healthy) {
-      return snapshot;
-    }
-  }
-
-  return snapshot;
 }

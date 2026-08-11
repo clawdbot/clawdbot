@@ -119,8 +119,6 @@ export type PluginRuntimeChannel = {
      */
     finalizeInboundContext: typeof import("../../auto-reply/reply/inbound-context.js").finalizeInboundContext;
     formatAgentEnvelope: typeof import("../../auto-reply/envelope.js").formatAgentEnvelope;
-    /** @deprecated Prefer `BodyForAgent` + structured user-context blocks (do not build plaintext envelopes for prompts). */
-    formatInboundEnvelope: typeof import("../../auto-reply/envelope.js").formatInboundEnvelope;
     resolveEnvelopeFormatOptions: typeof import("../../auto-reply/envelope.js").resolveEnvelopeFormatOptions;
   };
   routing: {
@@ -186,10 +184,12 @@ export type PluginRuntimeChannel = {
   };
   inbound: {
     buildContext: typeof import("../../channels/inbound-event/context.js").buildChannelInboundEventContext;
-    run: typeof import("../../channels/turn/kernel.js").runChannelInboundEvent;
+    run: typeof import("../../channels/turn/run-channel-turn.js").runChannelTurn;
     /** @deprecated Prefer `run` for raw inbound events or `dispatchReply` for assembled contexts. */
-    runPreparedReply: typeof import("../../channels/turn/kernel.js").runPreparedInboundReply;
-    dispatchReply: typeof import("../../channels/turn/kernel.js").dispatchChannelInboundReply;
+    runPreparedReply: typeof import("../../channels/turn/execution.js").runPreparedChannelTurn;
+    dispatch: typeof import("../../channels/turn/lifecycle.js").dispatchRoutedChannelTurn;
+    /** Compatibility escape hatch; prefer `dispatch`, which keeps session wiring in core. */
+    dispatchReply: typeof import("../../channels/turn/lifecycle.js").dispatchAssembledChannelTurn;
   };
   threadBindings: {
     setIdleTimeoutBySessionKey: (params: {

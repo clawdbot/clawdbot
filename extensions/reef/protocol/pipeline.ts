@@ -157,6 +157,8 @@ export type InboundResult =
   | { disposition: "accepted"; body: MessageBody; verdict: Verdict; receipt: SignedReceipt }
   | { disposition: "duplicate"; body?: MessageBody; receipt: SignedReceipt };
 
+const REPLAY_CLAIM_HEARTBEAT_MS = 60_000;
+
 // Caller MUST ack the relay with receipt. For accepted or duplicate-accepted results, it MUST
 // idempotently deliver every present body to channel ingress, keyed by envelope id.
 export async function composeInbound(options: ComposeInboundOptions): Promise<InboundResult> {
@@ -171,6 +173,15 @@ export async function composeInbound(options: ComposeInboundOptions): Promise<In
   }
   let finalized = false;
   const peer = parseHandleEpoch(options.envelope.from).handle;
+  const refreshClaim = async () => {
+    await options.replayStore.refresh?.(peer, options.envelope.id);
+  };
+  const heartbeat = options.replayStore.refresh
+    ? setInterval(() => {
+        void refreshClaim().catch(() => undefined);
+      }, REPLAY_CLAIM_HEARTBEAT_MS)
+    : undefined;
+  heartbeat?.unref?.();
   try {
     const proposalHash = bodyHash(opened.body);
     const approvalDigest = computeApprovalDigest(
@@ -183,6 +194,7 @@ export async function composeInbound(options: ComposeInboundOptions): Promise<In
     );
     const checks = deterministicChecks(opened.body.text);
     if (!checks.allowed) {
+      await refreshClaim();
       await appendAudit(options.audit, "deterministic_verdict", {
         id: options.envelope.id,
         approvalDigest,
@@ -222,6 +234,7 @@ export async function composeInbound(options: ComposeInboundOptions): Promise<In
         error.stage === "guard" &&
         error.verdict?.decision === "deny"
       ) {
+        await refreshClaim();
         const receipt = await completeRejection(
           options,
           peer,
@@ -237,6 +250,7 @@ export async function composeInbound(options: ComposeInboundOptions): Promise<In
         error.stage === "review" &&
         error.reviewOutcome === "denied"
       ) {
+        await refreshClaim();
         const receipt = await completeRejection(
           options,
           peer,
@@ -256,6 +270,7 @@ export async function composeInbound(options: ComposeInboundOptions): Promise<In
       }
       throw error;
     }
+    await refreshClaim();
     const inboxEntry = await appendAudit(options.audit, "inbox", {
       id: options.envelope.id,
       bodyHash: proposalHash,
@@ -285,6 +300,10 @@ export async function composeInbound(options: ComposeInboundOptions): Promise<In
       await options.replayStore.release(peer, options.envelope.id);
     }
     throw error;
+  } finally {
+    if (heartbeat) {
+      clearInterval(heartbeat);
+    }
   }
 }
 

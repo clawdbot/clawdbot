@@ -22,7 +22,7 @@ is still open.
 The channel stack grew from several local fixes: separate inbound helpers per
 maturity level (`runtime.channel.inbound.run` for simple adapters,
 `runtime.channel.inbound.runPreparedReply` for rich ones), legacy reply-dispatch
-helpers (`dispatchInboundReplyWithBase`, `recordInboundSessionAndDispatchReply`),
+helpers such as `dispatchInboundReplyWithBase`,
 channel-specific preview streaming, and final-delivery durability bolted onto
 existing reply-payload paths. That shape produced too many public concepts and
 too many places where delivery semantics could drift.
@@ -47,22 +47,22 @@ platform state before replay.
 
 The internal domain lives in `src/channels/message/*`:
 
-| File                        | Owns                                                                                                               |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `types.ts`                  | Adapter, send-context, receipt, and durable-intent type contracts                                                  |
-| `send.ts`                   | `withDurableMessageSendContext` / `sendDurableMessageBatch` — the durable send context                             |
-| `receive.ts`                | `createMessageReceiveContext` — inbound ack-policy state machine                                                   |
-| `live.ts`                   | Live preview state and finalize-in-place-or-fall-back logic                                                        |
-| `state.ts`                  | `classifyDurableSendRecoveryState` — recovery classification after interruption                                    |
-| `receipt.ts`                | Normalizes platform send results into `MessageReceipt`                                                             |
-| `capabilities.ts`           | Derives required durable-final capabilities from a payload                                                         |
-| `contracts.ts`              | Contract-proof verification for declared adapter capabilities                                                      |
-| `adapter.ts`                | `defineChannelMessageAdapter`                                                                                      |
-| `outbound-bridge.ts`        | `createChannelMessageAdapterFromOutbound` — wraps legacy `sendText`/`sendMedia`/`sendPayload`/`sendPoll` functions |
-| `ingress-queue.ts`          | `createChannelIngressQueue` — durable inbound event queue                                                          |
-| `durable-receive.ts`        | `createDurableInboundReceiveJournal` — accept/pending/complete/release journal for inbound dedupe                  |
-| `inbound-reply-dispatch.ts` | `dispatchChannelInboundReply` and legacy-named wrappers                                                            |
-| `reply-pipeline.ts`         | `createChannelReplyPipeline`, reply-prefix and typing-callback helpers                                             |
+| File                   | Owns                                                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `types.ts`             | Adapter, send-context, receipt, and durable-intent type contracts                                                  |
+| `send.ts`              | `withDurableMessageSendContext` / `sendDurableMessageBatch` — the durable send context                             |
+| `receive.ts`           | `createMessageReceiveContext` — inbound ack-policy state machine                                                   |
+| `live.ts`              | Live preview state and finalize-in-place-or-fall-back logic                                                        |
+| `state.ts`             | `classifyDurableSendRecoveryState` — recovery classification after interruption                                    |
+| `receipt.ts`           | Normalizes platform send results into `MessageReceipt`                                                             |
+| `capabilities.ts`      | Derives required durable-final capabilities from a payload                                                         |
+| `contracts.ts`         | Contract-proof verification for declared adapter capabilities                                                      |
+| `adapter.ts`           | `defineChannelMessageAdapter`                                                                                      |
+| `outbound-bridge.ts`   | `createChannelMessageAdapterFromOutbound` — wraps legacy `sendText`/`sendMedia`/`sendPayload`/`sendPoll` functions |
+| `ingress-queue.ts`     | `createChannelIngressQueue` — durable inbound event queue                                                          |
+| `durable-receive.ts`   | `createDurableInboundReceiveJournal` — accept/pending/complete/release journal for inbound dedupe                  |
+| `../turn/lifecycle.ts` | Canonical assembled and routed channel-turn dispatch (lives in `src/channels/turn/`)                               |
+| `reply-pipeline.ts`    | `createChannelReplyPipeline`, reply-prefix and typing-callback helpers                                             |
 
 Public surface: `openclaw/plugin-sdk/channel-outbound` (send/receipt/durable/live/reply-pipeline
 helpers) and `openclaw/plugin-sdk/channel-inbound` (inbound context, `runChannelInboundEvent`,
@@ -151,7 +151,7 @@ a restart.
 The refactor absorbed or deprecated: `reply-runtime`, `reply-dispatch-runtime`,
 `reply-reference`, `reply-chunking`, `reply-payload` helpers exposed as public
 API, `inbound-reply-dispatch`, `channel-reply-pipeline`, and most public uses
-of `outbound-runtime`. `src/plugin-sdk/channel-message.ts` is now a
+of the old outbound facade. `src/plugin-sdk/channel-message.ts` is now a
 `@deprecated` re-export barrel pointing at `channel-outbound` /
 `channel-inbound`; `channel.turn` runtime aliases were removed and the old
 `/plugins/sdk-channel-turn` doc page redirects to

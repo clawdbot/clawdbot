@@ -16,7 +16,7 @@ Task Flow is the orchestration layer above [background tasks](/automation/tasks)
 | Single background job                     | Plain task                                  |
 | Multi-step pipeline driven by plugin code | Task Flow (managed)                         |
 | Detached ACP or subagent spawn            | Task Flow (mirrored, created automatically) |
-| One-shot reminder                         | Cron job                                    |
+| One-shot reminder                         | Automation job                              |
 
 ## Sync modes
 
@@ -88,15 +88,15 @@ Flows are also covered by `openclaw tasks audit` (stale or broken flow findings)
 
 For recurring workflows such as market intelligence briefings, treat the schedule, orchestration, and reliability checks as separate layers:
 
-1. Use [Scheduled Tasks](/automation/cron-jobs) for timing.
-2. Use a persistent cron session when the workflow should build on prior context.
+1. Use [Automations](/automation/cron-jobs) for timing.
+2. Use a persistent automation session when the workflow should build on prior context.
 3. Use [Lobster](/tools/lobster) for deterministic steps, approval gates, and resume tokens.
 4. Use Task Flow to track the multi-step run across child tasks, waits, retries, and gateway restarts.
 
-Example cron shape:
+Example automation job (`openclaw automations`; `openclaw cron` remains an alias):
 
 ```bash
-openclaw cron add \
+openclaw automations add \
   --name "Market intelligence brief" \
   --cron "0 7 * * 1-5" \
   --tz "America/New_York" \
@@ -138,7 +138,7 @@ Recommended preflight checks:
 - API credentials and quota for each source.
 - Network reachability for required endpoints.
 - Required tools enabled for the agent, such as `lobster`, `browser`, and `llm-task`.
-- Failure destination configured for cron so preflight failures are visible. See [Scheduled Tasks](/automation/cron-jobs#delivery-and-output).
+- Failure destination configured for the automation so preflight failures are visible. See [Automations](/automation/cron-jobs#delivery-and-output).
 
 Recommended data provenance fields for every collected item:
 
@@ -165,4 +165,4 @@ Flows coordinate tasks, not replace them. A single flow may drive multiple backg
 - [Background Tasks](/automation/tasks) - the detached work ledger that flows coordinate
 - [CLI: tasks](/cli/tasks) - CLI command reference for `openclaw tasks flow`
 - [Automation Overview](/automation) - all automation mechanisms at a glance
-- [Cron Jobs](/automation/cron-jobs) - scheduled jobs that may feed into flows
+- [Automations](/automation/cron-jobs) - scheduled jobs that may feed into flows

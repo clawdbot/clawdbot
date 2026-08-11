@@ -44,6 +44,17 @@
         "screenIndex"
       ]
     },
+    "mobile_ui": {
+      "emoji": "📱",
+      "title": "Mobile UI",
+      "detailKeys": [
+        "action",
+        "mobileAction",
+        "snapshotId",
+        "node",
+        "nodeId"
+      ]
+    },
     "screen": {
       "emoji": "🖥️",
       "title": "Screen",
@@ -274,6 +285,16 @@
         }
       }
     },
+    "dashboard": {
+      "emoji": "📋",
+      "title": "Dashboard",
+      "detailKeys": [
+        "action",
+        "tabId",
+        "name",
+        "title"
+      ]
+    },
     "nodes": {
       "emoji": "📱",
       "title": "Nodes",
@@ -336,6 +357,15 @@
             "facing",
             "duration",
             "durationMs"
+          ]
+        },
+        "camera_ptz": {
+          "label": "camera PTZ",
+          "detailKeys": [
+            "ptzOperation",
+            "node",
+            "nodeId",
+            "deviceId"
           ]
         },
         "screen_record": {
@@ -440,7 +470,14 @@
         "plan.0.step"
       ]
     },
-    "spawn_task": {
+    "ask_user": {
+      "emoji": "❓",
+      "title": "Ask User",
+      "detailKeys": [
+        "questions.0.question"
+      ]
+    },
+    "suggest_task": {
       "emoji": "✨",
       "title": "Suggest Task",
       "detailKeys": [
@@ -562,6 +599,29 @@
         "messageLimit"
       ]
     },
+    "conversations_list": {
+      "emoji": "💬",
+      "title": "Conversations",
+      "detailKeys": [
+        "channel",
+        "limit"
+      ]
+    },
+    "conversations_send": {
+      "emoji": "📨",
+      "title": "Conversation Send",
+      "detailKeys": [
+        "conversationRef"
+      ]
+    },
+    "conversations_turn": {
+      "emoji": "↔️",
+      "title": "Conversation Turn",
+      "detailKeys": [
+        "conversationRef",
+        "timeoutSeconds"
+      ]
+    },
     "sessions_send": {
       "emoji": "📨",
       "title": "Session Send",
@@ -644,6 +704,21 @@
         "thinking",
         "runTimeoutSeconds",
         "cleanup"
+      ]
+    },
+    "agents_wait": {
+      "emoji": "⏳",
+      "title": "Wait for Agents",
+      "detailKeys": [
+        "ids",
+        "timeoutSeconds"
+      ]
+    },
+    "structured_output": {
+      "emoji": "🧾",
+      "title": "Structured Output",
+      "detailKeys": [
+        "result"
       ]
     },
     "subagents": {
