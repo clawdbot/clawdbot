@@ -521,6 +521,27 @@ describe("lazy protocol validators", () => {
     ]);
   });
 
+  it("validates closed worker desktop app launch contracts", () => {
+    expectAccepted(protocol.validateWorkerDesktopLaunchParams, [
+      { environmentId: "worker:one", app: "browser" },
+      { environmentId: "worker:one", app: "terminal" },
+    ]);
+    expectRejected(protocol.validateWorkerDesktopLaunchParams, [
+      { environmentId: "", app: "browser" },
+      { environmentId: "worker:one", app: "editor" },
+      { environmentId: "worker:one", app: "browser", args: [] },
+    ]);
+    expectAccepted(protocol.validateWorkerDesktopLaunchResult, [
+      { app: "browser", status: "ready" },
+      { app: "terminal", status: "ready" },
+    ]);
+    expectRejected(protocol.validateWorkerDesktopLaunchResult, [
+      { app: "editor", status: "ready" },
+      { app: "browser", status: "starting" },
+      { app: "browser", status: "ready", executablePath: "/usr/bin/chromium" },
+    ]);
+  });
+
   it("validates chat sends that suppress command interpretation", () => {
     expectAccepted(validateChatSendParams, [
       {

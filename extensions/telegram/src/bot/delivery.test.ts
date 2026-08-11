@@ -2147,7 +2147,7 @@ describe("deliverReplies", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(firstMockCallArg(sendMessage, 1)).toBe("Rank | Model | Score\n4 | Claude Opus | 78.16%");
     expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("rich-degrade=plain-fallback:rich-entity-invalid"),
+      "telegram sendRichMessage degrade=plain-fallback:rich-entity-invalid: GrammyError: Call to 'sendRichMessage' failed! (400: Bad Request: RICH_MESSAGE_URL_INVALID)",
     );
   });
 

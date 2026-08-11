@@ -12,6 +12,7 @@ import {
 } from "../agents/agent-run-terminal-outcome.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isTimeoutError, resolveFailoverReasonFromError } from "../agents/failover-error.js";
+import type { FailoverReason } from "../agents/failover/signal.js";
 import { resolveToolSearchCodeDisplayTarget } from "../agents/tool-display-common.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
@@ -242,6 +243,25 @@ const CHAT_ERROR_KINDS = new Set<ChatErrorKind>([
   "unknown",
 ]);
 
+const CHAT_ERROR_KIND_BY_FAILOVER_REASON = {
+  auth: undefined,
+  auth_permanent: undefined,
+  format: undefined,
+  rate_limit: "rate_limit",
+  overloaded: "rate_limit",
+  billing: undefined,
+  server_error: undefined,
+  timeout: undefined,
+  tls_certificate: undefined,
+  context_overflow: "context_length",
+  model_not_found: undefined,
+  session_expired: undefined,
+  empty_response: undefined,
+  no_error_details: undefined,
+  unclassified: undefined,
+  unknown: undefined,
+} satisfies Record<FailoverReason, ChatErrorKind | undefined>;
+
 function readChatErrorKind(value: unknown): ChatErrorKind | undefined {
   return typeof value === "string" && CHAT_ERROR_KINDS.has(value as ChatErrorKind)
     ? (value as ChatErrorKind)
@@ -263,11 +283,11 @@ export function resolveChatErrorKindFromError(error: unknown): ChatErrorKind | u
     return "refusal";
   }
   const reason = resolveFailoverReasonFromError(error);
-  if (reason === "rate_limit" || reason === "overloaded") {
-    return "rate_limit";
-  }
-  if (reason === "context_overflow") {
-    return "context_length";
+  if (reason) {
+    const errorKind = CHAT_ERROR_KIND_BY_FAILOVER_REASON[reason];
+    if (errorKind) {
+      return errorKind;
+    }
   }
   // FailoverReason "timeout" is the retryable-transient bucket and deliberately
   // swallows generic 5xx; only genuinely timeout-shaped errors get the badge.

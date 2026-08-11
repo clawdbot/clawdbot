@@ -12,21 +12,21 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { SessionEntrySummary } from "./session-accessor.sqlite-contract.js";
-import { publishSqliteSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
-import { readSqliteSessionGenerationIdsForKeys } from "./session-accessor.sqlite-lifecycle-state.js";
+import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
+import { readSessionGenerationIdsForKeys } from "./session-accessor.sqlite-lifecycle-state.js";
 import {
   copySessionNodeArtifactsForRepair,
   deleteSessionMembersForRepair,
 } from "./session-accessor.sqlite-node-artifacts.js";
-import { collectSqliteSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
+import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import {
   getSessionKysely,
   resolveSqliteScope,
   resolveSqliteStoreScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { bindSqliteSessionWindowEntryProjection } from "./session-accessor.sqlite-session-row.js";
-import { parseSqliteSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import { bindSessionWindowEntryProjection } from "./session-accessor.sqlite-session-row.js";
+import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import type { SessionEntryListScope } from "./session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
 import {
@@ -80,7 +80,7 @@ export function readExactSessionEntryRowForCanonicalRepair(
       return undefined;
     }
   }
-  const parsedEntry = parseSqliteSessionEntryJson(row);
+  const parsedEntry = parseSessionEntryJson(row);
   if (!parsedEntry && !options.allowMalformedRowRepair) {
     throw canonicalSessionKeyMigrationRequiredError(
       `invalid persisted session row requires repair for ${sessionKey}`,
@@ -129,7 +129,7 @@ export function listSqliteSessionGenerationIdsForCanonicalRepair(params: {
 }): string[] {
   const source = resolveSqliteStoreScope(params.storePath, { agentId: params.agentId });
   const database = openOpenClawAgentDatabase(toDatabaseOptions(source));
-  return readSqliteSessionGenerationIdsForKeys(database, uniqueStrings(params.sourceKeys), {
+  return readSessionGenerationIdsForKeys(database, uniqueStrings(params.sourceKeys), {
     exactStoredKeys: true,
   });
 }
@@ -328,7 +328,7 @@ export function listSqliteSessionEntriesForCanonicalRepair(
       if (row.entry_json === "{}" && row.current_window_id === row.current_session_id) {
         return [];
       }
-      const persistedEntry = parseSqliteSessionEntryJson(row);
+      const persistedEntry = parseSessionEntryJson(row);
       const entry = persistedEntry ?? hydrateCanonicalRepairEntry(row);
       const lineageProjectionMismatch = Boolean(
         persistedEntry &&
@@ -369,7 +369,7 @@ function copySqliteSessionOwnedStateForRepair(params: {
   const sourceDb = getSessionKysely(params.source.db);
   const destinationDb = getSessionKysely(params.destination.db);
   const entrySessionIds = uniqueStrings(
-    params.sourceEntries.flatMap((entry) => [...collectSqliteSessionStateIdsForEntry(entry)]),
+    params.sourceEntries.flatMap((entry) => [...collectSessionStateIdsForEntry(entry)]),
   );
   const windows = executeSqliteQuerySync(
     params.source.db,
@@ -471,7 +471,7 @@ function copySqliteSessionOwnedStateForRepair(params: {
     }
   }
   const preferredWindowProjection = params.preferredEntry
-    ? bindSqliteSessionWindowEntryProjection({
+    ? bindSessionWindowEntryProjection({
         entry: params.preferredEntry,
         sessionKey: params.canonicalKey,
       })
@@ -528,7 +528,7 @@ function copySqliteSessionOwnedStateForRepair(params: {
       (params.preferredEntry?.sessionId === sessionId ? params.preferredEntry : undefined) ??
       params.sourceEntries.find((candidate) => candidate.sessionId === sessionId) ??
       params.sourceEntries.find((candidate) =>
-        new Set(collectSqliteSessionStateIdsForEntry(candidate)).has(sessionId),
+        new Set(collectSessionStateIdsForEntry(candidate)).has(sessionId),
       );
     const updatedAt = entry?.updatedAt ?? Date.now();
     const recoveryWindow = {
@@ -580,7 +580,7 @@ function copySqliteSessionOwnedStateForRepair(params: {
     // Search and active-event tables are derived from transcript_events; force their canonical rebuild.
     deleteSessionTranscriptIndexInTransaction(params.destination.db, sessionId);
     reconcileSessionTranscriptIndexInTransaction(params.destination.db, sessionId);
-    publishSqliteSessionEntryCacheInvalidation(params.destination);
+    publishSessionEntryCacheInvalidation(params.destination);
   }
   // Membership is authorization state and follows the selected winner. Boards,
   // suggestions, and heartbeat state merge by their own revision/id contracts.

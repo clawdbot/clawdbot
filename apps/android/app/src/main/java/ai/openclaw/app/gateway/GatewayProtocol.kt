@@ -155,6 +155,18 @@ data class WorkerDesktopObserveResult(
 )
 
 @Serializable
+data class WorkerDesktopLaunchParams(
+  val environmentId: String,
+  val app: String,
+)
+
+@Serializable
+data class WorkerDesktopLaunchResult(
+  val app: String,
+  val status: String = "ready",
+)
+
+@Serializable
 data class GatewayEventFrameStateVersion(
   val presence: Long,
   val health: Long,
@@ -405,6 +417,7 @@ enum class GatewayMethod(
   CronRun("cron.run"),
   CronRuns("cron.runs"),
   GatewayIdentityGet("gateway.identity.get"),
+  GatewayRestartPreflight("gateway.restart.preflight"),
   GatewayRestartRequest("gateway.restart.request"),
   SystemPresence("system-presence"),
   SystemEvent("system-event"),
@@ -517,6 +530,13 @@ enum class GatewayMethod(
   UpdateHold("update.hold"),
   SessionsCatalogStartTerminal("sessions.catalog.startTerminal"),
   WorkerDesktopObserve("worker.desktop.observe"),
+  ProjectsList("projects.list"),
+  ProjectsRegister("projects.register"),
+  ProjectsRemove("projects.remove"),
+  WorkerDesktopLaunch("worker.desktop.launch"),
+  SecretsStoreList("secrets.store.list"),
+  SecretsStoreSet("secrets.store.set"),
+  SecretsStoreDelete("secrets.store.delete"),
 }
 
 enum class GatewayEvent(

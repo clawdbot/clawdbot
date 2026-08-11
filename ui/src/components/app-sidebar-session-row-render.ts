@@ -10,6 +10,7 @@ import { t } from "../i18n/index.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
 import { formatDurationCompact } from "../lib/format.ts";
 import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
+import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
@@ -17,6 +18,7 @@ import type {
   CatalogBackingSessionDisplay,
   CatalogSessionMenuRequest,
 } from "./app-sidebar-session-catalogs.ts";
+import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
 import {
   rowDemandsVisibility,
   sidebarSessionMetaId,
@@ -105,11 +107,7 @@ export interface SessionListHost {
   handleSessionRowClick(event: MouseEvent, session: SidebarRecentSession): void;
   toggleSessionChildren(session: SidebarRecentSession): void;
   toggleSessionPin(session: SidebarRecentSession): void;
-  toggleSessionMenu(
-    session: SidebarRecentSession,
-    menuSession: SidebarRecentSession,
-    trigger: HTMLElement,
-  ): void;
+  toggleSessionMenu(session: SidebarRecentSession, trigger: HTMLElement): void;
   showMoreChildren(sessionKey: string): void;
   sectionDragOver(event: DragEvent, sectionId: string, group?: string): void;
   sectionDragLeave(event: DragEvent, sectionId: string, group?: string): void;
@@ -191,12 +189,19 @@ export function renderRecentSession(params: {
   const trailingDescription = session.isChild
     ? ""
     : describeSessionTrailingState(session, pullRequestState);
-  const meta = display?.meta ?? session.meta;
+  const meta = display?.meta ?? formatSidebarTimestamp(session.updatedAt);
   const rowMeta = session.pinned ? "" : meta;
   const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
   const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
   const stateId = trailingIndicator === nothing ? undefined : sidebarSessionStateId(session.key);
-  const menuSession = display ? { ...session, meta } : session;
+  const openMenuFromEvent = session.isChild
+    ? undefined
+    : (event: MouseEvent | KeyboardEvent) =>
+        handleContextMenuEvent(
+          event,
+          (event.currentTarget as HTMLElement).querySelector("[data-session-menu]"),
+          (trigger, x, y) => host.sidebarMenus.openSessionMenu(session, x, y, trigger),
+        );
   const title = [
     display?.title ?? [label, narration, rowMeta].filter(Boolean).join(" · "),
     trailingDescription,
@@ -257,18 +262,8 @@ export function renderRecentSession(params: {
         : () => {
             host.finishSessionDrag();
           }}
-      @contextmenu=${session.isChild
-        ? nothing
-        : (event: MouseEvent) => {
-            event.preventDefault();
-            const rowElement = event.currentTarget as HTMLElement;
-            const trigger =
-              rowElement.querySelector<HTMLElement>("[data-session-menu]") ??
-              (event.target instanceof Element
-                ? event.target.closest<HTMLElement>("a, button, [tabindex]")
-                : null);
-            host.sidebarMenus.openSessionMenu(menuSession, event.clientX, event.clientY, trigger);
-          }}
+      @contextmenu=${openMenuFromEvent ?? nothing}
+      @keydown=${openMenuFromEvent ?? nothing}
       @mouseenter=${(event: MouseEvent) => startHoverMarquee(event.currentTarget as HTMLElement)}
       @mouseleave=${(event: MouseEvent) => stopHoverMarquee(event.currentTarget as HTMLElement)}
     >
@@ -374,7 +369,7 @@ export function renderRecentSession(params: {
                   ? html`<openclaw-elapsed-time
                       .startMs=${session.runtimeSampledAt! - session.runtimeMs}
                     ></openclaw-elapsed-time>`
-                  : (formatDurationCompact(session.runtimeMs, { spaced: true }) ?? "0ms")
+                  : (formatDurationCompact(session.runtimeMs) ?? "0ms")
                 : html`<openclaw-elapsed-time
                     .startMs=${session.startedAt!}
                     .endMs=${session.endedAt ?? null}
@@ -406,7 +401,7 @@ export function renderRecentSession(params: {
                 @click=${(event: MouseEvent) => {
                   event.stopPropagation();
                   const trigger = event.currentTarget as HTMLElement;
-                  host.toggleSessionMenu(session, menuSession, trigger);
+                  host.toggleSessionMenu(session, trigger);
                 }}
               >
                 ${icons.moreHorizontal}

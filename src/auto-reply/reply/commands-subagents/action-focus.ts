@@ -20,13 +20,13 @@ import {
 } from "../../../channels/thread-bindings-policy.js";
 import { normalizeConversationRef } from "../../../infra/outbound/session-binding-normalization.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
+import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { resolveConversationBindingContextFromAcpCommand } from "../conversation-binding-input.js";
 import {
   type SubagentsCommandContext,
   resolveCommandSubagentController,
   resolveFocusTargetSession,
-  stopWithText,
 } from "./shared.js";
 
 type FocusBindingContext = {
@@ -74,17 +74,17 @@ export async function handleSubagentsFocusAction(
   const { params, runs, restTokens } = ctx;
   const token = restTokens.join(" ").trim();
   if (!token) {
-    return stopWithText("Usage: /focus <subagent-label|session-key|session-id|session-label>");
+    return commandReply("Usage: /focus <subagent-label|session-key|session-id|session-label>");
   }
 
   const controller = resolveCommandSubagentController(params, ctx.requesterKey);
   if (controller.controlScope !== "children") {
-    return stopWithText("⚠️ Leaf subagents cannot control other sessions.");
+    return commandReply("⚠️ Leaf subagents cannot control other sessions.");
   }
 
   const bindingContext = resolveFocusBindingContext(params);
   if (!bindingContext) {
-    return stopWithText("⚠️ /focus must be run inside a bindable conversation.");
+    return commandReply("⚠️ /focus must be run inside a bindable conversation.");
   }
 
   const bindingService = getSessionBindingService();
@@ -93,7 +93,7 @@ export async function handleSubagentsFocusAction(
     accountId: bindingContext.accountId,
   });
   if (!capabilities.adapterAvailable || !capabilities.bindSupported) {
-    return stopWithText("⚠️ Conversation bindings are unavailable for this account.");
+    return commandReply("⚠️ Conversation bindings are unavailable for this account.");
   }
 
   const focusTarget = await resolveFocusTargetSession({
@@ -102,7 +102,7 @@ export async function handleSubagentsFocusAction(
     requesterKey: controller.controllerSessionKey,
   });
   if (!focusTarget) {
-    return stopWithText(`⚠️ Unable to resolve focus target: ${token}`);
+    return commandReply(`⚠️ Unable to resolve focus target: ${token}`);
   }
 
   if (bindingContext.placement === "child") {
@@ -113,7 +113,7 @@ export async function handleSubagentsFocusAction(
       kind: "subagent",
     });
     if (!spawnPolicy.enabled) {
-      return stopWithText(
+      return commandReply(
         `⚠️ ${formatThreadBindingDisabledError({
           channel: spawnPolicy.channel,
           accountId: spawnPolicy.accountId,
@@ -122,7 +122,7 @@ export async function handleSubagentsFocusAction(
       );
     }
     if (bindingContext.placement === "child" && !spawnPolicy.spawnEnabled) {
-      return stopWithText(
+      return commandReply(
         `⚠️ ${formatThreadBindingSpawnDisabledError({
           channel: spawnPolicy.channel,
           accountId: spawnPolicy.accountId,
@@ -145,7 +145,7 @@ export async function handleSubagentsFocusAction(
       ? existingBinding.metadata.boundBy.trim()
       : "";
   if (existingBinding && boundBy && boundBy !== "system" && senderId && senderId !== boundBy) {
-    return stopWithText(`⚠️ Only ${boundBy} can refocus this conversation.`);
+    return commandReply(`⚠️ Only ${boundBy} can refocus this conversation.`);
   }
 
   const label = focusTarget.label || token;
@@ -158,7 +158,7 @@ export async function handleSubagentsFocusAction(
         })?.acp
       : undefined;
   if (!capabilities.placements.includes(bindingContext.placement)) {
-    return stopWithText("⚠️ Conversation bindings are unavailable for this account.");
+    return commandReply("⚠️ Conversation bindings are unavailable for this account.");
   }
 
   let binding;
@@ -206,12 +206,12 @@ export async function handleSubagentsFocusAction(
       },
     });
   } catch {
-    return stopWithText("⚠️ Failed to bind this conversation to the target session.");
+    return commandReply("⚠️ Failed to bind this conversation to the target session.");
   }
 
   const actionText =
     bindingContext.placement === "child"
       ? `created child conversation ${binding.conversation.conversationId} and bound it to ${binding.targetSessionKey}`
       : `bound this conversation to ${binding.targetSessionKey}`;
-  return stopWithText(`✅ ${actionText} (${focusTarget.targetKind}).`);
+  return commandReply(`✅ ${actionText} (${focusTarget.targetKind}).`);
 }

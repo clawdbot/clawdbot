@@ -18,7 +18,7 @@ import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { createNodeTestShards } from "../../scripts/lib/ci-node-test-plan.mts";
+import { createVitestCacheWarmGroups } from "../../scripts/lib/ci-node-test-plan.mts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-app-i18n.ts";
 import { SUPPORTED_LOCALES } from "../../ui/src/i18n/lib/registry.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -181,6 +181,7 @@ function runCiManifestFixture(options: {
   qaSmokePlan?: boolean;
   formatCheck?: boolean;
   releaseCandidateCompatibility?: boolean;
+  targetContextCompatibility?: boolean;
   nodeFastOnly?: boolean;
   nodeFastPluginContracts?: boolean;
   nodeFastCiRouting?: boolean;
@@ -325,6 +326,8 @@ function runCiManifestFixture(options: {
             : "false",
         OPENCLAW_CI_RELEASE_CANDIDATE_TARGET:
           options.releaseCandidateCompatibility === true ? "true" : "false",
+        OPENCLAW_CI_TARGET_CONTEXT_TARGET:
+          options.targetContextCompatibility === true ? "true" : "false",
         OPENCLAW_CI_REPOSITORY: "openclaw/openclaw",
         OPENCLAW_CI_RUN_ANDROID: "true",
         OPENCLAW_CI_RUN_CONTROL_UI_I18N: "true",
@@ -355,6 +358,36 @@ function runCiManifestFixture(options: {
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
+}
+
+function runTargetContextValidation(targetContextRef: string, targetRef: string) {
+  const root = tempDirs.make("openclaw-ci-target-context-");
+  const outputPath = path.join(root, "github-output");
+  writeFileSync(outputPath, "", "utf8");
+  const step = expectDefined(
+    readCiWorkflow().jobs.preflight.steps.find(
+      (candidate: WorkflowStep) => candidate.name === "Validate target context",
+    ),
+    "target context validation step",
+  );
+  const run = spawnSync(
+    "bash",
+    ["-c", expectDefined(step.run, "target context validation script")],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GITHUB_OUTPUT: outputPath,
+        TARGET_CONTEXT_REF: targetContextRef,
+        TARGET_REF: targetRef,
+      },
+    },
+  );
+  return {
+    output: `${run.stdout}${run.stderr}`,
+    outputs: readWorkflowOutputs(outputPath),
+    status: run.status,
+  };
 }
 
 function readAndroidReleaseWorkflow() {
@@ -472,12 +505,7 @@ function readQaProfileEvidenceWorkflow() {
   return parse(readFileSync(".github/workflows/qa-profile-evidence.yml", "utf8"));
 }
 
-type QaProfileTimeoutFixtureMode =
-  | "natural-124"
-  | "self-kill"
-  | "supervisor-term"
-  | "term"
-  | "kill";
+type QaProfileTimeoutFixtureMode = "natural-124" | "self-kill" | "term" | "kill";
 
 function runQaProfileTimeoutFixture(mode: QaProfileTimeoutFixtureMode) {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-qa-profile-timeout-"));
@@ -498,10 +526,6 @@ case "\${FAKE_PNPM_MODE}" in
     ;;
   self-kill)
     kill -KILL "$$"
-    ;;
-  supervisor-term)
-    : > "$SUPERVISOR_READY_FILE"
-    while :; do sleep 0.01; done
     ;;
   term)
     trap 'exit 0' TERM
@@ -535,30 +559,9 @@ esac
       "Run QA profile step",
     );
     let script = runProfileStep.run
-      .replace("--kill-after=30s 110m", "--kill-after=0.5s 1s")
-      .replaceAll("110 minutes", "1 second")
-      .replaceAll("30-second", "0.5-second");
-    if (mode === "supervisor-term") {
-      const timeoutCommandTail = '  3>&2 2>"$timeout_supervisor_fifo" || qa_exit_code=$?';
-      const signaledTimeoutCommandTail = `  3>&2 2>"$timeout_supervisor_fifo" &
-timeout_supervisor_pid=$!
-(
-  for _ in {1..100}; do
-    [[ -e "$SUPERVISOR_READY_FILE" ]] && break
-    sleep 0.01
-  done
-  [[ -e "$SUPERVISOR_READY_FILE" ]]
-  kill -TERM "$timeout_supervisor_pid"
-) &
-timeout_signaler_pid=$!
-wait "$timeout_supervisor_pid" || qa_exit_code=$?
-wait "$timeout_signaler_pid"`;
-      const signaledScript = script.replace(timeoutCommandTail, signaledTimeoutCommandTail);
-      if (signaledScript === script) {
-        throw new Error("QA timeout fixture could not instrument the timeout supervisor");
-      }
-      script = signaledScript;
-    }
+      .replace("--kill-after=30s 110m", "--kill-after=0.05s 0.4s")
+      .replaceAll("110 minutes", "0.4 seconds")
+      .replaceAll("30-second", "0.05-second");
     const timeoutSupervisorCapture = path.join(root, "timeout-supervisor.log");
     const timeoutClassificationStart = `supervisor_tee_pid=""
 
@@ -590,7 +593,6 @@ timeout_outcome="none"`,
         PROTOCOL_SINCE_BASE_SHA: "b".repeat(40),
         QA_PROFILE: "all",
         REQUESTED_REF: "fixture",
-        SUPERVISOR_READY_FILE: path.join(root, "supervisor-ready"),
         TARGET_SHA: "a".repeat(40),
         TIMEOUT_SUPERVISOR_CAPTURE: timeoutSupervisorCapture,
       },
@@ -782,12 +784,19 @@ function writeExecutable(filePath: string, lines: string[]): void {
 
 function writeProtocolDescriptor(
   repo: string,
-  additions: Array<{ name: string; since?: string }> = [],
+  additions: Array<{
+    name: string;
+    since?: string;
+    compatibilityRestored?: boolean;
+  }> = [],
 ): void {
-  const rows = [{ name: "health", since: "2026.7" }, ...additions].map(({ name, since }) => {
-    const sinceProperty = since === undefined ? "" : `, since: ${JSON.stringify(since)}`;
-    return `  { name: ${JSON.stringify(name)}${sinceProperty} },`;
-  });
+  const rows = [{ name: "health", since: "2026.7" }, ...additions].map(
+    ({ name, since, compatibilityRestored }) => {
+      const sinceProperty = since === undefined ? "" : `, since: ${JSON.stringify(since)}`;
+      const compatibilityProperty = compatibilityRestored ? ", compatibilityRestored: true" : "";
+      return `  { name: ${JSON.stringify(name)}${sinceProperty}${compatibilityProperty} },`;
+    },
+  );
   const descriptor = path.join(repo, "src/gateway/methods/core-descriptors.ts");
   mkdirSync(path.dirname(descriptor), { recursive: true });
   writeFileSync(
@@ -827,6 +836,29 @@ function createQaProtocolTopology() {
   writeFileSync(path.join(origin, "main-tip.txt"), "later main tip\n");
   commitProtocolFixture(origin, "advance main");
 
+  runGit(origin, ["checkout", "-q", "-b", "compatibility/restore", mainBase]);
+  writeProtocolDescriptor(origin, [
+    {
+      name: "gateway.restart.preflight",
+      since: "<=2026.7",
+      compatibilityRestored: true,
+    },
+  ]);
+  const compatibilityHead = commitProtocolFixture(origin, "restore compatibility method");
+
+  runGit(origin, ["checkout", "-q", "-b", "compatibility/invalid", mainBase]);
+  writeProtocolDescriptor(origin, [
+    {
+      name: "gateway.restart.invalid",
+      since: "2026.8",
+      compatibilityRestored: true,
+    },
+  ]);
+  const invalidCompatibilityHead = commitProtocolFixture(
+    origin,
+    "mislabel new method as compatibility",
+  );
+
   runGit(origin, ["checkout", "-q", "-b", releaseBranch, mainBase]);
   writeProtocolDescriptor(origin, [{ name: "sessions.releaseOnly" }]);
   const releaseHead = commitProtocolFixture(origin, "add release protocol method");
@@ -848,8 +880,10 @@ function createQaProtocolTopology() {
 
   return {
     checkout,
+    compatibilityHead,
     fakeBin,
     featureHead,
+    invalidCompatibilityHead,
     mainBase,
     mainHead,
     mainReleaseTag,
@@ -938,7 +972,11 @@ function runProtocolSinceFixture(checkout: string, baseSha: string) {
   });
 }
 
-function runDependencyCheckFixture(options: { historicalTarget: boolean; scripts: string[] }): {
+function runDependencyCheckFixture(options: {
+  historicalTarget: boolean;
+  releaseToolingEntry?: boolean;
+  scripts: string[];
+}): {
   calls: string[];
   output: string;
   status: number | null;
@@ -954,9 +992,23 @@ function runDependencyCheckFixture(options: { historicalTarget: boolean; scripts
         scripts: Object.fromEntries(options.scripts.map((name) => [name, "true"])),
       })}\n`,
     );
+    if (options.releaseToolingEntry) {
+      mkdirSync(path.join(root, "config"), { recursive: true });
+      mkdirSync(path.join(root, "scripts"), { recursive: true });
+      writeFileSync(
+        path.join(root, "config/knip.config.ts"),
+        "const repositoryScriptEntries = [\n] as const;\n",
+      );
+      writeFileSync(path.join(root, "scripts/generate-dependency-release-evidence.mts"), "");
+    }
     writeExecutable(path.join(fakeBin, "pnpm"), [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
+      'if [ "${EXPECT_RELEASE_TOOLING_ENTRY:-false}" = "true" ] &&',
+      "  ! grep -Fq '\"scripts/generate-dependency-release-evidence.mts!\"' config/knip.config.ts; then",
+      '  echo "release-only helper is missing from Knip entries" >&2',
+      "  exit 1",
+      "fi",
       'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
     ]);
     const checkShardRun = readCiWorkflow().jobs["check-shard"].steps.find(
@@ -967,6 +1019,8 @@ function runDependencyCheckFixture(options: { historicalTarget: boolean; scripts
       encoding: "utf8",
       env: {
         ...process.env,
+        EXPECT_RELEASE_TOOLING_ENTRY: options.releaseToolingEntry ? "true" : "false",
+        FROZEN_TARGET: options.historicalTarget ? "true" : "false",
         FORMAT_CHECK: "false",
         HISTORICAL_TARGET: options.historicalTarget ? "true" : "false",
         PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
@@ -1098,20 +1152,20 @@ function runGeneratedPublisherScenario(
       writeFileSync(prState, "", "utf8");
       runGit(worktree, ["switch", "main"]);
     }
-    runGit(root, ["clone", "--branch", "main", origin, updater]);
-    runGit(updater, ["config", "user.name", "Base Updater"]);
-    runGit(updater, ["config", "user.email", "updater@example.com"]);
-    if (baseChangePath !== null) {
-      writeFileSync(
-        path.join(updater, "generated", `${baseChangePath}.txt`),
-        `newer-${baseChangePath}\n`,
-        "utf8",
-      );
-    }
-    if (options.updateSource) {
-      writeFileSync(path.join(updater, "source", "input.txt"), "newer-input\n", "utf8");
-    }
     if (baseChangePath !== null || options.updateSource) {
+      runGit(root, ["clone", "--branch", "main", origin, updater]);
+      runGit(updater, ["config", "user.name", "Base Updater"]);
+      runGit(updater, ["config", "user.email", "updater@example.com"]);
+      if (baseChangePath !== null) {
+        writeFileSync(
+          path.join(updater, "generated", `${baseChangePath}.txt`),
+          `newer-${baseChangePath}\n`,
+          "utf8",
+        );
+      }
+      if (options.updateSource) {
+        writeFileSync(path.join(updater, "source", "input.txt"), "newer-input\n", "utf8");
+      }
       runGit(updater, ["add", "generated", "source"]);
       runGit(updater, ["commit", "-m", "update base"]);
       runGit(updater, ["push", "origin", "main"]);
@@ -1138,18 +1192,7 @@ function runGeneratedPublisherScenario(
       ]);
     }
 
-    writeExecutable(path.join(fakeBin, "timeout"), [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      'while [[ "$#" -gt 0 ]]; do',
-      '  case "$1" in',
-      "    --signal=*|--kill-after=*) shift ;;",
-      "    [0-9]*s) shift; break ;;",
-      "    *) break ;;",
-      "  esac",
-      "done",
-      'exec "$@"',
-    ]);
+    writeExecutable(path.join(fakeBin, "sleep"), ["#!/bin/sh", "exit 0"]);
     writeExecutable(path.join(fakeBin, "gh"), [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
@@ -1191,9 +1234,21 @@ function runGeneratedPublisherScenario(
     ]);
 
     const action = parse(readFileSync(PUBLISH_GENERATED_PR_ACTION, "utf8"));
-    const publishRun = action.runs.steps.find(
+    const actionRun = action.runs.steps.find(
       (step: { name?: string }) => step.name === "Publish generated pull request",
     ).run;
+    expect(actionRun).toContain("timeout --signal=TERM --kill-after=10s");
+    const publishRun = `timeout() {
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --signal=*|--kill-after=*) shift ;;
+      [0-9]*s) shift; break ;;
+      *) break ;;
+    esac
+  done
+  "$@"
+}
+${actionRun}`;
     const publish = spawnSync("bash", ["-c", publishRun], {
       cwd: worktree,
       encoding: "utf8",
@@ -1363,6 +1418,18 @@ NODE
     expect(activityRun).toMatch(
       /push: \(if \$event_name == "push" then \{\s+before: \.before,\s+after: \.after,\s+ref: \.ref,\s+compare: \.compare,\s+head_commit: \.head_commit\.id\s+\} else null end\)/u,
     );
+
+    const exactReviewStep = expectDefined(
+      steps.find((step) => step.name === "Dispatch exact ClawSweeper review"),
+      "ClawSweeper exact-review dispatch",
+    );
+    expect(exactReviewStep.env?.TARGET_BRANCH).toBe(
+      "${{ github.event.repository.default_branch }}",
+    );
+    expect(exactReviewStep.run).toContain('--arg target_branch "$TARGET_BRANCH"');
+    expect(exactReviewStep.run).toContain("target_branch:$target_branch");
+    expect(exactReviewStep.run).toContain('ingress_route:"target_dispatcher"');
+    expect(exactReviewStep.run).toContain("ingress_fingerprint:$ingress_fingerprint");
   });
 
   it("runs the PR context and evidence gate only for relevant PR changes", () => {
@@ -2294,29 +2361,6 @@ NODE
   );
 
   it.skipIf(process.platform === "win32")(
-    "defers instead of overwriting a newer overlapping generated path",
-    () => {
-      const result = runGeneratedPublisherScenario("a");
-
-      expect(result.branchExists).toBe(false);
-      expect(result.summary).toContain(
-        "Deferred stale generated output because owned generated paths changed on main.",
-      );
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "retries a stale pull request head read after the branch push",
-    () => {
-      const result = runGeneratedPublisherScenario(null, { stalePrHeadOnce: true });
-
-      expect(result.branchExists).toBe(true);
-      expect(result.generatedA).toBe("desired-a");
-      expect(result.summary).toContain("https://github.com/openclaw/openclaw/pull/1");
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
     "defers stale generator inputs and neutralizes an existing pull request",
     () => {
       const result = runGeneratedPublisherScenario(null, {
@@ -2376,33 +2420,21 @@ NODE
         "::error::Refusing stale generated output because generator inputs changed on main.",
       );
 
-      const noPr = runGeneratedPublisherScenario(null, {
-        expectFailure: true,
-        noGeneratedChange: true,
-        overlapPolicy: "fail",
-        updateSource: true,
+      const publishRun = parse(readFileSync(PUBLISH_GENERATED_PR_ACTION, "utf8")).runs.steps.find(
+        (step: { name?: string }) => step.name === "Publish generated pull request",
+      ).run;
+      const invalidPolicy = spawnSync("bash", ["-c", publishRun], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          AUTO_MERGE: "false",
+          CONTENTS_TOKEN: "contents-token",
+          GH_TOKEN: "pull-request-token",
+          OVERLAP_POLICY: "continue",
+        },
       });
-      expect(noPr.branchExists).toBe(false);
-      expect(noPr.publishOutput).toContain(
-        "::error::Refusing stale generated output because generator inputs changed on main.",
-      );
-
-      const unchangedOverlap = runGeneratedPublisherScenario("b", {
-        expectFailure: true,
-        noGeneratedChange: true,
-        overlapPolicy: "fail",
-      });
-      expect(unchangedOverlap.branchExists).toBe(false);
-      expect(unchangedOverlap.publishOutput).toContain(
-        "::error::Refusing stale generated output because owned generated paths changed on main.",
-      );
-
-      const invalidPolicy = runGeneratedPublisherScenario("b", {
-        expectFailure: true,
-        overlapPolicy: "continue",
-      });
-      expect(invalidPolicy.branchExists).toBe(false);
-      expect(invalidPolicy.publishOutput).toContain(
+      expect(invalidPolicy.status).not.toBe(0);
+      expect(`${invalidPolicy.stdout}${invalidPolicy.stderr}`).toContain(
         "Generated PR publication overlap policy must be 'defer' or 'fail'.",
       );
     },
@@ -2571,6 +2603,58 @@ NODE
     );
   });
 
+  it("validates frozen target context without binding it to the live branch head", () => {
+    const workflow = readCiWorkflow();
+    const input = workflow.on.workflow_dispatch.inputs.target_context_ref;
+    const step = expectDefined(
+      workflow.jobs.preflight.steps.find(
+        (candidate: WorkflowStep) => candidate.name === "Validate target context",
+      ),
+      "target context validation step",
+    );
+    const targetSha = "a".repeat(40);
+
+    expect(input).toEqual({
+      description:
+        "Canonical release branch context authorizing compatibility fallbacks for an exact-SHA target",
+      required: false,
+      default: "",
+      type: "string",
+    });
+    expect(step.if).toBe("inputs.target_context_ref != ''");
+    expect(step.run).not.toContain("ls-remote");
+    expect(step.run).not.toContain("EXPECTED_SHA");
+    expect(step.run).not.toContain("git ");
+
+    for (const contextRef of ["release/2026.8.1", "extended-stable/2026.8.33"]) {
+      const result = runTargetContextValidation(contextRef, targetSha);
+      expect(result.status, `${contextRef}: ${result.output}`).toBe(0);
+      expect(result.outputs.eligible).toBe("true");
+    }
+
+    for (const contextRef of [
+      "v2026.8.1",
+      "main",
+      "release-ci/2026.8.1-beta.2-frozen",
+      "release/2026.8",
+      "refs/heads/release/2026.8.1",
+    ]) {
+      const result = runTargetContextValidation(contextRef, targetSha);
+      expect(result.status, contextRef).toBe(1);
+      expect(result.output).toContain(
+        "target_context_ref must be a canonical OpenClaw release branch.",
+      );
+    }
+
+    for (const targetRef of ["main", "a".repeat(39)]) {
+      const result = runTargetContextValidation("release/2026.8.1", targetRef);
+      expect(result.status, targetRef).toBe(1);
+      expect(result.output).toContain(
+        "target_context_ref requires target_ref to be a full commit SHA.",
+      );
+    }
+  });
+
   it("loads Android CI setup from the workflow revision for frozen targets", () => {
     const steps = readCiWorkflow().jobs.android.steps as WorkflowStep[];
     const checkoutIndex = steps.findIndex((step) => step.name === "Checkout");
@@ -2606,29 +2690,67 @@ NODE
   it("covers Android app variants, lint, and benchmark compilation", () => {
     const workflow = readCiWorkflow();
     const source = readFileSync(".github/workflows/ci.yml", "utf8");
-    const runStep = workflow.jobs.android.steps.find(
-      (step: WorkflowStep) => step.name === "Run Android ${{ matrix.task }}",
+    const androidJob = workflow.jobs.android;
+    const runStep = expectDefined(
+      androidJob.steps.find((step: WorkflowStep) => step.name === "Run Android ${{ matrix.task }}"),
+      "Android task runner",
     );
     const nativeResourcesSetup = expectDefined(
-      workflow.jobs.android.steps.find(
+      androidJob.steps.find(
         (step: WorkflowStep) => step.name === "Setup Node environment for native resources",
       ),
       "Android native resources Node setup",
     );
+    const buildPlayCase = expectDefined(
+      runStep.run?.match(/^\s*build-play\)\n([\s\S]*?)^\s*;;$/mu)?.[1],
+      "Android build-play case",
+    );
+    const buildPlayBranches = expectDefined(
+      buildPlayCase.match(
+        /if \[ "\$GITHUB_EVENT_NAME" = "workflow_dispatch" \]; then\n([\s\S]*?)\n\s*else\n([\s\S]*?)\n\s*fi/u,
+      ),
+      "Android build-play event branches",
+    );
+    const dispatchBuild = expectDefined(buildPlayBranches[1], "hosted dispatch build branch");
+    const blacksmithBuild = expectDefined(buildPlayBranches[2], "Blacksmith build branch");
+    const readTasks = (script: string) =>
+      [...script.matchAll(/^\s+(:[a-z][A-Za-z0-9:-]*)\s*\\?$/gmu)].map((match) => match[1]);
+    const dispatchTasks = readTasks(dispatchBuild);
+    const blacksmithTasks = readTasks(blacksmithBuild);
 
     expect(source).toContain('task: useCompatibleAndroidCi ? "test-play-compat" : "test-play"');
     expect(source).toContain(
       '{ check_name: "android-test-third-party", task: "test-third-party" }',
     );
-    expect(source).toContain('check_name: "android-build-play"');
+    expect(source.match(/check_name: "android-build-play"/gu)).toHaveLength(1);
     expect(source).toContain('task: useCompatibleAndroidCi ? "build-play-compat" : "build-play"');
+    expect(androidJob.name).toBe("${{ matrix.check_name }}");
+    expect(androidJob["runs-on"]).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
+    );
     expect(runStep.run).toContain(":app:testPlayDebugUnitTest");
     expect(runStep.run).toContain(":app:testThirdPartyDebugUnitTest");
-    expect(runStep.run).toContain(":app:assemblePlayDebug");
-    expect(runStep.run).toContain(":app:assembleThirdPartyDebug");
-    expect(runStep.run).toContain(":app:lintPlayDebug");
-    expect(runStep.run).toContain(":app:lintThirdPartyDebug");
-    expect(runStep.run).toContain(":benchmark:assembleDebug");
+    expect(dispatchBuild.match(/^\s*\.\/gradlew\b/gmu)).toHaveLength(3);
+    expect(dispatchTasks).toEqual([
+      ":app:assemblePlayDebug",
+      ":app:lintPlayDebug",
+      ":app:assembleThirdPartyDebug",
+      ":app:lintThirdPartyDebug",
+      ":benchmark:assembleDebug",
+      ":wear-shared:assembleDebug",
+      ":wear-shared:lintDebug",
+    ]);
+    expect(new Set(dispatchTasks).size).toBe(dispatchTasks.length);
+    expect(blacksmithBuild.match(/^\s*\.\/gradlew\b/gmu)).toHaveLength(1);
+    expect(blacksmithTasks).toEqual([
+      ":app:assemblePlayDebug",
+      ":app:assembleThirdPartyDebug",
+      ":app:lintPlayDebug",
+      ":app:lintThirdPartyDebug",
+      ":benchmark:assembleDebug",
+      ":wear-shared:assembleDebug",
+      ":wear-shared:lintDebug",
+    ]);
     expect(nativeResourcesSetup.uses).toBe("./.github/actions/setup-node-env");
     expect(nativeResourcesSetup.if).toBe(
       "needs.preflight.outputs.use_compatible_android_ci != 'true'",
@@ -3043,6 +3165,15 @@ NODE
       OPENCLAW_BUILD_PRIVATE_QA: "1",
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
     });
+    const targetedGroupStep = releaseChecks.jobs.plan_docker_lane_groups.steps.find(
+      (step: WorkflowStep) => step.name === "Build targeted Docker lane groups",
+    );
+    expect(targetedGroupStep.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS).toBe(
+      "${{ inputs.published_upgrade_survivor_scenarios }}",
+    );
+    expect(releaseChecks.jobs.validate_docker_lanes["timeout-minutes"]).toBe(
+      "${{ matrix.group.timeout_minutes || 60 }}",
+    );
   });
 
   it("persists Node 22 declarations through trusted bounded artifacts", () => {
@@ -3483,17 +3614,12 @@ NODE
     expect(warmer.on).not.toHaveProperty("workflow_run");
     expect(checkoutStep.with).toBeUndefined();
     expect(warmerSource).toContain('cron: "17 8 * * *"');
-    expect(warmerSource).toContain('candidate.shardName.startsWith("core-unit-fast")');
-    expect(warmerSource).toContain('"agentic-agents-embedded"');
-    expect(warmerSource).toContain('"agentic-gateway-methods"');
-    expect(warmerSource).toContain('"auto-reply-reply-commands-3"');
-    expect(warmerSource).toContain("const groups = shards.flatMap((shard) =>");
-    expect(warmerSource).toContain("configs: [config]");
-    expect(warmerSource).toContain("...(shard.env ? { env: shard.env } : {})");
-    expect(warmerSource).toContain(
-      "...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {})",
+    expect(seedStep.run).toContain(
+      'import { createVitestCacheWarmGroups } from "./scripts/lib/ci-node-test-plan.mts";',
     );
-    expect(warmerSource).toContain("`OPENCLAW_NODE_TEST_GROUPS_JSON=${JSON.stringify(groups)}`");
+    expect(seedStep.run).toMatch(
+      /const groups = createVitestCacheWarmGroups\(\);[\s\S]*appendFileSync\(\s*process\.env\.GITHUB_ENV,[\s\S]*OPENCLAW_NODE_TEST_GROUPS_JSON=\$\{JSON\.stringify\(groups\)\}/u,
+    );
     expect(warmerSource).not.toContain("OPENCLAW_NODE_TEST_CONFIGS_JSON");
     expect(warmerSource).toContain('"OPENCLAW_NODE_TEST_PLAN_CONCURRENCY=1"');
     expect(warmerSetup.with).toMatchObject({
@@ -3512,107 +3638,48 @@ NODE
     expect(maintainStoreStep).toBeUndefined();
     expect(maintainStickyStoreStep.env.OPENCLAW_PNPM_STORE_MAX_KIB).toBe("8388608");
 
-    const seedRoot = mkdtempSync(path.join(tmpdir(), "openclaw-cache-seed-"));
-    try {
-      const envPath = path.join(seedRoot, "github-env");
-      const result = runWorkflowShellScript(seedStep.run, {
-        env: {
-          ...process.env,
-          GITHUB_ENV: envPath,
-        },
-      });
-      expect(result.status, result.stderr).toBe(0);
-      const seedEnv = Object.fromEntries(
-        readFileSync(envPath, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => {
-            const separator = line.indexOf("=");
-            return [line.slice(0, separator), line.slice(separator + 1)];
-          }),
-      );
-      const serializedGroups = seedEnv.OPENCLAW_NODE_TEST_GROUPS_JSON;
-      if (!serializedGroups) {
-        throw new Error("cache warmer did not export OPENCLAW_NODE_TEST_GROUPS_JSON");
-      }
-      const groups = JSON.parse(serializedGroups) as Array<{
-        configs: string[];
-        env?: Record<string, string>;
-        includePatterns?: string[];
-        shard_name: string;
-      }>;
-      const selectedShardNames = new Set([
-        "agentic-agents-embedded",
-        "agentic-gateway-methods",
-        "auto-reply-reply-commands-3",
-      ]);
-      const selectedShards = createNodeTestShards().filter(
-        (shard) =>
-          shard.shardName.startsWith("core-unit-fast") || selectedShardNames.has(shard.shardName),
-      );
-      const expectedGroups = selectedShards.flatMap((shard) =>
-        shard.configs.map((config) => ({
-          configs: [config],
-          ...(shard.env ? { env: shard.env } : {}),
-          ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
-          shard_name: `cache-warm:${shard.shardName}:${config}`,
-        })),
-      );
+    const groups = createVitestCacheWarmGroups();
+    expect(groups).toHaveLength(10);
+    expect(groups.every((group) => group.configs.length === 1)).toBe(true);
+    expect(new Set(groups.flatMap((group) => group.configs))).toHaveProperty("size", 9);
+    expect(new Set(groups.map((group) => group.shard_name))).toHaveProperty("size", groups.length);
 
-      expect(groups).toEqual(expectedGroups);
-      expect(groups).toHaveLength(10);
-      expect(groups.every((group) => group.configs.length === 1)).toBe(true);
-      expect(new Set(groups.flatMap((group) => group.configs))).toHaveProperty("size", 9);
-      expect(new Set(groups.map((group) => group.shard_name))).toHaveProperty(
-        "size",
-        groups.length,
-      );
+    const coreStripeGroups = groups.filter(
+      (group) => group.configs[0] === "test/vitest/vitest.unit-fast.config.ts",
+    );
+    expect(coreStripeGroups).toHaveLength(2);
+    expect(coreStripeGroups.every((group) => (group.includePatterns?.length ?? 0) > 0)).toBe(true);
+    const coreStripePatterns = coreStripeGroups.flatMap((group) => group.includePatterns ?? []);
+    expect(new Set(coreStripePatterns).size).toBe(coreStripePatterns.length);
 
-      const coreStripeGroups = groups.filter(
-        (group) => group.configs[0] === "test/vitest/vitest.unit-fast.config.ts",
-      );
-      expect(coreStripeGroups).toHaveLength(2);
-      expect(coreStripeGroups.every((group) => (group.includePatterns?.length ?? 0) > 0)).toBe(
-        true,
-      );
-      const coreStripePatterns = coreStripeGroups.flatMap((group) => group.includePatterns ?? []);
-      expect(new Set(coreStripePatterns).size).toBe(coreStripePatterns.length);
+    const isolatedGroups = groups.filter((group) =>
+      group.shard_name.startsWith("cache-warm:core-unit-fast-isolated:"),
+    );
+    expect(isolatedGroups).toHaveLength(2);
+    expect(isolatedGroups.every((group) => group.includePatterns === undefined)).toBe(true);
+    expect(isolatedGroups.every((group) => group.env === undefined)).toBe(true);
 
-      const isolatedGroups = groups.filter((group) =>
-        group.shard_name.startsWith("cache-warm:core-unit-fast-isolated:"),
-      );
-      expect(isolatedGroups).toHaveLength(2);
-      expect(isolatedGroups.every((group) => group.includePatterns === undefined)).toBe(true);
-      expect(isolatedGroups.every((group) => group.env === undefined)).toBe(true);
+    const embeddedGroups = groups.filter((group) =>
+      group.shard_name.startsWith("cache-warm:agentic-agents-embedded:"),
+    );
+    expect(embeddedGroups).toHaveLength(4);
+    expect(
+      embeddedGroups.every((group) => group.env?.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS === "660000"),
+    ).toBe(true);
 
-      const embeddedGroups = groups.filter((group) =>
-        group.shard_name.startsWith("cache-warm:agentic-agents-embedded:"),
-      );
-      expect(embeddedGroups).toHaveLength(4);
-      expect(
-        embeddedGroups.every(
-          (group) => group.env?.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS === "660000",
-        ),
-      ).toBe(true);
+    const gatewayGroups = groups.filter((group) =>
+      group.shard_name.startsWith("cache-warm:agentic-gateway-methods:"),
+    );
+    expect(gatewayGroups).toHaveLength(1);
+    expect(gatewayGroups[0]?.includePatterns).toBeUndefined();
+    expect(gatewayGroups[0]?.env).toBeUndefined();
 
-      const gatewayGroups = groups.filter((group) =>
-        group.shard_name.startsWith("cache-warm:agentic-gateway-methods:"),
-      );
-      expect(gatewayGroups).toHaveLength(1);
-      expect(gatewayGroups[0]?.includePatterns).toBeUndefined();
-      expect(gatewayGroups[0]?.env).toBeUndefined();
-
-      const autoReplyGroups = groups.filter((group) =>
-        group.shard_name.startsWith("cache-warm:auto-reply-reply-commands-3:"),
-      );
-      expect(autoReplyGroups).toHaveLength(1);
-      expect(autoReplyGroups[0]?.includePatterns).toHaveLength(18);
-      expect(autoReplyGroups[0]?.env).toBeUndefined();
-      expect(seedEnv.OPENCLAW_NODE_TEST_PLAN_CONCURRENCY).toBe("1");
-      expect(seedEnv).not.toHaveProperty("OPENCLAW_NODE_TEST_CONFIGS_JSON");
-    } finally {
-      rmSync(seedRoot, { force: true, recursive: true });
-    }
+    const autoReplyGroups = groups.filter((group) =>
+      group.shard_name.startsWith("cache-warm:auto-reply-reply-commands-3:"),
+    );
+    expect(autoReplyGroups).toHaveLength(1);
+    expect(autoReplyGroups[0]?.includePatterns).toHaveLength(18);
+    expect(autoReplyGroups[0]?.env).toBeUndefined();
 
     const maintenanceRoot = mkdtempSync(path.join(tmpdir(), "openclaw-pnpm-maintenance-"));
     try {
@@ -4308,28 +4375,48 @@ NODE
     }
   });
 
-  it("prepares all Testbox checkouts from one maintained owner", () => {
+  it("prepares Testbox checkouts with one maintained owner and scoped history", () => {
     const workflowPaths = [
-      ".github/workflows/ci-check-testbox.yml",
-      ".github/workflows/ci-check-arm-testbox.yml",
-      ".github/workflows/ci-build-artifacts-testbox.yml",
-    ];
+      [
+        ".github/workflows/ci-check-testbox.yml",
+        "1",
+        "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'HEAD' }}",
+      ],
+      [
+        ".github/workflows/ci-check-arm-testbox.yml",
+        "0",
+        "${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}",
+      ],
+      [
+        ".github/workflows/ci-build-artifacts-testbox.yml",
+        "0",
+        "${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}",
+      ],
+    ] as const;
 
-    for (const workflowPath of workflowPaths) {
+    for (const [workflowPath, dispatchFetchDepth, baseRef] of workflowPaths) {
       const workflow = parse(readFileSync(workflowPath, "utf8"));
       const job = Object.values(workflow.jobs)[0] as { steps: WorkflowStep[] };
       const checkoutStep = job.steps.find((step) => step.name === "Checkout");
       const prepareStep = job.steps.find((step) => step.name === "Prepare Testbox shell");
 
       expect(checkoutStep?.uses, workflowPath).toBe(CHECKOUT_V6);
-      expect(checkoutStep?.with, workflowPath).toEqual({
-        "fetch-depth": "${{ github.event_name == 'pull_request' && '2' || '0' }}",
-        "persist-credentials": false,
-      });
+      expect(checkoutStep?.with?.["persist-credentials"], workflowPath).toBe(false);
+      for (const [eventName, expectedDepth] of [
+        ["pull_request", "2"],
+        ["workflow_dispatch", dispatchFetchDepth],
+      ] as const) {
+        expect(
+          evaluateWorkflowExpression(checkoutStep?.with?.["fetch-depth"], {
+            eventName,
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+          }),
+          `${workflowPath} ${eventName}`,
+        ).toBe(expectedDepth);
+      }
       expect(prepareStep?.uses, workflowPath).toBe("./.github/actions/prepare-testbox-shell");
-      expect(prepareStep?.with?.["base-ref"], workflowPath).toBe(
-        "${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}",
-      );
+      expect(prepareStep?.with?.["base-ref"], workflowPath).toBe(baseRef);
       const ensureBaseStep = job.steps.find(
         (step: WorkflowStep) => step.name === "Ensure Testbox base commit",
       );
@@ -4727,6 +4814,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(npmLockGuards).toContain("pnpm deps:npm-lock:check");
     expect(preflightGuards).toContain("pnpm deps:patches:check");
+    expect(preflightGuards).toContain('has_package_script "check:coercion-helpers"');
+    expect(preflightGuards).toContain("pnpm check:coercion-helpers");
+    expect(preflightGuards).toContain(
+      "[skip] historical target predates the coercion-helper declaration guard",
+    );
+    expect(preflightGuards).toContain(
+      "Current CI targets must provide the check:coercion-helpers package script.",
+    );
     expect(parsedWorkflow.jobs.preflight.outputs.diff_base_revision).toBe(
       "${{ steps.diff_base.outputs.sha }}",
     );
@@ -4798,6 +4893,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
     const frozenWithExports = runDependencyCheckFixture({
       historicalTarget: true,
+      releaseToolingEntry: true,
       scripts: ["deadcode:dependencies", "deadcode:unused-files", "deadcode:exports"],
     });
     expect(frozenWithExports.status, frozenWithExports.output).toBe(0);
@@ -4907,6 +5003,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "matrix.task == 'max-lines-ratchet' && github.event_name == 'workflow_dispatch' && inputs.release_gate",
     );
     expect(checksFastRun.run).toContain("max-lines-ratchet)");
+    expect(checksFastRun.run).toContain("coercion-helpers)");
+    expect(checksFastRun.run).toContain("pnpm check:coercion-helpers");
     expect(checksFastRun.run).toContain('has_package_script "check:max-lines-ratchet"');
     expect(checksFastRun.env.RATCHET_PR_HEAD_SHA).toBe(
       "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}",
@@ -4997,6 +5095,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         check_name: "checks-fast-max-lines-ratchet",
         runtime: "node",
         task: "max-lines-ratchet",
+      },
+      {
+        check_name: "checks-fast-coercion-helpers",
+        runtime: "node",
+        task: "coercion-helpers",
       },
     ]);
   });
@@ -5230,6 +5333,22 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       ).include,
     ).toContainEqual(expect.objectContaining({ check_name: "legacy-node-plan" }));
 
+    const frozenTargetContext = runCiManifestFixture({
+      bundledPlanner: false,
+      historicalCompatibility: false,
+      targetContextCompatibility: true,
+    });
+    expect(frozenTargetContext.status, frozenTargetContext.output).toBe(0);
+    expect(frozenTargetContext.outputs.compatibility_target).toBe("true");
+    expect(
+      JSON.parse(
+        expectDefined(
+          frozenTargetContext.outputs.checks_node_core_nondist_matrix,
+          "frozen target context node core nondist matrix output",
+        ),
+      ).include,
+    ).toContainEqual(expect.objectContaining({ check_name: "legacy-node-plan" }));
+
     const currentMissingProtocolCoverage = runCiManifestFixture({
       bundledPlanner: true,
       historicalCompatibility: false,
@@ -5393,8 +5512,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'",
     );
     expect(uiE2e["runs-on"]).not.toBe(ui["runs-on"]);
-    // Each Chromium worker keeps serial file ownership while all four shards
-    // together remain required by the aggregate CI gate.
+    // Three serial workers own Control UI files while the fourth owns browser
+    // extension E2E; all four remain required by the aggregate CI gate.
     expect(uiE2e["timeout-minutes"]).toBe(25);
     expect(uiE2e.env).toEqual({ OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" });
     expect(uiE2e.strategy).toEqual({
@@ -5539,15 +5658,18 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       uiE2e.steps.find((step: WorkflowStep) => step.name === "Test Control UI end-to-end"),
       "Control UI E2E suite",
     );
+    expect(scenario.if).toBe("matrix.shard != 4");
     expect(scenario.run).toBe(
-      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner --shard ${{ matrix.shard }}/4",
+      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner --shard ${{ matrix.shard }}/3",
     );
-    const browserCopilot = expectDefined(
-      uiE2e.steps.find((step: WorkflowStep) => step.name === "Test browser copilot end-to-end"),
-      "browser copilot E2E suite",
+    const browserExtension = expectDefined(
+      uiE2e.steps.find(
+        (step: WorkflowStep) => step.name === "Test browser extension bootstrap end-to-end",
+      ),
+      "browser extension bootstrap E2E suite",
     );
-    expect(browserCopilot.if).toBe("matrix.shard == 1");
-    expect(browserCopilot.run).toBe("pnpm test:e2e:browser-copilot");
+    expect(browserExtension.if).toBe("matrix.shard == 4");
+    expect(browserExtension.run).toBe("pnpm test:e2e:browser-extension");
     for (const { job } of routedUiE2eJobs) {
       const jobContract = JSON.stringify(job);
       expect(jobContract).not.toContain("OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM");
@@ -6056,6 +6178,24 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(mainCheck.status, `${mainCheck.stdout}${mainCheck.stderr}`).toBe(0);
       expect(mainCheck.stdout).toContain("1 new core method");
 
+      runGit(topology.checkout, ["checkout", "-q", "--detach", topology.compatibilityHead]);
+      const compatibilityCheck = runProtocolSinceFixture(topology.checkout, topology.mainBase);
+      expect(
+        compatibilityCheck.status,
+        `${compatibilityCheck.stdout}${compatibilityCheck.stderr}`,
+      ).toBe(0);
+      expect(compatibilityCheck.stdout).toContain("1 restored compatibility method");
+
+      runGit(topology.checkout, ["checkout", "-q", "--detach", topology.invalidCompatibilityHead]);
+      const invalidCompatibilityCheck = runProtocolSinceFixture(
+        topology.checkout,
+        topology.mainBase,
+      );
+      expect(invalidCompatibilityCheck.status).not.toBe(0);
+      expect(invalidCompatibilityCheck.stderr).toContain(
+        "restored compatibility methods must retain <= vintage metadata",
+      );
+
       runGit(topology.checkout, ["checkout", "-q", "--detach", topology.releaseHead]);
       const releaseCheck = runProtocolSinceFixture(topology.checkout, topology.mainBase);
       expect(releaseCheck.status).not.toBe(0);
@@ -6208,13 +6348,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           timeoutOutcome: "none",
         },
         {
-          exitCode: 143,
-          mode: "supervisor-term",
-          supervisorSignals: ["TERM"],
-          timedOut: false,
-          timeoutOutcome: "none",
-        },
-        {
           exitCode: 124,
           mode: "term",
           supervisorSignals: ["TERM"],
@@ -6262,11 +6395,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         }
         if (scenario.timeoutOutcome === "term") {
           expect(result.stdout).toContain(
-            "::warning::QA profile 'all' timed out after 1 second and was terminated",
+            "::warning::QA profile 'all' timed out after 0.4 seconds and was terminated",
           );
         } else if (scenario.timeoutOutcome === "kill") {
           expect(result.stdout).toContain(
-            "::warning::QA profile 'all' timed out after 1 second and required SIGKILL after the 0.5-second grace period",
+            "::warning::QA profile 'all' timed out after 0.4 seconds and required SIGKILL after the 0.05-second grace period",
           );
         } else {
           expect(result.stdout).not.toContain("::warning::QA profile");
@@ -6592,7 +6725,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(validateManifestStep.run).toContain("qa-evidence.json profile must be all");
     expect(validateManifestStep.run).toContain("QA evidence manifest profile must be all");
     expect(validateManifestStep.run).toContain("manifest.targetSha !== targetSha");
-    expect(validateManifestStep.run).toContain("qaProfileEvidencePlan.attest");
+    expect(validateManifestStep.run).toMatch(
+      /qaProfileEvidencePlan\.attest\(\s*evidence\.profilePlan,\s*manifest\.qaPassed === true,?\s*\)/u,
+    );
     expect(validateManifestStep.run).toContain("profilePlanSha256");
     expect(validateManifestStep.run).toContain("rerun the QA Profile Evidence workflow");
 
@@ -6605,7 +6740,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(qaEvidenceStep.run).toContain("qa-profile-evidence-manifest.json");
     expect(qaEvidenceStep.run).toContain("validateQaEvidenceSummaryJson");
-    expect(qaEvidenceStep.run).toContain("qaProfileEvidencePlan.attest");
+    expect(qaEvidenceStep.run).toMatch(
+      /qaProfileEvidencePlan\.attest\(\s*payload\.profilePlan,\s*process\.env\.QA_EXIT_CODE === "0",?\s*\)/u,
+    );
     expect(qaEvidenceStep.run).toContain("profilePlanSha256");
     expect(qaEvidenceStep.run).toContain("rerun the QA Profile Evidence workflow");
     expect(qaEvidenceStep.env.PROTOCOL_BASE_SHA).toBe(
@@ -6747,7 +6884,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
   });
 
   it.skipIf(process.platform === "win32")(
-    "round-trips complete and incomplete profile evidence and rejects digest drift",
+    "round-trips profile evidence and rejects digest drift",
     () => {
       const qaWorkflow = readQaProfileEvidenceWorkflow();
       const maturityWorkflow = readMaturityScorecardWorkflow();
@@ -6805,9 +6942,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         ],
       };
 
-      const writeEvidence = (complete: boolean) => {
-        const observedCells = complete ? [expectedCell] : [];
-        const missingCells = complete ? [] : [expectedCell];
+      const writeEvidence = () => {
         writeFileSync(
           evidencePath,
           `${JSON.stringify({
@@ -6823,15 +6958,15 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
               selected: ["scenario-one"],
               excluded: [],
               expectedCells: [expectedCell],
-              observedCells,
-              missingCells,
+              observedCells: [expectedCell],
+              missingCells: [],
               counts: {
                 membership: 1,
                 selected: 1,
                 excluded: 0,
                 expectedCells: 1,
-                observedCells: observedCells.length,
-                missingCells: missingCells.length,
+                observedCells: 1,
+                missingCells: 0,
               },
             },
             scorecard,
@@ -6866,41 +7001,18 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         });
 
       try {
-        writeEvidence(true);
+        writeEvidence();
         const completeProducer = runProducer("0");
         expect(
           completeProducer.status,
           `${completeProducer.stdout}${completeProducer.stderr}`,
         ).toBe(0);
-        expect(JSON.parse(readFileSync(manifestPath, "utf8"))).toMatchObject({
+        const completeManifest = readFileSync(manifestPath, "utf8");
+        expect(JSON.parse(completeManifest)).toMatchObject({
           protocolBaseSha,
           targetSha,
         });
-        const completeConsumer = runConsumer();
-        expect(
-          completeConsumer.status,
-          `${completeConsumer.stdout}${completeConsumer.stderr}`,
-        ).toBe(0);
-
-        writeEvidence(false);
-        const incompleteProducer = runProducer("7");
-        expect(
-          incompleteProducer.status,
-          `${incompleteProducer.stdout}${incompleteProducer.stderr}`,
-        ).toBe(0);
-        const incompleteConsumer = runConsumer();
-        expect(
-          incompleteConsumer.status,
-          `${incompleteConsumer.stdout}${incompleteConsumer.stderr}`,
-        ).toBe(0);
-
-        writeEvidence(true);
-        const mismatchProducer = runProducer("0");
-        expect(
-          mismatchProducer.status,
-          `${mismatchProducer.stdout}${mismatchProducer.stderr}`,
-        ).toBe(0);
-        const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+        const manifest = JSON.parse(completeManifest) as Record<string, unknown>;
         manifest.profilePlanSha256 = "0".repeat(64);
         writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, "utf8");
         const mismatched = runConsumer();
@@ -7001,6 +7113,86 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(destinationSymlink.escaped).toBe("outside\n");
     },
   );
+
+  it("keeps exact release validation identity separate from release context", () => {
+    const fullReleaseWorkflow = readWorkflow(".github/workflows/full-release-validation.yml");
+    const releaseWorkflow = readReleaseChecksWorkflow();
+    const telegramWorkflow = readWorkflow(".github/workflows/openclaw-release-telegram-qa.yml");
+    const fullReleaseDispatchStep = fullReleaseWorkflow.jobs.release_checks.steps.find(
+      (step: WorkflowStep) => step.name === "Dispatch and monitor release checks",
+    );
+    const dispatchStep = releaseWorkflow.jobs.qa_live_telegram_release_checks.steps.find(
+      (step: WorkflowStep) => step.name === "Dispatch and await trusted Telegram QA",
+    );
+    const identityStep = telegramWorkflow.jobs.trusted_identity.steps.find(
+      (step: WorkflowStep) => step.name === "Verify dispatched-main identity",
+    );
+    const provenanceSteps = [
+      telegramWorkflow.jobs.build_candidate.steps.find(
+        (step: WorkflowStep) => step.name === "Validate candidate release provenance",
+      ),
+      telegramWorkflow.jobs.run_telegram.steps.find(
+        (step: WorkflowStep) => step.name === "Revalidate candidate release provenance",
+      ),
+    ];
+
+    expect(fullReleaseWorkflow.on.workflow_dispatch.inputs.target_context_ref).toMatchObject({
+      required: false,
+      default: "",
+      type: "string",
+    });
+    expect(fullReleaseDispatchStep.run).toContain('-f ref="$TARGET_SHA"');
+    expect(fullReleaseDispatchStep.run).toContain('-f target_context_ref="$TARGET_CONTEXT_REF"');
+    expect(fullReleaseDispatchStep.run).not.toContain(
+      'release_checks_target_ref="${TARGET_CONTEXT_REF:-$TARGET_REF}"',
+    );
+    expect(releaseWorkflow.on.workflow_dispatch.inputs.target_context_ref).toMatchObject({
+      required: false,
+      default: "",
+      type: "string",
+    });
+    expect(telegramWorkflow.on.workflow_dispatch.inputs.target_context_ref).toMatchObject({
+      required: false,
+      default: "",
+      type: "string",
+    });
+    expect(dispatchStep.env.TARGET_SHA).toBe("${{ needs.resolve_target.outputs.revision }}");
+    expect(dispatchStep.env.TARGET_CONTEXT_REF).toBe("${{ inputs.target_context_ref }}");
+    expect(dispatchStep.run).toContain('-f target_context_ref="$TARGET_CONTEXT_REF"');
+    expect(dispatchStep.run).toContain('-f target_ref="$TARGET_SHA"');
+    expect(dispatchStep.run).not.toContain("telegram_target_ref=");
+    expect(identityStep.run).toContain(
+      "Telegram QA target context must be a canonical release branch or tag.",
+    );
+    expect(identityStep.run).toContain(
+      "Telegram QA release context requires an exact-SHA target ref.",
+    );
+    for (const provenanceStep of provenanceSteps) {
+      expect(provenanceStep.env.TARGET_CONTEXT_REF).toBe("${{ inputs.target_context_ref }}");
+      expect(provenanceStep.run).toContain("frozen-release-branch-head");
+      expect(provenanceStep.run).toContain(
+        'elif [[ "$candidate_version" =~ ^${release_version_pattern}-beta\\.[0-9]+$ ]]',
+      );
+      expect(provenanceStep.run).toContain(
+        'frozen_release_branch_pattern="^release/${candidate_version_pattern}-code-frozen(-r[1-9][0-9]*)?$"',
+      );
+      expect(provenanceStep.run).toContain('elif [[ -z "$frozen_release_branch_pattern" ]]; then');
+      expect(provenanceStep.run).toContain(
+        "Telegram candidate version ${candidate_version} does not belong to release ${release_version}.",
+      );
+      expect(provenanceStep.run).toContain(
+        "Telegram candidate version ${candidate_version} does not match context ${normalized_context_ref}.",
+      );
+      expect(provenanceStep.run).toContain('context_release_branch="$normalized_context_ref"');
+      expect(provenanceStep.run).toContain('context_release_tag="$normalized_context_ref"');
+      expect(provenanceStep.run).toContain(
+        "Frozen release candidate ${candidate_sha} requires a valid maintainer signature.",
+      );
+      expect(provenanceStep.run).toContain(
+        'select(.state == "OPEN" and .headRepository.nameWithOwner == $repo and',
+      );
+    }
+  });
 
   it("keeps maturity scorecard release docs opt-in from release checks", () => {
     const releaseWorkflow = readReleaseChecksWorkflow();

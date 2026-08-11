@@ -9,7 +9,7 @@ describe("cloud worker desktop method advertisement", () => {
   it.each([
     { desktop: undefined, advertised: false },
     { desktop: true, advertised: true },
-  ])("advertises worker.desktop.observe only when the Labs gate is $desktop", async (testCase) => {
+  ])("advertises desktop methods only when the Labs gate is $desktop", async (testCase) => {
     process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
     await writeConfigFile({
       cloudWorkers: {
@@ -29,6 +29,7 @@ describe("cloud worker desktop method advertisement", () => {
 
       expect(methods).toContain("sessions.dispatch");
       expect(methods.includes("worker.desktop.observe")).toBe(testCase.advertised);
+      expect(methods.includes("worker.desktop.launch")).toBe(testCase.advertised);
     } finally {
       ws.close();
       await server.close();

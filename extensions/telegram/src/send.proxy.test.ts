@@ -1,4 +1,5 @@
 // Telegram tests cover send.proxy plugin behavior.
+import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { botApi, botCtorSpy } = vi.hoisted(() => ({
@@ -564,17 +565,3 @@ describe("telegram proxy client", () => {
     vi.useRealTimers();
   });
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

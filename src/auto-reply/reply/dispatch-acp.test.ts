@@ -17,7 +17,7 @@ import {
   resolveAgentTurnAttachments,
   resolveInlineAgentImageAttachments,
 } from "./agent-turn-attachments.js";
-import { tryDispatchAcpReply } from "./dispatch-acp.js";
+import { tryDispatchAcpReplyCore } from "./dispatch-acp.js";
 import { createAbortAwareDispatcher } from "./dispatch-from-config.abort.js";
 import {
   appendRecentHistoryImageContext,
@@ -370,7 +370,7 @@ async function runDispatch(params: {
   markIdle?: (reason: string) => void;
 }) {
   const targetSessionKey = params.sessionKeyOverride ?? sessionKey;
-  return tryDispatchAcpReply({
+  return tryDispatchAcpReplyCore({
     ctx: buildTestCtx({
       Provider: "discord",
       Surface: "discord",
@@ -486,7 +486,7 @@ function expectRoutedPayload(callIndex: number, payload: Partial<MockTtsReply>) 
   }
 }
 
-describe("tryDispatchAcpReply", () => {
+describe("tryDispatchAcpReplyCore", () => {
   beforeEach(() => {
     auditMocks.emitAcpLifecycleStart.mockReset();
     auditMocks.emitAcpRuntimeEvent.mockReset();
@@ -625,6 +625,40 @@ describe("tryDispatchAcpReply", () => {
     expect(routePayload().text).toBe("hello");
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("records channel transform suppression without an ACP delivery claim", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("private reply");
+    const transport = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({
+      deliver: transport,
+      transformReplyPayload: () => null,
+    });
+    const recordProcessed = vi.fn();
+
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      recordProcessed,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(transport).not.toHaveBeenCalled();
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+    expect(recordProcessed).toHaveBeenCalledWith("completed", {
+      reason: "channel_transform",
+    });
+    const transcript = requireRecord(
+      mockArg(transcriptMocks.persistAcpDispatchTranscript, 0, 0, "transcript call"),
+      "transcript call",
+    );
+    expect(transcript.finalText).toBe("");
   });
 
   it("persists ACP transcript when routed delivery fails", async () => {
@@ -1173,6 +1207,49 @@ describe("tryDispatchAcpReply", () => {
           "media understanding",
         ).agentDir,
       ).toBe(agentDir);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes exactly the resolved attachment indexes as delivered images", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("image turn");
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const imagePath = path.join(tempDir, "delivered.png");
+    try {
+      // Real PNG bytes: the turn-attachment resolver byte-sniffs image MIME
+      // through the harness buffer map keyed by local path.
+      await fs.writeFile(imagePath, ACP_PNG_IMAGE_BYTES);
+      acpAttachmentBuffers.set(imagePath, ACP_PNG_IMAGE_BYTES);
+
+      await runDispatch({
+        bodyForAgent: "describe both images",
+        cfg: createAcpTestConfig({
+          channels: {
+            imessage: {
+              attachmentRoots: [tempDir],
+            },
+          },
+        }),
+        ctxOverrides: {
+          Provider: "imessage",
+          Surface: "imessage",
+          media: [
+            { path: imagePath, contentType: "image/png", kind: "image" },
+            { url: "https://cdn.example.test/photos/remote.png", contentType: "image/png" },
+          ],
+        },
+      });
+
+      // The delivered set must mirror the resolver: local image in, remote-url
+      // image out — an empty or over-broad set reintroduces false skip claims.
+      const delivered = requireRecord(
+        mockArg(mediaUnderstandingMocks.applyMediaUnderstanding, 0, 0, "media understanding"),
+        "media understanding",
+      ).deliveredImageIndexes as ReadonlySet<number>;
+      expect(delivered.has(0)).toBe(true);
+      expect(delivered.has(1)).toBe(false);
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }

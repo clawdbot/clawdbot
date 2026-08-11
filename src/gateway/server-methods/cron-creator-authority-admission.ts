@@ -67,6 +67,7 @@ export function resolveGatewayCronCreatorAuthorityAdmission(params: {
       request.acpTurnSource !== undefined ||
       request.internalRuntimeHandoffId !== undefined ||
       request.internalExecutionIdentityRetry === true ||
+      request.internalExecutionIdentityRecoveryAttempt !== undefined ||
       request.execApprovalFollowupExpectedSessionId !== undefined ||
       request.internalEvents !== undefined ||
       request.sessionEffects === "internal" ||

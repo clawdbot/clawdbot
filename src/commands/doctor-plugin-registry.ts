@@ -31,7 +31,7 @@ import {
   type StaleManagedNpmInstallGenerationIssue,
 } from "./doctor-plugin-generations.js";
 import {
-  listManagedPluginNpmRoots,
+  resolveDoctorPluginNpmRoots,
   listPluginOpenClawHostLinkIssues,
   maybeRepairPluginOpenClawHostLinks,
 } from "./doctor-plugin-host-links.js";
@@ -154,7 +154,7 @@ function listStaleManagedNpmBundledPlugins(
   );
   const stale: StaleManagedNpmBundledPlugin[] = [];
 
-  for (const npmRoot of listManagedPluginNpmRoots(params)) {
+  for (const npmRoot of resolveDoctorPluginNpmRoots(params)) {
     const npmPackageJsonPath = path.join(npmRoot, "package.json");
     const dependencies = readStringMap(readJsonObject(npmPackageJsonPath)?.dependencies);
     for (const packageName of Object.keys(dependencies).toSorted((left, right) =>

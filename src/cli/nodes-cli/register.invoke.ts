@@ -8,7 +8,7 @@ import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import {
-  callGatewayCli,
+  callNodesGatewayCli,
   nodesCallOpts,
   parseOptionalNodePositiveInteger,
   resolveNodeId,
@@ -68,7 +68,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
             invokeParams.timeoutMs = timeoutMs;
           }
 
-          const result = await callGatewayCli("node.invoke", opts, invokeParams);
+          const result = await callNodesGatewayCli("node.invoke", opts, invokeParams);
           defaultRuntime.writeJson(result);
         });
       }),

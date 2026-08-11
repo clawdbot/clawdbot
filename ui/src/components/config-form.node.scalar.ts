@@ -10,6 +10,7 @@ import {
   numericInputConstraints,
 } from "./config-form.constraints.ts";
 import {
+  configEnumOptionLabel,
   getSensitiveRenderState,
   isSecretRefObject,
   jsonValue,
@@ -527,7 +528,7 @@ export function renderSelect(
       ${options.map(
         (option, index) => html`
           <option value=${String(index)} ?selected=${selectedValue === String(index)}>
-            ${String(option)}
+            ${configEnumOptionLabel(option, options)}
           </option>
         `,
       )}

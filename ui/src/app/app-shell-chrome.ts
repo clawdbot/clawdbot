@@ -1,3 +1,5 @@
+import { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
+import type { GatewaySessionRow } from "../api/types.ts";
 import { isSettingsNavigationRoute } from "../app-navigation.ts";
 import { routeIdFromPath, type RouteId } from "../app-route-paths.ts";
 import {
@@ -22,6 +24,7 @@ import type { BoardFace } from "../lib/board/settings.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
+import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
@@ -55,8 +58,10 @@ export function isBrowserPanelAvailable(
 
 export function isDesktopPanelAvailable(
   snapshot: ApplicationContext["gateway"]["snapshot"],
+  session: GatewaySessionRow | undefined,
 ): boolean {
   return (
+    isCloudWorkerPlacementState(session?.placement?.state) &&
     snapshot.phase === "connected" &&
     hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
     isGatewayMethodAdvertised(snapshot, "worker.desktop.observe") === true
@@ -65,6 +70,7 @@ export function isDesktopPanelAvailable(
 
 export interface ShellChromeHost extends HTMLElement {
   readonly context: ApplicationContext<RouteId> | undefined;
+  readonly activeSessionKey: string;
   readonly onboardingMode: boolean;
   readonly updateComplete: Promise<boolean>;
   readonly commandPaletteElement: OptionalCustomElement;
@@ -501,13 +507,16 @@ export class ShellChromeOwner {
 
   readonly handleDeferredDesktopToggle = (event: Event): void => {
     const host = this.host;
+    const context = host.context;
+    const session = context ? findUiSessionRow(context, host.activeSessionKey) : undefined;
+    if (!context || !isDesktopPanelAvailable(context.gateway.snapshot, session)) {
+      event.stopImmediatePropagation();
+      return;
+    }
     if (isOptionalElementDefined(host.desktopPanelElement)) {
       return;
     }
-    const snapshot = host.context?.gateway?.snapshot;
-    if (snapshot && isDesktopPanelAvailable(snapshot)) {
-      this.deliverPanelEventAfterLoad(host.desktopPanelElement, event);
-    }
+    this.deliverPanelEventAfterLoad(host.desktopPanelElement, event);
   };
 
   readonly handleDeferredCustodianToggle = (event: Event): void => {

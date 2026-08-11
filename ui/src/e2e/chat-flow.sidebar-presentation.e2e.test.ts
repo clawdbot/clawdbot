@@ -247,7 +247,9 @@ suite.define(() => {
         ] = marker;
         return marker;
       });
-      const avatar = page.locator("img.agent-chat__welcome-avatar");
+      const avatar = page.locator(
+        'openclaw-chat-pane[aria-hidden="false"] img.agent-chat__welcome-avatar',
+      );
       await avatar.waitFor({ state: "visible" });
       await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);
 

@@ -25,7 +25,7 @@ import {
   resolveSessionResetPolicy,
 } from "../../config/sessions/reset-policy.js";
 import { resolveChannelResetConfig, resolveSessionResetType } from "../../config/sessions/reset.js";
-import { listSessionEntries } from "../../config/sessions/session-accessor.js";
+import { listSessionEntriesCore } from "../../config/sessions/session-accessor.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -41,7 +41,7 @@ import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
 import { clearAllCliSessions } from "../cli-session.js";
-import { transitionMainSessionRecovery } from "../main-session-recovery-state.js";
+import { transitionMainSessionRecovery } from "../main-session-recovery/main-session-recovery-state.js";
 
 /** Resolved command session identity plus backing store metadata. */
 type SessionResolution = {
@@ -112,7 +112,7 @@ function loadCommandSessionStore(params: {
   storePath: string;
 }): Record<string, SessionEntry> {
   return Object.fromEntries(
-    listSessionEntries({
+    listSessionEntriesCore({
       storePath: params.storePath,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.clone === false ? { clone: false } : {}),

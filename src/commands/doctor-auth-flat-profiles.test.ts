@@ -4,15 +4,13 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import {
   readPersistedAuthProfileStoreRaw,
   writePersistedAuthProfileStateRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  saveAuthProfileStore,
-} from "../agents/auth-profiles/store.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import {

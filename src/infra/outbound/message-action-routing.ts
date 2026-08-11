@@ -2,7 +2,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { readStringParam } from "../../agents/tools/common.js";
+import { readToolStringParam } from "../../agents/tools/common.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import {
@@ -38,7 +38,7 @@ async function resolveChannel(
   toolContext?: { currentChannelProvider?: string },
   action?: ChannelMessageActionName,
 ) {
-  const channel = readStringParam(params, "channel");
+  const channel = readToolStringParam(params, "channel");
   // Explicit reads must never switch to the source conversation when their
   // requested provider is unknown or unavailable.
   const fallbackChannel =
@@ -355,7 +355,7 @@ export async function prepareMessageRoute(params: {
   const explicitAccountId = validateExplicitMessageAccountSelection({
     cfg,
     channel,
-    accountId: readStringParam(actionParams, "accountId"),
+    accountId: readToolStringParam(actionParams, "accountId"),
     plugin: channelPlugin,
   });
   const pluginOwnedAction = action !== "send" && action !== "poll";

@@ -18,7 +18,12 @@ import {
   SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readPositiveIntegerParam, readStringParam, ToolInputError } from "./common.js";
+import {
+  jsonResult,
+  readPositiveIntegerParam,
+  readToolStringParam,
+  ToolInputError,
+} from "./common.js";
 import {
   callAgentToolGatewayRequest,
   type AgentToolGatewayRequestCaller,
@@ -338,7 +343,7 @@ export function createSessionsSearchTool(opts?: {
     outputSchema: SessionsSearchOutputSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const query = readStringParam(params, "query")?.trim() ?? "";
+      const query = readToolStringParam(params, "query")?.trim() ?? "";
       if (!query) {
         throw new ToolInputError("query must not be empty");
       }
@@ -351,7 +356,7 @@ export function createSessionsSearchTool(opts?: {
         readPositiveIntegerParam(params, "limit", {
           max: SESSIONS_SEARCH_MAX_LIMIT,
         }) ?? SESSIONS_SEARCH_DEFAULT_LIMIT;
-      const requestedSessionKey = readStringParam(params, "sessionKey");
+      const requestedSessionKey = readToolStringParam(params, "sessionKey");
       const cfg = opts?.config ?? getRuntimeConfig();
       const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({

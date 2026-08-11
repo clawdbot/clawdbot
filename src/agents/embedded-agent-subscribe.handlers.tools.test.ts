@@ -9,6 +9,7 @@ import {
 } from "../infra/agent-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import {
   buildBlockedToolResult,
   recordAdjustedParamsForToolCall,
@@ -178,6 +179,7 @@ function createTestContext(): {
       toolMetas: [],
       acceptedSessionSpawns: [],
       toolSummaryById: new Set<string>(),
+      liveEditDiffStateById: new Map(),
       itemActiveIds: new Set<string>(),
       itemStartedCount: 0,
       itemCompletedCount: 0,
@@ -1609,7 +1611,7 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
   });
 
   it("snapshots hook-adjusted args before result middleware can mutate them", async () => {
-    const { ctx } = createTestContext();
+    const { ctx, onAgentEvent } = createTestContext();
     const toolCallId = "tool-cron-mutable-adjusted-args";
     const executedArgs = {
       action: "add",
@@ -1635,6 +1637,10 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
       hadPotentialSideEffects: true,
     });
     expect(ctx.state.successfulCronAdds).toBe(1);
+    const resultEvent = onAgentEvent.mock.calls.find(
+      ([event]) => event.stream === "tool" && event.data.phase === "result",
+    )?.[0];
+    expect(resultEvent?.data).not.toHaveProperty("args");
   });
 
   it("uses hook-adjusted message arguments for delivery telemetry", async () => {
@@ -2627,6 +2633,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     ]);
     const prepared = prepareEmbeddedRunTerminal({
       runParams: {
+        admittedRunContext: createTestAdmittedRunContext("run-test"),
         sessionId: "session-test-id",
         runId: "run-test",
         workspaceDir: "/tmp/openclaw-test",

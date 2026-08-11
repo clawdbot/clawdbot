@@ -1,6 +1,6 @@
 import type { ManagedRun } from "../process/supervisor/index.js";
 import type { SpawnInput } from "../process/supervisor/types.js";
-import { createDeferred } from "../shared/deferred.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { runExecProcess } from "./bash-tools.exec-runtime.js";
@@ -14,7 +14,7 @@ export async function startDeferredNotifyRun(params: {
   sessionKey: string;
   notifyDeliveryContext?: DeliveryContext;
 }) {
-  const exit = createDeferred<Awaited<ReturnType<ManagedRun["wait"]>>>();
+  const exit = createDeferredCore<Awaited<ReturnType<ManagedRun["wait"]>>>();
   params.spawn.mockImplementationOnce(async (input) => {
     input.onStdout?.("producer output\n");
     return {

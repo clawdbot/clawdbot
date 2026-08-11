@@ -469,7 +469,9 @@ function scheduleDeferredTurnMaintenance(
       sessionKey,
     });
   if (!task) {
-    log.warn("[context-engine] failed to create deferred turn maintenance task", { sessionKey });
+    log.warn("[context-engine] failed to create deferred turn maintenance task", {
+      sessionKey,
+    });
     return undefined;
   }
   const lane = `${TURN_MAINTENANCE_LANE_PREFIX}${sessionKey}`;

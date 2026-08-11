@@ -4,7 +4,7 @@ import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { resolveStorePath, SESSION_TOTAL_TOKENS_VERSION } from "../../../config/sessions.js";
 import { parseSqliteSessionFileMarker } from "../../../config/sessions/legacy-sqlite-marker.js";
 import {
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
   updateSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
@@ -63,7 +63,7 @@ export function buildContextEngineCompactionSessionTarget(params: {
         })
       : undefined;
   const markerMatches = marker
-    ? listSessionEntries({
+    ? listSessionEntriesCore({
         agentId: marker.agentId,
         storePath: marker.storePath,
       }).filter(({ entry }) => entry.sessionId === marker.sessionId)
@@ -317,11 +317,13 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
         throw new Error(`Could not record superseded writer outcome: ${previousWriterRunId}`);
       }
     });
-    log.warn(
-      `[session-writer] replacing claim session=${sanitizeForLog(snapshot.sessionKey)} ` +
-        `previousRunId=${redactRunIdentifier(sanitizeForLog(previousWriterRunId))} ` +
-        `nextRunId=${redactRunIdentifier(sanitizeForLog(params.runId))} live=${superseded}`,
-    );
+    if (superseded) {
+      log.warn(
+        `[session-writer] replacing claim session=${sanitizeForLog(snapshot.sessionKey)} ` +
+          `previousRunId=${redactRunIdentifier(sanitizeForLog(previousWriterRunId))} ` +
+          `nextRunId=${redactRunIdentifier(sanitizeForLog(params.runId))} live=true`,
+      );
+    }
   }
   return {
     expectedLifecycleRevision,

@@ -157,9 +157,9 @@ describe("resolveGatewayScopedTools", () => {
       surface: "loopback",
     });
 
-    expect(withoutActions.tools.some((tool) => tool.name === "spawn_task")).toBe(false);
+    expect(withoutActions.tools.some((tool) => tool.name === "suggest_task")).toBe(false);
     expect(withActions.tools.map((tool) => tool.name)).toEqual(
-      expect.arrayContaining(["spawn_task", "dismiss_task"]),
+      expect.arrayContaining(["suggest_task", "dismiss_task"]),
     );
   });
 

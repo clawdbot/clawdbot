@@ -560,6 +560,47 @@ describe("mcp cli", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "does not treat Path as PATH when checking MCP stdio commands",
+    async () => {
+      await withTempHome("openclaw-cli-mcp-home-", async () => {
+        const workspaceDir = await createWorkspace();
+        const binDir = path.join(workspaceDir, "bin");
+        const commandPath = path.join(binDir, "mis-cased-path-mcp");
+        await fs.mkdir(binDir, { recursive: true });
+        await fs.writeFile(commandPath, "#!/bin/sh\nexit 0\n", "utf-8");
+        await fs.chmod(commandPath, 0o755);
+        vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+        await runMcpCommand([
+          "mcp",
+          "set",
+          "docs",
+          JSON.stringify({ command: "mis-cased-path-mcp", env: { Path: binDir } }),
+        ]);
+        mockLog.mockClear();
+
+        await expect(runMcpCommand(["mcp", "doctor", "--json"])).rejects.toThrow("__exit__:1");
+
+        expect(JSON.parse(lastLogLine())).toMatchObject({
+          ok: false,
+          servers: [
+            {
+              name: "docs",
+              ok: false,
+              issues: [
+                {
+                  level: "error",
+                  message: "stdio command not found or not executable: mis-cased-path-mcp",
+                },
+              ],
+            },
+          ],
+        });
+      });
+    },
+  );
+
   it("resolves relative configured PATH entries from the MCP stdio cwd", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();
@@ -605,10 +646,12 @@ describe("mcp cli", () => {
       ]);
       await runMcpCommand(["mcp", "configure", "docs", "--clear-auth"]);
 
-      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith({
-        serverName: "docs",
-        serverUrl: "https://mcp.example.com",
-      });
+      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith(
+        expect.objectContaining({
+          serverName: "docs",
+          serverUrl: "https://mcp.example.com",
+        }),
+      );
 
       mockLog.mockClear();
       await runMcpCommand(["mcp", "show", "docs", "--json"]);
@@ -629,10 +672,12 @@ describe("mcp cli", () => {
       ]);
       await runMcpCommand(["mcp", "unset", "docs"]);
 
-      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith({
-        serverName: "docs",
-        serverUrl: "https://mcp.example.com",
-      });
+      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith(
+        expect.objectContaining({
+          serverName: "docs",
+          serverUrl: "https://mcp.example.com",
+        }),
+      );
     });
   });
 
@@ -650,10 +695,12 @@ describe("mcp cli", () => {
       clearMcpOAuthCredentials.mockClear();
       await runMcpCommand(["mcp", "set", "docs", '{"command":"uvx","args":["docs-mcp"]}']);
 
-      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith({
-        serverName: "docs",
-        serverUrl: "https://mcp.example.com",
-      });
+      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith(
+        expect.objectContaining({
+          serverName: "docs",
+          serverUrl: "https://mcp.example.com",
+        }),
+      );
     });
   });
 
@@ -682,10 +729,12 @@ describe("mcp cli", () => {
         "--no-probe",
       ]);
 
-      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith({
-        serverName: "docs",
-        serverUrl: "https://mcp.example.com",
-      });
+      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith(
+        expect.objectContaining({
+          serverName: "docs",
+          serverUrl: "https://mcp.example.com",
+        }),
+      );
     });
   });
 

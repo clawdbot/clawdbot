@@ -28,13 +28,23 @@ type AgentRunContext = {
   registeredAt?: number;
   /** Timestamp of last activity (updated on every emitAgentEvent). */
   lastActiveAt?: number;
+  /** Exact approval authority owned by this operational execution. */
+  delegatedAuthority?: AgentRunDelegatedAuthority;
 };
+
+export type AgentRunDelegatedAuthority = Readonly<{
+  operationalRunInstance: Readonly<{ instanceId: string; runId: string }>;
+  lifecycleGeneration: string;
+  claimId: string;
+}>;
 
 type AgentRunContextOwnership = {
   lifecycleGeneration: string;
   claimIds: Set<string>;
   /** Detached task ids exist only for the exact execution claims that own them. */
   taskRunIds?: Map<string, string>;
+  /** Live execution claims are lifecycle-owned and must not be expired by the projection sweeper. */
+  sweepProtectedClaimIds: Set<string>;
   preserveAfterRelease: boolean;
   clearRequested: boolean;
   exclusiveClaimId?: string;
@@ -47,6 +57,7 @@ type AgentRunRegistryState = {
   queuedRunContextLeases?: WeakMap<AgentRunContext, number>;
   lifecycleGeneration: string;
   sequenceResetHandler?: (runId: string) => void;
+  delegatedAuthorityClosedHandler?: (authority: AgentRunDelegatedAuthority) => void;
   version: number;
 };
 
@@ -76,9 +87,40 @@ export function getAgentRunLifecycleGeneration(): string {
 
 export function rotateAgentRunRegistryLifecycleGeneration(): string {
   const state = getAgentRunRegistryState();
+  for (const context of state.contexts.values()) {
+    const authority = context.delegatedAuthority;
+    if (authority) {
+      delete context.delegatedAuthority;
+      notifyDelegatedAuthorityClosed(state, authority);
+    }
+  }
   state.lifecycleGeneration = randomUUID();
   bumpAgentRunIndexVersion();
   return state.lifecycleGeneration;
+}
+
+function notifyDelegatedAuthorityClosed(
+  state: AgentRunRegistryState,
+  authority: AgentRunDelegatedAuthority,
+): void {
+  try {
+    state.delegatedAuthorityClosedHandler?.(authority);
+  } catch {
+    // Approval settlement observes lifecycle closure; it cannot block the owner transition.
+  }
+}
+
+/** Installs the Gateway-lifetime observer for exact delegated-authority closure. */
+export function registerAgentRunDelegatedAuthorityClosedHandler(
+  handler: (authority: AgentRunDelegatedAuthority) => void,
+): () => void {
+  const state = getAgentRunRegistryState();
+  state.delegatedAuthorityClosedHandler = handler;
+  return () => {
+    if (state.delegatedAuthorityClosedHandler === handler) {
+      state.delegatedAuthorityClosedHandler = undefined;
+    }
+  };
 }
 
 /** Connects registry cleanup to the event sequencer without reversing ownership. */
@@ -181,6 +223,7 @@ export function claimAgentRunContext(
     ownsContext?: boolean;
     exclusive?: boolean;
     onClearRequested?: (claimId: string) => void;
+    protectFromSweep?: boolean;
   } = {},
 ): string | undefined {
   if (!runId) {
@@ -210,6 +253,9 @@ export function claimAgentRunContext(
     claimId = randomUUID();
     if (currentOwners) {
       currentOwners.claimIds.add(claimId);
+      if (options.protectFromSweep) {
+        currentOwners.sweepProtectedClaimIds.add(claimId);
+      }
       if (options.ownsContext) {
         currentOwners.preserveAfterRelease = false;
       }
@@ -221,6 +267,7 @@ export function claimAgentRunContext(
       state.owners.set(runId, {
         lifecycleGeneration,
         claimIds: new Set([claimId]),
+        sweepProtectedClaimIds: new Set(options.protectFromSweep ? [claimId] : []),
         preserveAfterRelease:
           options.ownsContext !== true && existing?.lifecycleGeneration === lifecycleGeneration,
         clearRequested: false,
@@ -376,6 +423,117 @@ export function getAgentRunContextOwnerStatus(
   return owners.clearRequested ? "clear-requested" : "active";
 }
 
+function sameOperationalRunInstance(
+  left: Readonly<{ instanceId: string; runId: string }>,
+  right: Readonly<{ instanceId: string; runId: string }>,
+): boolean {
+  return left.instanceId === right.instanceId && left.runId === right.runId;
+}
+
+function ownsCurrentAgentRunClaim(
+  runId: string,
+  claimId: string,
+  lifecycleGeneration: string,
+): boolean {
+  const state = getAgentRunRegistryState();
+  const owners = state.owners.get(runId);
+  return (
+    lifecycleGeneration === state.lifecycleGeneration &&
+    owners?.lifecycleGeneration === lifecycleGeneration &&
+    owners.claimIds.has(claimId)
+  );
+}
+
+/** Claims approval authority for the exact admitted operational execution. */
+export function claimAgentRunDelegatedAuthority(
+  operationalRunInstance: Readonly<{ instanceId: string; runId: string }>,
+): AgentRunDelegatedAuthority {
+  const instanceId = operationalRunInstance.instanceId.trim();
+  const runId = operationalRunInstance.runId.trim();
+  if (!instanceId || !runId) {
+    throw new Error("agent run delegated authority requires an operational run instance");
+  }
+  const state = getAgentRunRegistryState();
+  const lifecycleGeneration = state.lifecycleGeneration;
+  const current = state.contexts.get(runId);
+  const existing = current?.delegatedAuthority;
+  if (
+    existing &&
+    sameOperationalRunInstance(existing.operationalRunInstance, { instanceId, runId }) &&
+    ownsCurrentAgentRunClaim(runId, existing.claimId, lifecycleGeneration)
+  ) {
+    return existing;
+  }
+  if (existing) {
+    // Same-id replacement retires only the prior operational authority. Other
+    // legitimate run-context owners continue until their own lifecycle exits.
+    releaseAgentRunContext(runId, existing.claimId);
+  }
+  const claimId = claimAgentRunContext(
+    runId,
+    { lifecycleGeneration, lastActiveAt: Date.now() },
+    {
+      trackOwner: true,
+      protectFromSweep: true,
+      onClearRequested: (requestedClaimId) => {
+        releaseAgentRunContext(runId, requestedClaimId);
+      },
+    },
+  );
+  if (!claimId) {
+    throw new Error("agent run delegated authority could not claim the operational execution");
+  }
+  const authority = Object.freeze({
+    operationalRunInstance:
+      operationalRunInstance.instanceId === instanceId && operationalRunInstance.runId === runId
+        ? operationalRunInstance
+        : Object.freeze({ instanceId, runId }),
+    lifecycleGeneration,
+    claimId,
+  });
+  const context = state.contexts.get(runId);
+  if (!context || context.lifecycleGeneration !== lifecycleGeneration) {
+    releaseAgentRunContext(runId, claimId);
+    throw new Error("agent run delegated authority lost its lifecycle during admission");
+  }
+  context.delegatedAuthority = authority;
+  return authority;
+}
+
+/** Returns authority only while the exact lifecycle owner still holds its claim. */
+export function getActiveAgentRunDelegatedAuthority(
+  operationalRunInstance: Readonly<{ instanceId: string; runId: string }>,
+): AgentRunDelegatedAuthority | undefined {
+  const context = getAgentRunRegistryState().contexts.get(operationalRunInstance.runId);
+  const authority = context?.delegatedAuthority;
+  return authority &&
+    sameOperationalRunInstance(authority.operationalRunInstance, operationalRunInstance) &&
+    ownsCurrentAgentRunClaim(
+      operationalRunInstance.runId,
+      authority.claimId,
+      authority.lifecycleGeneration,
+    )
+    ? authority
+    : undefined;
+}
+
+export function validateAgentRunDelegatedAuthority(authority: AgentRunDelegatedAuthority): boolean {
+  const active = getActiveAgentRunDelegatedAuthority(authority.operationalRunInstance);
+  return (
+    active?.claimId === authority.claimId &&
+    active.lifecycleGeneration === authority.lifecycleGeneration
+  );
+}
+
+/** Compare-releases only the exact authority owned by one admitted execution. */
+export function releaseAgentRunDelegatedAuthority(authority: AgentRunDelegatedAuthority): boolean {
+  if (!validateAgentRunDelegatedAuthority(authority)) {
+    return false;
+  }
+  releaseAgentRunContext(authority.operationalRunInstance.runId, authority.claimId);
+  return true;
+}
+
 /** Lists active runs bound to one current session identity. */
 export function listAgentRunsForSession(params: {
   sessionKey: string;
@@ -465,6 +623,11 @@ export function clearAgentRunContext(
       const wasClearRequested = owners.clearRequested;
       owners.clearRequested = true;
       for (const [ownerClaimId, listener] of owners.clearListeners ?? []) {
+        // A run-id-only terminal projection cannot identify a reused logical
+        // execution. Its exact outer close or abort owns capability revocation.
+        if (ownerClaimId === existing?.delegatedAuthority?.claimId) {
+          continue;
+        }
         listener(ownerClaimId);
       }
       if (!wasClearRequested) {
@@ -491,6 +654,13 @@ export function releaseAgentRunContext(runId: string, claimId: string | undefine
   if (!owners?.claimIds.delete(claimId)) {
     return;
   }
+  const context = state.contexts.get(runId);
+  const authority = context?.delegatedAuthority;
+  if (context && authority?.claimId === claimId) {
+    delete context.delegatedAuthority;
+    notifyDelegatedAuthorityClosed(state, authority);
+  }
+  owners.sweepProtectedClaimIds.delete(claimId);
   const versionBeforeRelease = readAgentRunIndexVersion();
   owners.taskRunIds?.delete(claimId);
   owners.clearListeners?.delete(claimId);
@@ -520,6 +690,13 @@ export function sweepStaleRunContexts(maxAgeMs = 30 * 60 * 1000): number {
     if (
       context.lifecycleGeneration === state.lifecycleGeneration &&
       (state.queuedRunContextLeases?.get(context) ?? 0) > 0
+    ) {
+      continue;
+    }
+    const owners = state.owners.get(runId);
+    if (
+      owners?.lifecycleGeneration === state.lifecycleGeneration &&
+      owners.sweepProtectedClaimIds.size > 0
     ) {
       continue;
     }

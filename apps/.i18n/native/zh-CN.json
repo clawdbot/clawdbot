@@ -8274,6 +8274,41 @@
       "translated": "+${toolCalls.size - 4} 个更多"
     },
     {
+      "id": "native.android.f2da5ffc1adaad58",
+      "source": "+${moreWorkingCount} more working",
+      "translated": "+${moreWorkingCount} 个进行中"
+    },
+    {
+      "id": "native.android.db391c2712f7340b",
+      "source": "+${diff.added}",
+      "translated": "+${diff.added}"
+    },
+    {
+      "id": "native.android.babb72da2d6270a2",
+      "source": "−${diff.removed}",
+      "translated": "−${diff.removed}"
+    },
+    {
+      "id": "native.android.e58b3c8805c79bd0",
+      "source": "Subagent working",
+      "translated": "子代理进行中"
+    },
+    {
+      "id": "native.android.bdfea93e16940c82",
+      "source": "Subagent failed",
+      "translated": "子代理失败"
+    },
+    {
+      "id": "native.android.9fde542e43b4e73b",
+      "source": "Subagent cancelled",
+      "translated": "子代理已取消"
+    },
+    {
+      "id": "native.android.0bba48c12caa076a",
+      "source": "Subagent finished",
+      "translated": "子代理已完成"
+    },
+    {
       "id": "native.android.22d747642a3887cd",
       "source": "$completedCount/${steps.size}",
       "translated": "$completedCount/${steps.size}"
@@ -21824,6 +21859,21 @@
       "translated": "下一步"
     },
     {
+      "id": "native.apple.77671f1903c73f44",
+      "source": " (\\(command) pid \\(pid))",
+      "translated": " (\\(command) pid \\(pid))"
+    },
+    {
+      "id": "native.apple.69779351bd137b5b",
+      "source": "Existing gateway detected",
+      "translated": "检测到现有 gateway"
+    },
+    {
+      "id": "native.apple.ff1e86b4eb896434",
+      "source": "Port \\(port) already in use",
+      "translated": "端口 \\(port) 已被占用"
+    },
+    {
       "id": "native.apple.3db546546fbaf38e",
       "source": "OpenClaw is preparing a local model.",
       "translated": "OpenClaw 正在准备本地模型。"
@@ -22272,21 +22322,6 @@
       "id": "native.apple.d54084b48f40aa0a",
       "source": "OK — OpenClaw won’t start anything yet. Pick Local or Remote later in Settings → General.",
       "translated": "好的 — OpenClaw 还不会启动任何内容。稍后可在 Settings → General 中选择 Local 或 Remote。"
-    },
-    {
-      "id": "native.apple.8d9eb247d41a0ca7",
-      "source": "Existing gateway detected",
-      "translated": "检测到现有 gateway"
-    },
-    {
-      "id": "native.apple.335bb6b21095d15a",
-      "source": "Port \\(probe.port) already in use",
-      "translated": "端口 \\(probe.port) 已被占用"
-    },
-    {
-      "id": "native.apple.de453cb637c46670",
-      "source": " (\\(probe.command) pid \\(probe.pid))",
-      "translated": "（\\(probe.command) pid \\(probe.pid)）"
     },
     {
       "id": "native.apple.9ab228a4cb7d4403",
@@ -25977,6 +26012,11 @@
       "id": "native.apple.b09b91392835fe58",
       "source": "Delete",
       "translated": "删除"
+    },
+    {
+      "id": "native.apple.d5a544f5ba642c60",
+      "source": "+%1$lld more working",
+      "translated": "+%1$lld 个进行中"
     },
     {
       "id": "native.apple.946b677d8dbf0f37",

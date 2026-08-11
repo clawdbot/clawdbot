@@ -41,10 +41,10 @@ const programMocks = vi.hoisted(() => {
 export const configureCommand = programMocks.configureCommand as AnyMock;
 export const setupCommand = programMocks.setupCommand as AnyMock;
 export const setupWizardCommand = programMocks.setupWizardCommand as AnyMock;
-export const callGateway = programMocks.callGateway as AnyMock;
+export const programGatewayCallMock = programMocks.callGateway as AnyMock;
 export const runTui = programMocks.runTui as AnyMock;
 export const runSystemAgentWithInference = programMocks.runSystemAgentWithInference as AnyMock;
-export const ensureConfigReady = programMocks.ensureConfigReady as AnyMock;
+export const ensureConfigReadyMock = programMocks.ensureConfigReady as AnyMock;
 
 export const runtime = programMocks.runtime as {
   log: Mock<(...args: unknown[]) => void>;

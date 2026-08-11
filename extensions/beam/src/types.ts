@@ -1,4 +1,7 @@
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeBoundedOptionalString as readBoundedString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const BEAM_HOST_ID = "gateway";
 export const BEAM_MAX_BODY_BYTES = 56 * 1024;
@@ -47,14 +50,6 @@ function hasOnlyKeys(value: Record<string, unknown>, allowed: Set<string>): bool
   return Object.keys(value).every((key) => allowed.has(key));
 }
 
-function optionalString(value: unknown, maxLength: number): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed && trimmed.length <= maxLength ? trimmed : undefined;
-}
-
 function isIsoTimestamp(value: string): boolean {
   const match =
     /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|([+-])(\d{2}):(\d{2}))$/.exec(
@@ -96,19 +91,19 @@ export function parseBeamUpload(
   if (value.version !== 1) {
     return { ok: false, error: "version must be 1" };
   }
-  const beamId = optionalString(value.beamId, 64);
+  const beamId = readBoundedString(value.beamId, 64);
   if (!beamId || !/^[a-f0-9]{32}$/i.test(beamId)) {
     return { ok: false, error: "beamId must be a 32-character hex id" };
   }
-  const source = optionalString(value.source, 32);
+  const source = readBoundedString(value.source, 32);
   if (!source || !/^[a-z0-9._-]+$/i.test(source)) {
     return { ok: false, error: "source must be a short identifier" };
   }
-  const title = optionalString(value.title, 160);
+  const title = readBoundedString(value.title, 160);
   if (!title) {
     return { ok: false, error: "title must be a non-empty string" };
   }
-  const updatedAt = optionalString(value.updatedAt, 64);
+  const updatedAt = readBoundedString(value.updatedAt, 64);
   if (!updatedAt || !isIsoTimestamp(updatedAt)) {
     return { ok: false, error: "updatedAt must be an ISO timestamp" };
   }
@@ -118,7 +113,8 @@ export function parseBeamUpload(
   if (value.truncated !== undefined && typeof value.truncated !== "boolean") {
     return { ok: false, error: "truncated must be a boolean" };
   }
-  const hookEvent = value.hookEvent === undefined ? undefined : optionalString(value.hookEvent, 64);
+  const hookEvent =
+    value.hookEvent === undefined ? undefined : readBoundedString(value.hookEvent, 64);
   if (value.hookEvent !== undefined && !hookEvent) {
     return { ok: false, error: "hookEvent must be a short string" };
   }
@@ -140,7 +136,7 @@ export function parseBeamUpload(
     ) {
       return { ok: false, error: "transcript item type is invalid" };
     }
-    const text = optionalString(rawItem.text, BEAM_MAX_ITEM_CHARS);
+    const text = readBoundedString(rawItem.text, BEAM_MAX_ITEM_CHARS);
     if (!text) {
       return {
         ok: false,

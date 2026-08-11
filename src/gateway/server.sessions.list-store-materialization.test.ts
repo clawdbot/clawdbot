@@ -45,11 +45,11 @@ async function countMaterializedEntriesForRows(rows: number): Promise<number> {
 
   let materialized = 0;
   // Only the lookup-store path used by sharing resolution goes through
-  // `listSessionEntries`; the listing itself and ACP metadata use the read-only
+  // `listSessionEntriesCore`; the listing itself and ACP metadata use the read-only
   // variant, so this isolates the per-row store loads under test.
-  const original = sessionAccessor.listSessionEntries;
+  const original = sessionAccessor.listSessionEntriesCore;
   const spies = [
-    vi.spyOn(sessionAccessor, "listSessionEntries").mockImplementation(((...args: never[]) => {
+    vi.spyOn(sessionAccessor, "listSessionEntriesCore").mockImplementation(((...args: never[]) => {
       const result = (original as (...inner: never[]) => unknown[])(...args);
       materialized += Array.isArray(result) ? result.length : 0;
       return result;
@@ -281,13 +281,13 @@ test("sessions.list projects out prompt snapshots without changing full entry re
 
   const projections: Array<string | undefined> = [];
   const originalReadOnly = sessionAccessor.listSessionEntriesReadOnly;
-  const originalWritable = sessionAccessor.listSessionEntries;
+  const originalWritable = sessionAccessor.listSessionEntriesCore;
   const spies = [
     vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly").mockImplementation((scope) => {
       projections.push(scope?.projection);
       return originalReadOnly(scope);
     }),
-    vi.spyOn(sessionAccessor, "listSessionEntries").mockImplementation((scope) => {
+    vi.spyOn(sessionAccessor, "listSessionEntriesCore").mockImplementation((scope) => {
       projections.push(scope?.projection);
       return originalWritable(scope);
     }),

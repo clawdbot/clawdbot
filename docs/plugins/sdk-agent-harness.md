@@ -131,10 +131,10 @@ own the full set; an explicit or persisted plugin selection fails closed.
 **Import:** `openclaw/plugin-sdk/agent-harness`
 
 ```typescript
-import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness";
+import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
-const myHarness: AgentHarness = {
+const myHarness: AgentHarnessV2 = {
   id: "my-harness",
   label: "My native agent harness",
 
@@ -340,6 +340,41 @@ the prompt, deliver it through OpenClaw's blocking reply path, and normalize
 choice/free-form answers back into the runtime's native response shape. The
 helper keeps channel/TUI presentation consistent while each harness keeps its
 own protocol parsing and pending-request lifecycle.
+
+Each prepared attempt also receives a versioned `params.hostCapabilities`
+object. Use `bindToolSurface(...)` before exposing plugin-built OpenClaw tools,
+and use its policy and approval operations for native actions. A native action
+whose working directory differs from the attempt may pass
+`nativeOperation: { cwd }` to `runBeforeToolCall(...)`; the host normalizes that
+bounded action fact while keeping identity and policy authority closure-bound. The closure
+binds the host-resolved run, sandbox, requester, route, and approval identity;
+plugins must not reconstruct those fields or retain the capability after the
+attempt returns. Calls made after attempt settlement fail closed.
+
+New harnesses should implement `AgentHarnessV2` and type prepared attempts as
+`AgentHarnessAttemptParamsV2`, `EmbeddedRunAttemptParamsV2`, and
+`AgentHarnessSideQuestionParamsV2`; those contracts require
+`hostCapabilities`. Packages adopting V2 must declare
+`openclaw.compat.pluginApi: ">=2026.8.1"` (or a newer floor) so older hosts
+reject them before load. Import the parameter types from the runtime subpath:
+
+```typescript
+import type {
+  AgentHarnessAttemptParamsV2,
+  AgentHarnessSideQuestionParamsV2,
+  EmbeddedRunAttemptParamsV2,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+```
+
+The older `AgentHarness`,
+`AgentHarnessAttemptParams`, and `EmbeddedRunAttemptParams` names remain
+source-compatible for existing plugins, so the capability field is optional
+in those deprecated parameter types through 2026-10-12. The public
+`AgentHarnessSideQuestionParams` contract has the same compatibility window
+and optional field. Core still supplies
+the capability on every selected attempt. Compatibility is type-level only:
+current harness code must not add a runtime path that operates without the
+host capability.
 
 Native harnesses that need PI-like compact tool routing should use
 `createAgentHarnessToolSurfaceRuntime(...)` from

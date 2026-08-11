@@ -210,6 +210,8 @@ Define providers under `secrets.providers`:
 }
 ```
 
+Provider aliases are source-specific. A matching explicit provider entry wins; if an `env` or `store` default alias is also used by an entry for another source, that source's built-in provider wins. Non-default aliases and `file` or `exec` providers must resolve to an explicit entry with the matching source.
+
 <Accordion title="Env provider">
 - Optional exact-name allowlist via `allowlist`.
 - Missing or empty env values fail resolution.
@@ -265,20 +267,22 @@ but are not displayed because resolver output can contain credential material.
 <Accordion title="Store provider">
 - Reads values from OpenClaw's shared state SQLite database.
 - The provider has no connection settings. `secrets.defaults.store` selects its default alias.
-- Only team scope is resolved in this release. Identity scope is reserved for a later settings experience.
+- Only team scope is resolved in this release. Identity scope is reserved for a later release.
 
 </Accordion>
 
 ## Shared secret store
 
-The shared secret store is a Gateway-wide, team-scoped place for secrets and environment values that should be available to every Gateway process using the same state database. Manage it locally with `openclaw secrets store`; there are no Gateway URL or token options for these commands.
+The shared secret store is a Gateway-wide, team-scoped place for secrets and environment values that should be available to every Gateway process using the same state database. Manage it from **Settings → Secrets** in the Control UI or locally with `openclaw secrets store`. The CLI commands operate on the local state database and do not accept Gateway URL or token options.
 
 Entries have a `secret` or `env` kind. The kind controls CLI disclosure, not SecretRef resolution:
 
-- `secret` values are write-only through the CLI. List and get output never reveal them.
-- `env` values can be returned by `store list` and `store get`.
+- `secret` values are write-only after saving. Gateway list results, the Control UI, and CLI list/get output never include them; there is no reveal RPC.
+- `env` values remain visible to administrators in the Control UI and can be returned by `store list` and `store get`. Team-scoped `env` entries are also added to agent exec environments, after inherited process values and before explicit per-call env. Protected host keys and sandbox-blocked credential names are ignored with a visible warning.
 
-Names use the same uppercase grammar as env SecretRefs, and each UTF-8 value is limited to 64 KiB (65,536 bytes). This supports PEM keys and service-account JSON without inheriting the smaller limits of ordinary environment variables.
+`secret` entries are never injected into subprocess environments. They remain available only through `store` SecretRefs because plaintext env injection would bypass the store disclosure boundary; safe secret injection requires a future egress-substitution mechanism.
+
+Names use the same uppercase grammar as env SecretRefs, and each UTF-8 value is limited to 64 KiB (65,536 bytes). A `secret` entry must carry a value; empty secrets are rejected because they would surface only as a confusing downstream auth failure. `env` entries may be empty. This supports PEM keys and service-account JSON without inheriting the smaller limits of ordinary environment variables.
 
 Reference an entry from `openclaw.json` with the `store` source:
 
@@ -294,7 +298,7 @@ Reference an entry from `openclaw.json` with the `store` source:
 }
 ```
 
-After changing a value used by config, run `openclaw secrets reload` so the active in-memory snapshot picks it up.
+Control UI set/delete operations automatically refresh the active secrets runtime when the changed name is referenced by a `store` SecretRef in the active source config. Names that are not referenced skip that work. Direct CLI writes remain an offline/local path; after changing a config-referenced value with the CLI, run `openclaw secrets reload` so the active in-memory snapshot picks it up.
 
 <Warning>
 Store values are not encrypted at rest. They are stored unencrypted in the shared state SQLite database (`state/openclaw.sqlite`), protected by the same `0600` file and `0700` directory permissions as other credentials in that database. Operators who need stronger storage isolation should use an external exec provider such as the [1Password plugin](/plugins/onepassword) or [Vault SecretRefs](/plugins/vault).
@@ -807,9 +811,11 @@ For static credentials, runtime no longer depends on plaintext legacy auth stora
 - Legacy static `api_key` entries are scrubbed when discovered.
 - OAuth-related compatibility behavior remains separate.
 
-## Web UI note
+## Control UI
 
-Some SecretInput unions are easier to configure in raw editor mode than in form mode.
+Open **Settings → Secrets** to list, add, edit, bulk-import, or soft-delete team-scoped entries. Bulk Add accepts dotenv `NAME=VALUE` assignments, including quoted multiline values. Credential-like names default to `secret`; clear **Auto-detect secrets** to import all entries as visible environment values.
+
+This store page manages values only. Configure the corresponding `store` SecretRef on a supported field through its settings form or the raw editor. Identity-scoped entries are reserved for a later release and are not exposed by this page.
 
 ## Related
 

@@ -20,10 +20,10 @@ import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
-  listSessionEntries as listAccessorSessionEntries,
+  listSessionEntriesCore as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
-  patchSessionEntry as patchAccessorSessionEntry,
+  patchSessionEntryCore as patchAccessorSessionEntry,
   replaceSessionEntry,
   rollbackAgentHarnessSessionEntryLifecycle,
   rollbackPluginOwnedSessionEntryLifecycle,
@@ -617,7 +617,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     Partial<Pick<PluginRuntime["agent"], "runEmbeddedAgent" | "runEmbeddedPiAgent" | "session">>;
 
   defineCachedValue(agentRuntime, "runEmbeddedAgent", () =>
-    createLazyRuntimeMethod(loadEmbeddedAgentRuntime, (runtime) => runtime.runEmbeddedAgent),
+    createLazyRuntimeMethod(loadEmbeddedAgentRuntime, (runtime) => runtime.runPluginEmbeddedAgent),
   );
   defineCachedValue(
     agentRuntime,

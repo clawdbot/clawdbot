@@ -176,8 +176,11 @@ enum CLIInstaller {
         return locations
     }
 
-    static func managedExecutableLocation() -> String {
-        URL(fileURLWithPath: self.installPrefix())
+    static func managedExecutableLocation(
+        homeDirectory: URL = FileManager().homeDirectoryForCurrentUser,
+        profile: AppProfile = .current) -> String
+    {
+        URL(fileURLWithPath: self.installPrefix(homeDirectory: homeDirectory, profile: profile))
             .appendingPathComponent("bin/openclaw")
             .path
     }
@@ -430,10 +433,13 @@ enum CLIInstaller {
         target == .channel(.dev) ? 7200 : 900
     }
 
-    private static func installPrefix() -> String {
-        FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent(".openclaw")
-            .path
+    static func installPrefix(
+        homeDirectory: URL = FileManager().homeDirectoryForCurrentUser,
+        profile: AppProfile = .current) -> String
+    {
+        // Managed install identity follows only the profile; a state override must not split
+        // the install used by its LaunchAgent.
+        profile.stateDirectoryURL(homeDirectory: homeDirectory).path
     }
 
     static func installScriptCommand(

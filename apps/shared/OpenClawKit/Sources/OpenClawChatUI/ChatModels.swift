@@ -877,6 +877,7 @@ public struct OpenClawChatPendingToolCall: Identifiable, Hashable, Sendable {
     public let args: AnyCodable?
     public let startedAt: Double?
     public let isError: Bool?
+    let diffStat: ChatToolDiffStat?
 }
 
 public struct OpenClawGatewayHealthOK: Codable, Sendable {

@@ -1,7 +1,7 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../../i18n/index.ts";
-import type { RuntimeConfigCapability } from "./index.ts";
+import type { RuntimeConfigCapability } from "./runtime-config-capability.ts";
 
 export const MCP_SERVER_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 

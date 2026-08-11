@@ -2,6 +2,7 @@
 // Checks or refreshes generated release artifacts before a release publish.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { coerceErrorMessage as formatError } from "./lib/error-format.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
 
@@ -251,10 +252,6 @@ function readPlistString(infoPlist: string, key: string) {
     };
   }
   return { value: matches[0]![1]?.trim() ?? "" };
-}
-
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 async function runTaskGraph({

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   isSessionTranscriptProjectionUnavailableError,
   readRecentSessionTranscriptMessageEvents,
@@ -24,13 +25,13 @@ import {
   ArchivedTranscriptReader,
   attachOpenClawTranscriptMeta,
   buildSessionPreviewItems,
-  readLatestSessionUsageFromTranscriptAsync as readLatestSessionUsageFromTranscriptAsyncFile,
+  readLatestSessionUsageFromTranscriptFileAsync,
 } from "./session-utils.fs.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
 
 export type { ReadSessionMessagesAsyncOptions };
 export { attachOpenClawTranscriptMeta, capArrayByJsonBytes } from "./session-utils.fs.js";
-export { readSessionTranscriptVisibleMessageDelta } from "../config/sessions/session-accessor.js";
+export { readSessionTranscriptVisibleMessageDeltaCore } from "../config/sessions/session-accessor.js";
 
 export type { SessionTranscriptReadScope };
 
@@ -96,10 +97,7 @@ function archivedTranscriptReader(target: ResolvedTranscriptReadTarget): Archive
 }
 
 function readTranscriptRecordTimestampMs(event: Record<string, unknown>): number | undefined {
-  const raw = event.timestamp;
-  const timestampMs =
-    typeof raw === "string" ? Date.parse(raw) : typeof raw === "number" ? raw : Number.NaN;
-  return Number.isFinite(timestampMs) ? timestampMs : undefined;
+  return parseDateFirstTimestampMs(event.timestamp);
 }
 
 function extractMessageRecord(
@@ -234,7 +232,7 @@ export function extractMessageRole(message: unknown): string | undefined {
     : undefined;
 }
 
-export function extractMessageText(message: unknown): string | null {
+export function extractSessionTranscriptText(message: unknown): string | null {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     return null;
   }
@@ -433,7 +431,7 @@ export async function readLatestSessionUsageFromTranscriptAsync(
     path.isAbsolute(artifactFile) &&
     artifactFile.endsWith(".jsonl")
   ) {
-    return await readLatestSessionUsageFromTranscriptAsyncFile(
+    return await readLatestSessionUsageFromTranscriptFileAsync(
       scope.sessionId,
       concreteStorePath,
       artifactFile,

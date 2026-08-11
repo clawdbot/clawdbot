@@ -234,7 +234,7 @@ export function registerRuntimeAuthProfileStoreMutationListener(
 }
 
 /** Reads a cloned runtime auth profile store snapshot for an agent dir. */
-export function getRuntimeAuthProfileStoreSnapshot(
+export function getRuntimeAuthProfileStoreSnapshotCore(
   agentDir?: string,
 ): RuntimeAuthProfileStore | undefined {
   const store = runtimeAuthStoreSnapshots.get(resolveRuntimeStoreKey(agentDir));
@@ -245,12 +245,12 @@ export function getRuntimeAuthProfileStoreSnapshot(
  * Reads the effective prepared auth store without falling back to persisted storage.
  * Lifecycle consumers use this after auth publication so request paths never reopen SQLite.
  */
-export function getPreparedRuntimeAuthProfileStoreSnapshot(
+export function getPreparedRuntimeAuthProfileStoreSnapshotCore(
   agentDir?: string,
   inheritedAuthDir?: string,
 ): AuthProfileStore | undefined {
-  const inherited = getRuntimeAuthProfileStoreSnapshot(inheritedAuthDir);
-  const requested = getRuntimeAuthProfileStoreSnapshot(agentDir);
+  const inherited = getRuntimeAuthProfileStoreSnapshotCore(inheritedAuthDir);
+  const requested = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
   if (!agentDir || resolveRuntimeStoreKey(agentDir) === resolveRuntimeStoreKey(inheritedAuthDir)) {
     return requested ?? inherited;
   }
@@ -280,20 +280,20 @@ export function hasRuntimeAuthProfileStoreSnapshot(agentDir?: string): boolean {
 
 /** Returns true when requested or main runtime snapshots contain profiles. */
 export function hasAnyRuntimeAuthProfileStoreSource(agentDir?: string): boolean {
-  const requestedStore = getRuntimeAuthProfileStoreSnapshot(agentDir);
+  const requestedStore = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
   if (requestedStore && Object.keys(requestedStore.profiles).length > 0) {
     return true;
   }
   if (!agentDir) {
     return false;
   }
-  const mainStore = getRuntimeAuthProfileStoreSnapshot();
+  const mainStore = getRuntimeAuthProfileStoreSnapshotCore();
   return Boolean(mainStore && Object.keys(mainStore.profiles).length > 0);
 }
 
 /** Replaces all runtime auth profile snapshots with cloned entries. */
 export function replaceRuntimeAuthProfileStoreSnapshots(
-  entries: Array<{ agentDir?: string; store: RuntimeAuthProfileStore }>,
+  entries: Array<{ agentDir?: string; store: AuthProfileStore }>,
 ): void {
   const credentialsChanged = replaceChangesCredentials(entries);
   const ownerChanged = replaceChangesOwner(entries);
@@ -342,7 +342,7 @@ export function clearRuntimeAuthProfileStoreSnapshots(): void {
 }
 
 /** Clears one runtime auth-profile snapshot without disturbing other active agents. */
-export function clearRuntimeAuthProfileStoreSnapshot(agentDir?: string): boolean {
+export function clearRuntimeAuthProfileStoreSnapshotCore(agentDir?: string): boolean {
   const key = resolveRuntimeStoreKey(agentDir);
   const store = runtimeAuthStoreSnapshots.get(key);
   if (!store) {

@@ -38,15 +38,17 @@ import {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import WebSocket from "ws";
 import {
   asFiniteNumber,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import WebSocket from "ws";
+import {
   captureOpenAIRealtimeWsClose,
   createOpenAIRealtimeClientSecret,
   readRealtimeErrorDetail,
   resolveOpenAIProviderConfigRecord,
-  trimToUndefined,
 } from "./realtime-provider-shared.js";
 import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
@@ -272,7 +274,7 @@ function normalizeProviderConfig(
       value: raw?.apiKey,
       path: "plugins.entries.voice-call.config.realtime.providers.openai.apiKey",
     }),
-    model: trimToUndefined(raw?.model),
+    model: normalizeOptionalString(raw?.model),
     voice: normalizeOpenAIRealtimeVoice(raw?.speakerVoice ?? raw?.voice),
     temperature: asFiniteNumber(raw?.temperature),
     vadThreshold: asUnitInterval(raw?.vadThreshold),
@@ -283,10 +285,10 @@ function normalizeProviderConfig(
         ? raw.interruptResponseOnInputAudio
         : undefined,
     minBargeInAudioEndMs: asNonNegativeInteger(raw?.minBargeInAudioEndMs),
-    reasoningEffort: trimToUndefined(raw?.reasoningEffort),
-    azureEndpoint: trimToUndefined(raw?.azureEndpoint),
-    azureDeployment: trimToUndefined(raw?.azureDeployment),
-    azureApiVersion: trimToUndefined(raw?.azureApiVersion),
+    reasoningEffort: normalizeOptionalString(raw?.reasoningEffort),
+    azureEndpoint: normalizeOptionalString(raw?.azureEndpoint),
+    azureDeployment: normalizeOptionalString(raw?.azureDeployment),
+    azureApiVersion: normalizeOptionalString(raw?.azureApiVersion),
   };
 }
 
@@ -2113,7 +2115,7 @@ function buildOpenAIRealtimeBrowserSessionConfig(
     session.tools = tools;
     session.tool_choice = "auto";
   }
-  const reasoningEffort = trimToUndefined(req.reasoningEffort) ?? config.reasoningEffort;
+  const reasoningEffort = normalizeOptionalString(req.reasoningEffort) ?? config.reasoningEffort;
   if (reasoningEffort) {
     session.reasoning = { effort: reasoningEffort };
   }
@@ -2150,7 +2152,7 @@ async function createOpenAIRealtimeBrowserSession(
       model,
       noiseReduction: { type: "near_field" },
       prefixPaddingMs: req.prefixPaddingMs ?? config.prefixPaddingMs,
-      reasoningEffort: trimToUndefined(req.reasoningEffort) ?? config.reasoningEffort,
+      reasoningEffort: normalizeOptionalString(req.reasoningEffort) ?? config.reasoningEffort,
       silenceDurationMs: req.silenceDurationMs ?? config.silenceDurationMs,
       tools: normalizeOpenAIRealtimeTools(req.tools),
       vadThreshold: req.vadThreshold ?? config.vadThreshold,
@@ -2204,7 +2206,7 @@ async function createOpenAIRealtimeBrowserSession(
     if (!quicksilverBroker) {
       throw new Error("OpenAI GPT-Live browser session broker is unavailable");
     }
-    const configuredVoice = trimToUndefined(rawConfig?.speakerVoice ?? rawConfig?.voice);
+    const configuredVoice = normalizeOptionalString(rawConfig?.speakerVoice ?? rawConfig?.voice);
     const quicksilverRequest = {
       ...req,
       model,

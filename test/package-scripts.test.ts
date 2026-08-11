@@ -140,9 +140,9 @@ describe("package scripts", () => {
     );
   });
 
-  it("runs browser copilot E2E against real Chromium", () => {
-    expect(readPackageJson().scripts["test:e2e:browser-copilot"]).toBe(
-      "node --import tsx scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node --import tsx scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import tsx scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_COPILOT_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts extensions/browser/chrome-extension/page-share.e2e.test.ts extensions/browser/chrome-extension/sidepanel.e2e.test.ts",
+  it("runs browser extension bootstrap E2E against real Chromium", () => {
+    expect(readPackageJson().scripts["test:e2e:browser-extension"]).toBe(
+      "node --import tsx scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node --import tsx scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import tsx scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_EXTENSION_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
     );
   });
 
@@ -197,12 +197,6 @@ describe("package scripts", () => {
     );
   });
 
-  it("runs Doctor SecretRef ACL coverage in Windows CI", () => {
-    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
-      "test/e2e/qa-lab/runtime/doctor-auth-secretref-checks.e2e.test.ts",
-    );
-  });
-
   it("runs the Doctor managed-service SecretRef renderer in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "src/commands/doctor-gateway-auth-token.windows.test.ts",
@@ -237,6 +231,10 @@ describe("package scripts", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "src/infra/ssh-client.windows.test.ts",
     );
+  });
+
+  it("runs native port diagnostics coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain("src/infra/ports.test.ts");
   });
 
   it("keeps the native Scheduled Task lifecycle proof opt-in", () => {
@@ -354,5 +352,27 @@ describe("package scripts", () => {
     expect(script).toContain("packages/terminal-core/src/display-string.test.ts");
     expect(script).toContain("src/agents/sandbox/fs-paths.test.ts");
     expect(script).toContain("src/agents/sessions/tools/render-utils.test.ts");
+  });
+
+  it("runs native OS-home path tool coverage in Windows CI", () => {
+    const script = readPackageJson().scripts["test:windows:ci"];
+
+    expect(script).toContain("src/agents/agent-tools.read.windows.test.ts");
+    expect(script).toContain("src/agents/agent-tools.read.host-operations.test.ts");
+    expect(script).toContain("src/agents/sessions/tools/path-utils.test.ts");
+  });
+
+  it("runs child environment and native doctor coverage in Windows CI", () => {
+    const script = readPackageJson().scripts["test:windows:ci"];
+
+    expect(script).toContain("src/agents/provider-local-service.env-case.test.ts");
+    expect(script).toContain("src/infra/process-env.test.ts");
+    expect(script).toContain("src/cli/mcp-cli.path-case.windows.test.ts");
+  });
+
+  it("runs explicit memory extra-file casing coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "extensions/memory-core/src/memory-extra-file-path.windows.test.ts",
+    );
   });
 });

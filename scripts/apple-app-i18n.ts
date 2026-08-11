@@ -166,7 +166,6 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     "struct SettingsCardGroup<Content: View>: View {\n    let title: SettingsTextValue",
     "struct SettingsCardRow<Content: View>: View {\n    let title: SettingsTextValue\n    let subtitle: SettingsTextValue?",
     "struct SettingsCardToggleRow: View {\n    let title: SettingsTextValue\n    let subtitle: SettingsTextValue?",
-    "struct SettingsToggleRow: View {\n    let title: SettingsTextValue\n    let subtitle: SettingsTextValue?",
     "Text(verbatim: value)",
   ],
   "apps/ios/Sources/Design/OpenClawProComponents.swift": [

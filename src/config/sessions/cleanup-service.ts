@@ -17,7 +17,7 @@ import {
 import { resolveStorePath } from "./paths.js";
 import {
   applySessionEntryLifecycleMutation,
-  listSessionEntries,
+  listSessionEntriesCore,
   loadTranscriptEventsSync,
   purgeDeletedAgentSessionEntries,
   type SessionEntryLifecycleRemoval,
@@ -120,7 +120,7 @@ function loadCleanupSessionStore(
     return {};
   }
   return Object.fromEntries(
-    listSessionEntries({
+    listSessionEntriesCore({
       agentId: target.agentId,
       storePath: target.storePath,
     }).map(({ sessionKey, entry }) => [sessionKey, entry]),

@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   hashCodexAppServerBindingFingerprint,
@@ -15,6 +15,7 @@ import {
 import {
   createAppServerOptions,
   createParams,
+  resetThreadLifecycleTestFixtures,
   startOrResumeThread,
   threadResumeResult,
   threadStartResult,
@@ -31,6 +32,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
   });
 
   afterEach(async () => {
+    resetThreadLifecycleTestFixtures();
     if (tempDir) {
       await fs.rm(tempDir, { recursive: true, force: true });
     }

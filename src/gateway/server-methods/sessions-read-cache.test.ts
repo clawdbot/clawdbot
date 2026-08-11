@@ -3,7 +3,7 @@ import type { SessionsListParams } from "../../../packages/gateway-protocol/src/
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
-} from "../../agents/subagent-registry.test-helpers.js";
+} from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   loadSessionEntry,
@@ -31,15 +31,15 @@ vi.mock("../session-utils.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../session-utils.js")>();
   return {
     ...actual,
-    loadCombinedSessionStoreForGateway: (
-      ...args: Parameters<typeof actual.loadCombinedSessionStoreForGateway>
+    loadCombinedSessionStoreForGatewayCore: (
+      ...args: Parameters<typeof actual.loadCombinedSessionStoreForGatewayCore>
     ) => {
       loader.calls(...args);
       if (loader.failNext) {
         loader.failNext = false;
         throw new Error("synthetic store load failure");
       }
-      return actual.loadCombinedSessionStoreForGateway(...args);
+      return actual.loadCombinedSessionStoreForGatewayCore(...args);
     },
     listSessionsFromStoreAsync: async (
       ...args: Parameters<typeof actual.listSessionsFromStoreAsync>

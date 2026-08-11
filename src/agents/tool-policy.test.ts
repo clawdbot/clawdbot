@@ -13,7 +13,7 @@ import {
   DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
   expandToolGroups,
   hasRestrictiveAllowPolicy,
-  normalizeToolName,
+  normalizeToolPolicyName,
   resolveToolProfilePolicy,
   TOOL_GROUPS,
 } from "./tool-policy.js";
@@ -49,12 +49,12 @@ describe("tool-policy", () => {
   });
 
   it("normalizes tool names and aliases", () => {
-    expect(normalizeToolName(" BASH ")).toBe("exec");
-    expect(normalizeToolName("apply-patch")).toBe("apply_patch");
-    expect(normalizeToolName("READ")).toBe("read");
+    expect(normalizeToolPolicyName(" BASH ")).toBe("exec");
+    expect(normalizeToolPolicyName("apply-patch")).toBe("apply_patch");
+    expect(normalizeToolPolicyName("READ")).toBe("read");
     // Pre-rename scheduler tool name from persisted config (RFC 0026).
-    expect(normalizeToolName("cron")).toBe("automations");
-    expect(normalizeToolName("automations")).toBe("automations");
+    expect(normalizeToolPolicyName("cron")).toBe("automations");
+    expect(normalizeToolPolicyName("automations")).toBe("automations");
   });
 
   it("collects explicit allowlist entries", () => {

@@ -359,7 +359,10 @@ export class ProfilePage extends OpenClawLightDomElement {
   private renderAvatar(avatarUrl: string | null, textAvatar: string | null, name: string) {
     const imageUrl = avatarUrl?.startsWith("/")
       ? this.heroAvatarAuthReady
-        ? this.heroAvatarLoader.resolve(avatarUrl, this.heroAvatarAuthToken)
+        ? this.heroAvatarLoader.resolve(
+            avatarUrl,
+            this.heroAvatarAuthToken ? [this.heroAvatarAuthToken] : [],
+          )
         : null
       : avatarUrl;
     if (avatarUrl && avatarUrl !== this.failedHeroAvatarUrl) {

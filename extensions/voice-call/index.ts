@@ -4,6 +4,7 @@ import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
+  asNonArrayRecord,
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -88,9 +89,7 @@ const VoiceCallToolSchema = Type.Union([
 ]);
 
 function asParamRecord(params: unknown): Record<string, unknown> {
-  return params && typeof params === "object" && !Array.isArray(params)
-    ? (params as Record<string, unknown>)
-    : {};
+  return asNonArrayRecord(params);
 }
 
 function isCliOnlyProcess(): boolean {

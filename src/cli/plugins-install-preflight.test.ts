@@ -1,17 +1,17 @@
 // Invalid plugin install requests must fail before persistent state or source execution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  installHooksFromNpmSpec,
-  installHooksFromPath,
-  installPluginFromClawHub,
-  installPluginFromGitSpec,
-  installPluginFromMarketplace,
-  installPluginFromNpmPackArchive,
-  installPluginFromNpmSpec,
-  installPluginFromPath,
-  parseClawHubPluginSpec,
-  promptYesNo,
-  readConfigFileSnapshotForWrite,
+  installHooksFromNpmSpecMock,
+  installHooksFromPathMock,
+  installPluginFromClawHubMock,
+  installPluginFromGitSpecMock,
+  installPluginFromMarketplaceMock,
+  installPluginFromNpmPackArchiveMock,
+  installPluginFromNpmSpecMock,
+  installPluginFromPathMock,
+  parseClawHubPluginSpecMock,
+  promptYesNoMock,
+  readConfigFileSnapshotForWriteMock,
   resetPluginsCliTestState,
   resolveMarketplaceInstallShortcut,
   runPluginsCommand,
@@ -30,16 +30,16 @@ vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
 
 function expectNoPluginInstallSideEffects(): void {
   expect(withPluginLifecycleLeaseMock).not.toHaveBeenCalled();
-  expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
-  expect(promptYesNo).not.toHaveBeenCalled();
-  expect(installPluginFromClawHub).not.toHaveBeenCalled();
-  expect(installPluginFromGitSpec).not.toHaveBeenCalled();
-  expect(installPluginFromMarketplace).not.toHaveBeenCalled();
-  expect(installPluginFromNpmPackArchive).not.toHaveBeenCalled();
-  expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
-  expect(installPluginFromPath).not.toHaveBeenCalled();
-  expect(installHooksFromNpmSpec).not.toHaveBeenCalled();
-  expect(installHooksFromPath).not.toHaveBeenCalled();
+  expect(readConfigFileSnapshotForWriteMock).not.toHaveBeenCalled();
+  expect(promptYesNoMock).not.toHaveBeenCalled();
+  expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
+  expect(installPluginFromGitSpecMock).not.toHaveBeenCalled();
+  expect(installPluginFromMarketplaceMock).not.toHaveBeenCalled();
+  expect(installPluginFromNpmPackArchiveMock).not.toHaveBeenCalled();
+  expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+  expect(installPluginFromPathMock).not.toHaveBeenCalled();
+  expect(installHooksFromNpmSpecMock).not.toHaveBeenCalled();
+  expect(installHooksFromPathMock).not.toHaveBeenCalled();
   expect(writeConfigFile).not.toHaveBeenCalled();
 }
 
@@ -179,7 +179,7 @@ describe("plugin install mutation-free preflight", () => {
     },
   ])("rejects $label before the lifecycle lease", async ({ args, error }) => {
     if (args[0] === "clawhub:demo") {
-      parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
+      parseClawHubPluginSpecMock.mockReturnValue({ name: "demo" });
     }
 
     await expect(runPluginsCommand(["plugins", "install", ...args, "--force"])).rejects.toThrow(

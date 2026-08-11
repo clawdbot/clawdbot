@@ -44,7 +44,7 @@ vi.mock("../infra/state-migrations.js", async () => ({
 }));
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
-  listSessionEntries: listSessionEntriesMock,
+  listSessionEntriesCore: listSessionEntriesMock,
   listSessionEntriesReadOnly: listSessionEntriesMock,
 }));
 

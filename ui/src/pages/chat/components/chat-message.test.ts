@@ -9,9 +9,11 @@ import * as localStorageModule from "../../../local-storage.ts";
 import * as chatAvatar from "../chat-avatar.ts";
 import { renderChatNotice } from "./chat-divider.ts";
 import { isTextyDocumentAttachment } from "./chat-message-document-preview.ts";
-import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import {
-  getAssistantAttachmentAvailabilityRenderVersion,
+  getChatMediaRenderVersion,
+  releaseChatMediaResourceSubscriber,
+} from "./chat-message-media.ts";
+import {
   dismissConfirmedActionPopovers,
   renderActivityGroup,
   renderMessageGroup,
@@ -1547,14 +1549,11 @@ describe("grouped chat rendering", () => {
     expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(0);
     expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
     expect(container.querySelector(".chat-working-indicator__elapsed")).not.toBeNull();
+    expect(container.querySelector(".chat-working-indicator__status > .sr-only")?.textContent).toBe(
+      "Working…",
+    );
     expect(
-      container.querySelector(".chat-working-indicator__status > .agent-chat__sr-only")
-        ?.textContent,
-    ).toBe("Working…");
-    expect(
-      container.querySelectorAll(
-        ".chat-working-indicator__status > span:not(.agent-chat__sr-only)",
-      ),
+      container.querySelectorAll(".chat-working-indicator__status > span:not(.sr-only)"),
     ).toHaveLength(0);
     expect(container.querySelector(".chat-group-footer")).toBeNull();
   });
@@ -1611,9 +1610,7 @@ describe("grouped chat rendering", () => {
       label,
     );
     expect(container.querySelector(".chat-working-indicator__elapsed")).not.toBeNull();
-    expect(
-      container.querySelector(".chat-working-indicator__status > .agent-chat__sr-only"),
-    ).toBeNull();
+    expect(container.querySelector(".chat-working-indicator__status > .sr-only")).toBeNull();
   });
 
   it("formats terminal recap durations with full localized units", () => {
@@ -1763,8 +1760,8 @@ describe("grouped chat rendering", () => {
       );
       const status = container.querySelector(".chat-working-indicator__status");
       return {
-        hidden: status?.querySelector(".agent-chat__sr-only")?.textContent,
-        visibleLabels: status?.querySelectorAll("span:not(.agent-chat__sr-only)").length,
+        hidden: status?.querySelector(".sr-only")?.textContent,
+        visibleLabels: status?.querySelectorAll("span:not(.sr-only)").length,
         // The whimsical long-wait phrase rides in its own aria-hidden element,
         // never as a plain status span screen readers would announce.
         decorativePhrases: status?.querySelectorAll("openclaw-working-phrase[aria-hidden]").length,
@@ -1921,6 +1918,8 @@ describe("grouped chat rendering", () => {
       renderChatNotice({
         kind: "notice",
         key: "notice:command",
+        icon: "cpu",
+        label: "System",
         text: "**first line**\nsecond line\n<img src=x onerror=alert(1)><script>alert(1)</script>",
         timestamp: 1000,
       }),
@@ -1928,6 +1927,11 @@ describe("grouped chat rendering", () => {
     );
 
     const notice = container.querySelector<HTMLElement>(".chat-notice");
+    expect(notice?.querySelector(".chat-divider__title")?.textContent).toBe("System");
+    expect(notice?.querySelector(".chat-divider__icon svg")).not.toBeNull();
+    expect(notice?.querySelector(".chat-avatar")).toBeNull();
+    expect(notice?.querySelector(".chat-author-avatar")).toBeNull();
+    expect(notice?.querySelector(".chat-sender-name")).toBeNull();
     expect(notice?.querySelector("strong")?.textContent).toBe("first line");
     expect(notice?.textContent).not.toContain("**");
     expect(notice?.querySelector("br")).not.toBeNull();
@@ -3988,12 +3992,12 @@ describe("grouped chat rendering", () => {
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toContain("mediaTicket=ticket-old");
-    const renderVersionBeforeRefresh = getAssistantAttachmentAvailabilityRenderVersion();
+    const renderVersionBeforeRefresh = getChatMediaRenderVersion();
 
     await vi.advanceTimersByTimeAsync(1_001);
     await flushAssistantAttachmentAvailabilityChecks();
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(getAssistantAttachmentAvailabilityRenderVersion()).not.toBe(renderVersionBeforeRefresh);
+    expect(getChatMediaRenderVersion()).not.toBe(renderVersionBeforeRefresh);
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toContain("mediaTicket=ticket-new");
@@ -4563,7 +4567,10 @@ describe("grouped chat rendering", () => {
       },
     );
     const imageBlob = new Blob(["png"], { type: "image/png" });
-    const fetchMock = vi.fn(async () => ({ ok: true, blob: async () => imageBlob }));
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => ({
+      ok: true,
+      blob: async () => imageBlob,
+    }));
     vi.stubGlobal("fetch", fetchMock);
     let copiedBlob: Blob | undefined;
     class ClipboardItemMock {
@@ -4574,7 +4581,12 @@ describe("grouped chat rendering", () => {
     });
     vi.stubGlobal("ClipboardItem", ClipboardItemMock);
     vi.stubGlobal("navigator", { clipboard: { write } });
-    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const clickedDownloads: string[] = [];
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        clickedDownloads.push(this.download);
+      });
     const toastHost = document.body.appendChild(document.createElement("openclaw-toast-host"));
     const container = document.body.appendChild(document.createElement("div"));
     renderAssistantMessage(
@@ -4587,12 +4599,14 @@ describe("grouped chat rendering", () => {
 
     expectElement(container, 'button[aria-label="Download image"]', HTMLButtonElement).click();
     await vi.waitFor(() => expect(click).toHaveBeenCalledOnce());
-    expect(click.mock.instances[0]?.download).toBe("Ticketed image.png");
+    expect(clickedDownloads[0]).toBe("Ticketed image.png");
 
     expectElement(container, 'button[aria-label="Copy image"]', HTMLButtonElement).click();
     await vi.waitFor(() => expect(copiedBlob?.type).toBe("image/png"));
     await vi.waitFor(() => expect(toastHost.textContent).toContain("Copied!"));
-    expect(fetchMock.mock.calls.filter(([url]) => url === ticketedUrl)).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter((call: unknown[]) => call[0] === ticketedUrl)).toHaveLength(
+      1,
+    );
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
     toastHost.remove();
     container.remove();

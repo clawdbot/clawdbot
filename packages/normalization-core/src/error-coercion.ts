@@ -125,6 +125,11 @@ export function toErrorObject(value: unknown, fallbackMessage: string): Error {
   return error;
 }
 
+/** Reads Error messages unchanged and stringifies every other value. */
+export function coerceErrorMessage(value: unknown): string {
+  return value instanceof Error ? value.message : String(value);
+}
+
 /** Renders a non-Error cause as useful text without throwing. */
 export function stringifyNonErrorCause(value: unknown): string {
   if (value === null) {

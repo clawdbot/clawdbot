@@ -16,12 +16,13 @@ type CoreGatewayMethodSpec = {
   advertise?: false;
   startup?: true;
   controlPlaneWrite?: true;
+  compatibilityRestored?: true;
 };
 
 type CoreGatewayMethodMetadata = Pick<CoreGatewayMethodSpec, "name" | "scope" | "since">;
 type CoreGatewayMethodPolicy = Pick<
   CoreGatewayMethodSpec,
-  "advertise" | "startup" | "controlPlaneWrite"
+  "advertise" | "startup" | "controlPlaneWrite" | "compatibilityRestored"
 >;
 type CoreGatewayMethodSpecRow = readonly [
   name: string,
@@ -299,6 +300,15 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["cron.run", "cron", "operator.admin", "<=2026.7"],
   ["cron.runs", "cron", "operator.read", "<=2026.7"],
   ["gateway.identity.get", "system", "operator.read", "<=2026.7"],
+  // Deprecated read-only compatibility preview; new restart flows request the
+  // restart directly, while atomic host suspension uses gateway.suspend.prepare.
+  [
+    "gateway.restart.preflight",
+    "restart",
+    "operator.read",
+    "<=2026.7",
+    { compatibilityRestored: true },
+  ],
   ["gateway.restart.request", "restart", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
   ["system-presence", "system", "operator.read", "<=2026.7"],
   ["system-event", "system", "operator.admin", "<=2026.7"],
@@ -483,6 +493,15 @@ const CORE_GATEWAY_METHOD_SPECS = [
   // Additive catalog terminal start appends so older advertised indices stay stable.
   ["sessions.catalog.startTerminal", "session-catalog", "operator.admin", "2026.8"],
   ["worker.desktop.observe", "environments", "operator.admin", "2026.8", { startup: true }],
+  // First-class project RPCs append so every older advertised index remains stable.
+  ["projects.list", "projects", "operator.read", "2026.8"],
+  ["projects.register", "projects", "operator.admin", "2026.8"],
+  ["projects.remove", "projects", "operator.admin", "2026.8"],
+  ["worker.desktop.launch", "environments", "operator.admin", "2026.8", { startup: true }],
+  // Store CRUD shares the auxiliary secrets runtime owner and appends for stable indices.
+  ["secrets.store.list", null, "operator.admin", "2026.8"],
+  ["secrets.store.set", null, "operator.admin", "2026.8", { controlPlaneWrite: true }],
+  ["secrets.store.delete", null, "operator.admin", "2026.8", { controlPlaneWrite: true }],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;
@@ -502,6 +521,9 @@ const CORE_GATEWAY_METHOD_SPEC_LIST: readonly CoreGatewayMethodSpec[] =
     }
     if (normalizedPolicy?.controlPlaneWrite === true) {
       spec.controlPlaneWrite = true;
+    }
+    if (normalizedPolicy?.compatibilityRestored === true) {
+      spec.compatibilityRestored = true;
     }
     return spec;
   });

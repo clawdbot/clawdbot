@@ -28,7 +28,7 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "./embedded-agent-messaging.types.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
   isToolResultError,
   readToolResultDetails,
@@ -636,7 +636,7 @@ function isCoreToolResultMediaTrustedName(toolName?: string): boolean {
   if (!toolName) {
     return false;
   }
-  return TRUSTED_TOOL_RESULT_MEDIA.has(normalizeToolName(toolName));
+  return TRUSTED_TOOL_RESULT_MEDIA.has(normalizeToolPolicyName(toolName));
 }
 
 function isExternalToolResult(result: unknown): boolean {
@@ -676,7 +676,7 @@ function isTrustedOwnedTtsLocalMedia(
   if (
     !toolName ||
     !isToolResultMediaTrusted(toolName, result, trustedLocalMediaToolNames) ||
-    normalizeToolName(toolName) !== "tts"
+    normalizeToolPolicyName(toolName) !== "tts"
   ) {
     return false;
   }

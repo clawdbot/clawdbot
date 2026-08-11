@@ -5,7 +5,7 @@ import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runNodesCommand } from "./cli-utils.js";
 import {
-  callGatewayCli,
+  callNodesGatewayCli,
   nodesCallOpts,
   parseOptionalNodeNonNegativeInteger,
   parseOptionalNodePositiveInteger,
@@ -63,7 +63,7 @@ export function registerNodesLocationCommands(nodes: Command) {
             invokeParams.timeoutMs = invokeTimeoutMs;
           }
 
-          const raw = await callGatewayCli("node.invoke", opts, invokeParams);
+          const raw = await callNodesGatewayCli("node.invoke", opts, invokeParams);
           const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
           const payload =
             res.payload && typeof res.payload === "object"

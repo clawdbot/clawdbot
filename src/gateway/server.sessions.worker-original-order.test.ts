@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
+import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { WorkerProvider, WorkerSshEndpoint } from "../plugins/types.js";
 import { runCommandWithTimeout, type CommandOptions, type SpawnResult } from "../process/exec.js";
 import {
@@ -44,7 +45,7 @@ const BUNDLE_HASH = "a".repeat(64);
 const RECEIPT = {
   bundleHash: BUNDLE_HASH,
   openclawVersion: "2026.8.1",
-  protocolFeatures: [],
+  protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
 };
 const INSTALLATION: WorkerInstallationArtifact = {
   install: "bundle",
@@ -449,6 +450,7 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
     profileId: PROFILE_ID,
   });
   expect(active).toMatchObject({ state: "active", environmentId: ENVIRONMENT_ID });
+  expect(runner.starts).toHaveLength(1);
   await expect(fs.stat(runner.bootstrapUploadPath)).rejects.toMatchObject({ code: "ENOENT" });
   await expect(fs.readFile(runner.bootstrapReceiptPath, "utf8")).resolves.toBe(
     `${JSON.stringify(RECEIPT)}\n`,

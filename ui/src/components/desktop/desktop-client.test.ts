@@ -18,6 +18,7 @@ class FakeSocket extends EventTarget {
 function createFakeRfb() {
   const instances: FakeRfb[] = [];
   class FakeRfb extends EventTarget implements RfbClient {
+    background = "";
     viewOnly = false;
     scaleViewport = false;
     readonly disconnect = vi.fn();
@@ -76,10 +77,12 @@ describe("DesktopClient", () => {
       gatewayUrl: "ws://control.example.test",
       wsUrl: "/worker-desktop/observe",
       password: "secret",
+      background: "rgb(8, 8, 8)",
       viewOnly: false,
       target: document.createElement("div"),
     });
 
+    expect(instances[0]?.background).toBe("rgb(8, 8, 8)");
     expect(instances[0]?.viewOnly).toBe(false);
     expect(instances[0]?.scaleViewport).toBe(true);
     expect(instances[0]?.options).toEqual({ credentials: { password: "secret" } });

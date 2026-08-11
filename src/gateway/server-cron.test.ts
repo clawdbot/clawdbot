@@ -148,7 +148,7 @@ vi.mock("../infra/restart-coordinator.js", async () => {
   );
   return {
     ...actual,
-    requestSafeGatewayRestart: requestSafeGatewayRestartMock,
+    scheduleSafeGatewayRestart: requestSafeGatewayRestartMock,
   };
 });
 

@@ -592,7 +592,7 @@ describe("sessions view", () => {
     expect(onAssignCategory).not.toHaveBeenCalled();
   });
 
-  it("opens the session menu from the kebab and row context menu", async () => {
+  it("opens the session menu from the kebab and row context-menu shortcuts", async () => {
     const container = document.createElement("div");
     const onOpenSessionMenu = vi.fn();
     const session = {
@@ -642,6 +642,21 @@ describe("sessions view", () => {
       null,
     );
     expect(contextMenu.defaultPrevented).toBe(true);
+
+    const keyboardContextMenu = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "F10",
+      shiftKey: true,
+    });
+    row.dispatchEvent(keyboardContextMenu);
+    expect(onOpenSessionMenu).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ key: session.key }),
+      { x: expect.any(Number), y: expect.any(Number) },
+      button,
+    );
+    expect(keyboardContextMenu.defaultPrevented).toBe(true);
   });
 
   it("keeps pinned sessions above newer unpinned sessions", async () => {

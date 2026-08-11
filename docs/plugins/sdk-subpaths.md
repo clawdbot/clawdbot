@@ -101,7 +101,7 @@ deprecated for new code; see the per-row notes below.
     | `plugin-sdk/channel-message` | Deprecated compatibility alias for `plugin-sdk/channel-outbound`. |
     | `plugin-sdk/inbound-envelope` | Shared inbound route + envelope builder helpers |
     | `plugin-sdk/inbound-event-delivery` | Process-local correlation between active inbound events and successful channel sends |
-    | `plugin-sdk/inbound-reply-dispatch` | Deprecated compatibility shim for `dispatchInboundReplyWithBase`; removal is targeted for the next SDK major. Use `plugin-sdk/channel-inbound` for inbound runners and `plugin-sdk/channel-outbound` for message delivery helpers. |
+    | `plugin-sdk/inbound-reply-dispatch` | Deprecated compatibility shim for `dispatchInboundReplyWithBase`; its compatibility-ledger gate is the next Plugin SDK major, not a calendar date. Use `plugin-sdk/channel-inbound` for inbound runners and `plugin-sdk/channel-outbound` for message delivery helpers. |
     | `plugin-sdk/messaging-targets` | Deprecated target parsing alias; use `plugin-sdk/channel-targets` |
     | `plugin-sdk/outbound-media` | Private-local after July 2026; Shared outbound media loading and hosted-media state helpers |
     | `plugin-sdk/poll-runtime` | Private-local after July 2026; Narrow poll normalization helpers |
@@ -228,6 +228,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/channel-runtime-context` | Generic channel runtime-context registration and lookup helpers |
     | `plugin-sdk/matrix` | Deprecated Matrix compatibility facade for older third-party channel packages; new plugins should import `plugin-sdk/run-command` directly |
     | `plugin-sdk/runtime-store` | `createPluginRuntimeStore` |
+    | `plugin-sdk/plugin-command-runtime` | Registry-generation-bound native plugin command candidates, terminal catalog decisions, and exact selected dispatch execution |
     | `plugin-sdk/plugin-runtime` | Deprecated broad barrel for plugin command/hook/http/interactive helpers; prefer focused plugin runtime subpaths |
     | `plugin-sdk/hook-runtime` | Deprecated broad barrel for webhook/internal hook pipeline helpers; prefer focused hook/plugin runtime subpaths |
     | `plugin-sdk/lazy-runtime` | Lazy runtime import/binding helpers such as `createLazyRuntimeModule`, `createLazyRuntimeMethod`, and `createLazyRuntimeSurface` |

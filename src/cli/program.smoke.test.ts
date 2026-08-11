@@ -2,9 +2,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildProgram } from "./program.js";
 import {
-  callGateway,
+  programGatewayCallMock,
   configureCommand,
-  ensureConfigReady,
+  ensureConfigReadyMock,
   runSystemAgentWithInference,
   runTui,
   runtime,
@@ -46,7 +46,7 @@ describe("cli program (smoke)", () => {
     vi.clearAllMocks();
     runTui.mockResolvedValue(undefined);
     runSystemAgentWithInference.mockResolvedValue(undefined);
-    ensureConfigReady.mockResolvedValue(undefined);
+    ensureConfigReadyMock.mockResolvedValue(undefined);
   });
 
   it("registers message + status commands", () => {
@@ -68,11 +68,11 @@ describe("cli program (smoke)", () => {
   });
 
   it("resolves a positional tui short reference before launch", async () => {
-    callGateway.mockResolvedValue({ ok: true, key: "agent:main:thread:resolved" });
+    programGatewayCallMock.mockResolvedValue({ ok: true, key: "agent:main:thread:resolved" });
 
     await runProgram(["tui", "movies-a1166b81"]);
 
-    expect(callGateway).toHaveBeenCalledWith(
+    expect(programGatewayCallMock).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "sessions.resolve",
         params: { shortId: "a1166b81", slugHint: "movies" },
@@ -85,7 +85,7 @@ describe("cli program (smoke)", () => {
   });
 
   it("preserves a global-scope URL main session when launching tui", async () => {
-    callGateway.mockResolvedValue({
+    programGatewayCallMock.mockResolvedValue({
       defaultId: "main",
       mainKey: "main",
       scope: "global",
@@ -94,7 +94,7 @@ describe("cli program (smoke)", () => {
 
     await runProgram(["tui", "https://gateway.example/dashboard/ops"]);
 
-    expect(callGateway).toHaveBeenCalledWith(
+    expect(programGatewayCallMock).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "agents.list",
         params: {},

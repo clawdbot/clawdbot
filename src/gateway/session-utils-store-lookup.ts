@@ -10,11 +10,11 @@ import {
 } from "../config/sessions.js";
 import {
   listSessionChildEntriesReadOnly,
-  listSessionEntries as listAccessorSessionEntries,
+  listSessionEntriesCore as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
   loadExactSessionEntryReadOnly,
+  type SessionEntryListScope,
 } from "../config/sessions/session-accessor.js";
-import type { SessionEntryListScope } from "../config/sessions/session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {

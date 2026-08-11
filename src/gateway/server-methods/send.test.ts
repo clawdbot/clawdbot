@@ -252,13 +252,14 @@ async function runSend(params: Record<string, unknown>) {
 
 async function runSendWithClient(
   params: Record<string, unknown>,
-  client?: { connect?: { scopes?: string[] } } | null,
+  client?: { connect?: { scopes?: string[] }; internal?: Record<string, unknown> } | null,
+  context: GatewayRequestContext = makeContext(),
 ) {
   const respond = vi.fn();
   await expectDefined(sendHandlers.send, "sendHandlers.send test invariant").call(sendHandlers, {
     params: params as never,
     respond,
-    context: makeContext(),
+    context,
     req: { type: "req", id: "1", method: "send" },
     client: (client ?? null) as never,
     isWebchatConnect: () => false,
@@ -534,6 +535,7 @@ async function runTelegramTerminalAction(params: {
   currentMessageId?: string;
   currentThreadTs?: string;
   sourceReplyFinal?: boolean;
+  context?: GatewayRequestContext;
 }) {
   const sessionKey = params.sessionKey ?? "agent:main:telegram:direct:chat-123";
   return runMessageActionRequest(
@@ -581,6 +583,7 @@ async function runTelegramTerminalAction(params: {
         },
       },
     },
+    params.context,
   );
 }
 
@@ -1386,6 +1389,64 @@ describe("gateway send mirroring", () => {
     );
 
     expect(lastDispatchChannelMessageActionCall()?.conversationReadOrigin).toBe("delegated");
+  });
+
+  it("does not send after delegated authority closes during session preparation", async () => {
+    const preparation = createDeferred<undefined>();
+    mocks.ensureOutboundSessionEntry.mockReturnValueOnce(preparation.promise);
+    let authorityActive = true;
+    const context = {
+      ...makeContext(),
+      validateAgentRuntimeApprovalAuthority: () => authorityActive,
+    } as GatewayRequestContext;
+    const request = runSendWithClient(
+      {
+        channel: "slack",
+        to: "channel:C1",
+        message: "must not escape",
+        sessionKey: "agent:main:slack:channel:C1",
+        idempotencyKey: "idem-send-authority-race",
+      },
+      agentRuntimeClient("agent:main:slack:channel:C1"),
+      context,
+    );
+    await vi.waitFor(() => expect(mocks.ensureOutboundSessionEntry).toHaveBeenCalledOnce());
+    authorityActive = false;
+    preparation.resolve(undefined);
+
+    const { respond } = await request;
+    expect(firstRespondCall(respond)[0]).toBe(false);
+    expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("cancels a prepared terminal receipt when authority closes before action dispatch", async () => {
+    const receipt = createDeferred<"started">();
+    mocks.beginRestartRecoveryTerminalDelivery.mockReturnValueOnce(receipt.promise);
+    let authorityActive = true;
+    const context = {
+      ...makeContext(),
+      validateAgentRuntimeApprovalAuthority: () => authorityActive,
+    } as GatewayRequestContext;
+    const request = runTelegramTerminalAction({
+      sessionId: "session-authority-race",
+      idempotencyKey: "idem-action-authority-race",
+      sourceTurnId: "channel-user:v1:authority-race",
+      toolCallId: "tool-authority-race",
+      message: "must not escape",
+      context,
+    });
+    await vi.waitFor(() =>
+      expect(mocks.beginRestartRecoveryTerminalDelivery).toHaveBeenCalledOnce(),
+    );
+    authorityActive = false;
+    receipt.resolve("started");
+
+    const { respond } = await request;
+    expect(firstRespondCall(respond)[0]).toBe(false);
+    expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
+    expect(mocks.cancelRestartRecoveryTerminalDelivery).toHaveBeenCalledOnce();
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
   });
 
   it("dedupes omitted and explicit default send routes", async () => {

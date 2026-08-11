@@ -22,15 +22,15 @@ import {
   summarizeSpawnError,
 } from "../../spawn-pipeline.js";
 import {
-  materializeSubagentAttachments,
-  type SubagentAttachmentReceiptFile,
-} from "../../subagent-attachments.js";
-import {
   completeCollectorLaunchCleanup,
   settleFailedQueuedSubagentLaunch,
   startQueuedSubagentRun,
-} from "../../subagent-registry.js";
+} from "../registry/subagent-registry.js";
 import { activateSwarmRun, removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
+import {
+  materializeSubagentAttachments,
+  type SubagentAttachmentReceiptFile,
+} from "./subagent-attachments.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
 import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
 import {

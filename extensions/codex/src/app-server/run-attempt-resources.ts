@@ -240,6 +240,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       turnStartTimeoutMs: params.timeoutMs,
       loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
       signal: runAbortController.signal,
+      hostCapabilities: params.hostCapabilities,
       onPreToolUseFailure: (failure) => {
         const projector = projectorRef.current;
         if (projector) {

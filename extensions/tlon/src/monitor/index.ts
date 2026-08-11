@@ -7,7 +7,11 @@ import {
 import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
-import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asFiniteNumber,
+  asNullableRecord as asRecord,
+  readStringField as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import { createLoggerBackedRuntime } from "../../runtime-api.js";
@@ -40,7 +44,7 @@ import {
   shouldMigrateTlonSetting,
 } from "./settings-helpers.js";
 import { createActiveSnapshotTracker, createParticipatedThreadTracker } from "./tracking.js";
-import { asRecord, formatErrorMessage, readString } from "./utils.js";
+import { formatErrorMessage } from "./utils.js";
 import {
   extractMessageText,
   formatModelName,
@@ -60,10 +64,6 @@ type MonitorTlonOpts = {
   abortSignal?: AbortSignal;
   accountId?: string | null;
 };
-
-function readNumber(record: Record<string, unknown> | null, key: string): number | undefined {
-  return asFiniteNumber(record?.[key]);
-}
 
 export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<void> {
   const core = getTlonRuntime();
@@ -793,7 +793,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       }
 
       const contentBody = content.content;
-      const sentAt = readNumber(content, "sent") ?? Date.now();
+      const sentAt = asFiniteNumber(content?.sent) ?? Date.now();
 
       cacheMessage(nest, {
         author: senderShip,
@@ -1036,7 +1036,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           messageText: resolvedMessageText,
           messageContent: essay.content,
           isGroup: false,
-          timestamp: readNumber(essay, "sent") ?? Date.now(),
+          timestamp: asFiniteNumber(essay?.sent) ?? Date.now(),
           turnAdoptionLifecycle,
         });
         return;
@@ -1054,7 +1054,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
               messageId: messageId ?? "",
               messageText,
               messageContent: essay.content,
-              timestamp: readNumber(essay, "sent") ?? Date.now(),
+              timestamp: asFiniteNumber(essay?.sent) ?? Date.now(),
             },
           });
           await queueApprovalRequest(approval);
@@ -1075,7 +1075,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         senderShip,
         messageContent: essay.content, // Pass raw content for media extraction
         isGroup: false,
-        timestamp: readNumber(essay, "sent") ?? Date.now(),
+        timestamp: asFiniteNumber(essay?.sent) ?? Date.now(),
         turnAdoptionLifecycle,
       });
     } catch (error: unknown) {

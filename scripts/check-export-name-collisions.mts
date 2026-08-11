@@ -10,6 +10,7 @@ import {
   isTestLikeTypeScriptFile,
   resolveSourceRoots,
   runAsScript,
+  toLine,
   unwrapExpression,
 } from "./lib/ts-guard-utils.mts";
 
@@ -37,12 +38,18 @@ export type NamedReExport = {
   moduleSpecifier: string;
 };
 
+export type AliasingReExport = NamedReExport & {
+  line: number;
+  path: string;
+};
+
 export type ExportedValueDefinition = {
   importedReferences: ImportedSymbolReference[];
   name: string;
 };
 
 export type ModuleExports = {
+  aliasingReExports: Array<Omit<AliasingReExport, "path">>;
   definitions: Set<string>;
   exportedNames: Set<string>;
   namedReExports: NamedReExport[];
@@ -330,6 +337,7 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
   const directlyExportedNames = new Set<string>();
   const locallyExportedNames = new Set<string>();
   const exportedNames = new Set<string>();
+  const aliasingReExports: Array<Omit<AliasingReExport, "path">> = [];
   const namedReExports: NamedReExport[] = [];
   const pendingLocalReExports: Array<{ exportedName: string; localName: string }> = [];
   const starExportSpecifiers: string[] = [];
@@ -442,15 +450,18 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
         }
         const localName = specifier.propertyName?.text ?? specifier.name.text;
         if (statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)) {
-          namedReExports.push({
+          const reExport = {
             exportedName: specifier.name.text,
             importedName: localName,
             moduleSpecifier: statement.moduleSpecifier.text,
-          });
+          };
+          namedReExports.push(reExport);
+          if (reExport.exportedName !== reExport.importedName) {
+            aliasingReExports.push({ ...reExport, line: toLine(sourceFile, specifier) });
+          }
         } else if (!statement.moduleSpecifier) {
           pendingLocalReExports.push({ exportedName: specifier.name.text, localName });
         }
-        // Renamed re-exports are deliberately outside this guard's first slice.
         if (specifier.name.text !== localName) {
           continue;
         }
@@ -544,6 +555,7 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
   }
 
   return {
+    aliasingReExports,
     definitions,
     exportedNames,
     namedReExports: namedReExports.toSorted((left, right) =>
@@ -612,8 +624,8 @@ function collectTransitiveExportNames(
 // exact module. Flagging them would push burn-down work to "fix" a deliberate idiom.
 const intentionalSameNameFamilies = new Set(["testing", "testApi"]);
 
-/** Finds duplicate exported function/const definitions across source modules. */
-export function findExportNameCollisions(modules: SourceModule[]): ExportNameCollision[] {
+function analyzeExportNames(modules: SourceModule[]) {
+  const aliasingReExports: AliasingReExport[] = [];
   const filesByName = new Map<string, Set<string>>();
   const sdkExportNames = new Set<string>();
   const modulesByPath = new Map<string, ModuleExports>();
@@ -623,6 +635,14 @@ export function findExportNameCollisions(modules: SourceModule[]): ExportNameCol
     const relativePath = normalizeRelativePath(sourceModule.path);
     const moduleExports = collectModuleExportNames(sourceModule.content, relativePath);
     modulesByPath.set(relativePath, moduleExports);
+    if (sourceModule.includeDefinitions !== false && !relativePath.startsWith("src/plugin-sdk/")) {
+      aliasingReExports.push(
+        ...moduleExports.aliasingReExports.map((reExport) => ({
+          ...reExport,
+          path: relativePath,
+        })),
+      );
+    }
     if (sourceModule.includeDefinitions !== false) {
       for (const name of moduleExports.definitions) {
         const files = filesByName.get(name) ?? new Set<string>();
@@ -654,7 +674,25 @@ export function findExportNameCollisions(modules: SourceModule[]): ExportNameCol
     }
     collisions.push(collision);
   }
-  return collisions.toSorted((left, right) => left.name.localeCompare(right.name));
+  return {
+    aliasingReExports: aliasingReExports.toSorted(
+      (left, right) =>
+        left.path.localeCompare(right.path) ||
+        left.line - right.line ||
+        left.exportedName.localeCompare(right.exportedName),
+    ),
+    collisions: collisions.toSorted((left, right) => left.name.localeCompare(right.name)),
+  };
+}
+
+/** Finds direct renamed re-exports outside the Plugin SDK boundary. */
+export function findAliasingReExports(modules: SourceModule[]) {
+  return analyzeExportNames(modules).aliasingReExports;
+}
+
+/** Finds duplicate exported function/const definitions across source modules. */
+export function findExportNameCollisions(modules: SourceModule[]): ExportNameCollision[] {
+  return analyzeExportNames(modules).collisions;
 }
 
 type CollisionChange = {
@@ -702,7 +740,7 @@ function resolveBaselinePath(repoRoot: string) {
   return path.join(repoRoot, ...baselineRelativePath.split("/"));
 }
 
-export async function collectRepositoryCollisions(repoRoot: string) {
+async function collectRepositoryModules(repoRoot: string) {
   const sourceCollectOptions = {
     fileExtensions: [".ts", ".mts", ".js", ".mjs"],
     includeTests: true,
@@ -735,7 +773,15 @@ export async function collectRepositoryCollisions(repoRoot: string) {
       path: normalizeRelativePath(path.relative(repoRoot, filePath)),
     })),
   );
-  return findExportNameCollisions(modules);
+  return modules;
+}
+
+async function collectRepositoryExportAnalysis(repoRoot: string) {
+  return analyzeExportNames(await collectRepositoryModules(repoRoot));
+}
+
+export async function collectRepositoryCollisions(repoRoot: string) {
+  return (await collectRepositoryExportAnalysis(repoRoot)).collisions;
 }
 
 async function readBaseline(repoRoot: string) {
@@ -751,8 +797,7 @@ async function readBaseline(repoRoot: string) {
   }
 }
 
-async function writeBaseline(repoRoot: string) {
-  const collisions = await collectRepositoryCollisions(repoRoot);
+async function writeBaseline(repoRoot: string, collisions: ExportNameCollision[]) {
   await fs.writeFile(resolveBaselinePath(repoRoot), `${JSON.stringify(collisions, null, 2)}\n`);
   return collisions.length;
 }
@@ -761,11 +806,25 @@ function formatCollision(collision: ExportNameCollision | undefined) {
   return JSON.stringify(collision);
 }
 
+function printAliasingReExports(reExports: AliasingReExport[]) {
+  if (reExports.length === 0) {
+    return;
+  }
+  console.log("Aliasing re-exports outside src/plugin-sdk/ (informational):");
+  for (const reExport of reExports) {
+    console.log(
+      `- ${reExport.path}:${reExport.line}: ${reExport.importedName} as ${reExport.exportedName} from ${JSON.stringify(reExport.moduleSpecifier)}`,
+    );
+  }
+}
+
 export async function main() {
   const repoRoot = resolveRepoRoot(import.meta.url);
   if (process.argv.includes("--update-debt-baseline")) {
-    const count = await writeBaseline(repoRoot);
+    const analysis = await collectRepositoryExportAnalysis(repoRoot);
+    const count = await writeBaseline(repoRoot, analysis.collisions);
     console.log(`Wrote ${baselineRelativePath} (${count} entries)`);
+    printAliasingReExports(analysis.aliasingReExports);
     return 0;
   }
 
@@ -776,8 +835,9 @@ export async function main() {
     );
     return 1;
   }
-  const current = await collectRepositoryCollisions(repoRoot);
-  const debt = compareExportNameCollisionDebt(current, baseline);
+  const analysis = await collectRepositoryExportAnalysis(repoRoot);
+  const debt = compareExportNameCollisionDebt(analysis.collisions, baseline);
+  printAliasingReExports(analysis.aliasingReExports);
   if (debt.regressions.length === 0 && debt.improvements.length === 0) {
     console.log("export name collision guard passed.");
     return 0;

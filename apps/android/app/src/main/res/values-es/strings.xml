@@ -224,6 +224,7 @@
     <string name="native_21378545892f1fe2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Editor"</string>
     <string name="native_2147ee396ae75c73" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bifurcar desde aquí"</string>
     <string name="native_214d4932fc767e8f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">" · Conversación: Hablando"</string>
+    <string name="native_216bcd2049f2251a" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"−%1$s"</string>
     <string name="native_217119a61e20f1f2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Anulación opcional"</string>
     <string name="native_21b111cbfe6e8fca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Predeterminado"</string>
     <string name="native_21bddf13c6a8d4b3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aprobación de comandos"</string>
@@ -338,6 +339,7 @@
     <string name="native_31e392d1c0378bec" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aplicar"</string>
     <string name="native_31ee02ebfbe71531" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Se omitió la ejecución de la automatización."</string>
     <string name="native_31fbef162594de01" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Continuar"</string>
+    <string name="native_320aa0dcf7eb63d9" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"+%1$s"</string>
     <string name="native_3217b0565007c0ae" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Supervisando · %1$s tareas programadas"</string>
     <string name="native_3227aa9666253f7a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Explorar"</string>
     <string name="native_32d3fedad4cfedcc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"tabs"</string>
@@ -418,6 +420,7 @@
     <string name="native_3e258ff7801d9f13" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Puedo comprobar el estado del Gateway, reparar la configuración, cambiar modelos o conectar canales."</string>
     <string name="native_3e398e6fb979557a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tool Call"</string>
     <string name="native_3e42e385075b9b56" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Hilos"</string>
+    <string name="native_3e93fc69520d2d1f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Error en el subagente"</string>
     <string name="native_3f00927a719345ed" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Write"</string>
     <string name="native_3f25ccebfa99dcf3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Empieza con una indicación o usa la voz."</string>
     <string name="native_3f39d5c348e5b79d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"D"</string>
@@ -582,6 +585,7 @@
     <string name="native_58268edca12a81a1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Android puede escanear o pegar un código de configuración existente, pero este gateway aún no expone la generación de códigos de configuración a la app. Genera el QR/código en el host del gateway con openclaw qr y luego escanéalo aquí o pega el código de configuración a continuación."</string>
     <string name="native_584162ac73e99ee6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Estado del lienzo"</string>
     <string name="native_5855b3ac2fcc1b3e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Corregir conexión"</string>
+    <string name="native_587876eaa5a53621" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Subagente cancelado"</string>
     <string name="native_58e909c0f4cc5723" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Guardar imagen"</string>
     <string name="native_590b0003ccaad929" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nodo %1$s"</string>
     <string name="native_59235e6ebfd03967" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Se necesita la contraseña de Gateway"</string>
@@ -800,6 +804,7 @@
     <string name="native_773e7729b237d4ea" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Otra respuesta"</string>
     <string name="native_7765ad1890a192a8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Descartar advertencia de imagen compartida"</string>
     <string name="native_779aa3df405560c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"El Gateway evaluó una versión diferente de ClawHub. Revisa de nuevo la Skill antes de instalarla."</string>
+    <string name="native_77a9c080491599ff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Subagente finalizado"</string>
     <string name="native_77ab6bb71f77154d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Abrir acceso del sistema"</string>
     <string name="native_7804f7a79a9eee32" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Finalizada"</string>
     <string name="native_7817cd06563196ee" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Imagen no disponible"</string>
@@ -1450,6 +1455,7 @@
     <string name="native_e08a8fc53e29e5c9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Hilos recientes"</string>
     <string name="native_e0926fdac700b094" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Terminal"</string>
     <string name="native_e0d1b68224bf0b31" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Actual"</string>
+    <string name="native_e0eb2d0309a54f5b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Subagente trabajando"</string>
     <string name="native_e10435f6306b06d9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 cuenta"</string>
     <string name="native_e159b06187d369a0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"En pausa"</string>
     <string name="native_e18835ef2f6c8558" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Permitir cámara"</string>
@@ -1602,6 +1608,7 @@
     <string name="native_f8cd133f0ea1031b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Buscar conversaciones anteriores"</string>
     <string name="native_f90f3791049b995d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Explorar hilos"</string>
     <string name="native_f92e2ad582c0e13f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Actualizando"</string>
+    <string name="native_f971d10e8fc36214" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"+%1$s más trabajando"</string>
     <string name="native_f9777b12e8f49df2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Buscando perlas"</string>
     <string name="native_f991ae9cb081e1f3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Abre la cámara y encuadra el código de openclaw qr."</string>
     <string name="native_f9ea3f1540eaa584" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"No hay dispositivos"</string>

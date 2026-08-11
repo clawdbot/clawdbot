@@ -1,4 +1,4 @@
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { GPT5_HEARTBEAT_PROMPT_OVERLAY as CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   asOptionalRecord,

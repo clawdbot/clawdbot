@@ -8274,6 +8274,41 @@
       "translated": "+${toolCalls.size - 4}개 더"
     },
     {
+      "id": "native.android.f2da5ffc1adaad58",
+      "source": "+${moreWorkingCount} more working",
+      "translated": "+${moreWorkingCount}개 더 작업 중"
+    },
+    {
+      "id": "native.android.db391c2712f7340b",
+      "source": "+${diff.added}",
+      "translated": "+${diff.added}"
+    },
+    {
+      "id": "native.android.babb72da2d6270a2",
+      "source": "−${diff.removed}",
+      "translated": "−${diff.removed}"
+    },
+    {
+      "id": "native.android.e58b3c8805c79bd0",
+      "source": "Subagent working",
+      "translated": "하위 에이전트 작업 중"
+    },
+    {
+      "id": "native.android.bdfea93e16940c82",
+      "source": "Subagent failed",
+      "translated": "하위 에이전트 실패"
+    },
+    {
+      "id": "native.android.9fde542e43b4e73b",
+      "source": "Subagent cancelled",
+      "translated": "하위 에이전트 취소됨"
+    },
+    {
+      "id": "native.android.0bba48c12caa076a",
+      "source": "Subagent finished",
+      "translated": "하위 에이전트 완료됨"
+    },
+    {
       "id": "native.android.22d747642a3887cd",
       "source": "$completedCount/${steps.size}",
       "translated": "$completedCount/${steps.size}"
@@ -21824,6 +21859,21 @@
       "translated": "다음"
     },
     {
+      "id": "native.apple.77671f1903c73f44",
+      "source": " (\\(command) pid \\(pid))",
+      "translated": " (\\(command) pid \\(pid))"
+    },
+    {
+      "id": "native.apple.69779351bd137b5b",
+      "source": "Existing gateway detected",
+      "translated": "기존 gateway가 감지됨"
+    },
+    {
+      "id": "native.apple.ff1e86b4eb896434",
+      "source": "Port \\(port) already in use",
+      "translated": "포트 \\(port)가 이미 사용 중입니다"
+    },
+    {
       "id": "native.apple.3db546546fbaf38e",
       "source": "OpenClaw is preparing a local model.",
       "translated": "OpenClaw가 로컬 모델을 준비하고 있습니다."
@@ -22272,21 +22322,6 @@
       "id": "native.apple.d54084b48f40aa0a",
       "source": "OK — OpenClaw won’t start anything yet. Pick Local or Remote later in Settings → General.",
       "translated": "확인 — OpenClaw는 아직 아무것도 시작하지 않습니다. 나중에 설정 → 일반에서 로컬 또는 원격을 선택하세요."
-    },
-    {
-      "id": "native.apple.8d9eb247d41a0ca7",
-      "source": "Existing gateway detected",
-      "translated": "기존 gateway가 감지됨"
-    },
-    {
-      "id": "native.apple.335bb6b21095d15a",
-      "source": "Port \\(probe.port) already in use",
-      "translated": "포트 \\(probe.port)이(가) 이미 사용 중입니다"
-    },
-    {
-      "id": "native.apple.de453cb637c46670",
-      "source": " (\\(probe.command) pid \\(probe.pid))",
-      "translated": " (\\(probe.command) pid \\(probe.pid))"
     },
     {
       "id": "native.apple.9ab228a4cb7d4403",
@@ -25977,6 +26012,11 @@
       "id": "native.apple.b09b91392835fe58",
       "source": "Delete",
       "translated": "삭제"
+    },
+    {
+      "id": "native.apple.d5a544f5ba642c60",
+      "source": "+%1$lld more working",
+      "translated": "+%1$lld개 더 작업 중"
     },
     {
       "id": "native.apple.946b677d8dbf0f37",

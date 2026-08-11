@@ -26,7 +26,7 @@ import {
   extractMessagingToolSendResult,
   extractMessagingToolSourceReplyPayload,
 } from "../embedded-agent-subscribe.tools.js";
-import { rotateClaudeLiveMcpCaptureKeyForContext } from "./claude-live-session.js";
+import { closeClaudeSession } from "./claude-live-registry.js";
 import { attachCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import {
   appendUniqueCliMessagingEvidence,
@@ -541,7 +541,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         return;
       }
       if (params.useManagedClaudeLiveSession) {
-        await rotateClaudeLiveMcpCaptureKeyForContext(context);
+        await closeClaudeSession(context, "mcp-capture-rotation");
       }
       const internalStates = await Promise.all(
         Array.from(inFlightPreparedMessagingCalls).map(isPreparedInternalSourceReply),

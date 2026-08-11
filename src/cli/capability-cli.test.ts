@@ -372,9 +372,9 @@ vi.mock("../media/media-services.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../plugins/memory-embedding-providers.js", () => ({
-  listMemoryEmbeddingProviders:
-    mocks.listMemoryEmbeddingProviders as unknown as typeof import("../plugins/memory-embedding-providers.js").listMemoryEmbeddingProviders,
+vi.mock("../plugins/memory-embedding-provider-runtime.js", () => ({
+  listRegisteredMemoryEmbeddingProviderAdapters:
+    mocks.listMemoryEmbeddingProviders as unknown as typeof import("../plugins/memory-embedding-provider-runtime.js").listRegisteredMemoryEmbeddingProviderAdapters,
 }));
 
 vi.mock("../plugins/embedding-provider-runtime.js", () => ({

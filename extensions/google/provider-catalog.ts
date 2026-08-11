@@ -7,6 +7,10 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  asPositiveSafeInteger,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isGoogleTextGenerationModelId, resolveGoogleStaticModelId } from "./provider-models.js";
 
 const GOOGLE_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
@@ -67,16 +71,6 @@ function readGoogleLiveModels(body: unknown): readonly unknown[] {
   return Array.isArray(models) ? models : [];
 }
 
-function readString(row: Record<string, unknown>, key: string): string | undefined {
-  const value = row[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function readPositiveInteger(row: Record<string, unknown>, key: string): number | undefined {
-  const value = row[key];
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
-}
-
 function googleLiveModelInput(id: string): ModelDefinitionConfig["input"] {
   if (!id.startsWith("gemma-")) {
     return ["text", "image"];
@@ -93,11 +87,11 @@ function buildGoogleLiveModel(row: unknown): ModelDefinitionConfig | undefined {
     return undefined;
   }
   const record = row as Record<string, unknown>;
-  const resourceName = readString(record, "name");
+  const resourceName = normalizeOptionalString(record.name);
   const id = resourceName?.startsWith("models/") ? resourceName.slice("models/".length) : undefined;
   const methods = record.supportedGenerationMethods;
-  const contextWindow = readPositiveInteger(record, "inputTokenLimit");
-  const maxTokens = readPositiveInteger(record, "outputTokenLimit");
+  const contextWindow = asPositiveSafeInteger(record.inputTokenLimit);
+  const maxTokens = asPositiveSafeInteger(record.outputTokenLimit);
   if (
     !id ||
     !isGoogleTextGenerationModelId(id) ||
@@ -115,7 +109,7 @@ function buildGoogleLiveModel(row: unknown): ModelDefinitionConfig | undefined {
   const staticModel = staticId ? GOOGLE_GEMINI_TEXT_MODEL_BY_ID.get(staticId) : undefined;
   return {
     id,
-    name: readString(record, "displayName") ?? id,
+    name: normalizeOptionalString(record.displayName) ?? id,
     reasoning: record.thinking === true,
     // models.list omits modalities. Gemma has both text-only small variants and
     // multimodal families, so keep this capability distinction explicit.

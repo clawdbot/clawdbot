@@ -7,6 +7,7 @@ import {
   resolveMemoryHostSearchPathConfig,
   type OpenClawConfig,
 } from "./config-utils.js";
+import { isExplicitExtraMarkdownFilePath } from "./explicit-extra-markdown.js";
 import {
   assertNoSymlinkParents,
   isFileMissingError,
@@ -88,7 +89,7 @@ export async function readMemoryFile(params: {
   const relPath = path.relative(params.workspaceDir, absPath).replace(/\\/g, "/");
   const inWorkspace = relPath.length > 0 && !relPath.startsWith("..") && !path.isAbsolute(relPath);
   const allowedWorkspace = inWorkspace && isMemoryPath(relPath);
-  let allowedAdditional = false;
+  let allowedAdditional: false | "directory" | "file" = false;
   if (!allowedWorkspace && (params.extraPaths?.length ?? 0) > 0) {
     const additionalPaths = normalizeExtraMemoryPathEntries(params.workspaceDir, params.extraPaths);
     for (const additionalPath of additionalPaths) {
@@ -106,13 +107,17 @@ export async function readMemoryFile(params: {
             if (candidateStat?.isSymbolicLink()) {
               continue;
             }
-            allowedAdditional = true;
+            allowedAdditional = "directory";
             break;
           }
           continue;
         }
-        if (stat.isFile() && absPath === additionalPath.path && absPath.endsWith(".md")) {
-          allowedAdditional = true;
+        if (
+          stat.isFile() &&
+          absPath === additionalPath.path &&
+          isExplicitExtraMarkdownFilePath(absPath)
+        ) {
+          allowedAdditional = "file";
           break;
         }
       } catch {}
@@ -121,7 +126,7 @@ export async function readMemoryFile(params: {
   if (!allowedWorkspace && !allowedAdditional) {
     throw new Error("path required");
   }
-  if (!absPath.endsWith(".md")) {
+  if (!absPath.endsWith(".md") && allowedAdditional !== "file") {
     throw new Error("path required");
   }
   if (allowedWorkspace) {

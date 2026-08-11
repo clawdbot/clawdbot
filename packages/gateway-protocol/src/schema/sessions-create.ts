@@ -35,6 +35,12 @@ export const SessionsCreateParamsSchema = closedObject({
   task: Type.Optional(Type.String()),
   message: Type.Optional(Type.String()),
   attachments: Type.Optional(ChatAttachmentsSchema),
+  projectId: Type.Optional(
+    Type.String({
+      minLength: 1,
+      description: "Start in a registered project; operator.write.",
+    }),
+  ),
   worktree: Type.Optional(Type.Boolean()),
   worktreeBaseRef: Type.Optional(
     Type.String({

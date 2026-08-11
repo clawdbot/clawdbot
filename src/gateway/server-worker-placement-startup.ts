@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { installSessionPlacementAdmissionProvider } from "../agents/session-placement-admission.js";
 import { clearSessionQueues } from "../auto-reply/reply/queue/cleanup.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -54,6 +55,58 @@ const loadWorkerWorkspacePreflight = createLazyRuntimeModule(async () => {
 
 class WorkerDispatchTargetChangedError extends Error {
   readonly code = "invalid_state";
+}
+
+type WorkerPlacementSessionRuntime = Awaited<
+  ReturnType<typeof loadWorkerPlacementSessionRuntimeModule>
+>;
+type WorkerPlacementSessionTarget = ReturnType<
+  WorkerPlacementSessionRuntime["resolveGatewaySessionStoreTargetWithStore"]
+>;
+
+/** Keeps store identity, session incarnation, canonical ownership, and the live worktree
+ * in one cross-phase fence. Initial resolution throws normally; barrier revalidation
+ * supplies expectedTarget and yields an invalid_state retry when the target changed. */
+function resolveWorkerPlacementSessionTarget(params: {
+  sessionRuntime: WorkerPlacementSessionRuntime;
+  config: ReturnType<typeof getRuntimeConfig>;
+  sessionId: string;
+  sessionKey: string;
+  agentId: string;
+  expectedTarget?: WorkerPlacementSessionTarget;
+  errorMessage: string;
+}) {
+  const target = params.sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
+    cfg: params.config,
+    key: params.sessionKey,
+    agentId: params.agentId,
+    clone: false,
+  });
+  const entry = params.sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
+    target.store,
+    target.storeKeys,
+  );
+  const worktree = params.sessionRuntime.managedWorktrees.findLiveByOwner(
+    "session",
+    target.canonicalKey,
+  );
+  const expected = params.expectedTarget;
+  if (
+    (expected &&
+      (target.storePath !== expected.storePath ||
+        target.canonicalKey !== expected.canonicalKey ||
+        target.agentId !== expected.agentId)) ||
+    entry?.sessionId !== params.sessionId ||
+    !entry.worktree?.id ||
+    !worktree ||
+    worktree.id !== entry.worktree.id ||
+    worktree.ownerId !== target.canonicalKey
+  ) {
+    throw expected
+      ? new WorkerDispatchTargetChangedError(params.errorMessage)
+      : new Error(params.errorMessage);
+  }
+  return { config: params.config, target, entry, worktree };
 }
 
 /** Serializes reconciliation sweeps against in-flight dispatches so a sweep never
@@ -145,7 +198,8 @@ export function coordinateWorkerPlacementDispatch(
         if (
           inFlight.request.sessionKey !== request.sessionKey ||
           inFlight.request.agentId !== request.agentId ||
-          inFlight.request.profileId !== request.profileId
+          inFlight.request.profileId !== request.profileId ||
+          !isDeepStrictEqual(inFlight.request.inheritedProfile, request.inheritedProfile)
         ) {
           throw new Error(`Session ${request.sessionKey} is already dispatching another request`);
         }
@@ -200,28 +254,15 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     sessionKey: string;
     agentId: string;
   }): Promise<string> => {
-    const {
-      managedWorktrees,
-      resolveCanonicalSessionEntryFromStoreKeys,
-      resolveGatewaySessionStoreTargetWithStore,
-    } = await loadWorkerPlacementSessionRuntimeModule();
-    const target = resolveGatewaySessionStoreTargetWithStore({
-      cfg: getRuntimeConfig(),
-      key: sessionKey,
+    const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
+    const { worktree } = resolveWorkerPlacementSessionTarget({
+      sessionRuntime,
+      config: getRuntimeConfig(),
+      sessionId,
+      sessionKey,
       agentId,
-      clone: false,
+      errorMessage: `Session ${sessionKey} dispatch requires a session-owned managed worktree`,
     });
-    const sessionEntry = resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
-    const worktree = managedWorktrees.findLiveByOwner("session", target.canonicalKey);
-    if (
-      sessionEntry?.sessionId !== sessionId ||
-      !sessionEntry.worktree?.id ||
-      !worktree ||
-      worktree.id !== sessionEntry.worktree.id ||
-      worktree.ownerId !== target.canonicalKey
-    ) {
-      throw new Error(`Session ${sessionKey} dispatch requires a session-owned managed worktree`);
-    }
     return worktree.path;
   };
   const dispatchService = coordinateWorkerPlacementDispatch(
@@ -230,13 +271,12 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
       environments: params.environments,
       ...workspaceConflictHandlers,
       runLocalBarrier: async ({ sessionId, sessionKey, agentId, startDispatch }) => {
+        const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
         const {
           isWorkerPlacementSessionRuntimeSupported,
-          managedWorktrees,
-          resolveCanonicalSessionEntryFromStoreKeys,
           resolveGatewaySessionStoreTargetWithStore,
           resolveWorkerPlacementSessionRuntime,
-        } = await loadWorkerPlacementSessionRuntimeModule();
+        } = sessionRuntime;
         const target = resolveGatewaySessionStoreTargetWithStore({
           cfg: getRuntimeConfig(),
           key: sessionKey,
@@ -254,35 +294,20 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
           scope: target.storePath,
           identities: lifecycleIdentities,
           prepare: async () => {
-            const currentConfig = getRuntimeConfig();
-            const currentTarget = resolveGatewaySessionStoreTargetWithStore({
-              cfg: currentConfig,
-              key: sessionKey,
+            const {
+              config: currentConfig,
+              target: currentTarget,
+              entry: currentEntry,
+              worktree,
+            } = resolveWorkerPlacementSessionTarget({
+              sessionRuntime,
+              config: getRuntimeConfig(),
+              sessionId,
+              sessionKey,
               agentId,
-              clone: false,
+              expectedTarget: target,
+              errorMessage: `Session ${sessionKey} changed before cloud worker dispatch. Retry.`,
             });
-            const currentEntry = resolveCanonicalSessionEntryFromStoreKeys(
-              currentTarget.store,
-              currentTarget.storeKeys,
-            );
-            const worktree = managedWorktrees.findLiveByOwner(
-              "session",
-              currentTarget.canonicalKey,
-            );
-            if (
-              currentTarget.storePath !== target.storePath ||
-              currentTarget.canonicalKey !== target.canonicalKey ||
-              currentTarget.agentId !== target.agentId ||
-              currentEntry?.sessionId !== sessionId ||
-              !currentEntry.worktree?.id ||
-              !worktree ||
-              worktree.id !== currentEntry.worktree.id ||
-              worktree.ownerId !== currentTarget.canonicalKey
-            ) {
-              throw new WorkerDispatchTargetChangedError(
-                `Session ${sessionKey} changed before cloud worker dispatch. Retry.`,
-              );
-            }
             if (currentEntry.archivedAt !== undefined) {
               throw new WorkerDispatchTargetChangedError(
                 `Session ${sessionKey} was archived before cloud worker dispatch. Retry.`,
@@ -334,13 +359,12 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         return placement;
       },
       runActivationBarrier: async ({ sessionId, sessionKey, agentId, activate }) => {
+        const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
         const {
           isWorkerPlacementSessionRuntimeSupported,
-          managedWorktrees,
-          resolveCanonicalSessionEntryFromStoreKeys,
           resolveGatewaySessionStoreTargetWithStore,
           resolveWorkerPlacementSessionRuntime,
-        } = await loadWorkerPlacementSessionRuntimeModule();
+        } = sessionRuntime;
         const target = resolveGatewaySessionStoreTargetWithStore({
           cfg: getRuntimeConfig(),
           key: sessionKey,
@@ -358,35 +382,19 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
           scope: target.storePath,
           identities: lifecycleIdentities,
           run: async () => {
-            const currentConfig = getRuntimeConfig();
-            const currentTarget = resolveGatewaySessionStoreTargetWithStore({
-              cfg: currentConfig,
-              key: sessionKey,
+            const {
+              config: currentConfig,
+              target: currentTarget,
+              entry: currentEntry,
+            } = resolveWorkerPlacementSessionTarget({
+              sessionRuntime,
+              config: getRuntimeConfig(),
+              sessionId,
+              sessionKey,
               agentId,
-              clone: false,
+              expectedTarget: target,
+              errorMessage: `Session ${sessionKey} changed before cloud worker activation. Retry.`,
             });
-            const currentEntry = resolveCanonicalSessionEntryFromStoreKeys(
-              currentTarget.store,
-              currentTarget.storeKeys,
-            );
-            const worktree = managedWorktrees.findLiveByOwner(
-              "session",
-              currentTarget.canonicalKey,
-            );
-            if (
-              currentTarget.storePath !== target.storePath ||
-              currentTarget.canonicalKey !== target.canonicalKey ||
-              currentTarget.agentId !== target.agentId ||
-              currentEntry?.sessionId !== sessionId ||
-              !currentEntry.worktree?.id ||
-              !worktree ||
-              worktree.id !== currentEntry.worktree.id ||
-              worktree.ownerId !== currentTarget.canonicalKey
-            ) {
-              throw new WorkerDispatchTargetChangedError(
-                `Session ${sessionKey} changed before cloud worker activation. Retry.`,
-              );
-            }
             if (currentEntry.archivedAt !== undefined) {
               throw new WorkerDispatchTargetChangedError(
                 `Session ${sessionKey} was archived before cloud worker activation. Retry.`,
@@ -412,11 +420,8 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         return activePlacement;
       },
       runReclaimBarrier: async ({ sessionId, sessionKey, agentId, reclaim }) => {
-        const {
-          managedWorktrees,
-          resolveCanonicalSessionEntryFromStoreKeys,
-          resolveGatewaySessionStoreTargetWithStore,
-        } = await loadWorkerPlacementSessionRuntimeModule();
+        const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
+        const { resolveGatewaySessionStoreTargetWithStore } = sessionRuntime;
         const target = resolveGatewaySessionStoreTargetWithStore({
           cfg: getRuntimeConfig(),
           key: sessionKey,
@@ -435,34 +440,15 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
           scope: target.storePath,
           identities: lifecycleIdentities,
           prepare: async () => {
-            const currentTarget = resolveGatewaySessionStoreTargetWithStore({
-              cfg: getRuntimeConfig(),
-              key: sessionKey,
+            const { worktree } = resolveWorkerPlacementSessionTarget({
+              sessionRuntime,
+              config: getRuntimeConfig(),
+              sessionId,
+              sessionKey,
               agentId,
-              clone: false,
+              expectedTarget: target,
+              errorMessage: `Session ${sessionKey} changed before cloud worker stop. Retry.`,
             });
-            const currentEntry = resolveCanonicalSessionEntryFromStoreKeys(
-              currentTarget.store,
-              currentTarget.storeKeys,
-            );
-            const worktree = managedWorktrees.findLiveByOwner(
-              "session",
-              currentTarget.canonicalKey,
-            );
-            if (
-              currentTarget.storePath !== target.storePath ||
-              currentTarget.canonicalKey !== target.canonicalKey ||
-              currentTarget.agentId !== target.agentId ||
-              currentEntry?.sessionId !== sessionId ||
-              !currentEntry.worktree?.id ||
-              !worktree ||
-              worktree.id !== currentEntry.worktree.id ||
-              worktree.ownerId !== currentTarget.canonicalKey
-            ) {
-              throw new WorkerDispatchTargetChangedError(
-                `Session ${sessionKey} changed before cloud worker stop. Retry.`,
-              );
-            }
             const placement = params.placements.get(sessionId);
             if (placement?.state !== "active" || placement.turnClaim) {
               throw new Error(

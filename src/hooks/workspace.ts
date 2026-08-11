@@ -12,7 +12,7 @@ import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { resolveBundledHooksDir } from "./bundled-dir.js";
 import {
-  parseFrontmatter,
+  parseHookFrontmatter,
   resolveHookInvocationPolicy,
   resolveOpenClawMetadata,
 } from "./frontmatter.js";
@@ -82,7 +82,7 @@ function loadHookFromDir(params: {
     return null;
   }
   try {
-    const frontmatter = parseFrontmatter(content);
+    const frontmatter = parseHookFrontmatter(content);
 
     const name = frontmatter.name || params.nameHint || path.basename(params.hookDir);
     const description = frontmatter.description || "";

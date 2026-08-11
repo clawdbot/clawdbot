@@ -50,7 +50,7 @@ const runtime = vi.hoisted(() => ({
   })),
   capArrayByJsonBytes: vi.fn((items: unknown[]) => ({ items })),
   enforceChatHistoryFinalBudget: vi.fn(({ messages }: { messages: unknown[] }) => ({ messages })),
-  loadCombinedSessionStoreForGateway: vi.fn(() => ({
+  loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({
     storePath: "/tmp/openclaw-sessions.json",
     store: {},
   })),
@@ -75,7 +75,7 @@ describe("embedded gateway stub", () => {
     runtime.resolveSessionStoreKey.mockClear();
     runtime.resolveStoredSessionKeyForAgentStore.mockClear();
     runtime.searchSessionTranscripts.mockClear();
-    runtime.loadCombinedSessionStoreForGateway.mockClear();
+    runtime.loadCombinedSessionStoreForGatewayCore.mockClear();
     runtime.listSessionsFromStoreAsync.mockClear();
   });
 
@@ -86,7 +86,7 @@ describe("embedded gateway stub", () => {
       params: { agentId: "work", includeGlobal: true, search: "global" },
     });
 
-    expect(runtime.loadCombinedSessionStoreForGateway).toHaveBeenCalledWith(
+    expect(runtime.loadCombinedSessionStoreForGatewayCore).toHaveBeenCalledWith(
       { agents: { list: [{ id: "main", default: true }] } },
       { agentId: "work", projection: "list" },
     );

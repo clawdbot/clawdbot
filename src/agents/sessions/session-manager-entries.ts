@@ -1,4 +1,7 @@
-import type { TranscriptEntryAnchor } from "../../config/sessions/session-accessor.js";
+import {
+  readActiveTranscriptEntryAnchor,
+  type TranscriptEntryAnchor,
+} from "../../config/sessions/session-accessor.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import type { ImageContent, Message, TextContent } from "../../llm/types.js";
 import {
@@ -137,7 +140,16 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       if (currentUserId) {
         // Session setup may insert context-free metadata after the ingress-persisted user.
         // Keep that metadata as the append parent while adopting the canonical user once.
-        return { entryId: currentUserId };
+        const anchor = this.persistenceTarget
+          ? readActiveTranscriptEntryAnchor({
+              ...this.persistenceTarget,
+              entryId: currentUserId,
+            })
+          : undefined;
+        if (this.persistenceTarget && !anchor) {
+          throw new Error(`Session transcript anchor was not returned: ${currentUserId}`);
+        }
+        return { entryId: currentUserId, ...(anchor ? { anchor } : {}) };
       }
     }
     const entry: SessionMessageEntry = {

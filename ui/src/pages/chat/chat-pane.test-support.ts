@@ -30,6 +30,8 @@ import type { ChatMessageCache } from "./session-message-cache.ts";
 export type TestChatPane = HTMLElement & {
   catalogMessages: unknown[];
   active: boolean;
+  presented: boolean;
+  presentationId: string;
   chatMessagesBySession?: ChatMessageCache;
   chatState: { attach: (state: ChatPageHost) => void };
   context: ApplicationContext;
@@ -39,6 +41,7 @@ export type TestChatPane = HTMLElement & {
   connectedCallback: () => void;
   connectionGeneration: number;
   createSession: () => Promise<boolean>;
+  prepareForEviction: () => void;
   restoreArchivedSession: (sessionKey: string) => Promise<void>;
   disconnectedCallback: () => void;
   discardStagedAttachments?: () => void;
@@ -76,7 +79,7 @@ export type TestChatPane = HTMLElement & {
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
   paneId: string;
   sessionKey: string;
-  switchPaneSession: (nextSessionKey: string) => void;
+  updateComplete: Promise<boolean>;
   deferSessionHydrationUntilTranscript: (
     sessionKey: string,
     transcriptLoad: Promise<unknown>,

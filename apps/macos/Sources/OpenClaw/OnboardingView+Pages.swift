@@ -172,11 +172,7 @@ extension OnboardingView {
         guard let probe = localGatewayProbe else {
             return "Private to this computer. Installs and starts automatically."
         }
-        let base = probe.expected
-            ? "Existing gateway detected"
-            : "Port \(probe.port) already in use"
-        let command = probe.command.isEmpty ? "" : " (\(probe.command) pid \(probe.pid))"
-        return "\(base)\(command). Will attach."
+        return probe.subtitle
     }
 
     private var remoteChoiceSubtitle: String {

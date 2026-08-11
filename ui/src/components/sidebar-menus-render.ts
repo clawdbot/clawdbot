@@ -15,6 +15,7 @@ import {
 } from "../lib/sessions/session-key.ts";
 import { renderSidebarAgentMenu, renderSidebarIdentityMenu } from "./app-sidebar-agent-menu.ts";
 import { renderSidebarCustomizeMenu, renderSidebarMoreMenu } from "./app-sidebar-nav-menus.ts";
+import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
 import {
   renderSidebarCatalogViewMenu,
   renderSidebarSessionGroupMenu,
@@ -180,7 +181,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
           category: batchRows ? sharedCategory : (session.category ?? null),
         }}
         .selectionCount=${rows.length}
-        .lastActive=${batchRows ? "" : session.meta}
+        .lastActive=${batchRows ? "" : formatSidebarTimestamp(session.updatedAt)}
         .anchor=${menu}
         .trigger=${controller.sessionMenuTrigger}
         .disabled=${!host.connected}
@@ -316,6 +317,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     peopleSortAvailable: host.sessionPeopleSortAvailable(),
     statusFilter: host.sessionsStatusFilter,
     showCron: host.sessionsShowCron,
+    showSystem: host.sessionsShowSystem,
     creators: host.sessionOwnershipVisible ? host.sessionCreatorOptions : [],
     creatorFilterId: host.sessionCreatorFilterActive ? host.sessionCreatorFilterId : null,
     onGroupingChange: (grouping) => {
@@ -337,6 +339,10 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     },
     onShowCronChange: (show) => {
       host.sessionOrganizer.setSessionsShowCron(show);
+      controller.closeSessionSortMenu({ restoreFocus: true });
+    },
+    onShowSystemChange: (show) => {
+      host.sessionOrganizer.setSessionsShowSystem(show);
       controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onClose: (restoreFocus) => {

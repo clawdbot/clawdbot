@@ -122,6 +122,8 @@ export const HelloOkSchema = closedObject({
   ),
   auth: closedObject({
     deviceToken: Type.Optional(NonEmptyString),
+    recoveryMigrationAllowed: Type.Optional(Type.Literal(true)),
+    recoveryScope: Type.Optional(NonEmptyString),
     role: NonEmptyString,
     scopes: Type.Array(NonEmptyString),
     issuedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),

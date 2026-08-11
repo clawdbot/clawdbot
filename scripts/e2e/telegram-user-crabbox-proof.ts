@@ -13,10 +13,12 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sleep } from "../lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
 import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mts";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
+import { readTextFileTail } from "./lib/text-file-utils.mjs";
 import { telegramBotApi } from "./telegram-bot-api.ts";
 
 type CommandResult = {
@@ -690,21 +692,17 @@ function shellQuote(value: string) {
 
 type AppendCommandStdoutResult = { ok: true; value: string } | { ok: false; message: string };
 
-function appendCommandText(current: string, chunk: Buffer): string {
-  return current + chunk.toString("utf8");
-}
-
-function appendCommandTextTail(current: string, chunk: Buffer, maxChars: number): string {
-  const next = appendCommandText(current, chunk);
-  return next.length > maxChars ? next.slice(-maxChars) : next;
+function appendCommandTextTail(current: string, chunk: string, maxChars: number): string {
+  const next = current + chunk;
+  return next.length > maxChars ? sliceUtf16Safe(next, -maxChars) : next;
 }
 
 function appendCommandStdout(
   current: string,
-  chunk: Buffer,
+  chunk: string,
   maxChars = COMMAND_STDOUT_MAX_CHARS,
 ): AppendCommandStdoutResult {
-  const next = appendCommandText(current, chunk);
+  const next = current + chunk;
   if (next.length > maxChars) {
     return { ok: false, message: `command stdout exceeded ${maxChars} characters` };
   }
@@ -713,7 +711,7 @@ function appendCommandStdout(
 
 function appendCommandStderrTail(
   current: string,
-  chunk: Buffer,
+  chunk: string,
   maxChars = COMMAND_STDERR_TAIL_CHARS,
 ): string {
   return appendCommandTextTail(current, chunk, maxChars);
@@ -722,9 +720,7 @@ function appendCommandStderrTail(
 function commandFailureOutput(stdout: string, stderr: string): string {
   const stdoutTail =
     stdout.length > COMMAND_FAILURE_STDOUT_TAIL_CHARS
-      ? `\n[stdout truncated to last ${COMMAND_FAILURE_STDOUT_TAIL_CHARS} characters]\n${stdout.slice(
-          -COMMAND_FAILURE_STDOUT_TAIL_CHARS,
-        )}`
+      ? `\n[stdout truncated to last ${COMMAND_FAILURE_STDOUT_TAIL_CHARS} characters]\n${sliceUtf16Safe(stdout, -COMMAND_FAILURE_STDOUT_TAIL_CHARS)}`
       : stdout;
   return `${stdoutTail}${stderr}`;
 }
@@ -917,10 +913,11 @@ export function runCommand(params: {
       killTimer.unref?.();
     }, timeoutMs);
     timeout.unref?.();
-    child.stdout.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
       if (params.outputFile) {
-        fs.appendFileSync(params.outputFile, text);
+        fs.appendFileSync(params.outputFile, chunk);
         stdout = appendCommandTextTail(stdout, chunk, COMMAND_FAILURE_STDOUT_TAIL_CHARS);
       } else if (params.stdio === "inherit") {
         stdout = appendCommandTextTail(stdout, chunk, COMMAND_FAILURE_STDOUT_TAIL_CHARS);
@@ -934,17 +931,16 @@ export function runCommand(params: {
         }
       }
       if (params.stdio === "inherit") {
-        process.stdout.write(text);
+        process.stdout.write(chunk);
       }
     });
-    child.stderr.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
+    child.stderr.on("data", (chunk: string) => {
       if (params.outputFile) {
-        fs.appendFileSync(params.outputFile, text);
+        fs.appendFileSync(params.outputFile, chunk);
       }
       stderr = appendCommandStderrTail(stderr, chunk);
       if (params.stdio === "inherit") {
-        process.stderr.write(text);
+        process.stderr.write(chunk);
       }
     });
     child.on("error", (error) => {
@@ -1012,7 +1008,7 @@ function spawnLogged(command: string, args: string[], options: SpawnOptionsWitho
   child.stderr.setEncoding("utf8");
   let output = "";
   const capture = (chunk: string) => {
-    output = `${output}${chunk}`.slice(-12000);
+    output = sliceUtf16Safe(`${output}${chunk}`, -12000);
   };
   child.stdout.on("data", capture);
   child.stderr.on("data", capture);
@@ -1036,7 +1032,7 @@ function waitForOutput(
     const timeout = setTimeout(() => {
       reject(
         new Error(
-          `${label} did not become ready within ${resolvedTimeoutMs}ms\n${output().slice(-4000)}`,
+          `${label} did not become ready within ${resolvedTimeoutMs}ms\n${sliceUtf16Safe(output(), -4000)}`,
         ),
       );
     }, resolvedTimeoutMs);
@@ -1050,7 +1046,7 @@ function waitForOutput(
       cleanup();
       reject(
         new Error(
-          `${label} exited before ready with code ${code ?? "unknown"}\n${output().slice(-4000)}`,
+          `${label} exited before ready with code ${code ?? "unknown"}\n${sliceUtf16Safe(output(), -4000)}`,
         ),
       );
     };
@@ -1176,25 +1172,7 @@ function waitForChildExit(child: ChildProcess) {
 }
 
 export function readLogTail(logPath: string, maxBytes = LOG_READY_TAIL_BYTES): string {
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(logPath);
-  } catch {
-    return "";
-  }
-  if (!stat.isFile() || stat.size <= 0) {
-    return "";
-  }
-  const bytesToRead = Math.min(Math.max(1, maxBytes), stat.size);
-  const buffer = Buffer.alloc(bytesToRead);
-  const fd = fs.openSync(logPath, "r");
-  let bytesRead;
-  try {
-    bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, stat.size - bytesToRead);
-  } finally {
-    fs.closeSync(fd);
-  }
-  return buffer.subarray(0, bytesRead).toString("utf8");
+  return readTextFileTail(logPath, Math.max(1, maxBytes));
 }
 
 export async function waitForLog(
@@ -1214,7 +1192,9 @@ export async function waitForLog(
     });
   }
   const text = readLogTail(logPath);
-  throw new Error(`${label} did not become ready within ${timeoutMs}ms\n${text.slice(-4000)}`);
+  throw new Error(
+    `${label} did not become ready within ${timeoutMs}ms\n${sliceUtf16Safe(text, -4000)}`,
+  );
 }
 
 async function telegram(token: string, method: string, body: JsonObject = {}) {

@@ -17,7 +17,7 @@ export function renderBrowserPanelTabs(params: {
   tabs: BrowserPanelTab[];
   activeTargetId: string | null;
   onSelect: (targetId: string) => void;
-  onClose: (targetId: string) => void;
+  onClose: (targetId: string) => void | Promise<void>;
   onNew: () => void;
 }) {
   const tabs: PanelTabStripTab[] = params.tabs.map((tab) => {

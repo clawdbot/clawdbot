@@ -1913,6 +1913,66 @@ private func waitUntil(
         }
     }
 
+    @Test @MainActor func `share relay keeps credentials out of app group defaults`() throws {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let token = "relay-token-\(UUID().uuidString)"
+        let password = "relay-password-\(UUID().uuidString)"
+
+        #expect(ShareGatewayRelaySettings.saveConfig(ShareGatewayRelayConfig(
+            gatewayURLString: "wss://secure-relay.example.com",
+            gatewayStableID: "manual|secure-relay.example.com|443",
+            token: token,
+            password: password,
+            sessionKey: "main")))
+
+        let defaults = try #require(UserDefaults(suiteName: OpenClawAppGroup.identifier))
+        let persisted = try #require(defaults.data(forKey: "share.gatewayRelay.config.v1"))
+        #expect(persisted.range(of: Data(token.utf8)) == nil)
+        #expect(persisted.range(of: Data(password.utf8)) == nil)
+        let loaded = try #require(ShareGatewayRelaySettings.loadConfig())
+        #expect(loaded.token == token)
+        #expect(loaded.password == password)
+
+        let otherRelay = ShareGatewayRelayConfig(
+            gatewayURLString: "wss://other-relay.example.com",
+            gatewayStableID: "manual|other-relay.example.com|443",
+            token: nil,
+            password: nil,
+            sessionKey: "main")
+        defaults.set(try JSONEncoder().encode(otherRelay), forKey: "share.gatewayRelay.config.v1")
+        let mismatched = try #require(ShareGatewayRelaySettings.loadConfig())
+        #expect(mismatched.token == nil)
+        #expect(mismatched.password == nil)
+    }
+
+    @Test @MainActor func `share relay migrates legacy defaults credentials into keychain`() throws {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let token = "legacy-token-\(UUID().uuidString)"
+        let password = "legacy-password-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: OpenClawAppGroup.identifier))
+        let legacy = try JSONSerialization.data(withJSONObject: [
+            "gatewayURLString": "wss://legacy-relay.example.com",
+            "gatewayStableID": "manual|legacy-relay.example.com|443",
+            "token": token,
+            "password": password,
+            "sessionKey": "main",
+        ])
+        defaults.set(legacy, forKey: "share.gatewayRelay.config.v1")
+
+        let loaded = try #require(ShareGatewayRelaySettings.loadConfig())
+
+        #expect(loaded.token == token)
+        #expect(loaded.password == password)
+        let migrated = try #require(defaults.data(forKey: "share.gatewayRelay.config.v1"))
+        #expect(migrated.range(of: Data(token.utf8)) == nil)
+        #expect(migrated.range(of: Data(password.utf8)) == nil)
+        let reloaded = try #require(ShareGatewayRelaySettings.loadConfig())
+        #expect(reloaded.token == token)
+        #expect(reloaded.password == password)
+    }
+
     @Test @MainActor func `forget gateway clears matching share relay only`() async {
         let registryIsolation = GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }

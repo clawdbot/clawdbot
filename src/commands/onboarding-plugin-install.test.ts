@@ -125,21 +125,6 @@ vi.mock("../utils/with-timeout.js", () => ({
 }));
 
 import { ensureOnboardingPluginInstalled } from "./onboarding-plugin-install.js";
-import { testing } from "./onboarding-plugin-install.test-support.js";
-
-describe("plugin install error summaries", () => {
-  it("keeps bounded terminal text UTF-16 well-formed", () => {
-    expect(testing.summarizeInstallError(`${"x".repeat(178)}🚀tail`)).toBe(`${"x".repeat(178)}…`);
-  });
-
-  it("keeps copyable line breaks while bounding detailed installer output", () => {
-    expect(testing.formatInstallErrorDetail("first\nsecond\tvalue")).toBe("first\nsecond\\tvalue");
-    const detailed = testing.formatInstallErrorDetail(`start\n${"x".repeat(20_000)}`);
-    expect(detailed).toContain("start\n");
-    expect(detailed).toHaveLength(12_000);
-    expect(detailed.endsWith("… (installer output truncated)")).toBe(true);
-  });
-});
 
 function requireCapturedPrompt<T>(captured: T | undefined): T {
   if (!captured) {
@@ -1215,10 +1200,11 @@ describe("ensureOnboardingPluginInstalled", () => {
 
   it("returns bounded multiline ClawHub failure detail to non-interactive callers", async () => {
     const runtimeError = vi.fn();
+    const summaryPrefix = "x".repeat(178);
     installPluginFromClawHub.mockResolvedValueOnce({
       ok: false,
       code: "archive_integrity_mismatch",
-      error: `first line\n${"x".repeat(20_000)}`,
+      error: `Install failed: ${summaryPrefix}🚀tail\tvalue[31m\nsecond\tline\n${"y".repeat(20_000)}`,
     });
 
     const result = await ensureOnboardingPluginInstalled({
@@ -1242,10 +1228,15 @@ describe("ensureOnboardingPluginInstalled", () => {
       promptInstall: false,
     });
 
-    expect(result.error).toMatch(/^first line\n/);
+    expect(result.error).toMatch(/^Install failed: x{178}🚀tail/);
+    expect(result.error).toContain("\\tvalue");
+    expect(result.error).toContain("\nsecond\\tline\n");
+    expect(result.error).not.toContain("");
     expect(result.error?.endsWith("\n… (installer output truncated)")).toBe(true);
     expect(result.error?.length).toBe(12_000);
-    expect(readFirstMockCall(runtimeError, "runtime.error")[0]).toHaveLength(203);
+    const runtimeMessage = String(readFirstMockCall(runtimeError, "runtime.error")[0]);
+    expect(runtimeMessage).toContain(`${summaryPrefix}…`);
+    expect(runtimeMessage).not.toContain("");
   });
 
   it("does not offer local installs when the workspace only has a spoofed .git marker", async () => {

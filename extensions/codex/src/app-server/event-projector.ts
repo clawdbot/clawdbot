@@ -5,8 +5,9 @@ import {
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessBeforeCompactionHook,
   type BeforeToolCallFailureDisposition,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { AttemptFailureSource } from "./attempt-terminal.js";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { CodexAssistantProjection } from "./event-projector-assistant.js";
@@ -37,7 +38,6 @@ import {
   readCodexErrorNotificationMessage,
   readItem,
   readItemString,
-  readString,
 } from "./event-projector-values.js";
 import type { CodexNativePreToolUseFailure } from "./native-hook-relay.js";
 import {

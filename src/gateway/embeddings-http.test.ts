@@ -21,7 +21,7 @@ import { createPluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { startOpenAiCompatGatewayServer } from "./openai-compatible-http.test-helpers.js";
 import {
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
   resetTestPluginRegistry,
   setTestPluginRegistry,
@@ -172,7 +172,7 @@ beforeAll(async () => {
     },
   };
   ({ startGatewayServer } = await import("./server.js"));
-  enabledPort = await getFreePort();
+  enabledPort = await getGatewayTestPort();
   enabledServer = await startOpenAiCompatGatewayServer({
     startGatewayServer,
     port: enabledPort,
@@ -598,7 +598,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
   });
 
   it("rejects x-openclaw-model for trusted write-only callers", async () => {
-    const port = await getFreePort();
+    const port = await getGatewayTestPort();
     const server = await startOpenAiCompatGatewayServer({
       startGatewayServer,
       port,

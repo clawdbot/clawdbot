@@ -8,7 +8,7 @@ import { resolveSqliteTranscriptScope } from "./session-accessor.sqlite-scope.js
 
 // Outward notifications happen only after the owning SQLite mutation commits.
 
-export function emitArchivedSqliteTranscriptUpdates(
+export function emitArchivedTranscriptUpdates(
   archivedTranscripts: readonly SessionLifecycleArchivedTranscript[],
 ): void {
   for (const archived of archivedTranscripts) {
@@ -16,7 +16,7 @@ export function emitArchivedSqliteTranscriptUpdates(
   }
 }
 
-export async function publishSqliteTranscriptUpdate(
+export async function publishTranscriptUpdate(
   scope: SessionTranscriptWriteScope,
   update: TranscriptUpdatePayload = {},
 ): Promise<void> {

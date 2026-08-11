@@ -4,8 +4,7 @@ import {
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
-import { parseFiniteNumber as parseFiniteNumberish } from "./parse-finite-number.js";
-import { resolveProviderUsageDisplayName } from "./provider-usage.shared.js";
+import { providerUsageLabel } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageProviderId } from "./provider-usage.types.js";
 
 /** Fetches JSON-compatible provider usage endpoints with an abort timeout. */
@@ -23,9 +22,7 @@ export async function fetchJson(
   return await fetchFn(url, { ...init, signal });
 }
 
-export function parseFiniteNumber(value: unknown): number | undefined {
-  return parseFiniteNumberish(value);
-}
+export { parseFiniteNumber } from "./parse-finite-number.js";
 
 /** Parses a provider reset-time string without leaking an invalid Date timestamp. */
 export function parseUsageResetAt(value: unknown): number | undefined {
@@ -49,7 +46,7 @@ export function buildUsageErrorSnapshot(
 ): ProviderUsageSnapshot {
   return {
     provider,
-    displayName: resolveProviderUsageDisplayName(provider),
+    displayName: providerUsageLabel(provider) ?? provider,
     windows: [],
     error,
   };

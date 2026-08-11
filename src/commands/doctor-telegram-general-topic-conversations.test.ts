@@ -2,7 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listConversations } from "../config/sessions/conversation-registry.js";
-import { patchSessionEntry, upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore, upsertSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   getSessionKysely,
   resolveSqliteReadScope,
@@ -185,7 +185,7 @@ describe("doctor Telegram General-topic conversation repair", () => {
       }),
     ]);
 
-    await patchSessionEntry(scope, () => ({ displayName: "harmless later write" }));
+    await patchSessionEntryCore(scope, () => ({ displayName: "harmless later write" }));
     expect(listConversations(scope, { channel: "telegram" })).toEqual([
       expect.objectContaining({
         target: "telegram:-1002223334444",

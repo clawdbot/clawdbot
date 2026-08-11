@@ -294,8 +294,13 @@ export type LlmCompleteResult = {
   };
 };
 
+type RuntimeRunEmbeddedAgentParams = Omit<
+  import("../../agents/embedded-agent-runner/run/params.js").RunEmbeddedAgentParams,
+  "admittedRunContext" | "preparedRunAdmission" | "skillWorkshopCollectionReconcile"
+>;
+
 type RuntimeRunEmbeddedAgent = (
-  params: import("../../agents/embedded-agent-runner/run/params.js").RunEmbeddedAgentParams,
+  params: RuntimeRunEmbeddedAgentParams,
 ) => Promise<import("../../agents/embedded-agent-runner/types.js").EmbeddedAgentRunResult>;
 
 /** Core runtime helpers exposed to trusted native plugins. */
@@ -384,9 +389,8 @@ export type PluginRuntimeCore = {
     requestHeartbeatNow: (opts?: RuntimeRequestHeartbeatNowOptions) => void;
     /**
      * Run a single heartbeat cycle immediately (bypassing the coalesce timer).
-     * Accepts an optional `heartbeat` config override so callers can force
-     * delivery to the last active channel — the same pattern the cron service
-     * uses to avoid the default `target: "none"` suppression.
+     * Accepts an optional `heartbeat` config override so callers can choose
+     * an explicit destination or opt into internal-only `target: "none"` runs.
      */
     runHeartbeatOnce: (opts?: RunHeartbeatOnceOptions) => Promise<HeartbeatRunResult>;
     runCommandWithTimeout: typeof import("../../process/exec.js").runCommandWithTimeout;

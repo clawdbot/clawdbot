@@ -109,9 +109,11 @@ export function buildOAuthCallbackOriginResolver(
 /**
  * Generates a high-entropy OAuth state token for local callback validation.
  */
-export function generateOAuthState(): string {
+function generateHexOAuthState(): string {
   return crypto.randomBytes(32).toString("hex");
 }
+
+export { generateHexOAuthState as generateOAuthState };
 
 /**
  * Parses a pasted OAuth redirect URL into callback code/state fields.
@@ -230,7 +232,7 @@ function isHttpOrigin(value: string): boolean {
 
 type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
 type GetRuntimeAuthForModel =
-  typeof import("../plugins/runtime/runtime-model-auth.runtime.js").getRuntimeAuthForModel;
+  typeof import("../plugins/runtime/runtime-model-auth.runtime.js").getRuntimeAuthForModelCore;
 type RuntimeModelAuthModule = typeof import("../plugins/runtime/runtime-model-auth.runtime.js");
 const RUNTIME_MODEL_AUTH_CANDIDATES = [
   "./runtime-model-auth.runtime",
@@ -277,7 +279,7 @@ export async function getRuntimeAuthForModel(
   /** Concrete model auth request forwarded to the runtime auth module. */
   params: Parameters<GetRuntimeAuthForModel>[0],
 ): Promise<Awaited<ReturnType<GetRuntimeAuthForModel>>> {
-  const { getRuntimeAuthForModel: getRuntimeAuthForModelLocal } =
+  const { getRuntimeAuthForModelCore: getRuntimeAuthForModelLocal } =
     await loadRuntimeModelAuthModule();
   return getRuntimeAuthForModelLocal(params);
 }

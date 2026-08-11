@@ -98,6 +98,10 @@ const mocks = vi.hoisted(() => ({
   maybeRepairLegacyPluginManifestContracts: vi.fn().mockResolvedValue(undefined),
   detectLegacyClawdBrowserProfileResidue: vi.fn(),
   maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn(),
+  maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
+    changes: [],
+    warnings: [],
+  }),
   listAgentIds: vi.fn<(_cfg: OpenClawConfig) => string[]>(() => ["default"]),
   resolveAgentWorkspaceDir: vi.fn<(_cfg: OpenClawConfig, agentId: string) => string>(
     () => "/tmp/openclaw-workspace",
@@ -188,7 +192,6 @@ const mocks = vi.hoisted(() => ({
   resolveSystemdUserServiceAccount: vi.fn(() => "alice" as string | null),
   gatewayServiceIsLoaded: vi.fn(async () => true),
   resolveGatewayService: vi.fn(),
-  getSkillCuratorDoctorWarning: vi.fn(),
 }));
 
 vi.mock("../config/paths.js", async () => {
@@ -209,10 +212,6 @@ vi.mock("../commands/doctor/shared/plugin-runtime-symlinks.js", () => ({
 
 vi.mock("./bundled-health-checks.js", () => ({
   registerBundledHealthChecks: mocks.registerBundledHealthChecks,
-}));
-
-vi.mock("../skills/workshop/curator.js", () => ({
-  getSkillCuratorDoctorWarning: mocks.getSkillCuratorDoctorWarning,
 }));
 
 vi.mock("./doctor-repair-flow.js", () => ({
@@ -382,6 +381,7 @@ vi.mock("../commands/doctor-browser.js", () => ({
   noteChromeMcpBrowserReadiness: mocks.noteChromeMcpBrowserReadiness,
   detectLegacyClawdBrowserProfileResidue: mocks.detectLegacyClawdBrowserProfileResidue,
   maybeArchiveLegacyClawdBrowserProfileResidue: mocks.maybeArchiveLegacyClawdBrowserProfileResidue,
+  maybeRepairOwnedChromeExtensionNativeHosts: mocks.maybeRepairOwnedChromeExtensionNativeHosts,
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -1269,27 +1269,6 @@ describe("doctor health contributions", () => {
 
     expect(ids.indexOf("doctor:skills")).toBeGreaterThan(-1);
     expect(ids.indexOf("doctor:skills")).toBeLessThan(ids.indexOf("doctor:write-config"));
-  });
-
-  it("reports a wedged skill curator as a warning finding", async () => {
-    mocks.getSkillCuratorDoctorWarning.mockReturnValueOnce(
-      "skill curator has not completed a sweep since 2026-01-01 — check gateway logs",
-    );
-    const contribution = requireDoctorContribution("doctor:skill-curator");
-    const check = contribution.healthChecks[0] as HealthCheck;
-    const findings = await check.detect({
-      cfg: {},
-      mode: "doctor",
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    });
-
-    expect(findings).toEqual([
-      expect.objectContaining({
-        checkId: "core/doctor/skill-curator",
-        severity: "warning",
-        target: "skill-curator",
-      }),
-    ]);
   });
 
   it("keeps workspace status opt-in for structured lint selection", async () => {

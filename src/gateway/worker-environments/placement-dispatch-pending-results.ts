@@ -221,6 +221,7 @@ export async function recoverPendingWorkspaceResults(
         }
         // Clean refs are deleted while their accepted fence still exists. A
         // crash after deletion resumes here and can safely finish ownership.
+        await placements.closeWorkerTurnToolState(turnClaim);
         if (
           environment &&
           environment.state !== "destroyed" &&
@@ -348,9 +349,11 @@ export async function recoverPendingWorkspaceResults(
           continue;
         }
         if (pending.workspaceAcceptedAtMs !== null && environment?.state === "destroyed") {
+          await placements.closeWorkerTurnToolState(turnClaim);
           placements.completeWorkspaceResultAndReleaseTurn(turnClaim, { reclaim: true });
           continue;
         }
+        await placements.closeWorkerTurnToolState(turnClaim);
         const failed = placements.failWorkspaceResultAndReleaseTurn(
           pending,
           pendingWorkerLossError(environment, pending.sessionId),

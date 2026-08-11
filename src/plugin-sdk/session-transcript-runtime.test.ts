@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendTranscriptEvent,
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
   replaceTranscriptEvents,
   upsertSessionEntry,
@@ -937,7 +937,7 @@ describe("session transcript runtime SDK", () => {
     const keys = resolveSessionTranscriptMemoryHitKeyToSessionKeys({
       key: formatSessionTranscriptMemoryHitKey(scope),
       store: Object.fromEntries(
-        listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+        listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
       ),
     });
 

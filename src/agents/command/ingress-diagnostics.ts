@@ -29,7 +29,7 @@ type AgentCommandResult = {
 };
 
 /** Resolve the channel label for model.usage diagnostics from ingress run options. */
-export function ingressDiagnosticChannel(opts: AgentCommandIngressOpts): string {
+function ingressDiagnosticChannel(opts: AgentCommandIngressOpts): string {
   return opts.runContext?.messageChannel ?? opts.messageChannel ?? opts.channel ?? "http";
 }
 

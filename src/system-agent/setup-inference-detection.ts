@@ -12,6 +12,17 @@ const SETUP_INFERENCE_DETECTION_TIMEOUT_MS = 10_000;
 
 const log = createSubsystemLogger("system-agent/setup-inference-detection");
 
+class SetupInferenceDetectionTimeoutError extends Error {
+  override name = "SetupInferenceDetectionTimeoutError";
+
+  constructor(timeoutMs: number) {
+    super(
+      `Checking this Gateway for AI access timed out after ${timeoutMs / 1_000}s. ` +
+        "The Gateway may be busy — try again.",
+    );
+  }
+}
+
 type DetectionWorkerMessage =
   | { type: "partial"; detection: SetupInferenceDetection }
   | { type: "result"; detection: SetupInferenceDetection }
@@ -21,13 +32,11 @@ type DetectionWorkerOptions = {
   timeoutMs?: number;
   workerUrl?: URL;
   workerData?: WorkerOptions["workerData"];
-  fallback?: () => Promise<SetupInferenceDetection>;
   fallbackEnv?: NodeJS.ProcessEnv;
 };
 
 let inFlightDetection: Promise<SetupInferenceDetection> | undefined;
 let workerShutdown: Promise<void> | undefined;
-let workerShutdownResult: SetupInferenceDetection | undefined;
 
 function trackWorkerShutdown(worker: Worker): void {
   const current = worker.terminate().then(
@@ -40,7 +49,6 @@ function trackWorkerShutdown(worker: Worker): void {
   void current.finally(() => {
     if (workerShutdown === current) {
       workerShutdown = undefined;
-      workerShutdownResult = undefined;
     }
   });
 }
@@ -97,21 +105,18 @@ function withAmbientCandidates(
   return { ...detection, candidates: [...detection.candidates, ...ambient] };
 }
 
-function createUndetectedFallback(env: NodeJS.ProcessEnv = process.env): SetupInferenceDetection {
+function createUndetectedFallback(): SetupInferenceDetection {
   // This fallback must stay independent of the detection/plugin graph. The worker
   // supplies richer partial data when that graph loads before the deadline.
-  return withAmbientCandidates(
-    {
-      candidates: [],
-      unavailableCandidates: [],
-      manualProviders: [],
-      authOptions: [],
-      recommendedInstalls: listRecommendedToolInstalls(),
-      workspace: DEFAULT_AGENT_WORKSPACE_DIR,
-      setupComplete: false,
-    },
-    env,
-  );
+  return {
+    candidates: [],
+    unavailableCandidates: [],
+    manualProviders: [],
+    authOptions: [],
+    recommendedInstalls: listRecommendedToolInstalls(),
+    workspace: DEFAULT_AGENT_WORKSPACE_DIR,
+    setupComplete: false,
+  };
 }
 
 async function runDetectionWorker(
@@ -155,7 +160,6 @@ async function runDetectionWorker(
           reject(new Error(message.error));
           return;
         }
-        workerShutdownResult = message.detection;
         resolve(message.detection);
       });
     });
@@ -174,19 +178,18 @@ async function runDetectionWorker(
     const timer = setTimeout(() => {
       settle(() => {
         log.warn(
-          `Setup inference detection timed out after ${timeoutMs}ms; returning partial detection.`,
+          `Setup inference detection timed out after ${timeoutMs}ms; using partial signal if available.`,
         );
-        if (options.fallback) {
-          void options.fallback().then(resolve, reject);
-          return;
-        }
         const env = options.fallbackEnv ?? process.env;
         const detection = withAmbientCandidates(
-          partialDetection ?? createUndetectedFallback(env),
+          partialDetection ?? createUndetectedFallback(),
           env,
         );
-        workerShutdownResult = detection;
-        resolve(detection);
+        if (detection.candidates.length > 0 || detection.unavailableCandidates.length > 0) {
+          resolve(detection);
+          return;
+        }
+        reject(new SetupInferenceDetectionTimeoutError(timeoutMs));
       });
     }, timeoutMs);
     // Installing a message listener references the underlying MessagePort.
@@ -202,10 +205,11 @@ export async function detectSetupInferenceIsolated(
   if (inFlightDetection) {
     return await inFlightDetection;
   }
-  // A native provider probe can delay Worker termination. Reuse the bounded
-  // result until exit instead of allowing repeat UI requests to stack threads.
+  // A native provider probe can delay Worker termination. Wait for exit before
+  // retrying so repeat UI requests neither stack threads nor reuse stale results.
   if (workerShutdown) {
-    return workerShutdownResult ?? createUndetectedFallback();
+    await workerShutdown;
+    return await detectSetupInferenceIsolated(options);
   }
   const current = runDetectionWorker(options);
   inFlightDetection = current;

@@ -3,6 +3,7 @@
  */
 
 import type { MediaKind } from "@openclaw/media-core/constants";
+import type { toolIcons } from "../../components/icons-tools.ts";
 import type { SenderIdentity } from "./sender-label.ts";
 
 export type BrowserAnnotationAttachment = {
@@ -49,6 +50,8 @@ export type ChatQueueItem = {
   id: string;
   text: string;
   createdAt: number;
+  /** Operator-owned queue position; absent means "wherever arrival put it". */
+  orderKey?: number;
   kind?: "queued" | "steered";
   attachments?: ChatAttachment[];
   refreshSessions?: boolean;
@@ -82,11 +85,20 @@ export type ChatQueueItem = {
 /** Union type for items in the chat thread */
 export type ChatItem =
   | { kind: "message"; key: string; message: unknown; duplicateCount?: number }
-  | { kind: "notice"; key: string; text: string; timestamp: number }
+  | {
+      kind: "notice";
+      key: string;
+      text: string;
+      timestamp: number;
+      icon?: keyof typeof toolIcons;
+      label?: string;
+      startsTurn?: true;
+    }
   | {
       kind: "divider";
       key: string;
       label: string;
+      icon?: keyof typeof toolIcons;
       metric?: string;
       description?: string;
       action?: { kind: "session-checkpoints"; label: string };
@@ -194,6 +206,8 @@ export type ToolCard = {
   outputText?: string;
   /** Structured tool result details (e.g. the edit tool's precomputed diff). */
   details?: unknown;
+  /** Monotonic edit counts while a live tool call is still receiving input. */
+  liveDiffStat?: { added: number; removed: number };
   isError?: boolean;
   /** True when the card comes from the live tool stream of the current run. */
   live?: boolean;

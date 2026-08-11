@@ -1,11 +1,11 @@
-import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery-owner-release.js";
-import { isMainRestartRecoveryCandidate } from "../../agents/main-session-recovery-state.js";
+import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
+import { isMainRestartRecoveryCandidate } from "../../agents/main-session-recovery/main-session-recovery-state.js";
 import {
   claimMainSessionRecoveryOwner,
   releaseMainSessionRecoveryOwner,
   type MainSessionRecoveryPendingTarget,
   type MainSessionRecoveryOwnerLease,
-} from "../../agents/main-session-recovery-store.js";
+} from "../../agents/main-session-recovery/main-session-recovery-store.js";
 // Decides whether an inbound turn may start, queue, or abort a reply run.
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";

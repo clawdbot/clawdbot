@@ -67,13 +67,12 @@ export type SidebarLifecycleState = HTMLElement & {
     routeId: string,
     options?: { pathname?: string; search?: string; hash?: string },
   ) => void;
-  onCloseNavDrawer: () => void;
   readonly sessionData: SessionDataController;
   readonly sessionOrganizer: SessionOrganizerController;
   requestUpdate: () => void;
   updateComplete: Promise<boolean>;
   updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
-  updateRunning: boolean;
+  updateBusy: boolean;
   canUpdate: boolean;
   onUpdate: () => void;
   refreshRequired: boolean;
@@ -227,7 +226,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   let canonicalListRevision = 1;
   const listeners = new Set<(next: SessionState) => void>();
   const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
-  const groupsPut = vi.fn(() => Promise.resolve());
+  const groupsPut = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsRename = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsDelete = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const create = vi.fn(() => Promise.resolve("agent:main:fork"));

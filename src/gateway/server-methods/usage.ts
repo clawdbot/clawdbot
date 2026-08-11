@@ -66,7 +66,10 @@ import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
 } from "../session-store-key.js";
-import { loadCombinedSessionStoreForGateway, loadSessionEntryReadOnly } from "../session-utils.js";
+import {
+  loadCombinedSessionStoreForGatewayCore,
+  loadSessionEntryReadOnly,
+} from "../session-utils.js";
 import { loadUsageStatusStaleWhileRevalidate } from "./models-auth-status-usage-cache.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -1140,7 +1143,6 @@ export const testApi = {
   sessionsUsageCache,
   sessionsUsageCacheKey,
 };
-export { testApi as __test };
 
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
 
@@ -1236,7 +1238,7 @@ export const usageHandlers: GatewayRequestHandlers = {
         load: async () => {
           // Load session store for named sessions only on a result-cache miss.
           const sessionStoreOpts = effectiveAgentId ? { agentId: effectiveAgentId } : {};
-          const { store } = loadCombinedSessionStoreForGateway(config, sessionStoreOpts);
+          const { store } = loadCombinedSessionStoreForGatewayCore(config, sessionStoreOpts);
           const scopedStore = effectiveAgentId
             ? filterSessionStoreByAgent({
                 config,

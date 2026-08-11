@@ -7,12 +7,13 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
 import {
   attachToolAllowlistIntersection,
   expandToolGroups,
   normalizeToolList,
-  normalizeToolName,
+  normalizeToolPolicyName,
   readToolAllowlistIntersection,
 } from "../agents/tool-policy.js";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
@@ -417,7 +418,7 @@ export function createHookRunner(
     }
     return [...new Set(normalizeToolList([...normalizedLeft, ...normalizedRight]))].filter(
       (name) => {
-        const normalized = normalizeToolName(name);
+        const normalized = normalizeToolPolicyName(name);
         return (
           isToolAllowedByPolicyName(normalized, { allow: normalizedLeft }) &&
           isToolAllowedByPolicyName(normalized, { allow: normalizedRight })
@@ -614,13 +615,6 @@ export function createHookRunner(
 
   const getPluginPackageVersion = (pluginId: string): string | undefined =>
     registry.plugins.find((plugin) => plugin.id === pluginId)?.packageVersion;
-
-  const isPromiseLike = (value: unknown): value is PromiseLike<unknown> => {
-    if ((typeof value !== "object" && typeof value !== "function") || value === null) {
-      return false;
-    }
-    return typeof (value as { then?: unknown }).then === "function";
-  };
 
   const normalizePositiveTimeoutMs = (timeoutMs: number | undefined): number | undefined => {
     return clampPositiveTimerTimeoutMs(timeoutMs);

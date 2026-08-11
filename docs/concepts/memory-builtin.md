@@ -1,9 +1,11 @@
 ---
+doc-schema-version: 1
 summary: "The default SQLite-based memory backend with keyword, vector, and hybrid search"
 title: "Builtin memory engine"
 read_when:
   - You want to understand the default memory backend
   - You want to configure embedding providers or hybrid search
+  - You are migrating from the removed QMD memory backend
 ---
 
 The builtin engine is the default memory backend. It stores your memory index
@@ -111,6 +113,42 @@ You can also index Markdown files outside the workspace with
 `memory.search.extraPaths`. See the
 [configuration reference](/reference/memory-config#additional-memory-paths).
 </Info>
+
+## Migrating from QMD
+
+QMD has been removed; builtin is the only memory engine. After upgrading, run:
+
+```bash
+openclaw doctor --fix
+```
+
+Doctor removes the retired `memory.backend`, `memory.qmd`, and
+`memory.search.qmd` settings, including agent-scoped `memory.search.qmd`
+forms. It preserves QMD paths and extra collections as the corresponding
+`memory.search.extraPaths` entries, including `{ path, pattern }` globs. When
+Memory Core finds a retired per-agent QMD workspace under
+`~/.openclaw/agents/<agentId>/qmd/`, Doctor also offers to remove its derived
+indexes, model downloads, collection metadata, and session exports.
+
+Canonical memory remains in `MEMORY.md`, `USER.md`, `memory/*.md`, and the
+migrated extra paths. Builtin indexes those same Markdown sources on its next
+sync. The cutover is lossless by construction: no canonical memory content is
+copied or deleted; only derived state is rebuilt.
+
+Builtin now covers most QMD use cases with:
+
+- hybrid BM25 and vector retrieval by default, followed by temporal decay,
+  importance, and project affinity before MMR diversity,
+- bounded lexical query expansion for conversational searches,
+- string or `{ path, pattern }` entries in `memory.search.extraPaths`, and
+- optional image and audio indexing under `extraPaths` only.
+
+QMD query mode's learned cross-encoder reranking and HyDE generation are not
+part of builtin memory. MMR reduces duplicate results but is not a learned
+relevance reranker. To replace QMD's in-process, zero-key GGUF embeddings,
+install the [llama.cpp provider](/plugins/llama-cpp) and set
+`memory.search.provider: "local"`; without an embedding provider, builtin uses
+BM25 keyword search only.
 
 ## When to use
 

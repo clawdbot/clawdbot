@@ -1,6 +1,6 @@
 // Manual facade. Keep loader boundary explicit.
 import type { RuntimeEnv } from "../runtime.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
+import { loadBundledPluginPublicSurfaceModuleSyncCore } from "./facade-loader.js";
 
 type FacadeModule = {
   githubCopilotLoginCommand: (
@@ -10,7 +10,7 @@ type FacadeModule = {
 };
 
 function loadFacadeModule(): FacadeModule {
-  return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
+  return loadBundledPluginPublicSurfaceModuleSyncCore<FacadeModule>({
     dirName: "github-copilot",
     artifactBasename: "api.js",
   });

@@ -932,7 +932,7 @@ export function renderSessionDiffToggle(
         ?disabled=${sessionWorkspace.diffNotGit === true}
         @click=${sessionWorkspace.onOpenDiff}
       >
-        ${icons.gitBranch}
+        ${icons.fileDiff}
       </button>
     </openclaw-tooltip>
   `;
@@ -1005,7 +1005,7 @@ export function renderSessionWorkspaceRail(
             ?disabled=${sessionWorkspace.diffNotGit === true}
             @click=${sessionWorkspace.onOpenDiff}
           >
-            ${icons.gitBranch}
+            ${icons.fileDiff}
           </button>
         </openclaw-tooltip>
       `

@@ -2,10 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { isRecord } from "./lib/record-shared.mjs";
 
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 const SHARED_LOCATION_PREFIX = "../shared/OpenClawKit/Sources/";
 const SHARED_SOURCE_ROOT = "apps/shared/OpenClawKit/Sources";
 const BARE_PERIPHERY_IGNORE_COMMENT = /\/\/\/?\s*periphery:ignore(?![:\w])/;

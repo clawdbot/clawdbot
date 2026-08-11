@@ -2,11 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.js";
 import {
   WorkerProviderError,
   type WorkerDesktopEndpoint,
+  type WorkerProfile,
   type WorkerProvider,
   type WorkerSshEndpoint,
 } from "../../plugins/types.js";
@@ -50,6 +52,14 @@ const DESKTOP: WorkerDesktopEndpoint = {
   protocol: "rfb",
   port: 5900,
   passwordFilePath: "/var/lib/crabbox/vnc.password",
+  apps: [
+    {
+      id: "browser",
+      executablePath: "/usr/local/bin/openclaw-worker-browser",
+      cdpPort: 9222,
+    },
+    { id: "terminal", executablePath: "/usr/local/bin/openclaw-worker-terminal" },
+  ],
 };
 const BUNDLE_HASH = "a".repeat(64);
 const BUNDLE_ARTIFACT: WorkerInstallationArtifact = {
@@ -180,9 +190,7 @@ describe("worker environment service", () => {
     return service;
   }
 
-  function createProvider(
-    overrides: Partial<Pick<WorkerProvider, "provision" | "inspect" | "destroy">> = {},
-  ): WorkerProvider {
+  function createProvider(overrides: Partial<WorkerProvider> = {}): WorkerProvider {
     return {
       id: "fake",
       provision: async () => ({ leaseId: "lease-1", ssh: SSH_ENDPOINT }),
@@ -243,7 +251,7 @@ describe("worker environment service", () => {
     });
   }
 
-  function seedReadyDesktop(environmentId: string) {
+  function seedReadyDesktop(environmentId: string, desktop: WorkerDesktopEndpoint = DESKTOP) {
     const intent = store.createIntent({
       environmentId,
       providerId: "fake",
@@ -263,7 +271,7 @@ describe("worker environment service", () => {
       patch: {
         leaseId: `lease:${environmentId}`,
         sshEndpoint: SSH_ENDPOINT,
-        desktop: DESKTOP,
+        desktop,
       },
     });
     return store.transition({
@@ -430,7 +438,9 @@ describe("worker environment service", () => {
   ) {
     const identity = seedAttachedIdentity(environmentId, sessionId);
     const placementStore = {
+      hasWorkerTurn: vi.fn(() => true),
       validateWorkerTurn: vi.fn(() => true),
+      isWorkerTurnToolAuthorized: vi.fn(() => true),
       updateAckCursors: vi.fn(),
     };
     const workerService = createService(createProvider(), { ...serviceOptions, placementStore });
@@ -487,6 +497,42 @@ describe("worker environment service", () => {
     expect(workerService.acknowledgeCredentialDelivery(grant!)).toBe(true);
     expect(store.getCredential(result.environmentId)).toMatchObject({ deliveredAtMs: nowMs });
     expect(workerService.takeMintedCredential(binding)).toBeUndefined();
+  });
+
+  it("creates a nested environment from its parent's snapshot after config drift", async () => {
+    const provisionedProfiles: WorkerProfile[] = [];
+    let lease = 0;
+    let credential = 0;
+    const workerService = createService(
+      createProvider({
+        provision: async (profile) => {
+          provisionedProfiles.push(structuredClone(profile));
+          lease += 1;
+          return { leaseId: `lease-${lease}`, ssh: SSH_ENDPOINT };
+        },
+      }),
+      {
+        generateWorkerCredential: () => `nested-worker-credential-${(credential += 1)}`,
+      },
+    );
+    const parent = await workerService.create("development", "parent-profile-snapshot");
+    getDevelopmentProfile().settings = { region: "mutated" };
+
+    const child = await workerService.createFromProfileSnapshot(
+      {
+        profileId: parent.profileId,
+        providerId: parent.providerId,
+        profileSnapshot: parent.profileSnapshot,
+      },
+      "child-profile-snapshot",
+    );
+
+    expect(provisionedProfiles).toEqual([{ region: "test" }, { region: "test" }]);
+    expect(child).toMatchObject({
+      profileId: parent.profileId,
+      providerId: parent.providerId,
+      profileSnapshot: parent.profileSnapshot,
+    });
   });
 
   it("adopts a matching milestone-1 row that predates worker credentials", async () => {
@@ -613,16 +659,44 @@ describe("worker environment service", () => {
     expect(workerService.validateWorkerConnection(warmAdmission.identity)).toBe(
       "credential-expired",
     );
-    await expect(workerService.admitWorker(admission)).resolves.toEqual({
-      ok: false,
-      reason: "credential-expired",
+    await expect(workerService.admitWorker(admission)).resolves.toMatchObject({
+      ok: true,
+      identity: { sessionId, runId: "run-1" },
     });
 
     placementStore.validateWorkerTurn.mockReturnValue(false);
     expect(workerService.validateWorkerConnection(identity)).toBe("placement-mismatch");
+    vi.mocked(prepareInstallation).mockClear();
+    await expect(workerService.admitWorker(admission)).resolves.toEqual({
+      ok: false,
+      reason: "credential-expired",
+    });
+    expect(prepareInstallation).not.toHaveBeenCalled();
     await expect(
       workerService.commitTranscript(identity, transcriptRequest(identity, "fenced")),
     ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
+  });
+
+  it("does not rotate an expired delivered credential while its durable turn is active", async () => {
+    const environmentId = "worker-expired-active-turn";
+    const sessionId = "session-expired-active-turn";
+    const liveEvents = createLiveEvents();
+    const { identity, workerService } = placementHarness(environmentId, sessionId, {
+      liveEvents,
+    });
+    store.markCredentialDelivered({
+      environmentId,
+      credentialHash: identity.credentialHash,
+      ownerEpoch: identity.ownerEpoch,
+      sessionId,
+      deliveredAtMs: nowMs,
+    });
+    nowMs = identity.credentialExpiresAtMs;
+
+    await workerService.reconcileOnce();
+
+    expect(store.getCredential(environmentId)?.credentialHash).toBe(identity.credentialHash);
+    expect(liveEvents.rotateCredential).not.toHaveBeenCalled();
   });
 
   it("persists worker transcript and terminal live ACK cursors", async () => {
@@ -1589,6 +1663,44 @@ describe("worker environment service", () => {
     });
   });
 
+  it("does not resolve a provider provision timeout when the service override is set", async () => {
+    const resolveProvisionTimeoutMs = vi.fn(() => {
+      throw new Error("provider timeout hook must not run");
+    });
+    const workerService = createService(createProvider({ resolveProvisionTimeoutMs }), {
+      providerCallTimeoutMs: 1_000,
+    });
+
+    await expect(
+      workerService.create("development", "request-provider-timeout-override"),
+    ).resolves.toMatchObject({ state: "ready" });
+    expect(resolveProvisionTimeoutMs).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["zero", 0],
+    ["negative", -1],
+    ["fractional", 1.5],
+    ["non-finite", Number.NaN],
+    ["timer overflow", MAX_TIMER_TIMEOUT_MS + 1],
+  ])("rejects a %s provider provision timeout before allocation", async (_label, timeoutMs) => {
+    const provision = vi.fn(async () => ({ leaseId: "lease-invalid-timeout", ssh: SSH_ENDPOINT }));
+    const workerService = createService(
+      createProvider({
+        provision,
+        resolveProvisionTimeoutMs: () => timeoutMs,
+      }),
+    );
+
+    await expect(
+      workerService.create("development", `request-invalid-provider-timeout-${String(timeoutMs)}`),
+    ).rejects.toMatchObject({
+      code: "invalid_profile",
+      message: expect.stringContaining("Worker provider provision timeout must be an integer"),
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    expect(provision).not.toHaveBeenCalled();
+  });
+
   it("serializes destroy and provision replay behind a timed-out provider operation", async () => {
     const events: string[] = [];
     const operationIds: string[] = [];
@@ -1622,8 +1734,9 @@ describe("worker environment service", () => {
         return { leaseId: "lease-timeout-replay", ssh: SSH_ENDPOINT };
       },
       destroy,
+      resolveProvisionTimeoutMs: () => 20,
     });
-    const workerService = createService(provider, { providerCallTimeoutMs: 20 });
+    const workerService = createService(provider);
     const creation = workerService.create("development", "request-provider-timeout-race");
     const creationResult = expect(creation).rejects.toMatchObject({
       code: "provider_failure",
@@ -1752,6 +1865,26 @@ describe("worker environment service", () => {
         desktop: { protocol: "rfb", port: 5900, passwordFilePath: "vnc.password" },
       },
       "desktop password file path must be absolute",
+    ],
+    [
+      "unrecognized desktop app metadata",
+      {
+        leaseId: "lease-invalid",
+        ssh: SSH_ENDPOINT,
+        desktop: {
+          protocol: "rfb",
+          port: 5900,
+          apps: [
+            {
+              id: "browser",
+              executablePath: "/usr/local/bin/openclaw-worker-browser",
+              cdpPort: 9222,
+              command: "chromium",
+            },
+          ],
+        },
+      },
+      "browser desktop app contains unknown fields",
     ],
   ])("keeps %s from a provider retryable", async (_name, result, error) => {
     const workerService = createService(createProvider({ provision: async () => result as never }));
@@ -2448,13 +2581,99 @@ describe("worker environment service", () => {
   it("projects desktop availability only while a desktop lease is observable", () => {
     const ready = seedReadyDesktop("worker-desktop-projection");
     const workerService = createService(createProvider());
-    expect(workerService.get(ready.environmentId)).toMatchObject({ desktopAvailable: true });
+    expect(workerService.get(ready.environmentId)).toMatchObject({
+      desktopAvailable: true,
+      desktopApps: ["browser", "terminal"],
+    });
     store.transition({
       environmentId: ready.environmentId,
       from: ready.state,
       to: "draining",
     });
-    expect(workerService.get(ready.environmentId)).toMatchObject({ desktopAvailable: false });
+    expect(workerService.get(ready.environmentId)).toMatchObject({
+      desktopAvailable: false,
+      desktopApps: [],
+    });
+  });
+
+  it("launches only an advertised desktop app through the pinned SSH runtime", async () => {
+    const record = seedReadyDesktop("worker-desktop-launch");
+    const launchApp = vi.fn(async () => {});
+    const tunnelManager = {
+      desktop: {
+        acquire: vi.fn(),
+        attachObserver: vi.fn(),
+        launchApp,
+        stop: vi.fn(async () => {}),
+        stopAll: vi.fn(async () => {}),
+      },
+      status: () => "stopped" as const,
+      start: vi.fn(),
+      stop: vi.fn(async () => {}),
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    const workerService = createService(createProvider(), { tunnelManager });
+
+    await expect(
+      workerService.launchDesktopApp({ environmentId: record.environmentId, app: "browser" }),
+    ).resolves.toEqual({ app: "browser", status: "ready" });
+    expect(launchApp).toHaveBeenCalledExactlyOnceWith({
+      environmentId: record.environmentId,
+      ownerEpoch: record.ownerEpoch,
+      ssh: SSH_ENDPOINT,
+      app: DESKTOP.apps?.[0],
+      resolveIdentity: expect.any(Function),
+    });
+  });
+
+  it("rejects missing desktop apps and maps launcher runtime failures to typed errors", async () => {
+    const record = seedReadyDesktop("worker-desktop-launch-errors");
+    const launchApp = vi.fn(async () => {
+      throw new Error("private SSH launcher detail");
+    });
+    const tunnelManager = {
+      desktop: {
+        acquire: vi.fn(),
+        attachObserver: vi.fn(),
+        launchApp,
+        stop: vi.fn(async () => {}),
+        stopAll: vi.fn(async () => {}),
+      },
+      status: () => "stopped" as const,
+      start: vi.fn(),
+      stop: vi.fn(async () => {}),
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    const workerService = createService(createProvider(), { tunnelManager });
+
+    await expect(
+      workerService.launchDesktopApp({ environmentId: record.environmentId, app: "browser" }),
+    ).rejects.toMatchObject({
+      code: "launcher_failure",
+      message: "worker desktop browser launcher failed; verify the app is installed and retry",
+    });
+    store.transition({
+      environmentId: record.environmentId,
+      from: record.state,
+      to: "draining",
+    });
+    await expect(
+      workerService.launchDesktopApp({ environmentId: record.environmentId, app: "terminal" }),
+    ).rejects.toMatchObject({ code: "invalid_state" });
+
+    const browserOnly = seedReadyDesktop("worker-desktop-browser-only", {
+      ...DESKTOP,
+      apps: [DESKTOP.apps![0]!],
+    });
+    await expect(
+      workerService.launchDesktopApp({
+        environmentId: browserOnly.environmentId,
+        app: "terminal",
+      }),
+    ).rejects.toMatchObject({
+      code: "desktop_app_not_found",
+      message: "environment does not advertise desktop app: terminal",
+    });
   });
 
   it("acquires a desktop tunnel and mints a one-shot websocket path", async () => {

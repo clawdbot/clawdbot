@@ -288,6 +288,9 @@ export function handleChatScroll(host: ChatScrollHost, event: Event): void {
   }
   const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
   if (isUserScrollUp && distanceFromBottom > CHAT_TRANSCRIPT_END_THRESHOLD_PX) {
+    // Taking control before initial history settles must retire its queued
+    // force-scroll. Otherwise that delayed commit can overwrite the viewport.
+    host.chatHasAutoScrolled = true;
     host.chatFollowLocked = true;
   } else if (distanceFromBottom <= CHAT_TRANSCRIPT_END_THRESHOLD_PX) {
     host.chatFollowLocked = false;
@@ -299,30 +302,6 @@ export function handleChatScroll(host: ChatScrollHost, event: Event): void {
     container.scrollHeight - container.clientHeight > CHAT_TRANSCRIPT_END_THRESHOLD_PX &&
       distanceFromBottom > CHAT_TRANSCRIPT_END_THRESHOLD_PX,
   );
-}
-
-export function restoreChatScroll(
-  host: ChatScrollHost,
-  target: HTMLElement,
-  scrollTop: number,
-): number {
-  cancelChatScroll(host);
-  const maxScrollTop = Math.max(0, target.scrollHeight - target.clientHeight);
-  target.scrollTop = Math.min(Math.max(0, scrollTop), maxScrollTop);
-  const restoredScrollTop = target.scrollTop;
-  const distanceFromBottom = maxScrollTop - restoredScrollTop;
-  host.chatLastScrollTop = restoredScrollTop;
-  host.chatLastScrollHeight = target.scrollHeight;
-  host.chatHasAutoScrolled = true;
-  // A virtualized transcript may not expose its final scroll height yet. Keep
-  // the restored viewport locked until the requested offset becomes reachable.
-  host.chatFollowLocked =
-    scrollTop > maxScrollTop || distanceFromBottom > CHAT_TRANSCRIPT_END_THRESHOLD_PX;
-  host.chatUserNearBottom = !host.chatFollowLocked && distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
-  host.chatIsProgrammaticScroll = false;
-  host.chatProgrammaticScrollTarget = restoredScrollTop;
-  setNewMessagesBelow(host, host.chatFollowLocked);
-  return restoredScrollTop;
 }
 
 export function resetChatScroll(host: ChatScrollHost): void {

@@ -5,7 +5,7 @@ import {
   projectAgentHarnessTranscriptMessageForDisplay,
   runAgentHarnessBeforeMessageWriteHook,
   type AgentMessage,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { withCodexSessionTranscriptMirrorWriteLock } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
 import {

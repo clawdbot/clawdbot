@@ -3,7 +3,7 @@ import { resolveStorePath } from "../../../config/sessions/paths.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
-  resolveSessionTranscriptRuntimeReadTarget,
+  resolveSessionTranscriptRuntimeTarget,
   updateSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
 import { resolveQuotaSuspensionEntryMaintenance } from "../../../config/sessions/store-maintenance.js";
@@ -148,7 +148,7 @@ export async function resolveAttemptTrajectorySessionFile(params: {
     return params.sessionFile;
   }
   return (
-    await resolveSessionTranscriptRuntimeReadTarget({
+    await resolveSessionTranscriptRuntimeTarget({
       agentId: params.agentId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
