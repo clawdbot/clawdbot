@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS user_preferences (
 ) STRICT;
 `;
 
-export type UserPreferenceError =
+type UserPreferenceError =
   | { code: "invalid-entry-count" }
   | { code: "invalid-key" | "invalid-value" | "value-too-large"; key: string }
   | {
