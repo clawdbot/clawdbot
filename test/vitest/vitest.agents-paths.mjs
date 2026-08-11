@@ -18,7 +18,10 @@ const coreIsolatedFiles = [
   "src/agents/subagents/registry/subagent-registry-restart-recovery.test.ts",
 ];
 const incompleteTurnFiles = [`${embeddedRoot}/run.incomplete-turn.test.ts`];
-const overflowCompactionFiles = [`${embeddedRoot}/run.overflow-compaction.test.ts`];
+const overflowCompactionFiles = [
+  `${embeddedRoot}/run.overflow-compaction.test.ts`,
+  `${embeddedRoot}/run.prepared-harness-source-delivery.integration.test.ts`,
+];
 
 export const agentVitestProjectOwners = {
   all: {

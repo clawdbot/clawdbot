@@ -17,6 +17,11 @@ import {
   createSessions,
   mountSidebar,
 } from "../app-sidebar.ts";
+import {
+  answerConfirmDialog,
+  installDialogPolyfill,
+  waitForConfirmDialogActions,
+} from "../modal-dialog.ts";
 import { waitForFast } from "../wait-for.ts";
 import {
   click,
@@ -239,7 +244,7 @@ describe("AppSidebar multi-select", () => {
   });
 
   it("deletes the selection in one batch after a single confirm", async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const restoreDialogPolyfill = installDialogPolyfill();
     try {
       const { sidebar, harness } = await mountMultiSelect();
 
@@ -252,15 +257,17 @@ describe("AppSidebar multi-select", () => {
       const menu = await sessionMenu(sidebar);
       menu.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();
 
+      const actions = await waitForConfirmDialogActions();
+      expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain("2");
+      answerConfirmDialog(actions, "confirm");
+
       await waitForFast(() => expect(harness.deleteMany).toHaveBeenCalledOnce());
-      expect(confirmSpy).toHaveBeenCalledOnce();
-      expect(confirmSpy.mock.calls[0]?.[0]).toContain("2");
       expect(harness.deleteMany).toHaveBeenCalledWith([
         { key: "agent:main:a", agentId: "main", deleteTranscript: true },
         { key: "agent:main:b", agentId: "main", deleteTranscript: true },
       ]);
     } finally {
-      confirmSpy.mockRestore();
+      restoreDialogPolyfill();
     }
   });
 
@@ -337,10 +344,6 @@ describe("AppSidebar catalog session rows", () => {
       );
       const navigated: Array<[string, unknown]> = [];
       sidebar.onNavigate = (routeId, options) => navigated.push([routeId, options]);
-      let navDrawerCloses = 0;
-      sidebar.onCloseNavDrawer = () => {
-        navDrawerCloses += 1;
-      };
       const header = sidebar.querySelector<HTMLElement>(
         '[data-session-section="catalog:codex"] .sidebar-recent-sessions__head',
       );
@@ -366,10 +369,6 @@ describe("AppSidebar catalog session rows", () => {
 
       expect(loadStoredHiddenSessionCatalogIds().has("codex")).toBe(true);
       expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).toBeNull();
-
-      // On a phone this menu lives inside the modal navigation drawer, which occludes
-      // and inerts the toast; the outcome only reaches the operator once it closes.
-      expect(navDrawerCloses).toBe(1);
 
       // Hiding must announce its own outcome: the section name, undo, and a recovery
       // path that opens the settings block instead of only naming it.

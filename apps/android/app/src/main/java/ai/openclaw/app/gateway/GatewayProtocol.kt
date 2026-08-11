@@ -534,6 +534,9 @@ enum class GatewayMethod(
   ProjectsRegister("projects.register"),
   ProjectsRemove("projects.remove"),
   WorkerDesktopLaunch("worker.desktop.launch"),
+  SecretsStoreList("secrets.store.list"),
+  SecretsStoreSet("secrets.store.set"),
+  SecretsStoreDelete("secrets.store.delete"),
 }
 
 enum class GatewayEvent(

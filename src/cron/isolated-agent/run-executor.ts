@@ -13,6 +13,7 @@ import {
   finalizeAcceptedContextEngineTurn,
   type ContextEngineTurnAttemptFacts,
 } from "../../agents/harness/context-engine-turn-attempt.js";
+import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
@@ -37,8 +38,9 @@ import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../tasks/task-status-access.js";
+import type { CronRuntimeAuthority } from "../runtime-authority.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
-import type { CronAgentExecutionPhaseUpdate, CronJob } from "../types.js";
+import type { CronAgentExecutionPhaseUpdate, CronJob, CronStoredJob } from "../types.js";
 import {
   resolveCronChannelOutputPolicy,
   resolveCurrentChannelTarget,
@@ -72,6 +74,22 @@ import { resolveEffectiveAgentRuntime, resolveThinkingDefault } from "./run.runt
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 type AgentTurnPayload = Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
+
+function assertCronRuntimeAuthorityCandidate(params: {
+  authority?: CronRuntimeAuthority;
+  candidateRuntime: string;
+  cliExecution: boolean;
+}): void {
+  const authority = params.authority;
+  if (!authority) {
+    return;
+  }
+  if (params.candidateRuntime !== authority.runtimeId || params.cliExecution) {
+    throw new AgentHarnessPreflightError(
+      `This automation carries ${authority.namespace} authority captured for the ${authority.runtimeId} runtime, but the selected execution runtime is ${params.candidateRuntime}. Restore that runtime and auth profile, or explicitly replace the automation's toolsAllow cap from an authenticated creator turn.`,
+    );
+  }
+}
 type CronPromptRunResult = Awaited<ReturnType<typeof runCliAgent>>;
 type CronEmbeddedRuntime = typeof import("./run-embedded.runtime.js");
 type CronSubagentRegistryRuntime = typeof import("./run-subagent-registry.runtime.js");
@@ -217,7 +235,7 @@ export type CronExecutionResult = {
 function createCronPromptExecutor(params: {
   cfg: OpenClawConfig;
   cfgWithAgentDefaults: OpenClawConfig;
-  job: CronJob;
+  job: CronStoredJob;
   agentId: string;
   agentDir: string;
   agentSessionKey: string;
@@ -423,11 +441,6 @@ function createCronPromptExecutor(params: {
         if (params.abortSignal?.aborted) {
           throw new Error(params.abortReason());
         }
-        // The candidate that admits detached work owns its continuation even
-        // if the provider throws before returning result metadata.
-        params.cronSession.sessionEntry.modelProvider = providerOverride;
-        params.cronSession.sessionEntry.model = modelOverride;
-        await params.persistRunContinuationSession?.();
         const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
           provider: providerOverride,
           entry: params.cronSession.sessionEntry,
@@ -497,6 +510,16 @@ function createCronPromptExecutor(params: {
                 modelId: modelOverride,
               }) ?? providerOverride));
         const cliExecution = isCliProvider(executionProvider, params.cfgWithAgentDefaults);
+        assertCronRuntimeAuthorityCandidate({
+          authority: params.job.runtimeAuthority,
+          candidateRuntime,
+          cliExecution,
+        });
+        // The validated candidate that admits detached work owns its continuation
+        // even if the provider throws before returning result metadata.
+        params.cronSession.sessionEntry.modelProvider = providerOverride;
+        params.cronSession.sessionEntry.model = modelOverride;
+        await params.persistRunContinuationSession?.();
         await params.setRunContinuationCliExecutionProvider?.(
           cliExecution ? executionProvider : undefined,
         );
@@ -667,6 +690,9 @@ function createCronPromptExecutor(params: {
           bootstrapContextMode,
           bootstrapContextRunKind: "cron",
           toolsAllow: params.agentPayload?.toolsAllow,
+          scheduledRuntimeAuthority: params.job.runtimeAuthority,
+          scheduledRuntimeAuthorityRecoveryRequired:
+            params.job.runtimeAuthorityRecoveryRequired === true,
           scheduledToolPolicy,
           execOverrides: params.suppressExecNotifyOnExit
             ? {
@@ -757,7 +783,7 @@ function createCronPromptExecutor(params: {
 export async function executeCronRun(params: {
   cfg: OpenClawConfig;
   cfgWithAgentDefaults: OpenClawConfig;
-  job: CronJob;
+  job: CronStoredJob;
   agentId: string;
   agentDir: string;
   agentSessionKey: string;

@@ -683,7 +683,7 @@ function formatRuntimeMs(runtimeMs: number | undefined): string | null {
   if (typeof runtimeMs !== "number" || !Number.isFinite(runtimeMs) || runtimeMs < 0) {
     return null;
   }
-  return formatDurationCompact(runtimeMs, { spaced: true }) ?? "0ms";
+  return formatDurationCompact(runtimeMs) ?? "0ms";
 }
 
 // Goal state is a dot + summary; the tooltip carries the objective detail.
@@ -1286,7 +1286,7 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
             ${sortHeader("updated", t("sessionsView.updated"))}
             ${sortHeader("tokens", t("sessionsView.tokens"))}
             <th class="session-actions-col">
-              <span class="sessions-sr-only">${t("sessionsView.actions")}</span>
+              <span class="sr-only">${t("sessionsView.actions")}</span>
             </th>
           </tr>
         </thead>

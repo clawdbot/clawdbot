@@ -14,7 +14,6 @@ import {
 } from "../../tool-search.js";
 
 const mocks = vi.hoisted(() => ({
-  buildSubscriptionParams: vi.fn(),
   clearActiveRun: vi.fn(),
   notifyToolActivity: vi.fn(),
   runBeforeFinalizeHook: vi.fn(),
@@ -28,9 +27,6 @@ vi.mock("../../embedded-agent-subscribe.js", () => ({
 vi.mock("../runs.js", () => ({
   clearActiveEmbeddedRun: mocks.clearActiveRun,
   setActiveEmbeddedRun: mocks.setActiveRun,
-}));
-vi.mock("./attempt-subscription-cleanup.js", () => ({
-  buildEmbeddedSubscriptionParams: mocks.buildSubscriptionParams,
 }));
 vi.mock("./tool-activity-heartbeat.js", () => ({
   notifyToolActivity: mocks.notifyToolActivity,
@@ -104,7 +100,6 @@ function prepareCatalogExecutor(
 describe("prepareEmbeddedAttemptStream", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.buildSubscriptionParams.mockImplementation((params) => params);
     mocks.subscribe.mockReturnValue({
       toolMetas: [],
       runToolLifecycle: vi.fn(async ({ execute }) => await execute()),
@@ -158,7 +153,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       builtinToolNames: new Set(),
       replaySafeToolNames: new Set(),
     });
-    const subscriptionInput = mocks.buildSubscriptionParams.mock.calls.at(-1)?.[0] as {
+    const subscriptionInput = mocks.subscribe.mock.calls.at(-1)?.[0] as {
       onBeforeTerminalDelivery?: (event: unknown) => Promise<unknown>;
     };
     const decision = subscriptionInput.onBeforeTerminalDelivery?.({
@@ -237,7 +232,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       replaySafeToolNames: new Set(),
     });
     const queued = prepared.queueHandle.queueMessage("new user input");
-    const subscriptionInput = mocks.buildSubscriptionParams.mock.calls.at(-1)?.[0] as {
+    const subscriptionInput = mocks.subscribe.mock.calls.at(-1)?.[0] as {
       onBeforeTerminalDelivery?: (event: unknown) => Promise<unknown>;
     };
 
@@ -271,7 +266,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       sandboxSessionKey: "agent:main:main",
     });
 
-    expect(mocks.buildSubscriptionParams).toHaveBeenCalledWith(
+    expect(mocks.subscribe).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:main:internal-session-effects:companion-run",
       }),

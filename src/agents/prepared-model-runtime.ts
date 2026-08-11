@@ -4,6 +4,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles/runtime-snapshots.js";
 import { registerPreparedRuntimeAuthMaterializationPublisher } from "./prepared-model-runtime-materializations.js";
+import { toPreparedModelRuntimeError } from "./prepared-model-runtime.errors.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimeOwnerRetention,
@@ -22,7 +23,6 @@ import {
   publishModelRuntimeSnapshot,
   rebindInputToCommittedConfiguredOwner,
   resolvePublishedOwner,
-  toError,
   type PreparedModelRuntimeOwner,
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimePublicationOptions,
@@ -513,7 +513,7 @@ export function rejectPendingPreparedModelRuntimeReplacement(
     return;
   }
   pendingModelRuntimeReplacement = undefined;
-  const replacementError = toError(error);
+  const replacementError = toPreparedModelRuntimeError(error);
   replacement.reject(replacementError);
   notifyPreparedModelRuntimePublication({ phase: "failed", error: replacementError });
 }
@@ -633,7 +633,7 @@ export function refreshPreparedModelRuntimeSnapshots(
       }
     },
     (error: unknown) => {
-      const refreshError = toError(error);
+      const refreshError = toPreparedModelRuntimeError(error);
       if (requestEpoch === refreshRequestEpoch) {
         // Candidate and queued auth builds may finish independently. A failed transaction must
         // leave no owner from its partially published generation request-visible.
@@ -739,7 +739,7 @@ function invalidateForAuthMutation(event: AuthMutationEvent): void {
     if (error instanceof PreparedModelRuntimePublicationSupersededError) {
       return;
     }
-    const refreshError = toError(error);
+    const refreshError = toPreparedModelRuntimeError(error);
     notifyPreparedModelRuntimePublication({ phase: "failed", error: refreshError });
     log.warn(`auth-triggered model runtime refresh failed: ${String(refreshError)}`);
   });

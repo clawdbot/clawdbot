@@ -419,6 +419,68 @@ describe("chat transcript row measurement", () => {
     transcript.hostDisconnected();
   });
 
+  it.each([
+    { label: "end-pinned", distanceFromEnd: 0, expectedCalls: 1 },
+    { label: "scrolled away", distanceFromEnd: 100, expectedCalls: 0 },
+  ])(
+    "$label transcript preserves its resize anchor",
+    async ({ distanceFromEnd, expectedCalls }) => {
+      measuredRowHeight = 240;
+      const transcript = createTestTranscript();
+      const container = document.body.appendChild(document.createElement("div"));
+      const messages = Array.from({ length: 12 }, (_, index) => ({
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `message ${index}`,
+        timestamp: index + 1,
+      }));
+      const props = threadProps(
+        `pane-height-resize-${distanceFromEnd}`,
+        "agent:main:resize",
+        messages,
+      );
+      render(renderChatThread(props, transcript), container);
+      transcript.hostConnected();
+      transcript.hostUpdated();
+      await flushDeferredRowPrune();
+
+      const scrollElement = container.querySelector<HTMLElement>(".chat-thread");
+      expect(scrollElement).not.toBeNull();
+      const virtualizer = (
+        transcript as unknown as {
+          sessionVirtualizer: {
+            virtualizerController: {
+              getVirtualizer: () => {
+                scrollOffset: number | null;
+                getTotalSize: () => number;
+                scrollToEnd: (options?: { behavior?: ScrollBehavior }) => void;
+              };
+            };
+          };
+        }
+      ).sessionVirtualizer.virtualizerController.getVirtualizer();
+      const scrollToEnd = vi.spyOn(virtualizer, "scrollToEnd");
+      const emitViewportResize = (height: number) => {
+        for (const observer of resizeObservers) {
+          if (scrollElement && observer.observes(scrollElement)) {
+            observer.emit(800, height);
+          }
+        }
+      };
+
+      emitViewportResize(600);
+      scrollToEnd.mockClear();
+      expect(virtualizer.getTotalSize()).toBeGreaterThan(700);
+      virtualizer.scrollOffset = Math.max(0, virtualizer.getTotalSize() - 600 - distanceFromEnd);
+      emitViewportResize(560);
+
+      expect(scrollToEnd).toHaveBeenCalledTimes(expectedCalls);
+      if (expectedCalls > 0) {
+        expect(scrollToEnd).toHaveBeenCalledWith({ behavior: "auto" });
+      }
+      transcript.hostDisconnected();
+    },
+  );
+
   it("rebinds guarded transcript images when the gateway rotates its auth token", async () => {
     const NativeUrl = URL;
     const blobUrl = `blob:transcript-media-${crypto.randomUUID()}`;

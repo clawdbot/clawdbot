@@ -57,7 +57,9 @@ type IterationMetric = {
 
 type CompactionProof = ReliabilityReport["maintenanceProof"]["compaction"];
 
-const COMPACTION_BLOAT_ROWS = 256;
+// Exceed the 1 MiB interruption thresholds without copying an arbitrary 64 MiB
+// through every repository and restore crash phase.
+const COMPACTION_BLOAT_ROWS = 64;
 const COMPACTION_BLOAT_PAYLOAD_BYTES = 256 * 1024;
 
 function nowMs(): number {

@@ -232,6 +232,44 @@ describe("canonical session message recovery", () => {
     expect(state.chatMessages).toEqual([selectedUser]);
   });
 
+  it("keeps the routed row when a hidden pane observes its archive first", () => {
+    const archivedKey = "agent:main:dashboard:archived";
+    const sharedHost = makeChatHost({
+      sessionKey: archivedKey,
+      sessionsResult: {
+        ts: 1,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: archivedKey,
+            kind: "direct",
+            archived: false,
+            derivedTitle: "Archived title",
+            updatedAt: 1,
+          },
+        ],
+      },
+    });
+    expect(sharedHost.sessions.state.result?.sessions).toHaveLength(1);
+    const { state } = createSessionEventState({ sessions: sharedHost.sessions });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "sessions.changed",
+      payload: { key: archivedKey, sessionKey: archivedKey, archived: true, reason: "update" },
+    });
+
+    expect(state.sessions.state.result?.sessions).toEqual([
+      expect.objectContaining({
+        key: archivedKey,
+        archived: true,
+        derivedTitle: "Archived title",
+      }),
+    ]);
+  });
+
   it("does not mistake identity-only message invalidation for a session reset", () => {
     const selectedUser = {
       role: "user",
@@ -1587,8 +1625,14 @@ describe("refreshChatMetadata", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
-  it("does not load unscoped compatibility models for a non-default agent", async () => {
-    const request = vi.fn(async (method: string) => {
+  it("loads agent-scoped compatibility models for a non-default agent", async () => {
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "models.list") {
+        expect(params).toEqual({ view: "configured", agentId: "work" });
+        return {
+          models: [{ id: "work-model", name: "Work Model", provider: "openai" }],
+        };
+      }
       expect(method).toBe("commands.list");
       return { commands: [] };
     });
@@ -1600,9 +1644,11 @@ describe("refreshChatMetadata", () => {
 
     await refreshChatMetadata(state);
 
-    expect(state.chatModelCatalog).toEqual([]);
+    expect(state.chatModelCatalog).toEqual([
+      { id: "work-model", name: "Work Model", provider: "openai" },
+    ]);
     expect(state.chatModelsLoading).toBe(false);
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("does not apply compatibility commands after switching agents", async () => {

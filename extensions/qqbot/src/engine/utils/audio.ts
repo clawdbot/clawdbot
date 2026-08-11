@@ -14,8 +14,8 @@ import * as path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { readRegularFileSync } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { debugLog, debugError, debugWarn } from "./log.js";
-import { normalizeLowercaseStringOrEmpty as normalizeLowercase } from "./string-normalize.js";
 
 type SilkWasm = typeof import("silk-wasm");
 let silkWasmPromise: Promise<SilkWasm | null> | null = null;
@@ -116,11 +116,11 @@ export function isVoiceAttachment(att: { content_type?: string; filename?: strin
   // MIME types are case-insensitive (RFC 2045) and relays may emit mixed-case
   // values; the bare "voice" platform sentinel gets the same treatment.
   // Compare lowercased like the extension check below.
-  const contentType = normalizeLowercase(att.content_type);
+  const contentType = normalizeLowercaseStringOrEmpty(att.content_type);
   if (contentType === "voice" || contentType.startsWith("audio/")) {
     return true;
   }
-  const ext = att.filename ? normalizeLowercase(path.extname(att.filename)) : "";
+  const ext = att.filename ? normalizeLowercaseStringOrEmpty(path.extname(att.filename)) : "";
   return [".amr", ".silk", ".slk", ".slac"].includes(ext);
 }
 
@@ -131,7 +131,7 @@ export function isAudioFile(filePath: string, mimeType?: string): boolean {
       return true;
     }
   }
-  const ext = normalizeLowercase(path.extname(filePath));
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
   return [
     ".silk",
     ".slk",
@@ -162,10 +162,10 @@ const QQ_NATIVE_VOICE_EXTS = new Set([".silk", ".slk", ".amr", ".wav", ".mp3"]);
 
 /** Check whether a voice file needs transcoding for upload (QQ-native formats skip it). */
 export function shouldTranscodeVoice(filePath: string, mimeType?: string): boolean {
-  if (mimeType && QQ_NATIVE_VOICE_MIMES.has(normalizeLowercase(mimeType))) {
+  if (mimeType && QQ_NATIVE_VOICE_MIMES.has(normalizeLowercaseStringOrEmpty(mimeType))) {
     return false;
   }
-  const ext = normalizeLowercase(path.extname(filePath));
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
   if (QQ_NATIVE_VOICE_EXTS.has(ext)) {
     return false;
   }
@@ -176,7 +176,7 @@ const QQ_NATIVE_UPLOAD_FORMATS = [".wav", ".mp3", ".silk"];
 
 function normalizeFormats(formats: string[]): string[] {
   return formats.map((f) => {
-    const lower = normalizeLowercase(f);
+    const lower = normalizeLowercaseStringOrEmpty(f);
     return lower.startsWith(".") ? lower : `.${lower}`;
   });
 }
@@ -202,7 +202,7 @@ export async function audioFileToSilkBase64(
     return null;
   }
 
-  const ext = normalizeLowercase(path.extname(filePath));
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
   const uploadFormats = directUploadFormats
     ? normalizeFormats(directUploadFormats)
     : QQ_NATIVE_UPLOAD_FORMATS;

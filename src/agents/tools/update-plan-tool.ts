@@ -9,7 +9,7 @@ import {
   describeUpdatePlanTool,
   UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
-import { type AnyAgentTool, ToolInputError, readStringParam, textResult } from "./common.js";
+import { type AnyAgentTool, ToolInputError, readToolStringParam, textResult } from "./common.js";
 
 const PLAN_STEP_STATUSES = ["pending", "in_progress", "completed"] as const;
 
@@ -52,11 +52,11 @@ function readPlanSteps(params: Record<string, unknown>): UpdatePlanStep[] {
       throw new ToolInputError(`plan[${index}] must be an object`);
     }
     const stepParams = entry as Record<string, unknown>;
-    const step = readStringParam(stepParams, "step", {
+    const step = readToolStringParam(stepParams, "step", {
       required: true,
       label: `plan[${index}].step`,
     });
-    const status = readStringParam(stepParams, "status", {
+    const status = readToolStringParam(stepParams, "status", {
       required: true,
       label: `plan[${index}].status`,
     });
@@ -89,7 +89,7 @@ export function createUpdatePlanTool(): AnyAgentTool {
     parameters: UpdatePlanToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const explanation = readStringParam(params, "explanation");
+      const explanation = readToolStringParam(params, "explanation");
       const plan = readPlanSteps(params);
       return textResult("Plan updated", {
         status: "updated" as const,

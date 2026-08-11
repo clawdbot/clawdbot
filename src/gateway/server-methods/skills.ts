@@ -42,7 +42,7 @@ import {
 } from "../../skills/lifecycle/clawhub.js";
 import { installSkill } from "../../skills/lifecycle/install.js";
 import { installUploadedSkillArchive } from "../../skills/lifecycle/upload-install.js";
-import { loadWorkspaceSkillEntries } from "../../skills/loading/workspace.js";
+import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import {
   collectClawHubVerdictTargets,
@@ -272,7 +272,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     const workspaceDirs = listAgentWorkspaceDirs(cfg);
     const bins = new Set<string>();
     for (const workspaceDir of workspaceDirs) {
-      const entries = loadWorkspaceSkillEntries(workspaceDir, { config: cfg });
+      const entries = loadWorkspaceSkills(workspaceDir, { config: cfg });
       for (const bin of collectSkillBins(entries)) {
         bins.add(bin);
       }

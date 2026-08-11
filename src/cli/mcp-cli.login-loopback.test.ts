@@ -22,7 +22,8 @@ const mocks = vi.hoisted(() => {
   };
   return {
     runtime,
-    runMcpOAuthLogin: vi.fn(),
+    completeMcpOAuthAuthorization: vi.fn(),
+    startMcpOAuthAuthorization: vi.fn(),
     readMcpOAuthCredentialsStatus: vi.fn(),
     createSessionMcpRuntimeOverride: undefined as CreateSessionMcpRuntime | undefined,
   };
@@ -32,8 +33,9 @@ vi.mock("../runtime.js", () => ({ defaultRuntime: mocks.runtime }));
 vi.mock("../mcp/channel-server.js", () => ({ serveOpenClawChannelMcp: vi.fn() }));
 vi.mock("../agents/mcp-oauth.js", () => ({
   clearMcpOAuthCredentials: vi.fn(),
+  completeMcpOAuthAuthorization: mocks.completeMcpOAuthAuthorization,
   readMcpOAuthCredentialsStatus: mocks.readMcpOAuthCredentialsStatus,
-  runMcpOAuthLogin: mocks.runMcpOAuthLogin,
+  startMcpOAuthAuthorization: mocks.startMcpOAuthAuthorization,
 }));
 vi.mock("../agents/agent-bundle-mcp-runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../agents/agent-bundle-mcp-runtime.js")>();
@@ -74,23 +76,16 @@ async function configureServer(): Promise<void> {
 }
 
 function mockRedirectFlow(redirectUrl: string): void {
-  mocks.runMcpOAuthLogin.mockImplementation(
-    async (params: {
-      authorizationCode?: string;
-      onAuthorizationUrl?: (url: URL) => void | Promise<void>;
-      onAuthorizationSession?: (session: { codeVerifier: string; redirectUrl: string }) => void;
-    }) => {
-      if (params.authorizationCode) {
-        return "authorized";
-      }
-      const authorizationUrl = new URL("https://auth.example.com/authorize");
-      authorizationUrl.searchParams.set("redirect_uri", redirectUrl);
-      authorizationUrl.searchParams.set("state", "state-1234567890");
-      await params.onAuthorizationUrl?.(authorizationUrl);
-      params.onAuthorizationSession?.({ codeVerifier: "verifier-123", redirectUrl });
-      return "redirect";
-    },
-  );
+  const authorizationUrl = new URL("https://auth.example.com/authorize");
+  authorizationUrl.searchParams.set("redirect_uri", redirectUrl);
+  authorizationUrl.searchParams.set("state", "state-1234567890");
+  mocks.startMcpOAuthAuthorization.mockResolvedValue({
+    status: "redirect",
+    authorizationUrl: authorizationUrl.toString(),
+    redirectUrl,
+    state: "state-1234567890",
+  });
+  mocks.completeMcpOAuthAuthorization.mockResolvedValue("authorized");
 }
 
 describe("mcp login loopback callback", () => {
@@ -131,18 +126,33 @@ describe("mcp login loopback callback", () => {
 
       const wrong = await fetch(`${redirectUrl}?code=wrong&state=wrong`);
       expect(wrong.status).toBe(400);
-      expect(mocks.runMcpOAuthLogin).toHaveBeenCalledOnce();
+      expect(mocks.startMcpOAuthAuthorization).toHaveBeenCalledOnce();
+      expect(mocks.completeMcpOAuthAuthorization).not.toHaveBeenCalled();
 
       const response = await fetch(`${redirectUrl}?code=right&state=state-1234567890`);
       expect(response.status).toBe(200);
       await expect(response.text()).resolves.toContain("Authorization received");
       await login;
 
-      expect(mocks.runMcpOAuthLogin).toHaveBeenCalledTimes(2);
-      expect(mocks.runMcpOAuthLogin).toHaveBeenLastCalledWith(
-        expect.objectContaining({ authorizationCode: "right" }),
-      );
+      expect(mocks.startMcpOAuthAuthorization).toHaveBeenCalledOnce();
+      expect(mocks.completeMcpOAuthAuthorization).toHaveBeenCalledOnce();
+      expect(mocks.completeMcpOAuthAuthorization.mock.calls[0]?.[2]).toEqual({ code: "right" });
       expect(mocks.runtime.log).toHaveBeenCalledWith('MCP OAuth credentials saved for "docs".');
+    });
+  });
+
+  it("reports an existing session without starting the loopback", async () => {
+    await withTempHome("openclaw-cli-mcp-loopback-home-", async () => {
+      await configureServer();
+      mocks.startMcpOAuthAuthorization.mockResolvedValue({ status: "authorized" });
+
+      await program.parseAsync(["mcp", "login", "docs"], { from: "user" });
+
+      expect(mocks.runtime.log).toHaveBeenCalledWith('MCP OAuth credentials saved for "docs".');
+      expect(mocks.completeMcpOAuthAuthorization).not.toHaveBeenCalled();
+      expect(
+        mocks.runtime.log.mock.calls.some(([line]) => String(line).includes("Open this URL")),
+      ).toBe(false);
     });
   });
 
@@ -164,7 +174,8 @@ describe("mcp login loopback callback", () => {
       expect(mocks.runtime.log.mock.calls.some(([line]) => String(line).includes("--code"))).toBe(
         true,
       );
-      expect(mocks.runMcpOAuthLogin).toHaveBeenCalledOnce();
+      expect(mocks.startMcpOAuthAuthorization).toHaveBeenCalledOnce();
+      expect(mocks.completeMcpOAuthAuthorization).not.toHaveBeenCalled();
       await new Promise<void>((resolve) => {
         blocker.close(() => resolve());
       });

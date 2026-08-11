@@ -1,5 +1,6 @@
 // Gateway plugin tests cover plugin loading, auto-enable, runtime registry setup,
 // request-scope injection, diagnostics, and handler dispatch integration.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import {
@@ -78,6 +79,43 @@ vi.mock("../channels/plugins/configured-binding-registry.js", async () => {
 
 vi.mock("./server-methods.js", () => ({
   handleGatewayRequest,
+}));
+
+vi.mock("./agent-turn/internal-facade.js", () => ({
+  createInternalAgentTurnFacade: (options: {
+    client: GatewayRequestOptions["client"];
+    getContext: () => GatewayRequestContext;
+    isWebchatConnect?: GatewayRequestOptions["isWebchatConnect"];
+  }) => ({
+    dispatch: async (
+      request: Record<string, unknown>,
+      dispatchOptions?: {
+        expectFinal?: boolean;
+        onAccepted?: (payload: unknown) => void;
+        onSignalAbort?: () => Promise<void> | void;
+        signal?: AbortSignal;
+        timeoutMs?: number;
+      },
+    ) => {
+      const { dispatchGatewayRequestInProcess } = await import("./server-in-process-dispatch.js");
+      return await dispatchGatewayRequestInProcess("agent", request, {
+        client: options.client,
+        context: options.getContext(),
+        isWebchatConnect: options.isWebchatConnect,
+        ...dispatchOptions,
+      });
+    },
+    wait: async (params: Record<string, unknown>, timeoutMs?: number, signal?: AbortSignal) => {
+      const { dispatchGatewayRequestInProcess } = await import("./server-in-process-dispatch.js");
+      return await dispatchGatewayRequestInProcess("agent.wait", params, {
+        client: options.client,
+        context: options.getContext(),
+        isWebchatConnect: options.isWebchatConnect,
+        signal,
+        timeoutMs,
+      });
+    },
+  }),
 }));
 
 vi.mock("../channels/registry.js", () => ({
@@ -201,10 +239,6 @@ function createTestLog() {
 
 function createTestContext(label: string): GatewayRequestContext {
   return { label } as unknown as GatewayRequestContext;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");

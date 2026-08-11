@@ -3,9 +3,10 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UiSettings } from "../../../app/settings.ts";
+import { icons } from "../../../components/icons.ts";
 import type { SessionMenuActionKind } from "../../../components/session-menu.ts";
 import "./chat-header-session-menu.ts";
-import type { HeaderMenuAction } from "./chat-header-session-menu.ts";
+import type { HeaderMenuAction, HeaderMenuQuickAction } from "./chat-header-session-menu.ts";
 
 type HeaderMenuElement = HTMLElement & { updateComplete: Promise<boolean> };
 type MenuItemElement = HTMLElement & { checked: boolean; disabled: boolean; submenuOpen?: boolean };
@@ -41,7 +42,10 @@ async function mountMenu(
     archived?: boolean;
     onboarding?: boolean;
     preferencesBrowserOnly?: boolean;
+    compact?: boolean;
     settings?: UiSettings;
+    panelActions?: HeaderMenuQuickAction[];
+    layoutActions?: HeaderMenuQuickAction[];
     actionDisabledReasons?: Partial<Record<SessionMenuActionKind, string>>;
     forkDisabled?: boolean;
     archiveAllowed?: boolean;
@@ -61,7 +65,10 @@ async function mountMenu(
       .archived=${options.archived ?? false}
       .onboarding=${options.onboarding ?? false}
       .preferencesBrowserOnly=${options.preferencesBrowserOnly ?? false}
+      .compact=${options.compact ?? false}
       .settings=${options.settings ?? settings()}
+      .panelActions=${options.panelActions ?? []}
+      .layoutActions=${options.layoutActions ?? []}
       .actionDisabledReasons=${options.actionDisabledReasons ?? {}}
       .forkDisabled=${options.forkDisabled ?? false}
       .archiveAllowed=${options.archiveAllowed ?? true}
@@ -163,6 +170,84 @@ describe("chat header session menu", () => {
       [{ chatShowToolCalls: false }],
       [{ chatPersistCommentary: false }],
     ]);
+  });
+
+  it("keeps panel and layout actions available from the session menu", async () => {
+    const showTasks = vi.fn();
+    const showChanges = vi.fn();
+    const splitRight = vi.fn();
+    const menu = await mountMenu({
+      panelActions: [
+        {
+          id: "background-tasks",
+          label: "Show background tasks",
+          icon: icons.listChecks,
+          active: false,
+          badge: 2,
+          onActivate: showTasks,
+        },
+        {
+          id: "changes",
+          label: "Show session changes",
+          icon: icons.fileDiff,
+          disabledReason: "This session's workspace is not a git checkout.",
+          onActivate: showChanges,
+        },
+      ],
+      layoutActions: [
+        {
+          id: "split-right",
+          label: "Split right",
+          icon: icons.panelRightOpen,
+          onActivate: splitRight,
+        },
+      ],
+    });
+
+    const panels = item(menu, "Panels");
+    const panelItems = Array.from(
+      panels.querySelectorAll<MenuItemElement>("wa-dropdown-item[slot='submenu']"),
+    );
+    expect(panelItems.map(itemLabel)).toEqual(["Show background tasks", "Show session changes"]);
+    expect(panelItems[0]?.checked).toBe(false);
+    expect(panelItems[0]?.querySelector('[slot="details"]')?.textContent?.trim()).toBe("2");
+    expect(panelItems[1]?.disabled).toBe(true);
+    expect(
+      Array.from(
+        item(menu, "Layout").querySelectorAll<MenuItemElement>("wa-dropdown-item[slot='submenu']"),
+      ).map(itemLabel),
+    ).toEqual(["Split right"]);
+
+    select(menu, "quick:panels:background-tasks");
+    select(menu, "quick:panels:changes");
+    select(menu, "quick:layout:split-right");
+    expect(showTasks).toHaveBeenCalledOnce();
+    expect(showChanges).not.toHaveBeenCalled();
+    expect(splitRight).toHaveBeenCalledOnce();
+  });
+
+  it("renders quick actions directly in the compact menu", async () => {
+    const showTasks = vi.fn();
+    const menu = await mountMenu({
+      compact: true,
+      panelActions: [
+        {
+          id: "background-tasks",
+          label: "Show background tasks",
+          icon: icons.listChecks,
+          badge: 2,
+          onActivate: showTasks,
+        },
+      ],
+    });
+
+    expect(menu.querySelector(".session-menu__section-label")?.textContent?.trim()).toBe("Panels");
+    const action = item(menu, "Show background tasks");
+    expect(action.getAttribute("slot")).toBeNull();
+    expect(action.querySelector('[slot="details"]')?.textContent?.trim()).toBe("2");
+
+    select(menu, "quick:panels:background-tasks");
+    expect(showTasks).toHaveBeenCalledOnce();
   });
 
   it("pins and disables onboarding view preferences", async () => {

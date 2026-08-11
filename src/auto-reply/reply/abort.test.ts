@@ -96,10 +96,11 @@ const { subagentRegistryMocks, subagentRegistryDeps } = vi.hoisted(() => {
 });
 
 vi.mock("../../agents/subagents/registry/subagent-registry.js", () => ({
-  getLatestSubagentRunByChildSessionKey: subagentRegistryDeps.getLatestSubagentRunByChildSessionKey,
-  listSubagentRunsForRequester: subagentRegistryDeps.listSubagentRunsForRequester,
-  listSubagentRunsForController: subagentRegistryDeps.listSubagentRunsForRequester,
   markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
+}));
+vi.mock("../../agents/subagents/registry/subagent-registry-read.js", () => ({
+  getLatestSubagentRunByChildSessionKey: subagentRegistryDeps.getLatestSubagentRunByChildSessionKey,
+  listSubagentRunsForController: subagentRegistryDeps.listSubagentRunsForRequester,
 }));
 
 const acpManagerMocks = vi.hoisted(() => ({

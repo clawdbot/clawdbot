@@ -12,7 +12,7 @@ export {
   applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
   applySecretRefHeaderSentinels,
-  getApiKeyForModel,
+  getApiKeyForModelCore,
   hasAvailableAuthForProvider,
   resolveModelAuthMode,
 } from "./model-auth-model.js";

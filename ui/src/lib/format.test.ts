@@ -66,8 +66,13 @@ describe("formatAgo", () => {
 });
 
 describe("localized durations", () => {
-  it("preserves compact day and remainder-hour units", () => {
-    expect(formatDurationCompact(49 * 60 * 60 * 1000, { spaced: true })).toBe("2d 1h");
+  it.each([
+    { durationMs: 59_000, expected: "59s" },
+    { durationMs: 92_000, expected: "1m 32s" },
+    { durationMs: 3_660_000, expected: "1h 1m" },
+    { durationMs: 49 * 60 * 60 * 1000, expected: "2d 1h" },
+  ])("formats $durationMs ms with separated compact units", ({ durationMs, expected }) => {
+    expect(formatDurationCompact(durationMs)).toBe(expected);
   });
 
   it("switches human durations to days at 24 hours", () => {

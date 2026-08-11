@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { CliBackendConfig } from "../plugins/cli-backend.types.js";
 import type { CliOutput, CliTerminalFailure, CliUsage } from "./cli-output-contracts.js";
+import { normalizeUsage, type UsageLike } from "./usage.js";
 
 function isClaudeCliProvider(providerId: string): boolean {
   return normalizeLowercaseStringOrEmpty(providerId) === "claude-cli";
@@ -130,77 +131,41 @@ function unwrapCliErrorText(raw: string): string {
   return trimmed;
 }
 
-function toCliUsage(raw: Record<string, unknown>): CliUsage | undefined {
-  const readNestedCached = (
-    key: "input_tokens_details" | "prompt_tokens_details",
-    field: "cached_tokens" | "cache_write_tokens" = "cached_tokens",
-  ) => {
-    const nested = raw[key];
-    if (!isRecord(nested)) {
-      return undefined;
-    }
-    return typeof nested[field] === "number" && nested[field] > 0 ? nested[field] : undefined;
-  };
-  const pick = (key: string) =>
-    typeof raw[key] === "number" && raw[key] > 0 ? raw[key] : undefined;
-  // Chat Completions calls these prompt/completion tokens; preserve existing CLI-field precedence.
-  const totalInput =
-    pick("input_tokens") ?? pick("inputTokens") ?? pick("prompt_tokens") ?? pick("promptTokens");
-  const output =
-    pick("output_tokens") ??
-    pick("outputTokens") ??
-    pick("completion_tokens") ??
-    pick("completionTokens");
-  const nestedCached =
-    readNestedCached("input_tokens_details") ?? readNestedCached("prompt_tokens_details");
-  const cacheRead =
-    pick("cache_read_input_tokens") ??
-    pick("cached_input_tokens") ??
-    pick("cacheRead") ??
-    pick("cached") ??
-    nestedCached;
-  const nestedCacheWrite =
-    readNestedCached("input_tokens_details", "cache_write_tokens") ??
-    readNestedCached("prompt_tokens_details", "cache_write_tokens");
-  const cacheWrite =
-    pick("cache_creation_input_tokens") ??
-    pick("cache_write_input_tokens") ??
-    pick("cacheWrite") ??
-    nestedCacheWrite;
-  const input =
-    pick("input") ??
-    ((Object.hasOwn(raw, "cached") ||
-      Object.hasOwn(raw, "cached_input_tokens") ||
-      Object.hasOwn(raw, "cache_write_input_tokens") ||
-      nestedCached !== undefined ||
-      nestedCacheWrite !== undefined) &&
-    typeof totalInput === "number"
-      ? Math.max(0, totalInput - (cacheRead ?? 0) - (cacheWrite ?? 0))
-      : totalInput);
-  const total = pick("total_tokens") ?? pick("total");
-  if (!input && !output && !cacheRead && !cacheWrite && !total) {
+function normalizeCliUsageRecord(raw: unknown): CliUsage | undefined {
+  if (!isRecord(raw)) {
     return undefined;
   }
-  return { input, output, cacheRead, cacheWrite, total };
+  const usageRaw = raw as UsageLike;
+  const usage = normalizeUsage(usageRaw);
+  if (!usage) {
+    return undefined;
+  }
+  const reportedInputTotal = [
+    usageRaw.inputTokens,
+    usageRaw.input_tokens,
+    usageRaw.promptTokens,
+    usageRaw.prompt_tokens,
+  ].some((value) => typeof value === "number" && value > 0);
+  const cacheAdjustedInput =
+    usage.input === 0 && reportedInputTotal && Boolean(usage.cacheRead || usage.cacheWrite);
+  const cliUsage: CliUsage = {
+    input: cacheAdjustedInput ? 0 : usage.input || undefined,
+    output: usage.output || undefined,
+    cacheRead: usage.cacheRead || undefined,
+    cacheWrite: usage.cacheWrite || undefined,
+    total: usage.total || undefined,
+  };
+  return Object.values(cliUsage).some((value) => typeof value === "number" && value > 0)
+    ? cliUsage
+    : undefined;
 }
 
 export function readCliUsage(parsed: Record<string, unknown>): CliUsage | undefined {
-  if (isRecord(parsed.message) && isRecord(parsed.message.usage)) {
-    const usage = toCliUsage(parsed.message.usage);
-    if (usage) {
-      return usage;
-    }
-  }
-  if (isRecord(parsed.usage)) {
-    const usage = toCliUsage(parsed.usage);
-    if (usage) {
-      return usage;
-    }
-  }
-  if (isRecord(parsed.stats)) {
-    return toCliUsage(parsed.stats);
-  }
-  return undefined;
+  return (
+    normalizeCliUsageRecord(isRecord(parsed.message) ? parsed.message.usage : undefined) ??
+    normalizeCliUsageRecord(parsed.usage) ??
+    normalizeCliUsageRecord(parsed.stats)
+  );
 }
 
 function collectCliText(value: unknown): string {

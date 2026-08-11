@@ -21,8 +21,8 @@ import {
   type CommandSecretAssignment,
 } from "../secrets/runtime-command-secrets.js";
 import {
-  getActiveSecretsRuntimeSnapshot,
-  getActiveSecretsRuntimeSnapshotRevision,
+  getActiveSecretsRuntimeSnapshotState,
+  getActiveSecretsRuntimeSnapshotRevisionState,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime-state.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
@@ -339,9 +339,14 @@ export function createGatewayAuxHandlers(params: {
   let reloadInFlight: Promise<ReloadSecretsResult> | null = null;
   const runExclusiveReload = (
     fn: () => Promise<ReloadSecretsResult>,
+    options: { joinInFlight?: boolean } = {},
   ): Promise<ReloadSecretsResult> => {
     if (reloadInFlight) {
-      return reloadInFlight;
+      if (options.joinInFlight !== false) {
+        return reloadInFlight;
+      }
+      const precedingReload = reloadInFlight;
+      return precedingReload.catch(() => undefined).then(() => runExclusiveReload(fn, options));
     }
     const run = (async () => {
       try {
@@ -357,7 +362,7 @@ export function createGatewayAuxHandlers(params: {
     () =>
       import("./server-methods/secrets.js").then(({ createSecretsHandlers }) =>
         createSecretsHandlers({
-          reloadSecrets: () =>
+          reloadSecrets: (reloadOptions) =>
             runExclusiveReload(async () => {
               let transaction:
                 | {
@@ -376,11 +381,11 @@ export function createGatewayAuxHandlers(params: {
               const restartedChannels = new Set<ChannelKind>();
               try {
                 for (;;) {
-                  const previousSnapshot = getActiveSecretsRuntimeSnapshot();
+                  const previousSnapshot = getActiveSecretsRuntimeSnapshotState();
                   if (!previousSnapshot) {
                     throw new Error("Secrets runtime snapshot is not active.");
                   }
-                  const previousSnapshotRevision = getActiveSecretsRuntimeSnapshotRevision();
+                  const previousSnapshotRevision = getActiveSecretsRuntimeSnapshotRevisionState();
                   const previousGenerationOwnership =
                     captureSharedGatewaySessionGenerationOwnership(
                       params.sharedGatewaySessionGenerationState,
@@ -397,8 +402,9 @@ export function createGatewayAuxHandlers(params: {
                       reason: "reload",
                       activate: false,
                       publishFailureAsDegraded: true,
+                      forceColdRefKeys: reloadOptions?.forceColdRefKeys,
                       canPublishFailureAsDegraded: () =>
-                        getActiveSecretsRuntimeSnapshotRevision() === previousSnapshotRevision,
+                        getActiveSecretsRuntimeSnapshotRevisionState() === previousSnapshotRevision,
                     },
                   );
                   const plan = buildReloadPlan(
@@ -419,7 +425,7 @@ export function createGatewayAuxHandlers(params: {
                         activate: true,
                       },
                       async () => {
-                        publishedSnapshotRevision = getActiveSecretsRuntimeSnapshotRevision();
+                        publishedSnapshotRevision = getActiveSecretsRuntimeSnapshotRevisionState();
                         generationOwnership = claimSharedGatewaySessionGenerationIfOwned(
                           params.sharedGatewaySessionGenerationState,
                           previousGenerationOwnership,
@@ -624,7 +630,7 @@ export function createGatewayAuxHandlers(params: {
                 }
                 throw err;
               }
-            }),
+            }, reloadOptions),
           log: params.log,
           resolveSecrets: async ({
             allowedPaths,
@@ -701,6 +707,9 @@ export function createGatewayAuxHandlers(params: {
       "question.list": createLazyHandler("question.list", loadQuestionHandlers),
       "secrets.reload": createLazyHandler("secrets.reload", loadSecretsHandlers),
       "secrets.resolve": createLazyHandler("secrets.resolve", loadSecretsHandlers),
+      "secrets.store.list": createLazyHandler("secrets.store.list", loadSecretsHandlers),
+      "secrets.store.set": createLazyHandler("secrets.store.set", loadSecretsHandlers),
+      "secrets.store.delete": createLazyHandler("secrets.store.delete", loadSecretsHandlers),
     },
   };
 }

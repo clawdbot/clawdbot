@@ -156,6 +156,26 @@ describe("gateway prepared model catalog", () => {
     });
   });
 
+  it("carries provider outcomes through the gateway owner projection", async () => {
+    const config = ownerConfig();
+    const modelCatalog: ModelCatalogSnapshot = {
+      entries: [],
+      routeVariants: [],
+      providerOutcomes: [{ provider: "openai", status: "auth-rejected" }],
+    };
+    const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () =>
+      ownerSnapshot(config, modelCatalog),
+    );
+
+    await expect(
+      loadGatewayModelCatalogSnapshot({
+        getConfig: () => config,
+        loadPublishedPreparedModelCatalogOwnerSnapshot,
+        readOnly: false,
+      }),
+    ).resolves.toMatchObject({ providerOutcomes: modelCatalog.providerOutcomes });
+  });
+
   it("does not hide lifecycle publication failures behind stale data", async () => {
     const error = new Error("generation failed");
     const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => {

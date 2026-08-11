@@ -4,6 +4,7 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import {
   auditNativeToolName,
@@ -13,7 +14,7 @@ import {
   type CodexNativeToolAuditStatus,
   type CodexNativeToolUnfinishedStatus,
 } from "./event-projector-items.js";
-import { readItem, readString } from "./event-projector-values.js";
+import { readItem } from "./event-projector-values.js";
 import {
   emitCodexNativePreToolUseFailureDiagnostic,
   type CodexNativePreToolUseFailure,

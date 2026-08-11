@@ -5,6 +5,7 @@ import {
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
+import { t } from "../../i18n/index.ts";
 import type { ChatItem, ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import {
   streamSegmentHasItemId,
@@ -47,7 +48,6 @@ import {
   messageMatchesSearchQuery,
   queuedSendThreadMessage,
   rawMessageTimestamp,
-  safeNormalizeMessage,
   insertChatItemsByTimestamp,
   sanitizeStreamText,
   timestampAfterVisibleItems,
@@ -56,6 +56,7 @@ import {
   userTurnSendIdentity,
   type TurnInsertionBounds,
 } from "./chat-thread-items.ts";
+import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { chatMessagesContainQueuedSend } from "./steer-lifecycle.ts";
 import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
 import {
@@ -264,6 +265,22 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       continue;
     }
     if (!hasRenderableNormalizedMessage(msg) && normalized.role.toLowerCase() !== "assistant") {
+      continue;
+    }
+
+    const provenance = asRecord(raw.provenance);
+    if (role === "user" && provenance?.kind === "internal_system") {
+      const text = extractTextCached(msg)?.replace(/^\[System\] /u, "");
+      if (text?.trim()) {
+        items.push({
+          kind: "notice",
+          key: itemKey,
+          label: t("common.system"),
+          startsTurn: true,
+          text,
+          timestamp: normalized.timestamp,
+        });
+      }
       continue;
     }
 

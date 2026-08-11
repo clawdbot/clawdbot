@@ -6,7 +6,7 @@ import {
   resolveSandboxContext as defaultResolveSandboxContext,
   resolveSessionAgentIds,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { readResolvedAttemptPath, readString, resolveModelRef } from "./attempt-config.js";
+import { readNonEmptyString, readResolvedAttemptPath, resolveModelRef } from "./attempt-config.js";
 import type {
   AttemptParamsLike,
   CopilotAttemptDeps,
@@ -58,13 +58,13 @@ export function prepareCopilotAttemptContext(
   const resolvedWorkspaceForSandbox =
     readResolvedAttemptPath(input.workspaceDir) ?? readResolvedAttemptPath(input.cwd);
   const sandboxSessionKey =
-    readString((input as { sandboxSessionKey?: unknown }).sandboxSessionKey) ??
-    readString((input as { sessionKey?: unknown }).sessionKey) ??
-    readString(input.sessionId);
+    readNonEmptyString((input as { sandboxSessionKey?: unknown }).sandboxSessionKey) ??
+    readNonEmptyString((input as { sessionKey?: unknown }).sessionKey) ??
+    readNonEmptyString(input.sessionId);
   const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: readString((input as { sessionKey?: unknown }).sessionKey),
+    sessionKey: readNonEmptyString((input as { sessionKey?: unknown }).sessionKey),
     config: input.config,
-    agentId: readString(params.agentId),
+    agentId: readNonEmptyString(params.agentId),
   });
   const hookContextWindowFields = {
     ...(input.contextWindowInfo?.tokens

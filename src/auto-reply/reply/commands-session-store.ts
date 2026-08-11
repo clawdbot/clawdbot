@@ -35,7 +35,7 @@ export function resolveCommandSessionEntryForKey(
   };
 }
 
-export async function persistSessionEntry(params: PersistSessionEntryParams): Promise<boolean> {
+export async function persistCommandSession(params: PersistSessionEntryParams): Promise<boolean> {
   if (!params.sessionEntry || !params.sessionStore || !params.sessionKey) {
     return false;
   }

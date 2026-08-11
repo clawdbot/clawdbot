@@ -160,11 +160,14 @@ function loadSessionEntryWithMode(
   };
 }
 
-export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string; clone?: boolean }) {
+export function loadGatewaySessionEntry(
+  sessionKey: string,
+  opts?: { agentId?: string; clone?: boolean },
+) {
   return loadSessionEntryWithMode(sessionKey, opts, false);
 }
 
-export function loadSessionEntryReadOnly(
+export function loadGatewaySessionEntryReadOnly(
   sessionKey: string,
   opts?: { agentId?: string; clone?: boolean; includeStoreChildEntries?: boolean },
 ) {

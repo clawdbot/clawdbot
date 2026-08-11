@@ -39,7 +39,7 @@ import {
   recordRecentMediaGenerationTaskStartForSession,
 } from "../media-generation-task-status-shared.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
-import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
+import { ToolInputError, readNumberParam, readToolStringParam } from "./common.js";
 import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import {
@@ -686,7 +686,7 @@ export function createMusicGenerateTool(options?: {
       const explicitModelConfig = hasExplicitMusicGenerationModelConfig(cfg);
       const effectiveCfg =
         applyMusicGenerationModelConfigDefaults(cfg, musicGenerationModelConfig) ?? cfg;
-      const prompt = readStringParam(args, "prompt", { required: true });
+      const prompt = readToolStringParam(args, "prompt", { required: true });
 
       const activeDuplicateGuardResult = createMusicGenerateDuplicateGuardResult(
         options?.agentSessionKey,
@@ -696,9 +696,9 @@ export function createMusicGenerateTool(options?: {
         return activeDuplicateGuardResult;
       }
 
-      const lyrics = readStringParam(args, "lyrics");
+      const lyrics = readToolStringParam(args, "lyrics");
       const instrumental = readBooleanToolParam(args, "instrumental");
-      const model = readStringParam(args, "model");
+      const model = readToolStringParam(args, "model");
       const durationSeconds = readNumberParam(args, "durationSeconds", {
         positiveInteger: true,
         strict: true,
@@ -709,8 +709,8 @@ export function createMusicGenerateTool(options?: {
       ) {
         throw new ToolInputError("durationSeconds must be a positive integer");
       }
-      const format = normalizeOutputFormat(readStringParam(args, "format"));
-      const filename = readStringParam(args, "filename");
+      const format = normalizeOutputFormat(readToolStringParam(args, "format"));
+      const filename = readToolStringParam(args, "filename");
       const timeout = normalizeMusicGenerationTimeoutMs(musicGenerationModelConfig.timeoutMs);
       const timeoutMs = timeout.timeoutMs;
       const imageInputs = normalizeReferenceImageInputs(args);

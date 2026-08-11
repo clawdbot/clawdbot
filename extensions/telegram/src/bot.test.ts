@@ -687,175 +687,230 @@ function systemEventOptions(index = 0) {
   );
 }
 
-describe("createTelegramReplyDelivery", () => {
-  const runtime = createNonExitingRuntimeEnv();
+type TelegramDispatch = typeof import("./bot-message-dispatch.js").dispatchTelegramMessage;
+type TelegramDispatchParams = Parameters<TelegramDispatch>[0];
 
+function createDirectDispatchContext(cfg: OpenClawConfig): TelegramDispatchParams["context"] {
+  const msg = {
+    chat: { id: 123, type: "private" },
+    date: 1_736_380_800,
+    from: { id: 9, is_bot: false, first_name: "Ada" },
+    message_id: 456,
+    text: "test turn",
+  } as TelegramDispatchParams["context"]["msg"];
+  return {
+    cfg,
+    ctxPayload: {
+      Body: "test turn",
+      BodyForAgent: "test turn",
+      ChatType: "direct",
+      CommandBody: "test turn",
+      MessageSid: "456",
+      RawBody: "test turn",
+      SessionKey: "agent:default:telegram:direct:123",
+    } as TelegramDispatchParams["context"]["ctxPayload"],
+    turn: {
+      storePath: "/tmp/openclaw/telegram-sessions.json",
+      recordInboundSession: vi.fn(async () => undefined),
+      record: { onRecordError: vi.fn() },
+    } as TelegramDispatchParams["context"]["turn"],
+    primaryCtx: { message: msg } as TelegramDispatchParams["context"]["primaryCtx"],
+    msg,
+    chatId: 123,
+    isGroup: false,
+    threadSpec: { scope: "none" },
+    isForum: false,
+    historyLimit: 0,
+    groupHistories: new Map(),
+    skillFilter: undefined,
+    route: {
+      accountId: "default",
+      agentId: "default",
+      sessionKey: "agent:default:telegram:direct:123",
+    } as TelegramDispatchParams["context"]["route"],
+    sendTyping: vi.fn(async () => undefined),
+    sendRecordVoice: vi.fn(async () => undefined),
+    sendChatActionHandler: {
+      sendChatAction: vi.fn(async () => undefined),
+      isSuspended: () => false,
+      reset: vi.fn(),
+    },
+    ackReactionPromise: null,
+    reactionApi: null,
+    statusReactionController: null,
+    accountId: "default",
+  };
+}
+
+async function dispatchDirectTelegramTurn(params: {
+  cfg?: OpenClawConfig;
+  deliverReplies: NonNullable<TelegramBotDeps["deliverReplies"]>;
+  telegramCfg?: TelegramDispatchParams["telegramCfg"];
+}) {
+  const cfg = params.cfg ?? {};
+  const { dispatchTelegramMessage } = await import("./bot-message-dispatch.js");
+  const { Bot } = await import("./bot.runtime.js");
+  const bot = new Bot("tok", { botInfo: telegramBotInfoForTest });
+  return await dispatchTelegramMessage({
+    context: createDirectDispatchContext(cfg),
+    bot,
+    cfg,
+    runtime: createNonExitingRuntimeEnv(),
+    replyToMode: "first",
+    streamMode: "off",
+    textLimit: 4096,
+    telegramCfg: params.telegramCfg ?? {},
+    telegramDeps: { ...telegramBotDepsForTest, deliverReplies: params.deliverReplies },
+    opts: { token: "tok" },
+  });
+}
+
+function requireFinalization(result: unknown): Promise<unknown> {
+  const record = requireRecord(result, "buffered Telegram delivery result");
+  if (!(record.finalization instanceof Promise)) {
+    throw new Error("Expected buffered Telegram finalization promise");
+  }
+  return record.finalization;
+}
+
+describe("dispatchTelegramMessage reply settlement", () => {
   it("reports each payload independently when a later provider-hook send is cancelled", async () => {
-    const { createTelegramReplyDelivery } = await import("./bot-message-dispatch-reply.js");
-    const sendPayload = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
-    const reply = createTelegramReplyDelivery({
-      cfg: {} as never,
-      context: { route: { accountId: "default" } } as never,
-      delivery: {
-        normalizeDeliveryPayload: (payload: unknown) => payload,
-        sendPayload,
-      } as never,
-      draft: {
-        answerLane: { stream: undefined },
-        reasoningLane: { stream: undefined },
-        setReasoningStepCallbacks: vi.fn(),
-        splitTextIntoLaneSegments: () => ({ segments: [], suppressedReasoningOnly: false }),
-        enqueueEvent: async (callback: () => Promise<void>) => await callback(),
-        rotateAnswerLaneAfterToolProgress: async () => false,
-      } as never,
-      fence: { generation: () => 1, isSuperseded: () => false },
-      progress: {
-        markFinalStarted: vi.fn(),
-        finalAnswerDeliveryStarted: () => false,
-        finalAnswerDelivered: () => false,
-        markFinalDelivered: vi.fn(),
-      } as never,
-      runtime,
-      state: {} as never,
-      streamMode: "off",
-      telegramCfg: {},
+    const deliverReplies = vi
+      .fn<NonNullable<TelegramBotDeps["deliverReplies"]>>()
+      .mockResolvedValueOnce({ delivered: true })
+      .mockResolvedValueOnce({ delivered: false });
+    const results: unknown[] = [];
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      const deliver = dispatcherOptions.deliver;
+      if (!deliver) {
+        throw new Error("Expected Telegram reply deliverer");
+      }
+      results.push(await deliver({ text: "visible first" }, { kind: "final" }));
+      results.push(await deliver({ text: "cancelled second" }, { kind: "final" }));
+      return { queuedFinal: true, counts: { block: 0, final: 2, tool: 0 } };
     });
 
-    await expect(reply.deliver({ text: "visible first" }, { kind: "final" })).resolves.toEqual({
-      visibleReplySent: true,
-    });
-    await expect(reply.deliver({ text: "cancelled second" }, { kind: "final" })).resolves.toEqual({
-      visibleReplySent: false,
-      suppression: { reason: "no_visible_result" },
-    });
-    expect(sendPayload).toHaveBeenCalledTimes(2);
+    await dispatchDirectTelegramTurn({ deliverReplies });
+
+    expect(results).toEqual([
+      { visibleReplySent: true },
+      { visibleReplySent: false, suppression: { reason: "no_visible_result" } },
+    ]);
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
   });
 
   it("settles a buffered final before a later empty final resets reasoning state", async () => {
-    const { createTelegramReplyDelivery } = await import("./bot-message-dispatch-reply.js");
-    const deliverFinalAnswerText = vi.fn(async () => ({ kind: "sent" as const }));
-    const reply = createTelegramReplyDelivery({
-      cfg: {} as never,
-      context: { route: { accountId: "default" } } as never,
-      delivery: {
-        normalizeDeliveryPayload: (payload: { text?: string }) =>
-          payload.text === "drop terminal" ? undefined : payload,
-        deliverFinalAnswerText,
-      } as never,
-      draft: {
-        answerLane: { stream: undefined },
-        reasoningLane: { stream: undefined },
-        setReasoningStepCallbacks: vi.fn(),
-        splitTextIntoLaneSegments: (
-          input: { text?: string },
-          isReasoning: boolean | undefined,
-        ) => ({
-          segments: input.text
-            ? [
-                {
-                  lane: isReasoning ? ("reasoning" as const) : ("answer" as const),
-                  update: { text: input.text },
-                },
-              ]
-            : [],
-          suppressedReasoningOnly: false,
-        }),
-        enqueueEvent: async (callback: () => Promise<void>) => await callback(),
-        dropQueuedAnswerBlockRotation: vi.fn(),
-        isQueuedAnswerBlock: () => false,
-      } as never,
-      fence: { generation: () => 1, isSuperseded: () => false },
-      progress: {
-        markFinalStarted: vi.fn(),
-        finalAnswerDeliveryStarted: () => false,
-        finalAnswerDelivered: () => false,
-      } as never,
-      runtime,
-      state: {} as never,
-      streamMode: "off",
-      telegramCfg: {},
+    const cfg: OpenClawConfig = { agents: { defaults: { reasoningDefault: "on" } } };
+    const deliverReplies = vi
+      .fn<NonNullable<TelegramBotDeps["deliverReplies"]>>()
+      .mockResolvedValueOnce({ delivered: false })
+      .mockResolvedValueOnce({ delivered: true });
+    let bufferedFinalization: Promise<unknown> | undefined;
+    let emptyFinalResult: unknown;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      const deliver = dispatcherOptions.deliver;
+      if (!deliver) {
+        throw new Error("Expected Telegram reply deliverer");
+      }
+      await deliver({ text: "<think>first attempt</think>", isReasoning: true }, { kind: "block" });
+      bufferedFinalization = requireFinalization(
+        await deliver({ text: "buffered answer" }, { kind: "final" }),
+      );
+      emptyFinalResult = await deliver({}, { kind: "final" });
+      return { queuedFinal: true, counts: { block: 1, final: 2, tool: 0 } };
     });
-    reply.reasoningStepState.noteReasoningHint();
 
-    const buffered = (await reply.deliver({ text: "buffered answer" }, { kind: "final" })) as {
-      visibleReplySent: boolean;
-      finalization: Promise<unknown>;
-    };
-    expect(buffered).toMatchObject({ visibleReplySent: false });
-    expect(buffered.finalization).toBeInstanceOf(Promise);
+    await dispatchDirectTelegramTurn({ cfg, deliverReplies });
 
-    await expect(reply.deliver({ text: "drop terminal" }, { kind: "final" })).resolves.toEqual({
+    expect(emptyFinalResult).toEqual({
       visibleReplySent: false,
       suppression: { reason: "no_visible_result" },
     });
-    await expect(buffered.finalization).resolves.toEqual({ visibleReplySent: true });
-    expect(deliverFinalAnswerText).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "buffered answer" }),
-      "buffered answer",
-      undefined,
+    await expect(bufferedFinalization).resolves.toEqual({ visibleReplySent: true });
+    expect(deliverReplies).toHaveBeenLastCalledWith(
+      expect.objectContaining({ replies: [expect.objectContaining({ text: "buffered answer" })] }),
     );
   });
 
   it("keeps buffered-final failure separate from a visible reasoning payload", async () => {
-    const { createTelegramReplyDelivery } = await import("./bot-message-dispatch-reply.js");
+    const cfg: OpenClawConfig = { agents: { defaults: { reasoningDefault: "on" } } };
     const error = new Error("buffered final failed");
-    const reply = createTelegramReplyDelivery({
-      cfg: {} as never,
-      context: { route: { accountId: "default" } } as never,
-      delivery: {
-        normalizeDeliveryPayload: (payload: unknown) => payload,
-        deliverFinalAnswerText: async () => {
-          throw error;
-        },
-        deliverLaneText: async () => ({ kind: "sent" as const }),
-      } as never,
-      draft: {
-        answerLane: { stream: undefined },
-        reasoningLane: { stream: undefined },
-        setReasoningStepCallbacks: vi.fn(),
-        splitTextIntoLaneSegments: (
-          input: { text?: string },
-          isReasoning: boolean | undefined,
-        ) => ({
-          segments: [
-            {
-              lane: isReasoning ? ("reasoning" as const) : ("answer" as const),
-              update: { text: input.text ?? "" },
-            },
-          ],
-          suppressedReasoningOnly: false,
-        }),
-        enqueueEvent: async (callback: () => Promise<void>) => await callback(),
-        dropQueuedAnswerBlockRotation: vi.fn(),
-        isQueuedAnswerBlock: () => false,
-      } as never,
-      fence: { generation: () => 1, isSuperseded: () => false },
-      progress: {
-        markFinalStarted: vi.fn(),
-        finalAnswerDeliveryStarted: () => false,
-        finalAnswerDelivered: () => false,
-      } as never,
-      runtime,
-      state: {} as never,
-      streamMode: "off",
-      telegramCfg: {},
+    const deliverReplies = vi
+      .fn<NonNullable<TelegramBotDeps["deliverReplies"]>>()
+      .mockResolvedValueOnce({ delivered: false })
+      .mockResolvedValueOnce({ delivered: true })
+      .mockRejectedValueOnce(error);
+    let bufferedSettlement: Promise<unknown> | undefined;
+    let visibleReasoningError: unknown;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      const deliver = dispatcherOptions.deliver;
+      if (!deliver) {
+        throw new Error("Expected Telegram reply deliverer");
+      }
+      await deliver({ text: "<think>first attempt</think>", isReasoning: true }, { kind: "block" });
+      const finalization = requireFinalization(
+        await deliver({ text: "buffered answer" }, { kind: "final" }),
+      );
+      bufferedSettlement = finalization.then(
+        () => ({ status: "resolved" as const }),
+        (settlementError: unknown) => ({ status: "rejected" as const, error: settlementError }),
+      );
+      try {
+        await deliver(
+          { text: "<think>visible reasoning</think>", isReasoning: true },
+          { kind: "block" },
+        );
+      } catch (deliveryError) {
+        visibleReasoningError = deliveryError;
+      }
+      return { queuedFinal: true, counts: { block: 2, final: 1, tool: 0 } };
     });
-    reply.reasoningStepState.noteReasoningHint();
-    const buffered = (await reply.deliver({ text: "buffered answer" }, { kind: "final" })) as {
-      finalization: Promise<unknown>;
-    };
-    const bufferedSettlement = buffered.finalization.then(
-      () => ({ status: "resolved" as const }),
-      (settlementError: unknown) => ({ status: "rejected" as const, error: settlementError }),
-    );
 
-    await expect(
-      reply.deliver({ text: "visible reasoning", isReasoning: true }, { kind: "block" }),
-    ).rejects.toMatchObject({
+    await dispatchDirectTelegramTurn({ cfg, deliverReplies });
+
+    expect(visibleReasoningError).toMatchObject({
       code: "CHANNEL_PARTIAL_DELIVERY",
       deliveryResult: { visibleReplySent: true },
     });
     await expect(bufferedSettlement).resolves.toEqual({ status: "rejected", error });
+  });
+
+  it("keeps a suppressed exec-approval final in the fallback ledger", async () => {
+    const telegramCfg = {
+      execApprovals: { enabled: true, approvers: ["123"], target: "dm" as const },
+    };
+    const cfg: OpenClawConfig = { channels: { telegram: telegramCfg } };
+    const deliverReplies = vi
+      .fn<NonNullable<TelegramBotDeps["deliverReplies"]>>()
+      .mockResolvedValue({ delivered: true });
+    let suppressedResult: unknown;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      const deliver = dispatcherOptions.deliver;
+      if (!deliver) {
+        throw new Error("Expected Telegram reply deliverer");
+      }
+      suppressedResult = await deliver(
+        {
+          channelData: {
+            execApproval: { approvalId: "req-1", approvalSlug: "req-1" },
+          },
+        },
+        { kind: "final" },
+      );
+      return {
+        queuedFinal: false,
+        noVisibleReplyFallbackEligible: true,
+        counts: { block: 0, final: 1, tool: 0 },
+      };
+    });
+
+    await dispatchDirectTelegramTurn({ cfg, deliverReplies, telegramCfg });
+
+    expect(suppressedResult).toEqual({
+      visibleReplySent: false,
+      suppression: { reason: "no_visible_result" },
+    });
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 });
 

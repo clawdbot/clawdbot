@@ -38,10 +38,7 @@ function teamScope(scope: string | undefined): { kind: "team" } {
     return { kind: "team" };
   }
   if (scope === "me") {
-    throw new SecretStoreCliFailure(
-      2,
-      "Identity scope arrives with the settings UI; use --scope team.",
-    );
+    throw new SecretStoreCliFailure(2, "Identity scope is not supported yet; use --scope team.");
   }
   throw new SecretStoreCliFailure(2, `Invalid scope "${scope}"; only "team" is supported.`);
 }
@@ -76,7 +73,8 @@ function mapStoreError(error: unknown): SecretStoreCliFailure {
   if (
     validation?.name === "SecretStoreValidationError" &&
     (validation.code === "SECRET_STORE_INVALID_NAME" ||
-      validation.code === "SECRET_STORE_VALUE_TOO_LARGE")
+      validation.code === "SECRET_STORE_VALUE_TOO_LARGE" ||
+      validation.code === "SECRET_STORE_VALUE_EMPTY")
   ) {
     return new SecretStoreCliFailure(2, validation.message ?? "Invalid secret store input.");
   }

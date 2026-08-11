@@ -15,19 +15,41 @@ import type { NormalizedUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import type { PromptCacheBreak, PromptCacheChange } from "../prompt-cache-observability.js";
 import { clearActiveEmbeddedRun } from "../runs.js";
+import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
 import type {
   EmbeddedAttemptExecutionPhaseInput,
   EmbeddedAttemptExecutionState,
 } from "./attempt-execution-types.js";
+import { completeEmbeddedAttemptAfterTurn } from "./attempt-finalize.js";
+import type { prepareEmbeddedAttemptHistory } from "./attempt-history.js";
 import { runEmbeddedAttemptPromptPhase } from "./attempt-prompt-phase.js";
 import { completeEmbeddedAttemptResult } from "./attempt-result.js";
-import { finalizeEmbeddedAttemptStreamPhase } from "./attempt-stream-finalize.js";
-import type { prepareEmbeddedAttemptStreamRuntime } from "./attempt-stream-runtime-prepare.js";
+import type { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
+import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
+import type { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
+import type { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 /** Runs prompt dispatch, stream settlement, cleanup, and result projection. */
 
-type PreparedStreamRuntime = Awaited<ReturnType<typeof prepareEmbeddedAttemptStreamRuntime>>;
+type PreparedStreamRuntime = {
+  abortable: <T>(promise: Promise<T>) => Promise<T>;
+  cache: {
+    observabilityEnabled: boolean;
+    promptTools: ReturnType<typeof installEmbeddedAttemptStreamGuards>["promptCacheTools"];
+  };
+  history: Awaited<ReturnType<typeof prepareEmbeddedAttemptHistory>>;
+  isProbeSession: boolean;
+  onBlockReplyFlush: Parameters<typeof prepareEmbeddedAttemptStream>[0]["onBlockReplyFlush"];
+  promptActiveSession: (
+    prompt: string,
+    options?: Parameters<
+      Parameters<typeof prepareEmbeddedAttemptStream>[0]["activeSession"]["prompt"]
+    >[1],
+  ) => Promise<void>;
+  stream: ReturnType<typeof prepareEmbeddedAttemptStream>;
+  timeout: ReturnType<typeof prepareEmbeddedAttemptTimeout>;
+};
 
 type StreamCleanupInput = {
   attempt: EmbeddedRunAttemptParams;
@@ -292,7 +314,6 @@ export async function runEmbeddedAttemptSettledPhase(
           finalPromptText = prompt;
         },
         markBeforeAgentRunBlocked: (outcome) => {
-          state.beforeAgentRunBlocked = true;
           state.beforeAgentRunBlockedBy = outcome.blockedBy;
         },
         markYieldAborted: () => {
@@ -308,106 +329,171 @@ export async function runEmbeddedAttemptSettledPhase(
       },
     });
 
-    const afterTurn = await finalizeEmbeddedAttemptStreamPhase({
+    // Queued subscription handlers (block-reply delivery, tool events) are
+    // fire-and-forget during the turn; the pending-events join below is the only
+    // place the run waits for them. One hung handler (e.g. a stuck delivery
+    // dispatch lane) must not dead-end the turn until the run budget — 48h by
+    // default — so the join is bounded and settlement proceeds with a recorded
+    // warning instead of producing no visible outcome at all.
+    await joinWithRunLivenessDeadline({
+      joinWork: waitForPendingEvents,
+      runAbortSignal: input.runAbortController.signal,
+      onTimeout: () => {
+        log.warn(
+          `pending subscription events did not settle within ${RUN_LIVENESS_JOIN_TIMEOUT_MS}ms; ` +
+            `proceeding to stream settlement: runId=${attempt.runId}`,
+        );
+      },
+    });
+    const beforeAgentFinalizeRevisionReason = getBeforeAgentFinalizeRevisionReason();
+    const beforeAgentFinalizeRevisionEntryId = getBeforeAgentFinalizeRevisionEntryId();
+    let rewoundBeforeAgentFinalizeRevision = false;
+    if (beforeAgentFinalizeRevisionReason && beforeAgentFinalizeRevisionEntryId) {
+      await input.sessionLock.withOwnedTranscriptWrite(() => {
+        const rejectedEntry = sessionManager.getEntry(beforeAgentFinalizeRevisionEntryId);
+        if (rejectedEntry?.type !== "message" || rejectedEntry.message.role !== "assistant") {
+          throw new Error(
+            `before_agent_finalize persisted assistant entry is missing or invalid ` +
+              `(entry=${beforeAgentFinalizeRevisionEntryId})`,
+          );
+        }
+        // Keep persistence append-only while excluding the rejected draft and
+        // every trailing descendant from the hidden retry's active branch.
+        sessionManager.appendLeafControl({
+          targetId: rejectedEntry.parentId,
+          appendParentId: rejectedEntry.parentId,
+        });
+        rewoundBeforeAgentFinalizeRevision = true;
+      });
+    }
+    let settledStream: Awaited<ReturnType<typeof settleEmbeddedAttemptStream>>;
+    try {
+      if (input.getRepairedRejectedThinkingReplay() && !rewoundBeforeAgentFinalizeRevision) {
+        activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
+      }
+      const settleTerminal = readTerminal();
+      const streamSettleState = {
+        promptError: settleTerminal.promptError,
+        promptErrorSource: settleTerminal.promptErrorSource,
+        yieldAborted,
+        sessionIdUsed,
+      };
+      try {
+        settledStream = await settleEmbeddedAttemptStream({
+          attempt,
+          activeSession,
+          sessionManager,
+          withOwnedTranscriptWrite: input.sessionLock.withOwnedTranscriptWrite,
+          state: streamSettleState,
+          runAbortDeadlineAtMs: getRunAbortDeadlineAtMs(),
+          shouldFlushForContextEngine: Boolean(
+            input.activeContextEngine && !getBeforeAgentFinalizeRevisionReason(),
+          ),
+          subscription,
+          readLifecycleState: () => {
+            const terminal = readTerminal();
+            return {
+              aborted: terminal.aborted,
+              timedOut: terminal.timedOut,
+              timedOutDuringCompaction: terminal.timedOutDuringCompaction,
+            };
+          },
+          markTimedOutDuringCompaction: () => {
+            state.terminal = mergeAgentRunAttemptTerminal(state.terminal, {
+              kind: "timeout",
+              phase: "compaction",
+              source: "observation",
+            });
+          },
+          runAbortSignal: input.runAbortController.signal,
+          isProbeSession,
+          onBlockReplyFlush,
+          abortable,
+          prePromptMessageCount: sessionRuntimeState.prePromptMessageCount,
+          toolSearchTargetTranscriptProjections,
+          cache: {
+            observabilityEnabled: cacheObservabilityEnabled,
+            changesForTurn: promptCacheChangesForTurn,
+            retention: effectivePromptCacheRetention,
+          },
+        });
+      } catch (error) {
+        // Settlement mutates this shared state before some failures. Publish it so
+        // outer teardown keeps the recorded prompt error and attribution.
+        setFailure(streamSettleState.promptError, streamSettleState.promptErrorSource);
+        throw error;
+      }
+    } finally {
+      if (rewoundBeforeAgentFinalizeRevision) {
+        await input.sessionLock.withOwnedTranscriptWrite(() => {
+          // Settlement classifies the completed attempt from its original
+          // in-memory messages. Later work always sees the rewound branch.
+          activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
+        });
+      }
+    }
+    // Publish settled fields before after-turn hooks: those hooks may throw, and
+    // outer teardown still needs the completed stream snapshot and usage state.
+    setFailure(settledStream.promptError, settledStream.promptErrorSource);
+    if (settledStream.timedOutDuringCompaction) {
+      state.terminal = mergeAgentRunAttemptTerminal(state.terminal, {
+        kind: "timeout",
+        phase: "compaction",
+        source: "observation",
+      });
+    }
+    messagesSnapshot = settledStream.messagesSnapshot;
+    sessionIdUsed = settledStream.sessionIdUsed;
+    lastAssistant = settledStream.lastAssistant;
+    currentAttemptAssistant = settledStream.currentAttemptAssistant;
+    currentAttemptCompletedAssistant = settledStream.currentAttemptCompletedAssistant;
+    attemptUsage = settledStream.attemptUsage;
+    cacheBreak = settledStream.cacheBreak;
+    sessionRuntimeState.promptCache = settledStream.promptCache;
+
+    const afterTurn = await completeEmbeddedAttemptAfterTurn({
       attempt,
       activeSession,
       sessionManager,
       withOwnedTranscriptWrite: input.sessionLock.withOwnedTranscriptWrite,
-      waitForPendingEvents,
-      repairedRejectedThinkingReplay: input.getRepairedRejectedThinkingReplay(),
-      getRunAbortDeadlineAtMs,
-      shouldFlushForContextEngine: () =>
-        Boolean(input.activeContextEngine && !getBeforeAgentFinalizeRevisionReason()),
-      getBeforeAgentFinalizeRevisionReason,
-      getBeforeAgentFinalizeRevisionEntryId,
-      getContextEngineAfterTurnCheckpoint: contextGuards.getAfterTurnCheckpoint,
-      onSettleErrorState: (settleState) => {
-        setFailure(settleState.promptError, settleState.promptErrorSource);
-      },
-      onSettled: (settledStream) => {
-        setFailure(settledStream.promptError, settledStream.promptErrorSource);
-        if (settledStream.timedOutDuringCompaction) {
-          state.terminal = mergeAgentRunAttemptTerminal(state.terminal, {
-            kind: "timeout",
-            phase: "compaction",
-            source: "observation",
-          });
-        }
-        messagesSnapshot = settledStream.messagesSnapshot;
-        sessionIdUsed = settledStream.sessionIdUsed;
-        lastAssistant = settledStream.lastAssistant;
-        currentAttemptAssistant = settledStream.currentAttemptAssistant;
-        currentAttemptCompletedAssistant = settledStream.currentAttemptCompletedAssistant;
-        attemptUsage = settledStream.attemptUsage;
-        cacheBreak = settledStream.cacheBreak;
-        sessionRuntimeState.promptCache = settledStream.promptCache;
-      },
-      getState: () => {
+      activeContextEngine: input.activeContextEngine,
+      readLifecycleState: () => {
         const terminal = readTerminal();
         return {
-          promptError: terminal.promptError,
-          promptErrorSource: terminal.promptErrorSource,
-          yieldAborted,
-          sessionIdUsed,
-          sessionFileUsed,
+          aborted: terminal.aborted,
+          timedOut: terminal.timedOut,
+          idleTimedOut: terminal.idleTimedOut,
+          timedOutDuringCompaction: terminal.timedOutDuringCompaction,
         };
       },
-      settle: {
-        subscription,
-        readLifecycleState: () => {
-          const terminal = readTerminal();
-          return {
-            aborted: terminal.aborted,
-            timedOut: terminal.timedOut,
-            timedOutDuringCompaction: terminal.timedOutDuringCompaction,
-          };
-        },
-        markTimedOutDuringCompaction: () => {
-          state.terminal = mergeAgentRunAttemptTerminal(state.terminal, {
-            kind: "timeout",
-            phase: "compaction",
-            source: "observation",
-          });
-        },
-        runAbortSignal: input.runAbortController.signal,
-        isProbeSession,
-        onBlockReplyFlush,
-        abortable,
-        prePromptMessageCount: sessionRuntimeState.prePromptMessageCount,
-        toolSearchTargetTranscriptProjections,
-        cache: {
-          observabilityEnabled: cacheObservabilityEnabled,
-          changesForTurn: promptCacheChangesForTurn,
-          retention: effectivePromptCacheRetention,
-        },
+      runtime: {
+        effectiveWorkspace: input.setup.effectiveWorkspace,
+        agentDir: input.agentDir,
+        sessionAgentId: input.setup.sessionAgentId,
+        resolveActiveContextEnginePluginId: input.resolveActiveContextEnginePluginId,
+        shouldRecordCompletedBootstrapTurn,
+        cacheTrace,
+        anthropicPayloadLogger,
+        hookAgentId,
+        diagnosticTrace: input.diagnostics.diagnosticTrace,
+        skillWorkshopAvailable: uncompactedEffectiveTools.some(
+          (tool) => tool.name === "skill_workshop",
+        ),
+        hookRunner,
+        promptStartedAt,
       },
-      afterTurn: {
-        activeContextEngine: input.activeContextEngine,
-        readLifecycleState: () => {
-          const terminal = readTerminal();
-          return {
-            aborted: terminal.aborted,
-            timedOut: terminal.timedOut,
-            idleTimedOut: terminal.idleTimedOut,
-            timedOutDuringCompaction: terminal.timedOutDuringCompaction,
-          };
-        },
-        runtime: {
-          effectiveWorkspace: input.setup.effectiveWorkspace,
-          agentDir: input.agentDir,
-          sessionAgentId: input.setup.sessionAgentId,
-          resolveActiveContextEnginePluginId: input.resolveActiveContextEnginePluginId,
-          shouldRecordCompletedBootstrapTurn,
-          cacheTrace,
-          anthropicPayloadLogger,
-          hookAgentId,
-          diagnosticTrace: input.diagnostics.diagnosticTrace,
-          skillWorkshopAvailable: uncompactedEffectiveTools.some(
-            (tool) => tool.name === "skill_workshop",
-          ),
-          hookRunner,
-          promptStartedAt,
-        },
+      state: {
+        promptError: settledStream.promptError,
+        yieldAborted,
+        sessionIdUsed: settledStream.sessionIdUsed,
+        sessionFileUsed,
+        messagesSnapshot: settledStream.messagesSnapshot,
+        prePromptMessageCount: sessionRuntimeState.prePromptMessageCount,
+        contextEngineAfterTurnCheckpoint: contextGuards.getAfterTurnCheckpoint(),
+        lastCallUsage: settledStream.lastCallUsage,
+        promptCache: settledStream.promptCache,
+        ...(beforeAgentFinalizeRevisionReason ? { beforeAgentFinalizeRevisionReason } : {}),
+        compactionOccurredThisAttempt: settledStream.compactionOccurredThisAttempt,
       },
     });
     sessionIdUsed = afterTurn.sessionIdUsed;

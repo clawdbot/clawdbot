@@ -4,14 +4,20 @@
  * Provides ordered channel metadata for setup, status, and selection surfaces.
  */
 import { expectDefined } from "@openclaw/normalization-core";
+import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import { buildChatChannelMetaById, type ChatChannelMeta } from "./chat-meta-shared.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "./ids.js";
 
-let chatChannelMetaCache: Record<ChatChannelId, ChatChannelMeta> | null = null;
+let chatChannelMetaCache:
+  | { cacheKey: string; metaById: Record<ChatChannelId, ChatChannelMeta> }
+  | undefined;
 
 function getChatChannelMetaById(): Record<ChatChannelId, ChatChannelMeta> {
-  chatChannelMetaCache ??= buildChatChannelMetaById();
-  return chatChannelMetaCache;
+  const cacheKey = resolveBundledPluginsDir(process.env) ?? "";
+  if (chatChannelMetaCache?.cacheKey !== cacheKey) {
+    chatChannelMetaCache = { cacheKey, metaById: buildChatChannelMetaById() };
+  }
+  return chatChannelMetaCache.metaById;
 }
 
 /**

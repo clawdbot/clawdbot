@@ -19,7 +19,7 @@ import {
   githubApiToken,
   isRecord,
   optionalNumber,
-  optionalString,
+  readOptionalGitHubString,
 } from "./control-ui-github-api.js";
 import {
   gitOutput,
@@ -314,7 +314,7 @@ async function resolveSessionBranch(
 }
 
 function derivePullState(value: Record<string, unknown>): ControlUiSessionPullRequest["state"] {
-  if (optionalString(value, "merged_at")) {
+  if (readOptionalGitHubString(value, "merged_at")) {
     return "merged";
   }
   if (value.state !== "open") {
@@ -328,13 +328,13 @@ function parsePullListItem(value: unknown): PullListItem | null {
     return null;
   }
   const number = optionalNumber(value, "number");
-  const title = optionalString(value, "title");
-  const url = optionalString(value, "html_url");
+  const title = readOptionalGitHubString(value, "title");
+  const url = readOptionalGitHubString(value, "html_url");
   const base = isRecord(value.base) ? value.base : {};
   const baseRepo = isRecord(base.repo) ? base.repo : {};
   const baseOwner = isRecord(baseRepo.owner) ? baseRepo.owner : {};
-  const owner = optionalString(baseOwner, "login");
-  const repo = optionalString(baseRepo, "name");
+  const owner = readOptionalGitHubString(baseOwner, "login");
+  const repo = readOptionalGitHubString(baseRepo, "name");
   const head = isRecord(value.head) ? value.head : {};
   if (!number || !Number.isSafeInteger(number) || number < 1 || !title || !url || !owner || !repo) {
     return null;
@@ -346,9 +346,9 @@ function parsePullListItem(value: unknown): PullListItem | null {
     owner,
     repo,
     state: derivePullState(value),
-    headSha: optionalString(head, "sha"),
-    baseRef: optionalString(base, "ref"),
-    mergeCommitSha: optionalString(value, "merge_commit_sha"),
+    headSha: readOptionalGitHubString(head, "sha"),
+    baseRef: readOptionalGitHubString(base, "ref"),
+    mergeCommitSha: readOptionalGitHubString(value, "merge_commit_sha"),
   };
 }
 
@@ -378,8 +378,8 @@ async function fetchParentRepo(
     return null;
   }
   const parentOwner = isRecord(value.parent.owner) ? value.parent.owner : {};
-  const parentLogin = optionalString(parentOwner, "login");
-  const parentName = optionalString(value.parent, "name");
+  const parentLogin = readOptionalGitHubString(parentOwner, "login");
+  const parentName = readOptionalGitHubString(value.parent, "name");
   return parentLogin && parentName ? { owner: parentLogin, repo: parentName } : null;
 }
 
@@ -431,7 +431,7 @@ function rollupCheckRuns(value: unknown): ControlUiSessionPullRequest["checks"] 
   let running = 0;
   for (const runValue of value.check_runs) {
     const run = isRecord(runValue) ? runValue : {};
-    const conclusion = optionalString(run, "conclusion");
+    const conclusion = readOptionalGitHubString(run, "conclusion");
     if (conclusion && FAILING_CHECK_CONCLUSIONS.has(conclusion)) {
       failed += 1;
       continue;

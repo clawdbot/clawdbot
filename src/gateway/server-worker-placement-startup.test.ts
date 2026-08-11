@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../shared/deferred.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   coordinateWorkerPlacementDispatch,
   type GatewayWorkerPlacementRuntime,
@@ -33,8 +33,8 @@ describe("worker placement dispatch coordinator", () => {
   });
 
   it("coalesces an identical dispatch and rejects a conflicting in-flight request", async () => {
-    const dispatchStarted = createDeferred();
-    const releaseDispatch = createDeferred();
+    const dispatchStarted = createDeferredCore();
+    const releaseDispatch = createDeferredCore();
     const active = { state: "active" };
     const dispatch = vi.fn(async () => {
       dispatchStarted.resolve();
@@ -55,6 +55,15 @@ describe("worker placement dispatch coordinator", () => {
     await expect(
       coordinated.dispatch({ ...REQUEST, profileId: "another-profile" }),
     ).rejects.toThrow(`Session ${REQUEST.sessionKey} is already dispatching another request`);
+    await expect(
+      coordinated.dispatch({
+        ...REQUEST,
+        inheritedProfile: {
+          providerId: "fake",
+          profileSnapshot: { settings: { region: "parent" } },
+        },
+      }),
+    ).rejects.toThrow(`Session ${REQUEST.sessionKey} is already dispatching another request`);
     const retry = coordinated.dispatch(REQUEST);
     releaseDispatch.resolve();
 
@@ -67,8 +76,8 @@ describe("worker placement dispatch coordinator", () => {
   });
 
   it("joins a retry before a queued reconciliation after dispatch failure", async () => {
-    const dispatchStarted = createDeferred();
-    const releaseDispatch = createDeferred();
+    const dispatchStarted = createDeferredCore();
+    const releaseDispatch = createDeferredCore();
     const dispatchError = new Error("provision failed");
     const dispatch = vi.fn(async () => {
       dispatchStarted.resolve();
@@ -107,8 +116,8 @@ describe("worker placement dispatch coordinator", () => {
   });
 
   it("coalesces full sweeps but runs a fresh targeted pass with its environment id", async () => {
-    const fullSweepStarted = createDeferred();
-    const releaseFullSweep = createDeferred();
+    const fullSweepStarted = createDeferredCore();
+    const releaseFullSweep = createDeferredCore();
     const reconcileActive = vi.fn(async (environmentId?: string) => {
       if (environmentId === undefined) {
         fullSweepStarted.resolve();

@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 const LOGIN_HINT_SENTINEL = "<<login-hint-for-provider>>";
 
-import type { FailoverReason } from "../failover/signal.js";
+import { FAILOVER_REASONS, type FailoverReason } from "../failover/signal.js";
 import { renderAuthProfileFailoverCopy } from "../failover/user-copy.js";
 
 const formatAuthProfileFailureMessage = (
@@ -20,42 +20,37 @@ const formatAuthProfileFailureMessage = (
 
 const PROVIDER = "openai-codex";
 
-const REASONS_WITH_RECOVERY: readonly FailoverReason[] = [
-  "auth",
-  "session_expired",
-  "auth_permanent",
-  "billing",
-];
-const REASONS_WITHOUT_RECOVERY: readonly FailoverReason[] = [
-  "rate_limit",
-  "overloaded",
-  "timeout",
-  "server_error",
-  "model_not_found",
-  "format",
-];
+const RECOVERY_BY_REASON = {
+  auth: true,
+  auth_permanent: true,
+  format: false,
+  rate_limit: false,
+  overloaded: false,
+  billing: true,
+  server_error: false,
+  timeout: false,
+  tls_certificate: false,
+  context_overflow: true,
+  model_not_found: false,
+  session_expired: true,
+  empty_response: true,
+  no_error_details: true,
+  unclassified: true,
+  unknown: true,
+} satisfies Record<FailoverReason, boolean>;
 
 describe("renderAuthProfileFailoverCopy", () => {
   describe("recovery-hint dispatch", () => {
-    it("includes the login command for reasons the user can act on", () => {
-      for (const reason of REASONS_WITH_RECOVERY) {
+    it("dispatches the login command for every failover reason", () => {
+      for (const reason of FAILOVER_REASONS) {
         const message = formatAuthProfileFailureMessage({
           reason,
           provider: PROVIDER,
           allInCooldown: true,
         });
-        expect(message, `reason=${reason}`).toContain(`${LOGIN_HINT_SENTINEL}:${PROVIDER}`);
-      }
-    });
-
-    it("omits the login command for transient cooldown reasons", () => {
-      for (const reason of REASONS_WITHOUT_RECOVERY) {
-        const message = formatAuthProfileFailureMessage({
-          reason,
-          provider: PROVIDER,
-          allInCooldown: true,
-        });
-        expect(message, `reason=${reason}`).not.toContain(LOGIN_HINT_SENTINEL);
+        expect(message.includes(LOGIN_HINT_SENTINEL), `reason=${reason}`).toBe(
+          RECOVERY_BY_REASON[reason],
+        );
       }
     });
   });
@@ -69,11 +64,7 @@ describe("renderAuthProfileFailoverCopy", () => {
     });
 
     it("always mentions the provider name", () => {
-      for (const reason of [
-        ...REASONS_WITH_RECOVERY,
-        ...REASONS_WITHOUT_RECOVERY,
-        "unknown",
-      ] as const) {
+      for (const reason of FAILOVER_REASONS) {
         const message = formatAuthProfileFailureMessage({
           reason,
           provider: PROVIDER,

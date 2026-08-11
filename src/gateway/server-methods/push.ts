@@ -200,6 +200,16 @@ export const pushHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      if (!results.some((result) => result.ok)) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "all web push deliveries failed", {
+            details: { results },
+          }),
+        );
+        return;
+      }
       respond(true, { results }, undefined);
     });
   },

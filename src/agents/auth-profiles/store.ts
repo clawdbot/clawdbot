@@ -13,7 +13,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { isRecord } from "../../utils.js";
 import { cloneAuthProfileStore } from "./clone.js";
-import { AUTH_STORE_VERSION, log } from "./constants.js";
+import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
 import {
   listRuntimeExternalAuthProfiles,
   overlayExternalAuthProfiles,
@@ -44,14 +44,14 @@ import {
   mergeAuthProfileStores,
 } from "./persisted.js";
 import {
-  clearRuntimeAuthProfileStoreSnapshot as clearRuntimeAuthProfileStoreSnapshotImpl,
-  clearRuntimeAuthProfileStoreSnapshots as clearRuntimeAuthProfileStoreSnapshotsImpl,
-  getPreparedRuntimeAuthProfileStoreSnapshot as getPreparedRuntimeAuthProfileStoreSnapshotImpl,
-  getRuntimeAuthProfileStoreSnapshot as getRuntimeAuthProfileStoreSnapshotImpl,
+  clearRuntimeAuthProfileStoreSnapshotCore,
+  clearRuntimeAuthProfileStoreSnapshots,
+  getPreparedRuntimeAuthProfileStoreSnapshotCore,
+  getRuntimeAuthProfileStoreSnapshotCore,
   getRuntimeAuthProfileStoreSnapshotRevision,
   noteRuntimeAuthProfileStorePersistedMutation,
   listRuntimeAuthProfileStoreSnapshots,
-  replaceRuntimeAuthProfileStoreSnapshots as replaceRuntimeAuthProfileStoreSnapshotsImpl,
+  replaceRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
 import {
@@ -209,8 +209,10 @@ function publishRuntimeSnapshotsAfterCommit(publish: (() => void) | undefined): 
     }
     return true;
   } catch (err) {
-    clearRuntimeAuthProfileStoreSnapshotsImpl();
-    log.warn("auth profile store committed but runtime snapshot publication failed", { err });
+    clearRuntimeAuthProfileStoreSnapshots();
+    authProfilesLog.warn("auth profile store committed but runtime snapshot publication failed", {
+      err,
+    });
     return false;
   }
 }
@@ -280,8 +282,8 @@ function resolveRuntimeAuthProfileStore(
 ): AuthProfileStore | null {
   const mainKey = resolveAuthStorePath(options?.inheritedAuthDir);
   const requestedKey = resolveAuthStorePath(agentDir);
-  const mainStore = getRuntimeAuthProfileStoreSnapshotImpl(options?.inheritedAuthDir);
-  const requestedStore = getRuntimeAuthProfileStoreSnapshotImpl(agentDir);
+  const mainStore = getRuntimeAuthProfileStoreSnapshotCore(options?.inheritedAuthDir);
+  const requestedStore = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
 
   if (!agentDir || requestedKey === mainKey) {
     if (!mainStore) {
@@ -415,9 +417,12 @@ function maybeSyncPersistedExternalCliAuthProfiles(params: {
         const previous = params.store.profiles[profileId];
         const latest = latestStore.profiles[profileId];
         if (!isDeepStrictEqual(latest, previous)) {
-          log.debug("skipped persisted external cli auth sync for concurrently changed profile", {
-            profileId,
-          });
+          authProfilesLog.debug(
+            "skipped persisted external cli auth sync for concurrently changed profile",
+            {
+              profileId,
+            },
+          );
           continue;
         }
         latestStore.profiles[profileId] = credential;
@@ -436,9 +441,12 @@ function maybeSyncPersistedExternalCliAuthProfiles(params: {
       return { store: latestStore, cacheable: true };
     });
   } catch (err) {
-    log.warn("skipped persisted external cli auth sync because auth store write failed", {
-      err,
-    });
+    authProfilesLog.warn(
+      "skipped persisted external cli auth sync because auth store write failed",
+      {
+        err,
+      },
+    );
     return { store: params.store, cacheable: false };
   }
   return publishRuntimeSnapshotsAfterCommit(publishRuntimeSnapshots)
@@ -933,7 +941,7 @@ export async function updateAuthProfileStoreWithLock(params: {
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    log.warn(`auth profile store update failed: ${message}`, {
+    authProfilesLog.warn(`auth profile store update failed: ${message}`, {
       agentDir,
       error: message,
     });
@@ -1309,7 +1317,7 @@ export {
 export function getRuntimeAuthProfileStoreSnapshot(
   agentDir?: string,
 ): AuthProfileStore | undefined {
-  return getRuntimeAuthProfileStoreSnapshotImpl(agentDir);
+  return getRuntimeAuthProfileStoreSnapshotCore(agentDir);
 }
 
 /** Return the lifecycle-published effective auth store without persisted fallback reads. */
@@ -1317,26 +1325,14 @@ export function getPreparedRuntimeAuthProfileStoreSnapshot(
   agentDir?: string,
   inheritedAuthDir?: string,
 ): AuthProfileStore | undefined {
-  return getPreparedRuntimeAuthProfileStoreSnapshotImpl(agentDir, inheritedAuthDir);
+  return getPreparedRuntimeAuthProfileStoreSnapshotCore(agentDir, inheritedAuthDir);
 }
 
 export { getRuntimeAuthProfileStoreSnapshotRevision };
 
-/** Replace runtime auth-profile snapshots, used by tests and prepared runtimes. */
-export function replaceRuntimeAuthProfileStoreSnapshots(
-  entries: Array<{ agentDir?: string; store: AuthProfileStore }>,
-): void {
-  replaceRuntimeAuthProfileStoreSnapshotsImpl(entries);
-}
-
-/** Clear all runtime auth-profile snapshots. */
-export function clearRuntimeAuthProfileStoreSnapshots(): void {
-  clearRuntimeAuthProfileStoreSnapshotsImpl();
-}
-
 /** Clear one runtime auth-profile snapshot. */
 export function clearRuntimeAuthProfileStoreSnapshot(agentDir?: string): boolean {
-  return clearRuntimeAuthProfileStoreSnapshotImpl(agentDir);
+  return clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
 }
 
 function saveAuthProfileStoreInTransaction(
@@ -1588,7 +1584,7 @@ function replaceRuntimeAuthProfileStoreSnapshot(
     return;
   }
   const replacedAuthPath = resolveAuthStorePath(agentDir);
-  replaceRuntimeAuthProfileStoreSnapshotsImpl(
+  replaceRuntimeAuthProfileStoreSnapshots(
     listRuntimeAuthProfileStoreSnapshots().filter(
       (entry) => resolveAuthStorePath(entry.agentDir) !== replacedAuthPath,
     ),

@@ -33,6 +33,7 @@ import {
   requestFlowCancel,
 } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import { getTaskActivitySnapshot } from "./task-registry-activity.js";
 import {
   cancelTaskById,
   deleteTaskRecordById,
@@ -788,6 +789,67 @@ describe("task-registry", () => {
       expectRecordFields(requireTaskByRunId("run-tools"), {
         toolUseCount: 2,
         lastToolName: "exec",
+      });
+    });
+  });
+
+  it("folds Codex native child activity under its canonical thread run id", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      const runId = "codex-thread:019fef4-native-child";
+      const task = createTaskFixture("subagent", {
+        childSessionKey: runId,
+        runId,
+        task: "Inspect the ACP runtime",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { delta: "Editing the native child path" },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "tool",
+        data: { phase: "start", name: "bash", toolCallId: "cmd-1" },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: "apply_patch",
+          toolCallId: "patch-1",
+          args: {
+            changes: [
+              {
+                path: "src/tasks/task-registry.ts",
+                kind: "update",
+                stat: { added: 5, removed: 2 },
+              },
+              {
+                path: "src/tasks/task-registry.test.ts",
+                kind: "update",
+                stat: { added: 8, removed: 0 },
+              },
+            ],
+          },
+        },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "tool",
+        data: { phase: "result", name: "apply_patch", toolCallId: "patch-1", isError: false },
+      });
+
+      expectRecordFields(requireTaskByRunId(runId), {
+        toolUseCount: 2,
+        lastToolName: "apply_patch",
+      });
+      expect(getTaskActivitySnapshot(task.taskId)).toEqual({
+        lastActivity: "Editing the native child path",
+        diffStat: { files: 2, added: 13, removed: 2 },
       });
     });
   });

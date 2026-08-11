@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../config/types.js";
 import {
   WorkerProviderError,
   type WorkerDesktopEndpoint,
+  type WorkerProfile,
   type WorkerProvider,
   type WorkerSshEndpoint,
 } from "../../plugins/types.js";
@@ -437,7 +438,9 @@ describe("worker environment service", () => {
   ) {
     const identity = seedAttachedIdentity(environmentId, sessionId);
     const placementStore = {
+      hasWorkerTurn: vi.fn(() => true),
       validateWorkerTurn: vi.fn(() => true),
+      isWorkerTurnToolAuthorized: vi.fn(() => true),
       updateAckCursors: vi.fn(),
     };
     const workerService = createService(createProvider(), { ...serviceOptions, placementStore });
@@ -494,6 +497,42 @@ describe("worker environment service", () => {
     expect(workerService.acknowledgeCredentialDelivery(grant!)).toBe(true);
     expect(store.getCredential(result.environmentId)).toMatchObject({ deliveredAtMs: nowMs });
     expect(workerService.takeMintedCredential(binding)).toBeUndefined();
+  });
+
+  it("creates a nested environment from its parent's snapshot after config drift", async () => {
+    const provisionedProfiles: WorkerProfile[] = [];
+    let lease = 0;
+    let credential = 0;
+    const workerService = createService(
+      createProvider({
+        provision: async (profile) => {
+          provisionedProfiles.push(structuredClone(profile));
+          lease += 1;
+          return { leaseId: `lease-${lease}`, ssh: SSH_ENDPOINT };
+        },
+      }),
+      {
+        generateWorkerCredential: () => `nested-worker-credential-${(credential += 1)}`,
+      },
+    );
+    const parent = await workerService.create("development", "parent-profile-snapshot");
+    getDevelopmentProfile().settings = { region: "mutated" };
+
+    const child = await workerService.createFromProfileSnapshot(
+      {
+        profileId: parent.profileId,
+        providerId: parent.providerId,
+        profileSnapshot: parent.profileSnapshot,
+      },
+      "child-profile-snapshot",
+    );
+
+    expect(provisionedProfiles).toEqual([{ region: "test" }, { region: "test" }]);
+    expect(child).toMatchObject({
+      profileId: parent.profileId,
+      providerId: parent.providerId,
+      profileSnapshot: parent.profileSnapshot,
+    });
   });
 
   it("adopts a matching milestone-1 row that predates worker credentials", async () => {
@@ -620,16 +659,44 @@ describe("worker environment service", () => {
     expect(workerService.validateWorkerConnection(warmAdmission.identity)).toBe(
       "credential-expired",
     );
-    await expect(workerService.admitWorker(admission)).resolves.toEqual({
-      ok: false,
-      reason: "credential-expired",
+    await expect(workerService.admitWorker(admission)).resolves.toMatchObject({
+      ok: true,
+      identity: { sessionId, runId: "run-1" },
     });
 
     placementStore.validateWorkerTurn.mockReturnValue(false);
     expect(workerService.validateWorkerConnection(identity)).toBe("placement-mismatch");
+    vi.mocked(prepareInstallation).mockClear();
+    await expect(workerService.admitWorker(admission)).resolves.toEqual({
+      ok: false,
+      reason: "credential-expired",
+    });
+    expect(prepareInstallation).not.toHaveBeenCalled();
     await expect(
       workerService.commitTranscript(identity, transcriptRequest(identity, "fenced")),
     ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
+  });
+
+  it("does not rotate an expired delivered credential while its durable turn is active", async () => {
+    const environmentId = "worker-expired-active-turn";
+    const sessionId = "session-expired-active-turn";
+    const liveEvents = createLiveEvents();
+    const { identity, workerService } = placementHarness(environmentId, sessionId, {
+      liveEvents,
+    });
+    store.markCredentialDelivered({
+      environmentId,
+      credentialHash: identity.credentialHash,
+      ownerEpoch: identity.ownerEpoch,
+      sessionId,
+      deliveredAtMs: nowMs,
+    });
+    nowMs = identity.credentialExpiresAtMs;
+
+    await workerService.reconcileOnce();
+
+    expect(store.getCredential(environmentId)?.credentialHash).toBe(identity.credentialHash);
+    expect(liveEvents.rotateCredential).not.toHaveBeenCalled();
   });
 
   it("persists worker transcript and terminal live ACK cursors", async () => {

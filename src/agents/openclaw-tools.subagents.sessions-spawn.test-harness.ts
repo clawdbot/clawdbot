@@ -96,7 +96,7 @@ const hoisted = vi.hoisted(() => {
       });
     }
 
-    return true;
+    return "delivered";
   };
   const defaultCaptureSubagentCompletionReply: CaptureSubagentCompletionReply = async () =>
     undefined;

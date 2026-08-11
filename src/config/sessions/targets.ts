@@ -17,7 +17,7 @@ import {
 import { resolveStateDir } from "../paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentsDirFromSessionStorePath, resolveStorePath } from "./paths.js";
-import { readSqliteSessionEntryKeys } from "./session-accessor.sqlite-entry-store.js";
+import { readSessionEntryKeys } from "./session-accessor.sqlite-entry-store.js";
 import {
   listDurableSqliteTargetOwnersForSessionStorePath,
   resolveSqliteTargetFromSessionStorePath,
@@ -152,7 +152,7 @@ export function listKnownSessionStoreAgentIds(
       try {
         const logicalOwners = withOpenClawAgentDatabaseReadOnly(
           (database) =>
-            readSqliteSessionEntryKeys(database).flatMap((sessionKey) => {
+            readSessionEntryKeys(database).flatMap((sessionKey) => {
               const parsed = parseAgentSessionKey(sessionKey);
               return parsed ? [normalizeAgentId(parsed.agentId)] : [];
             }),
@@ -453,7 +453,7 @@ export function resolveExistingAgentSessionStoreTargetsSync(
           : requested;
         const result = withOpenClawAgentDatabaseReadOnly(
           (database) =>
-            readSqliteSessionEntryKeys(database).some((sessionKey) => {
+            readSessionEntryKeys(database).some((sessionKey) => {
               const parsed = parseAgentSessionKey(sessionKey);
               // Unscoped keys belong to the validated database owner. Explicit agent keys must
               // match so a fixed store containing only another agent's rows proves nothing.

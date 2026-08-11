@@ -2,7 +2,7 @@
  * Prepares transcript boundaries, session management, and active resources.
  * It may assume attempt configuration and tool inputs are ready.
  */
-import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.types.js";
+import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";

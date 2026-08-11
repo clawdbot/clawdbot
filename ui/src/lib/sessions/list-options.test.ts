@@ -94,16 +94,20 @@ describe("session list replacement options", () => {
     sessions.dispose();
   });
 
-  it("restores derived titles after a foreground refresh omits them", async () => {
+  it("keeps derived titles when a foreground refresh queues behind an archive replacement", async () => {
     const key = "agent:main:untitled";
+    const archiveReplacementStarted = deferred<void>();
+    const archiveReplacement = deferred<SessionsListResult>();
+    let listCallCount = 0;
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "sessions.list") {
+        listCallCount += 1;
         const includeDerivedTitles =
           typeof params === "object" &&
           params !== null &&
           "includeDerivedTitles" in params &&
           params.includeDerivedTitles === true;
-        return sessionsResult(
+        const result = sessionsResult(
           [
             {
               key,
@@ -115,6 +119,11 @@ describe("session list replacement options", () => {
           ],
           1,
         );
+        if (listCallCount === 2) {
+          archiveReplacementStarted.resolve();
+          return await archiveReplacement.promise;
+        }
+        return result;
       }
       if (method === "sessions.patch") {
         return { ok: true };
@@ -124,14 +133,155 @@ describe("session list replacement options", () => {
     const sessions = createSessions({ request } as unknown as GatewayBrowserClient, key);
 
     await sessions.refresh({ agentId: "main", includeDerivedTitles: true, force: true });
-    await sessions.refresh({ agentId: "main", force: true });
-    await sessions.patch(key, { pinned: true }, { agentId: "main" });
+    const archive = sessions.patch(key, { archived: true }, { agentId: "main" });
+    await archiveReplacementStarted.promise;
+    const foreground = sessions.refresh({ agentId: "main", force: true });
+    archiveReplacement.resolve(
+      sessionsResult(
+        [
+          {
+            key,
+            kind: "direct",
+            updatedAt: 1,
+            label: key,
+            derivedTitle: "Readable planning title",
+          },
+        ],
+        1,
+      ),
+    );
+    await Promise.all([archive, foreground]);
 
     const listCalls = request.mock.calls.filter(([method]) => method === "sessions.list");
     expect(listCalls).toHaveLength(3);
-    expect(listCalls[1]?.[1]).not.toHaveProperty("includeDerivedTitles");
+    expect(listCalls[1]?.[1]).toMatchObject({ agentId: "main", includeDerivedTitles: true });
     expect(listCalls[2]?.[1]).toMatchObject({ agentId: "main", includeDerivedTitles: true });
     expect(sessions.state.result?.sessions[0]?.derivedTitle).toBe("Readable planning title");
+    sessions.dispose();
+  });
+
+  it("retains the routed archived descriptor through its foreground replacement", async () => {
+    const key = "agent:main:dashboard:archived";
+    let listCallCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.patch") {
+        return { ok: true };
+      }
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      listCallCount += 1;
+      return sessionsResult(
+        listCallCount === 1
+          ? [
+              {
+                key,
+                kind: "direct",
+                sessionId: "archived-session",
+                updatedAt: 1,
+                derivedTitle: "Readable archived title",
+              },
+            ]
+          : [{ key: "agent:main:main", kind: "direct", updatedAt: 2 }],
+        listCallCount,
+      );
+    });
+    const sessions = createSessions({ request } as unknown as GatewayBrowserClient, key);
+
+    await sessions.refresh({ agentId: "main", includeDerivedTitles: true, force: true });
+    const titleHistory: Array<string | undefined> = [];
+    const stop = sessions.subscribe((state) => {
+      titleHistory.push(state.result?.sessions.find((row) => row.key === key)?.derivedTitle);
+    });
+
+    await sessions.patch(key, { archived: true }, { agentId: "main" });
+
+    expect(titleHistory).not.toContain(undefined);
+    expect(sessions.state.result?.sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key,
+          archived: true,
+          derivedTitle: "Readable archived title",
+        }),
+      ]),
+    );
+    stop();
+    sessions.dispose();
+  });
+
+  it("keeps derived titles while an enriched roster response is temporarily degraded", async () => {
+    const key = "agent:main:dashboard:session-1";
+    let listCallCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      listCallCount += 1;
+      return sessionsResult(
+        [
+          {
+            key,
+            kind: "direct",
+            sessionId: "session-1",
+            updatedAt: listCallCount,
+            ...(listCallCount === 1
+              ? {
+                  derivedTitle: "Readable planning title",
+                  lastMessagePreview: "Latest visible reply",
+                }
+              : {}),
+          },
+        ],
+        listCallCount,
+      );
+    });
+    const sessions = createSessions({ request } as unknown as GatewayBrowserClient, key);
+
+    await sessions.refresh({ agentId: "main", includeDerivedTitles: true, force: true });
+    await sessions.refresh({ agentId: "main", includeDerivedTitles: true, force: true });
+
+    expect(sessions.state.result?.sessions[0]).toMatchObject({
+      key,
+      updatedAt: 2,
+      derivedTitle: "Readable planning title",
+      lastMessagePreview: "Latest visible reply",
+    });
+    sessions.dispose();
+  });
+
+  it("does not preserve a derived title across a session reset", async () => {
+    const key = "agent:main:dashboard:session";
+    let listCallCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      listCallCount += 1;
+      return sessionsResult(
+        [
+          {
+            key,
+            kind: "direct",
+            sessionId: `session-${listCallCount}`,
+            updatedAt: listCallCount,
+            ...(listCallCount === 1 ? { derivedTitle: "Previous session title" } : {}),
+          },
+        ],
+        listCallCount,
+      );
+    });
+    const sessions = createSessions({ request } as unknown as GatewayBrowserClient, key);
+
+    await sessions.refresh({ agentId: "main", includeDerivedTitles: true, force: true });
+    await sessions.refresh({ agentId: "main", includeDerivedTitles: true, force: true });
+
+    expect(sessions.state.result?.sessions[0]).toMatchObject({
+      key,
+      sessionId: "session-2",
+      updatedAt: 2,
+    });
+    expect(sessions.state.result?.sessions[0]?.derivedTitle).toBeUndefined();
     sessions.dispose();
   });
 

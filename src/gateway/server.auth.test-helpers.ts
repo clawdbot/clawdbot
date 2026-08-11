@@ -14,7 +14,7 @@ import { buildDeviceAuthPayload } from "./device-auth.js";
 import {
   connectReq,
   getTrackedConnectChallengeNonce,
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
   onceMessage,
   rpcReq,
@@ -380,7 +380,7 @@ export {
   createSignedDevice,
   ensurePairedDeviceTokenForCurrentIdentity,
   expectHelloOkServerVersion,
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
   MIN_PROBE_PROTOCOL_VERSION,
   NODE_CLIENT,

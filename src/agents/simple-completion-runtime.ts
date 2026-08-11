@@ -35,7 +35,7 @@ import {
   applySecretRefHeaderSentinels,
   applyLocalNoAuthHeaderOverride,
   formatMissingAuthError,
-  getApiKeyForModel,
+  getApiKeyForModelCore,
   resolveApiKeyForProvider,
   type ResolvedProviderAuth,
 } from "./model-auth.js";
@@ -306,7 +306,7 @@ export async function prepareSimpleCompletionModel(params: {
           modelId: initialModel.id,
           secretSentinels: true,
         })
-      : await getApiKeyForModel({
+      : await getApiKeyForModelCore({
           model: initialModel,
           cfg: params.cfg,
           agentDir: params.agentDir,
@@ -396,7 +396,7 @@ export async function prepareSimpleCompletionModel(params: {
             ),
         })) ?? initialModel;
       if (resolvesAuthBeforePhysicalRoute) {
-        auth = await getApiKeyForModel({
+        auth = await getApiKeyForModelCore({
           model: resolvedModel,
           cfg: params.cfg,
           agentDir: params.agentDir,

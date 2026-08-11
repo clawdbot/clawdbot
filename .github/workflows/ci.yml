@@ -2348,6 +2348,14 @@ jobs:
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage
+              if has_package_script "check:coercion-helpers"; then
+                pnpm check:coercion-helpers
+              elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
+                echo "[skip] historical target predates the coercion-helper declaration guard"
+              else
+                echo "Current CI targets must provide the check:coercion-helpers package script." >&2
+                exit 1
+              fi
               if [ -n "$PR_BASE_SHA" ]; then
                 timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/ci-base"
                 node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/ci-base --head HEAD --no-merge-base
@@ -3678,14 +3686,29 @@ jobs:
               ./gradlew --no-daemon --build-cache :wear:testDebugUnitTest
               ;;
             build-play)
-              ./gradlew --no-daemon --build-cache \
-                :app:assemblePlayDebug \
-                :app:assembleThirdPartyDebug \
-                :app:lintPlayDebug \
-                :app:lintThirdPartyDebug \
-                :benchmark:assembleDebug \
-                :wear-shared:assembleDebug \
-                :wear-shared:lintDebug
+              if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+                # GitHub-hosted runners have less memory headroom. Separate Gradle
+                # processes release each variant's build state before the next starts.
+                ./gradlew --no-daemon --build-cache \
+                  :app:assemblePlayDebug \
+                  :app:lintPlayDebug
+                ./gradlew --no-daemon --build-cache \
+                  :app:assembleThirdPartyDebug \
+                  :app:lintThirdPartyDebug
+                ./gradlew --no-daemon --build-cache \
+                  :benchmark:assembleDebug \
+                  :wear-shared:assembleDebug \
+                  :wear-shared:lintDebug
+              else
+                ./gradlew --no-daemon --build-cache \
+                  :app:assemblePlayDebug \
+                  :app:assembleThirdPartyDebug \
+                  :app:lintPlayDebug \
+                  :app:lintThirdPartyDebug \
+                  :benchmark:assembleDebug \
+                  :wear-shared:assembleDebug \
+                  :wear-shared:lintDebug
+              fi
               ;;
             build-wear)
               ./gradlew --no-daemon --build-cache \

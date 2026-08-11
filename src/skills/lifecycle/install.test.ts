@@ -115,7 +115,7 @@ describe("installSkill before_install hooks", () => {
     resetGlobalHookRunner();
     runCommandWithTimeoutMock.mockClear();
     skillsInstallTesting.setDepsForTest({
-      loadWorkspaceSkillEntries: loadTestWorkspaceSkillEntries,
+      loadWorkspaceSkills: loadTestWorkspaceSkillEntries,
       resolveNodeInstallStateDir: () => {
         const stateDir = process.env.OPENCLAW_STATE_DIR;
         if (!stateDir) {

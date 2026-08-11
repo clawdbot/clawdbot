@@ -26,6 +26,7 @@ export const en: TranslationMap = {
     probe: "Probe",
     call: "Call",
     confirm: "Confirm",
+    dontAskAgain: "Don't ask me again",
     cancel: "Cancel",
     close: "Close",
     previous: "Previous",
@@ -378,6 +379,7 @@ export const en: TranslationMap = {
       impact:
         "Running sessions are interrupted and this Control UI disconnects until the Gateway is back.",
       versions: "Installed {installed} · Available {available}",
+      versionsBehind: "Installed {installed} · {available}",
       action: "Update and restart",
       macAction: "Update Mac app and restart",
     },
@@ -388,6 +390,13 @@ export const en: TranslationMap = {
     },
     sidebar: {
       campaignTarget: "{status} · {target}",
+      updating: "Updating Gateway…",
+    },
+    dialog: {
+      installing: "Installing the update on the Gateway. It restarts once the install finishes.",
+      restarting: "The Gateway is restarting. This page disconnects and reconnects on its own.",
+      notStarted:
+        "The update request went unanswered. Try again, or run `openclaw update` in the terminal.",
     },
     channel: {
       stable: "Stable",
@@ -477,13 +486,18 @@ export const en: TranslationMap = {
       managedServiceHandoffAlreadyRunning:
         "Another managed update is already running. Wait for it to complete, then refresh update status.",
       doctorFailed: "Doctor repair failed. Run `openclaw doctor --non-interactive` and retry.",
+      managedServiceHandoffFailed:
+        "The update helper stopped before finishing. Run `openclaw update` in the terminal to see why.",
+      managedServiceHandoffSpawnFailed:
+        "The Gateway could not start the update helper. Run `openclaw update` in the terminal instead.",
+      managedServiceHandoffParentTimeout:
+        "The Gateway stayed up too long for the update helper. Start the update again, or run `openclaw update`.",
       default: "See the gateway logs for the exact failure and retry once the cause is fixed.",
     },
-    postRestart: {
-      restartUnhealthy:
-        "The replacement process never became healthy and the previous process stayed up.",
-      default: "Check the gateway logs for the replacement failure.",
-    },
+    failedAtStep: "The update failed at {step}: {cause}.",
+    succeededVersion: "Gateway updated to v{version}.",
+    succeededCommit: "Gateway updated · now on {sha}.",
+    succeeded: "Gateway updated and restarted.",
   },
   devices: {
     pairing: {
@@ -925,6 +939,7 @@ export const en: TranslationMap = {
     groupByNone: "None",
     groupByCategory: "Custom groups",
     showCronSessions: "Show automation sessions",
+    showSystemSessions: "Show system sessions",
     groupByChannel: "Channel",
     groupByKind: "Kind",
     groupByAgent: "Agent",
@@ -1541,6 +1556,9 @@ export const en: TranslationMap = {
       hint: "Choose what appears while sessions are running.",
       liveActivity: "Show live agent activity in sidebar",
       liveActivityHint: "Show the latest assistant or tool activity beneath running sessions.",
+      deleteConfirm: "Confirm before deleting sessions",
+      deleteConfirmHint:
+        "Applies to sidebar deletes. Stopping cloud workers and removing preserved worktrees always ask.",
     },
     sessionObserver: {
       title: "Session observer",
@@ -1840,6 +1858,7 @@ export const en: TranslationMap = {
     more: "More",
     home: "Home",
     pages: "Pages",
+    pinned: "Pinned",
     customize: "Edit pinned items",
     customizeReset: "Reset pinned items",
     workboardGroup: "WorkBoard",
@@ -2009,6 +2028,7 @@ export const en: TranslationMap = {
     modelSetup: "Model Setup",
     memoryImport: "Import Memory",
     security: "Privacy & Security",
+    secrets: "Secrets",
     debug: "Debug",
     logs: "Logs",
     plugin: "Plugin",
@@ -3938,6 +3958,7 @@ export const en: TranslationMap = {
       expired: "Expired",
       missing: "Not signed in",
       apiKey: "API key",
+      denied: "Credentials rejected",
     },
     expiresIn: "Credential expires in {time}",
     models: "{count} models",
@@ -4584,6 +4605,8 @@ export const en: TranslationMap = {
       renameAria: "Rename session {title}",
       renameInputAria: "Session title",
       renameInputPlaceholder: "Session title",
+      panels: "Panels",
+      layout: "Layout",
       workspaceAria: "Workspace actions for {workspace}",
       revealFinder: "Reveal in Finder",
       revealFileExplorer: "Reveal in File Explorer",
@@ -4867,12 +4890,19 @@ export const en: TranslationMap = {
       steerQueuedMessage: "Steer queued message",
       removeQueuedMessage: "Remove queued message",
       reorderQueuedMessage: "Reorder queued message with the arrow keys",
+      reorderUnavailable: "This message holds its place and cannot be reordered",
+      editQueuedMessage: "Edit queued message",
+      editing: "Editing a queued message",
+      cancelEdit: "Cancel editing and keep the queued message",
+      editNeedsEmptyComposer:
+        "Editing needs an empty composer. Send or clear your current message first.",
       states: {
         steering: "Steering",
         applyingSettings: "Applying chat settings",
         waitingForRun: "Waiting for current run",
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",
+        editing: "Editing",
         needsReview: "Delivery uncertain",
       },
       imageCount: "Image ({count})",
@@ -5451,6 +5481,31 @@ export const en: TranslationMap = {
     nl: "Nederlands (Dutch)",
     fa: "فارسی (Persian)",
     ru: "Русский (Russian)",
+  },
+  secretsStore: {
+    name: "Name",
+    value: "Value",
+    updated: "Last updated",
+    by: "{time} by {name}",
+    actions: "Actions",
+    add: "Add",
+    edit: "Edit",
+    bulk: "Bulk Add",
+    secret: "Secret",
+    hint: "Secret values are hidden after saving. Env var values stay visible here.",
+    required: "Enter a value.",
+    detect: "Auto-detect secrets",
+    detected: "{count} secrets detected",
+    detectedOne: "{count} secret detected",
+    unavail: "Gateway/admin required.",
+    badName: "Use SERVICE_API_KEY.",
+    tooLarge: "Max 64 KiB.",
+    saved: "Saved {name}.",
+    savedMany: "Saved {count} entries.",
+    warnings: "{count} runtime warnings.",
+    partial: "{saved}/{total}: {error}",
+    confirmDelete: "Delete {name}?",
+    deleted: "Deleted {name}.",
   },
   cron: {
     adminRequired: "Browsing only. Automation changes require operator.admin access.",

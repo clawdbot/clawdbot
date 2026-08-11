@@ -34,6 +34,28 @@ export type SessionActionHost = Pick<
   >;
 };
 
+/**
+ * Gate a mutation on the connection's advertised method access, publishing the
+ * refusal so the caller never fails silently. Shared by every session-organizer
+ * runtime module, so it lives with the types they already import.
+ */
+export function requireSessionMutationAccess(
+  host: SessionActionHost,
+  scope: SidebarSessionMutationScope,
+  request: {
+    method: string;
+    params?: unknown;
+    requiredScope?: "operator.write" | "operator.admin";
+  },
+): boolean {
+  const access = readSessionMethodAccess(scope.gateway.snapshot, request);
+  if (access.allowed) {
+    return true;
+  }
+  host.sessionData.publishSessionMutationError(scope, access.reason);
+  return false;
+}
+
 function isLegacyPatchManyMethodRejection(error: unknown): boolean {
   return (
     error instanceof GatewayRequestError &&

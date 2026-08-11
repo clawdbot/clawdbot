@@ -55,7 +55,7 @@ const agentRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
 const compactAuthMocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
   ensureAuthProfileStoreWithoutExternalProfiles: vi.fn(),
-  getApiKeyForModel: vi.fn(),
+  getApiKeyForModelCore: vi.fn(),
   prepareAgentRuntimeAuth: vi.fn(),
   resolveModelAsync: vi.fn(),
 }));
@@ -122,7 +122,7 @@ vi.mock("../model-auth.js", async (importOriginal) => ({
   ensureAuthProfileStore: compactAuthMocks.ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles:
     compactAuthMocks.ensureAuthProfileStoreWithoutExternalProfiles,
-  getApiKeyForModel: compactAuthMocks.getApiKeyForModel,
+  getApiKeyForModelCore: compactAuthMocks.getApiKeyForModelCore,
 }));
 vi.mock("../embedded-agent-runner/model.js", () => ({
   resolveModelAsync: compactAuthMocks.resolveModelAsync,
@@ -174,7 +174,7 @@ beforeEach(async () => {
   compactAuthMocks.resolveModelAsync.mockResolvedValue({
     model: { id: "gpt-5.5", provider: "openai" },
   });
-  compactAuthMocks.getApiKeyForModel.mockResolvedValue({ apiKey: "test-key" });
+  compactAuthMocks.getApiKeyForModelCore.mockResolvedValue({ apiKey: "test-key" });
   providerOwnerMocks.resolveProviderRefOwnership.mockReset();
   providerOwnerMocks.resolveProviderRefOwnership.mockReturnValue({ status: "unowned" });
   contextEngineTurnAttemptMocks.drainPendingContextEngineTurnsBeforeRun
@@ -214,7 +214,7 @@ afterEach(() => {
   agentRunAttempt.mockClear();
   compactAuthMocks.prepareAgentRuntimeAuth.mockClear();
   compactAuthMocks.resolveModelAsync.mockReset();
-  compactAuthMocks.getApiKeyForModel.mockReset();
+  compactAuthMocks.getApiKeyForModelCore.mockReset();
   compactAuthMocks.ensureAuthProfileStore.mockReset();
   compactAuthMocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReset();
   providerOwnerMocks.resolveProviderRefOwnership.mockReset();
@@ -532,6 +532,7 @@ describe("runAgentHarnessAttempt", () => {
   });
 
   it("routes settled turns only through an explicit harness finalizer", async () => {
+    const internalKey = "__openclawSourceReplyDeliveryRuntime";
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("run"));
     let hostAuthorityActive = true;
     const finalizeSettledTurn = vi.fn<NonNullable<AgentHarness["finalizeSettledTurn"]>>(
@@ -539,6 +540,7 @@ describe("runAgentHarnessAttempt", () => {
         hostAuthorityActive = isHostScopedAgentToolActive("openclaw");
         expect(attempt.operation).toBe("settled-tool-finalization");
         expect(attempt).not.toHaveProperty("hostCapabilities");
+        expect(attempt).not.toHaveProperty(internalKey);
         return {
           assistant: createFinalAssistant(),
         };
@@ -553,6 +555,7 @@ describe("runAgentHarnessAttempt", () => {
     };
     registerAgentHarness(harness, { ownerPluginId: "codex" });
     const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
+    (params as unknown as Record<string, unknown>)[internalKey] = { currentMode: "automatic" };
     const settledAttempt = createAttemptResult("settled");
 
     await expect(
@@ -565,6 +568,7 @@ describe("runAgentHarnessAttempt", () => {
     });
     expect(runAttempt).not.toHaveBeenCalled();
     expect(hostAuthorityActive).toBe(false);
+    expect((params as unknown as Record<string, unknown>)[internalKey]).toBeDefined();
     expect(finalizeSettledTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         settledAttempt,
@@ -638,6 +642,30 @@ describe("runAgentHarnessAttempt", () => {
       expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
     },
   );
+
+  it("strips the internal source delivery controller at the plugin harness handoff", async () => {
+    const internalKey = "__openclawSourceReplyDeliveryRuntime";
+    let handedOffRuntime: unknown;
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: async (attemptParams) => {
+          handedOffRuntime = (attemptParams as unknown as Record<string, unknown>)[internalKey];
+          return createAttemptResult("codex");
+        },
+      },
+      { ownerPluginId: "codex" },
+    );
+    const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
+    (params as unknown as Record<string, unknown>)[internalKey] = { currentMode: "automatic" };
+
+    await runAgentHarnessAttempt(params);
+
+    expect((params as unknown as Record<string, unknown>)[internalKey]).toBeDefined();
+    expect(handedOffRuntime).toBeUndefined();
+  });
 
   it.each(["heartbeat"] as const)(
     "records %s classification on the host-owned turn candidate",
@@ -2627,7 +2655,7 @@ describe("selectAgentHarness", () => {
     ).resolves.toEqual({ ok: true, compacted: false });
 
     expect(compactAuthMocks.resolveModelAsync).not.toHaveBeenCalled();
-    expect(compactAuthMocks.getApiKeyForModel).not.toHaveBeenCalled();
+    expect(compactAuthMocks.getApiKeyForModelCore).not.toHaveBeenCalled();
     expect(compact).toHaveBeenCalledWith(
       expect.objectContaining({
         runtimeAuthPlan: expect.objectContaining({
@@ -2853,7 +2881,7 @@ describe("selectAgentHarness", () => {
   });
 
   it("keeps compaction recoverable when auth profile lookup fails", async () => {
-    compactAuthMocks.getApiKeyForModel.mockRejectedValue(new Error("missing auth profile"));
+    compactAuthMocks.getApiKeyForModelCore.mockRejectedValue(new Error("missing auth profile"));
     const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
       ok: true,
       compacted: false,
@@ -2930,7 +2958,7 @@ describe("selectAgentHarness", () => {
       }),
     ).resolves.toEqual({ ok: true, compacted: false });
 
-    expect(compactAuthMocks.getApiKeyForModel).not.toHaveBeenCalled();
+    expect(compactAuthMocks.getApiKeyForModelCore).not.toHaveBeenCalled();
     expect(compact).toHaveBeenCalledWith(
       expect.objectContaining({
         resolvedApiKey: "already-resolved",
@@ -3041,7 +3069,7 @@ describe("selectAgentHarness", () => {
         workspaceDir: "/tmp/workspace",
       }),
     );
-    expect(compactAuthMocks.getApiKeyForModel).toHaveBeenCalledWith(
+    expect(compactAuthMocks.getApiKeyForModelCore).toHaveBeenCalledWith(
       expect.objectContaining({
         agentDir: expect.any(String),
         model: expect.objectContaining({

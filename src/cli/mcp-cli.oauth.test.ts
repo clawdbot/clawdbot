@@ -1,17 +1,16 @@
 // MCP CLI OAuth tests cover credential status, login callbacks, and logout behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as mcpHttpFetch from "../agents/mcp-http-fetch.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
 import {
   cleanupMcpCliTestState,
   clearMcpOAuthCredentials,
+  completeMcpOAuthAuthorization,
   createWorkspace,
   lastLogLine,
   mockLog,
   readMcpOAuthCredentialsStatus,
   resetMcpCliTestState,
   runMcpCommand,
-  runMcpOAuthLogin,
 } from "./mcp-cli.test-harness.js";
 
 describe("mcp cli OAuth", () => {
@@ -114,8 +113,7 @@ describe("mcp cli OAuth", () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-      const buildMcpHttpFetch = vi.spyOn(mcpHttpFetch, "buildMcpHttpFetch");
-      runMcpOAuthLogin.mockResolvedValueOnce("authorized");
+      completeMcpOAuthAuthorization.mockResolvedValueOnce("authorized");
 
       await runMcpCommand([
         "mcp",
@@ -135,19 +133,14 @@ describe("mcp cli OAuth", () => {
       ]);
       await runMcpCommand(["mcp", "login", "docs", "--code", "abc123"]);
 
-      expect(buildMcpHttpFetch).toHaveBeenCalledWith(
+      expect(completeMcpOAuthAuthorization).toHaveBeenCalledWith(
         expect.objectContaining({
-          resourceUrl: "https://mcp.example.com",
-          timeoutMs: 9_000,
+          serverName: "docs",
+          serverUrl: "https://mcp.example.com",
         }),
+        expect.objectContaining({ url: "https://mcp.example.com" }),
+        { code: "abc123" },
       );
-      expect(runMcpOAuthLogin).toHaveBeenCalledWith({
-        serverName: "docs",
-        serverUrl: "https://mcp.example.com",
-        config: undefined,
-        fetchFn: expect.any(Function),
-        authorizationCode: "abc123",
-      });
 
       mockLog.mockClear();
       await runMcpCommand(["mcp", "status", "--json"]);
@@ -175,10 +168,12 @@ describe("mcp cli OAuth", () => {
       clearMcpOAuthCredentials.mockClear();
       await runMcpCommand(["mcp", "logout", "docs"]);
 
-      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith({
-        serverName: "docs",
-        serverUrl: "https://mcp.example.com",
-      });
+      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith(
+        expect.objectContaining({
+          serverName: "docs",
+          serverUrl: "https://mcp.example.com",
+        }),
+      );
       expect(lastLogLine()).toBe('MCP OAuth credentials cleared for "docs".');
     });
   });
@@ -197,10 +192,12 @@ describe("mcp cli OAuth", () => {
       clearMcpOAuthCredentials.mockClear();
       await runMcpCommand(["mcp", "logout", "docs"]);
 
-      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith({
-        serverName: "docs",
-        serverUrl: "https://mcp.example.com",
-      });
+      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith(
+        expect.objectContaining({
+          serverName: "docs",
+          serverUrl: "https://mcp.example.com",
+        }),
+      );
     });
   });
 });

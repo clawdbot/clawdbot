@@ -192,6 +192,66 @@ describe("Pi session upstream activity", () => {
     ).resolves.toEqual([]);
   });
 
+  it("preserves Pi date parsing for numeric-looking activity timestamps", async () => {
+    const sessionDirectory = await createPiStoreFixture(
+      temporaryDirectories,
+      "hi",
+      "Pi catalog session",
+      { command: "pwd" },
+      true,
+    );
+    const continued = await linkContinuedPiSession("agent:main:pi", "pi-session");
+    const file = path.join(sessionDirectory, "session.jsonl");
+    const probe = {
+      sessionKey: continued.sessionKey,
+      agentId: "main",
+      threadId: "pi-session",
+      hostId: "gateway",
+      upstreamKind: continued.upstream!.kind,
+      upstreamRef: continued.upstream!.ref,
+      marker: continued.upstream!.marker,
+      ownRecentUserTexts: [],
+    };
+
+    await fs.appendFile(
+      file,
+      `${JSON.stringify({
+        type: "message",
+        timestamp: "0",
+        message: { role: "user", content: "first external Pi turn" },
+      })}\n`,
+    );
+    const first = await checkPiUpstreamActivity([probe]);
+    expect(first).toEqual([
+      expect.objectContaining({
+        kind: "activity",
+        humanTurns: 1,
+        occurredAt: Date.parse("0"),
+      }),
+    ]);
+    expect(first[0]?.kind === "activity" ? first[0].occurredAt : undefined).not.toBe(0);
+
+    await fs.appendFile(
+      file,
+      `${JSON.stringify({
+        type: "message",
+        timestamp: "2026",
+        message: { role: "user", content: "second external Pi turn" },
+      })}\n`,
+    );
+    await expect(
+      checkPiUpstreamActivity([
+        { ...probe, marker: first[0]!.kind === "activity" ? first[0]!.nextMarker : null },
+      ]),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        kind: "activity",
+        humanTurns: 1,
+        occurredAt: Date.parse("2026"),
+      }),
+    ]);
+  });
+
   it("stops the cursor before the first unclassifiable complete row", async () => {
     const sessionDirectory = await createPiStoreFixture(
       temporaryDirectories,

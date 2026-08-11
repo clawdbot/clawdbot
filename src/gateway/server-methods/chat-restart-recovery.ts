@@ -350,9 +350,9 @@ export function buildRestartSafeChatTranscriptState(params: {
       ? { expectedSessionState: params.admission.retryExpectedState }
       : {}),
     sessionLifecyclePatch: {
-      // Admission precedes runtime plugin loading. The runner atomically turns
-      // this into `pending` before a hook; recovery reloads hooks before resume.
-      restartRecoveryBeforeAgentReplyState: "admitted",
+      // The runner records `pending` only while a hook is executing. With no
+      // checkpoint, recovery simply re-enters the normal agent hook pipeline.
+      restartRecoveryBeforeAgentReplyState: undefined,
       restartRecoveryDeliveryReceiptState: undefined,
       restartRecoveryDeliveryToolCallId: undefined,
       status: "running",
@@ -366,8 +366,6 @@ export function buildRestartSafeChatTranscriptState(params: {
       restartRecoveryRequesterAccountId: undefined,
       restartRecoveryRequesterSenderId: undefined,
       restartRecoverySameChannelThreadRequired: undefined,
-      // This survives runner adoption after the retry fingerprint is cleared.
-      // Recovery uses it to recheck hooks before Gateway agent dispatch.
       restartRecoverySourceIngress: "control-ui",
       restartRecoverySourceReplyDeliveryMode: undefined,
       ...(params.admission.priorTerminalSourceRunId

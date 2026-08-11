@@ -254,7 +254,7 @@ export async function createCopilotToolBridge(
     }
   } catch (error: unknown) {
     throw createError(
-      `[copilot-tool-bridge] createOpenClawCodingTools failed: ${toError(error).message}`,
+      `[copilot-tool-bridge] createOpenClawCodingTools failed: ${toCopilotToolError(error).message}`,
       error,
     );
   }
@@ -547,7 +547,7 @@ function convertOpenClawToolToSdkTool(
     error: unknown,
     executionStarted: boolean,
   ): ToolResultObject => {
-    const errorMessage = toError(error).message;
+    const errorMessage = toCopilotToolError(error).message;
     ctx.observeToolTerminal?.({
       toolCallId: invocation.toolCallId,
       toolName: sourceTool.name,
@@ -595,7 +595,7 @@ function convertOpenClawToolToSdkTool(
         args,
         invocation,
         startedAt,
-        `[copilot-tool-bridge] beforeExecute failed for tool '${sourceTool.name}': ${toError(error).message}`,
+        `[copilot-tool-bridge] beforeExecute failed for tool '${sourceTool.name}': ${toCopilotToolError(error).message}`,
         error,
         false,
       );
@@ -609,7 +609,7 @@ function convertOpenClawToolToSdkTool(
         args,
         invocation,
         startedAt,
-        `[copilot-tool-bridge] prepareArguments failed for tool '${sourceTool.name}': ${toError(error).message}`,
+        `[copilot-tool-bridge] prepareArguments failed for tool '${sourceTool.name}': ${toCopilotToolError(error).message}`,
         error,
         false,
       );
@@ -628,7 +628,7 @@ function convertOpenClawToolToSdkTool(
         preparedArgs,
         invocation,
         startedAt,
-        `[copilot-tool-bridge] tool '${sourceTool.name}' failed: ${toError(error).message}`,
+        `[copilot-tool-bridge] tool '${sourceTool.name}' failed: ${toCopilotToolError(error).message}`,
         error,
         true,
       );
@@ -756,7 +756,7 @@ async function executeCatalogTool(
     });
     return result;
   } catch (error: unknown) {
-    const message = toError(error).message;
+    const message = toCopilotToolError(error).message;
     // Completion hooks can throw after the tool terminal outcome. Do not
     // rewrite that recorded outcome as a second, contradictory tool failure.
     if (!terminalObserved) {
@@ -801,7 +801,7 @@ function createFailureResult(message: string, error: unknown): ToolResultObject 
   // Error object would produce a non-serializable JSON-RPC payload, so we
   // surface the message string instead.
   return {
-    error: toError(error).message,
+    error: toCopilotToolError(error).message,
     resultType: "failure",
     textResultForLlm: message,
   };
@@ -912,6 +912,6 @@ function findDuplicateToolNames(sourceTools: AnyAgentTool[]): string[] {
     .toSorted();
 }
 
-function toError(error: unknown): Error {
+function toCopilotToolError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }

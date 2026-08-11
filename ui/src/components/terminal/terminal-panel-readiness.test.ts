@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -38,14 +39,6 @@ class ReadinessTestTerminalPanel extends OpenClawTerminalPanel {
 
 const TERMINAL_PANEL_ELEMENT_NAME = `test-terminal-panel-readiness-${crypto.randomUUID()}`;
 customElements.define(TERMINAL_PANEL_ELEMENT_NAME, ReadinessTestTerminalPanel);
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
 
 function terminalOpenResult(sessionId: string) {
   return {
@@ -121,7 +114,7 @@ describe("terminal panel readiness", () => {
   });
 
   it("shows a connecting animation while a terminal open is in flight", async () => {
-    const open = deferred<{
+    const open = createDeferred<{
       sessionId: string;
       agentId: string;
       shell: string;

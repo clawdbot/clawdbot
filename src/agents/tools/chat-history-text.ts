@@ -26,7 +26,7 @@ export function sanitizeTextContent(text: string): string {
   return sanitizeAssistantVisibleTextWithProfile(text, "history");
 }
 
-export function extractAssistantText(message: unknown): string | undefined {
+export function extractStoredAssistantText(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
   }

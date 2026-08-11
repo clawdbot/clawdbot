@@ -450,6 +450,7 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
     profileId: PROFILE_ID,
   });
   expect(active).toMatchObject({ state: "active", environmentId: ENVIRONMENT_ID });
+  expect(runner.starts).toHaveLength(1);
   await expect(fs.stat(runner.bootstrapUploadPath)).rejects.toMatchObject({ code: "ENOENT" });
   await expect(fs.readFile(runner.bootstrapReceiptPath, "utf8")).resolves.toBe(
     `${JSON.stringify(RECEIPT)}\n`,

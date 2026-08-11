@@ -1,6 +1,7 @@
 /**
  * Handles lifecycle and compaction events from subscribed embedded-agent sessions.
  */
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";
@@ -26,7 +27,6 @@ import {
   hasAssistantVisibleReply,
 } from "./embedded-agent-subscribe.handlers.messages.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
-import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import { isAssistantMessage } from "./embedded-agent-utils.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 import { summarizeToolValidationError } from "./tool-error-summary.js";

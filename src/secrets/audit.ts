@@ -23,6 +23,7 @@ import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { findSecretStorePlaintextResidueFindings } from "./audit-store.js";
 import type { PlaintextAssignment } from "./audit-store.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
+import { listAuthProfileStoreAgentDirs } from "./auth-store-paths.js";
 import { createSecretsConfigIO } from "./config-io.js";
 import { getSkippedExecRefStaticError, selectRefsForExecPolicy } from "./exec-resolution-policy.js";
 import { isLikelySensitiveModelProviderHeaderName } from "./model-provider-header-policy.js";
@@ -41,7 +42,6 @@ import {
 import { isNonEmptyString, isRecord } from "./shared.js";
 import {
   listAgentModelsJsonPaths,
-  listAuthProfileStoreAgentDirs,
   listSecretsDotEnvPaths,
   parseEnvAssignmentValue,
   readJsonObjectIfExists,

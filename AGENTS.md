@@ -167,6 +167,15 @@ Skills own workflows; root owns hard policy and routing. Product direction and m
 - Prompt-state mutations (skills/tools/memory) default to deferred cache invalidation — effect next session; immediate invalidation is an explicit opt-in.
 - Agent tool schema cleanup: remove stale args cleanly; no hidden compat for model-facing params just to avoid churn.
 
+## Execution Identity Audit
+
+- Execution identity is opt-in diagnostic provenance, never authorization or enforcement. Unknown facts stay unknown; record ingress or invoker facts only at their authoritative producer. Never infer identity from session keys, `runId`, or routing metadata.
+- Each outer admitted turn owns one immutable `executionId` and `contextId`; `runId` is non-unique correlation. Retries, fallbacks, and recovery reuse the original admission identity. Only byte-identical canonical replay is idempotent.
+- Admission may only validate, bound, freeze, and enqueue through the shared audit writer. No synchronous SQLite, schema, filesystem, HMAC-key, or readiness work. Audit failure never delays or aborts execution.
+- Raw identity references are transient worker-message data. Never persist, export, inspect, or log them. Public Plugin SDK ingress must strip private recovery/admission authority, including JavaScript extra and inherited properties.
+- Default or disabled collection creates and propagates no identity token and does not create optional storage. Existing-storage maintenance may continue. Reads enforce expiry before projection; missing or expired evidence never proves no run occurred.
+- `audit.run.inspect` intentionally uses `operator.read` within one trusted Gateway domain. Reader isolation requires separate domains. Ask before changing this scope, default-off behavior, retained fields, 30-day cutoff, maintenance/row bounds, or schema/protocol contract.
+
 ## Commands
 
 - Runtime: Node 22.22.3+, 24.15+, or 25.9+; Node 26 recommended (CI and release workflows still pin Node 24). Keep Node + Bun paths working.

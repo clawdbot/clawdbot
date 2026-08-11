@@ -14,6 +14,7 @@ import {
   disconnectTextareaOverflowObserver,
   observeTextareaOverflow,
   preserveComposerFocusOnPrimaryAction,
+  replaceComposerPopoverAnchor,
   restoreHistoryCaret,
   scheduleTextareaHeightAdjustment,
 } from "./chat-composer-dom.ts";
@@ -140,6 +141,9 @@ export function renderChatComposer(props: ChatComposerProps) {
   state.dictationDraftKey = draftKey;
   const visibleDraft =
     state.composingDraft?.key === draftKey ? state.composingDraft.value : props.draft;
+  state.composerInputRef ??= (element?: Element) => {
+    state.composerInput = replaceComposerPopoverAnchor(state.composerInput, element);
+  };
   state.textareaRef ??= (element?: Element) => {
     const nextTextarea = element instanceof HTMLTextAreaElement ? element : null;
     const prevTextarea = state.composerTextarea;

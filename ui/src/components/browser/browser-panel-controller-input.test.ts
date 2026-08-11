@@ -55,6 +55,60 @@ describe("BrowserPanelController capture and input ownership", () => {
     expect(controller.loading).toBe(false);
   });
 
+  it.each(["navigation", "focus rejection"] as const)(
+    "does not restore a stale view when %s settles first",
+    async (first) => {
+      const navigation = createDeferred<{ ok: boolean }>();
+      const focus = createDeferred<{ ok: boolean }>();
+      const initialUrl = "https://example.test/initial";
+      const destinationUrl = "https://example.test/destination";
+      const { client, request } = createBrowserClient(async (envelope) => {
+        if (envelope.path === "/navigate") {
+          return await navigation.promise;
+        }
+        if (envelope.path === "/tabs/focus") {
+          return await focus.promise;
+        }
+        throw new Error(`Unexpected browser route: ${envelope.path}`);
+      });
+      const controller = createBrowserPanelTestController(client, "tab-a", initialUrl);
+      controller.tabs = [
+        { id: "tab-a", targetId: "raw-a", title: "Initial", url: initialUrl },
+        {
+          id: "tab-b",
+          targetId: "raw-b",
+          title: "Selected",
+          url: "https://example.test/selected",
+        },
+      ];
+
+      const pendingNavigation = controller.openUrl(destinationUrl, { newTab: false });
+      await flushBrowserResponses();
+      const pendingSelection = controller.selectTab("tab-b");
+      if (first === "navigation") {
+        navigation.resolve({ ok: true });
+        await pendingNavigation;
+        focus.reject(new Error("Tab focus rejected"));
+        await pendingSelection;
+      } else {
+        focus.reject(new Error("Tab focus rejected"));
+        await pendingSelection;
+        navigation.resolve({ ok: true });
+        await pendingNavigation;
+      }
+
+      expect(controller.activeTargetId).toBeNull();
+      expect(controller.view).toBeNull();
+      expect(controller.urlDraft).toBe("");
+      expect(controller.errorText).toBe("Browser request failed: Tab focus rejected");
+      expect(
+        request.mock.calls.filter(([, envelope]) => {
+          return (envelope as BrowserRequestEnvelope).path === "/tabs";
+        }),
+      ).toEqual([]);
+    },
+  );
+
   it("retains a newly opened tab after its original active tab closes", async () => {
     stubScreenshotMedia();
     const newUrl = "https://example.test/new";
@@ -378,6 +432,59 @@ describe("BrowserPanelController capture and input ownership", () => {
     expect(controller.loading).toBe(false);
   });
 
+  it("does not poll tab metadata after a committed background navigation", async () => {
+    stubScreenshotMedia();
+    const navigation = createDeferred<{ ok: boolean }>();
+    const initialUrl = "https://example.test/initial";
+    const destinationUrl = "https://example.test/destination";
+    const selectedUrl = "https://example.test/selected";
+    const { client, request } = createBrowserClient(async (envelope) => {
+      if (envelope.path === "/navigate") {
+        return await navigation.promise;
+      }
+      if (envelope.path === "/tabs/focus") {
+        return { ok: true };
+      }
+      if (envelope.path === "/screenshot") {
+        return { path: "/selected.png", targetId: "raw-b", url: selectedUrl };
+      }
+      if (envelope.path === "/act") {
+        return createBrowserPanelTestMetrics(selectedUrl, "Selected");
+      }
+      throw new Error(`Unexpected browser route: ${envelope.path}`);
+    });
+    const controller = createBrowserPanelTestController(client, "tab-a", initialUrl);
+    controller.tabs = [
+      { id: "tab-a", targetId: "raw-a", title: "Initial", url: initialUrl },
+      { id: "tab-b", targetId: "raw-b", title: "Selected", url: selectedUrl },
+    ];
+
+    const pendingNavigation = controller.openUrl(destinationUrl, { newTab: false });
+    await flushBrowserResponses();
+    await controller.selectTab("tab-b");
+    navigation.resolve({ ok: true });
+    await pendingNavigation;
+
+    expect(controller.activeTargetId).toBe("tab-b");
+    expect(controller.view?.targetId).toBe("tab-b");
+    expect(controller.view?.url).toBe(selectedUrl);
+    expect(controller.tabs.find((tab) => tab.id === "tab-a")).toMatchObject({
+      title: "Initial",
+      url: initialUrl,
+    });
+    expect(
+      request.mock.calls.filter(([, envelope]) => {
+        return (envelope as BrowserRequestEnvelope).path === "/tabs";
+      }),
+    ).toEqual([]);
+    expect(
+      request.mock.calls.filter(([, envelope]) => {
+        const browserRequest = envelope as BrowserRequestEnvelope;
+        return browserRequest.path === "/screenshot" && browserRequest.body?.targetId === "tab-a";
+      }),
+    ).toEqual([]);
+  });
+
   it("selects a new tab after a passive refresh overtakes its creation", async () => {
     stubScreenshotMedia();
     const initialUrl = "https://example.test/initial";
@@ -584,6 +691,58 @@ describe("BrowserPanelController capture and input ownership", () => {
     });
     expect(inspections).toHaveLength(1);
     expect(inspections[0]?.[1]).toMatchObject({ body: { targetId: "tab-a" } });
+  });
+
+  it("reconciles selected tab metadata from the captured history document", async () => {
+    vi.useFakeTimers();
+    stubScreenshotMedia();
+    const currentUrl = "https://example.test/current";
+    const previousUrl = "https://example.test/previous";
+    const { client, request } = createBrowserClient(async (envelope) => {
+      if (envelope.path === "/act") {
+        const fn = typeof envelope.body?.fn === "string" ? envelope.body.fn : "";
+        return fn.includes("history.go")
+          ? { result: true }
+          : createBrowserPanelTestMetrics(previousUrl, "Previous");
+      }
+      if (envelope.path === "/screenshot") {
+        return { path: "/fresh.png", targetId: "raw-a", url: previousUrl };
+      }
+      throw new Error(`Unexpected browser route: ${envelope.path}`);
+    });
+    const controller = createBrowserPanelTestController(client, "tab-a", currentUrl);
+    controller.tabs = [
+      { id: "tab-a", targetId: "raw-a", title: "Current", url: currentUrl },
+      {
+        id: "tab-b",
+        targetId: "raw-b",
+        title: "Background",
+        url: "https://example.test/background",
+      },
+    ];
+
+    controller.goHistory(-1);
+    await flushBrowserResponses();
+    await vi.advanceTimersByTimeAsync(350);
+    await flushBrowserResponses();
+    await vi.runAllTimersAsync();
+    await flushBrowserResponses();
+
+    expect(controller.tabs).toEqual([
+      { id: "tab-a", targetId: "raw-a", title: "Previous", url: previousUrl },
+      {
+        id: "tab-b",
+        targetId: "raw-b",
+        title: "Background",
+        url: "https://example.test/background",
+      },
+    ]);
+    expect(controller.urlDraft).toBe(previousUrl);
+    expect(
+      request.mock.calls.filter(([, envelope]) => {
+        return (envelope as BrowserRequestEnvelope).path === "/tabs";
+      }),
+    ).toEqual([]);
   });
 
   it("never forwards a queued wheel action to a newly selected tab", async () => {

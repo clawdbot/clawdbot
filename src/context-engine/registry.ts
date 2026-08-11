@@ -42,7 +42,7 @@ type RegisterContextEngineForOwnerOptions = {
 
 type GuardedContextEngineMethodName = Exclude<keyof ContextEngine, "info" | "dispose">;
 const GUARDED_CONTEXT_ENGINE_METHODS = new Set<PropertyKey>(
-  "bootstrap maintain ingest ingestBatch afterTurn commitTurn assemble compact prepareSubagentSpawn onSubagentEnded".split(
+  "bootstrap maintain ingest ingestBatch afterTurn commitTurn commitTurnLocal assemble compact prepareSubagentSpawn onSubagentEnded".split(
     " ",
   ),
 );

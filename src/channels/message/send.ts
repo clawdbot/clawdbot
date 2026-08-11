@@ -4,6 +4,7 @@
  * Sends rendered reply payloads, records live preview state, and classifies delivery outcomes.
  */
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver-types.js";
 import {
@@ -395,14 +396,27 @@ export async function withDurableMessageSendContext<T>(
 export async function sendDurableMessageBatch(
   params: DurableMessageSendContextParams,
 ): Promise<DurableMessageBatchSendResult> {
-  return await withDurableMessageSendContext(params, async (ctx) => {
-    const rendered = await ctx.render();
-    const result = await ctx.send(rendered);
-    if (result.status === "sent" || result.status === "suppressed") {
-      await ctx.commit(result.receipt);
-    } else {
-      await ctx.fail(result.error);
-    }
-    return result;
-  });
+  const pendingFinalCompletion = params.deliveryCompletion
+    ? undefined
+    : resolvePendingFinalDeliveryCompletion(params.payloads);
+  const pendingFinalDelivery = pendingFinalCompletion
+    ? {
+        deliveryCompletion: pendingFinalCompletion,
+        deliveryIntentId: pendingFinalCompletion.deliveryId,
+        durability: "required" as const,
+      }
+    : {};
+  return await withDurableMessageSendContext(
+    { ...params, ...pendingFinalDelivery },
+    async (ctx) => {
+      const rendered = await ctx.render();
+      const result = await ctx.send(rendered);
+      if (result.status === "sent" || result.status === "suppressed") {
+        await ctx.commit(result.receipt);
+      } else {
+        await ctx.fail(result.error);
+      }
+      return result;
+    },
+  );
 }

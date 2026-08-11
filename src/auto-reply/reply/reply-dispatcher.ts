@@ -8,15 +8,24 @@ import {
   isProvenDeliveryNotSentError,
 } from "../../infra/delivery-recovery.shared.js";
 import { collectErrorGraphCandidates } from "../../infra/errors.js";
+import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { generateSecureInt } from "../../infra/secure-random.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { sleep } from "../../utils.js";
-import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
-import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
+import {
+  normalizeReplyPayloadOutcome,
+  type NormalizeReplyOutcome,
+  type NormalizeReplySkipReason,
+} from "./normalize-reply.js";
 import type {
   ReplyDispatchBeforeDeliver,
   ReplyDispatchBeforeDeliverOptions,
@@ -90,6 +99,13 @@ const silentReplyLogger = createSubsystemLogger("silent-reply/dispatcher");
 const beforeDeliverCancelledHooks = new WeakMap<ReplyDispatcher, ReplyDispatchCancelHandler[]>();
 const deliveryOutcomeTrackers = new WeakMap<ReplyPayload, ReplyDispatchDeliveryOutcomeTracker>();
 const undeliveredFallbacks = new WeakMap<ReplyPayload, ReplyPayload>();
+const replyDispatcherPreparers = new WeakMap<
+  ReplyDispatcher,
+  {
+    owner: object;
+    normalize: (kind: ReplyDispatchKind, payload: ReplyPayload) => NormalizeReplyOutcome;
+  }
+>();
 
 type ReplyDispatchBeforeDeliverStage = {
   hook: ReplyDispatchBeforeDeliver;
@@ -354,17 +370,38 @@ type NormalizeReplyPayloadInternalOptions = Pick<
 function normalizeReplyPayloadInternal(
   payload: ReplyPayload,
   opts: NormalizeReplyPayloadInternalOptions,
-): ReplyPayload | null {
+): NormalizeReplyOutcome {
   // Prefer dynamic context provider over static context
   const prefixContext = opts.responsePrefixContextProvider?.() ?? opts.responsePrefixContext;
 
-  return normalizeReplyPayload(payload, {
+  return normalizeReplyPayloadOutcome(payload, {
     responsePrefix: opts.responsePrefix,
     responsePrefixContext: prefixContext,
     onHeartbeatStrip: opts.onHeartbeatStrip,
     transformReplyPayload: opts.transformReplyPayload,
     onSkip: opts.onSkip,
   });
+}
+
+/** Normalize through a dispatcher's exact owner before TTS or other visible side effects. */
+export function prepareReplyPayloadForDispatcher(
+  dispatcher: ReplyDispatcher,
+  kind: ReplyDispatchKind,
+  payload: ReplyPayload,
+): NormalizeReplyOutcome {
+  const preparer = replyDispatcherPreparers.get(dispatcher);
+  if (!preparer) {
+    return { kind: "deliver", payload };
+  }
+  const outcome = preparer.normalize(kind, payload);
+  return outcome.kind === "deliver"
+    ? {
+        kind: "deliver",
+        payload: setReplyPayloadMetadata(outcome.payload, {
+          replyDispatcherNormalizationOwner: preparer.owner,
+        }),
+      }
+    : outcome;
 }
 
 export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
@@ -409,6 +446,26 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     void Promise.resolve(options.onError?.(err, info)).catch(() => undefined);
   };
 
+  const normalizeForDispatch = (
+    kind: ReplyDispatchKind,
+    payload: ReplyPayload,
+    notifySkip: boolean,
+  ) =>
+    normalizeReplyPayloadInternal(payload, {
+      responsePrefix: options.responsePrefix,
+      responsePrefixContext: options.responsePrefixContext,
+      responsePrefixContextProvider: options.responsePrefixContextProvider,
+      transformReplyPayload: options.transformReplyPayload,
+      onHeartbeatStrip: options.onHeartbeatStrip,
+      onSkip: notifySkip
+        ? (reason) =>
+            options.onSkip?.(payload, {
+              ...buildReplyDispatchRuntimeInfo(payload, kind),
+              reason,
+            })
+        : undefined,
+    });
+
   const notifyBeforeDeliverCancelled = async (
     payload: ReplyPayload,
     info: ReplyDispatchRuntimeInfo,
@@ -442,6 +499,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   ): Promise<ReplyDispatchDeliveryOutcome> => {
     let deliverPayload: ReplyPayload | null = payload;
     let deliveryStarted = false;
+    const custody = getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion;
     try {
       if (beforeDeliver) {
         try {
@@ -451,21 +509,60 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           throw error;
         }
         if (!deliverPayload) {
+          // Record the intentional non-delivery before observers run so a
+          // restart during observer work cannot replay a suppressed final.
+          if (custody) {
+            await settlePendingFinalDelivery({ kind: "pending-final", ...custody }, "suppressed", [
+              "prepared",
+            ]);
+          }
           await notifyBeforeDeliverCancelled(payload, info);
           return "cancelled";
         }
         deliverPayload = copyReplyPayloadMetadata(payload, deliverPayload);
       }
+      if (custody) {
+        // Claim direct-send custody before provider I/O; a non-prepared marker
+        // means another owner already delivered, suppressed, or superseded this
+        // final, so repeating the send would duplicate it.
+        const claim = await settlePendingFinalDelivery(
+          { kind: "pending-final", ...custody },
+          "queued",
+          ["prepared"],
+        );
+        if (claim.state !== "queued") {
+          await notifyBeforeDeliverCancelled(payload, info);
+          return "cancelled";
+        }
+      }
       deliveryStarted = true;
       await options.deliver(deliverPayload, info);
+      if (custody) {
+        await settlePendingFinalDelivery({ kind: "pending-final", ...custody }, "delivered", [
+          "queued",
+        ]);
+      }
       return "delivered";
     } catch (error) {
+      const outcome =
+        deliveryStarted && !isRetryableNoSendFailure(error)
+          ? "failed-deliver"
+          : "failed-before-deliver";
+      if (custody && deliveryStarted) {
+        // Proven no-send keeps the marker replayable for restart recovery —
+        // including after direct custody escalated queued→unknown pre-I/O,
+        // since the error proves the send never crossed the wire. Anything
+        // else after platform I/O started fails closed as "unknown".
+        await settlePendingFinalDelivery(
+          { kind: "pending-final", ...custody },
+          outcome === "failed-deliver" ? "unknown" : "prepared",
+          outcome === "failed-deliver" ? ["queued"] : ["queued", "unknown"],
+        );
+      }
       try {
         await options.onError?.(error, info);
       } catch {}
-      return deliveryStarted && !isRetryableNoSendFailure(error)
-        ? "failed-deliver"
-        : "failed-before-deliver";
+      return outcome;
     }
   };
 
@@ -473,28 +570,21 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     const fallback = undeliveredFallbacks.get(payload);
     undeliveredFallbacks.delete(payload);
     const originalWasExactSilent = isSilentReplyText(payload.text, SILENT_REPLY_TOKEN);
-    const normalizedPrimary = normalizeReplyPayloadInternal(payload, {
-      responsePrefix: options.responsePrefix,
-      responsePrefixContext: options.responsePrefixContext,
-      responsePrefixContextProvider: options.responsePrefixContextProvider,
-      transformReplyPayload: options.transformReplyPayload,
-      onHeartbeatStrip: options.onHeartbeatStrip,
-      onSkip: (reason) =>
-        options.onSkip?.(payload, {
-          ...buildReplyDispatchRuntimeInfo(payload, kind),
-          reason,
-        }),
-    });
-    const normalizedFallback = fallback
-      ? normalizeReplyPayloadInternal(fallback, {
-          responsePrefix: options.responsePrefix,
-          responsePrefixContext: options.responsePrefixContext,
-          responsePrefixContextProvider: options.responsePrefixContextProvider,
-          transformReplyPayload: options.transformReplyPayload,
-          onHeartbeatStrip: options.onHeartbeatStrip,
-        })
-      : null;
-    const normalized = normalizedPrimary ?? normalizedFallback;
+    const normalizedPrimary =
+      getReplyPayloadMetadata(payload)?.replyDispatcherNormalizationOwner === dispatcher
+        ? ({ kind: "deliver", payload } as const)
+        : normalizeForDispatch(kind, payload, true);
+    const normalizedFallback =
+      fallback &&
+      !(normalizedPrimary.kind === "suppress" && normalizedPrimary.reason === "channel_transform")
+        ? normalizeForDispatch(kind, fallback, false)
+        : undefined;
+    const normalized =
+      normalizedPrimary.kind === "deliver"
+        ? normalizedPrimary.payload
+        : normalizedFallback?.kind === "deliver"
+          ? normalizedFallback.payload
+          : null;
     if (!normalized) {
       if (kind === "final" && originalWasExactSilent) {
         silentReplyLogger.debug("exact NO_REPLY final payload was skipped before delivery", {
@@ -505,7 +595,10 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       }
       return false;
     }
-    const deliveryFallback = normalizedPrimary ? normalizedFallback : null;
+    const deliveryFallback =
+      normalizedPrimary.kind === "deliver" && normalizedFallback?.kind === "deliver"
+        ? normalizedFallback.payload
+        : null;
     queuedCounts[kind] += 1;
     pending += 1;
     const deliveryOutcomeTracker = deliveryOutcomeTrackers.get(payload);
@@ -624,6 +717,10 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             })
         : undefined,
   };
+  replyDispatcherPreparers.set(dispatcher, {
+    owner: dispatcher,
+    normalize: (kind, payload) => normalizeForDispatch(kind, payload, true),
+  });
   beforeDeliverCancelledHooks.set(dispatcher, appendedBeforeDeliverCancelledHooks);
   return dispatcher;
 }

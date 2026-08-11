@@ -4,11 +4,11 @@ import {
   patchSessionEntry,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { applySqliteSessionEntryCanonicalReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import { applySessionEntryCanonicalReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createDeferred } from "../shared/deferred.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createGatewayMethodRegistry,
@@ -589,9 +589,9 @@ describe("sessions.patchMany orchestration", () => {
         cfg,
         key: conflictingAlias,
       }).storePath;
-      const writerStarted = createDeferred();
-      const insertConflictingAlias = createDeferred();
-      const writer = applySqliteSessionEntryCanonicalReplacements({
+      const writerStarted = createDeferredCore();
+      const insertConflictingAlias = createDeferredCore();
+      const writer = applySessionEntryCanonicalReplacements({
         agentId: "main",
         sessionKeys: [conflictingAlias],
         storePath,
@@ -612,7 +612,7 @@ describe("sessions.patchMany orchestration", () => {
       });
       await writerStarted.promise;
 
-      const preflightCompleted = createDeferred();
+      const preflightCompleted = createDeferredCore();
       const respond = vi.fn();
       const request = sessionMutationHandlers["sessions.patchMany"]!({
         params: {
@@ -686,9 +686,9 @@ describe("sessions.patchMany orchestration", () => {
         cfg,
         key: conflictingAlias,
       }).storePath;
-      const writerStarted = createDeferred();
-      const insertConflictingAlias = createDeferred();
-      const writer = applySqliteSessionEntryCanonicalReplacements({
+      const writerStarted = createDeferredCore();
+      const insertConflictingAlias = createDeferredCore();
+      const writer = applySessionEntryCanonicalReplacements({
         agentId: "main",
         sessionKeys: [conflictingAlias],
         storePath,
@@ -709,7 +709,7 @@ describe("sessions.patchMany orchestration", () => {
       });
       await writerStarted.promise;
 
-      const preflightCompleted = createDeferred();
+      const preflightCompleted = createDeferredCore();
       const respond = vi.fn();
       const request = sessionMutationHandlers["sessions.patch"]!({
         params: { key: conflictingAlias, pinned: true },

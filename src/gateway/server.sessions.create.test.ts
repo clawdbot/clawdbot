@@ -40,7 +40,7 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import {
-  agentCommand,
+  agentCommandMock,
   agentDiscoveryMock,
   dispatchInboundMessageMock,
   embeddedRunMock,
@@ -333,12 +333,18 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
 
     const child = await directSessionReq<{
       key: string;
-      entry: { incognito?: true; parentSessionKey?: string; sessionFile?: string };
+      entry: {
+        incognito?: true;
+        parentSessionId?: string;
+        parentSessionKey?: string;
+        sessionFile?: string;
+      };
     }>("sessions.create", { agentId: "main", parentSessionKey: key });
     expect(child.ok).toBe(true);
     const childKey = requireNonEmptyString(child.payload?.key, "incognito child key");
     expect(child.payload?.entry.incognito).toBe(true);
     expect(child.payload?.entry.parentSessionKey).toBe(key);
+    expect(child.payload?.entry.parentSessionId).toBe(entry?.sessionId);
     expect(child.payload?.entry).not.toHaveProperty("sessionFile");
 
     const rejectedInheritedChannel = await directSessionReq("sessions.create", {
@@ -1162,7 +1168,7 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
       ),
     ).toHaveLength(1);
 
-    agentCommand.mockClear();
+    agentCommandMock.mockClear();
     const { ws } = await openClient();
     const run = await rpcReq(ws, "agent", {
       message: "verify worktree cwd",
@@ -1170,8 +1176,8 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
       idempotencyKey: "session-worktree-cwd",
     });
     expect(run.ok, JSON.stringify(run)).toBe(true);
-    await waitForFast(() => expect(agentCommand).toHaveBeenCalled());
-    expect(agentCommand.mock.calls.at(-1)?.[0]).toMatchObject({
+    await waitForFast(() => expect(agentCommandMock).toHaveBeenCalled());
+    expect(agentCommandMock.mock.calls.at(-1)?.[0]).toMatchObject({
       cwd: worktree?.path,
       workspaceDir: worktree?.path,
     });

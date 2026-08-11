@@ -1,10 +1,4 @@
 // Runs heartbeat checks and emits status updates for configured agents.
-import { truncateHeartbeatPreview } from "./heartbeat-runner-prompt.js";
-import {
-  inferHeartbeatWakeSourceFromReason,
-  resolveHeartbeatWakePayloadFlags,
-} from "./heartbeat-wake-policy.js";
-
 export type { HeartbeatDeps } from "./heartbeat-runner-execution.js";
 export {
   resolveHeartbeatAgents,
@@ -22,9 +16,3 @@ export {
   type HeartbeatSummary,
 } from "./heartbeat-summary.js";
 export { areHeartbeatsEnabled, setHeartbeatsEnabled } from "./heartbeat-wake.js";
-
-export const testing = {
-  inferHeartbeatWakeSourceFromReason,
-  resolveHeartbeatWakePayloadFlags,
-  truncateHeartbeatPreview,
-};

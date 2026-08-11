@@ -22,6 +22,7 @@ import {
   storeCollapsedSessionSections,
   storeSidebarSessionsGrouping,
   storeSidebarSessionsShowCron,
+  storeSidebarSessionsShowSystem,
   type SidebarRecentSession,
   type SidebarSectionDropTarget,
   type SidebarSessionMutationResult,
@@ -48,6 +49,7 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
   readonly onUpdateSidebarEntries?: (entries: string[]) => void;
   sessionsGrouping: SidebarSessionsGrouping;
   sessionsShowCron: boolean;
+  sessionsShowSystem: boolean;
   sessionsStatusFilter: SidebarSessionStatusFilter;
   clearSessionSelection(): void;
   findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
@@ -196,7 +198,9 @@ export class SessionOrganizerController implements ReactiveController {
       return;
     }
     const operations = await this.loadOperations(scope);
-    await operations?.deleteSession(this.host, session, scope);
+    // Sidebar is the surface the delete-confirm setting names, so it is the one
+    // caller allowed to offer the opt-out.
+    await operations?.deleteSession(this.host, session, scope, { offerSkip: true });
   }
 
   startSidebarRouteDrag(event: DragEvent, route: SidebarNavRoute) {
@@ -691,6 +695,15 @@ export class SessionOrganizerController implements ReactiveController {
     this.host.sessionsShowCron = show;
     try {
       storeSidebarSessionsShowCron(show);
+    } catch {
+      // Keep the in-memory preference when storage is unavailable.
+    }
+  }
+
+  setSessionsShowSystem(show: boolean) {
+    this.host.sessionsShowSystem = show;
+    try {
+      storeSidebarSessionsShowSystem(show);
     } catch {
       // Keep the in-memory preference when storage is unavailable.
     }

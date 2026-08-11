@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
   callGateway: vi.fn().mockResolvedValue({ status: "ok" }),
   onAgentEventStop: vi.fn(),
   onAgentEvent: vi.fn(),
-  runSubagentAnnounceFlow: vi.fn().mockResolvedValue(false),
+  runSubagentAnnounceFlow: vi.fn().mockResolvedValue("retryable"),
   captureSubagentCompletionReply: vi.fn(),
   loadSubagentRegistryFromSqlite: vi.fn(() => new Map()),
   saveSubagentRegistryChangesToSqlite: vi.fn(),
@@ -126,7 +126,7 @@ describe("announce loop guard (#18264)", () => {
     mocks.onAgentEvent.mockReturnValue(mocks.onAgentEventStop);
     mocks.resolveAgentTimeoutMs.mockClear();
     mocks.runSubagentAnnounceFlow.mockReset();
-    mocks.runSubagentAnnounceFlow.mockResolvedValue(false);
+    mocks.runSubagentAnnounceFlow.mockResolvedValue("retryable");
     mocks.saveSubagentRegistryChangesToSqlite.mockClear();
     mocks.saveSubagentRegistryToSqlite.mockClear();
     mocks.updateSessionStore.mockClear();
@@ -250,7 +250,7 @@ describe("announce loop guard (#18264)", () => {
 
   test("expired completion-message entries are still resumed for announce", async () => {
     mocks.runSubagentAnnounceFlow.mockReset();
-    mocks.runSubagentAnnounceFlow.mockResolvedValueOnce(true);
+    mocks.runSubagentAnnounceFlow.mockResolvedValueOnce("delivered");
     registry.resetSubagentRegistryForTests();
 
     const now = Date.now();

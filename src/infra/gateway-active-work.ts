@@ -100,6 +100,7 @@ function normalizeCount(value: number): number {
 
 export function createGatewayActiveWorkSnapshot(
   inspectors: Partial<GatewayActiveWorkInspectors> = {},
+  options: { ignoreTerminalSessions?: boolean } = {},
 ): GatewayActiveWorkSnapshot {
   const resolved = { ...defaultInspectors, ...inspectors };
   const counts: GatewayActiveWorkCounts = {
@@ -118,10 +119,9 @@ export function createGatewayActiveWorkSnapshot(
     terminalSessions: normalizeCount(resolved.getTerminalSessions()),
     totalActive: 0,
   };
-  counts.totalActive = Object.entries(counts).reduce(
-    (total, [key, count]) => (key === "totalActive" ? total : total + count),
-    0,
-  );
+  counts.totalActive =
+    Object.values(counts).reduce((total, count) => total + count, 0) -
+    (options.ignoreTerminalSessions ? counts.terminalSessions : 0);
 
   const blockers: GatewayActiveWorkBlocker[] = [];
   const add = (count: number, kind: GatewayActiveWorkBlocker["kind"], message: string) => {
@@ -160,11 +160,13 @@ export function createGatewayActiveWorkSnapshot(
     "terminal-persistence",
     `${counts.terminalPersistence} pending terminal session write(s)`,
   );
-  add(
-    counts.terminalSessions,
-    "terminal-session",
-    `${counts.terminalSessions} open terminal session(s)`,
-  );
+  if (!options.ignoreTerminalSessions) {
+    add(
+      counts.terminalSessions,
+      "terminal-session",
+      `${counts.terminalSessions} open terminal session(s)`,
+    );
+  }
 
   if (counts.activeTasks > 0) {
     const taskBlockers = resolved.getTaskBlockers();

@@ -115,9 +115,13 @@ const dispatchChannelInboundTurnMock = vi.fn<DispatchChannelInboundTurnFn>(async
       DispatchReplyWithBufferedBlockDispatcherParams["dispatcherOptions"]["deliver"]
     >[1],
   ) => {
+    const providerInfo = {
+      ...info,
+      onPlatformSendDispatch: async () => undefined,
+    };
     const result =
       "deliverWithProviderMessageSending" in plan.delivery
-        ? await plan.delivery.deliverWithProviderMessageSending(payload, info)
+        ? await plan.delivery.deliverWithProviderMessageSending(payload, providerInfo)
         : await plan.delivery.deliver(payload, info);
     await plan.delivery.onDelivered?.(payload, info, result);
     return result;

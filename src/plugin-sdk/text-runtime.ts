@@ -13,6 +13,7 @@ export * from "../../packages/markdown-core/src/render-aware-chunking.js";
 export * from "../../packages/markdown-core/src/render.js";
 export * from "../../packages/markdown-core/src/tables.js";
 export { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
+// Public compatibility: this wildcard intentionally keeps isRecord on text-runtime.
 export * from "../../packages/normalization-core/src/record-coerce.js";
 export * from "../shared/scoped-expiring-id-cache.js";
 export * from "../../packages/normalization-core/src/string-coerce.js";
@@ -50,7 +51,6 @@ export {
   displayString,
   ensureDir,
   escapeRegExp,
-  isRecord,
   normalizeE164,
   pathExists,
   resolveConfigDir,

@@ -544,6 +544,34 @@ describe("Claude session catalog", () => {
     );
   });
 
+  it("preserves date-first parsing for numeric-looking index timestamps", async () => {
+    const home = await createHome();
+    const sessionId = "numeric-looking-timestamps";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          created: "0",
+          modified: "2026",
+          isSidechain: false,
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "timestamp contract", 1)] },
+    });
+
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [
+        {
+          threadId: sessionId,
+          createdAt: Date.parse("0"),
+          updatedAt: Date.parse("2026"),
+          recencyAt: Date.parse("2026"),
+        },
+      ],
+    });
+  });
+
   it("adopts a local CLI row with a locked one-shot fork binding", async () => {
     const home = await createHome();
     process.env.HOME = home;

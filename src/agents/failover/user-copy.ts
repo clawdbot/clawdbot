@@ -630,41 +630,45 @@ const AUTH_PROFILE_COOLDOWN_COPY = {
     `Couldn't reach ${provider} with any of your saved logins right now.`,
 } satisfies Record<FailoverReason, (provider: string) => string>;
 
-const AUTH_PROFILE_DIRECT_COPY: Partial<Record<FailoverReason, (provider: string) => string>> = {
-  auth: (provider) =>
-    `Couldn't sign in to ${provider}. Your saved login looks expired or no longer works.`,
-  auth_permanent: (provider) => `${provider} isn't accepting your saved login.`,
-  billing: (provider) =>
-    `${provider} rejected the request — looks like a billing issue on the account.`,
-  session_expired: (provider) =>
-    `Couldn't sign in to ${provider}. Your saved login looks expired or no longer works.`,
+type AuthProfileReasonPolicy = {
+  direct: ((provider: string) => string) | undefined;
+  recovery: boolean;
 };
 
-function authProfileRecoveryApplies(reason: FailoverReason): boolean {
-  return (
-    reason === "auth" ||
-    reason === "auth_permanent" ||
-    reason === "session_expired" ||
-    reason === "billing" ||
-    reason === "context_overflow" ||
-    reason === "empty_response" ||
-    reason === "no_error_details" ||
-    reason === "unclassified" ||
-    reason === "unknown"
-  );
-}
+const AUTH_PROFILE_REASON_POLICY = {
+  auth: { direct: AUTH_PROFILE_COOLDOWN_COPY.auth, recovery: true },
+  auth_permanent: {
+    direct: (provider) => `${provider} isn't accepting your saved login.`,
+    recovery: true,
+  },
+  format: { direct: undefined, recovery: false },
+  rate_limit: { direct: undefined, recovery: false },
+  overloaded: { direct: undefined, recovery: false },
+  billing: { direct: AUTH_PROFILE_COOLDOWN_COPY.billing, recovery: true },
+  server_error: { direct: undefined, recovery: false },
+  timeout: { direct: undefined, recovery: false },
+  tls_certificate: { direct: undefined, recovery: false },
+  context_overflow: { direct: undefined, recovery: true },
+  model_not_found: { direct: undefined, recovery: false },
+  session_expired: { direct: AUTH_PROFILE_COOLDOWN_COPY.session_expired, recovery: true },
+  empty_response: { direct: undefined, recovery: true },
+  no_error_details: { direct: undefined, recovery: true },
+  unclassified: { direct: undefined, recovery: true },
+  unknown: { direct: undefined, recovery: true },
+} satisfies Record<FailoverReason, AuthProfileReasonPolicy>;
 
 export function renderAuthProfileFailoverCopy(params: AuthProfileFailureCopyParams): string {
+  const policy = AUTH_PROFILE_REASON_POLICY[params.reason];
   const description = params.allInCooldown
     ? AUTH_PROFILE_COOLDOWN_COPY[params.reason](params.provider)
-    : AUTH_PROFILE_DIRECT_COPY[params.reason]?.(params.provider);
+    : policy.direct?.(params.provider);
   if (!description) {
     return params.causeText
       ? params.causeText.trim() ||
           `Couldn't reach ${params.provider} with any of your saved logins right now.`
       : `Couldn't reach ${params.provider} with any of your saved logins right now.`;
   }
-  const hint = authProfileRecoveryApplies(params.reason) ? params.recoveryHint : null;
+  const hint = policy.recovery ? params.recoveryHint : null;
   const causeText = params.causeText?.trim() ?? "";
   const suffix = causeText && !description.includes(causeText) ? ` (${causeText})` : "";
   return `${[description, hint].filter(Boolean).join(" ")}${suffix}`;

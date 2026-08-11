@@ -1,8 +1,14 @@
 // Googlechat plugin module implements monitor reply delivery behavior.
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { deleteGoogleChatMessage, sendGoogleChatMessage, updateGoogleChatMessage } from "./api.js";
+import {
+  deleteGoogleChatMessage,
+  GoogleChatApiError,
+  sendGoogleChatMessage,
+  updateGoogleChatMessage,
+} from "./api.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
 
 export type GoogleChatTypingMessage =
@@ -95,8 +101,11 @@ export async function deliverGoogleChatReply(params: {
     } catch (err) {
       runtime.error?.(`Google Chat typing cleanup failed: ${String(err)}`);
     }
-    throw new Error(
+    // Permanent policy rejection before any recipient-visible send; the typed
+    // contract keeps delivery custody from recording a false ambiguous attempt.
+    throw new PlatformMessageNotDispatchedError(
       "Google Chat outbound attachments require user OAuth and no text fallback is available.",
+      { cause: undefined, retryable: false },
     );
   }
 
@@ -132,17 +141,17 @@ export async function deliverGoogleChatReply(params: {
           messageName: typingMessage.name,
           text: chunk,
         });
-      } catch (err) {
-        // The typing placeholder may already be gone; resend the chunk as a new
-        // message below. Only the resend failing counts as a delivery failure.
-        runtime.error?.(`Google Chat message send failed: ${String(err)}`);
+      } catch (error) {
+        if (!(error instanceof GoogleChatApiError) || error.status !== 404) {
+          throw error;
+        }
+        runtime.error?.(`Google Chat typing update failed: ${String(error)}`);
         typingMessage = undefined;
+        await sendTextMessage(chunk);
       }
-      if (typingMessage) {
-        firstTextChunk = false;
-        recordOutboundStatus();
-        continue;
-      }
+      firstTextChunk = false;
+      recordOutboundStatus();
+      continue;
     }
     // Core delivery contract: a failed send must reject so the reply dispatcher
     // routes to onError instead of recording a dropped chunk as delivered.

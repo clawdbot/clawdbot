@@ -12,6 +12,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   clampThinkingLevel,
   type Api,
@@ -53,7 +54,7 @@ import {
   isLiveBillingDrift,
   isLiveRateLimitDrift,
 } from "../agents/live-test-provider-drift.test-support.js";
-import { getApiKeyForModel, resolveEnvApiKey } from "../agents/model-auth.js";
+import { getApiKeyForModelCore, resolveEnvApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
@@ -1269,10 +1270,6 @@ function resolveBedrockDiscoveryRegion(cfg: OpenClawConfig | undefined): string 
   }
   const region = discoveryConfig.region;
   return typeof region === "string" ? normalizeOptionalEnvValue(region) : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function resolveAwsProfileRegion(env: NodeJS.ProcessEnv): string | undefined {
@@ -5629,7 +5626,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           const modelRef = `${model.provider}/${model.id}`;
           try {
             const apiKeyInfo = await withGatewayLiveSetupTimeout(
-              getApiKeyForModel({
+              getApiKeyForModelCore({
                 model,
                 cfg,
                 store: authProfileStore,
@@ -5766,12 +5763,12 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         return;
       }
       try {
-        await getApiKeyForModel({
+        await getApiKeyForModelCore({
           model: anthropic,
           cfg,
           credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
         });
-        await getApiKeyForModel({
+        await getApiKeyForModelCore({
           model: zai,
           cfg,
           credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,

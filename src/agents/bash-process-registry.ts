@@ -29,11 +29,11 @@ let jobTtlMs = clampTtl(readEnvInt("OPENCLAW_BASH_JOB_TTL_MS", "PI_BASH_JOB_TTL_
 /** Lifecycle status recorded for background process sessions. */
 type ProcessStatus = "running" | "completed" | "failed" | "killed";
 
-/** Writable stdin surface shared by child-process and PTY-backed sessions. */
+/** Writable stdin surface prepared by the supervisor for child and PTY sessions. */
 type SessionStdin = {
   write: (data: string, cb?: (err?: Error | null) => void) => void;
   end: () => void;
-  // When backed by a real Node stream (child.stdin), this exists; for PTY wrappers it may not.
+  // Child and PTY wrappers both expose destroy today; keep it optional for alternate backends.
   destroy?: () => void;
   destroyed?: boolean;
   writable?: boolean;
@@ -70,6 +70,9 @@ export interface ProcessSession {
   /** Set when process poll observed the terminal result before notification. */
   terminalPollObserved?: boolean;
   notifyOnExitRemoval?: NotifyOnExitRemoval;
+  // Deprecated declaration-closure compatibility only; runtime never uses this.
+  // ProcessSupervisor owns raw processes. Remove when the public Plugin SDK closure no
+  // longer reaches registry types, or at the next compatible boundary change.
   child?: ChildProcessWithoutNullStreams;
   stdin?: SessionStdin;
   pid?: number;
@@ -326,33 +329,14 @@ export function getActiveBackgroundExecSessionCount(): number {
 function moveToFinished(session: ProcessSession, status: ProcessStatus) {
   runningSessions.delete(session.id);
 
-  // Clean up child process stdio streams to prevent FD leaks
-  if (session.child) {
-    // Destroy stdio streams to release file descriptors
-    session.child.stdin?.destroy?.();
-    session.child.stdout?.destroy?.();
-    session.child.stderr?.destroy?.();
-
-    // Remove all event listeners to prevent memory leaks
-    session.child.removeAllListeners();
-
-    // Clear the reference
-    delete session.child;
-  }
-
-  // Clean up stdin wrapper - call destroy if available, otherwise just remove reference
-  if (session.stdin) {
-    // Try to call destroy/end method if exists
-    if (typeof session.stdin.destroy === "function") {
-      session.stdin.destroy();
-    } else if (typeof session.stdin.end === "function") {
-      session.stdin.end();
-    }
-    // Only set flag if writable
-    try {
-      (session.stdin as { destroyed?: boolean }).destroyed = true;
-    } catch {
-      // Ignore if read-only
+  // The supervisor owns the raw process. The registry releases only the
+  // prepared stdin wrapper retained for process-tool input.
+  const stdin = session.stdin;
+  if (stdin) {
+    if (typeof stdin.destroy === "function") {
+      stdin.destroy();
+    } else if (typeof stdin.end === "function") {
+      stdin.end();
     }
     delete session.stdin;
   }

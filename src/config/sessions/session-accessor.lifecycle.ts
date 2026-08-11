@@ -16,19 +16,19 @@ import {
   replaceSessionEntry,
   patchSessionEntry,
 } from "./session-accessor.entry.js";
-import { applySqliteSessionEntryBatchProjection as applySessionEntryBatchProjection } from "./session-accessor.sqlite-batch-projection.js";
+import { applySessionEntryBatchProjection } from "./session-accessor.sqlite-batch-projection.js";
 import {
-  cleanupSqliteSessionLifecycleArtifacts as cleanupSessionLifecycleArtifacts,
-  deleteSqliteSessionEntryLifecycle as deleteSessionEntryLifecycle,
-  rollbackSqliteAgentHarnessSessionEntryLifecycle as rollbackAgentHarnessSessionEntryLifecycle,
-  rollbackSqlitePluginOwnedSessionEntryLifecycle as rollbackPluginOwnedSessionEntryLifecycle,
-  resetSqliteSessionEntryLifecycle as resetSessionEntryLifecycle,
+  cleanupSessionLifecycleArtifacts,
+  deleteSessionEntryLifecycle,
+  rollbackAgentHarnessSessionEntryLifecycle,
+  rollbackPluginOwnedSessionEntryLifecycle,
+  resetSessionEntryLifecycle,
 } from "./session-accessor.sqlite-lifecycle.js";
 import {
-  applySqliteSessionEntryLifecycleMutation as applySessionEntryLifecycleMutation,
-  applySqliteSessionEntryReplacements as applySessionEntryReplacements,
-  applySqliteSessionStoreProjection as applySessionStoreProjection,
-  purgeSqliteDeletedAgentSessionEntries as purgeDeletedAgentSessionEntries,
+  applySessionEntryLifecycleMutation,
+  applySessionEntryReplacements,
+  applySessionStoreProjection,
+  purgeDeletedAgentSessionEntries,
 } from "./session-accessor.sqlite-projection.js";
 import type {
   SessionAccessScope,

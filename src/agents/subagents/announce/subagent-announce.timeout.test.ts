@@ -196,15 +196,18 @@ vi.mock("./subagent-announce.runtime.js", () => ({
   waitForEmbeddedAgentRunEnd: (sessionId: string, timeoutMs?: number) =>
     waitForEmbeddedAgentRunEndMock(sessionId, timeoutMs),
 }));
-vi.mock("../registry/subagent-registry-runtime.js", () => ({
+vi.mock("../registry/subagent-registry-read.js", () => ({
   countActiveDescendantRuns: () => 0,
   countPendingDescendantRuns: () => pendingDescendantRuns,
-  countPendingDescendantRunsExcludingRun: () => 0,
+  hasDescendantRunAwaitingSettle: () => false,
+  getLatestSubagentRunByChildSessionKey: () => undefined,
   listSubagentRunsForRequester: () => [],
   isSubagentSessionRunActive: () => subagentSessionRunActive,
   shouldIgnorePostCompletionAnnounceForSession: () => shouldIgnorePostCompletion,
-  replaceSubagentRunAfterSteer: () => true,
   resolveRequesterForChildSession: () => fallbackRequesterResolution,
+}));
+vi.mock("../registry/subagent-registry-runtime.js", () => ({
+  replaceSubagentRunAfterSteer: () => true,
 }));
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 type AnnounceFlowParams = Parameters<
@@ -244,7 +247,7 @@ function setConfiguredAnnounceTimeout(timeoutMs: number): void {
 async function runAnnounceFlowForTest(
   childRunId: string,
   overrides: Partial<AnnounceFlowParams> = {},
-): Promise<boolean> {
+): ReturnType<typeof runSubagentAnnounceFlow> {
   return await runSubagentAnnounceFlow({
     ...baseAnnounceFlowParams,
     childRunId,
@@ -346,7 +349,7 @@ describe("subagent announce timeout config", () => {
         },
         expectsCompletionMessage: true,
       });
-      await expect(announcePromise).resolves.toBe(false);
+      await expect(announcePromise).resolves.toBe("retryable");
 
       const directAgentCalls = gatewayCalls.filter(
         (call) => call.method === "agent" && call.expectFinal === true,
@@ -366,7 +369,7 @@ describe("subagent announce timeout config", () => {
       requesterDisplayKey: "agent:main:subagent:parent",
     });
 
-    expect(didAnnounce).toBe(false);
+    expect(didAnnounce).toBe("retryable");
     expect(
       findGatewayCall((call) => call.method === "agent" && call.expectFinal === true),
     ).toBeUndefined();
@@ -379,7 +382,7 @@ describe("subagent announce timeout config", () => {
       requesterOrigin: { channel: "discord", to: "channel:cron" },
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     const directAgentCall = findGatewayCall(
       (call) => call.method === "agent" && call.expectFinal === true,
     );
@@ -556,7 +559,7 @@ describe("subagent announce timeout config", () => {
       roundOneReply: undefined,
     });
 
-    expect(didAnnounce).toBe(false);
+    expect(didAnnounce).toBe("retryable");
     expect(findFinalDirectAgentCall()).toBeUndefined();
   });
 

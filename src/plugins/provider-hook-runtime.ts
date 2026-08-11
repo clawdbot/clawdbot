@@ -38,6 +38,7 @@ const defaultProviderRuntimePluginCache = new PluginLruCache<ProviderPlugin | nu
 
 type ProviderRuntimePluginLookupParams = {
   provider: string;
+  providerOwner?: string;
   modelId?: string | null;
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -91,7 +92,7 @@ function resolveProviderRuntimePluginCacheKey(
   registryState = getPluginRegistryState(),
 ): string {
   return JSON.stringify({
-    provider: normalizeLowercaseStringOrEmpty(params.provider),
+    providerScope: [params.provider, params.providerOwner].map(normalizeLowercaseStringOrEmpty),
     modelId: resolveProviderRuntimeLookupModelId(params) ?? null,
     pluginControlPlane: resolvePluginControlPlaneFingerprint({
       config: params.config,
@@ -127,12 +128,12 @@ function resolveProviderRuntimeLookupModelId(
 
 function resolveProviderRuntimeLookupScope(
   params: ProviderRuntimePluginLookupParams,
-  apiOwnerHint?: string,
+  ownerRefs: readonly string[],
 ): {
   providerRefs: string[];
   modelRefs?: string[];
 } {
-  const providerRefs = apiOwnerHint ? [params.provider, apiOwnerHint] : [params.provider];
+  const providerRefs = [params.provider, ...ownerRefs];
   const modelId = resolveProviderRuntimeLookupModelId(params);
   if (!modelId) {
     return { providerRefs };
@@ -149,14 +150,14 @@ function resolveProviderRuntimeLookupScope(
 
 function findProviderRuntimePluginInLoadedRegistries(params: {
   lookup: ProviderRuntimePluginLookupParams;
-  apiOwnerHint?: string;
+  ownerRefs: readonly string[];
 }): ProviderPlugin | undefined {
   const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
   const scopedPlugin = scopedRegistry
     ? findProviderRuntimePluginInRegistry({
         registry: scopedRegistry,
         provider: params.lookup.provider,
-        apiOwnerHint: params.apiOwnerHint,
+        ownerRefs: params.ownerRefs,
       })
     : undefined;
   if (scopedPlugin) {
@@ -170,7 +171,7 @@ function findProviderRuntimePluginInLoadedRegistries(params: {
     ? findProviderRuntimePluginInRegistry({
         registry: activeRegistry,
         provider: params.lookup.provider,
-        apiOwnerHint: params.apiOwnerHint,
+        ownerRefs: params.ownerRefs,
       })
     : undefined;
   if (activePlugin) {
@@ -182,15 +183,15 @@ function findProviderRuntimePluginInLoadedRegistries(params: {
 function findProviderRuntimePluginInRegistry(params: {
   registry: PluginRegistry;
   provider: string;
-  apiOwnerHint?: string;
+  ownerRefs: readonly string[];
 }): ProviderPlugin | undefined {
   return params.registry.providers
     .map((entry) => Object.assign({}, entry.provider, { pluginId: entry.pluginId }))
     .find((plugin) => {
-      if (params.apiOwnerHint) {
+      if (params.ownerRefs.length > 0) {
         return (
           matchesProviderLiteralId(plugin, params.provider) ||
-          matchesProviderPluginRef(plugin, params.apiOwnerHint)
+          params.ownerRefs.some((ownerRef) => matchesProviderPluginRef(plugin, ownerRef))
         );
       }
       return matchesProviderPluginRef(plugin, params.provider);
@@ -238,10 +239,11 @@ export function resolveProviderRuntimePlugin(
     provider: params.provider,
     config: params.config,
   });
-  const providerRefs = apiOwnerHint ? [params.provider, apiOwnerHint] : [params.provider];
+  const ownerRefs = [...new Set([params.providerOwner, apiOwnerHint].filter(Boolean))] as string[];
+  const providerRefs = [params.provider, ...ownerRefs];
   const loadedPlugin = findProviderRuntimePluginInLoadedRegistries({
     lookup,
-    apiOwnerHint,
+    ownerRefs,
   });
   if (loadedPlugin) {
     return loadedPlugin;
@@ -262,7 +264,7 @@ export function resolveProviderRuntimePlugin(
   const registryState = getPluginRegistryState();
   const cacheKey = resolveProviderRuntimePluginCacheKey(lookup, registryState);
   const load = () => {
-    const lookupScope = resolveProviderRuntimeLookupScope(params, apiOwnerHint);
+    const lookupScope = resolveProviderRuntimeLookupScope(params, ownerRefs);
     return (
       resolveProviderPluginsForHooks({
         config: params.config,
@@ -273,10 +275,10 @@ export function resolveProviderRuntimePlugin(
         applyAutoEnable: params.applyAutoEnable,
         pluginMetadataSnapshot: params.pluginMetadataSnapshot,
       }).find((plugin) => {
-        if (apiOwnerHint) {
+        if (ownerRefs.length > 0) {
           return (
             matchesProviderLiteralId(plugin, params.provider) ||
-            matchesProviderPluginRef(plugin, apiOwnerHint)
+            ownerRefs.some((ownerRef) => matchesProviderPluginRef(plugin, ownerRef))
           );
         }
         return matchesProviderPluginRef(plugin, params.provider);
@@ -311,9 +313,10 @@ export function resolveLoadedProviderRuntimePlugin(
     provider: params.provider,
     config: params.config,
   });
+  const ownerRefs = [...new Set([params.providerOwner, apiOwnerHint].filter(Boolean))] as string[];
   return findProviderRuntimePluginInLoadedRegistries({
     lookup: params,
-    apiOwnerHint,
+    ownerRefs,
   });
 }
 

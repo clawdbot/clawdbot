@@ -8,7 +8,7 @@ import { testing as externalAuthTesting } from "./auth-profiles/external-auth.te
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
-} from "./auth-profiles/store.js";
+} from "./auth-profiles/runtime-snapshots.js";
 import { unsetEnv, withTempEnv } from "./models-config.e2e-harness.js";
 import {
   planOpenClawModelsJsonWithDeps,

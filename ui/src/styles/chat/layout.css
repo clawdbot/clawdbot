@@ -144,6 +144,36 @@ openclaw-chat-page {
   opacity: 0.5;
 }
 
+/* Transcript search sits above the workbench. Keep the shared SVG icon from
+   taking its intrinsic flex width and size the controls as compact chrome. */
+.agent-chat__search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+}
+
+.agent-chat__search-bar svg {
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.agent-chat__search-bar input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.88rem;
+}
+
+.agent-chat__search-bar input::placeholder {
+  color: var(--muted);
+}
+
 .chat-workspace-conflict-notice {
   flex: 0 0 auto;
   margin: 12px 16px 0;
@@ -1518,12 +1548,13 @@ openclaw-chat-video-player {
 .chat-reply-context-menu {
   position: fixed;
   z-index: 9999;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 4px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
   min-width: 160px;
+  animation: menu-in 140ms var(--ease-out);
 }
 
 .chat-reply-context-menu button {
@@ -1535,13 +1566,14 @@ openclaw-chat-video-player {
   border: none;
   background: none;
   color: var(--text);
-  border-radius: 6px;
+  min-height: var(--menu-item-height);
+  border-radius: var(--menu-item-radius);
   text-align: left;
 }
 
 .chat-reply-context-menu button:hover,
 .chat-reply-context-menu button:focus-visible {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  background: var(--bg-hover);
   outline: none;
 }
 
@@ -1550,11 +1582,11 @@ openclaw-chat-video-player {
   z-index: 9999;
   display: flex;
   gap: 2px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 3px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
   animation: fade-in 0.12s var(--ease-out);
 }
 
@@ -1566,14 +1598,15 @@ openclaw-chat-video-player {
   border: none;
   background: none;
   color: var(--text);
-  border-radius: 6px;
+  min-height: var(--menu-item-height);
+  border-radius: var(--menu-item-radius);
   font-size: 12px;
   white-space: nowrap;
 }
 
 .chat-selection-popup button:hover,
 .chat-selection-popup button:focus-visible {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  background: var(--bg-hover);
   outline: none;
 }
 
@@ -2302,6 +2335,10 @@ openclaw-chat-video-player {
 
 .agent-chat__input {
   --chat-box-inset: 8px;
+  /* Height of every control on the composer's input row. The row bottom-aligns
+     so it can follow a growing textarea, which only reads as one axis while all
+     its children share this box. */
+  --chat-composer-control-height: 36px;
 
   position: relative;
   display: flex;
@@ -2385,21 +2422,9 @@ openclaw-chat-video-player {
   min-width: 0;
 }
 
-.agent-chat__sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
 .agent-chat__composer-combobox > :is(textarea, input) {
   width: 100%;
-  min-height: 36px;
+  min-height: var(--chat-composer-control-height);
   max-height: calc(7em + 24px);
   resize: none;
   padding: var(--chat-box-inset);
@@ -2522,6 +2547,60 @@ openclaw-chat-video-player {
   padding: var(--chat-box-inset);
 }
 
+/* The row aligns on its bottom edge, so a child shorter than the control height
+   would centre below everything else. Owning the box here keeps that a property
+   of the row rather than something each new child has to remember. */
+.agent-chat__composer-input-row > * {
+  min-height: var(--chat-composer-control-height);
+}
+
+/* Edit-mode marker beside the input: the queued row already names the state, so
+   this only says which mode the composer is in and how to leave it. It takes the
+   row's control height like every other child, so it needs no alignment nudge. */
+.agent-chat__composer-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  flex-shrink: 0;
+  padding-inline: 7px 3px;
+  border-radius: var(--radius-full);
+  background: var(--info-subtle);
+  color: var(--info);
+}
+
+.agent-chat__composer-edit-icon,
+.agent-chat__composer-edit-cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.agent-chat__composer-edit-icon svg,
+.agent-chat__composer-edit-cancel svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.85px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.agent-chat__composer-edit-cancel {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-full);
+  background: none;
+  color: inherit;
+  cursor: var(--cursor-action);
+}
+
+.agent-chat__composer-edit-cancel:hover {
+  background: color-mix(in srgb, var(--info) 18%, transparent);
+}
+
 .agent-chat__disabled-reason {
   display: flex;
   align-items: center;
@@ -2628,11 +2707,11 @@ openclaw-chat-video-player {
 
 .agent-chat__attach-menu::part(menu) {
   width: 152px;
-  padding: 5px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
 }
 
 .agent-chat__attach-menu-option {
@@ -3507,6 +3586,7 @@ openclaw-chat-video-player {
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .agent-chat__input {
     --chat-box-inset: 4px;
+    --chat-composer-control-height: 44px;
   }
 
   .agent-chat__composer-input-row {
@@ -3516,7 +3596,7 @@ openclaw-chat-video-player {
   .agent-chat__composer-input-row .agent-chat__input-btn--attach {
     width: 36px;
     min-width: 36px;
-    height: 44px;
+    height: var(--chat-composer-control-height);
   }
 
   .agent-chat__composer-combobox {
@@ -3525,7 +3605,7 @@ openclaw-chat-video-player {
 
   .agent-chat__composer-combobox > :is(textarea, input) {
     flex: 1 1 auto;
-    min-height: 44px;
+    min-height: var(--chat-composer-control-height);
     max-height: calc(7em + var(--chat-box-inset) + var(--chat-box-inset));
     padding-top: 10px;
     padding-bottom: 10px;
@@ -3540,14 +3620,46 @@ openclaw-chat-video-player {
 
   .agent-chat__composer-controls {
     order: 0;
-    display: grid;
-    /* Three columns: settings, the transient interrupted toast (absent in
-       the normal state, so its column collapses), and the model picker. */
-    grid-template-columns: 40px minmax(0, max-content) minmax(0, max-content);
+    display: flex;
+    justify-content: flex-end;
     flex: 1 1 0;
     width: auto;
     margin-left: 0;
     gap: 0;
+  }
+
+  .agent-chat__input .agent-chat__composer-controls {
+    min-width: 187px;
+  }
+
+  .agent-chat__input .agent-chat__composer-run-status,
+  .agent-chat__input .agent-chat__session-overrides-pill {
+    flex: 1 1 auto;
+  }
+
+  .agent-chat__input .agent-chat__composer-run-status {
+    min-width: 23px;
+    overflow: hidden;
+  }
+
+  .agent-chat__input .agent-chat__session-overrides-pill {
+    min-width: 26px;
+  }
+
+  .agent-chat__input .agent-chat__composer-run-status .agent-chat__run-status {
+    min-width: 0;
+    flex-shrink: 1;
+  }
+
+  .agent-chat__input .agent-chat__session-overrides-open {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .agent-chat__input .agent-chat__session-overrides-clear {
+    flex: 0 0 26px;
   }
 
   .agent-chat__composer-meta {
@@ -3562,25 +3674,49 @@ openclaw-chat-video-player {
     margin-left: 0;
   }
 
-  /* The borderless trigger is 30px on desktop; keep a >=40px touch target
-     inside the mobile composer grid. */
-  .agent-chat__composer-controls .chat-controls__inline-select-trigger {
+  /* Reserve the readable model trigger, 44px effort target, and their gap;
+     keep the picker cluster right-aligned like desktop while transient status
+     text yields before either picker does. */
+  .agent-chat__input .agent-chat__composer-controls .chat-composer-model-control {
+    flex: 0 1 auto;
+    min-width: 138px;
+  }
+
+  .agent-chat__input .agent-chat__composer-controls .chat-controls__model-picker {
+    flex: 1 1 auto;
+  }
+
+  .agent-chat__input .agent-chat__composer-controls .chat-controls__effort-picker {
+    flex: 0 0 auto;
+    min-width: 44px;
+  }
+
+  .agent-chat__input .agent-chat__typing-indicator {
+    flex: 1 1 auto;
+    overflow: hidden;
+  }
+
+  /* The borderless trigger is 30px on desktop; keep a >=44px touch target
+     inside the mobile composer row. */
+  .agent-chat__input .agent-chat__composer-controls .chat-controls__inline-select-trigger {
     width: fit-content;
     max-width: 100%;
-    height: 40px;
-    min-height: 40px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
     gap: 4px;
     padding: 0 2px 0 4px;
   }
 
   .agent-chat__input .chat-controls__model-menu,
   .agent-chat__input .chat-controls__effort-menu {
+    box-sizing: border-box;
     position: fixed;
-    left: auto;
+    left: max(12px, var(--safe-area-left));
     right: max(12px, var(--safe-area-right));
-    bottom: calc(96px + var(--safe-area-bottom));
-    width: min(392px, calc(100vw - 24px));
-    max-height: min(440px, calc(100vh - 116px - var(--safe-area-bottom)));
+    bottom: var(--chat-composer-popover-bottom, calc(96px + var(--safe-area-bottom)));
+    width: auto;
+    max-height: min(440px, var(--chat-composer-popover-max-height, calc(100dvh - 116px)));
   }
 
   .agent-chat__composer-shell {
@@ -3601,14 +3737,8 @@ openclaw-chat-video-player {
     overscroll-behavior: contain;
   }
 
-  .agent-chat__input:has(.chat-controls__inline-select[open]),
   .agent-chat__input:has(.agent-chat__attach-menu[open]) {
     overflow: visible;
-  }
-
-  .agent-chat__input .chat-controls__model-menu,
-  .agent-chat__input .chat-controls__effort-menu {
-    max-height: calc(100vh - 148px);
   }
 
   .agent-chat__composer-footer {
@@ -3635,22 +3765,22 @@ openclaw-chat-video-player {
 }
 
 @media (max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  /* Backdrop-filter contains fixed descendants; lift it and the landscape scroll clip while open. */
+  /* Backdrop filtering contains fixed descendants, so lift it while the
+     viewport-anchored panels are open. */
   .agent-chat__input:has(.chat-controls__inline-select[open]),
-  .agent-chat__input:has(.context-usage details[open]),
-  .agent-chat__input:has(.agent-chat__attach-menu[open]) {
-    overflow: visible;
+  .agent-chat__input:has(.context-usage details[open]) {
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
 
   .context-usage__popover {
+    box-sizing: border-box;
     position: fixed;
     left: max(12px, var(--safe-area-left));
     right: max(12px, var(--safe-area-right));
-    bottom: calc(96px + var(--safe-area-bottom));
+    bottom: var(--chat-composer-popover-bottom, calc(96px + var(--safe-area-bottom)));
     width: auto;
-    max-height: calc(100vh - 116px - var(--safe-area-bottom));
+    max-height: var(--chat-composer-popover-max-height, calc(100dvh - 116px));
     overflow-y: auto;
   }
 }
@@ -3662,13 +3792,13 @@ openclaw-chat-video-player {
   right: 0;
   max-height: 320px;
   overflow-y: auto;
-  background: var(--popover);
+  background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
+  border-radius: var(--menu-radius);
+  box-shadow: var(--shadow-md);
   z-index: 30;
   margin-bottom: 4px;
-  padding: 6px;
+  padding: var(--menu-padding);
   scrollbar-width: thin;
 }
 

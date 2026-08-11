@@ -61,6 +61,7 @@ import {
   openSessionWorkspaceFile,
   revealSessionWorkspaceFile,
 } from "./components/chat-session-workspace.ts";
+import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import {
@@ -549,6 +550,11 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         ? undefined
         : (id) => void state.steerQueuedChatMessage(id),
       onQueueMove: sessionParticipationBlocked ? undefined : state.moveQueuedChatMessage,
+      queuedEdit: {
+        editingId: activeQueuedMessageEdit(state)?.id ?? null,
+        onEdit: sessionParticipationBlocked ? undefined : state.editQueuedChatMessage,
+        onCancel: state.cancelQueuedChatMessageEdit,
+      },
       onGoalCommand: (command) => void state.handleSendChat(command),
       onCompanionQuestion: (question) => void this.submitSessionCompanionQuestion(question),
       onCompanionPrefill: this.prefillSessionCompanionQuestion,

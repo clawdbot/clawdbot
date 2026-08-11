@@ -1,6 +1,9 @@
 import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
-import { adjustTextareaHeight } from "./chat-composer-dom.ts";
+import {
+  adjustTextareaHeight,
+  disconnectComposerPopoverAnchorObserver,
+} from "./chat-composer-dom.ts";
 import { clearGoalElapsedTimers } from "./chat-composer-goal.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
@@ -30,6 +33,7 @@ function createChatComposerState(): ChatComposerState {
     gatewayQuestionCollapsed: false,
     questionTakeoverActive: false,
     restoreComposerFocus: false,
+    composerInput: null,
     composerTextarea: null,
     microphonePickerOpen: false,
     microphonePickerLoading: false,
@@ -40,6 +44,7 @@ function createChatComposerState(): ChatComposerState {
     capabilityMenuOpen: false,
     capabilityMenuView: "root",
     textareaRef: null,
+    composerInputRef: null,
     dictation: null,
     dictationDraftKey: null,
     dictationSelection: null,
@@ -158,6 +163,9 @@ export function resetChatComposerState(paneId?: string) {
     const paneState = composerStates.get(paneId);
     paneState?.dictation?.dispose();
     if (paneState) {
+      if (paneState.composerInput) {
+        disconnectComposerPopoverAnchorObserver(paneState.composerInput);
+      }
       releaseMicrophoneDeviceWatch(paneState);
     }
     composerStates.delete(paneId);
@@ -165,6 +173,9 @@ export function resetChatComposerState(paneId?: string) {
   }
   for (const state of composerStates.values()) {
     state.dictation?.dispose();
+    if (state.composerInput) {
+      disconnectComposerPopoverAnchorObserver(state.composerInput);
+    }
     releaseMicrophoneDeviceWatch(state);
   }
   composerStates.clear();

@@ -22,6 +22,7 @@ import {
   createTaskRecord,
   markTaskLostById,
   markTaskTerminalById,
+  recordTaskProgressByRunId,
 } from "../tasks/task-registry.js";
 import { getTaskRegistryObservers } from "../tasks/task-registry.store.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
@@ -525,6 +526,50 @@ describe("startGatewayEventSubscriptions", () => {
     broadcast.mockClear();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it("suppresses identical task summaries without delaying status transitions", async () => {
+    const broadcast = vi.fn<SubscriptionParams["broadcast"]>();
+    unsubs = startGatewayEventSubscriptions({ ...createParams(), broadcast });
+    await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
+    const runId = "run-identical-task-summary";
+    const task = createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:subagent:summary",
+      runId,
+      task: "Avoid duplicate broadcasts",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      startedAt: 100,
+      lastEventAt: 100,
+    });
+    if (!task) {
+      throw new Error("expected task record");
+    }
+    broadcast.mockClear();
+
+    for (let index = 0; index < 2; index += 1) {
+      recordTaskProgressByRunId({
+        runId,
+        runtime: "subagent",
+        lastEventAt: 200,
+        progressSummary: "Working",
+      });
+    }
+    markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 300 });
+
+    const taskEvents = broadcast.mock.calls
+      .filter(([event]) => event === "task")
+      .map(([, payload]) => payload as TaskEventPayload)
+      .filter(
+        (payload): payload is Extract<TaskEventPayload, { action: "upserted" }> =>
+          payload.action === "upserted",
+      );
+    expect(taskEvents.map((event) => event.task.status)).toEqual(["running", "completed"]);
   });
 
   it.each(["succeeded", "failed", "cancelled", "timed_out", "lost"] as const)(

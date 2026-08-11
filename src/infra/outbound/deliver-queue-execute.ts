@@ -303,9 +303,13 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     if (!queueId) {
       if (params.deliveryCompletion) {
         if (results.length > 0) {
-          completeDurableDelivery(params.deliveryCompletion, results.at(-1)!);
+          await completeDurableDelivery(
+            params.deliveryCompletion,
+            results.at(-1)!,
+            platformQueueStateDir,
+          );
         } else {
-          suppressDurableDelivery(params.deliveryCompletion);
+          await suppressDurableDelivery(params.deliveryCompletion, platformQueueStateDir);
         }
       }
       if (!params.deferCommitHooks) {
@@ -363,9 +367,13 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       } else {
         if (params.deliveryCompletion) {
           if (results.length > 0) {
-            completeDurableDelivery(params.deliveryCompletion, results.at(-1)!);
+            await completeDurableDelivery(
+              params.deliveryCompletion,
+              results.at(-1)!,
+              platformQueueStateDir,
+            );
           } else {
-            suppressDurableDelivery(params.deliveryCompletion);
+            await suppressDurableDelivery(params.deliveryCompletion, platformQueueStateDir);
           }
         }
         const postSendState =
@@ -562,7 +570,11 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
                 terminalRejectionHandled = true;
               } else {
                 if (params.deliveryCompletion) {
-                  rejectDurableDelivery(params.deliveryCompletion, permanentRejection.message);
+                  await rejectDurableDelivery(
+                    params.deliveryCompletion,
+                    permanentRejection.message,
+                    platformQueueStateDir,
+                  );
                   ownerRejected = true;
                 }
                 await (producerClaimId

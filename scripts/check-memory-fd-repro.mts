@@ -126,7 +126,7 @@ function stripPackageManagerSeparatorForKnownFlags(argv: string[]) {
 /**
  * Parses a safe non-negative integer option.
  */
-export function readNumber(value: unknown, label: string) {
+export function parseNonNegativeInteger(value: unknown, label: string) {
   const raw = String(value).trim();
   if (!NON_NEGATIVE_INTEGER_PATTERN.test(raw)) {
     throw new Error(`${label} must be a non-negative integer`);
@@ -142,7 +142,7 @@ export function readNumber(value: unknown, label: string) {
  * Parses a safe positive integer option.
  */
 export function readPositiveNumber(value: unknown, label: string) {
-  const parsed = readNumber(value, label);
+  const parsed = parseNonNegativeInteger(value, label);
   if (parsed <= 0) {
     throw new Error(`${label} must be greater than 0`);
   }
@@ -151,7 +151,7 @@ export function readPositiveNumber(value: unknown, label: string) {
 
 function readNumberEnv(name: string, fallback: number) {
   const raw = process.env[name];
-  return raw == null || raw.trim() === "" ? fallback : readNumber(raw, name);
+  return raw == null || raw.trim() === "" ? fallback : parseNonNegativeInteger(raw, name);
 }
 
 function readPositiveNumberEnv(name: string, fallback: number) {
@@ -166,7 +166,8 @@ function clampTimerTimeoutMs(valueMs: number, minMs = 1) {
 }
 
 function readTimerTimeoutNumber(value: unknown, label: string, minMs = 1) {
-  const parsed = minMs > 0 ? readPositiveNumber(value, label) : readNumber(value, label);
+  const parsed =
+    minMs > 0 ? readPositiveNumber(value, label) : parseNonNegativeInteger(value, label);
   return clampTimerTimeoutMs(parsed, minMs);
 }
 
@@ -230,7 +231,7 @@ export function parseArgs(argv: string[]) {
         mode = "report";
         break;
       case "--max-workspace-reg-fds":
-        maxWorkspaceRegFds = readNumber(readValue(), "--max-workspace-reg-fds");
+        maxWorkspaceRegFds = parseNonNegativeInteger(readValue(), "--max-workspace-reg-fds");
         break;
       case "--min-leaked-fds":
         minLeakedFds = readPositiveNumber(readValue(), "--min-leaked-fds");

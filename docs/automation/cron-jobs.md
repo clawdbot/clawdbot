@@ -283,6 +283,18 @@ Throws, timeouts, exhausted tool budgets, invalid results, and `nextCheck` witho
 
 ## Execution styles
 
+### Codex apps in scheduled automations
+
+Codex-created automations can retain the app IDs and permission ceiling
+available to the authenticated creator thread. At execution, OpenClaw requires
+the same prepared Codex profile and account, then narrows the stored cap against
+current app policy. Revoked apps, account/runtime changes, and interactive
+approval requirements fail closed with a recovery message; they never fall
+back to broader or different credentials. Older jobs without a captured app
+envelope continue their ordinary non-app behavior; recreate or reauthorize one
+only when it needs Codex app access. See
+[Native Codex plugins](/plugins/codex-native-plugins#scheduled-automations).
+
 | Style           | `--session` value   | Runs in                   | Best for                        |
 | --------------- | ------------------- | ------------------------- | ------------------------------- |
 | Main session    | `main`              | Dedicated automation lane | Reminders, system events        |

@@ -7,7 +7,7 @@ import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../llm/types.js";
-import { extractAssistantText } from "../embedded-agent-utils.js";
+import { extractEmbeddedAssistantText } from "../embedded-agent-utils.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import { coerceToolModelConfig, type ToolModelConfig } from "./model-config.helpers.js";
@@ -62,7 +62,7 @@ function isImageReasoningFallbackSignature(value: unknown): boolean {
 
 /** Detects provider responses that contain only reasoning blocks and no usable image text. */
 export function hasImageReasoningOnlyResponse(message: AssistantMessage): boolean {
-  if (extractAssistantText(message).trim() || !Array.isArray(message.content)) {
+  if (extractEmbeddedAssistantText(message).trim() || !Array.isArray(message.content)) {
     return false;
   }
   let checkedBlocks = 0;
@@ -134,7 +134,7 @@ export function coerceImageAssistantText(params: {
   if (errorMessage) {
     throw new Error(`Image model failed (${params.provider}/${params.model}): ${errorMessage}`);
   }
-  const text = extractAssistantText(params.message);
+  const text = extractEmbeddedAssistantText(params.message);
   if (text.trim()) {
     return text.trim();
   }

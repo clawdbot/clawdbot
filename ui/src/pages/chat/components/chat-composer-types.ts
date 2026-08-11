@@ -25,6 +25,14 @@ import type {
   ChatComposerPlusMenuView,
 } from "./chat-composer-plus-menu.ts";
 
+/** One shape for the queued-message edit state and its two actions. */
+export type ChatQueuedEditProps = {
+  /** Id of the row the composer currently owns, or null when composing fresh. */
+  editingId: string | null;
+  onEdit?: (id: string) => void;
+  onCancel: () => void;
+};
+
 export type CapabilityMenuProps = Omit<
   ChatComposerPlusMenuProps,
   | "attachments"
@@ -122,6 +130,7 @@ export type ChatComposerProps = {
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, toIndex: number) => void;
+  queuedEdit?: ChatQueuedEditProps;
   onNewSession: () => void;
   onClearReply?: () => void;
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
@@ -173,6 +182,7 @@ export type ChatComposerState = {
   gatewayQuestionCollapsed: boolean;
   questionTakeoverActive: boolean;
   restoreComposerFocus: boolean;
+  composerInput: HTMLElement | null;
   composerTextarea: HTMLTextAreaElement | null;
   microphonePickerOpen: boolean;
   microphonePickerLoading: boolean;
@@ -183,8 +193,9 @@ export type ChatComposerState = {
   microphoneDiscoveryRequest: number;
   capabilityMenuOpen: boolean;
   capabilityMenuView: ChatComposerPlusMenuView;
-  // Stable Lit ref: an inline arrow would change identity per render and force
-  // a layout re-measure of the textarea on every chat render, not just attach.
+  // Stable Lit refs: inline arrows would change identity per render and force
+  // layout observers to detach and reconnect on every chat update.
+  composerInputRef: ((element?: Element) => void) | null;
   textareaRef: ((element?: Element) => void) | null;
   dictation: ComposerDictationController | null;
   dictationDraftKey: string | null;

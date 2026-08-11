@@ -8,12 +8,10 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../../agents/subagents/registry/subagent-lifecycle-events.js";
-import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import {
-  countPendingDescendantRunsFromRuns,
-  listRunsForControllerFromRuns,
-} from "../../agents/subagents/registry/subagent-registry-queries.js";
-import { getSubagentRunsSnapshotForRead } from "../../agents/subagents/registry/subagent-registry-state.js";
+  countPendingDescendantRuns,
+  listSubagentRunsForController,
+} from "../../agents/subagents/registry/subagent-registry-read.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -25,7 +23,7 @@ import { createTaskRecord } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import type { ReplyPayload } from "../types.js";
 import { buildSubagentsStatusLine } from "./commands-status-subagents.js";
-import { extractMessageText } from "./commands-subagents-text.js";
+import { extractSubagentMessageText } from "./commands-subagents-text.js";
 import { handleSubagentsInfoAction } from "./commands-subagents/action-info.js";
 import { handleSubagentsListAction } from "./commands-subagents/action-list.js";
 import { handleSubagentsLogAction } from "./commands-subagents/action-log.js";
@@ -131,14 +129,12 @@ describe("subagents status", () => {
     },
   ])("$name", ({ seedRuns, verboseLevel, expectedText, unexpectedText }) => {
     seedRuns();
-    const runsSnapshot = getSubagentRunsSnapshotForRead(subagentRuns);
-    const runs = listRunsForControllerFromRuns(runsSnapshot, "agent:main:main");
+    const runs = listSubagentRunsForController("agent:main:main");
     const text =
       buildSubagentsStatusLine({
         runs,
         verboseEnabled: verboseLevel === "on",
-        pendingDescendantsForRun: (entry) =>
-          countPendingDescendantRunsFromRuns(runsSnapshot, entry.childSessionKey),
+        pendingDescendantsForRun: (entry) => countPendingDescendantRuns(entry.childSessionKey),
         now: 5000,
       }) ?? "";
     for (const expected of expectedText) {
@@ -526,7 +522,7 @@ describe("subagents log", () => {
   });
 });
 
-describe("extractMessageText", () => {
+describe("extractSubagentMessageText", () => {
   it("preserves user markers and sanitizes assistant markers", () => {
     const cases = [
       {
@@ -540,7 +536,7 @@ describe("extractMessageText", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const result = extractMessageText(testCase.message);
+      const result = extractSubagentMessageText(testCase.message);
       expect(result?.text).toBe(testCase.expectedText);
     }
   });

@@ -20,6 +20,7 @@ import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-app
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CliSessionBindingFacts } from "../cli-runner/types.js";
+import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-context.js";
 import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery/main-session-recovery-store.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
@@ -200,6 +201,8 @@ export type AgentCommandOpts = {
   >;
   /** Gateway-owned exact operational instance shared with its abort controller. */
   operationalRunInstance?: import("../admitted-run-context.js").OperationalRunInstanceRef;
+  /** Gateway-minted exact-run capability for late Codex creator-authority capture. */
+  cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
   /** Private exact-instance binding hook invoked after delegated authority admission. */
   onAdmittedRunContext?: (
     context: import("../admitted-run-context.js").AdmittedRunContext,
@@ -234,6 +237,7 @@ export type AgentCommandIngressOpts = Omit<
   | "mainRestartRecoveryAttempt"
   | "executionIdentityAdmission"
   | "operationalRunInstance"
+  | "cronCreatorAuthorityCapability"
   | "onAdmittedRunContext"
 > & {
   /** Trusted sender identity bit for command/channel-action auth; defaults false for ingress. */
@@ -251,5 +255,6 @@ export type AgentCommandGatewayIngressOpts = AgentCommandIngressOpts &
     | "mainRestartRecoveryAttempt"
     | "executionIdentityAdmission"
     | "operationalRunInstance"
+    | "cronCreatorAuthorityCapability"
     | "onAdmittedRunContext"
   >;
