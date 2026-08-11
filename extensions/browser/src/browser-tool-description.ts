@@ -18,6 +18,7 @@ export function describeBrowserTool(opts: {
     "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
     "For page text, use a selector-scoped snapshot or act:evaluate that returns only relevant text or structured data, then reason over that bounded result with the active model. Use efficient snapshots for controls and action discovery; they omit most non-interactive prose.",
     "For file chooser uploads, pass the trigger ref with paths in the same upload call when available; use paths-only arming only when a later trigger is intentional. Use inputRef or element to set a file input directly.",
+    "Multi-step flows (3+ dependent actions, any loop or aggregation): when a Code Mode exec tool is available, drive this tool from one exec cell — see the browser-automation skill's Code Mode Loop — instead of issuing one action per call.",
     `target selects browser location (sandbox|host|node). Default: ${opts.targetDefault}.`,
     opts.hostHint,
   ].join(" ");
