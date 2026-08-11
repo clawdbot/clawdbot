@@ -29,6 +29,7 @@ import type {
   StageResult,
 } from "./heartbeat-runner-execution.js";
 import { getHeartbeatWakeAbortSignal } from "./heartbeat-wake.js";
+import { resolveReplyOperationAgentTurn } from "../auto-reply/reply/reply-operation-agent-turn-state.js";
 
 const log = heartbeatLog;
 
@@ -83,6 +84,7 @@ export async function invokeHeartbeatAgentRun(
   const heartbeatToolResponse = resolveHeartbeatToolResponseFromReplyResult(replyResult);
   const heartbeatScratchProposal = resolveHeartbeatScratchProposalFromReplyResult(replyResult);
   const heartbeatTerminalToolFailure = resolveHeartbeatTerminalToolFailure(replyResult);
+  const agentRunFailed = resolveReplyOperationAgentTurn(replyOperationRunState) === "failed";
   const selectedReplyPayload = resolveHeartbeatReplyPayload(replyResult);
   const replyPayload = selectedReplyPayload;
   if (
@@ -120,6 +122,7 @@ export async function invokeHeartbeatAgentRun(
     kind: "completed",
     heartbeatToolResponse,
     heartbeatTerminalToolFailure,
+    agentRunFailed,
     replyPayload,
   } as const;
 }

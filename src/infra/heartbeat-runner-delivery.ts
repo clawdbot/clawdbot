@@ -26,7 +26,6 @@ import type {
 import type { CompletedHeartbeatAgentRun } from "./heartbeat-runner-invoke.js";
 import { truncateHeartbeatPreview } from "./heartbeat-runner-prompt.js";
 import { restoreHeartbeatUpdatedAt } from "./heartbeat-runner-session.js";
-import { handleHeartbeatTerminalToolFailure } from "./heartbeat-terminal-tool-failure.js";
 import type { HeartbeatRunResult } from "./heartbeat-wake-contracts.js";
 import type { resolveAgentOutboundIdentity } from "./outbound/identity.js";
 import type { buildOutboundSessionContext } from "./outbound/session-context.js";
