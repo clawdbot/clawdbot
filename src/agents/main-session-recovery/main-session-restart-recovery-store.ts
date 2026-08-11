@@ -26,10 +26,6 @@ import {
 import { isMainRestartRecoveryCandidate } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import {
-  loadExpectedRestartRecoveryClaim,
-  type ExpectedRestartRecoveryClaim,
-} from "./main-session-restart-claim.js";
-import {
   hasRestartRecoveryMessageActionAuthority,
   requiresRestartRecoveryMessageActionAuthority,
   resumeMainSession,
@@ -137,6 +133,34 @@ async function completePendingFinalRecoveryWithNotice(
     { skipMaintenance: true, takeCacheOwnership: true },
   );
   return completed;
+}
+
+export type ExpectedRestartRecoveryClaim = {
+  canonicalSessionKey?: string;
+  recoveryRunId: string;
+  recoverySourceRunId: string;
+  sessionId: string;
+  sessionKey: string;
+};
+
+export function loadExpectedRestartRecoveryClaim(params: {
+  expected: ExpectedRestartRecoveryClaim;
+  storePath: string;
+}): SessionEntry | undefined {
+  const exact = loadExactSessionEntry({
+    readConsistency: "latest",
+    sessionKey: params.expected.sessionKey,
+    storePath: params.storePath,
+  });
+  const entry = exact?.sessionKey === params.expected.sessionKey ? exact.entry : undefined;
+  return entry?.sessionId === params.expected.sessionId &&
+    entry.status === "running" &&
+    entry.abortedLastRun === true &&
+    normalizeOptionalString(entry.restartRecoveryDeliveryRunId) === params.expected.recoveryRunId &&
+    normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) ===
+      params.expected.recoverySourceRunId
+    ? entry
+    : undefined;
 }
 
 export function loadExpectedRestartRecoveryTarget(params: {

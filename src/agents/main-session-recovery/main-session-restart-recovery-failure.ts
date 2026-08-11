@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
@@ -11,13 +12,20 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { MainSessionRecoveryObservation } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
-import { buildRestartRecoveryTombstoneNoticeKey } from "./main-session-restart-claim.js";
 import { resolveRestartRecoveryDeliveryContext } from "./main-session-restart-dispatch.js";
 import { buildRestartRecoveryExpectedState, log } from "./main-session-restart-recovery-shared.js";
 
 const TOMBSTONED_SESSION_NOTICE =
   "I couldn't continue this session after a gateway restart. " +
   "Use /new or /reset to start a replacement session.";
+
+function buildRestartRecoveryTombstoneNoticeKey(entry: SessionEntry): string {
+  const interruptedRunId =
+    normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) ??
+    normalizeOptionalString(entry.restartRecoveryDeliveryRunId) ??
+    entry.sessionId;
+  return `main-session-restart-recovery:${interruptedRunId}:failed-notice`;
+}
 
 async function sendRestartRecoveryTombstoneNotice(params: {
   deliveryContext: DeliveryContext & { channel: string; to: string };
