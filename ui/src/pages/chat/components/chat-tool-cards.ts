@@ -227,10 +227,25 @@ const TOOL_ROW_VERB_KEYS: Partial<Record<ToolCallView["kind"], string>> = {
 };
 
 const MUTATION_VERB_KEYS = {
-  edit: {
+  update: {
     running: "chat.toolCards.verbs.editing",
     succeeded: "chat.toolCards.verbs.edited",
     fallback: "chat.toolCards.verbs.edit",
+  },
+  add: {
+    running: "chat.toolCards.verbs.creating",
+    succeeded: "chat.toolCards.verbs.created",
+    fallback: "chat.toolCards.verbs.create",
+  },
+  delete: {
+    running: "chat.toolCards.verbs.deleting",
+    succeeded: "chat.toolCards.verbs.deleted",
+    fallback: "chat.toolCards.verbs.delete",
+  },
+  mixed: {
+    running: "chat.toolCards.verbs.changing",
+    succeeded: "chat.toolCards.verbs.changed",
+    fallback: "chat.toolCards.verbs.change",
   },
   write: {
     running: "chat.toolCards.verbs.writing",
@@ -239,12 +254,21 @@ const MUTATION_VERB_KEYS = {
   },
 } as const;
 
-function resolveToolRowVerb(
-  kind: ToolCallView["kind"],
-  outcome: ToolCardOutcome,
-): string | undefined {
-  if (kind === "edit" || kind === "write") {
-    const keys = MUTATION_VERB_KEYS[kind];
+function resolveMutationVerbKind(view: ToolCallView): keyof typeof MUTATION_VERB_KEYS | undefined {
+  if (view.kind === "write") {
+    return "write";
+  }
+  if (view.kind !== "edit") {
+    return undefined;
+  }
+  const operations = new Set(view.fileOperations?.map(({ operation }) => operation));
+  return operations.size > 1 ? "mixed" : (operations.values().next().value ?? "update");
+}
+
+function resolveToolRowVerb(view: ToolCallView, outcome: ToolCardOutcome): string | undefined {
+  const mutation = resolveMutationVerbKind(view);
+  if (mutation) {
+    const keys = MUTATION_VERB_KEYS[mutation];
     const key =
       outcome === "running"
         ? keys.running
@@ -253,7 +277,7 @@ function resolveToolRowVerb(
           : keys.fallback;
     return t(key);
   }
-  const key = TOOL_ROW_VERB_KEYS[kind];
+  const key = TOOL_ROW_VERB_KEYS[view.kind];
   return key ? t(key) : undefined;
 }
 
@@ -287,7 +311,7 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolC
     `;
   }
 
-  const verb = resolveToolRowVerb(view.kind, outcome);
+  const verb = resolveToolRowVerb(view, outcome);
   if (verb && view.target) {
     const stat =
       outcome === "succeeded"
@@ -574,7 +598,7 @@ export function resolveToolRowText(card: ToolCard, runActive?: boolean): string 
   if (view.kind === "command" && view.command) {
     return `$ ${firstCommandLine(view.command)}`;
   }
-  const verb = resolveToolRowVerb(view.kind, resolveToolCardOutcome(card, runActive));
+  const verb = resolveToolRowVerb(view, resolveToolCardOutcome(card, runActive));
   if (verb && view.target) {
     return `${verb} ${view.target}`;
   }

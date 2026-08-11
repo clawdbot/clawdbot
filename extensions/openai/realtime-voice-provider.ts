@@ -31,6 +31,7 @@ import type {
 import {
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+  normalizeRealtimeVoiceResponseOutcome,
   RealtimeVoiceSessionLifecycle,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { sleepWithAbort, warn } from "openclaw/plugin-sdk/runtime-env";
@@ -1430,6 +1431,18 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.ws?.close(1000, "max-duration rotation");
       return;
     }
+    if (event.type === "response.done") {
+      this.handleResponseDone(event, connection, emitServerEvent);
+      return;
+    }
+    if (event.type === "response.cancelled") {
+      try {
+        emitServerEvent();
+      } finally {
+        this.releaseResponseState();
+      }
+      return;
+    }
     emitServerEvent();
     switch (event.type) {
       case "session.created":
@@ -1521,29 +1534,6 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         // is the sole execution boundary.
         return;
 
-      case "response.cancelled":
-      case "response.done":
-        if (this.handleCompletedResponse(event, connection)) {
-          return;
-        }
-        this.responseActive = false;
-        this.responseCreateInFlight = false;
-        this.manualResponseCreateEventId = null;
-        this.responseCancelInFlight = false;
-        this.manualResponseCancelEventId = null;
-        if (this.standaloneSpeechActive) {
-          this.standaloneSpeechActive = false;
-          this.standaloneSpeechEventId = null;
-        }
-        if (this.standaloneSpeechQueue.length > 0) {
-          this.flushStandaloneSpeech();
-        } else if (this.responseCreatePending) {
-          this.flushPendingResponseCreate();
-        } else {
-          this.restoreAutoRespondAfterManualResponse();
-        }
-        return;
-
       case "error": {
         const detail = readRealtimeErrorDetail(event.error);
         const rejectedEventId = readRealtimeErrorEventId(event.error);
@@ -1602,6 +1592,28 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       }
 
       default:
+    }
+  }
+
+  private releaseResponseState(options: { drain?: boolean } = {}): void {
+    this.responseActive = false;
+    this.responseCreateInFlight = false;
+    this.manualResponseCreateEventId = null;
+    this.responseCancelInFlight = false;
+    this.manualResponseCancelEventId = null;
+    if (this.standaloneSpeechActive) {
+      this.standaloneSpeechActive = false;
+      this.standaloneSpeechEventId = null;
+    }
+    if (options.drain === false) {
+      return;
+    }
+    if (this.standaloneSpeechQueue.length > 0) {
+      this.flushStandaloneSpeech();
+    } else if (this.responseCreatePending) {
+      this.flushPendingResponseCreate();
+    } else {
+      this.restoreAutoRespondAfterManualResponse();
     }
   }
 
@@ -1749,6 +1761,47 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.config.onToolCall({ itemId: itemId ?? callId, callId, name, args });
     }
     return false;
+  }
+
+  private handleResponseDone(
+    event: RealtimeEvent,
+    connection: RealtimeVoiceSessionConnection,
+    emitServerEvent: () => void,
+  ): void {
+    const outcome = normalizeRealtimeVoiceResponseOutcome({
+      providerLabel: "OpenAI realtime voice",
+      response: event.response,
+      responseId: event.response_id,
+    });
+    let callbackError: unknown;
+    let providerTerminated = false;
+    const invoke = (callback: () => void) => {
+      try {
+        callback();
+      } catch (error) {
+        callbackError ??= error;
+      }
+    };
+    try {
+      invoke(() => this.config.onResponseDone?.(outcome));
+      invoke(emitServerEvent);
+      invoke(() => {
+        providerTerminated = this.handleCompletedResponse(event, connection);
+      });
+    } finally {
+      // response.done owns response state regardless of observer success. A fatal tool
+      // boundary still clears state, but must not start queued work on a closing socket.
+      const canDrain =
+        !providerTerminated &&
+        this.lifecycle.acceptsEvents(connection) &&
+        this.ws?.readyState === WebSocket.OPEN;
+      this.releaseResponseState({ drain: canDrain });
+    }
+    if (callbackError) {
+      throw callbackError instanceof Error
+        ? callbackError
+        : new Error("OpenAI realtime response callback failed", { cause: callbackError });
+    }
   }
 
   private rejectToolCallArguments(params: {
@@ -2185,6 +2238,7 @@ async function createOpenAIRealtimeBrowserSession(
               onAudio: () => undefined,
               onClearAudio: () => undefined,
               onEvent: gatewayControl.onEvent,
+              onResponseDone: gatewayControl.onResponseDone,
               onTranscript: gatewayControl.onTranscript,
               onToolCall: gatewayControl.onToolCall,
               onReady: gatewayControl.onReady,

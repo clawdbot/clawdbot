@@ -21,7 +21,7 @@ import {
 } from "../config/types.secrets.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { runSecretsApply, type SecretsApplyResult } from "./apply.js";
 import { createSecretsConfigIO } from "./config-io.js";
@@ -176,7 +176,7 @@ function loadSecretProviderIntegrationPresets(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 }): SecretProviderIntegrationPreset[] {
-  const manifestRegistry = loadPluginManifestRegistry({
+  const manifestRegistry = loadPluginManifestRegistryCore({
     config: params.config,
     env: params.env,
   });

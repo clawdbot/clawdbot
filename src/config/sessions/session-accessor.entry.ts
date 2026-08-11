@@ -56,7 +56,7 @@ import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-k
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import {
   normalizeStoreSessionKey,
-  resolveSessionStoreEntry as resolveSessionEntryFromStore,
+  resolveSessionStoreEntryCore as resolveSessionEntryFromStore,
 } from "./store-entry.js";
 import { resolveAllAgentSessionStoreTargetsSync, type SessionStoreTarget } from "./targets.js";
 import type { SessionEntry } from "./types.js";

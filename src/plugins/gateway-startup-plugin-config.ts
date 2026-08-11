@@ -19,7 +19,7 @@ import {
 import { readBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "./channel-presence-policy.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
-import { normalizePluginsConfigWithResolver } from "./config-normalization-shared.js";
+import { normalizePluginsConfigWithResolverCore } from "./config-normalization-shared.js";
 import {
   resolveEffectivePluginActivationState,
   resolveSelectedContextEnginePluginIdFromConfig,
@@ -63,7 +63,7 @@ export function normalizePluginsConfigForInstalledIndex(
   config: OpenClawConfig["plugins"] | undefined,
   lookup: InstalledPluginIndexScopeLookup,
 ) {
-  return normalizePluginsConfigWithResolver(config, lookup.normalizePluginId);
+  return normalizePluginsConfigWithResolverCore(config, lookup.normalizePluginId);
 }
 
 function isConfigActivationValueEnabled(value: unknown): boolean {

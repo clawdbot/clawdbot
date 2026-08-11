@@ -183,18 +183,32 @@ export function createReplyOperation(params: {
     terminalSettleTimer.scheduleOnce(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
   };
 
-  const abortWithReason = (
+  const abortOperation = (
     reason: ReplyBackendCancelReason,
     abortReason: unknown,
-    opts?: { abortedCode?: ReplyOperationAbortCode },
+    abortedCode: ReplyOperationAbortCode,
   ) => {
-    if (opts?.abortedCode && !result) {
-      setResult({ kind: "aborted", code: opts.abortedCode });
+    const phaseBeforeAbort = phase;
+    if (!result) {
+      setResult({ kind: "aborted", code: abortedCode });
       detachUpstreamAbort();
     }
     phase = "aborted";
     abortInternally(abortReason);
-    getAttachedBackend(operation)?.cancel(reason);
+    // Cancellation may throw, but lifecycle cleanup still must run. Pre-backend
+    // non-retained owners release now; retained/running owners await terminal settle.
+    try {
+      getAttachedBackend(operation)?.cancel(reason);
+    } finally {
+      if (
+        isReplyOperationPreBackendPhase(phaseBeforeAbort) &&
+        !retainStateUntilCompleteOperations.has(operation)
+      ) {
+        clearState();
+      } else {
+        scheduleTerminalSettle();
+      }
+    }
   };
 
   const operation: ReplyOperation = {
@@ -463,36 +477,14 @@ export function createReplyOperation(params: {
       if (!isReplyOperationAbortable(operation)) {
         return false;
       }
-      const phaseBeforeAbort = phase;
-      abortWithReason("user_abort", createUserAbortError(), {
-        abortedCode: "aborted_by_user",
-      });
-      if (
-        isReplyOperationPreBackendPhase(phaseBeforeAbort) &&
-        !retainStateUntilCompleteOperations.has(operation)
-      ) {
-        clearState();
-      } else {
-        scheduleTerminalSettle();
-      }
+      abortOperation("user_abort", createUserAbortError(), "aborted_by_user");
       return true;
     },
     abortForRestart() {
       if (!isReplyOperationAbortable(operation)) {
         return false;
       }
-      const phaseBeforeAbort = phase;
-      abortWithReason("restart", createAgentRunRestartAbortError(), {
-        abortedCode: "aborted_for_restart",
-      });
-      if (
-        isReplyOperationPreBackendPhase(phaseBeforeAbort) &&
-        !retainStateUntilCompleteOperations.has(operation)
-      ) {
-        clearState();
-      } else {
-        scheduleTerminalSettle();
-      }
+      abortOperation("restart", createAgentRunRestartAbortError(), "aborted_for_restart");
       return true;
     },
   };
@@ -638,18 +630,11 @@ export function createReplyOperation(params: {
         return;
       }
       const restart = isAgentRunRestartAbortReason(upstreamAbortSignal.reason);
-      const phaseBeforeAbort = phase;
-      abortWithReason(restart ? "restart" : "user_abort", upstreamAbortSignal.reason, {
-        abortedCode: restart ? "aborted_for_restart" : "aborted_by_user",
-      });
-      if (
-        isReplyOperationPreBackendPhase(phaseBeforeAbort) &&
-        !retainStateUntilCompleteOperations.has(operation)
-      ) {
-        clearState();
-      } else {
-        scheduleTerminalSettle();
-      }
+      abortOperation(
+        restart ? "restart" : "user_abort",
+        upstreamAbortSignal.reason,
+        restart ? "aborted_for_restart" : "aborted_by_user",
+      );
     };
     if (upstreamAbortSignal.aborted) {
       abortFromUpstream();

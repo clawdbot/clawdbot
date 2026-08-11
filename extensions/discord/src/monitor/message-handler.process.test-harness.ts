@@ -235,6 +235,7 @@ const dispatchInboundMessage = vi.hoisted(() =>
     counts: { final: 0, tool: 0, block: 0 },
   })),
 );
+const readAgentRunTerminalOutcome = vi.hoisted(() => vi.fn());
 const recordInboundSession = vi.hoisted(() =>
   vi.fn<(params?: unknown) => Promise<void>>(async () => {}),
 );
@@ -270,6 +271,7 @@ export const sendMocksForTest = sendMocks;
 export const typingMocksForTest = typingMocks;
 export const discordTargetMocksForTest = discordTargetMocks;
 export const dispatchInboundMessageForTest = dispatchInboundMessage;
+export const readAgentRunTerminalOutcomeForTest = readAgentRunTerminalOutcome;
 export const recordInboundSessionForTest = recordInboundSession;
 export const createDiscordRestClientSpyForTest = createDiscordRestClientSpy;
 let createBaseDiscordMessageContext: typeof import("./message-handler.test-harness.js").createBaseDiscordMessageContext;
@@ -403,6 +405,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   const replyRuntime = await import("openclaw/plugin-sdk/reply-runtime");
   return {
     ...actual,
+    readAgentRunTerminalOutcome,
     dispatchChannelInboundTurn: async (
       plan: import("openclaw/plugin-sdk/channel-inbound").ChannelInboundTurnPlan<"provider_message_sending">,
     ) => {
@@ -585,6 +588,7 @@ export function registerDiscordProcessTestLifecycle() {
     deliverDiscordReply.mockClear();
     createDiscordDraftStream.mockClear();
     dispatchInboundMessage.mockClear();
+    readAgentRunTerminalOutcome.mockReset().mockReturnValue(undefined);
     recordInboundSession.mockClear();
     readSessionUpdatedAt.mockClear();
     getSessionEntry.mockClear();

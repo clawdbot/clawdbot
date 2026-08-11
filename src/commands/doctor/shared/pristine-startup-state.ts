@@ -15,7 +15,7 @@ import {
   inspectPluginStartupMetadata,
 } from "../../../plugins/bundled-plugin-startup-metadata.js";
 import { discoverConfiguredPluginLoadPaths } from "../../../plugins/discovery.js";
-import { loadPluginManifestRegistry } from "../../../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "../../../plugins/manifest-registry.js";
 import { configMayRequireStartupPluginConvergence } from "./startup-plugin-convergence-plan.js";
 
 const STATEFUL_CONFIG_KEYS = new Set([
@@ -138,7 +138,7 @@ function hasOnlyMigrationSafePluginEntries(
       }
       // Discovery alone cannot prove host compatibility or rule out a fallback
       // doctor owner; use the same candidate acceptance as normal plugin startup.
-      const registry = loadPluginManifestRegistry({
+      const registry = loadPluginManifestRegistryCore({
         config: config as OpenClawConfig,
         discovery,
         env,

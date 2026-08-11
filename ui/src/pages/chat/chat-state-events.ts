@@ -502,8 +502,9 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
     return;
   }
   if (event.event === "agent" || event.event === "session.tool") {
-    handleAgentEvent(state as never, event.payload as never);
-    requestChatPageUpdate(state);
+    if (handleAgentEvent(state as never, event.payload as never)) {
+      requestChatPageUpdate(state);
+    }
     return;
   }
   if (event.event === "session.operation") {

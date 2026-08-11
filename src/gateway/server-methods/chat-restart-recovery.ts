@@ -38,7 +38,7 @@ type RestartSafeChatRequest = {
   fingerprint: string;
 };
 
-export type RestartSafeChatAdmission = {
+type RestartSafeChatAdmission = {
   priorTerminalSourceRunId?: string;
   requestFingerprint: string;
   retryExpectedState?: SessionTranscriptTurnExpectedState;

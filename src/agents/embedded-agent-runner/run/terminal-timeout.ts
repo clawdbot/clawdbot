@@ -1,7 +1,7 @@
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { hasMessagingToolDeliveryEvidence } from "../delivery-evidence.js";
 import type { EmbeddedAgentMeta, EmbeddedAgentRunResult } from "../types.js";
-import { resolveRunLivenessState } from "./incomplete-turn.js";
+import { resolveRunLivenessState } from "./incomplete-turn-resolution.js";
 import {
   isEmbeddedRunTerminalAbort,
   isEmbeddedRunTerminalTimeout,

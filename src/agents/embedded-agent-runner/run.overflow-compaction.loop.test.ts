@@ -41,14 +41,6 @@ vi.mock("../subagents/registry/subagent-registry.js", () => ({
   settleRequesterAfterSessionSpawns: mocks.settleRequesterAfterSessionSpawns,
 }));
 
-vi.mock("./run/plugin-harness-prompt-images.js", () => ({
-  preparePluginHarnessPromptImages: vi.fn(async () => ({
-    images: undefined,
-    imageOrder: undefined,
-    media: undefined,
-  })),
-}));
-
 vi.mock("./run/skill-workshop-attempt-params.js", () => ({
   resolveSkillWorkshopAttemptParams: vi.fn(() => ({})),
 }));

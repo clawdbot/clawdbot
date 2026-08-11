@@ -10,8 +10,8 @@ import {
   isMessageToolSendActionName,
   isMessagingToolDeliveryAction,
 } from "./embedded-agent-messaging.js";
-import { isToolResultError } from "./embedded-agent-subscribe.tools.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
+import { isToolResultError } from "./tool-result-error.js";
 
 const MESSAGE_TOOL_NAME = "message";
 const SESSIONS_SEND_TOOL_NAME = "sessions_send";

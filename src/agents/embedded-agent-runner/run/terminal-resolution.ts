@@ -15,24 +15,26 @@ import type {
   EmbeddedRunFailureSignal,
   TraceAttempt,
 } from "../types.js";
+import { hasAttemptTerminalState } from "./attempt-terminal-evidence.js";
 import {
   markEmbeddedRunAuthProfileSuccess,
   reportEmbeddedRunSuccessfulAuthBinding,
 } from "./auth-profile-success.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import {
-  hasAttemptTerminalState,
-  hasYieldContinuationEvidence,
   resolveEmptyResponseRetryInstruction,
-  resolveIncompleteTurnPayloadText,
   resolveReasoningOnlyRetryInstruction,
+  resolveSettledToolTerminalContinuationInstruction,
+  shouldTreatEmptyAssistantReplyAsSilent,
+} from "./incomplete-turn-recovery.js";
+import {
+  hasYieldContinuationEvidence,
+  resolveIncompleteTurnPayloadText,
   resolveRunLivenessState,
   resolveSilentToolResultReplyPayload,
-  resolveSettledToolTerminalContinuationInstruction,
   shouldRetryMissingAssistantTurn,
-  shouldTreatEmptyAssistantReplyAsSilent,
   YIELD_DIAGNOSTIC_TEXT,
-} from "./incomplete-turn.js";
+} from "./incomplete-turn-resolution.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import {
   isEmbeddedRunTerminalAbort,
@@ -646,6 +648,7 @@ function completeEmbeddedRun(
 export function copyAttemptDeliveryState(attempt: EmbeddedRunAttemptResult) {
   return {
     latestMcpAppChannelView: attempt.latestMcpAppChannelView,
+    latestMcpConnectAction: attempt.latestMcpConnectAction,
     didSendViaMessagingTool: attempt.didSendViaMessagingTool,
     didDeliverSourceReplyViaMessageTool: attempt.didDeliverSourceReplyViaMessageTool === true,
     didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,

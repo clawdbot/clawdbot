@@ -780,6 +780,7 @@ describe("plugin-sdk subpath exports", () => {
       ],
     });
     expectSourceMentions("runtime", ["createLoggerBackedRuntime"]);
+    expectSourceMentions("gateway-runtime", ["createOperatorApprovalsGatewayClient"]);
     expectSourceMentions("conversation-runtime", [
       "recordInboundSession",
       "recordInboundSessionMetaSafe",

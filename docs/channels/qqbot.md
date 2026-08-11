@@ -93,28 +93,15 @@ File-backed AppSecret:
 }
 ```
 
-Env SecretRef AppSecret:
-
-```json5
-{
-  channels: {
-    qqbot: {
-      enabled: true,
-      appId: "YOUR_APP_ID",
-      clientSecret: { source: "env", provider: "default", id: "QQBOT_CLIENT_SECRET" },
-    },
-  },
-}
-```
-
 Notes:
 
 - `openclaw channels add --channel qqbot --token-file ...` sets the AppSecret
   only; `appId` must already be set in config or `QQBOT_APP_ID`.
-- `clientSecret` accepts a plaintext string, a file path (`clientSecretFile`),
-  or a structured SecretRef object.
-- Legacy `secretref:...` / `secretref-env:...` marker strings are rejected for
-  `clientSecret`; use a structured SecretRef object instead.
+- `clientSecret` accepts a plaintext string or a file path (`clientSecretFile`).
+- Known limitation: the external `@tencent-connect/openclaw-qqbot` package does
+  not support structured SecretRef objects for `clientSecret`. If your config
+  uses one, move the secret to the `QQBOT_CLIENT_SECRET` environment variable
+  (or `clientSecretFile`) before upgrading.
 
 ### Streaming
 

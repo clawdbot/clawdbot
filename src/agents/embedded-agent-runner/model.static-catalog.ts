@@ -10,7 +10,7 @@ import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { listOpenClawPluginManifestMetadata } from "../../plugins/manifest-metadata-scan.js";
 import { passesManifestOwnerBasePolicy } from "../../plugins/manifest-owner-policy.js";
-import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "../../plugins/manifest-registry.js";
 import { loadPluginManifest } from "../../plugins/manifest.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
@@ -520,7 +520,7 @@ export async function loadBundledProviderStaticCatalogContextModels(
   const discoveryEntryPluginIds = new Set(
     (
       metadataSnapshot?.manifestRegistry?.plugins ??
-      loadPluginManifestRegistry({
+      loadPluginManifestRegistryCore({
         config: params.cfg,
         workspaceDir: params.workspaceDir,
         env,

@@ -187,6 +187,11 @@ export async function syncPluginsForUpdateChannel(params: {
             })
           : null;
       const effectiveNpmSpec = channelNpmSpecs?.installSpec ?? npmSpec;
+      // The catalog integrity pin covers only the bridge's exact npm spec; an
+      // update-channel override resolves a different version and must not
+      // inherit it.
+      const bridgeNpmIntegrity =
+        effectiveNpmSpec === npmSpec ? bridge.expectedIntegrity?.trim() : undefined;
       let installSource = preferredSource;
       let installSpec = preferredSource === "clawhub" ? clawhubSpec : effectiveNpmSpec;
       let result:
@@ -221,6 +226,7 @@ export async function syncPluginsForUpdateChannel(params: {
             config: params.config,
             mode: "update",
             expectedPluginId: targetPluginId,
+            ...(bridgeNpmIntegrity ? { expectedIntegrity: bridgeNpmIntegrity } : {}),
             trustedSourceLinkedOfficialInstall,
             logger,
           });
@@ -231,6 +237,7 @@ export async function syncPluginsForUpdateChannel(params: {
           config: params.config,
           mode: "update",
           expectedPluginId: targetPluginId,
+          ...(bridgeNpmIntegrity ? { expectedIntegrity: bridgeNpmIntegrity } : {}),
           trustedSourceLinkedOfficialInstall,
           logger,
         });

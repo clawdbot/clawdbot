@@ -237,7 +237,7 @@ function normalizePluginEntries(
 }
 
 /** Normalizes plugin config while allowing callers to resolve aliases first. */
-export function normalizePluginsConfigWithResolver(
+export function normalizePluginsConfigWithResolverCore(
   config?: OpenClawConfig["plugins"],
   normalizePluginId: NormalizePluginId = identityNormalizePluginId,
 ): NormalizedPluginsConfig {

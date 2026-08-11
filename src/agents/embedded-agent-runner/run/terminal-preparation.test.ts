@@ -2,8 +2,8 @@ import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { createUsageAccumulator } from "../usage-accumulator.js";
+import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
-import type { EmbeddedRunAttemptResult } from "./types.js";
 
 vi.mock("./payloads.js", () => ({
   buildEmbeddedRunPayloads: () => [],
@@ -43,8 +43,8 @@ function assistantMessage(stopReason: AssistantMessage["stopReason"] = "stop"): 
 }
 
 function attemptResult(
-  overrides: Partial<EmbeddedRunAttemptResult> = {},
-): EmbeddedRunAttemptResult {
+  overrides: Partial<EmbeddedRunAttemptWithReceiptEvidence> = {},
+): EmbeddedRunAttemptWithReceiptEvidence {
   const assistant = assistantMessage("error");
   return {
     terminal: { kind: "ok" },
@@ -114,7 +114,7 @@ describe("prepareEmbeddedRunTerminal", () => {
 
 describe("prepareEmbeddedRunTerminal run stats", () => {
   type StatsInput = {
-    attempt?: Partial<EmbeddedRunAttemptResult> & {
+    attempt?: Partial<EmbeddedRunAttemptWithReceiptEvidence> & {
       terminalTurnId?: string;
     };
     assistantTurns?: number;
@@ -257,12 +257,13 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
       attempt: {
         terminalTurnId: "turn-7",
         toolMetas: [
-          { toolName: "started" },
+          { toolName: "exec", isError: false },
           { toolName: "unknown" },
           { toolName: "write", isError: true },
           { toolName: "read", isError: false },
-          { toolName: "read", isError: false },
+          { toolName: "exec", isError: false },
         ],
+        successfulNestedToolNames: ["read", "zeta", "alpha", "Zeta", " exec ", "alpha", " "],
       },
     });
 
@@ -278,7 +279,7 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
         model: "cost-model-rerouted",
         responseModel: "cost-model-rerouted",
       },
-      successfulToolNames: ["read"],
+      successfulToolNames: ["exec", "read", "Zeta", "alpha", "zeta"],
       rerouted: true,
     });
     expect(

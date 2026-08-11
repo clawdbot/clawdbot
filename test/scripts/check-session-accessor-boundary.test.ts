@@ -137,7 +137,6 @@ describe("session accessor boundary guard", () => {
         "extensions/mattermost/src/mattermost/model-picker.ts",
         "extensions/matrix/src/matrix/monitor/handler.ts",
         "extensions/matrix/src/session-route.ts",
-        "extensions/qqbot/src/engine/group/activation.ts",
         "extensions/slack/src/monitor/slash.ts",
         "extensions/telegram/src/bot-core.ts",
         "extensions/telegram/src/bot-handlers.runtime.ts",
@@ -358,6 +357,7 @@ describe("session accessor boundary guard", () => {
         sessions["loadSessionStore"](storePath);
         readSessionStoreReadOnly(storePath);
         resolveSessionStoreEntry({ store, sessionKey });
+        resolveSessionStoreEntryCore({ store, sessionKey });
       `),
     ).toEqual([
       { line: 2, reason: 'calls legacy session store access "loadSessionStore"' },
@@ -365,6 +365,7 @@ describe("session accessor boundary guard", () => {
       { line: 4, reason: 'references legacy session store access "loadSessionStore"' },
       { line: 5, reason: 'calls legacy session store access "readSessionStoreReadOnly"' },
       { line: 6, reason: 'calls legacy session store access "resolveSessionStoreEntry"' },
+      { line: 7, reason: 'calls legacy session store access "resolveSessionStoreEntryCore"' },
     ]);
   });
 

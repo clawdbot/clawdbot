@@ -229,6 +229,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     providerThinkingLevel: input.transport.providerThinkingLevel,
     sessionAgentId: input.sessionManager.sessionAgentId,
     workspaceDir: input.effectiveWorkspace,
+    workspaceOnly: input.effectiveFsWorkspaceOnly,
     agentDir: input.agentDir,
     abortSignal: input.transport.abortSignal,
     getProviderRuntimeHandle: input.transport.getProviderRuntimeHandle,
