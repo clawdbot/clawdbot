@@ -7,6 +7,7 @@
   outline-offset: 2px;
 }
 
+.settings-workspace--fill-height #activity-mode-panel,
 .settings-workspace--fill-height #activity-live-panel {
   flex: 1 1 auto;
   min-height: 0;

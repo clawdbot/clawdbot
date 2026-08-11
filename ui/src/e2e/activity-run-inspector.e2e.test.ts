@@ -272,6 +272,97 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
     }
   });
 
+  it("keeps a populated Live activity stream bounded after adding the mode switcher", async () => {
+    const context = await newContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, { sessionKey: "main" });
+
+    try {
+      await page.goto(`${server.baseUrl}activity`);
+      await page.getByText("No activity yet.", { exact: true }).waitFor();
+
+      for (let index = 0; index < 40; index += 1) {
+        await gateway.emitGatewayEvent("agent", {
+          runId: `run-layout-${index}`,
+          seq: 1,
+          stream: "tool",
+          ts: Date.now() + index,
+          sessionKey: "main",
+          data: {
+            phase: "start",
+            name: `layout_tool_${index}`,
+            toolCallId: `tool-layout-${index}`,
+            args: {},
+          },
+        });
+      }
+
+      const stream = page.locator(".activity-stream");
+      await expect.poll(() => page.locator(".activity-entry").count()).toBe(40);
+      const layout = await page.locator("#activity-mode-panel").evaluate((modePanel) => {
+        const livePanel = modePanel.querySelector<HTMLElement>("#activity-live-panel");
+        const stream = modePanel.querySelector<HTMLElement>(".activity-stream");
+        if (!livePanel || !stream) {
+          throw new Error("Live Activity layout is incomplete");
+        }
+        const modeStyle = getComputedStyle(modePanel);
+        const liveStyle = getComputedStyle(livePanel);
+        const workspace = modePanel.closest<HTMLElement>(".settings-workspace--fill-height");
+        return {
+          documentScrollHeight: document.documentElement.scrollHeight,
+          liveDisplay: liveStyle.display,
+          liveFlexGrow: liveStyle.flexGrow,
+          modeDisplay: modeStyle.display,
+          modeFlexGrow: modeStyle.flexGrow,
+          streamBottom: stream.getBoundingClientRect().bottom,
+          streamClientHeight: stream.clientHeight,
+          streamScrollHeight: stream.scrollHeight,
+          viewportHeight: window.innerHeight,
+          workspaceBottom: workspace?.getBoundingClientRect().bottom ?? 0,
+        };
+      });
+      expect(layout.modeDisplay).toBe("flex");
+      expect(layout.modeFlexGrow).toBe("1");
+      expect(layout.liveDisplay).toBe("flex");
+      expect(layout.liveFlexGrow).toBe("1");
+      expect(layout.streamScrollHeight).toBeGreaterThan(layout.streamClientHeight);
+      expect(layout.streamBottom).toBeLessThanOrEqual(layout.workspaceBottom + 1);
+      expect(layout.documentScrollHeight).toBeLessThanOrEqual(layout.viewportHeight + 1);
+      await stream.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+        element.dispatchEvent(new Event("scroll"));
+      });
+      await expect
+        .poll(() =>
+          stream.evaluate(
+            (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+          ),
+        )
+        .toBeLessThanOrEqual(1);
+      await screenshot(page, "13-populated-live-activity.png");
+
+      await page.setViewportSize({ height: 900, width: 720 });
+      const mobileLayout = await page.locator("main.content").evaluate((content) => {
+        const outlet = content.querySelector("openclaw-router-outlet");
+        const stream = content.querySelector<HTMLElement>(".activity-stream");
+        if (!outlet || !stream) {
+          throw new Error("Mobile Live Activity layout is incomplete");
+        }
+        return {
+          contentClientHeight: content.clientHeight,
+          contentOverflowY: getComputedStyle(content).overflowY,
+          contentScrollHeight: content.scrollHeight,
+          outletDisplay: getComputedStyle(outlet).display,
+        };
+      });
+      expect(mobileLayout.contentOverflowY).toBe("auto");
+      expect(mobileLayout.outletDisplay).toBe("block");
+      expect(mobileLayout.contentScrollHeight).toBeGreaterThan(mobileLayout.contentClientHeight);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("renders empty, typed unavailable, corrupt, and expired results without guessing", async () => {
     const context = await newContext();
     const page = await context.newPage();
