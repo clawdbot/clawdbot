@@ -922,11 +922,11 @@ function closeChatThreadSearch(state: ChatThreadState, requestUpdate: () => void
   });
 }
 
+/** Toggles transcript search and retains the shortcut origin for focus restoration. */
 export function toggleChatThreadSearch(
   paneId: string,
   requestUpdate: () => void,
-  returnFocusTarget?: HTMLElement,
-  returnFocusOwner?: HTMLElement,
+  triggerEvent?: Event,
 ): void {
   const state = getChatThreadState(paneId);
   if (state.searchOpen) {
@@ -936,8 +936,16 @@ export function toggleChatThreadSearch(
 
   state.searchOpen = true;
   state.searchFocusPending = true;
-  state.searchReturnFocusTarget = returnFocusTarget?.isConnected ? returnFocusTarget : null;
-  state.searchReturnFocusOwner = returnFocusOwner?.isConnected ? returnFocusOwner : null;
+  const returnFocusTarget = triggerEvent?.target;
+  const returnFocusOwner = triggerEvent?.currentTarget;
+  state.searchReturnFocusTarget =
+    returnFocusTarget instanceof HTMLElement && returnFocusTarget.isConnected
+      ? returnFocusTarget
+      : null;
+  state.searchReturnFocusOwner =
+    returnFocusOwner instanceof HTMLElement && returnFocusOwner.isConnected
+      ? returnFocusOwner
+      : null;
   requestUpdate();
 }
 

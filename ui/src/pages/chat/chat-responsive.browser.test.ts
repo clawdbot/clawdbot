@@ -662,6 +662,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
       const searchBar = await getBoundingBox(page, ".agent-chat__search-bar");
       const icons = await page.locator(".agent-chat__search-bar svg").all();
+      const input = page.locator(".agent-chat__search-bar input");
 
       expect(searchBar.height).toBeLessThan(64);
       expect(icons).toHaveLength(2);
@@ -670,6 +671,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(box?.width).toBe(16);
         expect(box?.height).toBe(16);
       }
+      await input.focus();
+      const outline = await input.evaluate((element) => getComputedStyle(element).outline);
+      expect(outline).toContain("2px solid");
     } finally {
       await closeBrowserPage(page);
     }

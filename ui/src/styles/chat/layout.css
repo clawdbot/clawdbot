@@ -168,7 +168,6 @@ openclaw-chat-page {
   background: transparent;
   color: var(--text);
   font-size: 0.88rem;
-  outline: none;
 }
 
 .agent-chat__search-bar input::placeholder {
