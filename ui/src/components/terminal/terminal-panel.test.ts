@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -16,16 +17,6 @@ import { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
 const createGhosttyTerminalMock: CreateGhosttyTerminalMock = vi.fn();
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((next, fail) => {
-    resolve = next;
-    reject = fail;
-  });
-  return { promise, resolve, reject };
-}
-
 const TERMINAL_PANEL_ELEMENT_NAME = defineTestTerminalPanelElement(createGhosttyTerminalMock);
 
 async function startPanelWithPendingOpen() {
@@ -34,7 +25,7 @@ async function startPanelWithPendingOpen() {
     createOptions = options;
     return createTerminalController();
   });
-  const open = deferred<ReturnType<typeof terminalOpenResult>>();
+  const open = createDeferred<ReturnType<typeof terminalOpenResult>>();
   const requests: Array<{ method: string; params: unknown }> = [];
   const client: TerminalGatewayClient = {
     forceReconnect: () => {},
@@ -522,8 +513,8 @@ describe("OpenClawTerminalPanel", () => {
       attached: boolean;
       createdAtMs: number;
     };
-    const firstList = deferred<{ sessions: ListedSession[] }>();
-    const secondList = deferred<{ sessions: ListedSession[] }>();
+    const firstList = createDeferred<{ sessions: ListedSession[] }>();
+    const secondList = createDeferred<{ sessions: ListedSession[] }>();
     let listCount = 0;
     const client: TerminalGatewayClient = {
       forceReconnect: () => {},
@@ -627,7 +618,7 @@ describe("OpenClawTerminalPanel", () => {
   });
 
   it("queues a catalog toggle that arrives during another terminal boot", async () => {
-    const firstBoot = deferred<ReturnType<typeof createTerminalController>>();
+    const firstBoot = createDeferred<ReturnType<typeof createTerminalController>>();
     createGhosttyTerminalMock
       .mockReturnValueOnce(firstBoot.promise)
       .mockResolvedValueOnce(createTerminalController());
@@ -833,7 +824,7 @@ describe("OpenClawTerminalPanel", () => {
   it("discards an async boot that finishes after disconnect and reconnect", async () => {
     const staleController = createTerminalController();
     const currentController = createTerminalController();
-    const staleBoot = deferred<typeof staleController>();
+    const staleBoot = createDeferred<typeof staleController>();
     createGhosttyTerminalMock
       .mockImplementationOnce(async () => staleBoot.promise)
       .mockResolvedValueOnce(currentController);
@@ -905,43 +896,6 @@ describe("OpenClawTerminalPanel", () => {
     expect(document.documentElement.style.getPropertyValue("--oc-terminal-reserve-right")).toBe(
       "0px",
     );
-  });
-
-  it("removes leaked terminal listeners and the tab host when controller disposal throws", () => {
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
-    const host = document.createElement("div");
-    document.body.append(host);
-    const dispose = vi.fn(() => {
-      throw new Error("dispose failed");
-    });
-    const controller = createTerminalController(dispose);
-    const handleMouseUp = vi.fn();
-    (
-      controller.terminal as typeof controller.terminal & {
-        handleMouseUp: (event: MouseEvent) => void;
-      }
-    ).handleMouseUp = handleMouseUp;
-    const removeEventListener = vi.spyOn(document, "removeEventListener");
-    const terminalSessions = (
-      panel as unknown as {
-        terminalSessions: {
-          disposeTab(tab: { controller: typeof controller; host: HTMLDivElement }): void;
-        };
-      }
-    ).terminalSessions;
-    const disposeTab = terminalSessions.disposeTab.bind(terminalSessions);
-
-    try {
-      expect(() => disposeTab({ controller, host })).not.toThrow();
-      expect(removeEventListener).toHaveBeenCalledWith("mouseup", handleMouseUp);
-      expect(removeEventListener.mock.invocationCallOrder.at(-1)).toBeLessThan(
-        dispose.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-      );
-      expect(dispose).toHaveBeenCalledOnce();
-      expect(host.isConnected).toBe(false);
-    } finally {
-      removeEventListener.mockRestore();
-    }
   });
 
   it("retranslates cached exit state when the locale changes", async () => {

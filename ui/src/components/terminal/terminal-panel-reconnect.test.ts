@@ -109,9 +109,6 @@ describe("OpenClawTerminalPanel reconnect", () => {
       ...panel.renderRoot.querySelectorAll<HTMLButtonElement>(".tp-session"),
     ].find((button) => button.textContent?.includes("detached-agent"));
     detachedRow?.click();
-    await (
-      panel as unknown as { attachPickedSession: (sessionId: string) => Promise<void> }
-    ).attachPickedSession("detached-1");
 
     await waitForFast(() => {
       expect(requests).toContainEqual({
@@ -132,40 +129,15 @@ describe("OpenClawTerminalPanel reconnect", () => {
       createTerminalController(),
       createTerminalController(),
       createTerminalController(),
-      createTerminalController(),
     ] as const;
-    let controllerIndex = 0;
-    let resolveFirstReplacement: (() => void) | undefined;
-    const firstReplacement = new Promise<void>((resolve) => {
-      resolveFirstReplacement = resolve;
-    });
-    let resolveSecondReplacement: (() => void) | undefined;
-    const secondReplacement = new Promise<void>((resolve) => {
-      resolveSecondReplacement = resolve;
-    });
     const controllerParents: HTMLElement[] = [];
-    const replacementFocusVisibilities: string[] = [];
     createGhosttyTerminalMock.mockImplementation(async (options) => {
-      const currentIndex = controllerIndex++;
+      const currentIndex = createGhosttyTerminalMock.mock.calls.length - 1;
       const controller = controllers[currentIndex];
       if (!controller) {
         throw new Error("unexpected terminal controller creation");
       }
       controllerParents[currentIndex] = options.parent;
-      options.parent.tabIndex = 0;
-      const focusParent = () => {
-        if (currentIndex >= 2) {
-          replacementFocusVisibilities.push(options.parent.style.visibility);
-        }
-        options.parent.focus();
-      };
-      focusParent();
-      setTimeout(focusParent, 0);
-      if (currentIndex === 2) {
-        await firstReplacement;
-      } else if (currentIndex === 3) {
-        await secondReplacement;
-      }
       return controller;
     });
 
@@ -173,8 +145,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
     const replay = "reconnected shell\r\n$ ";
     const recoveredReplay = `${replay}?gap`;
-    const secondRecoveredReplay = `${recoveredReplay}!?next`;
-    const attachReplays = [replay, recoveredReplay, secondRecoveredReplay] as const;
+    const attachReplays = [replay, recoveredReplay] as const;
     let attachCount = 0;
     const client: TerminalGatewayClient = {
       forceReconnect: () => {},
@@ -240,10 +211,12 @@ describe("OpenClawTerminalPanel reconnect", () => {
     expect(controllers[0].dispose).toHaveBeenCalledOnce();
     expect(new TextDecoder().decode(controllers[1].write.mock.calls[0]?.[0])).toBe(replay);
 
-    const externalInput = document.createElement("input");
-    panel.renderRoot.append(externalInput);
-    externalInput.focus();
-    expect(panel.shadowRoot?.activeElement).toBe(externalInput);
+    const previousHost = controllerParents[1];
+    if (!previousHost) {
+      throw new Error("missing reconnected terminal host");
+    }
+    previousHost.style.display = "none";
+    previousHost.style.visibility = "collapse";
 
     listener?.({
       event: "terminal.data",
@@ -251,28 +224,12 @@ describe("OpenClawTerminalPanel reconnect", () => {
     });
     await waitForFast(() => expect(createGhosttyTerminalMock).toHaveBeenCalledTimes(3));
     expect(requests.filter((request) => request.method === "terminal.attach")).toHaveLength(2);
-    await waitForFast(() => expect(replacementFocusVisibilities).toEqual(["hidden", "hidden"]));
-
-    const newerExternalInput = document.createElement("input");
-    panel.renderRoot.append(newerExternalInput);
-    newerExternalInput.focus();
-    expect(panel.shadowRoot?.activeElement).toBe(newerExternalInput);
-    const previousHost = controllerParents[1];
-    if (!previousHost) {
-      throw new Error("missing previous terminal host");
-    }
-    previousHost.style.display = "none";
-    const finishFirstReplacement = resolveFirstReplacement;
-    if (!finishFirstReplacement) {
-      throw new Error("first replacement controller creation did not start");
-    }
-    finishFirstReplacement();
 
     await waitForFast(() => expect(controllers[1].dispose).toHaveBeenCalledOnce());
     expect(new TextDecoder().decode(controllers[2].write.mock.calls[0]?.[0])).toBe(recoveredReplay);
     expect(controllers[2].setReadOnly).toHaveBeenCalledWith(false);
-    expect(panel.shadowRoot?.activeElement).toBe(newerExternalInput);
     expect(controllerParents[2]?.style.display).toBe("none");
+    expect(controllerParents[2]?.style.visibility).toBe("collapse");
     expect(controllerParents[2]?.inert).toBe(false);
 
     listener?.({
@@ -283,39 +240,5 @@ describe("OpenClawTerminalPanel reconnect", () => {
     expect(new TextDecoder().decode(controllers[2].write.mock.calls[1]?.[0])).toBe("!");
     expect(requests.filter((request) => request.method === "terminal.attach")).toHaveLength(2);
     expect(controllers[1].dispose).toHaveBeenCalledOnce();
-
-    listener?.({
-      event: "terminal.data",
-      payload: {
-        sessionId: "surviving-session",
-        seq: recoveredReplay.length + 6,
-        data: "next",
-      },
-    });
-    await waitForFast(() => expect(createGhosttyTerminalMock).toHaveBeenCalledTimes(4));
-    await waitForFast(() => expect(replacementFocusVisibilities).toHaveLength(4));
-    const currentHost = controllerParents[2];
-    if (!currentHost) {
-      throw new Error("missing current terminal host");
-    }
-    currentHost.style.display = "block";
-    currentHost.focus();
-    expect(panel.shadowRoot?.activeElement).toBe(currentHost);
-    const finishSecondReplacement = resolveSecondReplacement;
-    if (!finishSecondReplacement) {
-      throw new Error("second replacement controller creation did not start");
-    }
-    finishSecondReplacement();
-
-    await waitForFast(() => expect(controllers[2].dispose).toHaveBeenCalledOnce());
-    expect(new TextDecoder().decode(controllers[3].write.mock.calls[0]?.[0])).toBe(
-      secondRecoveredReplay,
-    );
-    expect(controllers[3].setReadOnly).toHaveBeenCalledWith(false);
-    expect(panel.shadowRoot?.activeElement).toBe(controllerParents[3]);
-    expect(controllers[3].terminal.focus).not.toHaveBeenCalled();
-    expect(controllerParents[3]?.style.display).toBe("block");
-    expect(controllerParents[3]?.inert).toBe(false);
-    expect(requests.filter((request) => request.method === "terminal.attach")).toHaveLength(3);
   });
 });

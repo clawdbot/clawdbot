@@ -9,7 +9,7 @@ import {
 } from "./terminal-connection.ts";
 import {
   disposeTerminalController,
-  replaceTerminalControllerForReplay,
+  replaceTerminalController,
 } from "./terminal-controller-lifecycle.ts";
 import {
   forceTerminalRender,
@@ -17,7 +17,6 @@ import {
   shellBasename,
   TERMINAL_FONT_FAMILY,
   TERMINAL_OUTPUT_ENCODER,
-  type TerminalControllerFactory,
   type TerminalOperation,
   type TerminalPanelCatalogReference,
   type TerminalPanelSessionControllerHost,
@@ -29,6 +28,8 @@ import { createTerminalStartupInput } from "./terminal-startup-input.ts";
 import { TerminalTabReadinessController } from "./terminal-tab-readiness.ts";
 import { TerminalTaskQueue } from "./terminal-task-queue.ts";
 import { terminalDynamicColors, terminalTheme } from "./terminal-theme.ts";
+
+type TerminalSessionSink = Parameters<TerminalConnection["open"]>[1];
 
 /** Owns gateway PTY sessions and the Ghostty controllers bound to them. */
 export class TerminalPanelSessionController
@@ -253,12 +254,7 @@ export class TerminalPanelSessionController
   private async bootTab(
     operation: TerminalOperation,
     options: { awaitFirstOutput?: boolean } = {},
-  ): Promise<{
-    tab: TerminalPanelSessionTab;
-    connection: TerminalConnection;
-    cols: number;
-    rows: number;
-  }> {
+  ) {
     const connection = this.connectionFor(operation);
     // Preserve the connection so cancelled-open cleanup still closes the in-flight session.
     const host = document.createElement("div");
@@ -286,7 +282,7 @@ export class TerminalPanelSessionController
       getColors: () => terminalDynamicColors(this.host.themeMode),
       reply: (data) => startupInput.onData(TERMINAL_OUTPUT_ENCODER.encode(data)),
     });
-    const createController: TerminalControllerFactory = (parent, controllerOptions) =>
+    const createController = (parent: HTMLElement, controllerOptions?: { readOnly?: boolean }) =>
       this.host.createTerminalController({
         parent,
         readOnly: controllerOptions?.readOnly ?? false,
@@ -319,7 +315,6 @@ export class TerminalPanelSessionController
       gatewaySessionId: "",
       pendingInput: startupInput.buffer,
       defaultColorQueries,
-      createController,
       shellName: null,
       shell: "",
       agentId: null,
@@ -332,15 +327,7 @@ export class TerminalPanelSessionController
       readyTimer: null,
     };
     tabReference.current = tab;
-    this.updateControllerState("tabs", [...this.tabs, tab]);
-    this.updateControllerState("activeId", id);
-    const { terminal } = controller;
-    return { tab, connection, cols: terminal.cols || 80, rows: terminal.rows || 24 };
-  }
-
-  /** Output/exit sink for one tab, shared by open and attach. */
-  private tabSink(tab: TerminalPanelSessionTab) {
-    return {
+    const sink: TerminalSessionSink = {
       // The cancelled guard also protects the buffered-event replay inside
       // connection.open/attach from writing to an already-disposed terminal.
       onData: (data: string) => {
@@ -352,13 +339,8 @@ export class TerminalPanelSessionController
           }
         }
       },
-      onReplay: (
-        data: string,
-        newlyObservedFrom: number,
-        mode: "initial" | "recovery",
-        isReplayCurrent: () => boolean,
-      ) => {
-        if (tab.cancelled) {
+      onReplay: ({ data, newlyObservedFrom, mode, signal }) => {
+        if (tab.cancelled || signal.aborted) {
           return undefined;
         }
         // Suppress complete historical queries, then answer only the suffix
@@ -366,12 +348,7 @@ export class TerminalPanelSessionController
         tab.defaultColorQueries.primeFromReplay(data.slice(0, newlyObservedFrom));
         tab.defaultColorQueries.observe(data.slice(newlyObservedFrom));
         if (mode === "recovery") {
-          return replaceTerminalControllerForReplay({
-            target: tab,
-            createController: tab.createController,
-            replay: TERMINAL_OUTPUT_ENCODER.encode(data),
-            isCurrent: () => isReplayCurrent() && !tab.cancelled && this.tabs.includes(tab),
-          }).then((replaced) => {
+          return replaceTerminalController(tab, createController, data, signal).then((replaced) => {
             if (replaced && data) {
               this.readiness.markReady(tab);
             }
@@ -385,6 +362,16 @@ export class TerminalPanelSessionController
       },
       onExit: (info: { reason?: string; exitCode: number | null; error?: string }) =>
         this.handleExit(tab.id, info),
+    };
+    this.updateControllerState("tabs", [...this.tabs, tab]);
+    this.updateControllerState("activeId", id);
+    const { terminal } = controller;
+    return {
+      tab,
+      connection,
+      cols: terminal.cols || 80,
+      rows: terminal.rows || 24,
+      sink,
     };
   }
 
@@ -450,7 +437,7 @@ export class TerminalPanelSessionController
       createdTab = boot.tab;
       const result = await boot.connection.open(
         { agentId, cols: boot.cols, rows: boot.rows, ...(catalog ? { catalog } : {}) },
-        this.tabSink(boot.tab),
+        boot.sink,
       );
       if (!this.isTerminalOperationCurrent(operation) || boot.tab.cancelled) {
         // The tab's close button was clicked while the open RPC was in flight.
@@ -501,7 +488,7 @@ export class TerminalPanelSessionController
       const boot = await this.bootTab(operation);
       createdTab = boot.tab;
       createdConnection = boot.connection;
-      const result = await boot.connection.attach(sessionId, this.tabSink(boot.tab));
+      const result = await boot.connection.attach(sessionId, boot.sink);
       if (!this.isTerminalOperationCurrent(operation) || boot.tab.cancelled) {
         // A user close is deliberate; lifecycle cancellation leaves the existing
         // server session available for the next reconnect to reattach.
