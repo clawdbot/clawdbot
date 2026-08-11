@@ -22,7 +22,6 @@
     "session.typing": "Collaborative typing state is a Control UI-only ephemeral indicator; iOS does not render it.",
     "shutdown": "iOS relies on socket close plus reconnect/backoff instead of the shutdown notice.",
     "skills.changed": "Skills settings is a macOS operator surface; iOS does not expose skill management yet.",
-    "task": "Background task activity is not surfaced in the iOS app.",
     "task.suggestion": "Task suggestion cards are a Control UI-only surface; iOS does not render them.",
     "terminal.data": "Embedded terminal is a web/desktop surface; iOS has no terminal client.",
     "terminal.exit": "Embedded terminal is a web/desktop surface; iOS has no terminal client.",
